@@ -3518,6 +3518,14 @@ impl ReputMessageService {
                         loop {
                             // Check if there are messages to process
                             if !inner.is_commit_log_available() {
+                                if inner.has_unconfirmed_commit_log() {
+                                    dispatch_progress_notify.notify_waiters();
+                                    tokio::select! {
+                                        _ = shutdown_reader.cancelled() => return,
+                                        _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                                    }
+                                    continue;
+                                }
                                 break;
                             }
 
@@ -3542,6 +3550,13 @@ impl ReputMessageService {
                                 None => {
                                     // No more messages available at this offset
                                     dispatch_progress_notify.notify_waiters();
+                                    if inner.has_unconfirmed_commit_log() {
+                                        tokio::select! {
+                                            _ = shutdown_reader.cancelled() => return,
+                                            _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                                        }
+                                        continue;
+                                    }
                                     break;
                                 }
                             }
@@ -3846,6 +3861,12 @@ impl ReputMessageServiceInner {
 
     fn is_commit_log_available(&self) -> bool {
         self.reput_from_offset.load(Ordering::Relaxed) < self.get_reput_end_offset()
+    }
+
+    fn has_unconfirmed_commit_log(&self) -> bool {
+        !self.message_store_config.read_uncommitted
+            && self.reput_from_offset.load(Ordering::Relaxed) < self.commit_log.get_max_offset()
+            && !self.is_commit_log_available()
     }
 
     fn get_reput_end_offset(&self) -> i64 {
