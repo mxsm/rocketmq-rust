@@ -1,4 +1,0 @@
-[target.'cfg(all(windows, target_env = "msvc"))']
-# MSVC emits import-library status lines on stdout; nightly rustc reports them
-# through `linker_messages`, which obscures otherwise clean validation output.
-rustflags = ["-A", "linker_messages"]
