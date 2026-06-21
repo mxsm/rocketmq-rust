@@ -77,6 +77,7 @@ struct MetadataState {
 pub struct JsonMetadataStore {
     path: PathBuf,
     state: RwLock<MetadataState>,
+    persist_lock: tokio::sync::Mutex<()>,
 }
 
 impl JsonMetadataStore {
@@ -87,6 +88,7 @@ impl JsonMetadataStore {
                 .join("config")
                 .join("tieredStoreMetadata.json"),
             state: RwLock::new(MetadataState::default()),
+            persist_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -123,6 +125,7 @@ impl TieredMetadataStore for JsonMetadataStore {
     }
 
     async fn persist(&self) -> Result<(), RocketMQError> {
+        let _persist_guard = self.persist_lock.lock().await;
         let Some(parent) = self.path.parent() else {
             return Err(error::storage_write_failed(
                 path_to_string(&self.path),
