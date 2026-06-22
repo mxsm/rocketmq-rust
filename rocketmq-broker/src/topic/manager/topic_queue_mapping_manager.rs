@@ -42,19 +42,27 @@ use tracing::warn;
 
 use crate::broker_path_config_helper::get_topic_queue_mapping_path;
 
-static TOPIC_QUEUE_MAPPING_BLOCKING: OnceLock<BlockingExecutor> = OnceLock::new();
-
 #[derive(Default)]
 pub(crate) struct TopicQueueMappingManager {
     pub(crate) data_version: Arc<parking_lot::Mutex<DataVersion>>,
     pub(crate) topic_queue_mapping_table: DashMap<CheetahString /* topic */, ArcMut<TopicQueueMappingDetail>>,
     pub(crate) broker_config: Arc<BrokerConfig>,
+    blocking_executor: OnceLock<BlockingExecutor>,
+    parent_task_group: Option<TaskGroup>,
 }
 
 impl TopicQueueMappingManager {
     pub(crate) fn new(broker_config: Arc<BrokerConfig>) -> Self {
         Self {
             broker_config,
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn new_with_parent_task_group(broker_config: Arc<BrokerConfig>, parent_task_group: TaskGroup) -> Self {
+        Self {
+            broker_config,
+            parent_task_group: Some(parent_task_group),
             ..Default::default()
         }
     }
@@ -327,7 +335,7 @@ impl TopicQueueMappingManager {
         }
 
         let file_name = self.config_file_path();
-        topic_queue_mapping_blocking_executor()?
+        self.blocking_executor()?
             .spawn_io("broker.topic_queue_mapping.persist_clean_result", move || {
                 rocketmq_common::FileUtils::string_to_file(json.as_str(), file_name.as_str())
             })
@@ -348,42 +356,53 @@ impl TopicQueueMappingManager {
             }
         }
     }
-}
+    fn blocking_executor(&self) -> RocketMQResult<BlockingExecutor> {
+        if let Some(executor) = self.blocking_executor.get() {
+            return Ok(executor.clone());
+        }
 
-fn topic_queue_mapping_blocking_executor() -> RocketMQResult<BlockingExecutor> {
-    if let Some(executor) = TOPIC_QUEUE_MAPPING_BLOCKING.get() {
-        return Ok(executor.clone());
+        let executor = self.create_blocking_executor()?;
+        if self.blocking_executor.set(executor.clone()).is_err() {
+            return Ok(self
+                .blocking_executor
+                .get()
+                .expect("topic queue mapping blocking executor must be initialized")
+                .clone());
+        }
+
+        Ok(executor)
     }
 
-    let handle = Handle::try_current().map_err(|error| {
-        RocketMQError::Internal(format!(
-            "topic queue mapping blocking executor requires a Tokio runtime: {error}"
+    fn create_blocking_executor(&self) -> RocketMQResult<BlockingExecutor> {
+        let group = self.blocking_task_group()?;
+        BlockingExecutor::new(
+            BlockingPoolPolicy {
+                name: "rocketmq-broker.topic_queue_mapping.blocking".to_string(),
+                max_concurrency: 8,
+                ..BlockingPoolPolicy::default()
+            },
+            group.child("rocketmq-broker.topic_queue_mapping.blocking-reaper"),
+        )
+        .map_err(|error| {
+            RocketMQError::Internal(format!("create topic queue mapping blocking executor failed: {error}"))
+        })
+    }
+
+    fn blocking_task_group(&self) -> RocketMQResult<TaskGroup> {
+        if let Some(parent_task_group) = self.parent_task_group.as_ref() {
+            return Ok(parent_task_group.child("rocketmq-broker.topic_queue_mapping.blocking"));
+        }
+
+        let handle = Handle::try_current().map_err(|error| {
+            RocketMQError::Internal(format!(
+                "topic queue mapping blocking executor requires a Tokio runtime: {error}"
+            ))
+        })?;
+        Ok(TaskGroup::root(
+            "rocketmq-broker.topic_queue_mapping.blocking",
+            RuntimeHandle::new(handle),
         ))
-    })?;
-    let group = TaskGroup::root(
-        "rocketmq-broker.topic_queue_mapping.blocking",
-        RuntimeHandle::new(handle),
-    );
-    let executor = BlockingExecutor::new(
-        BlockingPoolPolicy {
-            name: "rocketmq-broker.topic_queue_mapping.blocking".to_string(),
-            max_concurrency: 8,
-            ..BlockingPoolPolicy::default()
-        },
-        group.child("rocketmq-broker.topic_queue_mapping.blocking-reaper"),
-    )
-    .map_err(|error| {
-        RocketMQError::Internal(format!("create topic queue mapping blocking executor failed: {error}"))
-    })?;
-
-    if TOPIC_QUEUE_MAPPING_BLOCKING.set(executor.clone()).is_err() {
-        return Ok(TOPIC_QUEUE_MAPPING_BLOCKING
-            .get()
-            .expect("topic queue mapping blocking executor must be initialized")
-            .clone());
     }
-
-    Ok(executor)
 }
 
 //Fully implemented will be removed
@@ -426,6 +445,7 @@ mod tests {
     use std::sync::Arc;
 
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_runtime::RuntimeContext;
 
     use super::*;
 
@@ -437,6 +457,40 @@ mod tests {
         assert!(Arc::ptr_eq(&manager.broker_config, &broker_config));
         assert_eq!(manager.data_version.lock().get_state_version(), 0);
         assert_eq!(manager.topic_queue_mapping_table.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn new_with_parent_task_group_uses_service_parent_for_blocking_executor() {
+        let context = RuntimeContext::from_current("broker-topic-queue-mapping-context-test");
+        let broker_service = context.service_context("broker-service");
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager =
+            TopicQueueMappingManager::new_with_parent_task_group(broker_config, broker_service.task_group().clone());
+
+        assert_eq!(
+            manager.parent_task_group.as_ref().map(TaskGroup::id),
+            Some(broker_service.task_group().id())
+        );
+
+        let executor = manager
+            .blocking_executor()
+            .expect("blocking executor should be created");
+        assert_eq!(executor.policy().name, "rocketmq-broker.topic_queue_mapping.blocking");
+        assert_eq!(executor.policy().max_concurrency, 8);
+
+        let broker_report = broker_service
+            .task_group()
+            .shutdown(std::time::Duration::from_secs(1))
+            .await;
+        assert!(
+            broker_report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq-broker.topic_queue_mapping.blocking"),
+            "{}",
+            broker_report.to_json()
+        );
+        assert!(broker_report.is_healthy(), "{}", broker_report.to_json());
     }
 
     #[test]

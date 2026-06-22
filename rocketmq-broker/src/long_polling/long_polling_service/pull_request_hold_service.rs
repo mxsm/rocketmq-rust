@@ -21,7 +21,6 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
@@ -80,15 +79,13 @@ where
             return;
         }
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                self.running.store(false, Ordering::Release);
-                warn!(?error, "failed to start PullRequestHoldService outside Tokio runtime");
-                return;
-            }
+        let Some(task_group) = this.broker_task_group_or_current(
+            "rocketmq-broker.long-polling.pull-request-hold",
+            "failed to start PullRequestHoldService outside Tokio runtime",
+        ) else {
+            self.running.store(false, Ordering::Release);
+            return;
         };
-        let task_group = TaskGroup::root("rocketmq-broker.long-polling.pull-request-hold", runtime);
         let cancellation_token = task_group.cancellation_token();
 
         if let Err(error) = task_group.spawn_service("broker.long-polling.pull-request-hold.scan", async move {

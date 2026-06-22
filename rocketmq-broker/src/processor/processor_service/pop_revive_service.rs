@@ -42,7 +42,6 @@ use rocketmq_common::utils::data_converter::DataConverter;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
@@ -328,19 +327,17 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
 
         this.shutdown.store(false, Ordering::Release);
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                this.running.store(false, Ordering::Release);
-                warn!(
-                    ?error,
-                    revive_queue_id = this.queue_id,
-                    "failed to start PopReviveService outside Tokio runtime"
-                );
-                return;
-            }
+        let Some(task_group) = this.broker_runtime_inner.broker_task_group_or_current(
+            format!("rocketmq-broker.pop-revive.{}", this.queue_id),
+            "failed to start PopReviveService outside Tokio runtime",
+        ) else {
+            this.running.store(false, Ordering::Release);
+            warn!(
+                revive_queue_id = this.queue_id,
+                "failed to start PopReviveService outside Tokio runtime"
+            );
+            return;
         };
-        let task_group = TaskGroup::root(format!("rocketmq-broker.pop-revive.{}", this.queue_id), runtime);
         let cancellation_token = task_group.cancellation_token();
         let mut service = this.clone();
 

@@ -16,16 +16,20 @@ use std::future::Future;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::BlockingExecutorSnapshot;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::RuntimeResult;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use serde::Serialize;
 
@@ -37,6 +41,17 @@ static AUTH_SYNC_BRIDGE_FALLBACK_RUNTIME_CALLS: AtomicU64 = AtomicU64::new(0);
 static AUTH_SYNC_RUNTIME_ACQUIRES: AtomicU64 = AtomicU64::new(0);
 static AUTH_SYNC_RUNTIME_CREATED: AtomicU64 = AtomicU64::new(0);
 static AUTH_SYNC_RUNTIME_REUSED: AtomicU64 = AtomicU64::new(0);
+static AUTH_BLOCKING_EXECUTOR_CREATED: AtomicU64 = AtomicU64::new(0);
+static AUTH_BLOCKING_EXECUTOR_SHUTDOWN_REQUESTS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+pub(crate) static AUTH_RUNTIME_BRIDGE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn auth_runtime_bridge_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    AUTH_RUNTIME_BRIDGE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
 pub(crate) struct AuthSyncBridgeSnapshot {
@@ -48,11 +63,19 @@ pub(crate) struct AuthSyncBridgeSnapshot {
     pub shared_runtime_created: u64,
     pub shared_runtime_reused: u64,
     pub shared_runtime_available: bool,
+    pub blocking_executor_creations: u64,
+    pub blocking_executor_shutdown_requests: u64,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AuthBlockingExecutor {
-    inner: Arc<OnceLock<BlockingExecutor>>,
+    inner: Arc<OnceLock<AuthBlockingExecutorState>>,
+}
+
+#[derive(Clone, Debug)]
+struct AuthBlockingExecutorState {
+    executor: BlockingExecutor,
+    task_group: TaskGroup,
 }
 
 impl AuthBlockingExecutor {
@@ -64,9 +87,21 @@ impl AuthBlockingExecutor {
         self.executor()?.spawn_io(name, operation).await
     }
 
+    pub(crate) fn snapshot(&self) -> Option<BlockingExecutorSnapshot> {
+        self.inner.get().map(|state| state.executor.snapshot())
+    }
+
+    pub(crate) async fn shutdown_with_report(&self, timeout: Duration) -> Option<ShutdownReport> {
+        AUTH_BLOCKING_EXECUTOR_SHUTDOWN_REQUESTS.fetch_add(1, Ordering::Relaxed);
+        let state = self.inner.get()?.clone();
+        let mut report = state.task_group.shutdown(timeout).await;
+        report.merge_blocking(state.executor.snapshot());
+        Some(report)
+    }
+
     fn executor(&self) -> RuntimeResult<BlockingExecutor> {
-        if let Some(executor) = self.inner.get() {
-            return Ok(executor.clone());
+        if let Some(state) = self.inner.get() {
+            return Ok(state.executor.clone());
         }
 
         let handle = tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::NoCurrentRuntime)?;
@@ -78,14 +113,20 @@ impl AuthBlockingExecutor {
             },
             group.child("rocketmq-auth.blocking-reaper"),
         )?;
+        let state = AuthBlockingExecutorState {
+            executor: executor.clone(),
+            task_group: group,
+        };
 
-        if self.inner.set(executor.clone()).is_err() {
+        if self.inner.set(state).is_err() {
             return Ok(self
                 .inner
                 .get()
                 .expect("auth blocking executor must be initialized")
+                .executor
                 .clone());
         }
+        AUTH_BLOCKING_EXECUTOR_CREATED.fetch_add(1, Ordering::Relaxed);
         Ok(executor)
     }
 }
@@ -137,6 +178,25 @@ pub(crate) fn auth_sync_bridge_snapshot() -> AuthSyncBridgeSnapshot {
         shared_runtime_created: AUTH_SYNC_RUNTIME_CREATED.load(Ordering::Relaxed),
         shared_runtime_reused: AUTH_SYNC_RUNTIME_REUSED.load(Ordering::Relaxed),
         shared_runtime_available: AUTH_SYNC_RUNTIME.get().is_some(),
+        blocking_executor_creations: AUTH_BLOCKING_EXECUTOR_CREATED.load(Ordering::Relaxed),
+        blocking_executor_shutdown_requests: AUTH_BLOCKING_EXECUTOR_SHUTDOWN_REQUESTS.load(Ordering::Relaxed),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_auth_sync_bridge_counters_for_tests() -> AuthSyncBridgeSnapshot {
+    AUTH_SYNC_BRIDGE_CALLS.store(0, Ordering::Relaxed);
+    AUTH_SYNC_BRIDGE_MULTI_THREAD_BLOCK_IN_PLACE.store(0, Ordering::Relaxed);
+    AUTH_SYNC_BRIDGE_CURRENT_THREAD_HANDOFFS.store(0, Ordering::Relaxed);
+    AUTH_SYNC_BRIDGE_FALLBACK_RUNTIME_CALLS.store(0, Ordering::Relaxed);
+    AUTH_SYNC_RUNTIME_ACQUIRES.store(0, Ordering::Relaxed);
+    AUTH_SYNC_RUNTIME_CREATED.store(0, Ordering::Relaxed);
+    AUTH_SYNC_RUNTIME_REUSED.store(0, Ordering::Relaxed);
+    AUTH_BLOCKING_EXECUTOR_CREATED.store(0, Ordering::Relaxed);
+    AUTH_BLOCKING_EXECUTOR_SHUTDOWN_REQUESTS.store(0, Ordering::Relaxed);
+    AuthSyncBridgeSnapshot {
+        shared_runtime_available: AUTH_SYNC_RUNTIME.get().is_some(),
+        ..AuthSyncBridgeSnapshot::default()
     }
 }
 
@@ -170,5 +230,52 @@ fn auth_sync_runtime() -> Result<&'static RuntimeOwner, String> {
             }
             Err(error.clone())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn auth_blocking_executor_snapshot_counts_creation_and_shutdown_request() {
+        let executor = AuthBlockingExecutor::default();
+        let before = auth_sync_bridge_snapshot();
+        assert!(executor.snapshot().is_none());
+
+        let value = executor
+            .spawn_io("auth.blocking.counter", || 42usize)
+            .await
+            .expect("auth blocking task should complete");
+        assert_eq!(value, 42);
+
+        let active_snapshot = executor
+            .snapshot()
+            .expect("auth blocking executor snapshot should exist after first task");
+        assert_eq!(active_snapshot.name, "rocketmq-auth.blocking");
+        assert_eq!(active_snapshot.blocking_still_running, 0);
+
+        let report = executor
+            .shutdown_with_report(Duration::from_secs(1))
+            .await
+            .expect("initialized auth blocking executor should return shutdown report");
+        assert_eq!(report.name, "rocketmq-auth.blocking");
+        assert!(report.is_healthy(), "{}", report.to_json());
+
+        let after = auth_sync_bridge_snapshot();
+        assert!(
+            after
+                .blocking_executor_creations
+                .saturating_sub(before.blocking_executor_creations)
+                >= 1
+        );
+        assert!(
+            after
+                .blocking_executor_shutdown_requests
+                .saturating_sub(before.blocking_executor_shutdown_requests)
+                >= 1
+        );
     }
 }

@@ -114,6 +114,11 @@ fn write_namesrv_shutdown_report_artifact() {
         "elapsed_ms": output.elapsed.as_millis(),
         "elapsed_us": output.elapsed.as_micros(),
         "healthy": output.report.is_healthy(),
+        "in_flight_completed": output.report.in_flight.completed,
+        "in_flight_remaining": output.report.in_flight.remaining,
+        "in_flight_timed_out": output.report.in_flight.timed_out,
+        "in_flight_timeout_ms": output.report.in_flight.timeout_ms,
+        "in_flight_drain_elapsed_ms": output.report.in_flight.elapsed_ms,
         "shutdown_report": output.report,
     });
     let path = output_dir.join("namesrv-shutdown-drain-report.json");

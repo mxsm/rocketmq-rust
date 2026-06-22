@@ -28,6 +28,7 @@ use futures_util::StreamExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedReadHalf;
@@ -582,6 +583,13 @@ impl ConcurrentConnection {
         Self::try_with_channel_capacity(stream, 1024)
     }
 
+    /// Try to create a concurrent connection using a parent task group.
+    pub fn try_new_with_task_group(stream: TcpStream, parent_task_group: TaskGroup) -> RocketMQResult<Self> {
+        Self::try_with_channel_capacity_and_writer_group(stream, 1024, |connection_id| {
+            parent_task_group.child(format!("rocketmq-remoting.connection.{connection_id}"))
+        })
+    }
+
     /// Create concurrent connection with specified channel capacity
     #[deprecated(
         since = "1.0.0",
@@ -600,6 +608,19 @@ impl ConcurrentConnection {
                 format!("ConcurrentConnection writer task requires a Tokio runtime: {error}"),
             )
         })?;
+        Self::try_with_channel_capacity_and_writer_group(stream, channel_capacity, |connection_id| {
+            TaskGroup::root(
+                format!("rocketmq-remoting.connection.{connection_id}"),
+                RuntimeHandle::new(runtime_handle),
+            )
+        })
+    }
+
+    fn try_with_channel_capacity_and_writer_group(
+        stream: TcpStream,
+        channel_capacity: usize,
+        writer_group: impl FnOnce(&CheetahString) -> TaskGroup,
+    ) -> RocketMQResult<Self> {
         let (read_half, write_half) = stream.into_split();
 
         let framed_reader = FramedRead::new(read_half, CompositeCodec::default());
@@ -609,10 +630,7 @@ impl ConcurrentConnection {
         let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
 
         let connection_id = CheetahString::from_string(format!("concurrent-{}", uuid::Uuid::new_v4()));
-        let writer_group = TaskGroup::root(
-            format!("rocketmq-remoting.connection.{connection_id}"),
-            RuntimeHandle::new(runtime_handle),
-        );
+        let writer_group = writer_group(&connection_id);
         writer_group
             .spawn_service(
                 "remoting.connection.writer",
@@ -975,8 +993,8 @@ impl ConcurrentConnection {
         self.write_tx.clone()
     }
 
-    /// Graceful shutdown
-    pub async fn close(self) -> RocketMQResult<()> {
+    /// Graceful shutdown and return the writer task shutdown report.
+    pub async fn close_with_report(self, timeout: Duration) -> RocketMQResult<ShutdownReport> {
         let (tx, rx) = oneshot::channel();
         self.write_tx.send(WriteCommand::Close(tx)).await.map_err(|_| {
             RocketMQError::Network(rocketmq_error::NetworkError::connection_failed(
@@ -990,14 +1008,19 @@ impl ConcurrentConnection {
                 "Response channel closed",
             ))
         })??;
-        let report = self.writer_group.shutdown(Duration::from_secs(3)).await;
+        let report = self.writer_group.shutdown(timeout).await;
         if let Err(error) = report.assert_no_task_leak() {
             return Err(RocketMQError::Network(rocketmq_error::NetworkError::connection_failed(
                 "connection",
                 format!("writer task shutdown report is unhealthy: {error}"),
             )));
         }
-        Ok(())
+        Ok(report)
+    }
+
+    /// Graceful shutdown
+    pub async fn close(self) -> RocketMQResult<()> {
+        self.close_with_report(Duration::from_secs(3)).await.map(|_| ())
     }
 }
 
@@ -1290,6 +1313,36 @@ mod concurrent_tests {
         assert!(error
             .to_string()
             .contains("ConcurrentConnection writer task requires a Tokio runtime"));
+    }
+
+    #[tokio::test]
+    async fn try_new_with_task_group_parents_writer_and_close_returns_report() {
+        let context = rocketmq_runtime::RuntimeContext::from_current("concurrent-connection-parent-test");
+        let service = context.service_context("concurrent-connection-service");
+        let parent_group = service.task_group().child("concurrent-connection-parent");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client_stream = TcpStream::connect(addr).await.unwrap();
+        let (socket, _) = listener.accept().await.unwrap();
+
+        let conn = ConcurrentConnection::try_new_with_task_group(socket, parent_group.clone()).unwrap();
+        assert_eq!(conn.writer_group.parent_id(), Some(parent_group.id()));
+        let writer_group_name = conn.writer_group.name().to_string();
+
+        let report = conn.close_with_report(Duration::from_secs(1)).await.unwrap();
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.name, writer_group_name);
+
+        let parent_report = parent_group.shutdown(Duration::from_secs(1)).await;
+        assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
+        assert!(
+            parent_report
+                .children
+                .iter()
+                .any(|child| child.name == writer_group_name),
+            "{}",
+            parent_report.to_json()
+        );
     }
 
     /// Test concurrent connection basic send/recv

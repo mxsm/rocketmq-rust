@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -26,13 +26,11 @@ use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
-use std::time::Duration;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -61,7 +59,7 @@ impl<MS: MessageStore> Clone for DefaultTransactionalMessageCheckListener<MS> {
 
 impl<MS: MessageStore> DefaultTransactionalMessageCheckListener<MS> {
     pub fn new(broker_client: Broker2Client, broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        let task_group = Self::create_task_group(broker_runtime_inner.broker_config());
+        let task_group = Self::create_task_group(&broker_runtime_inner);
         Self {
             broker_runtime_inner,
             broker_client: ArcMut::new(broker_client),
@@ -69,21 +67,12 @@ impl<MS: MessageStore> DefaultTransactionalMessageCheckListener<MS> {
         }
     }
 
-    fn create_task_group(broker_config: &BrokerConfig) -> Option<TaskGroup> {
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                warn!(
-                    ?error,
-                    "transaction check listener initialized outside Tokio runtime; check tasks will run inline"
-                );
-                return None;
-            }
-        };
-        Some(TaskGroup::root(
+    fn create_task_group(broker_runtime_inner: &ArcMut<BrokerRuntimeInner<MS>>) -> Option<TaskGroup> {
+        let broker_config = broker_runtime_inner.broker_config();
+        broker_runtime_inner.broker_task_group_or_current(
             format!("rocketmq-broker.transaction-check.{}", broker_config.broker_name()),
-            runtime,
-        ))
+            "transaction check listener initialized outside Tokio runtime; check tasks will run inline",
+        )
     }
 
     pub async fn shutdown(&self) {

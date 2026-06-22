@@ -35,6 +35,7 @@ use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskControl;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
@@ -69,6 +70,18 @@ where
 {
     let (task_group, fallback_lease) = client_task_group_on(task_name, executor)?;
     spawn_client_task_in_group(task_name, task_group, fallback_lease, task)
+}
+
+pub(crate) fn spawn_client_task_with_context<F>(
+    context: &ServiceContext,
+    task_name: &'static str,
+    task: F,
+) -> io::Result<ClientRuntimeTaskHandle>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let task_group = context.task_group().child(task_name);
+    spawn_client_task_in_group(task_name, task_group, None, task)
 }
 
 pub(crate) fn spawn_detached_client_task<F>(task_name: &'static str, task: F) -> io::Result<()>
@@ -193,6 +206,29 @@ where
     })
 }
 
+pub(crate) fn spawn_client_tracked_task_with_context<F>(
+    context: &ServiceContext,
+    task_name: &'static str,
+    task: F,
+) -> io::Result<ClientTrackedTaskHandle>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let task_group = context.task_group().child(task_name);
+    let (completion_tx, completion_rx) = std_mpsc::channel();
+    task_group
+        .spawn_service(task_name, async move {
+            let _completion = ClientTrackedTaskCompletion::new(completion_tx);
+            task.await;
+        })
+        .map_err(io::Error::other)?;
+
+    Ok(ClientTrackedTaskHandle {
+        task_group,
+        completion_rx: Mutex::new(Some(completion_rx)),
+    })
+}
+
 struct ClientTrackedTaskCompletion {
     completion_tx: Option<std_mpsc::Sender<()>>,
 }
@@ -268,6 +304,34 @@ where
     })
 }
 
+pub(crate) fn schedule_client_fixed_delay_task_with_context<F, Fut>(
+    context: &ServiceContext,
+    task_name: &'static str,
+    initial_delay: Duration,
+    period: Duration,
+    shutdown_timeout: Duration,
+    task: F,
+) -> io::Result<ClientScheduledTaskHandle>
+where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let task_group = context.task_group().child(task_name);
+    let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+    let mut config = ScheduledTaskConfig::fixed_delay(task_name, period);
+    config.initial_delay = initial_delay;
+    config.shutdown_timeout = shutdown_timeout;
+    scheduled_tasks
+        .schedule_fixed_delay(config, task)
+        .map_err(io::Error::other)?;
+
+    Ok(ClientScheduledTaskHandle {
+        task_group,
+        scheduled_tasks,
+        _fallback_lease: None,
+    })
+}
+
 pub(crate) fn schedule_client_fixed_delay_controlled_task<F, Fut>(
     task_name: &'static str,
     initial_delay: Duration,
@@ -292,6 +356,34 @@ where
         task_group,
         scheduled_tasks,
         _fallback_lease: fallback_lease,
+    })
+}
+
+pub(crate) fn schedule_client_fixed_delay_controlled_task_with_context<F, Fut>(
+    context: &ServiceContext,
+    task_name: &'static str,
+    initial_delay: Duration,
+    period: Duration,
+    shutdown_timeout: Duration,
+    task: F,
+) -> io::Result<ClientScheduledTaskHandle>
+where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
+{
+    let task_group = context.task_group().child(task_name);
+    let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+    let mut config = ScheduledTaskConfig::fixed_delay(task_name, period);
+    config.initial_delay = initial_delay;
+    config.shutdown_timeout = shutdown_timeout;
+    scheduled_tasks
+        .schedule_fixed_delay_controlled(config, task)
+        .map_err(io::Error::other)?;
+
+    Ok(ClientScheduledTaskHandle {
+        task_group,
+        scheduled_tasks,
+        _fallback_lease: None,
     })
 }
 
@@ -359,6 +451,22 @@ where
     R: Send + 'static,
 {
     client_blocking_executor()?
+        .spawn_io(task_name, task)
+        .await
+        .map_err(io::Error::other)
+}
+
+pub(crate) async fn spawn_client_blocking_io_with_context<F, R>(
+    context: &ServiceContext,
+    task_name: &'static str,
+    task: F,
+) -> io::Result<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    context
+        .blocking()
         .spawn_io(task_name, task)
         .await
         .map_err(io::Error::other)
@@ -818,6 +926,8 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    use rocketmq_runtime::RuntimeContext;
+
     use super::*;
 
     #[test]
@@ -844,6 +954,29 @@ mod tests {
         let snapshot = shared_fallback_snapshot().expect("fallback runtime should exist");
         assert!(snapshot.submitted_tasks >= before + 8);
         assert!(snapshot.active_tasks <= snapshot.submitted_tasks);
+    }
+
+    #[tokio::test]
+    async fn context_spawned_client_task_is_parented_by_service_context() {
+        let context = RuntimeContext::from_current("client-context-runtime-test");
+        let service = context.service_context("client-service");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        let handle = spawn_client_task_with_context(&service, "client-context-task", async move {
+            tx.send(()).expect("test receiver should be alive");
+        })
+        .expect("context client task should spawn");
+
+        tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .expect("context task should complete")
+            .expect("context task should complete");
+        assert!(handle.wait_finished(Duration::from_secs(2)));
+        assert_eq!(handle.task_group.parent_id(), Some(service.task_group().id()));
+        assert_eq!(handle.task_group.name(), "client-context-task");
+
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[test]

@@ -41,6 +41,10 @@ tracing.workspace = true
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
 
+[[test]]
+name = "task_group_concurrency_model"
+path = "tests/task_group_concurrency_model.rs"
+
 [[bench]]
 name    = "task_group_lifecycle_bench"
 harness = false

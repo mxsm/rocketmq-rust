@@ -42,7 +42,6 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -658,15 +657,13 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
 
         this.shutdown_requested.store(false, Ordering::Release);
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                this.running.store(false, Ordering::Release);
-                warn!(?error, "failed to start PopBufferMergeService outside Tokio runtime");
-                return;
-            }
+        let Some(task_group) = this.broker_runtime_inner.broker_task_group_or_current(
+            "rocketmq-broker.pop-buffer-merge",
+            "failed to start PopBufferMergeService outside Tokio runtime",
+        ) else {
+            this.running.store(false, Ordering::Release);
+            return;
         };
-        let task_group = TaskGroup::root("rocketmq-broker.pop-buffer-merge", runtime);
         let cancellation_token = task_group.cancellation_token();
         let service = this.clone();
 

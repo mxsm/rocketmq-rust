@@ -35,6 +35,7 @@ pub use blocking::BlockingTaskSnapshot;
 pub use config::RuntimeConfig;
 pub use context::RuntimeContext;
 pub use diagnostics::RuntimeDiagnostics;
+pub use diagnostics::RuntimeDiagnosticsSnapshot;
 pub use error::RuntimeError;
 pub use error::RuntimeResult;
 pub use handle::RuntimeHandle;

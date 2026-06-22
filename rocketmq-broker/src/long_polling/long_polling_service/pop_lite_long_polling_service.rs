@@ -25,7 +25,6 @@ use parking_lot::Mutex;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
@@ -79,16 +78,12 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
             return;
         }
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                this.running.store(false, Ordering::Release);
-                warn!(
-                    ?error,
-                    "failed to start PopLiteLongPollingService outside Tokio runtime"
-                );
-                return;
-            }
+        let Some(task_group) = this.broker_runtime_inner.broker_task_group_or_current(
+            "rocketmq-broker.long-polling.pop-lite",
+            "failed to start PopLiteLongPollingService outside Tokio runtime",
+        ) else {
+            this.running.store(false, Ordering::Release);
+            return;
         };
         let Some(mut wakeup_rx) = this.mut_from_ref().wakeup_rx.take() else {
             this.running.store(false, Ordering::Release);
@@ -96,7 +91,6 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
             return;
         };
 
-        let task_group = TaskGroup::root("rocketmq-broker.long-polling.pop-lite", runtime);
         let cancellation_token = task_group.cancellation_token();
         let service = this.clone();
 

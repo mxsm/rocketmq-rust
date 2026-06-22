@@ -27,6 +27,7 @@ use flume::Receiver;
 use flume::Sender;
 use rocketmq_error::RocketMQError;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use tokio::time::timeout;
@@ -443,13 +444,6 @@ impl ChannelInner {
         connection: Connection,
         response_table: ArcMut<HashMap<i32, ResponseFuture>>,
     ) -> rocketmq_error::RocketMQResult<Self> {
-        const QUEUE_CAPACITY: usize = 1024;
-
-        // Use flume bounded channel for better performance
-        // flume provides lock-free operations and better throughput than tokio::mpsc
-        let (outbound_queue_tx, outbound_queue_rx) = flume::bounded(QUEUE_CAPACITY);
-
-        let connection = ArcMut::new(connection);
         let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
             RocketMQError::network_connection_failed(
                 "channel",
@@ -457,6 +451,31 @@ impl ChannelInner {
             )
         })?;
         let task_group = TaskGroup::root("rocketmq-remoting.channel", RuntimeHandle::new(runtime));
+        Self::try_new_with_send_task_group(connection, response_table, task_group)
+    }
+
+    /// Creates a new `ChannelInner` under the provided parent task group.
+    pub fn try_new_with_task_group(
+        connection: Connection,
+        response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+        parent_task_group: TaskGroup,
+    ) -> rocketmq_error::RocketMQResult<Self> {
+        let task_group = parent_task_group.child("rocketmq-remoting.channel");
+        Self::try_new_with_send_task_group(connection, response_table, task_group)
+    }
+
+    fn try_new_with_send_task_group(
+        connection: Connection,
+        response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+        task_group: TaskGroup,
+    ) -> rocketmq_error::RocketMQResult<Self> {
+        const QUEUE_CAPACITY: usize = 1024;
+
+        // Use flume bounded channel for better performance
+        // flume provides lock-free operations and better throughput than tokio::mpsc
+        let (outbound_queue_tx, outbound_queue_rx) = flume::bounded(QUEUE_CAPACITY);
+
+        let connection = ArcMut::new(connection);
         task_group
             .spawn_service(
                 "remoting.channel.send",
@@ -474,6 +493,18 @@ impl ChannelInner {
             response_table,
             send_task_group: task_group,
         })
+    }
+
+    /// Closes the outbound queue and waits for the send task shutdown report.
+    pub async fn close_with_report(&mut self, timeout: Duration) -> ShutdownReport {
+        let (replacement_tx, replacement_rx) = flume::bounded(0);
+        drop(replacement_rx);
+        let outbound_queue_tx = std::mem::replace(&mut self.outbound_queue_tx, replacement_tx);
+        drop(outbound_queue_tx);
+
+        let report = self.send_task_group.shutdown(timeout).await;
+        report.log_if_unhealthy();
+        report
     }
 }
 
@@ -719,5 +750,37 @@ mod tests {
         assert!(error
             .to_string()
             .contains("ChannelInner send task requires a Tokio runtime"));
+    }
+
+    #[tokio::test]
+    async fn try_new_with_task_group_parents_send_task_and_close_returns_report() {
+        let context = rocketmq_runtime::RuntimeContext::from_current("channel-inner-parent-test");
+        let service = context.service_context("channel-inner-service");
+        let parent_group = service.task_group().child("channel-inner-parent");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client_stream = TcpStream::connect(addr).await.unwrap();
+        let (socket, _) = listener.accept().await.unwrap();
+
+        let mut channel_inner = ChannelInner::try_new_with_task_group(
+            Connection::new(socket),
+            ArcMut::new(HashMap::<i32, ResponseFuture>::new()),
+            parent_group.clone(),
+        )
+        .unwrap();
+        assert_eq!(channel_inner.send_task_group.parent_id(), Some(parent_group.id()));
+        let send_group_name = channel_inner.send_task_group.name().to_string();
+
+        let report = channel_inner.close_with_report(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.name, send_group_name);
+
+        let parent_report = parent_group.shutdown(Duration::from_secs(1)).await;
+        assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
+        assert!(
+            parent_report.children.iter().any(|child| child.name == send_group_name),
+            "{}",
+            parent_report.to_json()
+        );
     }
 }

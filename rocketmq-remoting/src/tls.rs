@@ -33,6 +33,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 #[cfg(feature = "tls")]
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownReport;
 #[cfg(feature = "tls")]
 use rocketmq_runtime::TaskGroup;
@@ -71,6 +72,38 @@ impl TlsServerRuntime {
     pub fn new(base_config: TlsConfig) -> Self {
         #[cfg(feature = "tls")]
         {
+            Self::new_with_reload_task_group(base_config, None)
+        }
+
+        #[cfg(not(feature = "tls"))]
+        {
+            Self {
+                mode: base_config.server.mode,
+            }
+        }
+    }
+
+    pub fn new_with_service_context(base_config: TlsConfig, service_context: &ServiceContext) -> Self {
+        #[cfg(feature = "tls")]
+        {
+            Self::new_with_reload_task_group(
+                base_config,
+                Some(service_context.task_group().child("rocketmq-remoting.tls")),
+            )
+        }
+
+        #[cfg(not(feature = "tls"))]
+        {
+            let _ = service_context;
+            Self {
+                mode: base_config.server.mode,
+            }
+        }
+    }
+
+    #[cfg(feature = "tls")]
+    fn new_with_reload_task_group(base_config: TlsConfig, reload_task_group: Option<TaskGroup>) -> Self {
+        {
             let effective_config = effective_tls_config(&base_config);
             let acceptor = StdArc::new(TlsAcceptorSlot::empty());
             let mode = base_config.server.mode;
@@ -90,15 +123,8 @@ impl TlsServerRuntime {
                 base_config: StdArc::new(base_config),
                 reload_task_group: StdArc::new(Mutex::new(None)),
             };
-            runtime.spawn_reload_task();
+            runtime.spawn_reload_task(reload_task_group);
             runtime
-        }
-
-        #[cfg(not(feature = "tls"))]
-        {
-            Self {
-                mode: base_config.server.mode,
-            }
         }
     }
 
@@ -183,21 +209,26 @@ impl TlsServerRuntime {
     }
 
     #[cfg(feature = "tls")]
-    fn spawn_reload_task(&self) {
+    fn spawn_reload_task(&self, task_group: Option<TaskGroup>) {
         if self.mode == TlsMode::Disabled {
             return;
         }
 
         let base_config = self.base_config.clone();
         let acceptor = self.acceptor.clone();
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                warn!(?error, "failed to start TLS reload task outside Tokio runtime");
-                return;
+        let task_group = match task_group {
+            Some(task_group) => task_group,
+            None => {
+                let runtime = match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => RuntimeHandle::new(handle),
+                    Err(error) => {
+                        warn!(?error, "failed to start TLS reload task outside Tokio runtime");
+                        return;
+                    }
+                };
+                TaskGroup::root("rocketmq-remoting.tls", runtime)
             }
         };
-        let task_group = TaskGroup::root("rocketmq-remoting.tls", runtime);
         let cancellation_token = task_group.cancellation_token();
         *self.reload_task_group.lock() = Some(task_group.clone());
 
@@ -686,6 +717,37 @@ fn config_error(key: &'static str, value: impl Into<String>, reason: impl Into<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn tls_reload_task_with_service_context_is_parented() {
+        let context = rocketmq_runtime::RuntimeContext::from_current("tls-context-runtime-test");
+        let service = context.service_context("tls-service");
+        let config = TlsConfig {
+            test_mode_enable: true,
+            server: rocketmq_common::common::tls_config::TlsServerConfig {
+                mode: TlsMode::Permissive,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let runtime = TlsServerRuntime::new_with_service_context(config, &service);
+        let task_group = runtime
+            .reload_task_group
+            .lock()
+            .as_ref()
+            .cloned()
+            .expect("reload task group");
+
+        assert_eq!(task_group.parent_id(), Some(service.task_group().id()));
+
+        let report = runtime
+            .shutdown_gracefully(Duration::from_secs(1))
+            .await
+            .expect("reload task should be running");
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
 
     #[cfg(feature = "tls")]
     #[test]

@@ -19,7 +19,9 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::IpAddr;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicU8;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -45,6 +47,7 @@ use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::wait_for_signal;
@@ -52,6 +55,7 @@ use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
+use tokio::sync::Notify;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -159,8 +163,26 @@ pub struct NameServerBootstrap {
 
 #[doc(hidden)]
 #[derive(Debug, Clone, Default, Serialize)]
+pub struct NameServerInFlightDrainReport {
+    pub elapsed_ms: u64,
+    pub timeout_ms: u64,
+    pub completed: u64,
+    pub remaining: usize,
+    pub timed_out: bool,
+}
+
+impl NameServerInFlightDrainReport {
+    #[doc(hidden)]
+    pub fn is_healthy(&self) -> bool {
+        !self.timed_out && self.remaining == 0
+    }
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct NameServerShutdownReport {
     pub elapsed_ms: u64,
+    pub in_flight: NameServerInFlightDrainReport,
     pub scheduled: Option<ShutdownReport>,
     pub route_unregistration: Option<ShutdownReport>,
     pub server: Option<ShutdownReport>,
@@ -171,7 +193,8 @@ pub struct NameServerShutdownReport {
 impl NameServerShutdownReport {
     #[doc(hidden)]
     pub fn is_healthy(&self) -> bool {
-        self.scheduled.as_ref().is_none_or(ShutdownReport::is_healthy)
+        self.in_flight.is_healthy()
+            && self.scheduled.as_ref().is_none_or(ShutdownReport::is_healthy)
             && self
                 .route_unregistration
                 .as_ref()
@@ -182,12 +205,70 @@ impl NameServerShutdownReport {
     }
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct InFlightRequestTracker {
+    active: AtomicUsize,
+    completed: AtomicU64,
+    notify: Notify,
+}
+
+impl InFlightRequestTracker {
+    pub(crate) fn enter(self: &Arc<Self>) -> InFlightRequestGuard {
+        self.active.fetch_add(1, Ordering::AcqRel);
+        InFlightRequestGuard {
+            tracker: Arc::clone(self),
+        }
+    }
+
+    async fn drain(&self, timeout: Duration) -> NameServerInFlightDrainReport {
+        let started_at = Instant::now();
+        let timed_out = if self.active.load(Ordering::Acquire) == 0 {
+            false
+        } else {
+            tokio::time::timeout(timeout, async {
+                loop {
+                    let notified = self.notify.notified();
+                    if self.active.load(Ordering::Acquire) == 0 {
+                        break;
+                    }
+                    notified.await;
+                }
+            })
+            .await
+            .is_err()
+        };
+
+        NameServerInFlightDrainReport {
+            elapsed_ms: started_at.elapsed().as_millis() as u64,
+            timeout_ms: timeout.as_millis() as u64,
+            completed: self.completed.load(Ordering::Acquire),
+            remaining: self.active.load(Ordering::Acquire),
+            timed_out,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct InFlightRequestGuard {
+    tracker: Arc<InFlightRequestTracker>,
+}
+
+impl Drop for InFlightRequestGuard {
+    fn drop(&mut self) {
+        let previous = self.tracker.active.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "in-flight request counter underflow");
+        self.tracker.completed.fetch_add(1, Ordering::AcqRel);
+        self.tracker.notify.notify_waiters();
+    }
+}
+
 /// Builder for creating NameServerBootstrap with custom configuration
 pub struct Builder {
     name_server_config: Option<NamesrvConfig>,
     server_config: Option<ServerConfig>,
     controller_config: Option<ControllerConfig>,
     cluster_test_route_lookup: Option<Arc<ClusterTestRouteLookup>>,
+    service_context: Option<ServiceContext>,
 }
 
 /// Core runtime managing NameServer lifecycle and operations
@@ -649,8 +730,12 @@ impl NameServerRuntime {
             "Phase 1/5: Waiting for in-flight requests (timeout: {}s)...",
             SHUTDOWN_TIMEOUT.as_secs()
         );
-        if let Err(e) = self.wait_for_inflight_requests(SHUTDOWN_TIMEOUT).await {
-            warn!("In-flight request wait timeout or error: {}", e);
+        shutdown_report.in_flight = self.wait_for_inflight_requests(SHUTDOWN_TIMEOUT).await;
+        if !shutdown_report.in_flight.is_healthy() {
+            warn!(
+                "In-flight request drain report is unhealthy: {:?}",
+                shutdown_report.in_flight
+            );
         }
 
         info!("Phase 2/5: Stopping scheduled tasks...");
@@ -706,19 +791,8 @@ impl NameServerRuntime {
     /// This provides a grace period for ongoing requests to finish before shutdown.
     /// Returns immediately if no requests are in-flight.
     #[instrument(skip(self), name = "wait_inflight_requests")]
-    async fn wait_for_inflight_requests(&self, timeout: Duration) -> RocketMQResult<()> {
-        tokio::time::timeout(timeout, async {
-            // There is not yet an in-flight request tracker here. A fixed sleep
-            // does not prove drain and only delays shutdown; the server TaskGroup
-            // below performs the actual graceful wait.
-            tokio::task::yield_now().await;
-            debug!("No in-flight request tracker registered; skipping fixed grace wait");
-        })
-        .await
-        .map_err(|_| RocketMQError::Timeout {
-            operation: "wait_for_inflight_requests",
-            timeout_ms: timeout.as_millis() as u64,
-        })
+    async fn wait_for_inflight_requests(&self, timeout: Duration) -> NameServerInFlightDrainReport {
+        self.inner.in_flight_requests.drain(timeout).await
     }
 
     /// Wait for server task to complete
@@ -787,7 +861,8 @@ impl NameServerRuntime {
         let default_request_processor =
             crate::processor::default_request_processor::DefaultRequestProcessor::new(self.inner.clone());
 
-        let mut name_server_request_processor = NameServerRequestProcessor::new();
+        let mut name_server_request_processor =
+            NameServerRequestProcessor::new_with_in_flight_tracker(self.inner.in_flight_request_tracker());
 
         // Register topic route query processor
         name_server_request_processor.register_processor(RequestCode::GetRouteinfoByTopic, route_request_processor);
@@ -834,6 +909,7 @@ impl Builder {
             server_config: None,
             controller_config: None,
             cluster_test_route_lookup: None,
+            service_context: None,
         }
     }
 
@@ -867,6 +943,11 @@ impl Builder {
         cluster_test_route_lookup: Arc<ClusterTestRouteLookup>,
     ) -> Self {
         self.cluster_test_route_lookup = Some(cluster_test_route_lookup);
+        self
+    }
+
+    pub fn set_service_context(mut self, service_context: ServiceContext) -> Self {
+        self.service_context = Some(service_context);
         self
     }
 
@@ -923,7 +1004,9 @@ impl Builder {
             controller_config,
             controller_manager: None,
             cluster_test_route_lookup,
+            service_context: self.service_context,
             task_group: OnceLock::new(),
+            in_flight_requests: Arc::new(InFlightRequestTracker::default()),
         });
 
         // Check configuration flag for RouteInfoManager version
@@ -981,7 +1064,9 @@ pub(crate) struct NameServerRuntimeInner {
     broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
     controller_manager: Option<ArcMut<ControllerManager>>,
     cluster_test_route_lookup: Option<Arc<ClusterTestRouteLookup>>,
+    service_context: Option<ServiceContext>,
     task_group: OnceLock<TaskGroup>,
+    in_flight_requests: Arc<InFlightRequestTracker>,
 }
 
 impl NameServerRuntimeInner {
@@ -997,6 +1082,12 @@ impl NameServerRuntimeInner {
             return Some(task_group.clone());
         }
 
+        if let Some(service_context) = self.service_context.as_ref() {
+            let task_group = service_context.task_group().child("rocketmq-namesrv");
+            let _ = self.task_group.set(task_group);
+            return self.task_group.get().cloned();
+        }
+
         let handle = match tokio::runtime::Handle::try_current() {
             Ok(handle) => handle,
             Err(error) => {
@@ -1007,6 +1098,14 @@ impl NameServerRuntimeInner {
         let task_group = TaskGroup::root("rocketmq-namesrv", RuntimeHandle::new(handle));
         let _ = self.task_group.set(task_group);
         self.task_group.get().cloned()
+    }
+
+    pub(crate) fn in_flight_request_tracker(&self) -> Arc<InFlightRequestTracker> {
+        Arc::clone(&self.in_flight_requests)
+    }
+
+    pub(crate) fn in_flight_request_guard(&self) -> InFlightRequestGuard {
+        self.in_flight_requests.enter()
     }
 
     #[inline]
@@ -1545,6 +1644,7 @@ mod tests {
     use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::protocol::RemotingSerializable;
     use rocketmq_remoting::runtime::processor::RequestProcessor;
+    use rocketmq_runtime::RuntimeContext;
     use tokio::sync::broadcast;
     use tokio::time::sleep;
 
@@ -1564,6 +1664,81 @@ mod tests {
 
     fn build_bootstrap_with_default_v2() -> NameServerBootstrap {
         build_bootstrap_with_v2_config(NamesrvConfig::default())
+    }
+
+    #[tokio::test]
+    async fn builder_service_context_parents_namesrv_task_group() {
+        let context = RuntimeContext::from_current("namesrv-context-runtime-test");
+        let service = context.service_context("namesrv-service");
+        let bootstrap = Builder::new().set_service_context(service.clone()).build();
+
+        let task_group = bootstrap
+            .name_server_runtime
+            .inner
+            .task_group()
+            .expect("service context should provide namesrv task group");
+
+        assert_eq!(task_group.parent_id(), Some(service.task_group().id()));
+        assert_eq!(task_group.name(), "rocketmq-namesrv");
+
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn namesrv_in_flight_drain_zero_requests_is_healthy() {
+        let bootstrap = build_bootstrap_with_default_v2();
+
+        let report = bootstrap
+            .name_server_runtime
+            .wait_for_inflight_requests(Duration::from_millis(10))
+            .await;
+
+        assert!(report.is_healthy(), "{report:?}");
+        assert_eq!(report.completed, 0);
+        assert_eq!(report.remaining, 0);
+        assert!(!report.timed_out);
+    }
+
+    #[tokio::test]
+    async fn namesrv_in_flight_drain_waits_for_controlled_request() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let guard = bootstrap.name_server_runtime.inner.in_flight_request_guard();
+        let wait = bootstrap
+            .name_server_runtime
+            .wait_for_inflight_requests(Duration::from_secs(1));
+        tokio::pin!(wait);
+
+        tokio::select! {
+            report = &mut wait => panic!("drain completed while request was still in flight: {report:?}"),
+            _ = sleep(Duration::from_millis(10)) => {}
+        }
+
+        drop(guard);
+        let report = wait.await;
+
+        assert!(report.is_healthy(), "{report:?}");
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.remaining, 0);
+        assert!(!report.timed_out);
+    }
+
+    #[tokio::test]
+    async fn namesrv_in_flight_drain_timeout_reports_remaining() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let guard = bootstrap.name_server_runtime.inner.in_flight_request_guard();
+
+        let report = bootstrap
+            .name_server_runtime
+            .wait_for_inflight_requests(Duration::from_millis(1))
+            .await;
+
+        assert!(!report.is_healthy(), "{report:?}");
+        assert_eq!(report.completed, 0);
+        assert_eq!(report.remaining, 1);
+        assert!(report.timed_out);
+
+        drop(guard);
     }
 
     fn reserve_local_port() -> u16 {
@@ -1625,6 +1800,24 @@ mod tests {
             .await
             .expect("request processing should succeed")
             .expect("processor should always return a response")
+    }
+
+    #[tokio::test]
+    async fn name_server_processor_records_completed_request() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let mut request = RemotingCommand::create_remoting_command(999_999);
+
+        let response = process_with_name_server_processor(&bootstrap, &harness, &mut request).await;
+        assert_eq!(response.code(), ResponseCode::RequestCodeNotSupported as i32);
+
+        let report = bootstrap
+            .name_server_runtime
+            .wait_for_inflight_requests(Duration::from_millis(10))
+            .await;
+        assert!(report.is_healthy(), "{report:?}");
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.remaining, 0);
     }
 
     fn topic_config_wrapper(entries: &[(&str, u32, u32)]) -> TopicConfigAndMappingSerializeWrapper {
