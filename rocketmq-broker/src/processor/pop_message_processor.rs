@@ -105,7 +105,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
                 .broker_cluster_name
                 .as_str(),
         ));
-        let queue_lock_manager = QueueLockManager::new();
+        let queue_lock_manager = queue_lock_manager_for_broker(&broker_runtime_inner);
         PopMessageProcessor {
             ck_message_number: Default::default(),
             pop_long_polling_service: ArcMut::new(PopLongPollingService::new(broker_runtime_inner.clone(), false)),
@@ -130,7 +130,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
                 .broker_cluster_name
                 .as_str(),
         ));
-        let queue_lock_manager = QueueLockManager::new();
+        let queue_lock_manager = queue_lock_manager_for_broker(&broker_runtime_inner);
         let processor = PopMessageProcessor {
             ck_message_number: Default::default(),
             pop_long_polling_service: ArcMut::new(PopLongPollingService::new(broker_runtime_inner.clone(), false)),
@@ -1455,6 +1455,15 @@ where
     }
 }
 
+pub(crate) fn queue_lock_manager_for_broker<MS: MessageStore>(
+    broker_runtime_inner: &ArcMut<BrokerRuntimeInner<MS>>,
+) -> QueueLockManager {
+    broker_runtime_inner
+        .broker_service_task_group()
+        .map(QueueLockManager::new_with_parent_task_group)
+        .unwrap_or_else(QueueLockManager::new)
+}
+
 impl<MS: MessageStore> PopMessageProcessor<MS> {
     pub fn gen_ack_unique_id(ack_msg: &dyn AckMessage) -> String {
         format!(
@@ -1588,16 +1597,41 @@ pub struct QueueLockManager {
     shutdown: Arc<Notify>,
     running: Arc<AtomicBool>,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
+    parent_task_group: Option<TaskGroup>,
 }
 
 impl QueueLockManager {
     pub fn new() -> Self {
+        Self::new_with_optional_parent_task_group(None)
+    }
+
+    pub(crate) fn new_with_parent_task_group(parent_task_group: TaskGroup) -> Self {
+        Self::new_with_optional_parent_task_group(Some(parent_task_group))
+    }
+
+    fn new_with_optional_parent_task_group(parent_task_group: Option<TaskGroup>) -> Self {
         QueueLockManager {
             expired_local_cache: Arc::new(RwLock::new(HashMap::with_capacity(4096))),
             shutdown: Arc::new(Notify::new()),
             running: Arc::new(AtomicBool::new(false)),
             task_group: Arc::new(Mutex::new(None)),
+            parent_task_group,
         }
+    }
+
+    fn task_group_or_current(&self) -> Option<TaskGroup> {
+        if let Some(parent_task_group) = self.parent_task_group.as_ref() {
+            return Some(parent_task_group.child("rocketmq-broker.pop.queue-lock"));
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(?error, "failed to start QueueLockManager outside Tokio runtime");
+                return None;
+            }
+        };
+        Some(TaskGroup::root("rocketmq-broker.pop.queue-lock", runtime))
     }
 
     #[inline]
@@ -1656,15 +1690,10 @@ impl QueueLockManager {
             return;
         }
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                self.running.store(false, Ordering::Release);
-                warn!(?error, "failed to start QueueLockManager outside Tokio runtime");
-                return;
-            }
+        let Some(task_group) = self.task_group_or_current() else {
+            self.running.store(false, Ordering::Release);
+            return;
         };
-        let task_group = TaskGroup::root("rocketmq-broker.pop.queue-lock", runtime);
         let cancellation_token = task_group.cancellation_token();
         let this = self.clone();
         let mut lifecycle = self.task_group.lock();
@@ -1729,6 +1758,7 @@ mod tests {
     use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_rust::ArcMut;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
@@ -1918,6 +1948,61 @@ mod tests {
 
         manager.shutdown().await;
         assert!(!manager.is_running());
+    }
+
+    #[tokio::test]
+    async fn queue_lock_manager_parent_task_group_parents_cleanup_task() {
+        let context = RuntimeContext::from_current("broker-queue-lock-context-test");
+        let broker_service = context.service_context("broker-service");
+        let manager = QueueLockManager::new_with_parent_task_group(broker_service.task_group().clone());
+
+        manager.start();
+
+        let task_group = manager
+            .task_group
+            .lock()
+            .as_ref()
+            .expect("queue lock task group should be installed")
+            .clone();
+        assert_eq!(task_group.parent_id(), Some(broker_service.task_group().id()));
+
+        manager.shutdown().await;
+        assert!(!manager.is_running());
+
+        let broker_report = broker_service
+            .task_group()
+            .shutdown(std::time::Duration::from_secs(1))
+            .await;
+        assert!(broker_report.is_healthy(), "{}", broker_report.to_json());
+    }
+
+    #[tokio::test]
+    async fn pop_message_processor_parents_queue_lock_manager_from_service_context() {
+        let context = RuntimeContext::from_current("broker-pop-processor-context-test");
+        let broker_service = context.service_context("broker-service");
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime =
+            BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
+        let processor = PopMessageProcessor::new(runtime.inner_for_test().clone());
+
+        processor.queue_lock_manager.start();
+
+        let task_group = processor
+            .queue_lock_manager
+            .task_group
+            .lock()
+            .as_ref()
+            .expect("processor queue lock task group should be installed")
+            .clone();
+        assert_eq!(task_group.parent_id(), Some(broker_service.task_group().id()));
+
+        processor.queue_lock_manager.shutdown().await;
+        let broker_report = broker_service
+            .task_group()
+            .shutdown(std::time::Duration::from_secs(1))
+            .await;
+        assert!(broker_report.is_healthy(), "{}", broker_report.to_json());
     }
 
     #[tokio::test]

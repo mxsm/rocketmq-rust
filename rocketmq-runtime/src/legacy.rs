@@ -14,6 +14,14 @@
 
 use std::time::Duration;
 
+/// Legacy compatibility wrapper around a directly owned Tokio runtime.
+///
+/// New RocketMQ code should prefer [`RuntimeOwner`](crate::RuntimeOwner) when
+/// it owns the runtime, or [`RuntimeContext`](crate::RuntimeContext) /
+/// [`ServiceContext`](crate::ServiceContext) when it is borrowing an existing
+/// Tokio runtime. `RocketMQRuntime` remains available for older synchronous
+/// builder and scheduler APIs while those call sites are migrated behind
+/// explicit compatibility adapters.
 pub enum RocketMQRuntime {
     Multi(tokio::runtime::Runtime),
 }

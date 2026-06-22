@@ -24,8 +24,9 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
-use rocketmq_remoting::remoting_server::rocketmq_tokio_server::run_with_report;
+use rocketmq_remoting::remoting_server::rocketmq_tokio_server::run_with_report_with_service_context;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::ShutdownReport;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
@@ -36,6 +37,7 @@ struct RemotingLifecycleOutput {
     connection_count: usize,
     elapsed: Duration,
     report: ShutdownReport,
+    parent_report: ShutdownReport,
 }
 
 fn run_remoting_lifecycle(connection_count: usize) -> RemotingLifecycleOutput {
@@ -53,9 +55,12 @@ fn run_remoting_lifecycle(connection_count: usize) -> RemotingLifecycleOutput {
             .expect("benchmark listener should bind");
         let addr = listener.local_addr().expect("benchmark listener should expose address");
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let runtime_context = RuntimeContext::from_current("rocketmq-remoting-lifecycle-bench");
+        let service_context = runtime_context.service_context("rocketmq-remoting-lifecycle");
 
         let started_at = Instant::now();
-        let server = tokio::spawn(run_with_report(
+        let server = tokio::spawn(run_with_report_with_service_context(
+            service_context.clone(),
             listener,
             async {
                 let _ = shutdown_rx.await;
@@ -79,11 +84,22 @@ fn run_remoting_lifecycle(connection_count: usize) -> RemotingLifecycleOutput {
             .expect("remoting server task should not panic")
             .expect("remoting server should return shutdown report");
         assert!(report.is_healthy(), "{}", report.to_json());
+        let parent_report = service_context.task_group().shutdown(Duration::from_secs(5)).await;
+        assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
+        assert!(
+            parent_report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq.remoting.server"),
+            "{}",
+            parent_report.to_json()
+        );
 
         RemotingLifecycleOutput {
             connection_count,
             elapsed: started_at.elapsed(),
             report,
+            parent_report,
         }
     })
 }
@@ -109,6 +125,7 @@ fn write_remoting_lifecycle_report_artifact() {
         "elapsed_us": output.elapsed.as_micros(),
         "healthy": output.report.is_healthy(),
         "shutdown_report": output.report,
+        "parent_shutdown_report": output.parent_report,
     });
     let path = output_dir.join("remoting-connection-lifecycle-report.json");
     fs::write(

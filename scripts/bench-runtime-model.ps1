@@ -24,16 +24,44 @@ function Write-JsonArtifact {
         [Parameter(Mandatory = $true)][hashtable]$Metrics
     )
 
+    $crateName = "unknown"
+    if ($Metrics.ContainsKey("expected_bench") -and $Metrics.expected_bench -match "-p\s+([^\s]+)") {
+        $crateName = $Matches[1]
+    }
+    $scenarioName = [System.IO.Path]::GetFileNameWithoutExtension($Name)
+    $stableMetrics = [ordered]@{
+        thread_count = 0
+        task_count = 0
+        shutdown_latency_us = 0
+        timed_out_tasks = 0
+        fallback_runtime_count = 0
+        blocking_still_running_count = 0
+    }
+    foreach ($key in $Metrics.Keys) {
+        $stableMetrics[$key] = $Metrics[$key]
+    }
+
     $payload = [ordered]@{
         generated_at = (Get-Date -Format o)
         mode = $Mode
+        crate = $crateName
+        scenario = $scenarioName
         source = "scripts/bench-runtime-model.ps1"
-        metrics = $Metrics
+        metrics = $stableMetrics
     }
 
     $path = Join-Path $modeRoot $Name
     $payload | ConvertTo-Json -Depth 8 | Out-File -Encoding utf8 $path
     return $path
+}
+
+function Assert-GeneratedArtifactsExist {
+    param([Parameter(Mandatory = $true)][array]$Paths)
+
+    $missing = @($Paths | Where-Object { -not (Test-Path $_) })
+    if ($missing.Count -gt 0) {
+        throw "Missing generated runtime model artifact(s): $($missing -join ', ')"
+    }
 }
 
 function Get-ThreadSampleSummary {
@@ -345,8 +373,11 @@ $jsonArtifacts += Write-JsonArtifact -Name "controller-openraft-scan.json" -Metr
 $manifest = [ordered]@{
     generated_at = (Get-Date -Format o)
     mode = $Mode
+    crate = "workspace"
+    scenario = "runtime-model-baseline-manifest"
     source = "scripts/bench-runtime-model.ps1"
     output_directory = $modeRoot
+    full_benchmark_command = "Run the expected_bench commands listed in artifacts, then rerun this script and compare target/runtime-baseline outputs."
     thread_sampling = [ordered]@{
         file = $threadSamplingPath
         process_id = $SampleProcessId
@@ -364,6 +395,8 @@ $manifest = [ordered]@{
     )
 }
 
+Assert-GeneratedArtifactsExist -Paths $jsonArtifacts
 $manifest | ConvertTo-Json -Depth 8 | Out-File -Encoding utf8 (Join-Path $modeRoot "manifest.json")
+Assert-GeneratedArtifactsExist -Paths @((Join-Path $modeRoot "manifest.json"))
 
 Write-Host "Runtime model baseline artifacts written to $modeRoot"

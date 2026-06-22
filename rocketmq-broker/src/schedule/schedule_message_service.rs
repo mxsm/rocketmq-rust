@@ -44,7 +44,6 @@ use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -325,11 +324,17 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     }
 
     fn install_task_groups(this: &ArcMut<Self>) -> Result<ScheduledTaskGroup, Box<dyn std::error::Error>> {
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => return Err(Box::new(error)),
-        };
-        let task_group = TaskGroup::root("rocketmq-broker.schedule", runtime);
+        let task_group = this
+            .broker_controller
+            .broker_task_group_or_current(
+                "rocketmq-broker.schedule",
+                "failed to start ScheduleMessageService outside Tokio runtime",
+            )
+            .ok_or_else(|| {
+                Box::<dyn std::error::Error>::from(std::io::Error::other(
+                    "failed to start ScheduleMessageService outside Tokio runtime",
+                ))
+            })?;
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         *this.task_group.lock() = Some(task_group);
         *this.scheduled_tasks.lock() = Some(scheduled_tasks.clone());

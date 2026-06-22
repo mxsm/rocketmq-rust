@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::BlockingExecutorSnapshot;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ShutdownReport;
@@ -23,6 +24,50 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 
 static ROCKSDB_BLOCKING: OnceLock<BlockingExecutor> = OnceLock::new();
+
+#[derive(Debug, Clone)]
+pub(crate) struct RocksDbRuntimeScope {
+    parent_task_group: TaskGroup,
+    blocking_executor: BlockingExecutor,
+}
+
+impl RocksDbRuntimeScope {
+    pub(crate) fn new(parent_task_group: TaskGroup) -> Result<Self, RocketMQError> {
+        let blocking_group = parent_task_group.child("rocketmq-store.rocksdb.blocking");
+        let blocking_executor = BlockingExecutor::new(
+            BlockingPoolPolicy {
+                name: "rocketmq-store.rocksdb.blocking".to_string(),
+                ..BlockingPoolPolicy::default()
+            },
+            blocking_group.child("rocketmq-store.rocksdb.blocking-reaper"),
+        )
+        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("blocking executor: {error}")))?;
+
+        Ok(Self {
+            parent_task_group,
+            blocking_executor,
+        })
+    }
+
+    pub(crate) async fn spawn_io<F, R>(&self, name: &'static str, operation: F) -> Result<R, RocketMQError>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.blocking_executor
+            .spawn_io(name, operation)
+            .await
+            .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("{name}: {error}")))
+    }
+
+    pub(crate) fn task_group(&self, name: &'static str) -> TaskGroup {
+        self.parent_task_group.child(name)
+    }
+
+    pub(crate) fn blocking_snapshot(&self) -> BlockingExecutorSnapshot {
+        self.blocking_executor.snapshot()
+    }
+}
 
 pub(crate) async fn spawn_io<F, R>(name: &'static str, operation: F) -> Result<R, RocketMQError>
 where

@@ -20,7 +20,6 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::net::channel::Channel;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -141,17 +140,10 @@ where
             }
         }
 
-        let handle = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle,
-            Err(error) => {
-                warn!(
-                    ?error,
-                    "failed to start broker client housekeeping outside Tokio runtime"
-                );
-                return None;
-            }
-        };
-        let group = TaskGroup::root("rocketmq-broker.client-housekeeping", RuntimeHandle::new(handle));
+        let group = self.broker_runtime_inner.broker_task_group_or_current(
+            "rocketmq-broker.client-housekeeping",
+            "failed to start broker client housekeeping outside Tokio runtime",
+        )?;
         *task_group = Some(group.clone());
         Some(group)
     }
@@ -233,6 +225,7 @@ mod tests {
     use std::sync::Arc;
 
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use crate::broker_runtime::BrokerRuntime;
@@ -258,5 +251,34 @@ mod tests {
         assert!(service.shutdown_requested.load(Ordering::Acquire));
         assert!(service.task_group.lock().is_none());
         assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn service_context_parents_task_group() {
+        let context = RuntimeContext::from_current("broker-client-housekeeping-context-test");
+        let broker_service = context.service_context("broker-service");
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut broker_runtime =
+            BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
+        let service = ClientHousekeepingService::new(broker_runtime.inner_for_test().clone());
+
+        service.start();
+
+        let task_group = service
+            .task_group
+            .lock()
+            .as_ref()
+            .expect("client housekeeping task group should be installed")
+            .clone();
+        assert_eq!(task_group.parent_id(), Some(broker_service.task_group().id()));
+
+        let report = service
+            .shutdown_with_report()
+            .await
+            .expect("shutdown should return a report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        let broker_report = broker_service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(broker_report.is_healthy(), "{}", broker_report.to_json());
     }
 }

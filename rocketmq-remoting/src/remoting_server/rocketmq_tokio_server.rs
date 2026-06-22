@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
@@ -367,74 +368,89 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             let shutdown_complete_tx = self.shutdown_complete_tx.clone();
             let conn_disconnect_notify = self.conn_disconnect_notify.clone();
             let event_tx_clone = event_tx.clone();
-            let task_group = self.task_group.clone();
+            let connection_task_group = self.task_group.child("rocketmq.remoting.connection");
+            let handler_task_group = connection_task_group.clone();
 
             // Spawn dedicated task for this connection
-            if let Err(error) = task_group.spawn("rocketmq.remoting.connection", TaskKind::Worker, async move {
-                let Some(connection) = tls_runtime.into_connection(socket, remote_addr).await else {
-                    drop(permit);
-                    return;
-                };
-
-                // Create connection channel wrapper
-                let channel_inner = match ChannelInner::try_new(connection, cmd_handler.response_table.clone()) {
-                    Ok(channel_inner) => ArcMut::new(channel_inner),
-                    Err(error) => {
-                        error!(
-                            remote_addr = %remote_addr,
-                            error = %error,
-                            "failed to initialize remoting channel"
-                        );
+            if let Err(error) =
+                connection_task_group.spawn("rocketmq.remoting.connection", TaskKind::Worker, async move {
+                    let Some(connection) = tls_runtime.into_connection(socket, remote_addr).await else {
                         drop(permit);
                         return;
+                    };
+
+                    // Create connection channel wrapper
+                    let channel_inner = match ChannelInner::try_new_with_task_group(
+                        connection,
+                        cmd_handler.response_table.clone(),
+                        handler_task_group.clone(),
+                    ) {
+                        Ok(channel_inner) => ArcMut::new(channel_inner),
+                        Err(error) => {
+                            error!(
+                                remote_addr = %remote_addr,
+                                error = %error,
+                                "failed to initialize remoting channel"
+                            );
+                            drop(permit);
+                            return;
+                        }
+                    };
+                    let channel = Channel::new(channel_inner, local_addr, remote_addr);
+
+                    // Notify CONNECTED event after plaintext/TLS negotiation succeeds
+                    let _ = event_tx_clone.send(TokioEvent::new(
+                        ConnectionNetEvent::CONNECTED(remote_addr),
+                        remote_addr,
+                        channel.clone(),
+                    ));
+
+                    // Build connection handler
+                    let idle_timeout = Duration::from_secs(DEFAULT_CHANNEL_IDLE_TIMEOUT_SECONDS);
+                    let handler_event_tx = event_tx_clone.clone();
+                    let handler = ConnectionHandler {
+                        connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
+                            channel: channel.clone(),
+                        }),
+                        shutdown: Shutdown::new(notify_shutdown),
+                        _shutdown_complete: shutdown_complete_tx,
+                        conn_disconnect_notify,
+                        cmd_handler,
+                        event_tx: Some(handler_event_tx),
+                        idle_timeout,
+                    };
+                    let mut handler = handler;
+
+                    // Run handler until completion
+                    if let Err(err) = handler.handle().await {
+                        error!(
+                            remote_addr = %remote_addr,
+                            error = ?err,
+                            "Connection handler terminated with error"
+                        );
                     }
-                };
-                let channel = Channel::new(channel_inner, local_addr, remote_addr);
 
-                // Notify CONNECTED event after plaintext/TLS negotiation succeeds
-                let _ = event_tx_clone.send(TokioEvent::new(
-                    ConnectionNetEvent::CONNECTED(remote_addr),
-                    remote_addr,
-                    channel.clone(),
-                ));
+                    let channel_report = handler
+                        .connection_handler_context
+                        .channel_mut()
+                        .channel_inner_mut()
+                        .close_with_report(Duration::from_secs(3))
+                        .await;
+                    channel_report.log_if_unhealthy();
 
-                // Build connection handler
-                let idle_timeout = Duration::from_secs(DEFAULT_CHANNEL_IDLE_TIMEOUT_SECONDS);
-                let handler_event_tx = event_tx_clone.clone();
-                let handler = ConnectionHandler {
-                    connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
-                        channel: channel.clone(),
-                    }),
-                    shutdown: Shutdown::new(notify_shutdown),
-                    _shutdown_complete: shutdown_complete_tx,
-                    conn_disconnect_notify,
-                    cmd_handler,
-                    event_tx: Some(handler_event_tx),
-                    idle_timeout,
-                };
-                let mut handler = handler;
+                    // Notify DISCONNECTED event
+                    let _ = event_tx_clone.send(TokioEvent::new(
+                        ConnectionNetEvent::DISCONNECTED,
+                        remote_addr,
+                        handler.connection_handler_context.channel.clone(),
+                    ));
 
-                // Run handler until completion
-                if let Err(err) = handler.handle().await {
-                    error!(
-                        remote_addr = %remote_addr,
-                        error = ?err,
-                        "Connection handler terminated with error"
-                    );
-                }
+                    info!("Client {} disconnected", remote_addr);
 
-                // Notify DISCONNECTED event
-                let _ = event_tx_clone.send(TokioEvent::new(
-                    ConnectionNetEvent::DISCONNECTED,
-                    remote_addr,
-                    handler.connection_handler_context.channel.clone(),
-                ));
-
-                info!("Client {} disconnected", remote_addr);
-
-                // IMPORTANT: Permit released when `permit` drops here
-                drop(permit);
-            }) {
+                    // IMPORTANT: Permit released when `permit` drops here
+                    drop(permit);
+                })
+            {
                 error!(remote_addr = %remote_addr, error = %error, "failed to spawn remoting connection task");
             }
         }
@@ -503,6 +519,7 @@ async fn acquire_connection_permit(limit_connections: &Arc<Semaphore>) -> anyhow
 pub struct RocketMQServer<RP> {
     config: Arc<ServerConfig>,
     rpc_hooks: Option<Vec<Arc<dyn RPCHook>>>,
+    service_context: Option<ServiceContext>,
     _phantom_data: std::marker::PhantomData<RP>,
 }
 
@@ -511,6 +528,16 @@ impl<RP> RocketMQServer<RP> {
         Self {
             config,
             rpc_hooks: Some(vec![]),
+            service_context: None,
+            _phantom_data: std::marker::PhantomData,
+        }
+    }
+
+    pub fn new_with_service_context(config: Arc<ServerConfig>, service_context: ServiceContext) -> Self {
+        Self {
+            config,
+            rpc_hooks: Some(vec![]),
+            service_context: Some(service_context),
             _phantom_data: std::marker::PhantomData,
         }
     }
@@ -562,7 +589,12 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             }
         };
         let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();
-        let tls_runtime = TlsServerRuntime::new(self.config.tls_config.clone());
+        let remoting_context = self.service_context.as_ref().map(new_remoting_server_context);
+        let task_group = remoting_context.as_ref().map(|context| context.task_group().clone());
+        let tls_runtime = remoting_context.as_ref().map_or_else(
+            || TlsServerRuntime::new(self.config.tls_config.clone()),
+            |context| TlsServerRuntime::new_with_service_context(self.config.tls_config.clone(), context),
+        );
         info!("Starting remoting_server at: {}", addr);
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         run_with_tls_config_report(
@@ -573,6 +605,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             rpc_hooks,
             channel_event_listener,
             tls_runtime,
+            task_group,
         )
         .await
     }
@@ -614,6 +647,32 @@ pub async fn run_with_report<RP: RequestProcessor + Sync + 'static + Clone>(
         rpc_hooks,
         channel_event_listener,
         TlsServerRuntime::new(Default::default()),
+        None,
+    )
+    .await
+}
+
+#[doc(hidden)]
+pub async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 'static + Clone>(
+    service_context: ServiceContext,
+    listener: TcpListener,
+    shutdown: impl Future,
+    request_processor: RP,
+    conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
+    rpc_hooks: Vec<Arc<dyn RPCHook>>,
+    channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+) -> Option<ShutdownReport> {
+    let remoting_context = new_remoting_server_context(&service_context);
+    let tls_runtime = TlsServerRuntime::new_with_service_context(Default::default(), &remoting_context);
+    run_with_tls_config_report(
+        listener,
+        shutdown,
+        request_processor,
+        conn_disconnect_notify,
+        rpc_hooks,
+        channel_event_listener,
+        tls_runtime,
+        Some(remoting_context.task_group().clone()),
     )
     .await
 }
@@ -635,6 +694,7 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
         rpc_hooks,
         channel_event_listener,
         tls_runtime,
+        None,
     )
     .await;
 }
@@ -647,14 +707,19 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     rpc_hooks: Vec<Arc<dyn RPCHook>>,
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
     tls_runtime: TlsServerRuntime,
+    parented_task_group: Option<TaskGroup>,
 ) -> Option<ShutdownReport> {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
-    let task_group = match new_remoting_server_task_group() {
-        Ok(task_group) => task_group,
-        Err(error) => {
-            error!(%error, "failed to start remoting server task group");
-            return None;
+    let task_group = if let Some(parented_task_group) = parented_task_group {
+        parented_task_group
+    } else {
+        match new_remoting_server_task_group() {
+            Ok(task_group) => task_group,
+            Err(error) => {
+                error!(%error, "failed to start remoting server task group");
+                return None;
+            }
         }
     };
     // Initialize the connection listener state
@@ -725,6 +790,14 @@ fn new_remoting_server_task_group() -> rocketmq_error::RocketMQResult<TaskGroup>
     Ok(TaskGroup::root("rocketmq.remoting.server", RuntimeHandle::new(runtime)))
 }
 
+fn new_remoting_server_context(context: &ServiceContext) -> ServiceContext {
+    context.child("rocketmq.remoting.server")
+}
+
+fn new_remoting_server_task_group_with_service_context(context: &ServiceContext) -> TaskGroup {
+    new_remoting_server_context(context).task_group().clone()
+}
+
 #[derive(Debug)]
 pub(crate) struct Shutdown {
     /// `true` if the shutdown signal has been received
@@ -776,11 +849,33 @@ mod tests {
     use rocketmq_common::common::tls_config::TlsMode;
     #[cfg(feature = "tls")]
     use rocketmq_common::common::tls_config::TlsServerConfig;
+    use rocketmq_runtime::RuntimeContext;
+    use tokio::io::AsyncWriteExt;
     use tokio::net::TcpStream;
     use tokio::sync::oneshot;
 
     use super::*;
     use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+
+    struct ConnectSignalListener {
+        connected: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    }
+
+    impl ChannelEventListener for ConnectSignalListener {
+        fn on_channel_connect(&self, _remote_addr: &str, _channel: &Channel) {
+            if let Some(sender) = self.connected.lock().expect("connect signal lock").take() {
+                let _ = sender.send(());
+            }
+        }
+
+        fn on_channel_close(&self, _remote_addr: &str, _channel: &Channel) {}
+
+        fn on_channel_exception(&self, _remote_addr: &str, _channel: &Channel) {}
+
+        fn on_channel_idle(&self, _remote_addr: &str, _channel: &Channel) {}
+
+        fn on_channel_active(&self, _remote_addr: &str, _channel: &Channel) {}
+    }
 
     #[test]
     fn remoting_server_task_group_without_tokio_runtime_returns_error() {
@@ -790,6 +885,61 @@ mod tests {
         assert!(error
             .to_string()
             .contains("remoting server task group requires a Tokio runtime"));
+    }
+
+    #[tokio::test]
+    async fn remoting_server_task_group_from_service_context_is_parented() {
+        let context = RuntimeContext::from_current("remoting-server-context-test");
+        let service = context.service_context("remoting-server-service");
+
+        let task_group = new_remoting_server_task_group_with_service_context(&service);
+
+        assert_eq!(task_group.parent_id(), Some(service.task_group().id()));
+        assert_eq!(task_group.name(), "rocketmq.remoting.server");
+
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn run_with_report_with_service_context_adds_remoting_child_to_parent_report() {
+        let context = RuntimeContext::from_current("remoting-server-parent-report-test");
+        let service = context.service_context("remoting-server-parent");
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+        let server_task = tokio::spawn(run_with_report_with_service_context(
+            service.clone(),
+            listener,
+            async {
+                let _ = shutdown_rx.await;
+            },
+            DefaultRemotingRequestProcessor,
+            None,
+            Vec::new(),
+            None,
+        ));
+
+        let _ = shutdown_tx.send(());
+        let report = tokio::time::timeout(Duration::from_secs(3), server_task)
+            .await
+            .expect("server should shut down before timeout")
+            .expect("server task should not panic")
+            .expect("server should return shutdown report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.name, "rocketmq.remoting.server");
+
+        let parent_report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(
+            parent_report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq.remoting.server"),
+            "{}",
+            parent_report.to_json()
+        );
     }
 
     #[tokio::test]
@@ -868,6 +1018,64 @@ mod tests {
         assert!(report.is_healthy(), "{}", report.to_json());
     }
 
+    #[tokio::test]
+    async fn run_shutdown_report_includes_channel_send_task_child() {
+        let context = RuntimeContext::from_current("remoting-server-channel-report-test");
+        let service = context.service_context("remoting-server-channel-report");
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener should have local addr");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let (connected_tx, connected_rx) = oneshot::channel::<()>();
+        let channel_listener = std::sync::Arc::new(ConnectSignalListener {
+            connected: std::sync::Mutex::new(Some(connected_tx)),
+        });
+        let server_task = tokio::spawn(run_with_report_with_service_context(
+            service,
+            listener,
+            async {
+                let _ = shutdown_rx.await;
+            },
+            DefaultRemotingRequestProcessor,
+            None,
+            Vec::new(),
+            Some(channel_listener),
+        ));
+
+        let mut client = TcpStream::connect(addr).await.expect("client should connect");
+        client
+            .write_all(&[0])
+            .await
+            .expect("client should send first byte for TLS/plaintext detection");
+        tokio::time::timeout(Duration::from_secs(3), connected_rx)
+            .await
+            .expect("server should accept connection before timeout")
+            .expect("connect signal should be sent");
+        let _ = shutdown_tx.send(());
+        let report = tokio::time::timeout(Duration::from_secs(3), server_task)
+            .await
+            .expect("server should shut down before timeout")
+            .expect("server task should not panic")
+            .expect("server should return shutdown report");
+        drop(client);
+
+        assert!(report.is_healthy(), "{}", report.to_json());
+        let connection_report = report
+            .children
+            .iter()
+            .find(|child| child.name == "rocketmq.remoting.connection")
+            .expect("remoting report should include connection child group");
+        assert!(
+            connection_report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq-remoting.channel"),
+            "{}",
+            report.to_json()
+        );
+    }
+
     #[cfg(feature = "tls")]
     #[tokio::test]
     async fn run_shutdown_report_includes_tls_reload_task() {
@@ -894,6 +1102,7 @@ mod tests {
             Vec::new(),
             None,
             tls_runtime,
+            None,
         );
         let server_task = tokio::spawn(report);
 

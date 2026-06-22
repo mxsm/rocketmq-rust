@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::blocking::BlockingExecutor;
 use crate::diagnostics::RuntimeDiagnostics;
+use crate::diagnostics::RuntimeDiagnosticsSnapshot;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
 use crate::scheduled::ScheduledTaskGroup;
@@ -68,6 +69,10 @@ impl ServiceContext {
 
     pub fn diagnostics(&self) -> &RuntimeDiagnostics {
         &self.diagnostics
+    }
+
+    pub fn diagnostics_snapshot(&self) -> RuntimeDiagnosticsSnapshot {
+        self.diagnostics.snapshot(&self.task_group, &self.blocking)
     }
 
     pub fn child(&self, name: impl Into<Arc<str>>) -> Self {

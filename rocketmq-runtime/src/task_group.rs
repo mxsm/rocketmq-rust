@@ -124,8 +124,8 @@ struct TaskGroupInner {
     tracker: TaskTracker,
     tasks: DashMap<TaskId, TaskMeta>,
     children: Mutex<Vec<TaskGroup>>,
+    next_group_id: Arc<AtomicU64>,
     next_task_id: AtomicU64,
-    next_child_id: AtomicU64,
     completed: AtomicUsize,
     cancelled: AtomicUsize,
     aborted: AtomicUsize,
@@ -197,6 +197,7 @@ impl Drop for TaskCompletionGuard {
 
 impl TaskGroup {
     pub fn root(name: impl Into<Arc<str>>, runtime: RuntimeHandle) -> Self {
+        let next_group_id = Arc::new(AtomicU64::new(2));
         Self {
             inner: Arc::new(TaskGroupInner::new(
                 TaskGroupId(1),
@@ -204,6 +205,7 @@ impl TaskGroup {
                 name.into(),
                 runtime,
                 CancellationToken::new(),
+                next_group_id,
             )),
         }
     }
@@ -262,7 +264,7 @@ impl TaskGroup {
     }
 
     fn open_child(&self, name: Arc<str>) -> Self {
-        let child_id = TaskGroupId(self.inner.next_child_id.fetch_add(1, Ordering::Relaxed));
+        let child_id = TaskGroupId(self.inner.next_group_id.fetch_add(1, Ordering::Relaxed));
         Self {
             inner: Arc::new(TaskGroupInner::new(
                 child_id,
@@ -270,6 +272,7 @@ impl TaskGroup {
                 name,
                 self.inner.runtime.clone(),
                 self.inner.cancellation_token.child_token(),
+                self.inner.next_group_id.clone(),
             )),
         }
     }
@@ -677,6 +680,7 @@ impl TaskGroupInner {
         name: Arc<str>,
         runtime: RuntimeHandle,
         cancellation_token: CancellationToken,
+        next_group_id: Arc<AtomicU64>,
     ) -> Self {
         Self {
             id,
@@ -687,8 +691,8 @@ impl TaskGroupInner {
             tracker: TaskTracker::new(),
             tasks: DashMap::new(),
             children: Mutex::new(Vec::new()),
+            next_group_id,
             next_task_id: AtomicU64::new(1),
-            next_child_id: AtomicU64::new(id.as_u64() * 1_000_000 + 1),
             completed: AtomicUsize::new(0),
             cancelled: AtomicUsize::new(0),
             aborted: AtomicUsize::new(0),

@@ -92,6 +92,7 @@ use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownAnnotation;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
@@ -603,6 +604,24 @@ impl<PR> ConnectionPool<PR> {
         }
     }
 
+    /// Start the background cleanup task under an injected service context.
+    pub fn start_cleanup_task_with_service_context(
+        &self,
+        context: &ServiceContext,
+        interval: Duration,
+    ) -> ConnectionPoolCleanupTask
+    where
+        PR: Send + Sync + 'static,
+    {
+        match self.try_start_cleanup_task_with_service_context(context, interval) {
+            Ok(cleanup_task) => cleanup_task,
+            Err(error) => {
+                warn!(?error, "connection pool cleanup task not started from service context");
+                ConnectionPoolCleanupTask::inactive()
+            }
+        }
+    }
+
     /// Try to start the background cleanup task.
     ///
     /// Unlike [`Self::start_cleanup_task`], this method returns an error when no
@@ -613,6 +632,19 @@ impl<PR> ConnectionPool<PR> {
     {
         let handle = tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::NoCurrentRuntime)?;
         let task_group = TaskGroup::root("rocketmq-remoting.connection-pool", RuntimeHandle::new(handle));
+        self.start_cleanup_task_with_group(interval, task_group)
+    }
+
+    /// Try to start the background cleanup task under an injected service context.
+    pub fn try_start_cleanup_task_with_service_context(
+        &self,
+        context: &ServiceContext,
+        interval: Duration,
+    ) -> RuntimeResult<ConnectionPoolCleanupTask>
+    where
+        PR: Send + Sync + 'static,
+    {
+        let task_group = context.task_group().child("rocketmq-remoting.connection-pool");
         self.start_cleanup_task_with_group(interval, task_group)
     }
 
@@ -780,6 +812,34 @@ mod tests {
 
         assert!(report.is_healthy(), "{}", report.to_json());
         assert_eq!(cleanup_task.task_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn cleanup_task_with_service_context_is_parented() {
+        let context = rocketmq_runtime::RuntimeContext::from_current("connection-pool-context-test");
+        let service = context.service_context("connection-pool-service");
+        let pool = ConnectionPool::<()>::new(100, Duration::from_millis(10));
+
+        let cleanup_task = pool
+            .try_start_cleanup_task_with_service_context(&service, Duration::from_millis(5))
+            .expect("cleanup task should start from service context");
+        assert!(cleanup_task.is_active());
+
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        let pool_report = report
+            .children
+            .iter()
+            .find(|child| child.name == "rocketmq-remoting.connection-pool")
+            .expect("parent report should include connection-pool child");
+        assert!(
+            pool_report
+                .children
+                .iter()
+                .any(|child| child.name == "remoting.connection-pool.cleanup"),
+            "{}",
+            report.to_json()
+        );
     }
 
     #[test]

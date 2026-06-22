@@ -18,6 +18,7 @@ use std::time::Duration;
 use crate::blocking::BlockingExecutor;
 use crate::blocking::BlockingPoolPolicy;
 use crate::diagnostics::RuntimeDiagnostics;
+use crate::diagnostics::RuntimeDiagnosticsSnapshot;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
@@ -77,6 +78,10 @@ impl RuntimeContext {
 
     pub fn diagnostics(&self) -> &RuntimeDiagnostics {
         &self.diagnostics
+    }
+
+    pub fn diagnostics_snapshot(&self) -> RuntimeDiagnosticsSnapshot {
+        self.diagnostics.snapshot(&self.root_group, &self.blocking)
     }
 
     pub fn service_context(&self, name: impl Into<Arc<str>>) -> ServiceContext {

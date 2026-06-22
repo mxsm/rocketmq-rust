@@ -538,6 +538,94 @@ function Get-BoundaryDisposition {
 
     switch ($Category) {
         "task-group-root-sites" {
+            if ($path -eq "rocketmq-broker/src/broker_runtime.rs" -and $Match.Text -match "TaskGroup::root\(name, runtime\)") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "BrokerRuntime compatibility helper falls back to the current Tokio runtime only when no ServiceContext was injected." `
+                    -MigrationPhase "PR-3-service-context-api"
+            }
+
+            if ($path -eq "rocketmq-namesrv/src/bootstrap.rs" -and $Match.Text -match 'TaskGroup::root\("rocketmq-namesrv"') {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "NameServerRuntimeInner::task_group compatibility helper falls back to the current Tokio runtime only when no ServiceContext was injected." `
+                    -MigrationPhase "PR-5-namesrv-shutdown"
+            }
+
+            if ($path -eq "rocketmq-broker/src/latency/broker_fast_failure.rs" -and $Match.Text -match 'TaskGroup::root\("rocketmq-broker\.fast-failure"') {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "BrokerFastFailure::new compatibility path falls back to the current Tokio runtime; BrokerRuntime injects a parent task group when ServiceContext is available." `
+                    -MigrationPhase "PR-6-broker-report-tree"
+            }
+
+            if ($path -eq "rocketmq-broker/src/processor/pop_message_processor.rs" -and $Match.Text -match 'TaskGroup::root\("rocketmq-broker\.pop\.queue-lock"') {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "QueueLockManager::new compatibility path falls back to the current Tokio runtime; broker processors inject a parent task group when ServiceContext is available." `
+                    -MigrationPhase "PR-6-broker-report-tree"
+            }
+
+            if ($path -eq "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs" -and $Match.Text -match "TaskGroup::root") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "TopicQueueMappingManager::new compatibility path falls back to the current Tokio runtime; BrokerRuntime injects a parent task group when ServiceContext is available." `
+                    -MigrationPhase "PR-6-broker-report-tree"
+            }
+
+            if ($path -eq "rocketmq-controller/src/storage/rocksdb_backend.rs" -and $Match.Text -match "TaskGroup::root") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "RocksDBBackend::new compatibility path falls back to the current Tokio runtime; new_with_parent_task_group injects a parent task group when available." `
+                    -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
+            if ($path -eq "rocketmq-auth/src/runtime_bridge.rs" -and $Match.Text -match "TaskGroup::root") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "AuthBlockingExecutor keeps a lazy current-runtime fallback for file-backed auth metadata compatibility; runtime bridge counters and shutdown reports expose the boundary." `
+                    -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
+            if ($path -eq "rocketmq-auth/src/runtime.rs" -and $Match.Text -match "TaskGroup::root") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "ACL file watcher is a compatibility path that binds the current Tokio runtime when auth hot reload is enabled." `
+                    -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
+            if ($path -eq "rocketmq-remoting/src/tls.rs" -and $Match.Text -match 'TaskGroup::root\("rocketmq-remoting\.tls", runtime\)') {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "TlsServerRuntime::new compatibility helper falls back to the current Tokio runtime; new code should use new_with_service_context." `
+                    -MigrationPhase "PR-4-remoting-lifecycle"
+            }
+
+            if ($path -eq "rocketmq-remoting/src/connection_v2.rs" -and $Match.Text -match "TaskGroup::root") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "ConcurrentConnection::try_new compatibility helper falls back to the current Tokio runtime; new code should use try_new_with_task_group." `
+                    -MigrationPhase "PR-4-remoting-lifecycle"
+            }
+
+            if ($path -eq "rocketmq-remoting/src/net/channel.rs" -and $Match.Text -match 'TaskGroup::root\("rocketmq-remoting\.channel"') {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "ChannelInner::try_new compatibility helper falls back to the current Tokio runtime; new code should use try_new_with_task_group." `
+                    -MigrationPhase "PR-4-remoting-lifecycle"
+            }
+
             return New-BoundaryDisposition `
                 -Disposition "unparented-task-group-root-risk" `
                 -ActionRequired $true `
@@ -551,6 +639,94 @@ function Get-BoundaryDisposition {
                     -ActionRequired $false `
                     -Reason "Allowed process or tool entrypoint runtime boundary." `
                     -MigrationPhase $phase
+            }
+
+            if ($path -eq "rocketmq-namesrv/src/bootstrap.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "NameServerRuntimeInner::task_group binds the current Tokio runtime only when no ServiceContext was injected." `
+                    -MigrationPhase "PR-5-namesrv-shutdown"
+            }
+
+            if ($path -eq "rocketmq-broker/src/broker_runtime.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "BrokerRuntimeInner::broker_task_group_or_current binds the current Tokio runtime only when no ServiceContext was injected." `
+                    -MigrationPhase "PR-6-broker-report-tree"
+            }
+
+            if ($path -eq "rocketmq-broker/src/latency/broker_fast_failure.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "BrokerFastFailure::new compatibility path binds the current Tokio runtime only when no parent TaskGroup was injected." `
+                    -MigrationPhase "PR-6-broker-report-tree"
+            }
+
+            if ($path -eq "rocketmq-broker/src/processor/pop_message_processor.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "QueueLockManager::new compatibility path binds the current Tokio runtime only when no parent TaskGroup was injected." `
+                    -MigrationPhase "PR-6-broker-report-tree"
+            }
+
+            if ($path -eq "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "TopicQueueMappingManager::new compatibility path binds the current Tokio runtime only when no parent TaskGroup was injected." `
+                    -MigrationPhase "PR-6-broker-report-tree"
+            }
+
+            if ($path -eq "rocketmq-controller/src/storage/rocksdb_backend.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "RocksDBBackend::new compatibility path binds the current Tokio runtime only when no parent TaskGroup was injected." `
+                    -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
+            if ($path -eq "rocketmq-auth/src/runtime_bridge.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "Auth sync and blocking bridges bind the current Tokio runtime only through documented compatibility paths with counters." `
+                    -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
+            if ($path -eq "rocketmq-auth/src/runtime.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "ACL file watcher binds the current Tokio runtime only through the auth hot-reload compatibility path." `
+                    -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
+            if ($path -eq "rocketmq-remoting/src/tls.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "TlsServerRuntime::new compatibility helper binds the current Tokio runtime only when no ServiceContext was injected." `
+                    -MigrationPhase "PR-4-remoting-lifecycle"
+            }
+
+            if ($path -eq "rocketmq-remoting/src/connection_v2.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "ConcurrentConnection::try_new compatibility helper binds the current Tokio runtime only when no parent TaskGroup was provided." `
+                    -MigrationPhase "PR-4-remoting-lifecycle"
+            }
+
+            if ($path -eq "rocketmq-remoting/src/net/channel.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "ChannelInner::try_new compatibility helper binds the current Tokio runtime only when no parent TaskGroup was provided." `
+                    -MigrationPhase "PR-4-remoting-lifecycle"
             }
 
             return New-BoundaryDisposition `
@@ -587,6 +763,29 @@ function Get-BoundaryDisposition {
                 -Disposition "raw-blocking-risk" `
                 -ActionRequired $true `
                 -Reason "Production code uses raw blocking offload; migrate to BlockingExecutor or document the compatibility boundary." `
+                -MigrationPhase $phase
+        }
+        "legacy-runtime-api-sites" {
+            if ($path -match "^rocketmq-tools/" -or $path -match "^rocketmq-.+/src/(bin|main)\.rs$") {
+                return New-BoundaryDisposition `
+                    -Disposition "top-level-owned-runtime-boundary" `
+                    -ActionRequired $false `
+                    -Reason "Allowed process or tool entrypoint legacy runtime ownership boundary." `
+                    -MigrationPhase $phase
+            }
+
+            if ($path -eq "rocketmq-client/src/producer/transaction_mq_produce_builder.rs") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "Transaction producer builder keeps RocketMQRuntime as a legacy check-runtime compatibility adapter." `
+                    -MigrationPhase "legacy-compatibility"
+            }
+
+            return New-BoundaryDisposition `
+                -Disposition "unclassified-boundary-risk" `
+                -ActionRequired $true `
+                -Reason "RocketMQRuntime usage must be a runtime primitive, top-level owned runtime boundary, or current-runtime compatibility adapter." `
                 -MigrationPhase $phase
         }
         "dedicated-thread-sites" {
@@ -1852,6 +2051,7 @@ $patterns = [ordered]@{
     "current-runtime-adapter-sites" = "Handle::try_current|Handle::current|RuntimeContext::from_current|RuntimeContext::try_from_current"
     "raw-tokio-spawn-sites" = "tokio::spawn|JoinSet::spawn"
     "raw-blocking-executor-sites" = "spawn_blocking|block_in_place"
+    "legacy-runtime-api-sites" = "\bRocketMQRuntime\b"
     "dedicated-thread-sites" = "std::thread::spawn|thread::Builder::new"
 }
 
@@ -1860,6 +2060,7 @@ $boundaryKeys = @(
     "current-runtime-adapter-sites",
     "raw-tokio-spawn-sites",
     "raw-blocking-executor-sites",
+    "legacy-runtime-api-sites",
     "dedicated-thread-sites"
 )
 
@@ -1963,6 +2164,7 @@ $classificationLines = @(
     "| scheduled task | ScheduledTaskGroup | scheduler-sites.md |",
     "| connection task | remoting connection TaskGroup | runtime-spawn-sites.md |",
     "| blocking task | BlockingExecutor | blocking-sites.md |",
+    "| legacy runtime compatibility | RuntimeOwner or RuntimeContext compatibility adapter | legacy-runtime-api-sites.md |",
     "| dedicated loop | dedicated thread + CancellationToken | runtime-creation-sites.md, shutdown-sites.md |",
     "| detached task | DetachedTaskPolicy or eliminate | runtime-spawn-sites.md |",
     "",

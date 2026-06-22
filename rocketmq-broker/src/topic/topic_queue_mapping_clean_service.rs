@@ -32,7 +32,6 @@ use rocketmq_remoting::protocol::static_topic::logic_queue_mapping_item::LogicQu
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -99,18 +98,13 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
             return;
         }
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                self.inner.running.store(false, Ordering::Release);
-                warn!(
-                    ?error,
-                    "failed to start TopicQueueMappingCleanService outside Tokio runtime"
-                );
-                return;
-            }
+        let Some(task_group) = self.inner.broker_runtime_inner.broker_task_group_or_current(
+            "rocketmq-broker.topic-queue-mapping-clean",
+            "failed to start TopicQueueMappingCleanService outside Tokio runtime",
+        ) else {
+            self.inner.running.store(false, Ordering::Release);
+            return;
         };
-        let task_group = TaskGroup::root("rocketmq-broker.topic-queue-mapping-clean", runtime);
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let this = Self {
             inner: Arc::clone(&self.inner),
@@ -529,6 +523,7 @@ mod tests {
     use std::sync::Arc;
 
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 
@@ -604,5 +599,39 @@ mod tests {
         assert!(!service.is_running());
         assert_eq!(service.task_count(), 0);
         assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn service_context_parents_task_group() {
+        let context = RuntimeContext::from_current("broker-topic-clean-context-test");
+        let broker_service = context.service_context("broker-service");
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut broker_runtime =
+            BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
+        let service = broker_runtime
+            .inner_for_test()
+            .topic_queue_mapping_clean_service_unchecked()
+            .clone();
+
+        service.start();
+
+        let task_group = service
+            .inner
+            .lifecycle
+            .lock()
+            .task_group
+            .as_ref()
+            .expect("topic queue mapping clean task group should be installed")
+            .clone();
+        assert_eq!(task_group.parent_id(), Some(broker_service.task_group().id()));
+
+        let report = service
+            .shutdown_with_report()
+            .await
+            .expect("shutdown should return a report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        let broker_report = broker_service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(broker_report.is_healthy(), "{}", broker_report.to_json());
     }
 }

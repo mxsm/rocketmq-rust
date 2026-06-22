@@ -38,6 +38,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::lite::memory_consumer_order_info_manager::MemoryConsumerOrderInfoManager;
 use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingService;
 use crate::long_polling::polling_result::PollingResult;
+use crate::processor::pop_message_processor::queue_lock_manager_for_broker;
 use crate::processor::pop_message_processor::QueueLockManager;
 
 pub(crate) struct PopLiteMessageProcessor<MS: MessageStore> {
@@ -63,7 +64,7 @@ impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
         Self {
             pop_lite_long_polling_service: ArcMut::new(PopLiteLongPollingService::new(broker_runtime_inner.clone())),
             consumer_order_info_manager: MemoryConsumerOrderInfoManager::default(),
-            queue_lock_manager: QueueLockManager::new(),
+            queue_lock_manager: queue_lock_manager_for_broker(&broker_runtime_inner),
             broker_runtime_inner,
         }
     }

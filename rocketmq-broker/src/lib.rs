@@ -67,6 +67,8 @@ pub mod bench_support {
         pub remoting_shutdown_report: Option<BrokerRemotingShutdownProbe>,
         pub request_processor_shutdown_report: Option<rocketmq_runtime::ShutdownReport>,
         pub basic_shutdown_elapsed_us: u128,
+        pub basic_shutdown_healthy: bool,
+        pub basic_shutdown_report: BrokerBasicShutdownProbe,
         pub healthy: bool,
     }
 
@@ -146,6 +148,15 @@ pub mod bench_support {
         pub healthy: bool,
     }
 
+    #[derive(Debug, Clone, Serialize)]
+    pub struct BrokerBasicShutdownProbe {
+        pub component_names: Vec<&'static str>,
+        pub healthy: bool,
+        pub unhealthy_component_count: usize,
+        pub unhealthy_components: Vec<&'static str>,
+        pub timed_out_components: Vec<&'static str>,
+    }
+
     impl From<ScheduledShutdownReport> for BrokerScheduledShutdownProbe {
         fn from(report: ScheduledShutdownReport) -> Self {
             Self {
@@ -178,6 +189,18 @@ pub mod bench_support {
                 server_report_count,
                 server_reports_healthy,
                 healthy: report.is_healthy(),
+            }
+        }
+    }
+
+    impl From<&crate::broker_runtime::BrokerBasicServiceShutdownReport> for BrokerBasicShutdownProbe {
+        fn from(report: &crate::broker_runtime::BrokerBasicServiceShutdownReport) -> Self {
+            Self {
+                component_names: report.component_names(),
+                healthy: report.is_healthy(),
+                unhealthy_component_count: report.unhealthy_component_count(),
+                unhealthy_components: report.unhealthy_component_names(),
+                timed_out_components: report.timed_out_component_names(),
             }
         }
     }
@@ -281,16 +304,20 @@ pub mod bench_support {
         let remoting_probe_installed = runtime.install_remoting_server_report_probe();
         let request_processor_probe_installed = runtime.install_request_processor_task_probe();
         let basic_started_at = Instant::now();
-        let basic_shutdown_report =
+        let mut basic_shutdown_report =
             tokio::time::timeout(Duration::from_secs(5), runtime.shutdown_basic_service_with_report())
                 .await
                 .expect("broker basic service shutdown should be bounded");
         let basic_shutdown_elapsed_us = basic_started_at.elapsed().as_micros();
 
         let scheduled_shutdown_report = BrokerScheduledShutdownProbe::from(scheduled_shutdown_report);
-        let basic_shutdown_healthy = basic_shutdown_report.is_healthy();
-        let remoting_shutdown_report = basic_shutdown_report.remoting.map(BrokerRemotingShutdownProbe::from);
-        let request_processor_shutdown_report = basic_shutdown_report.request_processor;
+        let basic_shutdown_report_probe = BrokerBasicShutdownProbe::from(&basic_shutdown_report);
+        let basic_shutdown_healthy = basic_shutdown_report_probe.healthy;
+        let remoting_shutdown_report = basic_shutdown_report
+            .remoting
+            .take()
+            .map(BrokerRemotingShutdownProbe::from);
+        let request_processor_shutdown_report = basic_shutdown_report.request_processor.take();
         let remoting_shutdown_elapsed_us = basic_shutdown_elapsed_us;
         let healthy = scheduled_shutdown_report.healthy
             && basic_shutdown_healthy
@@ -318,6 +345,8 @@ pub mod bench_support {
             remoting_shutdown_report,
             request_processor_shutdown_report,
             basic_shutdown_elapsed_us,
+            basic_shutdown_healthy,
+            basic_shutdown_report: basic_shutdown_report_probe,
             healthy,
         }
     }
@@ -627,6 +656,10 @@ mod bench_support_tests {
         let probe = super::bench_support::run_broker_runtime_lifecycle_probe(root, 1).await;
 
         assert!(probe.healthy, "{probe:?}");
+        assert!(probe.basic_shutdown_healthy, "{probe:?}");
+        assert_eq!(probe.basic_shutdown_report.unhealthy_component_count, 0, "{probe:?}");
+        assert!(probe.basic_shutdown_report.timed_out_components.is_empty(), "{probe:?}");
+        assert!(probe.basic_shutdown_report.component_names.contains(&"message_store"));
         let remoting_report = probe
             .remoting_shutdown_report
             .as_ref()

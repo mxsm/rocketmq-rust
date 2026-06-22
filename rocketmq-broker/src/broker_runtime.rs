@@ -24,6 +24,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -57,6 +58,7 @@ use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
@@ -426,21 +428,207 @@ impl BrokerRemotingServerShutdownReport {
                 .iter()
                 .all(|server| server.report.as_ref().is_some_and(ShutdownReport::is_healthy))
     }
+
+    pub(crate) fn has_timed_out(&self) -> bool {
+        shutdown_report_has_timed_out(&self.task_group)
+            || self
+                .server_reports
+                .iter()
+                .any(|server| server.report.as_ref().is_some_and(shutdown_report_has_timed_out))
+    }
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BrokerBasicServiceShutdownReport {
     pub(crate) remoting: Option<BrokerRemotingServerShutdownReport>,
     pub(crate) request_processor: Option<ShutdownReport>,
+    pub(crate) auth: BrokerShutdownComponentReport,
+    pub(crate) observability: BrokerShutdownComponentReport,
+    pub(crate) scheduled_tasks: BrokerShutdownComponentReport,
+    pub(crate) message_store: BrokerShutdownComponentReport,
+    pub(crate) pull_request_hold: BrokerShutdownComponentReport,
+    pub(crate) pop_services: BrokerShutdownComponentReport,
+    pub(crate) transaction_services: BrokerShutdownComponentReport,
+    pub(crate) fast_failure: BrokerShutdownComponentReport,
+    pub(crate) topic_route: BrokerShutdownComponentReport,
+    pub(crate) consumer_offset: BrokerShutdownComponentReport,
+    pub(crate) subscription_group: BrokerShutdownComponentReport,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BrokerShutdownComponentReport {
+    pub(crate) name: &'static str,
+    pub(crate) present: bool,
+    pub(crate) healthy: bool,
+    pub(crate) timed_out: bool,
+    pub(crate) elapsed: Duration,
+    pub(crate) detail: Option<String>,
+}
+
+impl Default for BrokerShutdownComponentReport {
+    fn default() -> Self {
+        Self::skipped("unknown")
+    }
+}
+
+impl BrokerShutdownComponentReport {
+    pub(crate) fn skipped(name: &'static str) -> Self {
+        Self {
+            name,
+            present: false,
+            healthy: true,
+            timed_out: false,
+            elapsed: Duration::ZERO,
+            detail: None,
+        }
+    }
+
+    pub(crate) fn completed(name: &'static str, elapsed: Duration) -> Self {
+        Self {
+            name,
+            present: true,
+            healthy: true,
+            timed_out: false,
+            elapsed,
+            detail: None,
+        }
+    }
+
+    pub(crate) fn unhealthy(name: &'static str, elapsed: Duration, detail: impl Into<String>) -> Self {
+        Self {
+            name,
+            present: true,
+            healthy: false,
+            timed_out: false,
+            elapsed,
+            detail: Some(detail.into()),
+        }
+    }
+
+    pub(crate) fn timed_out(name: &'static str, elapsed: Duration) -> Self {
+        Self {
+            name,
+            present: true,
+            healthy: false,
+            timed_out: true,
+            elapsed,
+            detail: Some("timed out".to_string()),
+        }
+    }
+
+    pub(crate) fn from_shutdown_report(name: &'static str, report: Option<&ShutdownReport>, elapsed: Duration) -> Self {
+        let Some(report) = report else {
+            return Self::skipped(name);
+        };
+        if shutdown_report_has_timed_out(report) {
+            return Self::timed_out(name, elapsed);
+        }
+        if report.is_healthy() {
+            Self::completed(name, elapsed)
+        } else {
+            Self::unhealthy(name, elapsed, report.to_json())
+        }
+    }
 }
 
 impl BrokerBasicServiceShutdownReport {
+    const COMPONENT_NAMES: [&'static str; 13] = [
+        "remoting",
+        "request_processor",
+        "auth",
+        "observability",
+        "scheduled_tasks",
+        "message_store",
+        "pull_request_hold",
+        "pop_services",
+        "transaction_services",
+        "fast_failure",
+        "topic_route",
+        "consumer_offset",
+        "subscription_group",
+    ];
+
     pub(crate) fn is_healthy(&self) -> bool {
         self.remoting
             .as_ref()
             .is_none_or(BrokerRemotingServerShutdownReport::is_healthy)
             && self.request_processor.as_ref().is_none_or(ShutdownReport::is_healthy)
+            && self.component_reports().into_iter().all(|component| component.healthy)
     }
+
+    pub(crate) fn component_names(&self) -> Vec<&'static str> {
+        Self::COMPONENT_NAMES.to_vec()
+    }
+
+    pub(crate) fn unhealthy_component_count(&self) -> usize {
+        self.unhealthy_component_names().len()
+    }
+
+    pub(crate) fn unhealthy_component_names(&self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if self.remoting.as_ref().is_some_and(|report| !report.is_healthy()) {
+            names.push("remoting");
+        }
+        if self
+            .request_processor
+            .as_ref()
+            .is_some_and(|report| !report.is_healthy())
+        {
+            names.push("request_processor");
+        }
+        names.extend(
+            self.component_reports()
+                .into_iter()
+                .filter(|component| component.present && !component.healthy)
+                .map(|component| component.name),
+        );
+        names
+    }
+
+    pub(crate) fn timed_out_component_names(&self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if self
+            .remoting
+            .as_ref()
+            .is_some_and(BrokerRemotingServerShutdownReport::has_timed_out)
+        {
+            names.push("remoting");
+        }
+        if self
+            .request_processor
+            .as_ref()
+            .is_some_and(shutdown_report_has_timed_out)
+        {
+            names.push("request_processor");
+        }
+        names.extend(
+            self.component_reports()
+                .into_iter()
+                .filter(|component| component.timed_out)
+                .map(|component| component.name),
+        );
+        names
+    }
+
+    fn component_reports(&self) -> Vec<&BrokerShutdownComponentReport> {
+        vec![
+            &self.auth,
+            &self.observability,
+            &self.scheduled_tasks,
+            &self.message_store,
+            &self.pull_request_hold,
+            &self.pop_services,
+            &self.transaction_services,
+            &self.fast_failure,
+            &self.topic_route,
+            &self.consumer_offset,
+            &self.subscription_group,
+        ]
+    }
+}
+
+fn shutdown_report_has_timed_out(report: &ShutdownReport) -> bool {
+    report.timed_out > 0 || report.children.iter().any(shutdown_report_has_timed_out)
 }
 
 impl Drop for BrokerRuntime {
@@ -458,12 +646,36 @@ impl BrokerRuntime {
         message_store_config: Arc<MessageStoreConfig>,
         //server_config: Arc<ServerConfig>,
     ) -> Self {
+        Self::new_with_optional_service_context(broker_config, message_store_config, None)
+    }
+
+    pub(crate) fn new_with_service_context(
+        broker_config: Arc<BrokerConfig>,
+        message_store_config: Arc<MessageStoreConfig>,
+        service_context: ServiceContext,
+    ) -> Self {
+        Self::new_with_optional_service_context(broker_config, message_store_config, Some(service_context))
+    }
+
+    fn new_with_optional_service_context(
+        broker_config: Arc<BrokerConfig>,
+        message_store_config: Arc<MessageStoreConfig>,
+        service_context: Option<ServiceContext>,
+    ) -> Self {
         let broker_address = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port);
         let store_host = broker_address.parse::<SocketAddr>().expect("parse store_host failed");
         let scheduled_task_manager = ScheduledTaskManager::default();
         let broker_outer_api = BrokerOuterAPI::new(Arc::new(TokioClientConfig::default()));
 
-        let topic_queue_mapping_manager = TopicQueueMappingManager::new(broker_config.clone());
+        let topic_queue_mapping_manager = service_context
+            .as_ref()
+            .map(|context| {
+                TopicQueueMappingManager::new_with_parent_task_group(
+                    broker_config.clone(),
+                    context.task_group().clone(),
+                )
+            })
+            .unwrap_or_else(|| TopicQueueMappingManager::new(broker_config.clone()));
         let mut broker_member_group = BrokerMemberGroup::new(
             broker_config.broker_identity.broker_cluster_name.clone(),
             broker_config.broker_identity.broker_name.clone(),
@@ -481,6 +693,12 @@ impl BrokerRuntime {
 
         let should_start_time = Arc::new(AtomicU64::new(0));
         let pop_inflight_message_counter = PopInflightMessageCounter::new(should_start_time);
+        let broker_fast_failure = service_context
+            .as_ref()
+            .map(|context| {
+                BrokerFastFailure::new_with_parent_task_group(broker_config.clone(), context.task_group().clone())
+            })
+            .unwrap_or_else(|| BrokerFastFailure::new(broker_config.clone()));
         #[cfg(feature = "rocksdb_store")]
         let rocksdb_config_managers =
             open_broker_rocksdb_config_managers(broker_config.as_ref(), message_store_config.as_ref());
@@ -538,7 +756,7 @@ impl BrokerRuntime {
             escape_bridge: None,
             pop_inflight_message_counter,
             replicas_manager: None,
-            broker_fast_failure: BrokerFastFailure::new(broker_config.clone()),
+            broker_fast_failure,
             #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
             observability_guard: None,
             cold_data_pull_request_hold_service: Some(ColdDataPullRequestHoldService::default()),
@@ -561,6 +779,7 @@ impl BrokerRuntime {
             broker_pre_online_service: None,
             min_broker_id_in_group: AtomicU64::new(0),
             min_broker_addr_in_group: Default::default(),
+            service_context,
             lock: Default::default(),
         });
         let mut stats_manager = BrokerStatsManager::new_with_scheduler(
@@ -670,8 +889,6 @@ impl BrokerRuntime {
 
         self.inner.broker_outer_api.shutdown();
 
-        self.shutdown_scheduled_tasks().await;
-
         if let Some(client_housekeeping_service) = self.inner.client_housekeeping_service.take() {
             client_housekeeping_service.shutdown().await;
         }
@@ -706,46 +923,110 @@ impl BrokerRuntime {
         shutdown_report.remoting = self.shutdown_remoting_servers().await;
         shutdown_report.request_processor = self.shutdown_request_processor_tasks().await;
 
+        let started = Instant::now();
         if let Some(auth_runtime) = self.inner.auth_runtime.take() {
             if let Err(error) = auth_runtime.shutdown().await {
                 warn!("Failed to shutdown auth runtime: {error}");
+                shutdown_report.auth =
+                    BrokerShutdownComponentReport::unhealthy("auth", started.elapsed(), error.to_string());
+            } else {
+                shutdown_report.auth = BrokerShutdownComponentReport::completed("auth", started.elapsed());
             }
+        } else {
+            shutdown_report.auth = BrokerShutdownComponentReport::skipped("auth");
         }
 
         #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
-        if let Some(guard) = self.inner.observability_guard.take() {
-            if let Err(error) = guard.shutdown() {
-                warn!("Failed to shutdown observability runtime: {error}");
+        {
+            let started = Instant::now();
+            if let Some(guard) = self.inner.observability_guard.take() {
+                if let Err(error) = guard.shutdown() {
+                    warn!("Failed to shutdown observability runtime: {error}");
+                    shutdown_report.observability =
+                        BrokerShutdownComponentReport::unhealthy("observability", started.elapsed(), error.to_string());
+                } else {
+                    shutdown_report.observability =
+                        BrokerShutdownComponentReport::completed("observability", started.elapsed());
+                }
+            } else {
+                shutdown_report.observability = BrokerShutdownComponentReport::skipped("observability");
             }
         }
+        #[cfg(not(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs")))]
+        {
+            shutdown_report.observability = BrokerShutdownComponentReport::skipped("observability");
+        }
+
+        let started = Instant::now();
+        let scheduled_report = self
+            .shutdown_scheduled_tasks_with_timeout(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
+            .await;
+        shutdown_report.scheduled_tasks = if scheduled_report.is_healthy() {
+            BrokerShutdownComponentReport::completed("scheduled_tasks", started.elapsed())
+        } else {
+            BrokerShutdownComponentReport::unhealthy(
+                "scheduled_tasks",
+                started.elapsed(),
+                format!(
+                    "task_count={}, completed={}, aborted={}, panicked={}, timed_out={}",
+                    scheduled_report.task_count,
+                    scheduled_report.completed,
+                    scheduled_report.aborted,
+                    scheduled_report.panicked,
+                    scheduled_report.timed_out
+                ),
+            )
+        };
 
         if let Some(broker_stats_manager) = self.inner.broker_stats_manager.as_ref() {
             broker_stats_manager.shutdown().await;
         }
 
+        let started = Instant::now();
+        let mut pull_request_hold_present = false;
         if let Some(pull_request_hold_service) = self.inner.pull_request_hold_service.as_mut() {
+            pull_request_hold_present = true;
             pull_request_hold_service.shutdown().await;
         }
+        shutdown_report.pull_request_hold = if pull_request_hold_present {
+            BrokerShutdownComponentReport::completed("pull_request_hold", started.elapsed())
+        } else {
+            BrokerShutdownComponentReport::skipped("pull_request_hold")
+        };
 
+        let pop_started = Instant::now();
+        let mut pop_services_present = false;
         if let Some(pop_message_processor) = self.inner.pop_message_processor.as_mut() {
+            pop_services_present = true;
             pop_message_processor.shutdown().await;
         }
 
         if let Some(pop_lite_message_processor) = self.inner.pop_lite_message_processor.as_mut() {
+            pop_services_present = true;
             pop_lite_message_processor.shutdown().await;
         }
 
         if let Some(ack_message_processor) = self.inner.ack_message_processor.as_mut() {
+            pop_services_present = true;
             ack_message_processor.shutdown().await;
         }
 
+        let transaction_started = Instant::now();
+        let mut transaction_services_present = false;
         if let Some(transactional_message_service) = self.inner.transactional_message_service.as_mut() {
+            transaction_services_present = true;
             transactional_message_service.shutdown().await;
         }
 
         if let Some(notification_processor) = self.inner.notification_processor.as_mut() {
+            pop_services_present = true;
             notification_processor.shutdown().await;
         }
+        shutdown_report.pop_services = if pop_services_present {
+            BrokerShutdownComponentReport::completed("pop_services", pop_started.elapsed())
+        } else {
+            BrokerShutdownComponentReport::skipped("pop_services")
+        };
         self.consumer_ids_change_listener.shutdown();
         if let Some(topic_queue_mapping_clean_service) = self.inner.topic_queue_mapping_clean_service.as_ref() {
             topic_queue_mapping_clean_service.shutdown().await;
@@ -757,7 +1038,13 @@ impl BrokerRuntime {
             replicas_manager.shutdown();
         }
 
-        self.inner.broker_fast_failure.shutdown().await;
+        let started = Instant::now();
+        let fast_failure_report = self.inner.broker_fast_failure.shutdown_with_report().await;
+        shutdown_report.fast_failure = BrokerShutdownComponentReport::from_shutdown_report(
+            "fast_failure",
+            fast_failure_report.as_ref(),
+            started.elapsed(),
+        );
 
         if let Some(consumer_filter_manager) = self.inner.consumer_filter_manager.as_ref() {
             consumer_filter_manager.persist();
@@ -771,20 +1058,36 @@ impl BrokerRuntime {
             schedule_message_service.shutdown().await;
         }
         if let Some(transactional_message_check_service) = self.inner.transactional_message_check_service.as_mut() {
+            transaction_services_present = true;
             transactional_message_check_service.shutdown().await;
         }
         if let Some(transactional_message_check_listener) = self.inner.transactional_message_check_listener.as_ref() {
+            transaction_services_present = true;
             transactional_message_check_listener.shutdown().await;
         }
         if let Some(transaction_metrics_flush_service) = self.inner.transaction_metrics_flush_service.as_mut() {
+            transaction_services_present = true;
             transaction_metrics_flush_service.shutdown();
         }
+        shutdown_report.transaction_services = if transaction_services_present {
+            BrokerShutdownComponentReport::completed("transaction_services", transaction_started.elapsed())
+        } else {
+            BrokerShutdownComponentReport::skipped("transaction_services")
+        };
         if let Some(escape_bridge) = self.inner.escape_bridge.as_mut() {
             escape_bridge.shutdown();
         }
+        let started = Instant::now();
+        let mut topic_route_present = false;
         if let Some(topic_route_info_manager) = self.inner.topic_route_info_manager.as_mut() {
+            topic_route_present = true;
             topic_route_info_manager.shutdown().await;
         }
+        shutdown_report.topic_route = if topic_route_present {
+            BrokerShutdownComponentReport::completed("topic_route", started.elapsed())
+        } else {
+            BrokerShutdownComponentReport::skipped("topic_route")
+        };
 
         if let Some(broker_pre_online_service) = self.inner.broker_pre_online_service.as_mut() {
             broker_pre_online_service.shutdown().await;
@@ -803,11 +1106,17 @@ impl BrokerRuntime {
             topic_config_manager.stop();
         }
 
+        let started = Instant::now();
         if let Some(mut subscription_group_manager) = self.inner.subscription_group_manager.take() {
             subscription_group_manager.persist();
             subscription_group_manager.stop();
+            shutdown_report.subscription_group =
+                BrokerShutdownComponentReport::completed("subscription_group", started.elapsed());
+        } else {
+            shutdown_report.subscription_group = BrokerShutdownComponentReport::skipped("subscription_group");
         }
 
+        let started = Instant::now();
         let mut consumer_offset_manager = ConsumerOffsetManager::new(
             self.inner.broker_config.clone(),
             self.inner.message_store_config.clone(),
@@ -816,23 +1125,27 @@ impl BrokerRuntime {
         std::mem::swap(&mut self.inner.consumer_offset_manager, &mut consumer_offset_manager);
         consumer_offset_manager.persist();
         consumer_offset_manager.stop();
+        shutdown_report.consumer_offset =
+            BrokerShutdownComponentReport::completed("consumer_offset", started.elapsed());
 
+        let started = Instant::now();
         if let Some(message_store) = self.inner.message_store.as_mut() {
             if tokio::time::timeout(Duration::from_secs(15), message_store.shutdown())
                 .await
                 .is_err()
             {
                 warn!("Timed out shutting down message store");
+                shutdown_report.message_store =
+                    BrokerShutdownComponentReport::timed_out("message_store", started.elapsed());
+            } else {
+                shutdown_report.message_store =
+                    BrokerShutdownComponentReport::completed("message_store", started.elapsed());
             }
+        } else {
+            shutdown_report.message_store = BrokerShutdownComponentReport::skipped("message_store");
         }
 
         shutdown_report
-    }
-
-    async fn shutdown_scheduled_tasks(&self) {
-        let _ = self
-            .shutdown_scheduled_tasks_with_timeout(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
-            .await;
     }
 
     pub(crate) async fn shutdown_scheduled_tasks_with_timeout(
@@ -909,17 +1222,12 @@ impl BrokerRuntime {
 
     #[doc(hidden)]
     pub(crate) fn install_remoting_server_report_probe(&mut self) -> bool {
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                warn!(
-                    ?error,
-                    "failed to install broker remoting server report probe outside Tokio runtime"
-                );
-                return false;
-            }
+        let Some(task_group) = self.broker_task_group_or_current(
+            "rocketmq-broker.remoting-server.probe",
+            "failed to install broker remoting server report probe outside Tokio runtime",
+        ) else {
+            return false;
         };
-        let task_group = TaskGroup::root("rocketmq-broker.remoting-server.probe", runtime);
         let shutdown_token = task_group.cancellation_token();
         let (report_tx, report_rx) = oneshot::channel();
         if let Err(error) = task_group.spawn_service("broker.remoting-server.probe", async move {
@@ -948,17 +1256,12 @@ impl BrokerRuntime {
             return false;
         }
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                warn!(
-                    ?error,
-                    "failed to install broker request processor task probe outside Tokio runtime"
-                );
-                return false;
-            }
+        let Some(task_group) = self.broker_task_group_or_current(
+            "rocketmq-broker.request-processor.probe",
+            "failed to install broker request processor task probe outside Tokio runtime",
+        ) else {
+            return false;
         };
-        let task_group = TaskGroup::root("rocketmq-broker.request-processor.probe", runtime);
         let shutdown_token = task_group.cancellation_token();
         if let Err(error) = task_group.spawn_service("broker.request-processor.probe", async move {
             shutdown_token.cancelled().await;
@@ -969,6 +1272,10 @@ impl BrokerRuntime {
 
         self.request_processor_task_group = Some(task_group);
         true
+    }
+
+    fn broker_task_group_or_current(&self, name: &'static str, no_runtime_warning: &'static str) -> Option<TaskGroup> {
+        self.inner.broker_task_group_or_current(name, no_runtime_warning)
     }
 
     async fn shutdown_request_processor_tasks(&mut self) -> Option<ShutdownReport> {
@@ -1458,22 +1765,12 @@ impl BrokerRuntime {
         let notification_processor = NotificationProcessor::new(self.inner.clone());
         self.inner.notification_processor = Some(notification_processor.clone());
         let mut broker_request_processor = BrokerRequestProcessor::new();
-        let request_processor_task_group =
-            self.request_processor_task_group
-                .clone()
-                .or_else(|| match tokio::runtime::Handle::try_current() {
-                    Ok(handle) => Some(TaskGroup::root(
-                        "rocketmq-broker.request-processor",
-                        RuntimeHandle::new(handle),
-                    )),
-                    Err(error) => {
-                        warn!(
-                            ?error,
-                            "failed to initialize broker request processor task group outside Tokio runtime"
-                        );
-                        None
-                    }
-                });
+        let request_processor_task_group = self.request_processor_task_group.clone().or_else(|| {
+            self.broker_task_group_or_current(
+                "rocketmq-broker.request-processor",
+                "failed to initialize broker request processor task group outside Tokio runtime",
+            )
+        });
         if let Some(task_group) = request_processor_task_group.clone() {
             pull_message_processor
                 .mut_from_ref()
@@ -1971,14 +2268,12 @@ impl BrokerRuntime {
         let (request_processor, fast_request_processor) = self.init_processor();
         self.proxy_request_processor = Some(request_processor.clone());
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                warn!(?error, "failed to start broker remoting servers outside Tokio runtime");
-                return;
-            }
+        let Some(remoting_server_task_group) = self.broker_task_group_or_current(
+            "rocketmq-broker.remoting-server",
+            "failed to start broker remoting servers outside Tokio runtime",
+        ) else {
+            return;
         };
-        let remoting_server_task_group = TaskGroup::root("rocketmq-broker.remoting-server", runtime);
 
         let mut server = RocketMQServer::new(Arc::new(self.inner.broker_config.broker_server_config.clone()));
         //start nomarl broker remoting_server
@@ -2571,12 +2866,39 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     broker_pre_online_service: Option<BrokerPreOnlineService<MS>>,
     min_broker_id_in_group: AtomicU64,
     min_broker_addr_in_group: Mutex<Option<CheetahString>>,
+    service_context: Option<ServiceContext>,
     lock: Mutex<()>,
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     pub(crate) fn auth_metrics_snapshot(&self) -> Option<AuthMetricsSnapshot> {
         self.auth_runtime.as_ref().map(|runtime| runtime.metrics_snapshot())
+    }
+
+    pub(crate) fn broker_task_group_or_current(
+        &self,
+        name: impl Into<Arc<str>>,
+        no_runtime_warning: &'static str,
+    ) -> Option<TaskGroup> {
+        let name = name.into();
+        if let Some(service_context) = self.service_context.as_ref() {
+            return Some(service_context.task_group().child(Arc::clone(&name)));
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(?error, "{no_runtime_warning}");
+                return None;
+            }
+        };
+        Some(TaskGroup::root(name, runtime))
+    }
+
+    pub(crate) fn broker_service_task_group(&self) -> Option<TaskGroup> {
+        self.service_context
+            .as_ref()
+            .map(|service_context| service_context.task_group().clone())
     }
 
     #[inline]
@@ -4459,6 +4781,7 @@ mod tests {
     use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_remoting::runtime::processor::RequestProcessor;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::base::message_status_enum::GetMessageStatus;
     use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::flush_disk_type::FlushDiskType;
@@ -4629,6 +4952,83 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
 
         assert!(runtime.initial_rpc_hooks());
+    }
+
+    #[tokio::test]
+    async fn broker_runtime_service_context_parents_probe_task_groups() {
+        let context = RuntimeContext::from_current("broker-context-runtime-test");
+        let service = context.service_context("broker-service");
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new_with_service_context(broker_config, message_store_config, service.clone());
+
+        assert!(runtime.install_remoting_server_report_probe());
+        assert!(runtime.install_request_processor_task_probe());
+
+        let remoting_group = runtime
+            .remoting_server_task_group
+            .as_ref()
+            .expect("remoting probe task group should be installed");
+        let request_group = runtime
+            .request_processor_task_group
+            .as_ref()
+            .expect("request processor probe task group should be installed");
+        assert_eq!(remoting_group.parent_id(), Some(service.task_group().id()));
+        assert_eq!(request_group.parent_id(), Some(service.task_group().id()));
+
+        let report = runtime.shutdown_basic_service_with_report().await;
+        assert!(report.is_healthy());
+        assert!(report.remoting.is_some());
+        assert!(report.request_processor.is_some());
+        assert_eq!(report.unhealthy_component_count(), 0);
+        assert!(report.timed_out_component_names().is_empty());
+        assert!(report.component_names().contains(&"scheduled_tasks"));
+    }
+
+    #[test]
+    fn broker_basic_shutdown_report_exposes_required_component_names() {
+        let report = BrokerBasicServiceShutdownReport::default();
+
+        assert_eq!(
+            report.component_names(),
+            vec![
+                "remoting",
+                "request_processor",
+                "auth",
+                "observability",
+                "scheduled_tasks",
+                "message_store",
+                "pull_request_hold",
+                "pop_services",
+                "transaction_services",
+                "fast_failure",
+                "topic_route",
+                "consumer_offset",
+                "subscription_group",
+            ]
+        );
+    }
+
+    #[test]
+    fn broker_basic_shutdown_report_aggregates_unhealthy_and_timed_out_components() {
+        let report = BrokerBasicServiceShutdownReport {
+            auth: BrokerShutdownComponentReport::completed("auth", Duration::from_millis(1)),
+            message_store: BrokerShutdownComponentReport::timed_out("message_store", Duration::from_millis(2)),
+            fast_failure: BrokerShutdownComponentReport::unhealthy(
+                "fast_failure",
+                Duration::from_millis(3),
+                "forced unhealthy component",
+            ),
+            ..Default::default()
+        };
+
+        assert!(!report.is_healthy());
+        assert_eq!(report.unhealthy_component_count(), 2);
+        assert_eq!(
+            report.unhealthy_component_names(),
+            vec!["message_store", "fast_failure"]
+        );
+        assert_eq!(report.timed_out_component_names(), vec!["message_store"]);
     }
 
     #[tokio::test]

@@ -29,6 +29,62 @@ impl Drop for DropCounter {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn diagnostics_snapshot_reports_runtime_state() {
+    let context = RuntimeContext::from_current("diagnostics-root");
+    let service = context.service_context("diagnostics-service");
+    let scheduled = service.scheduled_tasks("diagnostics-scheduled");
+
+    assert_eq!(scheduled.group().name(), "diagnostics-scheduled");
+
+    service
+        .spawn_service("diagnostics-service-task", async move {})
+        .expect("diagnostics service task should spawn");
+    context
+        .blocking()
+        .spawn_io("diagnostics-blocking-io", || 42)
+        .await
+        .expect("diagnostics blocking task should complete");
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let context_snapshot = context.diagnostics_snapshot();
+    let service_snapshot = service.diagnostics_snapshot();
+
+    assert!(!context_snapshot.runtime_id.is_empty(), "{context_snapshot:?}");
+    assert_eq!(context_snapshot.runtime_id, service_snapshot.runtime_id);
+    assert_eq!(context_snapshot.root_name, "diagnostics-root");
+    assert_eq!(service_snapshot.root_name, "diagnostics-service");
+    assert_eq!(context_snapshot.blocking.name, "rocketmq-blocking");
+    assert_eq!(
+        context_snapshot.blocking.max_concurrency,
+        BlockingPoolPolicy::default().max_concurrency
+    );
+    assert_eq!(context_snapshot.blocking.blocking_still_running, 0);
+    assert!(context_snapshot.blocking.tasks.is_empty(), "{context_snapshot:?}");
+
+    let report = context.shutdown_tasks(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn service_context_child_preserves_parent_runtime_and_blocking_executor() {
+    let context = RuntimeContext::from_current("service-context-parent-test");
+    let parent = context.service_context("parent-service");
+    let child = parent.child("child-service");
+
+    assert_eq!(child.name(), "child-service");
+    assert_eq!(child.task_group().parent_id(), Some(parent.task_group().id()));
+    assert_eq!(child.blocking().snapshot().name, parent.blocking().snapshot().name);
+    assert_eq!(
+        child.diagnostics_snapshot().runtime_id,
+        parent.diagnostics_snapshot().runtime_id
+    );
+
+    let report = context.shutdown_tasks(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
 #[tokio::test]
 async fn task_group_shutdown_waits_for_completed_tasks() {
     let context = RuntimeContext::from_current("task-group-complete-test");

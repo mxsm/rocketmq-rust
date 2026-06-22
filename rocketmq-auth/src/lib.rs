@@ -80,6 +80,8 @@ pub mod bench_support {
         pub shared_runtime_created: u64,
         pub shared_runtime_reused: u64,
         pub shared_runtime_available: bool,
+        pub blocking_executor_creations: u64,
+        pub blocking_executor_shutdown_requests: u64,
     }
 
     #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -91,6 +93,8 @@ pub mod bench_support {
         pub shared_runtime_acquires: u64,
         pub shared_runtime_created: u64,
         pub shared_runtime_reused: u64,
+        pub blocking_executor_creations: u64,
+        pub blocking_executor_shutdown_requests: u64,
     }
 
     #[derive(Clone, Debug, Serialize)]
@@ -312,6 +316,8 @@ accounts:
                 shared_runtime_created: snapshot.shared_runtime_created,
                 shared_runtime_reused: snapshot.shared_runtime_reused,
                 shared_runtime_available: snapshot.shared_runtime_available,
+                blocking_executor_creations: snapshot.blocking_executor_creations,
+                blocking_executor_shutdown_requests: snapshot.blocking_executor_shutdown_requests,
             }
         }
     }
@@ -336,6 +342,12 @@ accounts:
                     .shared_runtime_created
                     .saturating_sub(before.shared_runtime_created),
                 shared_runtime_reused: self.shared_runtime_reused.saturating_sub(before.shared_runtime_reused),
+                blocking_executor_creations: self
+                    .blocking_executor_creations
+                    .saturating_sub(before.blocking_executor_creations),
+                blocking_executor_shutdown_requests: self
+                    .blocking_executor_shutdown_requests
+                    .saturating_sub(before.blocking_executor_shutdown_requests),
             }
         }
     }
@@ -345,11 +357,38 @@ accounts:
 mod tests {
     #[test]
     fn auth_sync_bridge_multi_thread_probe_is_healthy() {
+        let _guard = crate::runtime_bridge::auth_runtime_bridge_test_guard();
         let probe = crate::bench_support::run_auth_sync_bridge_multi_thread_probe(8);
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.delta.multi_thread_block_in_place, 8);
         assert_eq!(probe.delta.current_thread_handoffs, 0);
         assert_eq!(probe.delta.shared_runtime_acquires, 0);
+    }
+
+    #[test]
+    fn auth_sync_bridge_counter_reset_clears_observable_counters() {
+        let _guard = crate::runtime_bridge::auth_runtime_bridge_test_guard();
+        crate::runtime_bridge::reset_auth_sync_bridge_counters_for_tests();
+
+        let value = crate::runtime_bridge::block_on_sync_bridge(
+            || async { Ok::<usize, String>(7) },
+            |error| error,
+            || "auth sync bridge thread panicked".to_string(),
+        )
+        .expect("auth sync bridge fallback call should complete");
+        assert_eq!(value, 7);
+        assert!(crate::runtime_bridge::auth_sync_bridge_snapshot().sync_bridge_calls > 0);
+
+        let snapshot = crate::runtime_bridge::reset_auth_sync_bridge_counters_for_tests();
+        assert_eq!(snapshot.sync_bridge_calls, 0);
+        assert_eq!(snapshot.multi_thread_block_in_place, 0);
+        assert_eq!(snapshot.current_thread_handoffs, 0);
+        assert_eq!(snapshot.fallback_runtime_calls, 0);
+        assert_eq!(snapshot.shared_runtime_acquires, 0);
+        assert_eq!(snapshot.shared_runtime_created, 0);
+        assert_eq!(snapshot.shared_runtime_reused, 0);
+        assert_eq!(snapshot.blocking_executor_creations, 0);
+        assert_eq!(snapshot.blocking_executor_shutdown_requests, 0);
     }
 }
 

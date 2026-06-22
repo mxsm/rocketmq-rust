@@ -27,7 +27,6 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -363,6 +362,7 @@ struct FastFailureLifecycle {
 
 struct BrokerFastFailureInner {
     broker_config: Arc<BrokerConfig>,
+    parent_task_group: Option<TaskGroup>,
     queues: FastFailureQueues,
     next_task_id: AtomicU64,
     running: AtomicBool,
@@ -379,9 +379,21 @@ pub(crate) struct BrokerFastFailure {
 
 impl BrokerFastFailure {
     pub(crate) fn new(broker_config: Arc<BrokerConfig>) -> Self {
+        Self::new_with_optional_parent_task_group(broker_config, None)
+    }
+
+    pub(crate) fn new_with_parent_task_group(broker_config: Arc<BrokerConfig>, parent_task_group: TaskGroup) -> Self {
+        Self::new_with_optional_parent_task_group(broker_config, Some(parent_task_group))
+    }
+
+    fn new_with_optional_parent_task_group(
+        broker_config: Arc<BrokerConfig>,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Self {
         Self {
             inner: Arc::new(BrokerFastFailureInner {
                 broker_config,
+                parent_task_group,
                 queues: FastFailureQueues::new(),
                 next_task_id: AtomicU64::new(0),
                 running: AtomicBool::new(false),
@@ -391,6 +403,21 @@ impl BrokerFastFailure {
                 scan_batch_limit: DEFAULT_SCAN_BATCH_LIMIT,
             }),
         }
+    }
+
+    fn task_group_or_current(&self) -> Option<TaskGroup> {
+        if let Some(parent_task_group) = self.inner.parent_task_group.as_ref() {
+            return Some(parent_task_group.child("rocketmq-broker.fast-failure"));
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => rocketmq_runtime::RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(?error, "failed to start BrokerFastFailure outside Tokio runtime");
+                return None;
+            }
+        };
+        Some(TaskGroup::root("rocketmq-broker.fast-failure", runtime))
     }
 
     pub(crate) fn set_page_cache_busy_checker<F>(&self, checker: F)
@@ -422,15 +449,10 @@ impl BrokerFastFailure {
             return;
         }
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                self.inner.running.store(false, Ordering::Release);
-                warn!(?error, "failed to start BrokerFastFailure outside Tokio runtime");
-                return;
-            }
+        let Some(task_group) = self.task_group_or_current() else {
+            self.inner.running.store(false, Ordering::Release);
+            return;
         };
-        let task_group = TaskGroup::root("rocketmq-broker.fast-failure", runtime);
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let this = self.clone();
         let mut config = ScheduledTaskConfig::fixed_delay("broker.fast-failure.scan", scan_interval);
@@ -651,6 +673,7 @@ fn system_busy_response(
 mod tests {
     use std::sync::atomic::AtomicBool;
 
+    use rocketmq_runtime::RuntimeContext;
     use tokio::sync::oneshot::error::TryRecvError;
 
     use super::*;
@@ -749,6 +772,36 @@ mod tests {
         assert!(!fast_failure.is_running());
         assert_eq!(fast_failure.task_count(), 0);
         assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn parent_task_group_parents_scanner_task_group() {
+        let context = RuntimeContext::from_current("broker-fast-failure-context-test");
+        let broker_service = context.service_context("broker-service");
+        let fast_failure = BrokerFastFailure::new_with_parent_task_group(
+            config_with_fast_failure_waits(1_000),
+            broker_service.task_group().clone(),
+        );
+
+        fast_failure.start();
+
+        let task_group = fast_failure
+            .inner
+            .lifecycle
+            .lock()
+            .task_group
+            .as_ref()
+            .expect("fast failure task group should be installed")
+            .clone();
+        assert_eq!(task_group.parent_id(), Some(broker_service.task_group().id()));
+
+        let report = fast_failure
+            .shutdown_with_report()
+            .await
+            .expect("shutdown should return a report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        let broker_report = broker_service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(broker_report.is_healthy(), "{}", broker_report.to_json());
     }
 
     #[tokio::test]

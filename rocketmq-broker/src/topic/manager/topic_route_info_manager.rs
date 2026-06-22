@@ -29,7 +29,6 @@ use rocketmq_common::common::mix_all;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
@@ -93,16 +92,14 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
             return;
         }
 
-        let mut task_group = self.task_group.lock();
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                self.running.store(false, Ordering::Release);
-                warn!(?error, "failed to start TopicRouteInfoManager outside Tokio runtime");
-                return;
-            }
+        let Some(group) = self.broker_runtime_inner.broker_task_group_or_current(
+            "rocketmq-broker.topic-route-info",
+            "failed to start TopicRouteInfoManager outside Tokio runtime",
+        ) else {
+            self.running.store(false, Ordering::Release);
+            return;
         };
-        let group = TaskGroup::root("rocketmq-broker.topic-route-info", runtime);
+        let mut task_group = self.task_group.lock();
         let cancellation_token = group.cancellation_token();
         let manager = self.clone();
         let load_balance_poll_name_server_interval = self
@@ -372,8 +369,10 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use crate::broker_runtime::BrokerRuntime;
@@ -391,5 +390,30 @@ mod tests {
 
         manager.shutdown().await;
         assert!(!manager.is_running());
+    }
+
+    #[tokio::test]
+    async fn service_context_parents_task_group() {
+        let context = RuntimeContext::from_current("broker-topic-route-context-test");
+        let broker_service = context.service_context("broker-service");
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut broker_runtime =
+            BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
+        let mut manager = broker_runtime.inner_for_test().topic_route_info_manager().clone();
+
+        manager.start();
+
+        let task_group = manager
+            .task_group
+            .lock()
+            .as_ref()
+            .expect("topic route task group should be installed")
+            .clone();
+        assert_eq!(task_group.parent_id(), Some(broker_service.task_group().id()));
+
+        manager.shutdown().await;
+        let broker_report = broker_service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(broker_report.is_healthy(), "{}", broker_report.to_json());
     }
 }

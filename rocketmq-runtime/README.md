@@ -89,6 +89,15 @@ Use `RuntimeContext::from_current` in applications that already run inside
 can shut down tracked RocketMQ tasks, but it does not own or close the Tokio
 runtime itself.
 
+### Legacy Compatibility Boundary
+
+`RocketMQRuntime` is retained only for legacy synchronous APIs that still need
+to pass around an owned Tokio runtime. New code should use `RuntimeOwner` for
+owned runtime lifecycle and `RuntimeContext` / `ServiceContext` for borrowed
+runtime integration. Runtime audit classifies remaining `RocketMQRuntime`
+references as either runtime primitives or explicit compatibility adapters so
+new unclassified legacy runtime use cannot grow unnoticed.
+
 `RuntimeOwner` intentionally separates two phases:
 
 1. `shutdown_tasks().await`: cancel, close, wait, abort, and report tracked
@@ -194,6 +203,8 @@ New RocketMQ code should follow these rules:
   through `BlockingExecutor`;
 - keep long-running blocking loops outside Tokio blocking pools;
 - return or log `ShutdownReport` during component shutdown;
+- do not rely on `Drop` for graceful shutdown; `Drop` may only cancel or abort
+  work as an emergency cleanup path;
 - keep diagnostics and benchmark tooling as validation artifacts rather than
   production-critical runtime dependencies.
 
@@ -216,6 +227,7 @@ hard-coded performance claims. The expected validation loop is:
 Useful local checks:
 
 ```bash
+cargo test -p rocketmq-runtime --test task_group_concurrency_model
 cargo test -p rocketmq-runtime --all-targets --all-features
 cargo clippy -p rocketmq-runtime --all-targets --all-features -- -D warnings
 ```
