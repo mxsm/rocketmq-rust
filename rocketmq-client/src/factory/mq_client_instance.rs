@@ -850,11 +850,7 @@ impl MQClientInstance {
                 }
             };
             if let Some(topic_route_data) = result.as_mut() {
-                for data in topic_route_data.queue_datas.iter_mut() {
-                    let queue_nums = producer_config.default_topic_queue_nums().max(data.read_queue_nums);
-                    data.read_queue_nums = queue_nums;
-                    data.write_queue_nums = queue_nums;
-                }
+                cap_default_topic_route_queue_nums(topic_route_data, producer_config.default_topic_queue_nums());
             }
             result
         } else {
@@ -2213,6 +2209,14 @@ pub fn topic_route_data2topic_publish_info(topic: &str, route: &mut TopicRouteDa
     info
 }
 
+fn cap_default_topic_route_queue_nums(topic_route_data: &mut TopicRouteData, default_topic_queue_nums: u32) {
+    for data in topic_route_data.queue_datas.iter_mut() {
+        let queue_nums = default_topic_queue_nums.min(data.read_queue_nums);
+        data.read_queue_nums = queue_nums;
+        data.write_queue_nums = queue_nums;
+    }
+}
+
 pub fn topic_route_data2_topic_publish_info(topic: &str, route: &mut TopicRouteData) -> TopicPublishInfo {
     topic_route_data2topic_publish_info(topic, route)
 }
@@ -2446,6 +2450,25 @@ mod tests {
         assert_eq!(info.message_queue_list[0].queue_id(), 0);
         assert_eq!(info.message_queue_list[1].broker_name(), "broker-b");
         assert_eq!(info.message_queue_list[1].queue_id(), 1);
+    }
+
+    #[test]
+    fn default_topic_route_queue_nums_are_capped_like_broker_auto_create() {
+        let mut route = TopicRouteData {
+            queue_datas: vec![rocketmq_remoting::protocol::route::route_data_view::QueueData {
+                broker_name: CheetahString::from("broker-a"),
+                read_queue_nums: 8,
+                write_queue_nums: 8,
+                perm: PermName::PERM_READ | PermName::PERM_WRITE,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        cap_default_topic_route_queue_nums(&mut route, 4);
+
+        assert_eq!(route.queue_datas[0].read_queue_nums, 4);
+        assert_eq!(route.queue_datas[0].write_queue_nums, 4);
     }
 
     #[test]

@@ -1782,7 +1782,12 @@ impl MQProducer for DefaultMQProducer {
         if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, None, None).await
         } else {
-            self.send_direct(msg, None, None).await
+            let timeout = self.producer_config.send_msg_timeout() as u64;
+            self.default_mqproducer_impl
+                .as_mut()
+                .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+                .send_with_timeout(&mut msg, timeout)
+                .await
         }
     }
 
@@ -1814,7 +1819,13 @@ impl MQProducer for DefaultMQProducer {
             self.send_by_accumulator(msg, None, Some(send_callback_inner.clone()))
                 .await
         } else {
-            self.send_direct(msg, None, Some(send_callback_inner.clone())).await
+            let timeout = self.producer_config.send_msg_timeout() as u64;
+            self.default_mqproducer_impl
+                .as_mut()
+                .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+                .async_send_with_callback_timeout(msg, Some(send_callback_inner.clone()), timeout)
+                .await
+                .map(|()| None)
         };
         if let Err(err) = result {
             send_callback_inner(None, Some(&err));
@@ -2397,6 +2408,7 @@ mod facade_tests {
 
     #[tokio::test]
     async fn default_mq_producer_exposes_modern_java_send_facade_methods_without_trait_import() {
+        assert_not_initialized(unstarted_producer().send(message()).await);
         assert_not_initialized(unstarted_producer().send_with_timeout(message(), 1000).await);
         assert_not_initialized(
             unstarted_producer()
