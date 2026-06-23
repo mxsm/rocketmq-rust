@@ -600,8 +600,13 @@ impl DefaultMQProducerImpl {
     where
         T: MessageTrait + Send + Sync,
     {
-        self.send_with_timeout(msg, self.producer_config.send_msg_timeout() as u64)
-            .await
+        self.send_default_impl(
+            msg,
+            CommunicationMode::Sync,
+            None,
+            self.producer_config.send_msg_timeout() as u64,
+        )
+        .await
     }
 
     #[inline]
@@ -1067,14 +1072,13 @@ impl DefaultMQProducerImpl {
                 return;
             };
 
-            let result = producer_impl
-                .send_default_impl(
-                    &mut msg,
-                    CommunicationMode::Async,
-                    send_callback_inner.clone(),
-                    remaining_timeout,
-                )
-                .await;
+            let result = Box::pin(producer_impl.send_default_impl(
+                &mut msg,
+                CommunicationMode::Async,
+                send_callback_inner.clone(),
+                remaining_timeout,
+            ))
+            .await;
             match result {
                 Ok(_) => {}
                 Err(err) => {
@@ -3996,6 +4000,45 @@ mod tests {
             "unexpected callback error: {error}"
         );
         assert!(!error.contains("MQClientInstance is not available"));
+    }
+
+    #[tokio::test]
+    async fn async_send_with_callback_reports_kernel_error_to_callback() {
+        let producer = running_producer_arc_with_self_inner();
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
+        let notify_for_callback = notify.clone();
+        let seen_for_callback = seen_error.clone();
+        let callback: ArcSendCallback = Arc::new(
+            move |_result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
+                if let Some(error) = error {
+                    *seen_for_callback
+                        .lock()
+                        .expect("seen error lock should not be poisoned") = Some(error.to_string());
+                    notify_for_callback.notify_one();
+                }
+            },
+        );
+        let msg = Message::builder()
+            .topic("TopicTest")
+            .body_slice(b"body")
+            .build_unchecked();
+
+        producer
+            .mut_from_ref()
+            .async_send_with_callback_timeout(msg, Some(callback), 3_000)
+            .await
+            .expect("async send should schedule kernel send");
+        tokio::time::timeout(Duration::from_secs(1), notify.notified())
+            .await
+            .expect("kernel error should reach callback");
+
+        let error = seen_error
+            .lock()
+            .expect("seen error lock should not be poisoned")
+            .clone()
+            .expect("callback should record kernel error");
+        assert!(error.contains("MQClientInstance is not available"));
     }
 
     #[tokio::test]
