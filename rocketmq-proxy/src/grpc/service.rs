@@ -446,9 +446,40 @@ impl<P> ProxyGrpcService<P> {
         F: std::future::Future<Output = ()> + Send,
         P: MessagingProcessor + 'static,
     {
-        let task_group = TaskGroup::root(
-            "rocketmq-proxy.grpc.housekeeping",
-            RuntimeHandle::new(tokio::runtime::Handle::current()),
+        self.run_housekeeping_until_with_optional_task_group(shutdown, None)
+            .await
+    }
+
+    pub async fn run_housekeeping_until_with_task_group<F>(
+        &self,
+        shutdown: F,
+        parent_task_group: TaskGroup,
+    ) -> ProxyHousekeepingRunReport
+    where
+        F: std::future::Future<Output = ()> + Send,
+        P: MessagingProcessor + 'static,
+    {
+        self.run_housekeeping_until_with_optional_task_group(shutdown, Some(parent_task_group))
+            .await
+    }
+
+    async fn run_housekeeping_until_with_optional_task_group<F>(
+        &self,
+        shutdown: F,
+        parent_task_group: Option<TaskGroup>,
+    ) -> ProxyHousekeepingRunReport
+    where
+        F: std::future::Future<Output = ()> + Send,
+        P: MessagingProcessor + 'static,
+    {
+        let task_group = parent_task_group.map_or_else(
+            || {
+                TaskGroup::root(
+                    "rocketmq-proxy.grpc.housekeeping",
+                    RuntimeHandle::new(tokio::runtime::Handle::current()),
+                )
+            },
+            |parent_task_group| parent_task_group.child("rocketmq-proxy.grpc.housekeeping"),
         );
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let service = self.clone();

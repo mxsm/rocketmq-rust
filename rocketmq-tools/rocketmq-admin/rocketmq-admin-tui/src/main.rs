@@ -21,12 +21,19 @@ mod state;
 mod ui;
 mod view_model;
 
-use rocketmq_rust::rocketmq;
-
 use crate::rocketmq_tui_app::RocketmqTuiApp;
 
-#[rocketmq::main]
-async fn main() -> anyhow::Result<()> {
+const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
+
+fn main() -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .max_blocking_threads(ENTRYPOINT_MAX_BLOCKING_THREADS)
+        .enable_all()
+        .build()?;
+    runtime.block_on(run())
+}
+
+async fn run() -> anyhow::Result<()> {
     let terminal = ratatui::try_init()?;
     let local = tokio::task::LocalSet::new();
     let result = local.run_until(RocketmqTuiApp::default().run(terminal)).await;

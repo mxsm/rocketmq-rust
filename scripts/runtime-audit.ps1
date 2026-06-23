@@ -465,6 +465,7 @@ function Get-BoundaryKind {
         "current-runtime-adapter-sites" { return "current-runtime-adapter" }
         "raw-tokio-spawn-sites" { return "raw-tokio-spawn" }
         "raw-blocking-executor-sites" { return "raw-blocking-executor" }
+        "scheduler-sites" { return "scheduler-site" }
         "dedicated-thread-sites" { return "dedicated-thread" }
         default { return $Category }
     }
@@ -537,6 +538,14 @@ function Get-BoundaryDisposition {
     }
 
     switch ($Category) {
+        "scheduler-sites" {
+            $schedulerDisposition = Get-SchedulerDisposition -Match $Match
+            return New-BoundaryDisposition `
+                -Disposition $schedulerDisposition.Disposition `
+                -ActionRequired ([bool]$schedulerDisposition.ActionRequired) `
+                -Reason $schedulerDisposition.Reason `
+                -MigrationPhase $phase
+        }
         "task-group-root-sites" {
             if ($path -eq "rocketmq-broker/src/broker_runtime.rs" -and $Match.Text -match "TaskGroup::root\(name, runtime\)") {
                 return New-BoundaryDisposition `
@@ -626,6 +635,65 @@ function Get-BoundaryDisposition {
                     -MigrationPhase "PR-4-remoting-lifecycle"
             }
 
+            if ($path -in @(
+                    "rocketmq/src/schedule.rs",
+                    "rocketmq/src/schedule/executor.rs",
+                    "rocketmq/src/schedule/scheduler.rs",
+                    "rocketmq/src/task/service_task.rs"
+                )) {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "Legacy rocketmq scheduling and service-task constructors retain current-runtime fallbacks; new *_with_task_group constructors attach tasks to an injected parent TaskGroup." `
+                    -MigrationPhase "legacy-compatibility"
+            }
+
+            if ($path -in @(
+                    "rocketmq-client/src/runtime.rs",
+                    "rocketmq-remoting/src/clients/client.rs",
+                    "rocketmq-remoting/src/clients/connection_pool.rs",
+                    "rocketmq-remoting/src/clients/rocketmq_tokio_client.rs",
+                    "rocketmq-remoting/src/remoting_server/rocketmq_tokio_server.rs"
+                )) {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "Client and remoting compatibility constructors retain current-runtime fallbacks; ServiceContext-based APIs attach new tasks to the caller's service tree." `
+                    -MigrationPhase "PR-4-remoting-lifecycle"
+            }
+
+            if ($path -in @(
+                    "rocketmq-common/src/common/statistics/statistics_manager.rs",
+                    "rocketmq-common/src/common/stats/moment_stats_item.rs",
+                    "rocketmq-common/src/common/stats/moment_stats_item_set.rs",
+                    "rocketmq-controller/src/controller/controller_manager.rs",
+                    "rocketmq-controller/src/controller/open_raft_controller.rs",
+                    "rocketmq-controller/src/heartbeat/default_broker_heartbeat_manager.rs",
+                    "rocketmq-controller/src/metadata/broker.rs",
+                    "rocketmq-controller/src/rpc/server.rs",
+                    "rocketmq-store/src/runtime.rs",
+                    "rocketmq-store/src/rocksdb/runtime.rs",
+                    "rocketmq-tieredstore/src/runtime.rs"
+                )) {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "Store, controller, tieredstore, and common statistics compatibility helpers retain current-runtime fallbacks; parent TaskGroup APIs are available for structured service-tree ownership." `
+                    -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
+            if ($path -in @(
+                    "rocketmq-observability/src/exporter/prometheus.rs",
+                    "rocketmq-proxy/src/grpc/server.rs",
+                    "rocketmq-proxy/src/grpc/service.rs"
+                )) {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "Proxy and observability compatibility entrypoints retain current-runtime fallbacks; *_with_task_group APIs attach background tasks to an injected parent TaskGroup." `
+                    -MigrationPhase "legacy-compatibility"
+            }
+
             return New-BoundaryDisposition `
                 -Disposition "unparented-task-group-root-risk" `
                 -ActionRequired $true `
@@ -687,6 +755,65 @@ function Get-BoundaryDisposition {
                     -ActionRequired $false `
                     -Reason "RocksDBBackend::new compatibility path binds the current Tokio runtime only when no parent TaskGroup was injected." `
                     -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
+            if ($path -in @(
+                    "rocketmq/src/schedule.rs",
+                    "rocketmq/src/schedule/executor.rs",
+                    "rocketmq/src/schedule/scheduler.rs",
+                    "rocketmq/src/task/service_task.rs"
+                )) {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "Legacy rocketmq scheduling and service-task constructors bind the current Tokio runtime only through compatibility fallbacks; new *_with_task_group constructors attach tasks to an injected parent TaskGroup." `
+                    -MigrationPhase "legacy-compatibility"
+            }
+
+            if ($path -in @(
+                    "rocketmq-client/src/runtime.rs",
+                    "rocketmq-remoting/src/clients/client.rs",
+                    "rocketmq-remoting/src/clients/connection_pool.rs",
+                    "rocketmq-remoting/src/clients/rocketmq_tokio_client.rs",
+                    "rocketmq-remoting/src/remoting_server/rocketmq_tokio_server.rs"
+                )) {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "Client and remoting compatibility constructors bind the current Tokio runtime only through fallback paths; ServiceContext-based APIs attach new tasks to the caller's service tree." `
+                    -MigrationPhase "PR-4-remoting-lifecycle"
+            }
+
+            if ($path -in @(
+                    "rocketmq-common/src/common/statistics/statistics_manager.rs",
+                    "rocketmq-common/src/common/stats/moment_stats_item.rs",
+                    "rocketmq-common/src/common/stats/moment_stats_item_set.rs",
+                    "rocketmq-controller/src/controller/controller_manager.rs",
+                    "rocketmq-controller/src/controller/open_raft_controller.rs",
+                    "rocketmq-controller/src/heartbeat/default_broker_heartbeat_manager.rs",
+                    "rocketmq-controller/src/metadata/broker.rs",
+                    "rocketmq-controller/src/rpc/server.rs",
+                    "rocketmq-store/src/runtime.rs",
+                    "rocketmq-store/src/rocksdb/runtime.rs",
+                    "rocketmq-tieredstore/src/runtime.rs"
+                )) {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "Store, controller, tieredstore, and common statistics compatibility helpers bind the current Tokio runtime only through fallback paths; parent TaskGroup APIs are available for structured service-tree ownership." `
+                    -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
+            if ($path -in @(
+                    "rocketmq-observability/src/exporter/prometheus.rs",
+                    "rocketmq-proxy/src/grpc/server.rs",
+                    "rocketmq-proxy/src/grpc/service.rs"
+                )) {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "Proxy and observability compatibility entrypoints bind the current Tokio runtime only through fallback paths; *_with_task_group APIs attach background tasks to an injected parent TaskGroup." `
+                    -MigrationPhase "legacy-compatibility"
             }
 
             if ($path -eq "rocketmq-auth/src/runtime_bridge.rs" -and $Match.Text -match "Handle::try_current") {
@@ -2060,6 +2187,7 @@ $boundaryKeys = @(
     "current-runtime-adapter-sites",
     "raw-tokio-spawn-sites",
     "raw-blocking-executor-sites",
+    "scheduler-sites",
     "legacy-runtime-api-sites",
     "dedicated-thread-sites"
 )
@@ -2115,6 +2243,7 @@ foreach ($key in $boundaryKeys) {
         "current-runtime-adapter-sites" { "production-current-runtime-adapter-disposition.md" }
         "raw-tokio-spawn-sites" { "production-raw-tokio-spawn-disposition.md" }
         "raw-blocking-executor-sites" { "production-raw-blocking-executor-disposition.md" }
+        "scheduler-sites" { "production-scheduler-boundary-disposition.md" }
         "dedicated-thread-sites" { "production-dedicated-thread-disposition.md" }
         default { "production-$key-disposition.md" }
     }

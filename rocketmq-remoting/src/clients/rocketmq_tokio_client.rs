@@ -23,6 +23,8 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeResult;
+use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_runtime::TaskId;
@@ -183,6 +185,9 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     /// Task group that owns short-lived client worker tasks.
     worker_task_group: Arc<Mutex<Option<TaskGroup>>>,
 
+    /// Optional parent service context for structured client task ownership.
+    service_context: Option<ServiceContext>,
+
     /// Shared command handler (processor + response table)
     ///
     /// Arc-wrapped to share across all `Client` instances
@@ -192,6 +197,27 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     ///
     /// Used for monitoring and metrics collection
     tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemotingClientConnectionShutdownReport {
+    pub addr: CheetahString,
+    pub report: ShutdownReport,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RemotingClientShutdownReport {
+    pub background: Option<ShutdownReport>,
+    pub workers: Option<ShutdownReport>,
+    pub connections: Vec<RemotingClientConnectionShutdownReport>,
+}
+
+impl RemotingClientShutdownReport {
+    pub fn is_healthy(&self) -> bool {
+        self.background.as_ref().is_none_or(ShutdownReport::is_healthy)
+            && self.workers.as_ref().is_none_or(ShutdownReport::is_healthy)
+            && self.connections.iter().all(|connection| connection.report.is_healthy())
+    }
 }
 
 impl<PR> Clone for RocketmqDefaultClient<PR> {
@@ -208,6 +234,7 @@ impl<PR> Clone for RocketmqDefaultClient<PR> {
             shutdown_token: self.shutdown_token.clone(),
             background_task_group: self.background_task_group.clone(),
             worker_task_group: self.worker_task_group.clone(),
+            service_context: self.service_context.clone(),
             cmd_handler: self.cmd_handler.clone(),
             tx: self.tx.clone(),
         }
@@ -219,10 +246,36 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         Self::new_with_cl(tokio_client_config, processor, None)
     }
 
+    pub fn new_with_service_context(
+        tokio_client_config: Arc<TokioClientConfig>,
+        processor: PR,
+        service_context: ServiceContext,
+    ) -> Self {
+        Self::new_with_cl_and_optional_service_context(tokio_client_config, processor, None, Some(service_context))
+    }
+
     pub fn new_with_cl(
         tokio_client_config: Arc<TokioClientConfig>,
         processor: PR,
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+    ) -> Self {
+        Self::new_with_cl_and_optional_service_context(tokio_client_config, processor, tx, None)
+    }
+
+    pub fn new_with_cl_and_service_context(
+        tokio_client_config: Arc<TokioClientConfig>,
+        processor: PR,
+        tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+        service_context: ServiceContext,
+    ) -> Self {
+        Self::new_with_cl_and_optional_service_context(tokio_client_config, processor, tx, Some(service_context))
+    }
+
+    fn new_with_cl_and_optional_service_context(
+        tokio_client_config: Arc<TokioClientConfig>,
+        processor: PR,
+        tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+        service_context: Option<ServiceContext>,
     ) -> Self {
         let handler = RemotingGeneralHandler {
             request_processor: processor,
@@ -241,6 +294,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             shutdown_token: CancellationToken::new(),
             background_task_group: Arc::new(Mutex::new(None)),
             worker_task_group: Arc::new(Mutex::new(None)),
+            service_context,
             cmd_handler: ArcMut::new(handler),
             tx,
         }
@@ -319,17 +373,21 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             }
         }
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                error!(
-                    ?error,
-                    "failed to create RemotingClient worker task group outside Tokio runtime"
-                );
-                return None;
-            }
+        let task_group = if let Some(service_context) = self.service_context.as_ref() {
+            service_context.task_group().child("rocketmq-remoting.client.workers")
+        } else {
+            let runtime = match tokio::runtime::Handle::try_current() {
+                Ok(handle) => RuntimeHandle::new(handle),
+                Err(error) => {
+                    error!(
+                        ?error,
+                        "failed to create RemotingClient worker task group outside Tokio runtime"
+                    );
+                    return None;
+                }
+            };
+            TaskGroup::root("rocketmq-remoting.client.workers", runtime)
         };
-        let task_group = TaskGroup::root("rocketmq-remoting.client.workers", runtime);
         *task_group_guard = Some(task_group.clone());
         Some(task_group)
     }
@@ -402,7 +460,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         cleanup_interval: Duration,
     ) -> ConnectionPoolCleanupTask {
         let pool = ConnectionPool::new(max_connections, max_idle_duration);
-        let cleanup_task = pool.start_cleanup_task(cleanup_interval);
+        let cleanup_task = match self.service_context.as_ref() {
+            Some(service_context) => pool.start_cleanup_task_with_service_context(service_context, cleanup_interval),
+            None => pool.start_cleanup_task(cleanup_interval),
+        };
         self.connection_pool = Some(pool);
         info!(
             "Connection pool enabled: max={}, idle_timeout={:?}, cleanup_interval={:?}",
@@ -419,7 +480,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         cleanup_interval: Duration,
     ) -> RuntimeResult<ConnectionPoolCleanupTask> {
         let pool = ConnectionPool::new(max_connections, max_idle_duration);
-        let cleanup_task = pool.try_start_cleanup_task(cleanup_interval)?;
+        let cleanup_task = match self.service_context.as_ref() {
+            Some(service_context) => {
+                pool.try_start_cleanup_task_with_service_context(service_context, cleanup_interval)?
+            }
+            None => pool.try_start_cleanup_task(cleanup_interval)?,
+        };
         self.connection_pool = Some(pool);
         info!(
             "Connection pool enabled: max={}, idle_timeout={:?}, cleanup_interval={:?}",
@@ -654,8 +720,20 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         let mut tls_config = self.tokio_client_config.tls_config.clone();
         tls_config.enable = self.tokio_client_config.use_tls;
 
-        let connect_result = time::timeout(duration, async {
-            Client::connect(addr_inner, self.cmd_handler.clone(), self.tx.as_ref(), tls_config).await
+        let service_context = self.service_context.clone();
+        let connect_result = time::timeout(duration, async move {
+            if let Some(service_context) = service_context.as_ref() {
+                Client::connect_with_service_context(
+                    service_context,
+                    addr_inner,
+                    self.cmd_handler.clone(),
+                    self.tx.as_ref(),
+                    tls_config,
+                )
+                .await
+            } else {
+                Client::connect(addr_inner, self.cmd_handler.clone(), self.tx.as_ref(), tls_config).await
+            }
         })
         .await;
 
@@ -909,22 +987,55 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             }
         }
     }
+
+    pub async fn shutdown_with_report(&mut self, timeout: Duration) -> RemotingClientShutdownReport {
+        self.shutdown_token.cancel();
+
+        let background_task_group = { self.background_task_group.lock().take() };
+        let worker_task_group = { self.worker_task_group.lock().take() };
+
+        let background = match background_task_group {
+            Some(task_group) => Some(task_group.shutdown(timeout).await),
+            None => None,
+        };
+        let workers = match worker_task_group {
+            Some(task_group) => Some(task_group.shutdown(timeout).await),
+            None => None,
+        };
+
+        if let Some(pool) = self.connection_pool.take() {
+            pool.clear();
+        }
+
+        let addrs: Vec<_> = self.connection_tables.iter().map(|entry| entry.key().clone()).collect();
+        let mut clients = Vec::with_capacity(addrs.len());
+        for addr in addrs {
+            if let Some((addr, client)) = self.connection_tables.remove(&addr) {
+                clients.push((addr, client));
+            }
+        }
+
+        let mut connections = Vec::with_capacity(clients.len());
+        for (addr, client) in clients {
+            let report = client.close_with_report(timeout).await;
+            connections.push(RemotingClientConnectionShutdownReport { addr, report });
+        }
+
+        self.namesrv_addr_list.clear();
+        self.available_namesrv_addr_set.clear();
+
+        RemotingClientShutdownReport {
+            background,
+            workers,
+            connections,
+        }
+    }
 }
 
 #[allow(unused_variables)]
 impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for RocketmqDefaultClient<PR> {
     async fn start(&self, this: WeakArcMut<Self>) {
         if let Some(client) = this.upgrade() {
-            let runtime = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => RuntimeHandle::new(handle),
-                Err(error) => {
-                    error!(
-                        ?error,
-                        "failed to start RemotingClient background tasks outside Tokio runtime"
-                    );
-                    return;
-                }
-            };
             let task_group = {
                 let mut task_group_guard = self.background_task_group.lock();
                 if let Some(task_group) = task_group_guard.as_ref() {
@@ -934,7 +1045,21 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
                     }
                 }
 
-                let task_group = TaskGroup::root("rocketmq-remoting.client", runtime);
+                let task_group = if let Some(service_context) = self.service_context.as_ref() {
+                    service_context.task_group().child("rocketmq-remoting.client")
+                } else {
+                    let runtime = match tokio::runtime::Handle::try_current() {
+                        Ok(handle) => RuntimeHandle::new(handle),
+                        Err(error) => {
+                            error!(
+                                ?error,
+                                "failed to start RemotingClient background tasks outside Tokio runtime"
+                            );
+                            return;
+                        }
+                    };
+                    TaskGroup::root("rocketmq-remoting.client", runtime)
+                };
                 *task_group_guard = Some(task_group.clone());
                 task_group
             };
@@ -996,6 +1121,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
                     "RemotingClient worker task shutdown report is unhealthy"
                 );
             }
+        }
+        if let Some(pool) = self.connection_pool.take() {
+            pool.clear();
         }
         self.connection_tables.clear();
         self.namesrv_addr_list.clear();
@@ -1312,6 +1440,7 @@ mod tests {
     use std::sync::Arc;
 
     use rocketmq_error::RocketMQResult;
+    use rocketmq_runtime::RuntimeContext;
     use tokio::net::TcpListener;
 
     use super::*;
@@ -1391,6 +1520,48 @@ mod tests {
         client.mut_from_ref().shutdown();
 
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::ShutdownCompleted);
+    }
+
+    #[tokio::test]
+    async fn service_context_parents_background_and_worker_tasks() {
+        let context = RuntimeContext::from_current("remoting-default-client-parent-test");
+        let service = context.service_context("remoting-client-service");
+        let config = TokioClientConfig {
+            connect_timeout_millis: 10,
+            channel_not_active_interval: 10,
+            ..Default::default()
+        };
+        let client = ArcMut::new(RocketmqDefaultClient::new_with_service_context(
+            Arc::new(config),
+            DefaultRemotingRequestProcessor,
+            service.clone(),
+        ));
+        let weak_client = ArcMut::downgrade(&client);
+
+        client.start(weak_client).await;
+        client
+            .spawn_worker_task("remoting.client.parent-test-worker", async {})
+            .expect("worker task should spawn");
+
+        let background_task_group = client
+            .background_task_group
+            .lock()
+            .as_ref()
+            .cloned()
+            .expect("background task group");
+        let worker_task_group = client
+            .worker_task_group
+            .lock()
+            .as_ref()
+            .cloned()
+            .expect("worker task group");
+
+        assert_eq!(background_task_group.parent_id(), Some(service.task_group().id()));
+        assert_eq!(worker_task_group.parent_id(), Some(service.task_group().id()));
+
+        client.mut_from_ref().shutdown();
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[tokio::test]
@@ -1499,5 +1670,33 @@ mod tests {
             worker_task_group.lifecycle_state(),
             TaskGroupLifecycleState::ShutdownCompleted
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_with_report_closes_connection_table_clients() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.expect("accept client");
+            time::sleep(Duration::from_secs(5)).await;
+        });
+        let mut client =
+            RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
+
+        let target = CheetahString::from_string(addr.to_string());
+        let created = client
+            .create_client(&target, Duration::from_secs(3))
+            .await
+            .expect("client connection should be created");
+        drop(created);
+        assert_eq!(client.connection_tables.len(), 1);
+
+        let report = client.shutdown_with_report(Duration::from_secs(1)).await;
+
+        assert!(report.is_healthy(), "{report:?}");
+        assert_eq!(report.connections.len(), 1);
+        assert_eq!(report.connections[0].addr, target);
+        assert!(client.connection_tables.is_empty());
+        server.abort();
     }
 }

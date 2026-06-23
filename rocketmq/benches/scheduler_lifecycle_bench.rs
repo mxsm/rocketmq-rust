@@ -200,7 +200,7 @@ fn run_scheduled_task_manager_probe(task_count: usize) -> ScheduledTaskManagerPr
         .expect("scheduled task manager benchmark runtime should start");
 
     runtime.block_on(async move {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         let runs = Arc::new(AtomicUsize::new(0));
         for _ in 0..task_count {
             let runs = runs.clone();

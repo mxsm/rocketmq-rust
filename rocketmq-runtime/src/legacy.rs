@@ -22,10 +22,12 @@ use std::time::Duration;
 /// Tokio runtime. `RocketMQRuntime` remains available for older synchronous
 /// builder and scheduler APIs while those call sites are migrated behind
 /// explicit compatibility adapters.
+#[deprecated(note = "use RuntimeOwner, RuntimeContext, or ServiceContext instead")]
 pub enum RocketMQRuntime {
     Multi(tokio::runtime::Runtime),
 }
 
+#[allow(deprecated)]
 impl RocketMQRuntime {
     #[inline]
     pub fn new_multi(threads: usize, name: &str) -> Self {

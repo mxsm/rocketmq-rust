@@ -45,6 +45,9 @@ use tokio::runtime::Handle;
 static SHARED_FALLBACK: OnceLock<ClientSharedFallbackRegistry> = OnceLock::new();
 static CLIENT_BLOCKING: OnceLock<BlockingExecutor> = OnceLock::new();
 
+pub const CLIENT_SHARED_FALLBACK_RUNTIME_BOUNDARY: &str = "rocketmq-client.shared-fallback-runtime";
+pub const CLIENT_SHARED_FALLBACK_RUNTIME_COMPATIBILITY: &str = "shared fallback runtime compatibility boundary";
+
 pub(crate) fn spawn_client_task<F>(task_name: &'static str, task: F) -> io::Result<ClientRuntimeTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
@@ -593,6 +596,9 @@ pub enum ClientSharedFallbackLifecycleState {
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientSharedFallbackSnapshot {
+    pub boundary: &'static str,
+    pub compatibility: &'static str,
+    pub prefers_injected_runtime: bool,
     pub state: ClientSharedFallbackLifecycleState,
     pub acquire_count: usize,
     pub runtime_created: usize,
@@ -679,6 +685,9 @@ impl ClientSharedFallbackRegistry {
         };
 
         ClientSharedFallbackSnapshot {
+            boundary: CLIENT_SHARED_FALLBACK_RUNTIME_BOUNDARY,
+            compatibility: CLIENT_SHARED_FALLBACK_RUNTIME_COMPATIBILITY,
+            prefers_injected_runtime: true,
             state: lifecycle_state,
             acquire_count: self.acquire_count.load(Ordering::Relaxed),
             runtime_created: self.runtime_created.load(Ordering::Relaxed),
@@ -990,6 +999,9 @@ mod tests {
         let lease = registry.acquire().expect("fallback runtime should be created");
 
         let snapshot = registry.snapshot();
+        assert_eq!(snapshot.boundary, CLIENT_SHARED_FALLBACK_RUNTIME_BOUNDARY);
+        assert_eq!(snapshot.compatibility, CLIENT_SHARED_FALLBACK_RUNTIME_COMPATIBILITY);
+        assert!(snapshot.prefers_injected_runtime);
         assert_eq!(snapshot.state, ClientSharedFallbackLifecycleState::Active);
         assert_eq!(snapshot.acquire_count, 1);
         assert_eq!(snapshot.runtime_created, 1);

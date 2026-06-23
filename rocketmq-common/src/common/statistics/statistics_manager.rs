@@ -62,6 +62,7 @@ pub struct StatisticsManager {
     stats_table: StatsTable,
     statistics_item_state_getter: Arc<RwLock<Option<Arc<dyn StatisticsItemStateGetter + Send + Sync>>>>,
     cleanup_task: Arc<Mutex<Option<CleanupTask>>>,
+    parent_task_group: Option<TaskGroup>,
 }
 
 impl Default for StatisticsManager {
@@ -74,24 +75,35 @@ impl StatisticsManager {
     const MAX_IDLE_TIME: u64 = 10 * 60 * 1000;
 
     pub fn new() -> Self {
-        let manager = Self {
-            kind_meta_map: Arc::new(RwLock::new(HashMap::new())),
-            brief_metas: None,
-            stats_table: Arc::new(RwLock::new(HashMap::new())),
-            statistics_item_state_getter: Arc::new(RwLock::new(None)),
-            cleanup_task: Arc::new(Mutex::new(None)),
-        };
-        manager.start();
-        manager
+        Self::new_with_optional_kind_meta_and_task_group(HashMap::new(), None)
+    }
+
+    pub fn new_with_task_group(parent_task_group: TaskGroup) -> Self {
+        Self::new_with_optional_kind_meta_and_task_group(HashMap::new(), Some(parent_task_group))
     }
 
     pub fn with_kind_meta(kind_meta: HashMap<String, Arc<StatisticsKindMeta>>) -> Self {
+        Self::new_with_optional_kind_meta_and_task_group(kind_meta, None)
+    }
+
+    pub fn with_kind_meta_and_task_group(
+        kind_meta: HashMap<String, Arc<StatisticsKindMeta>>,
+        parent_task_group: TaskGroup,
+    ) -> Self {
+        Self::new_with_optional_kind_meta_and_task_group(kind_meta, Some(parent_task_group))
+    }
+
+    fn new_with_optional_kind_meta_and_task_group(
+        kind_meta: HashMap<String, Arc<StatisticsKindMeta>>,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Self {
         let manager = Self {
             kind_meta_map: Arc::new(RwLock::new(kind_meta)),
             brief_metas: None,
             stats_table: Arc::new(RwLock::new(HashMap::new())),
             statistics_item_state_getter: Arc::new(RwLock::new(None)),
             cleanup_task: Arc::new(Mutex::new(None)),
+            parent_task_group,
         };
         manager.start();
         manager
@@ -114,14 +126,18 @@ impl StatisticsManager {
             return;
         }
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                tracing::debug!(%error, "StatisticsManager cleanup task deferred until a Tokio runtime is available");
-                return;
-            }
+        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
+            parent_task_group.child("rocketmq-common.statistics")
+        } else {
+            let runtime = match tokio::runtime::Handle::try_current() {
+                Ok(handle) => RuntimeHandle::new(handle),
+                Err(error) => {
+                    tracing::debug!(%error, "StatisticsManager cleanup task deferred until a Tokio runtime is available");
+                    return;
+                }
+            };
+            TaskGroup::root("rocketmq-common.statistics", runtime)
         };
-        let task_group = TaskGroup::root("rocketmq-common.statistics", runtime);
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let stats_table = self.stats_table.clone();
         let kind_meta_map = self.kind_meta_map.clone();
@@ -248,6 +264,8 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
 
+    use rocketmq_runtime::RuntimeContext;
+
     use super::*;
     use crate::common::statistics::statistics_item_scheduled_printer::StatisticsItemScheduledPrinter;
 
@@ -276,6 +294,30 @@ mod tests {
 
         manager.shutdown().await;
         assert!(manager.cleanup_task.lock().is_none());
+    }
+
+    #[tokio::test]
+    async fn new_with_task_group_parents_cleanup_task() {
+        let context = RuntimeContext::from_current("statistics-manager-parent-test");
+        let service = context.service_context("statistics-service");
+        let manager = StatisticsManager::new_with_task_group(service.task_group().clone());
+
+        assert!(
+            manager.cleanup_task.lock().is_some(),
+            "cleanup task should be running after parented manager creation"
+        );
+        manager.shutdown().await;
+
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(
+            report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq-common.statistics"),
+            "{}",
+            report.to_json()
+        );
     }
 
     #[test]

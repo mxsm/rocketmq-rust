@@ -103,6 +103,7 @@ pub struct OpenRaftController {
     lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn BrokerLifecycleListener>>>>,
     scheduling: Arc<AtomicBool>,
     first_received_heartbeat_time: Arc<AtomicU64>,
+    parent_task_group: Option<TaskGroup>,
 }
 
 impl OpenRaftController {
@@ -111,9 +112,33 @@ impl OpenRaftController {
         Self::new_with_heartbeat(config, heartbeat_manager)
     }
 
+    pub fn new_with_task_group(config: ArcMut<ControllerConfig>, parent_task_group: TaskGroup) -> Self {
+        let heartbeat_manager = ArcMut::new(DefaultBrokerHeartbeatManager::new_with_task_group(
+            config.clone(),
+            parent_task_group.clone(),
+        ));
+        Self::new_with_heartbeat_and_task_group(config, heartbeat_manager, parent_task_group)
+    }
+
     pub fn new_with_heartbeat(
         config: ArcMut<ControllerConfig>,
         heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
+    ) -> Self {
+        Self::new_with_heartbeat_and_optional_task_group(config, heartbeat_manager, None)
+    }
+
+    pub fn new_with_heartbeat_and_task_group(
+        config: ArcMut<ControllerConfig>,
+        heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
+        parent_task_group: TaskGroup,
+    ) -> Self {
+        Self::new_with_heartbeat_and_optional_task_group(config, heartbeat_manager, Some(parent_task_group))
+    }
+
+    fn new_with_heartbeat_and_optional_task_group(
+        config: ArcMut<ControllerConfig>,
+        heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
+        parent_task_group: Option<TaskGroup>,
     ) -> Self {
         Self {
             config,
@@ -126,6 +151,7 @@ impl OpenRaftController {
             lifecycle_listeners: Arc::new(RwLock::new(Vec::new())),
             scheduling: Arc::new(AtomicBool::new(false)),
             first_received_heartbeat_time: Arc::new(AtomicU64::new(0)),
+            parent_task_group,
         }
     }
 
@@ -135,10 +161,16 @@ impl OpenRaftController {
             return Ok(task_group.clone());
         }
 
-        let handle = tokio::runtime::Handle::try_current().map_err(|error| {
-            rocketmq_error::RocketMQError::Internal(format!("No Tokio runtime for OpenRaft controller tasks: {error}"))
-        })?;
-        let task_group = TaskGroup::root("rocketmq-controller.openraft", RuntimeHandle::new(handle));
+        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
+            parent_task_group.child("rocketmq-controller.openraft")
+        } else {
+            let handle = tokio::runtime::Handle::try_current().map_err(|error| {
+                rocketmq_error::RocketMQError::Internal(format!(
+                    "No Tokio runtime for OpenRaft controller tasks: {error}"
+                ))
+            })?;
+            TaskGroup::root("rocketmq-controller.openraft", RuntimeHandle::new(handle))
+        };
         *guard = Some(task_group.clone());
         Ok(task_group)
     }

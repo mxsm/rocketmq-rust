@@ -118,6 +118,7 @@ where
         cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         notify: broadcast::Receiver<()>,
+        send_notify: broadcast::Receiver<()>,
         tls_config: TlsConfig,
         task_group: TaskGroup,
     ) -> RocketMQResult<(tokio::sync::mpsc::Sender<SendMessage>, ArcMut<ClientInner<PR>>)> {
@@ -166,7 +167,7 @@ where
         }
         let mut client_ = client_inner.clone();
         if let Err(error) = task_group.spawn_service("remoting.client.connection.send", async move {
-            client_.run_send(rx).await;
+            client_.run_send(rx, Shutdown::new(send_notify)).await;
         }) {
             let _ = task_group.shutdown(Duration::from_secs(1)).await;
             return Err(remote_error(format!(
@@ -205,9 +206,17 @@ where
         }
     }
 
-    async fn run_send(&mut self, mut rx: Receiver<SendMessage>) {
-        while let Some((request, tx, timeout)) = rx.recv().await {
-            let _ = self.send(request, tx, timeout).await;
+    async fn run_send(&mut self, mut rx: Receiver<SendMessage>, mut shutdown: Shutdown) {
+        loop {
+            tokio::select! {
+                _ = shutdown.recv() => break,
+                maybe_message = rx.recv() => {
+                    let Some((request, tx, timeout)) = maybe_message else {
+                        break;
+                    };
+                    let _ = self.send(request, tx, timeout).await;
+                }
+            }
         }
     }
 
@@ -283,10 +292,12 @@ where
     ) -> RocketMQResult<Client<PR>> {
         let (notify_shutdown, _) = broadcast::channel(1);
         let receiver = notify_shutdown.subscribe();
+        let send_receiver = notify_shutdown.subscribe();
         let task_lifecycle = Arc::new(ClientTaskLifecycle {
             task_group: task_group.clone(),
         });
-        let (tx, inner) = ClientInner::connect(addr, cmd_handler, tx, receiver, tls_config, task_group).await?;
+        let (tx, inner) =
+            ClientInner::connect(addr, cmd_handler, tx, receiver, send_receiver, tls_config, task_group).await?;
         Ok(Client {
             inner,
             notify_shutdown,
@@ -463,6 +474,14 @@ where
         Ok(results)
     }
 
+    /// Gracefully stop this client connection and return the task shutdown report.
+    pub async fn close_with_report(&self, timeout: Duration) -> rocketmq_runtime::ShutdownReport {
+        let _ = self.notify_shutdown.send(());
+        let report = self.task_lifecycle.task_group.shutdown(timeout).await;
+        report.log_if_unhealthy();
+        report
+    }
+
     /// Reads and retrieves the response from the remote remoting_server.
     ///
     /// # Returns
@@ -570,6 +589,33 @@ mod lifecycle_tests {
         drop(client);
 
         assert!(task_group.cancellation_token().is_cancelled());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn close_with_report_stops_connection_tasks() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.expect("accept client");
+            time::sleep(Duration::from_secs(5)).await;
+        });
+        let cmd_handler = ArcMut::new(RemotingGeneralHandler {
+            request_processor: DefaultRemotingRequestProcessor,
+            rpc_hooks: vec![],
+            response_table: ArcMut::new(HashMap::new()),
+        });
+
+        let client = Client::connect(addr.to_string(), cmd_handler, None, TlsConfig::default())
+            .await
+            .expect("connect client");
+        let task_group = client.task_lifecycle.task_group.clone();
+
+        assert_eq!(task_group.task_count(), 2);
+        let report = client.close_with_report(Duration::from_secs(1)).await;
+
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.completed + report.cancelled, 2);
         server.abort();
     }
 

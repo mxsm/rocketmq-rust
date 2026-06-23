@@ -27,7 +27,6 @@ use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
 use rocketmq_remoting::protocol::remoting_command;
-use rocketmq_rust::rocketmq;
 #[cfg(feature = "tieredstore")]
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -44,8 +43,18 @@ const LOGO: &str = r#"
  |_|  \_\___/ \___|_|\_\___|\__|_|  |_|\___\_\      |_|  \_\__,_|___/\__| |____/|_|  \___/|_|\_\___|_|
 "#;
 
-#[rocketmq::main]
-async fn main() -> Result<()> {
+const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
+
+fn main() -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .max_blocking_threads(ENTRYPOINT_MAX_BLOCKING_THREADS)
+        .enable_all()
+        .build()
+        .context("failed to build broker Tokio runtime")?;
+    runtime.block_on(run())
+}
+
+async fn run() -> Result<()> {
     // Initialize logger
     rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO)?;
 

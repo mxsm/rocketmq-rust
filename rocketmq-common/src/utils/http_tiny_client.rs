@@ -38,6 +38,30 @@ use crate::TimeUtils::current_millis;
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 static HTTP_SYNC_RUNTIME: OnceLock<Result<RuntimeOwner, String>> = OnceLock::new();
 
+pub const HTTP_SYNC_RUNTIME_BOUNDARY: &str = "rocketmq-common.http-sync-runtime";
+pub const HTTP_SYNC_RUNTIME_COMPATIBILITY: &str = "deprecated blocking HTTP compatibility bridge";
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HttpSyncRuntimeBoundary {
+    pub name: &'static str,
+    pub compatibility: &'static str,
+    pub deprecated: bool,
+    pub rejects_tokio_context: bool,
+    pub prefers_async_api: bool,
+}
+
+#[doc(hidden)]
+pub fn http_sync_runtime_boundary() -> HttpSyncRuntimeBoundary {
+    HttpSyncRuntimeBoundary {
+        name: HTTP_SYNC_RUNTIME_BOUNDARY,
+        compatibility: HTTP_SYNC_RUNTIME_COMPATIBILITY,
+        deprecated: true,
+        rejects_tokio_context: true,
+        prefers_async_api: true,
+    }
+}
+
 fn build_http_client() -> RocketMQResult<Client> {
     Client::builder()
         .pool_idle_timeout(Duration::from_secs(90))
@@ -458,6 +482,17 @@ mod tests {
     #[test]
     fn shared_http_client_initializes_without_panicking() {
         assert!(HttpTinyClient::client().is_ok());
+    }
+
+    #[test]
+    fn http_sync_runtime_boundary_marks_blocking_bridge_deprecated() {
+        let boundary = http_sync_runtime_boundary();
+
+        assert_eq!(boundary.name, HTTP_SYNC_RUNTIME_BOUNDARY);
+        assert_eq!(boundary.compatibility, HTTP_SYNC_RUNTIME_COMPATIBILITY);
+        assert!(boundary.deprecated);
+        assert!(boundary.rejects_tokio_context);
+        assert!(boundary.prefers_async_api);
     }
 
     async fn spawn_http_server<F>(handler: F) -> String

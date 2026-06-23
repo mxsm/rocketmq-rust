@@ -35,7 +35,6 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_error::Result;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_remoting::protocol::remoting_command;
-use rocketmq_rust::rocketmq;
 use serde::Deserialize;
 use tracing::error;
 use tracing::info;
@@ -49,8 +48,18 @@ const LOGO: &str = r#"
      |_|  \_\___/ \___|_|\_\___|\__|_|  |_|\___\_\      |_|  \_\__,_|___/\__| |_| \_|\__,_|_| |_| |_|\___| |_____/ \___|_|    \_/ \___|_|
     "#;
 
-#[rocketmq::main]
-async fn main() -> Result<()> {
+const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
+
+fn main() -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .max_blocking_threads(ENTRYPOINT_MAX_BLOCKING_THREADS)
+        .enable_all()
+        .build()
+        .context("failed to build namesrv Tokio runtime")?;
+    runtime.block_on(run())
+}
+
+async fn run() -> Result<()> {
     // Parse command line arguments first
     let args = Args::parse();
 

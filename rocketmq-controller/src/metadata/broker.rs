@@ -87,17 +87,28 @@ pub struct BrokerManager {
 
     /// Scheduled heartbeat checker task group
     scheduled_tasks: Mutex<Option<ScheduledTaskGroup>>,
+
+    parent_task_group: Option<TaskGroup>,
 }
 
 impl BrokerManager {
     /// Create a new broker manager
     pub fn new(config: ArcMut<ControllerConfig>) -> Self {
+        Self::new_with_optional_task_group(config, None)
+    }
+
+    pub fn new_with_task_group(config: ArcMut<ControllerConfig>, parent_task_group: TaskGroup) -> Self {
+        Self::new_with_optional_task_group(config, Some(parent_task_group))
+    }
+
+    fn new_with_optional_task_group(config: ArcMut<ControllerConfig>, parent_task_group: Option<TaskGroup>) -> Self {
         Self {
             brokers: Arc::new(DashMap::new()),
             config,
             heartbeat_timeout: Duration::from_secs(30),
             task_group: Mutex::new(None),
             scheduled_tasks: Mutex::new(None),
+            parent_task_group,
         }
     }
 
@@ -111,14 +122,18 @@ impl BrokerManager {
             return Ok(());
         }
 
-        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-            ControllerError::Internal(format!(
-                "No Tokio runtime for broker manager heartbeat checker: {error}"
-            ))
-        })?;
         let brokers = self.brokers.clone();
         let timeout = self.heartbeat_timeout;
-        let task_group = TaskGroup::root("rocketmq-controller.metadata.broker", RuntimeHandle::new(runtime));
+        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
+            parent_task_group.child("rocketmq-controller.metadata.broker")
+        } else {
+            let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+                ControllerError::Internal(format!(
+                    "No Tokio runtime for broker manager heartbeat checker: {error}"
+                ))
+            })?;
+            TaskGroup::root("rocketmq-controller.metadata.broker", RuntimeHandle::new(runtime))
+        };
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         scheduled_tasks
             .schedule_fixed_delay(

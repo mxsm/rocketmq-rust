@@ -134,6 +134,24 @@ pub fn spawn_prometheus_http_endpoint(
     config: &ObservabilityConfig,
     registry: prometheus::Registry,
 ) -> Result<PrometheusHttpHandle, ObservabilityError> {
+    spawn_prometheus_http_endpoint_with_optional_task_group(config, registry, None)
+}
+
+#[cfg(feature = "prometheus")]
+pub fn spawn_prometheus_http_endpoint_with_task_group(
+    config: &ObservabilityConfig,
+    registry: prometheus::Registry,
+    parent_task_group: TaskGroup,
+) -> Result<PrometheusHttpHandle, ObservabilityError> {
+    spawn_prometheus_http_endpoint_with_optional_task_group(config, registry, Some(parent_task_group))
+}
+
+#[cfg(feature = "prometheus")]
+fn spawn_prometheus_http_endpoint_with_optional_task_group(
+    config: &ObservabilityConfig,
+    registry: prometheus::Registry,
+    parent_task_group: Option<TaskGroup>,
+) -> Result<PrometheusHttpHandle, ObservabilityError> {
     let path = normalize_prometheus_path(&config.prometheus.path)?;
     let listener = bind_prometheus_listener(config)?;
     let local_addr = listener
@@ -141,11 +159,15 @@ pub fn spawn_prometheus_http_endpoint(
         .map_err(|error| ObservabilityError::metrics_init(format!("read Prometheus listener address: {error}")))?;
     let listener = tokio::net::TcpListener::from_std(listener)
         .map_err(|error| ObservabilityError::metrics_init(format!("create Prometheus listener: {error}")))?;
-    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-        ObservabilityError::metrics_init(format!("Prometheus metrics endpoint requires a Tokio runtime: {error}"))
-    })?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let task_group = TaskGroup::root("rocketmq.observability.prometheus", RuntimeHandle::new(runtime.clone()));
+    let task_group = if let Some(parent_task_group) = parent_task_group {
+        parent_task_group.child("rocketmq.observability.prometheus")
+    } else {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+            ObservabilityError::metrics_init(format!("Prometheus metrics endpoint requires a Tokio runtime: {error}"))
+        })?;
+        TaskGroup::root("rocketmq.observability.prometheus", RuntimeHandle::new(runtime.clone()))
+    };
     let connection_group = task_group.child("prometheus.connection");
     task_group
         .spawn_service(
@@ -273,6 +295,7 @@ fn request_path_from_buffer(buffer: &[u8]) -> Option<&str> {
 #[cfg(all(test, feature = "prometheus"))]
 mod tests {
     use opentelemetry::metrics::MeterProvider;
+    use rocketmq_runtime::RuntimeContext;
 
     use super::*;
 
@@ -308,5 +331,35 @@ mod tests {
     fn normalizes_prometheus_path() {
         assert_eq!(normalize_prometheus_path("metrics").unwrap(), "/metrics");
         assert_eq!(normalize_prometheus_path("/metrics").unwrap(), "/metrics");
+    }
+
+    #[tokio::test]
+    async fn spawn_prometheus_http_endpoint_with_task_group_is_parented() {
+        let context = RuntimeContext::from_current("prometheus-parent-test");
+        let service = context.service_context("observability-service");
+        let mut config = ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        config.prometheus.host = "127.0.0.1".to_string();
+        config.prometheus.port = 0;
+        config.prometheus.path = "/metrics".to_string();
+        let registry = prometheus::Registry::new();
+
+        let handle = spawn_prometheus_http_endpoint_with_task_group(&config, registry, service.task_group().clone())
+            .expect("prometheus endpoint should spawn");
+        let report = handle.shutdown_gracefully(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+
+        let parent_report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
+        assert!(
+            parent_report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq.observability.prometheus"),
+            "{}",
+            parent_report.to_json()
+        );
     }
 }

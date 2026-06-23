@@ -119,6 +119,7 @@ pub struct TaskScheduler {
     shutdown_notify: Arc<Notify>,
     scheduler_group: Arc<RwLock<Option<TaskGroup>>>,
     last_scheduler_shutdown_report: Arc<RwLock<Option<ShutdownReport>>>,
+    parent_task_group: Option<TaskGroup>,
 }
 
 fn current_scheduler_handle(operation: &'static str) -> SchedulerResult<RuntimeHandle> {
@@ -140,10 +141,22 @@ impl Default for TaskScheduler {
 impl TaskScheduler {
     /// Create a new task scheduler
     pub fn new(config: SchedulerConfig) -> Self {
-        let executor_pool = Arc::new(ExecutorPool::new(
-            config.executor_pool_size,
-            config.executor_config.clone(),
-        ));
+        Self::new_with_optional_task_group(config, None)
+    }
+
+    pub fn new_with_task_group(config: SchedulerConfig, parent_task_group: TaskGroup) -> Self {
+        Self::new_with_optional_task_group(config, Some(parent_task_group))
+    }
+
+    fn new_with_optional_task_group(config: SchedulerConfig, parent_task_group: Option<TaskGroup>) -> Self {
+        let executor_pool = Arc::new(match parent_task_group.as_ref() {
+            Some(parent_task_group) => ExecutorPool::new_with_task_group(
+                config.executor_pool_size,
+                config.executor_config.clone(),
+                parent_task_group.child("rocketmq.task-scheduler.executors"),
+            ),
+            None => ExecutorPool::new(config.executor_pool_size, config.executor_config.clone()),
+        });
 
         Self {
             config,
@@ -153,6 +166,7 @@ impl TaskScheduler {
             shutdown_notify: Arc::new(Notify::new()),
             scheduler_group: Arc::new(RwLock::new(None)),
             last_scheduler_shutdown_report: Arc::new(RwLock::new(None)),
+            parent_task_group,
         }
     }
 
@@ -167,14 +181,18 @@ impl TaskScheduler {
         }
 
         info!("Starting task scheduler");
-        let runtime = match current_scheduler_handle("TaskScheduler::start") {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                *self.running.write().await = false;
-                return Err(error);
-            }
+        let scheduler_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
+            parent_task_group.child("rocketmq.task-scheduler")
+        } else {
+            let runtime = match current_scheduler_handle("TaskScheduler::start") {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    *self.running.write().await = false;
+                    return Err(error);
+                }
+            };
+            TaskGroup::root("rocketmq.task-scheduler", runtime)
         };
-        let scheduler_group = TaskGroup::root("rocketmq.task-scheduler", runtime);
         *self.scheduler_group.write().await = Some(scheduler_group.clone());
         *self.last_scheduler_shutdown_report.write().await = None;
 
@@ -612,6 +630,7 @@ pub struct SchedulerStatus {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_runtime::RuntimeContext;
     use std::future;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
@@ -667,6 +686,34 @@ mod tests {
         assert!(report.is_healthy(), "{}", report.to_json());
         assert_eq!(report.cancelled, 2);
         assert!(!scheduler.get_status().await.running);
+    }
+
+    #[tokio::test]
+    async fn new_with_task_group_parents_scheduler_tasks() {
+        let context = RuntimeContext::from_current("task-scheduler-parent-test");
+        let service = context.service_context("scheduler-service");
+        let scheduler = TaskScheduler::new_with_task_group(
+            SchedulerConfig {
+                check_interval: Duration::from_secs(60),
+                max_scheduler_threads: 1,
+                ..SchedulerConfig::default()
+            },
+            service.task_group().clone(),
+        );
+
+        scheduler.start().await.expect("parented scheduler should start");
+        scheduler.stop().await.expect("parented scheduler should stop");
+
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(
+            report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq.task-scheduler"),
+            "{}",
+            report.to_json()
+        );
     }
 
     #[tokio::test]

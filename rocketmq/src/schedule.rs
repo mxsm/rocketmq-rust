@@ -91,6 +91,28 @@ pub mod simple_scheduler {
 
     type TaskId = u64;
 
+    pub const LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY: &str = "rocketmq.simple-scheduled-task-manager";
+    pub const LEGACY_SCHEDULED_TASK_MANAGER_COMPATIBILITY: &str =
+        "legacy scheduled task manager compatibility boundary";
+    pub const LEGACY_SCHEDULED_TASK_MANAGER_REPLACEMENT: &str = "rocketmq_runtime::ScheduledTaskGroup";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct LegacyScheduledTaskManagerBoundary {
+        pub boundary: &'static str,
+        pub compatibility: &'static str,
+        pub replacement: &'static str,
+        pub prefers_parent_task_group: bool,
+    }
+
+    pub fn legacy_scheduled_task_manager_boundary() -> LegacyScheduledTaskManagerBoundary {
+        LegacyScheduledTaskManagerBoundary {
+            boundary: LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY,
+            compatibility: LEGACY_SCHEDULED_TASK_MANAGER_COMPATIBILITY,
+            replacement: LEGACY_SCHEDULED_TASK_MANAGER_REPLACEMENT,
+            prefers_parent_task_group: true,
+        }
+    }
+
     pub struct TaskInfo {
         cancel_token: CancellationToken,
         runtime_task_id: RuntimeTaskId,
@@ -157,16 +179,29 @@ pub mod simple_scheduler {
 
     impl Default for ScheduledTaskManager {
         fn default() -> Self {
-            Self::new()
+            Self::new_legacy_compatibility()
         }
     }
 
     impl ScheduledTaskManager {
+        pub fn new_legacy_compatibility() -> Self {
+            Self::new_with_optional_task_group(None)
+        }
+
+        #[deprecated(note = "use ScheduledTaskManager::new_with_task_group or rocketmq_runtime::ScheduledTaskGroup")]
         pub fn new() -> Self {
+            Self::new_legacy_compatibility()
+        }
+
+        pub fn new_with_task_group(parent_task_group: TaskGroup) -> Self {
+            Self::new_with_optional_task_group(Some(parent_task_group.child(LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY)))
+        }
+
+        fn new_with_optional_task_group(task_group: Option<TaskGroup>) -> Self {
             Self {
                 tasks: Arc::new(RwLock::new(HashMap::new())),
                 counter: Arc::new(AtomicU64::new(0)),
-                task_group: Arc::new(RwLock::new(None)),
+                task_group: Arc::new(RwLock::new(task_group)),
                 last_task_group_shutdown_report: Arc::new(RwLock::new(None)),
             }
         }
@@ -847,6 +882,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use rocketmq_runtime::RuntimeContext;
     use tokio::time;
 
     use crate::schedule::simple_scheduler::*;
@@ -860,8 +896,18 @@ mod tests {
     }
 
     #[test]
+    fn legacy_scheduler_boundary_marks_compatibility_replacement() {
+        let boundary = legacy_scheduled_task_manager_boundary();
+
+        assert_eq!(boundary.boundary, LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY);
+        assert_eq!(boundary.compatibility, LEGACY_SCHEDULED_TASK_MANAGER_COMPATIBILITY);
+        assert_eq!(boundary.replacement, LEGACY_SCHEDULED_TASK_MANAGER_REPLACEMENT);
+        assert!(boundary.prefers_parent_task_group);
+    }
+
+    #[test]
     fn add_scheduled_task_without_tokio_runtime_returns_error() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         let error = manager
             .add_scheduled_task(
                 ScheduleMode::FixedDelay,
@@ -880,7 +926,7 @@ mod tests {
 
     #[test]
     fn add_scheduled_task_async_without_tokio_runtime_returns_error() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         let error = manager
             .add_scheduled_task_async(
                 ScheduleMode::FixedDelay,
@@ -898,8 +944,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn new_with_task_group_parents_scheduled_tasks() {
+        let context = RuntimeContext::from_current("scheduled-task-manager-parent-test");
+        let service = context.service_context("scheduler-service");
+        let parent = service.task_group().clone();
+        let manager = ScheduledTaskManager::new_with_task_group(parent.clone());
+
+        let task_id = manager
+            .add_scheduled_task(
+                ScheduleMode::FixedDelay,
+                Duration::from_millis(10),
+                Duration::from_millis(50),
+                |_token| async move { Ok(()) },
+            )
+            .expect("parented scheduled task should start");
+
+        manager.cancel_task(task_id);
+        manager.shutdown_all(Duration::from_secs(1)).await;
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(
+            report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq.simple-scheduled-task-manager"),
+            "{}",
+            report.to_json()
+        );
+    }
+
+    #[tokio::test]
     async fn adds_task_and_increments_task_count() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         let task_id = manager
             .add_scheduled_task(
                 ScheduleMode::FixedRate,
@@ -921,7 +997,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancels_task_and_decrements_task_count() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         let task_id = manager
             .add_scheduled_task(
                 ScheduleMode::FixedRate,
@@ -942,7 +1018,7 @@ mod tests {
 
     #[tokio::test]
     async fn aborts_task_and_decrements_task_count() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         let task_id = manager
             .add_scheduled_task(
                 ScheduleMode::FixedRate,
@@ -963,7 +1039,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancels_all_tasks() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         for _ in 0..3 {
             manager
                 .add_scheduled_task(
@@ -988,7 +1064,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_all_waits_for_idle_drivers() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         for _ in 0..3 {
             manager
                 .add_scheduled_task(
@@ -1018,7 +1094,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_tasks_only_stops_selected_drivers() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         let selected = manager
             .add_scheduled_task(
                 ScheduleMode::FixedDelay,
@@ -1059,7 +1135,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_all_aborts_driver_after_timeout() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         let started = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicBool::new(false));
         manager
@@ -1100,7 +1176,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_all_only_times_out_unfinished_drivers() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         let started = Arc::new(AtomicBool::new(false));
         manager
             .add_scheduled_task(ScheduleMode::FixedDelay, Duration::ZERO, Duration::from_secs(60), {
@@ -1144,7 +1220,7 @@ mod tests {
 
     #[tokio::test]
     async fn aborts_all_tasks() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         for _ in 0..3 {
             manager
                 .add_scheduled_task(
@@ -1168,7 +1244,7 @@ mod tests {
 
     #[tokio::test]
     async fn skips_task_execution_in_fixed_rate_no_overlap_mode() {
-        let manager = ScheduledTaskManager::new();
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
         let task_id = manager
             .add_scheduled_task(
                 ScheduleMode::FixedRateNoOverlap,
@@ -1190,7 +1266,7 @@ mod tests {
     }
 
     fn new_manager() -> ScheduledTaskManager {
-        ScheduledTaskManager::new()
+        ScheduledTaskManager::new_legacy_compatibility()
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

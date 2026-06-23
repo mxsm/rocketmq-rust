@@ -19,6 +19,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::compression::compression_type::CompressionType;
 use rocketmq_common::common::compression::compressor::Compressor;
 use rocketmq_remoting::runtime::RPCHook;
+#[allow(deprecated)]
 use rocketmq_runtime::RocketMQRuntime;
 
 use crate::base::client_config::ClientConfig;
@@ -32,6 +33,7 @@ use crate::producer::transaction_mq_producer::TransactionProducerConfig;
 use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
 #[derive(Default)]
+#[allow(deprecated)]
 pub struct TransactionMQProducerBuilder {
     client_config: Option<ClientConfig>,
     default_mqproducer_impl: Option<DefaultMQProducerImpl>,
@@ -353,6 +355,7 @@ impl TransactionMQProducerBuilder {
         TransactionMQProducer::new(transaction_producer_config, mq_producer)
     }
 
+    #[allow(deprecated)]
     pub fn check_runtime(&mut self, check_runtime: RocketMQRuntime) {
         self.check_runtime = Some(Arc::new(check_runtime));
     }
