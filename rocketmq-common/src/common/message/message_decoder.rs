@@ -29,6 +29,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahBuilder;
 use cheetah_string::CheetahString;
 
 use crate::common::compression::compressor_factory::CompressorFactory;
@@ -183,15 +184,15 @@ pub fn message_properties_to_string(properties: &HashMap<CheetahString, CheetahS
         len += 2; // separator
     }
 
-    let mut sb = String::with_capacity(len);
+    let mut builder = CheetahBuilder::with_capacity(len);
     for (name, value) in properties.iter() {
-        sb.push_str(name);
-        sb.push(NAME_VALUE_SEPARATOR);
+        builder.push_str(name.as_str());
+        builder.push(NAME_VALUE_SEPARATOR);
 
-        sb.push_str(value);
-        sb.push(PROPERTY_SEPARATOR);
+        builder.push_str(value.as_str());
+        builder.push(PROPERTY_SEPARATOR);
     }
-    CheetahString::from_string(sb)
+    builder.finish_string()
 }
 
 pub fn decode_client(
@@ -960,6 +961,19 @@ mod tests {
     use bytes::BytesMut;
 
     use super::*;
+
+    #[test]
+    fn message_properties_to_string_preserves_separator_format() {
+        let mut properties = HashMap::new();
+        properties.insert(
+            CheetahString::from_static_str("key"),
+            CheetahString::from_static_str("value"),
+        );
+
+        let encoded = message_properties_to_string(&properties);
+
+        assert_eq!(encoded, "key\u{0001}value\u{0002}");
+    }
 
     #[test]
     fn count_inner_msg_num_counts_correctly_for_multiple_messages() {
