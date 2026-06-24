@@ -67,6 +67,8 @@ use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use std::any::Any;
@@ -76,6 +78,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -1122,48 +1125,61 @@ async fn send_transaction_message_with_runtime(
     request: SendTopicMessageRequest,
     normalized_message_body: String,
 ) -> TopicResult<TopicSendMessageResult> {
-    tokio::task::spawn_blocking(move || -> TopicResult<TopicSendMessageResult> {
-        let runtime = transaction_message_runtime()?;
-        let runtime = runtime
-            .lock()
-            .map_err(|error| TopicError::RocketMQ(format!("transaction message runtime lock poisoned: {error}")))?;
+    let blocking = transaction_message_blocking_executor()?;
+    blocking
+        .spawn_io(
+            "dashboard-topic-transaction-send",
+            move || -> TopicResult<TopicSendMessageResult> {
+                let runtime = transaction_message_runtime()?;
+                let runtime = runtime.lock().map_err(|error| {
+                    TopicError::RocketMQ(format!("transaction message runtime lock poisoned: {error}"))
+                })?;
 
-        runtime.block_on(async move {
-            let current_namesrv = snapshot.current_namesrv.clone().ok_or_else(|| {
-                TopicError::Configuration(
-                    "No active NameServer is configured. Add and select a NameServer first.".into(),
-                )
-            })?;
+                runtime.block_on(async move {
+                    let current_namesrv = snapshot.current_namesrv.clone().ok_or_else(|| {
+                        TopicError::Configuration(
+                            "No active NameServer is configured. Add and select a NameServer first.".into(),
+                        )
+                    })?;
 
-            let mut client_config = ClientConfig::new();
-            client_config.set_namesrv_addr(current_namesrv.into());
-            client_config.set_vip_channel_enabled(snapshot.use_vip_channel);
-            client_config.set_use_tls(snapshot.use_tls);
+                    let mut client_config = ClientConfig::new();
+                    client_config.set_namesrv_addr(current_namesrv.into());
+                    client_config.set_vip_channel_enabled(snapshot.use_vip_channel);
+                    client_config.set_use_tls(snapshot.use_tls);
 
-            let mut producer = TransactionMQProducer::builder()
-                .producer_group(format!("dashboard-topic-tx-sender-{}", Uuid::new_v4()))
-                .client_config(client_config)
-                .transaction_listener(DashboardTransactionListener)
-                .build();
+                    let mut producer = TransactionMQProducer::builder()
+                        .producer_group(format!("dashboard-topic-tx-sender-{}", Uuid::new_v4()))
+                        .client_config(client_config)
+                        .transaction_listener(DashboardTransactionListener)
+                        .build();
 
-            producer
-                .start()
-                .await
-                .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+                    producer
+                        .start()
+                        .await
+                        .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
 
-            let message = build_send_message(&request, &normalized_message_body);
-            let tx_result = producer
-                .send_message_in_transaction::<(), _>(message, None)
-                .await
-                .map_err(|error| TopicError::RocketMQ(error.to_string()));
-            producer.shutdown().await;
-            let tx_result = tx_result?;
+                    let message = build_send_message(&request, &normalized_message_body);
+                    let tx_result = producer
+                        .send_message_in_transaction::<(), _>(message, None)
+                        .await
+                        .map_err(|error| TopicError::RocketMQ(error.to_string()));
+                    producer.shutdown().await;
+                    let tx_result = tx_result?;
 
-            map_transaction_send_result(request.topic, tx_result)
-        })
-    })
-    .await
-    .map_err(|error| TopicError::RocketMQ(error.to_string()))?
+                    map_transaction_send_result(request.topic, tx_result)
+                })
+            },
+        )
+        .await
+        .map_err(|error| TopicError::RocketMQ(error.to_string()))?
+}
+
+fn transaction_message_blocking_executor() -> TopicResult<BlockingExecutor> {
+    let runtime = transaction_message_runtime()?;
+    let runtime = runtime
+        .lock()
+        .map_err(|error| TopicError::RocketMQ(format!("transaction message runtime lock poisoned: {error}")))?;
+    Ok(runtime.context().blocking().clone())
 }
 
 fn transaction_message_runtime() -> TopicResult<&'static StdMutex<RuntimeOwner>> {
@@ -1175,6 +1191,13 @@ fn transaction_message_runtime() -> TopicResult<&'static StdMutex<RuntimeOwner>>
         worker_threads: 1,
         max_blocking_threads: 2,
         thread_name: "rocketmq-dashboard-topic-tx".to_string(),
+        blocking_pool_policy: BlockingPoolPolicy {
+            name: "rocketmq-dashboard-topic-tx-blocking".to_string(),
+            max_concurrency: 1,
+            queue_timeout: Duration::from_secs(5),
+            task_timeout: Duration::from_secs(30),
+            warn_after: Duration::from_secs(5),
+        },
         ..RuntimeConfig::default()
     })
     .map_err(|error| TopicError::RocketMQ(format!("failed to start transaction message runtime: {error}")))?;
@@ -1859,6 +1882,7 @@ mod tests {
     use super::normalize_message_type;
     use super::normalize_topic_message_body;
     use super::quote_numeric_object_keys;
+    use super::transaction_message_blocking_executor;
     use super::transaction_message_runtime;
     use cheetah_string::CheetahString;
     use rocketmq_admin_core::core::stats::StatsAllRow;
@@ -1881,6 +1905,14 @@ mod tests {
         let second = transaction_message_runtime().expect("transaction runtime should be reused") as *const _;
 
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn transaction_message_blocking_executor_uses_runtime_policy() {
+        let blocking = transaction_message_blocking_executor().expect("blocking executor should be available");
+
+        assert_eq!(blocking.policy().name, "rocketmq-dashboard-topic-tx-blocking");
+        assert_eq!(blocking.policy().max_concurrency, 1);
     }
 
     #[test]

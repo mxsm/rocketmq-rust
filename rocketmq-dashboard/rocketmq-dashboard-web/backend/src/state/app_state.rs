@@ -17,6 +17,7 @@ use crate::config::ConfigStore;
 use crate::model::DashboardConfigView;
 use crate::service::AuthState;
 use crate::service::DashboardHistoryStore;
+use crate::service::DashboardTaskManager;
 use crate::service::MonitorStore;
 use crate::service::spawn_dashboard_history_collector;
 use rocketmq_dashboard_common::DashboardAdminFacade;
@@ -31,6 +32,7 @@ pub struct AppState {
     pub auth_state: Arc<AuthState>,
     pub monitor_store: Arc<MonitorStore>,
     pub history_store: DashboardHistoryStore,
+    pub dashboard_tasks: DashboardTaskManager,
     pub dashboard_config: Arc<RwLock<DashboardConfigView>>,
     pub admin_client: DashboardAdminClient,
 }
@@ -41,11 +43,13 @@ impl AppState {
         let auth_state = Arc::new(AuthState::new(config.auth));
         let monitor_store = Arc::new(MonitorStore::new(config.monitor_store_path));
         let history_store = DashboardHistoryStore::default();
+        let dashboard_tasks = DashboardTaskManager::default();
         let dashboard_config = config_store.load_or_init(&config.initial_config)?;
         let dashboard_config = Arc::new(RwLock::new(dashboard_config));
         let admin_client = DashboardAdminClient::new(dashboard_config.clone());
         if config.dashboard_history_interval_secs > 0 {
             spawn_dashboard_history_collector(
+                &dashboard_tasks,
                 DashboardAdminFacade::new(admin_client.clone()),
                 history_store.clone(),
                 config.dashboard_history_interval_secs,
@@ -57,6 +61,7 @@ impl AppState {
             auth_state,
             monitor_store,
             history_store,
+            dashboard_tasks,
             dashboard_config,
             admin_client,
         })

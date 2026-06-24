@@ -23,7 +23,9 @@ use chrono::Utc;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::sync::RwLock;
+use tokio::task::AbortHandle;
 use tokio::time::Duration;
 
 pub async fn overview(state: &AppState) -> Result<DashboardOverview, DashboardError> {
@@ -51,6 +53,45 @@ pub async fn topic_history(
 #[derive(Debug, Clone, Default)]
 pub struct DashboardHistoryStore {
     samples: Arc<RwLock<VecDeque<DashboardHistorySample>>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DashboardTaskManager {
+    inner: Arc<DashboardTaskManagerInner>,
+}
+
+#[derive(Debug, Default)]
+struct DashboardTaskManagerInner {
+    abort_handles: Mutex<Vec<AbortHandle>>,
+}
+
+impl DashboardTaskManager {
+    pub fn spawn<F>(&self, task_name: &'static str, task: F) -> anyhow::Result<()>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let mut abort_handles = self.inner.abort_handles.lock().map_err(|error| {
+            anyhow::anyhow!("dashboard task manager lock poisoned while spawning {task_name}: {error}")
+        })?;
+        let handle = tokio::task::spawn(async move {
+            tracing::debug!(task = task_name, "Dashboard background task started");
+            task.await;
+            tracing::debug!(task = task_name, "Dashboard background task stopped");
+        });
+        abort_handles.push(handle.abort_handle());
+        drop(handle);
+        Ok(())
+    }
+}
+
+impl Drop for DashboardTaskManagerInner {
+    fn drop(&mut self) {
+        if let Ok(abort_handles) = self.abort_handles.get_mut() {
+            for abort_handle in abort_handles.drain(..) {
+                abort_handle.abort();
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -145,11 +186,12 @@ impl DashboardHistoryStore {
 }
 
 pub fn spawn_dashboard_history_collector(
+    task_manager: &DashboardTaskManager,
     admin_facade: WebAdminFacade,
     history_store: DashboardHistoryStore,
     interval_secs: u64,
 ) -> anyhow::Result<()> {
-    spawn_dashboard_task("dashboard-history-collector", async move {
+    task_manager.spawn("dashboard-history-collector", async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs.max(1)));
         loop {
             interval.tick().await;
@@ -161,16 +203,6 @@ pub fn spawn_dashboard_history_collector(
             }
         }
     })
-}
-
-fn spawn_dashboard_task<F>(task_name: &'static str, task: F) -> anyhow::Result<()>
-where
-    F: Future<Output = ()> + Send + 'static,
-{
-    let handle = tokio::runtime::Handle::try_current()
-        .map_err(|error| anyhow::anyhow!("{task_name} requires a Tokio runtime: {error}"))?;
-    drop(handle.spawn(task));
-    Ok(())
 }
 
 async fn collect_history_sample(
@@ -195,22 +227,48 @@ async fn collect_history_sample(
 #[cfg(test)]
 mod tests {
     use super::DashboardHistoryStore;
-    use super::spawn_dashboard_task;
+    use super::DashboardTaskManager;
     use crate::model::DashboardHistoryQuery;
     use crate::model::DashboardOverview;
     use crate::model::DashboardTopicCurrent;
     use crate::model::TopicCurrentMetric;
     use chrono::Utc;
+    use std::future;
+    use tokio::sync::oneshot;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
 
-    #[test]
-    fn spawn_dashboard_task_without_tokio_runtime_returns_error() {
-        let error = spawn_dashboard_task("dashboard-test-task", async {})
-            .expect_err("dashboard task spawn should fail without a Tokio runtime");
+    struct DropSignal(Option<oneshot::Sender<()>>);
 
-        assert!(
-            error.to_string().contains("requires a Tokio runtime"),
-            "unexpected error: {error}"
-        );
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dashboard_task_manager_drop_aborts_spawned_tasks() {
+        let manager = DashboardTaskManager::default();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (dropped_tx, dropped_rx) = oneshot::channel();
+
+        manager
+            .spawn("dashboard-test-task", async move {
+                let _drop_signal = DropSignal(Some(dropped_tx));
+                let _ = started_tx.send(());
+                future::pending::<()>().await;
+            })
+            .expect("dashboard task should spawn");
+
+        started_rx.await.expect("task should start");
+        drop(manager);
+
+        timeout(Duration::from_secs(1), dropped_rx)
+            .await
+            .expect("task should be aborted when manager is dropped")
+            .expect("drop signal should be sent");
     }
 
     #[tokio::test]
