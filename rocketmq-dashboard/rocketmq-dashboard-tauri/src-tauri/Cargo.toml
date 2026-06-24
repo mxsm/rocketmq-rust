@@ -54,7 +54,7 @@ chrono           = { version = "0.4", features = ["serde"] }
 tokio            = { version = "1", features = ["sync"] }
 rocketmq-dashboard-common = { path = "../../rocketmq-dashboard-common" }
 anyhow           = "1.0"
-cheetah-string   = "1"
+cheetah-string   = { version = "2.1.0", features = ["serde", "bytes", "simd"] }
 rocketmq-common  = { path = "../../../rocketmq-common" }
 rocketmq-admin-core = { path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core" }
 rocketmq-client-rust = { path = "../../../rocketmq-client" }

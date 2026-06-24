@@ -46,7 +46,7 @@ impl RocketMQSerializable {
         length_size + len
     }
 
-    /// Optimized string read with enhanced boundary checks and zero-copy
+    /// Optimized string read with enhanced boundary checks
     #[inline]
     pub fn read_str(
         buf: &mut BytesMut,
@@ -81,9 +81,9 @@ impl RocketMQSerializable {
             return Err(RocketmqError::DecodingError(len, buf.remaining()).into());
         }
 
-        // Zero-copy split and freeze
+        // Checked UTF-8 decode with CheetahString storage optimization
         let bytes = buf.split_to(len).freeze();
-        Ok(Some(CheetahString::from_bytes(bytes)))
+        Ok(Some(CheetahString::try_from_bytes_buf(bytes)?))
     }
 
     /// Optimized ROCKETMQ protocol encoding with reduced allocations
@@ -397,6 +397,13 @@ mod tests {
     fn read_str_exceeds_limit() {
         let mut buf = BytesMut::from(&[0, 0, 0, 4, 116, 101, 115, 116][..]);
         let read = RocketMQSerializable::read_str(&mut buf, false, 2);
+        assert!(read.is_err());
+    }
+
+    #[test]
+    fn read_str_rejects_invalid_utf8() {
+        let mut buf = BytesMut::from(&[0, 2, 0xff, 0xfe][..]);
+        let read = RocketMQSerializable::read_str(&mut buf, true, 10);
         assert!(read.is_err());
     }
 

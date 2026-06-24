@@ -39,7 +39,7 @@ resolver = "3"
 [dependencies]
 
 [dev-dependencies]
-cheetah-string       = { version = "1.0.1", features = ["serde", "bytes", "simd"] }
+cheetah-string       = { version = "2.1.0", features = ["serde", "bytes", "simd"] }
 rand                 = "0.8"
 rocketmq-client-rust = { path = "../rocketmq-client" }
 rocketmq-common      = { path = "../rocketmq-common" }
