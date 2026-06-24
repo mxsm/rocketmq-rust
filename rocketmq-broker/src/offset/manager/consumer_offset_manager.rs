@@ -22,6 +22,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use cheetah_string::CheetahBuilder;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
@@ -49,6 +50,30 @@ use crate::broker_path_config_helper::get_consumer_offset_path;
 use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
 
 pub const TOPIC_GROUP_SEPARATOR: &str = "@";
+
+fn build_topic_group_key(topic: &CheetahString, group: &CheetahString) -> CheetahString {
+    let mut builder = CheetahBuilder::with_capacity(topic.len() + TOPIC_GROUP_SEPARATOR.len() + group.len());
+    builder.push_str(topic);
+    builder.push_str(TOPIC_GROUP_SEPARATOR);
+    builder.push_str(group);
+    builder.finish_string()
+}
+
+fn build_topic_group_lookup_key(topic: &str, group: &str) -> String {
+    let mut key = String::with_capacity(topic.len() + TOPIC_GROUP_SEPARATOR.len() + group.len());
+    key.push_str(topic);
+    key.push_str(TOPIC_GROUP_SEPARATOR);
+    key.push_str(group);
+    key
+}
+
+fn split_topic_group_key(key: &CheetahString) -> Option<(&str, &str)> {
+    let (topic, group) = key.split_once(TOPIC_GROUP_SEPARATOR)?;
+    if topic.is_empty() || group.is_empty() || group.contains(TOPIC_GROUP_SEPARATOR) {
+        return None;
+    }
+    Some((topic, group))
+}
 
 #[derive(Clone)]
 pub(crate) struct ConsumerOffsetManager<MS: MessageStore> {
@@ -133,7 +158,7 @@ where
         queue_id: i32,
         offset: i64,
     ) {
-        let key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}"));
+        let key = build_topic_group_key(topic, group);
         self.consumer_offset_wrapper
             .pull_offset_table
             .write()
@@ -148,7 +173,7 @@ where
         group: &CheetahString,
         queue_id: i32,
     ) -> Option<i64> {
-        let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
+        let key = build_topic_group_lookup_key(topic, group);
         let mut write_guard = self.consumer_offset_wrapper.reset_offset_table.write();
         let offset_table = write_guard.get_mut(key.as_str());
         match offset_table {
@@ -158,7 +183,7 @@ where
     }
 
     pub fn assign_reset_offset(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32, offset: i64) {
-        let key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}"));
+        let key = build_topic_group_key(topic, group);
         self.consumer_offset_wrapper
             .reset_offset_table
             .write()
@@ -168,31 +193,29 @@ where
     }
 
     pub fn clean_offset_by_topic(&self, topic: &CheetahString) {
-        self.remove_keys_matching(|key| {
-            let arrays: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
-            arrays.len() == 2 && arrays[0] == topic
-        });
+        self.remove_keys_matching(
+            |key| matches!(split_topic_group_key(key), Some((key_topic, _)) if key_topic == topic.as_str()),
+        );
     }
 
     pub fn clean_offset_by_group(&self, group: &CheetahString) {
-        self.remove_keys_matching(|key| {
-            let arrays: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
-            arrays.len() == 2 && arrays[1] == group
-        });
+        self.remove_keys_matching(
+            |key| matches!(split_topic_group_key(key), Some((_, key_group)) if key_group == group.as_str()),
+        );
     }
 
     pub fn clear_pull_offset(&self, group: &CheetahString, topic: &CheetahString) {
-        let key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}"));
+        let key = build_topic_group_key(topic, group);
         self.consumer_offset_wrapper.pull_offset_table.write().remove(&key);
     }
 
     pub fn clone_offset(&self, src_group: &CheetahString, dest_group: &CheetahString, topic: &CheetahString) {
-        let src_key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{src_group}"));
+        let src_key = build_topic_group_key(topic, src_group);
         let Some(offsets) = self.consumer_offset_wrapper.offset_table.read().get(&src_key).cloned() else {
             return;
         };
 
-        let dest_key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{dest_group}"));
+        let dest_key = build_topic_group_key(topic, dest_group);
         self.consumer_offset_wrapper
             .offset_table
             .write()
@@ -203,10 +226,10 @@ where
         let read_guard = self.consumer_offset_wrapper.offset_table.read();
         let mut groups = HashSet::new();
         for key in read_guard.keys() {
-            let arr: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
-            if arr.len() == 2 && arr[0] == topic {
-                let group = CheetahString::from_string(arr[1].to_string());
-                groups.insert(group);
+            if let Some((key_topic, group)) = split_topic_group_key(key) {
+                if key_topic == topic {
+                    groups.insert(CheetahString::from_slice(group));
+                }
             }
         }
         groups
@@ -220,7 +243,7 @@ where
         queue_id: i32,
         offset: i64,
     ) {
-        let key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}"));
+        let key = build_topic_group_key(topic, group);
 
         let mut write_guard = self.consumer_offset_wrapper.offset_table.write();
         let map = write_guard.entry(key.clone()).or_default();
@@ -258,7 +281,7 @@ where
     }
 
     pub fn has_offset_reset(&self, group: &str, topic: &str, queue_id: i32) -> bool {
-        let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
+        let key = build_topic_group_lookup_key(topic, group);
         match self.consumer_offset_wrapper.reset_offset_table.read().get(key.as_str()) {
             None => false,
             Some(inner) => inner.contains_key(&queue_id),
@@ -266,7 +289,7 @@ where
     }
 
     pub fn query_offset(&self, group: &CheetahString, topic: &CheetahString, queue_id: i32) -> i64 {
-        let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
+        let key = build_topic_group_lookup_key(topic, group);
         if self.broker_config.use_server_side_reset_offset {
             if let Some(value) = self.consumer_offset_wrapper.reset_offset_table.read().get(key.as_str()) {
                 return *value.get(&queue_id).unwrap_or(&-1);
@@ -279,7 +302,7 @@ where
     }
 
     pub fn query_offsets(&self, group: &CheetahString, topic: &CheetahString) -> Option<HashMap<i32, i64>> {
-        let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
+        let key = build_topic_group_lookup_key(topic, group);
         self.consumer_offset_wrapper
             .offset_table
             .read()
@@ -309,12 +332,13 @@ where
 
         let mut queue_min_offset = HashMap::new();
         for (topic_group, offsets) in self.consumer_offset_wrapper.offset_table.read().iter() {
-            let parts: Vec<&str> = topic_group.split(TOPIC_GROUP_SEPARATOR).collect();
-            if parts.len() != 2 || parts[0] != topic {
+            let Some((key_topic, group)) = split_topic_group_key(topic_group) else {
+                continue;
+            };
+            if key_topic != topic.as_str() {
                 continue;
             }
 
-            let group = parts[1];
             if excluded_groups.contains(group) {
                 continue;
             }
@@ -339,10 +363,10 @@ where
         let read_guard = self.consumer_offset_wrapper.offset_table.read();
         let mut topics = HashSet::new();
         for key in read_guard.keys() {
-            let arr: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
-            if arr.len() == 2 && arr[1] == group {
-                let topic = CheetahString::from_string(arr[0].to_string());
-                topics.insert(topic);
+            if let Some((topic, key_group)) = split_topic_group_key(key) {
+                if key_group == group.as_str() {
+                    topics.insert(CheetahString::from_slice(topic));
+                }
             }
         }
         topics
@@ -649,15 +673,11 @@ impl ConsumerOffsetWrapper {
         let mut ret_map = HashMap::with_capacity(128);
 
         for key in self.offset_table.read().keys() {
-            let arr: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
-            if arr.len() == 2 {
-                let topic = CheetahString::from_string(arr[0].to_string());
-                let group = CheetahString::from_string(arr[1].to_string());
-
+            if let Some((topic, group)) = split_topic_group_key(key) {
                 ret_map
-                    .entry(group)
+                    .entry(CheetahString::from_slice(group))
                     .or_insert_with(|| HashSet::with_capacity(8))
-                    .insert(topic);
+                    .insert(CheetahString::from_slice(topic));
             }
         }
 
@@ -782,6 +802,8 @@ impl<'de> Deserialize<'de> for ConsumerOffsetWrapper {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use cheetah_string::CheetahString;
@@ -791,6 +813,9 @@ mod tests {
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 
+    use super::build_topic_group_key;
+    use super::build_topic_group_lookup_key;
+    use super::split_topic_group_key;
     use super::ConsumerOffsetManager;
 
     fn new_manager() -> ConsumerOffsetManager<LocalFileMessageStore> {
@@ -799,6 +824,71 @@ mod tests {
             Arc::new(MessageStoreConfig::default()),
             None,
         )
+    }
+
+    #[test]
+    fn topic_group_key_helpers_keep_expected_storage_key() {
+        let topic = CheetahString::from_static_str("topic-a");
+        let group = CheetahString::from_static_str("group-a");
+
+        let owned_key = build_topic_group_key(&topic, &group);
+        let lookup_key = build_topic_group_lookup_key(topic.as_str(), group.as_str());
+
+        assert_eq!(owned_key, "topic-a@group-a");
+        assert_eq!(lookup_key, "topic-a@group-a");
+        assert_eq!(split_topic_group_key(&owned_key), Some(("topic-a", "group-a")));
+    }
+
+    #[test]
+    fn split_topic_group_key_rejects_malformed_keys() {
+        for raw_key in ["topic-a", "@group-a", "topic-a@", "topic-a@group-a@extra"] {
+            let key = CheetahString::from_static_str(raw_key);
+
+            assert_eq!(split_topic_group_key(&key), None, "{raw_key} should be rejected");
+        }
+    }
+
+    #[test]
+    fn topic_group_scans_ignore_malformed_offset_keys() {
+        let manager = new_manager();
+        {
+            let mut offsets = manager.consumer_offset_wrapper.offset_table.write();
+            offsets.insert(
+                CheetahString::from_static_str("topic-a@group-a"),
+                HashMap::from([(0, 10)]),
+            );
+            offsets.insert(CheetahString::from_static_str("topic-a"), HashMap::from([(0, 20)]));
+            offsets.insert(CheetahString::from_static_str("@group-a"), HashMap::from([(0, 30)]));
+            offsets.insert(CheetahString::from_static_str("topic-a@"), HashMap::from([(0, 40)]));
+            offsets.insert(
+                CheetahString::from_static_str("topic-a@group-a@extra"),
+                HashMap::from([(0, 50)]),
+            );
+        }
+
+        let groups = manager.which_group_by_topic("topic-a");
+        assert_eq!(groups.len(), 1);
+        assert!(groups.contains(&CheetahString::from_static_str("group-a")));
+
+        let topics = manager.which_topic_by_consumer(&CheetahString::from_static_str("group-a"));
+        assert_eq!(topics.len(), 1);
+        assert!(topics.contains(&CheetahString::from_static_str("topic-a")));
+
+        let group_topic_map = manager.consumer_offset_wrapper.get_group_topic_map();
+        assert_eq!(group_topic_map.len(), 1);
+        assert_eq!(
+            group_topic_map.get("group-a"),
+            Some(&HashSet::from([CheetahString::from_static_str("topic-a")]))
+        );
+
+        manager.clean_offset_by_topic(&CheetahString::from_static_str("topic-a"));
+
+        let offsets = manager.consumer_offset_wrapper.offset_table.read();
+        assert!(!offsets.contains_key("topic-a@group-a"));
+        assert!(offsets.contains_key("topic-a"));
+        assert!(offsets.contains_key("@group-a"));
+        assert!(offsets.contains_key("topic-a@"));
+        assert!(offsets.contains_key("topic-a@group-a@extra"));
     }
 
     #[test]
