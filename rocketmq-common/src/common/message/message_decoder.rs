@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::io::Write;
@@ -195,6 +196,13 @@ pub fn message_properties_to_string(properties: &HashMap<CheetahString, CheetahS
     builder.finish_string()
 }
 
+fn cheetah_from_utf8_lossy(bytes: &[u8]) -> CheetahString {
+    match String::from_utf8_lossy(bytes) {
+        Cow::Borrowed(value) => CheetahString::from_slice(value),
+        Cow::Owned(value) => CheetahString::from_string_owned(value),
+    }
+}
+
 pub fn decode_client(
     byte_buffer: &mut Bytes,
     read_body: bool,
@@ -371,14 +379,11 @@ pub fn decode(
         // Handle reading and processing properties
         let properties = split_to_checked(byte_buffer, properties_length as usize)?;
         if !is_set_properties_string {
-            //can optimize later
-            let properties_string =
-                CheetahString::from_string(String::from_utf8_lossy(properties.as_ref()).to_string());
+            let properties_string = cheetah_from_utf8_lossy(properties.as_ref());
             let message_properties = string_to_message_properties(Some(&properties_string));
             *msg_ext.message.properties_mut() = MessageProperties::from_map(message_properties);
         } else {
-            let properties_string =
-                CheetahString::from_string(String::from_utf8_lossy(properties.as_ref()).to_string());
+            let properties_string = cheetah_from_utf8_lossy(properties.as_ref());
             let mut message_properties = string_to_message_properties(Some(&properties_string));
             message_properties.insert(CheetahString::from_static_str("propertiesString"), properties_string);
             *msg_ext.message.properties_mut() = MessageProperties::from_map(message_properties);
@@ -973,6 +978,24 @@ mod tests {
         let encoded = message_properties_to_string(&properties);
 
         assert_eq!(encoded, "key\u{0001}value\u{0002}");
+    }
+
+    #[test]
+    fn cheetah_from_utf8_lossy_borrows_valid_utf8() {
+        let encoded = b"key\x01value\x02";
+
+        let decoded = cheetah_from_utf8_lossy(encoded);
+
+        assert_eq!(decoded, "key\u{0001}value\u{0002}");
+    }
+
+    #[test]
+    fn cheetah_from_utf8_lossy_preserves_lossy_invalid_utf8_behavior() {
+        let encoded = b"key\x01\xff\x02";
+
+        let decoded = cheetah_from_utf8_lossy(encoded);
+
+        assert_eq!(decoded.as_str(), String::from_utf8_lossy(encoded).as_ref());
     }
 
     #[test]
