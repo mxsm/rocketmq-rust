@@ -51,6 +51,8 @@ _site
 !.claude/rules/
 .claude/rules/*
 !.claude/rules/*.md
+!.claude/skills/
+!.claude/skills/**
 .codex
 
 # Tauri
