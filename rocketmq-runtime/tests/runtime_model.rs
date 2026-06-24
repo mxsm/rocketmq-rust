@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -29,6 +31,48 @@ impl Drop for DropCounter {
     }
 }
 
+#[test]
+fn production_tokio_entrypoints_set_max_blocking_threads() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("runtime crate should be inside the workspace");
+    let entrypoints = [
+        "rocketmq-broker/src/bin/broker_bootstrap_server.rs",
+        "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
+        "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+        "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs",
+    ];
+
+    for entrypoint in entrypoints {
+        let source = fs::read_to_string(workspace_root.join(entrypoint))
+            .unwrap_or_else(|error| panic!("failed to read {entrypoint}: {error}"));
+        assert!(
+            source.contains("tokio::runtime::Builder::new_multi_thread()"),
+            "{entrypoint} must build its Tokio runtime explicitly"
+        );
+        assert!(
+            source.contains(".max_blocking_threads(ENTRYPOINT_MAX_BLOCKING_THREADS)"),
+            "{entrypoint} must set max_blocking_threads explicitly"
+        );
+    }
+}
+
+#[test]
+fn legacy_rocketmq_runtime_is_marked_deprecated() {
+    let legacy_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/legacy.rs");
+    let source = fs::read_to_string(&legacy_path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", legacy_path.display()));
+    let enum_position = source
+        .find("pub enum RocketMQRuntime")
+        .expect("legacy runtime enum should exist");
+    let prefix = &source[..enum_position];
+
+    assert!(
+        prefix.contains("#[deprecated"),
+        "RocketMQRuntime must remain marked deprecated"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn diagnostics_snapshot_reports_runtime_state() {
     let context = RuntimeContext::from_current("diagnostics-root");
@@ -37,8 +81,11 @@ async fn diagnostics_snapshot_reports_runtime_state() {
 
     assert_eq!(scheduled.group().name(), "diagnostics-scheduled");
 
+    let service_token = service.task_group().cancellation_token();
     service
-        .spawn_service("diagnostics-service-task", async move {})
+        .spawn_service("diagnostics-service-task", async move {
+            service_token.cancelled().await;
+        })
         .expect("diagnostics service task should spawn");
     context
         .blocking()
@@ -55,6 +102,16 @@ async fn diagnostics_snapshot_reports_runtime_state() {
     assert_eq!(context_snapshot.runtime_id, service_snapshot.runtime_id);
     assert_eq!(context_snapshot.root_name, "diagnostics-root");
     assert_eq!(service_snapshot.root_name, "diagnostics-service");
+    assert_eq!(context_snapshot.group_id, context.root_group().id());
+    assert_eq!(context_snapshot.parent_group_id, None);
+    assert_eq!(context_snapshot.lifecycle_state, TaskGroupLifecycleState::Open);
+    assert_eq!(context_snapshot.task_count, 0);
+    assert!(context_snapshot.child_count >= 2, "{context_snapshot:?}");
+    assert_eq!(service_snapshot.group_id, service.task_group().id());
+    assert_eq!(service_snapshot.parent_group_id, Some(context.root_group().id()));
+    assert_eq!(service_snapshot.lifecycle_state, TaskGroupLifecycleState::Open);
+    assert_eq!(service_snapshot.task_count, 1);
+    assert_eq!(service_snapshot.child_count, 1);
     assert_eq!(context_snapshot.blocking.name, "rocketmq-blocking");
     assert_eq!(
         context_snapshot.blocking.max_concurrency,

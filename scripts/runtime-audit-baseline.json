@@ -456,6 +456,10 @@
                                                                               "migration_phase":  "PR-7-store-controller-auth-blocking"
                                                                           }
                                                                       ]
-                                                 }
+                                                 },
+                       "scheduler-sites":  {
+                                               "action_required_max":  0,
+                                               "fingerprints":  []
+                                           }
                    }
 }

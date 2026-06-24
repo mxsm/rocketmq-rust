@@ -22,6 +22,8 @@ use crate::blocking::BlockingExecutor;
 use crate::blocking::BlockingExecutorSnapshot;
 use crate::handle::RuntimeHandle;
 use crate::task_group::TaskGroup;
+use crate::task_group::TaskGroupId;
+use crate::task_group::TaskGroupLifecycleState;
 
 static NEXT_RUNTIME_DIAGNOSTICS_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -35,6 +37,11 @@ pub struct RuntimeDiagnostics {
 pub struct RuntimeDiagnosticsSnapshot {
     pub runtime_id: String,
     pub root_name: String,
+    pub group_id: TaskGroupId,
+    pub parent_group_id: Option<TaskGroupId>,
+    pub lifecycle_state: TaskGroupLifecycleState,
+    pub task_count: usize,
+    pub child_count: usize,
     pub blocking: BlockingExecutorSnapshot,
 }
 
@@ -59,6 +66,11 @@ impl RuntimeDiagnostics {
         RuntimeDiagnosticsSnapshot {
             runtime_id: self.runtime_id.to_string(),
             root_name: root.name().to_string(),
+            group_id: root.id(),
+            parent_group_id: root.parent_id(),
+            lifecycle_state: root.lifecycle_state(),
+            task_count: root.task_count(),
+            child_count: root.child_count(),
             blocking: blocking.snapshot(),
         }
     }

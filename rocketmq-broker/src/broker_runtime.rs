@@ -165,6 +165,7 @@ type FasterServerProcessor =
     BrokerRequestProcessor<GenericMessageStore, DefaultTransactionalMessageService<GenericMessageStore>>;
 
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const BROKER_OUTER_API_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
     AuthConfig {
@@ -442,6 +443,8 @@ impl BrokerRemotingServerShutdownReport {
 pub(crate) struct BrokerBasicServiceShutdownReport {
     pub(crate) remoting: Option<BrokerRemotingServerShutdownReport>,
     pub(crate) request_processor: Option<ShutdownReport>,
+    pub(crate) broker_outer_api: BrokerShutdownComponentReport,
+    pub(crate) client_housekeeping: BrokerShutdownComponentReport,
     pub(crate) auth: BrokerShutdownComponentReport,
     pub(crate) observability: BrokerShutdownComponentReport,
     pub(crate) scheduled_tasks: BrokerShutdownComponentReport,
@@ -532,9 +535,11 @@ impl BrokerShutdownComponentReport {
 }
 
 impl BrokerBasicServiceShutdownReport {
-    const COMPONENT_NAMES: [&'static str; 13] = [
+    const COMPONENT_NAMES: [&'static str; 15] = [
         "remoting",
         "request_processor",
+        "broker_outer_api",
+        "client_housekeeping",
         "auth",
         "observability",
         "scheduled_tasks",
@@ -612,6 +617,8 @@ impl BrokerBasicServiceShutdownReport {
 
     fn component_reports(&self) -> Vec<&BrokerShutdownComponentReport> {
         vec![
+            &self.broker_outer_api,
+            &self.client_housekeeping,
             &self.auth,
             &self.observability,
             &self.scheduled_tasks,
@@ -664,7 +671,10 @@ impl BrokerRuntime {
     ) -> Self {
         let broker_address = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port);
         let store_host = broker_address.parse::<SocketAddr>().expect("parse store_host failed");
-        let scheduled_task_manager = ScheduledTaskManager::default();
+        let scheduled_task_manager = service_context
+            .as_ref()
+            .map(|context| ScheduledTaskManager::new_with_task_group(context.task_group().clone()))
+            .unwrap_or_else(ScheduledTaskManager::new_legacy_compatibility);
         let broker_outer_api = BrokerOuterAPI::new(Arc::new(TokioClientConfig::default()));
 
         let topic_queue_mapping_manager = service_context
@@ -886,12 +896,6 @@ impl BrokerRuntime {
         self.inner.shutdown.store(true, Ordering::SeqCst);
 
         self.shutdown_basic_service().await;
-
-        self.inner.broker_outer_api.shutdown();
-
-        if let Some(client_housekeeping_service) = self.inner.client_housekeeping_service.take() {
-            client_housekeeping_service.shutdown().await;
-        }
     }
 
     async fn unregister_broker(&mut self) {
@@ -1144,6 +1148,35 @@ impl BrokerRuntime {
         } else {
             shutdown_report.message_store = BrokerShutdownComponentReport::skipped("message_store");
         }
+
+        let started = Instant::now();
+        let broker_outer_api_report = self
+            .inner
+            .broker_outer_api
+            .shutdown_with_report(BROKER_OUTER_API_SHUTDOWN_TIMEOUT)
+            .await;
+        shutdown_report.broker_outer_api = if broker_outer_api_report.is_healthy() {
+            BrokerShutdownComponentReport::completed("broker_outer_api", started.elapsed())
+        } else {
+            BrokerShutdownComponentReport::unhealthy(
+                "broker_outer_api",
+                started.elapsed(),
+                format!("{broker_outer_api_report:?}"),
+            )
+        };
+
+        let started = Instant::now();
+        shutdown_report.client_housekeeping =
+            if let Some(client_housekeeping_service) = self.inner.client_housekeeping_service.take() {
+                let client_housekeeping_report = client_housekeeping_service.shutdown_with_report().await;
+                BrokerShutdownComponentReport::from_shutdown_report(
+                    "client_housekeeping",
+                    client_housekeeping_report.as_ref(),
+                    started.elapsed(),
+                )
+            } else {
+                BrokerShutdownComponentReport::skipped("client_housekeeping")
+            };
 
         shutdown_report
     }
@@ -4983,6 +5016,17 @@ mod tests {
         assert_eq!(report.unhealthy_component_count(), 0);
         assert!(report.timed_out_component_names().is_empty());
         assert!(report.component_names().contains(&"scheduled_tasks"));
+
+        let service_report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(
+            service_report
+                .children
+                .iter()
+                .any(|child| child.name
+                    == rocketmq_rust::schedule::simple_scheduler::LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY),
+            "{}",
+            service_report.to_json()
+        );
     }
 
     #[test]
@@ -4994,6 +5038,8 @@ mod tests {
             vec![
                 "remoting",
                 "request_processor",
+                "broker_outer_api",
+                "client_housekeeping",
                 "auth",
                 "observability",
                 "scheduled_tasks",

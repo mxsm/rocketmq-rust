@@ -20,6 +20,7 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use rocketmq_runtime::ShutdownReport;
+use rocketmq_runtime::TaskGroup;
 
 use crate::config::TieredStoreConfig;
 use crate::dispatcher::TieredDispatchRequest;
@@ -49,6 +50,7 @@ where
     permits: Arc<Semaphore>,
     shutdown: CancellationToken,
     task_group: tokio::sync::Mutex<Option<rocketmq_runtime::TaskGroup>>,
+    parent_task_group: Option<TaskGroup>,
     task_error: Arc<tokio::sync::Mutex<Option<String>>>,
     metrics: Arc<TieredStoreMetrics>,
 }
@@ -62,11 +64,30 @@ where
         flat_file_store: Arc<TieredFlatFileStore<P>>,
         shutdown: CancellationToken,
     ) -> Self {
-        Self::new_with_metrics(
+        Self::new_with_optional_task_group(config, flat_file_store, shutdown, None)
+    }
+
+    pub fn new_with_task_group(
+        config: Arc<TieredStoreConfig>,
+        flat_file_store: Arc<TieredFlatFileStore<P>>,
+        shutdown: CancellationToken,
+        parent_task_group: TaskGroup,
+    ) -> Self {
+        Self::new_with_optional_task_group(config, flat_file_store, shutdown, Some(parent_task_group))
+    }
+
+    fn new_with_optional_task_group(
+        config: Arc<TieredStoreConfig>,
+        flat_file_store: Arc<TieredFlatFileStore<P>>,
+        shutdown: CancellationToken,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Self {
+        Self::new_with_optional_metrics(
             config,
             flat_file_store,
             shutdown,
             Arc::new(TieredStoreMetrics::default()),
+            parent_task_group,
         )
     }
 
@@ -75,6 +96,26 @@ where
         flat_file_store: Arc<TieredFlatFileStore<P>>,
         shutdown: CancellationToken,
         metrics: Arc<TieredStoreMetrics>,
+    ) -> Self {
+        Self::new_with_optional_metrics(config, flat_file_store, shutdown, metrics, None)
+    }
+
+    pub fn new_with_metrics_and_task_group(
+        config: Arc<TieredStoreConfig>,
+        flat_file_store: Arc<TieredFlatFileStore<P>>,
+        shutdown: CancellationToken,
+        metrics: Arc<TieredStoreMetrics>,
+        parent_task_group: TaskGroup,
+    ) -> Self {
+        Self::new_with_optional_metrics(config, flat_file_store, shutdown, metrics, Some(parent_task_group))
+    }
+
+    fn new_with_optional_metrics(
+        config: Arc<TieredStoreConfig>,
+        flat_file_store: Arc<TieredFlatFileStore<P>>,
+        shutdown: CancellationToken,
+        metrics: Arc<TieredStoreMetrics>,
+        parent_task_group: Option<TaskGroup>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(config.max_pending_tasks);
         let permits = Arc::new(Semaphore::new((config.max_pending_tasks / 4).max(1)));
@@ -86,6 +127,7 @@ where
             permits,
             shutdown,
             task_group: tokio::sync::Mutex::new(None),
+            parent_task_group,
             task_error: Arc::new(tokio::sync::Mutex::new(None)),
             metrics,
         }
@@ -241,7 +283,12 @@ where
         let Some(receiver) = receiver_guard.take() else {
             return Ok(());
         };
-        let task_group = runtime::task_group("rocketmq-tieredstore.dispatcher")?;
+        let task_group = match self.parent_task_group.as_ref() {
+            Some(parent_task_group) => {
+                runtime::task_group_with_parent("rocketmq-tieredstore.dispatcher", parent_task_group)
+            }
+            None => runtime::task_group("rocketmq-tieredstore.dispatcher")?,
+        };
         let task_error = self.task_error.clone();
         let flat_file_store = self.flat_file_store.clone();
         let permits = self.permits.clone();
@@ -267,9 +314,11 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use bytes::Bytes;
     use rocketmq_error::RocketMQError;
+    use rocketmq_runtime::RuntimeContext;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
@@ -328,6 +377,45 @@ mod tests {
             flat_file.read_message_by_queue_offset(3).await?,
             Some(Bytes::from_static(b"body"))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_with_task_group_parents_dispatcher_task() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            backend_provider: "memory".to_owned(),
+            max_pending_tasks: 4,
+            ..TieredStoreConfig::default()
+        });
+        let flat_file_store = Arc::new(TieredFlatFileStore::new(
+            config.clone(),
+            Arc::new(JsonMetadataStore::new(config.clone())),
+            MemoryProvider::default(),
+        ));
+        let context = RuntimeContext::from_current("tieredstore-dispatcher-parent-test");
+        let service = context.service_context("tieredstore-dispatcher");
+        let dispatcher = DefaultTieredDispatcher::new_with_task_group(
+            config,
+            flat_file_store,
+            CancellationToken::new(),
+            service.task_group().clone(),
+        );
+
+        dispatcher.start().await?;
+        dispatcher.shutdown().await?;
+
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(
+            report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq-tieredstore.dispatcher"),
+            "{}",
+            report.to_json()
+        );
+        assert!(report.is_healthy(), "{}", report.to_json());
         Ok(())
     }
 }

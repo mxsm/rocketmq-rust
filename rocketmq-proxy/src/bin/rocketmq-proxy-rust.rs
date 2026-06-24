@@ -23,8 +23,20 @@ use rocketmq_proxy::ProxyResult;
 use rocketmq_proxy::ProxyRuntime;
 use tracing::info;
 
-#[tokio::main]
-async fn main() -> ProxyResult<()> {
+const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
+
+fn main() -> ProxyResult<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .max_blocking_threads(ENTRYPOINT_MAX_BLOCKING_THREADS)
+        .enable_all()
+        .build()
+        .map_err(|error| ProxyError::Transport {
+            message: format!("failed to build proxy Tokio runtime: {error}"),
+        })?;
+    runtime.block_on(run())
+}
+
+async fn run() -> ProxyResult<()> {
     rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO)?;
 
     let args = Args::parse()?;

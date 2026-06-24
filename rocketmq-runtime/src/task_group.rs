@@ -238,6 +238,10 @@ impl TaskGroup {
         self.inner.tasks.len()
     }
 
+    pub fn child_count(&self) -> usize {
+        self.inner.children.lock().len()
+    }
+
     pub fn contains_task(&self, task_id: TaskId) -> bool {
         self.inner.tasks.contains_key(&task_id)
     }

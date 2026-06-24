@@ -41,6 +41,7 @@ use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
+use rocketmq_remoting::clients::rocketmq_tokio_client::RemotingClientShutdownReport;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -351,6 +352,10 @@ impl BrokerOuterAPI {
 
     pub fn shutdown(&mut self) {
         self.remoting_client.shutdown();
+    }
+
+    pub async fn shutdown_with_report(&mut self, timeout: std::time::Duration) -> RemotingClientShutdownReport {
+        self.remoting_client.shutdown_with_report(timeout).await
     }
 
     pub fn refresh_metadata(&self) {}

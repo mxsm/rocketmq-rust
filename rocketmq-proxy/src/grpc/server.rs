@@ -69,6 +69,33 @@ where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
+    serve_with_report_with_optional_task_group(config, service, shutdown, None).await
+}
+
+#[doc(hidden)]
+pub async fn serve_with_report_with_task_group<P, F>(
+    config: Arc<ProxyConfig>,
+    service: ProxyGrpcService<P>,
+    shutdown: F,
+    parent_task_group: TaskGroup,
+) -> ProxyResult<ProxyGrpcServerShutdownReport>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ()> + Send + 'static,
+{
+    serve_with_report_with_optional_task_group(config, service, shutdown, Some(parent_task_group)).await
+}
+
+async fn serve_with_report_with_optional_task_group<P, F>(
+    config: Arc<ProxyConfig>,
+    service: ProxyGrpcService<P>,
+    shutdown: F,
+    parent_task_group: Option<TaskGroup>,
+) -> ProxyResult<ProxyGrpcServerShutdownReport>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ()> + Send + 'static,
+{
     let addr = config.grpc.socket_addr()?;
     let listener = TcpListener::bind(addr).await.map_err(|error| ProxyError::Transport {
         message: format!("proxy gRPC server failed to bind {addr}: {error}"),
@@ -80,24 +107,32 @@ where
     let shutdown_signal = shutdown_tx.clone();
     let housekeeping_service = service.clone();
     let (housekeeping_report_tx, housekeeping_report_rx) = tokio::sync::oneshot::channel();
-    let runtime = tokio::runtime::Handle::try_current().map_err(|error| ProxyError::Transport {
-        message: format!("proxy gRPC server has no Tokio runtime for housekeeping task: {error}"),
-    })?;
-    let task_group = TaskGroup::root("rocketmq-proxy.grpc-server", RuntimeHandle::new(runtime));
+    let task_group = if let Some(parent_task_group) = parent_task_group {
+        parent_task_group.child("rocketmq-proxy.grpc-server")
+    } else {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| ProxyError::Transport {
+            message: format!("proxy gRPC server has no Tokio runtime for housekeeping task: {error}"),
+        })?;
+        TaskGroup::root("rocketmq-proxy.grpc-server", RuntimeHandle::new(runtime))
+    };
+    let housekeeping_task_group = task_group.clone();
     task_group
         .spawn_service("proxy.grpc.housekeeping", async move {
             let mut shutdown_rx = shutdown_rx;
             let report = housekeeping_service
-                .run_housekeeping_until_with_report(async move {
-                    loop {
-                        if *shutdown_rx.borrow() {
-                            break;
+                .run_housekeeping_until_with_task_group(
+                    async move {
+                        loop {
+                            if *shutdown_rx.borrow() {
+                                break;
+                            }
+                            if shutdown_rx.changed().await.is_err() {
+                                break;
+                            }
                         }
-                        if shutdown_rx.changed().await.is_err() {
-                            break;
-                        }
-                    }
-                })
+                    },
+                    housekeeping_task_group,
+                )
                 .await;
             let _ = housekeeping_report_tx.send(report);
         })
@@ -147,7 +182,6 @@ where
     })?;
     Ok(shutdown_report)
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -167,6 +201,7 @@ mod tests {
     use rocketmq_auth::authorization::model::resource::Resource;
     use rocketmq_common::common::action::Action;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_runtime::RuntimeContext;
     use sha1::Sha1;
     use tokio::sync::oneshot;
     use tonic::metadata::MetadataValue;
@@ -174,6 +209,7 @@ mod tests {
 
     use super::serve;
     use super::serve_with_report;
+    use super::serve_with_report_with_task_group;
     use crate::auth::ProxyAuthRuntime;
     use crate::config::GrpcConfig;
     use crate::config::ProxyAuthConfig;
@@ -298,6 +334,47 @@ mod tests {
             housekeeping.shutdown_report.is_healthy(),
             "{}",
             housekeeping.shutdown_report.to_json()
+        );
+    }
+
+    #[tokio::test]
+    async fn serve_with_report_with_task_group_parents_server_tasks() {
+        let route_service = Arc::new(RecordingRouteService::default());
+        let metadata_service = Arc::new(StaticMetadataService);
+        let manager = Arc::new(ClusterServiceManager::with_services(
+            route_service,
+            metadata_service,
+            Arc::new(DefaultAssignmentService),
+            Arc::new(DefaultMessageService),
+            Arc::new(DefaultConsumerService),
+            Arc::new(DefaultTransactionService),
+        ));
+        let processor = Arc::new(DefaultMessagingProcessor::new(manager));
+        let config = Arc::new(ProxyConfig {
+            grpc: GrpcConfig {
+                listen_addr: "127.0.0.1:0".to_string(),
+                ..GrpcConfig::default()
+            },
+            ..ProxyConfig::default()
+        });
+        let service = ProxyGrpcService::new(config.clone(), processor, ClientSessionRegistry::default());
+        let context = RuntimeContext::from_current("proxy-grpc-server-parent-test");
+        let proxy_service = context.service_context("proxy-service");
+
+        let report = serve_with_report_with_task_group(config, service, async {}, proxy_service.task_group().clone())
+            .await
+            .expect("server should return a shutdown report");
+
+        assert!(report.is_healthy(), "{report:?}");
+        let parent_report = proxy_service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
+        assert!(
+            parent_report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq-proxy.grpc-server"),
+            "{}",
+            parent_report.to_json()
         );
     }
 

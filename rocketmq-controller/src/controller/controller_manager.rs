@@ -407,6 +407,7 @@ pub struct ControllerManager {
     notify_cache: Arc<RwLock<HashMap<NotifyCacheKey, NotifyCacheState>>>,
     pending_notify_state: Arc<RwLock<HashMap<NotifyCacheKey, NotifyCacheState>>>,
     notify_generation: Arc<AtomicU64>,
+    parent_task_group: Option<TaskGroup>,
 }
 
 impl ControllerManager {
@@ -427,12 +428,28 @@ impl ControllerManager {
     /// - Metadata store creation fails
     /// - Configuration is invalid
     pub async fn new(config: ControllerConfig) -> Result<Self> {
+        Self::new_with_optional_task_group(config, None).await
+    }
+
+    pub async fn new_with_task_group(config: ControllerConfig, parent_task_group: TaskGroup) -> Result<Self> {
+        Self::new_with_optional_task_group(config, Some(parent_task_group)).await
+    }
+
+    async fn new_with_optional_task_group(
+        config: ControllerConfig,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Result<Self> {
         let config = ArcMut::new(config);
 
         info!("Creating controller manager with config: {:?}", config);
 
         // Initialize heartbeat manager
-        let heartbeat_manager = ArcMut::new(DefaultBrokerHeartbeatManager::new(config.clone()));
+        let heartbeat_manager = ArcMut::new(match parent_task_group.as_ref() {
+            Some(parent_task_group) => {
+                DefaultBrokerHeartbeatManager::new_with_task_group(config.clone(), parent_task_group.clone())
+            }
+            None => DefaultBrokerHeartbeatManager::new(config.clone()),
+        });
 
         // Initialize RocketMQ runtime for Raft controller
         //let runtime = Arc::new(RocketMQRuntime::new_multi(2, "controller-runtime"));
@@ -510,6 +527,7 @@ impl ControllerManager {
             notify_cache: Arc::new(RwLock::new(HashMap::new())),
             pending_notify_state: Arc::new(RwLock::new(HashMap::new())),
             notify_generation: Arc::new(AtomicU64::new(0)),
+            parent_task_group,
         })
     }
 
@@ -519,9 +537,14 @@ impl ControllerManager {
             return Ok(task_group.clone());
         }
 
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|error| ControllerError::Internal(format!("No Tokio runtime for controller tasks: {error}")))?;
-        let task_group = TaskGroup::root("rocketmq-controller.manager", RuntimeHandle::new(handle));
+        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
+            parent_task_group.child("rocketmq-controller.manager")
+        } else {
+            let handle = tokio::runtime::Handle::try_current().map_err(|error| {
+                ControllerError::Internal(format!("No Tokio runtime for controller tasks: {error}"))
+            })?;
+            TaskGroup::root("rocketmq-controller.manager", RuntimeHandle::new(handle))
+        };
         *guard = Some(task_group.clone());
         Ok(task_group)
     }

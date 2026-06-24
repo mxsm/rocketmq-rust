@@ -32,16 +32,26 @@ pub struct MomentStatsItemSet {
     stats_item_table: Arc<DashMap<String, MomentStatsItem>>,
     stats_name: String,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
+    parent_task_group: Option<TaskGroup>,
 }
 
 impl MomentStatsItemSet {
     pub fn new(stats_name: String) -> Self {
+        Self::new_with_optional_task_group(stats_name, None)
+    }
+
+    pub fn new_with_task_group(stats_name: String, parent_task_group: TaskGroup) -> Self {
+        Self::new_with_optional_task_group(stats_name, Some(parent_task_group))
+    }
+
+    fn new_with_optional_task_group(stats_name: String, parent_task_group: Option<TaskGroup>) -> Self {
         let stats_item_table = Arc::new(DashMap::new());
         let task_group = Arc::new(Mutex::new(None));
         let set = MomentStatsItemSet {
             stats_item_table,
             stats_name,
             task_group,
+            parent_task_group,
         };
         set.init();
         set
@@ -64,17 +74,22 @@ impl MomentStatsItemSet {
         let initial_delay =
             Duration::from_millis((compute_next_minutes_time_millis() as i64 - current_millis() as i64).unsigned_abs());
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                warn!(
-                    "[{}] failed to initialize MomentStatsItemSet outside Tokio runtime: {}",
-                    self.stats_name, error
-                );
-                return;
-            }
+        let group_name = format!("rocketmq-common.moment-stats-set.{}", self.stats_name);
+        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
+            parent_task_group.child(group_name)
+        } else {
+            let runtime = match tokio::runtime::Handle::try_current() {
+                Ok(handle) => RuntimeHandle::new(handle),
+                Err(error) => {
+                    warn!(
+                        "[{}] failed to initialize MomentStatsItemSet outside Tokio runtime: {}",
+                        self.stats_name, error
+                    );
+                    return;
+                }
+            };
+            TaskGroup::root(group_name, runtime)
         };
-        let task_group = TaskGroup::root(format!("rocketmq-common.moment-stats-set.{}", self.stats_name), runtime);
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let mut config =
             ScheduledTaskConfig::fixed_rate_no_overlap("common.moment-stats-set.print", Duration::from_secs(300));
@@ -138,7 +153,14 @@ impl MomentStatsItemSet {
             return stats_item.clone();
         }
 
-        let new_item = MomentStatsItem::new(self.stats_name.clone(), stats_key.clone());
+        let new_item = match self.parent_task_group.as_ref() {
+            Some(parent_task_group) => MomentStatsItem::new_with_task_group(
+                self.stats_name.clone(),
+                stats_key.clone(),
+                parent_task_group.clone(),
+            ),
+            None => MomentStatsItem::new(self.stats_name.clone(), stats_key.clone()),
+        };
         self.stats_item_table.insert(stats_key, new_item.clone());
         new_item
     }
@@ -172,6 +194,7 @@ mod tests {
     use std::sync::Arc;
 
     use dashmap::DashMap;
+    use rocketmq_runtime::RuntimeContext;
 
     use super::*;
 
@@ -185,6 +208,26 @@ mod tests {
     async fn moment_stats_item_set_returns_correct_stats_name() {
         let stats_set = MomentStatsItemSet::new("TestName".to_string());
         assert_eq!(stats_set.get_stats_name(), "TestName");
+    }
+
+    #[tokio::test]
+    async fn moment_stats_item_set_with_task_group_is_parented() {
+        let context = RuntimeContext::from_current("moment-stats-set-parent-test");
+        let service = context.service_context("common-stats-service");
+        let stats_set =
+            MomentStatsItemSet::new_with_task_group("ParentedName".to_string(), service.task_group().clone());
+
+        stats_set.shutdown().await;
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(
+            report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq-common.moment-stats-set.ParentedName"),
+            "{}",
+            report.to_json()
+        );
     }
 
     #[tokio::test]

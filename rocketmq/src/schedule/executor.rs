@@ -104,6 +104,14 @@ where
 
 impl TaskExecutor {
     pub fn new(config: ExecutorConfig) -> Self {
+        Self::new_with_optional_task_group(config, None)
+    }
+
+    pub fn new_with_task_group(config: ExecutorConfig, parent_task_group: TaskGroup) -> Self {
+        Self::new_with_optional_task_group(config, Some(parent_task_group.child("rocketmq.task-executor")))
+    }
+
+    fn new_with_optional_task_group(config: ExecutorConfig, task_group: Option<TaskGroup>) -> Self {
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_tasks));
 
         Self {
@@ -112,7 +120,7 @@ impl TaskExecutor {
             running_tasks: Arc::new(RwLock::new(HashMap::new())),
             metrics: Arc::new(RwLock::new(ExecutionMetrics::default())),
             executions: Arc::new(RwLock::new(HashMap::new())),
-            task_group: Arc::new(RwLock::new(None)),
+            task_group: Arc::new(RwLock::new(task_group)),
             last_task_group_shutdown_report: Arc::new(RwLock::new(None)),
         }
     }
@@ -479,6 +487,22 @@ impl ExecutorPool {
         }
     }
 
+    pub fn new_with_task_group(pool_size: usize, config: ExecutorConfig, parent_task_group: TaskGroup) -> Self {
+        let executors = (0..pool_size)
+            .map(|index| {
+                Arc::new(TaskExecutor::new_with_task_group(
+                    config.clone(),
+                    parent_task_group.child(format!("rocketmq.task-executor.{index}")),
+                ))
+            })
+            .collect();
+
+        Self {
+            executors,
+            current_index: Arc::new(RwLock::new(0)),
+        }
+    }
+
     /// Get the next executor using round-robin
     pub async fn get_executor(&self) -> Arc<TaskExecutor> {
         let mut index = self.current_index.write().await;
@@ -531,6 +555,8 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
 
+    use rocketmq_runtime::RuntimeContext;
+
     use super::*;
 
     struct DropMarker(Arc<AtomicBool>);
@@ -578,6 +604,33 @@ mod tests {
             .await;
 
         assert_eq!(executor.running_task_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn new_with_task_group_parents_executor_tasks() {
+        let context = RuntimeContext::from_current("task-executor-parent-test");
+        let service = context.service_context("executor-service");
+        let executor = TaskExecutor::new_with_task_group(ExecutorConfig::default(), service.task_group().clone());
+        let task = Arc::new(Task::new("parented-task", "parented task", |_context| async {
+            TaskResult::Success(None)
+        }));
+
+        executor
+            .execute_task(task, SystemTime::now())
+            .await
+            .expect("parented executor task should start");
+        executor.shutdown_all(Duration::from_secs(1)).await;
+
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(
+            report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq.task-executor"),
+            "{}",
+            report.to_json()
+        );
     }
 
     #[tokio::test]

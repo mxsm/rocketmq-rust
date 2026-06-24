@@ -84,6 +84,8 @@ pub struct DefaultBrokerHeartbeatManager {
 
     /// Scan interval in milliseconds
     scan_interval_ms: u64,
+
+    parent_task_group: Option<TaskGroup>,
 }
 
 impl DefaultBrokerHeartbeatManager {
@@ -93,6 +95,14 @@ impl DefaultBrokerHeartbeatManager {
     ///
     /// * `config` - Controller configuration
     pub fn new(config: ArcMut<ControllerConfig>) -> Self {
+        Self::new_with_optional_task_group(config, None)
+    }
+
+    pub fn new_with_task_group(config: ArcMut<ControllerConfig>, parent_task_group: TaskGroup) -> Self {
+        Self::new_with_optional_task_group(config, Some(parent_task_group))
+    }
+
+    fn new_with_optional_task_group(config: ArcMut<ControllerConfig>, parent_task_group: Option<TaskGroup>) -> Self {
         let scan_interval_ms = config.scan_not_active_broker_interval.max(1);
         Self {
             config,
@@ -101,6 +111,7 @@ impl DefaultBrokerHeartbeatManager {
             scan_task_group: None,
             scan_scheduled_tasks: None,
             scan_interval_ms,
+            parent_task_group,
         }
     }
 
@@ -296,21 +307,24 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
             return;
         }
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                warn!(
-                    ?error,
-                    "failed to start DefaultBrokerHeartbeatManager outside Tokio runtime"
-                );
-                return;
-            }
-        };
-
         let broker_live_table = self.broker_live_table.clone();
         let listeners = Arc::new(self.lifecycle_listeners.clone());
         let scan_interval_ms = self.scan_interval_ms;
-        let task_group = TaskGroup::root("rocketmq-controller.heartbeat", runtime);
+        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
+            parent_task_group.child("rocketmq-controller.heartbeat")
+        } else {
+            let runtime = match tokio::runtime::Handle::try_current() {
+                Ok(handle) => RuntimeHandle::new(handle),
+                Err(error) => {
+                    warn!(
+                        ?error,
+                        "failed to start DefaultBrokerHeartbeatManager outside Tokio runtime"
+                    );
+                    return;
+                }
+            };
+            TaskGroup::root("rocketmq-controller.heartbeat", runtime)
+        };
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let mut config = ScheduledTaskConfig::fixed_delay(
             "controller.heartbeat.scan-not-active-broker",

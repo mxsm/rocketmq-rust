@@ -138,6 +138,8 @@ pub struct ServiceManager<T: ServiceTask + 'static> {
 
     last_task_group_shutdown_report: Arc<RwLock<Option<ShutdownReport>>>,
 
+    parent_task_group: Option<TaskGroup>,
+
     /// Whether this is a daemon service
     is_daemon: AtomicBool,
 }
@@ -222,6 +224,31 @@ where
         )
     })?;
     let task_group = TaskGroup::root("rocketmq.service-manager", RuntimeHandle::new(handle));
+    spawn_service_task_with_group(operation, task_name, task_group, future)
+}
+
+fn spawn_service_task_with_task_group<F>(
+    operation: &'static str,
+    task_name: String,
+    parent_task_group: TaskGroup,
+    future: F,
+) -> RocketMQResult<ServiceTaskHandle>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let task_group = parent_task_group.child("rocketmq.service-manager");
+    spawn_service_task_with_group(operation, task_name, task_group, future)
+}
+
+fn spawn_service_task_with_group<F>(
+    operation: &'static str,
+    task_name: String,
+    task_group: TaskGroup,
+    future: F,
+) -> RocketMQResult<ServiceTaskHandle>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     let task_id = task_group.spawn_service(task_name, future).map_err(|error| {
         RocketMQError::network_connection_failed(
             "service-task",
@@ -250,20 +277,22 @@ pub enum ServiceLifecycle {
 impl<T: ServiceTask + 'static> ServiceManager<T> {
     /// Create new service thread implementation
     pub fn new(service: T) -> Self {
-        Self {
-            service: Arc::new(service),
-            state: Arc::new(RwLock::new(ServiceLifecycle::NotStarted)),
-            stopped: Arc::new(AtomicBool::new(false)),
-            started: Arc::new(AtomicBool::new(false)),
-            has_notified: Arc::new(AtomicBool::new(false)),
-            wait_point: Arc::new(Notify::new()),
-            task_handle: Arc::new(RwLock::new(None)),
-            last_task_group_shutdown_report: Arc::new(RwLock::new(None)),
-            is_daemon: AtomicBool::new(false),
-        }
+        Self::new_with_optional_task_group(Arc::new(service), None)
+    }
+
+    pub fn new_with_task_group(service: T, parent_task_group: TaskGroup) -> Self {
+        Self::new_with_optional_task_group(Arc::new(service), Some(parent_task_group))
     }
 
     pub fn new_arc(service: Arc<T>) -> Self {
+        Self::new_with_optional_task_group(service, None)
+    }
+
+    pub fn new_arc_with_task_group(service: Arc<T>, parent_task_group: TaskGroup) -> Self {
+        Self::new_with_optional_task_group(service, Some(parent_task_group))
+    }
+
+    fn new_with_optional_task_group(service: Arc<T>, parent_task_group: Option<TaskGroup>) -> Self {
         Self {
             service,
             state: Arc::new(RwLock::new(ServiceLifecycle::NotStarted)),
@@ -273,6 +302,7 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
             wait_point: Arc::new(Notify::new()),
             task_handle: Arc::new(RwLock::new(None)),
             last_task_group_shutdown_report: Arc::new(RwLock::new(None)),
+            parent_task_group,
             is_daemon: AtomicBool::new(false),
         }
     }
@@ -317,9 +347,18 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         let task_handle = self.task_handle.clone();
 
         // Spawn the service task
-        let handle = match spawn_service_task("ServiceManager::start", service_name.clone(), async move {
+        let future = async move {
             Self::run_internal(service, state, stopped, started, has_notified, wait_point).await;
-        }) {
+        };
+        let handle = match match self.parent_task_group.as_ref() {
+            Some(parent_task_group) => spawn_service_task_with_task_group(
+                "ServiceManager::start",
+                service_name.clone(),
+                parent_task_group.clone(),
+                future,
+            ),
+            None => spawn_service_task("ServiceManager::start", service_name.clone(), future),
+        } {
             Ok(handle) => handle,
             Err(error) => {
                 self.started.store(false, Ordering::Release);
@@ -617,6 +656,7 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
+    use rocketmq_runtime::RuntimeContext;
     use tokio::time::sleep;
     use tokio::time::Duration;
 
@@ -769,6 +809,28 @@ mod tests {
         assert!(
             error.to_string().contains("requires a Tokio runtime"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_with_task_group_parents_service_task() {
+        let context = RuntimeContext::from_current("service-manager-parent-test");
+        let service_context = context.service_context("service-manager-service");
+        let service = TestService::new("parented-service".to_string(), Duration::from_millis(10));
+        let service_thread = ServiceManager::new_with_task_group(service, service_context.task_group().clone());
+
+        service_thread.start().await.unwrap();
+        service_thread.shutdown().await.unwrap();
+
+        let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(
+            report
+                .children
+                .iter()
+                .any(|child| child.name == "rocketmq.service-manager"),
+            "{}",
+            report.to_json()
         );
     }
 

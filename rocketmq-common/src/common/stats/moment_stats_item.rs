@@ -37,15 +37,29 @@ pub struct MomentStatsItem {
     stats_name: String,
     stats_key: String,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
+    parent_task_group: Option<TaskGroup>,
 }
 
 impl MomentStatsItem {
     pub fn new(stats_name: String, stats_key: String) -> Self {
+        Self::new_with_optional_task_group(stats_name, stats_key, None)
+    }
+
+    pub fn new_with_task_group(stats_name: String, stats_key: String, parent_task_group: TaskGroup) -> Self {
+        Self::new_with_optional_task_group(stats_name, stats_key, Some(parent_task_group))
+    }
+
+    fn new_with_optional_task_group(
+        stats_name: String,
+        stats_key: String,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Self {
         MomentStatsItem {
             value: Arc::new(AtomicI64::new(0)),
             stats_name,
             stats_key,
             task_group: Arc::new(Mutex::new(None)),
+            parent_task_group,
         }
     }
 
@@ -58,20 +72,22 @@ impl MomentStatsItem {
             return;
         }
 
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                warn!(
-                    "[{}] [{}] failed to initialize MomentStatsItem outside Tokio runtime: {}",
-                    self.stats_name, self.stats_key, error
-                );
-                return;
-            }
+        let group_name = format!("rocketmq-common.moment-stats.{}.{}", self.stats_name, self.stats_key);
+        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
+            parent_task_group.child(group_name)
+        } else {
+            let runtime = match tokio::runtime::Handle::try_current() {
+                Ok(handle) => RuntimeHandle::new(handle),
+                Err(error) => {
+                    warn!(
+                        "[{}] [{}] failed to initialize MomentStatsItem outside Tokio runtime: {}",
+                        self.stats_name, self.stats_key, error
+                    );
+                    return;
+                }
+            };
+            TaskGroup::root(group_name, runtime)
         };
-        let task_group = TaskGroup::root(
-            format!("rocketmq-common.moment-stats.{}.{}", self.stats_name, self.stats_key),
-            runtime,
-        );
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let self_clone = self.clone();
         let mut config =

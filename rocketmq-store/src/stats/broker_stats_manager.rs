@@ -1444,7 +1444,7 @@ mod tests {
     #[tokio::test]
     async fn test_start_with_scheduler() {
         let broker_config = Arc::new(BrokerConfig::default());
-        let scheduler = Arc::new(ScheduledTaskManager::new());
+        let scheduler = Arc::new(ScheduledTaskManager::new_legacy_compatibility());
         let manager = BrokerStatsManager::new_with_scheduler(broker_config, Some(scheduler.clone()));
 
         manager.start();
@@ -1455,7 +1455,7 @@ mod tests {
     #[tokio::test]
     async fn test_shutdown_cancels_tasks() {
         let broker_config = Arc::new(BrokerConfig::default());
-        let scheduler = Arc::new(ScheduledTaskManager::new());
+        let scheduler = Arc::new(ScheduledTaskManager::new_legacy_compatibility());
         let manager = BrokerStatsManager::new_with_scheduler(broker_config, Some(scheduler.clone()));
 
         manager.start();

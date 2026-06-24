@@ -299,7 +299,7 @@ impl MQClientInstance {
             broker_addr_table,
             broker_version_table,
             send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
-            scheduled_task_manager: ScheduledTaskManager::new(),
+            scheduled_task_manager: ScheduledTaskManager::new_legacy_compatibility(),
             broker_heartbeat_fingerprint_table,
             broker_support_v2_heartbeat_set,
             consumer_stats_manager: ConsumerStatsManager::new(),

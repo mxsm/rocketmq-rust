@@ -54,6 +54,8 @@ pub struct RpcServer {
 
     /// Accept and connection task group
     task_group: Arc<Mutex<Option<TaskGroup>>>,
+
+    parent_task_group: Option<TaskGroup>,
 }
 
 /// Server state
@@ -72,11 +74,28 @@ enum ServerState {
 impl RpcServer {
     /// Create a new RPC server
     pub fn new(listen_addr: SocketAddr, processor_manager: Arc<ProcessorManager>) -> Self {
+        Self::new_with_optional_task_group(listen_addr, processor_manager, None)
+    }
+
+    pub fn new_with_task_group(
+        listen_addr: SocketAddr,
+        processor_manager: Arc<ProcessorManager>,
+        parent_task_group: TaskGroup,
+    ) -> Self {
+        Self::new_with_optional_task_group(listen_addr, processor_manager, Some(parent_task_group))
+    }
+
+    fn new_with_optional_task_group(
+        listen_addr: SocketAddr,
+        processor_manager: Arc<ProcessorManager>,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Self {
         Self {
             listen_addr,
             processor_manager,
             state: Arc::new(RwLock::new(ServerState::Stopped)),
             task_group: Arc::new(Mutex::new(None)),
+            parent_task_group,
         }
     }
 
@@ -101,9 +120,14 @@ impl RpcServer {
         // Clone Arc for the task
         let processor_manager = self.processor_manager.clone();
         let state = self.state.clone();
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|error| ControllerError::Internal(format!("No Tokio runtime for RPC server tasks: {error}")))?;
-        let task_group = TaskGroup::root("rocketmq-controller.rpc-server", RuntimeHandle::new(runtime));
+        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
+            parent_task_group.child("rocketmq-controller.rpc-server")
+        } else {
+            let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+                ControllerError::Internal(format!("No Tokio runtime for RPC server tasks: {error}"))
+            })?;
+            TaskGroup::root("rocketmq-controller.rpc-server", RuntimeHandle::new(runtime))
+        };
         let shutdown_token = task_group.cancellation_token();
         let task_group_for_accept = task_group.clone();
 

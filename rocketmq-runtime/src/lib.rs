@@ -39,6 +39,7 @@ pub use diagnostics::RuntimeDiagnosticsSnapshot;
 pub use error::RuntimeError;
 pub use error::RuntimeResult;
 pub use handle::RuntimeHandle;
+#[allow(deprecated)]
 pub use legacy::RocketMQRuntime;
 pub use owner::RuntimeOwner;
 pub use scheduled::ScheduleMode;

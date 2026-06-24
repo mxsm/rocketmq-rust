@@ -445,6 +445,11 @@ impl<PR> ConnectionPool<PR> {
         })
     }
 
+    /// Clear all pooled connection references.
+    pub fn clear(&self) {
+        self.connections.clear();
+    }
+
     /// Get connection metrics.
     ///
     /// # Returns
