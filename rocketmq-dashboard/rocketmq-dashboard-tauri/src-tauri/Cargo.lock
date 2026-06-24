@@ -544,11 +544,12 @@ dependencies = [
 
 [[package]]
 name = "cheetah-string"
-version = "1.0.1"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbeadb90f88586f7f634f68afcf83750dea1bc147ee042a4ff1013c3af61ab4e"
+checksum = "34617d68520087a27a373f84fa30b683ef46c83603143e861a22fdcd65daab55"
 dependencies = [
  "bytes",
+ "memchr",
  "serde",
 ]
 
