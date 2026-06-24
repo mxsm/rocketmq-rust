@@ -265,21 +265,27 @@ impl DashboardAdminClient {
             .expect("admin session should be initialized before use");
 
         let topic_list = session.admin.fetch_all_topic_list().await.map_err(map_rocketmq_error)?;
-        let mut topics: Vec<_> = topic_list
-            .topic_list
-            .iter()
-            .map(|topic| {
-                let topic = topic.to_string();
-                TopicInfo {
-                    category: classify_topic(&topic).to_string(),
-                    topic,
-                    broker_name: None,
-                    read_queue_count: 0,
-                    write_queue_count: 0,
-                    perm: 0,
+        let mut topics = Vec::with_capacity(topic_list.topic_list.len());
+        for topic in &topic_list.topic_list {
+            let topic = topic.to_string();
+            let route = match session
+                .admin
+                .examine_topic_route_info(CheetahString::from(topic.as_str()))
+                .await
+            {
+                Ok(Some(route)) => Some(map_topic_route(&topic, &route)),
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(
+                        topic,
+                        error = %error,
+                        "Failed to load topic route while building topic list; using name-only metadata"
+                    );
+                    None
                 }
-            })
-            .collect();
+            };
+            topics.push(topic_info_from_route(&topic, route.as_ref()));
+        }
         topics.sort_by(|left, right| left.topic.cmp(&right.topic));
 
         Ok(TopicListView {
@@ -291,19 +297,7 @@ impl DashboardAdminClient {
     pub async fn get_topic(&self, topic: &str) -> Result<TopicInfo, DashboardError> {
         validate_name(topic, "Topic")?;
         let route = self.topic_route(topic).await?;
-        let read_queue_count = route.queues.iter().map(|queue| queue.read_queue_nums).sum();
-        let write_queue_count = route.queues.iter().map(|queue| queue.write_queue_nums).sum();
-        let perm = route.queues.iter().map(|queue| queue.perm).max().unwrap_or_default();
-        let broker_name = route.brokers.first().map(|broker| broker.broker_name.clone());
-
-        Ok(TopicInfo {
-            topic: topic.to_string(),
-            broker_name,
-            read_queue_count,
-            write_queue_count,
-            perm,
-            category: classify_topic(topic).to_string(),
-        })
+        Ok(topic_info_from_route(topic, Some(&route)))
     }
 
     pub async fn topic_route(&self, topic: &str) -> Result<TopicRouteInfo, DashboardError> {
@@ -2004,6 +1998,28 @@ fn map_topic_route(topic: &str, route: &TopicRouteData) -> TopicRouteInfo {
     }
 }
 
+fn topic_info_from_route(topic: &str, route: Option<&TopicRouteInfo>) -> TopicInfo {
+    let read_queue_count = route
+        .map(|route| route.queues.iter().map(|queue| queue.read_queue_nums).sum())
+        .unwrap_or_default();
+    let write_queue_count = route
+        .map(|route| route.queues.iter().map(|queue| queue.write_queue_nums).sum())
+        .unwrap_or_default();
+    let perm = route
+        .and_then(|route| route.queues.iter().map(|queue| queue.perm).max())
+        .unwrap_or_default();
+    let broker_name = route.and_then(|route| route.brokers.first().map(|broker| broker.broker_name.clone()));
+
+    TopicInfo {
+        topic: topic.to_string(),
+        broker_name,
+        read_queue_count,
+        write_queue_count,
+        perm,
+        category: classify_topic(topic).to_string(),
+    }
+}
+
 fn map_topic_stats(topic: &str, stats: &TopicStatsTable) -> TopicStatsInfo {
     let queue_count = stats.get_offset_table().len();
     let total_min_offset = stats
@@ -2323,6 +2339,10 @@ mod tests {
     use super::normalize_message_type;
     use super::parse_rate_value;
     use super::select_consume_tps_value;
+    use super::topic_info_from_route;
+    use crate::model::TopicRouteBroker;
+    use crate::model::TopicRouteInfo;
+    use crate::model::TopicRouteQueue;
     use std::collections::BTreeMap;
     use std::collections::HashSet;
 
@@ -2369,5 +2389,38 @@ mod tests {
         let brokers = HashSet::from(["broker-b".to_string(), "broker-a".to_string()]);
 
         assert_eq!(build_order_conf(&brokers, 8), "broker-a:8;broker-b:8");
+    }
+
+    #[test]
+    fn topic_info_from_route_populates_list_row_metadata() {
+        let route = TopicRouteInfo {
+            topic: "TopicTest".to_string(),
+            brokers: vec![TopicRouteBroker {
+                broker_name: "broker-a".to_string(),
+                broker_addrs: vec!["127.0.0.1:10911".to_string()],
+            }],
+            queues: vec![
+                TopicRouteQueue {
+                    broker_name: "broker-a".to_string(),
+                    read_queue_nums: 4,
+                    write_queue_nums: 4,
+                    perm: 6,
+                },
+                TopicRouteQueue {
+                    broker_name: "broker-b".to_string(),
+                    read_queue_nums: 1,
+                    write_queue_nums: 1,
+                    perm: 7,
+                },
+            ],
+        };
+
+        let topic = topic_info_from_route("TopicTest", Some(&route));
+
+        assert_eq!(topic.broker_name.as_deref(), Some("broker-a"));
+        assert_eq!(topic.read_queue_count, 5);
+        assert_eq!(topic.write_queue_count, 5);
+        assert_eq!(topic.perm, 7);
+        assert_eq!(topic.category, "normal");
     }
 }
