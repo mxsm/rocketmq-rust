@@ -709,6 +709,14 @@ function Get-BoundaryDisposition {
                     -MigrationPhase $phase
             }
 
+            if ($path -eq "rocketmq-common/src/utils/http_tiny_client.rs" -and $Match.Text -match "Handle::try_current") {
+                return New-BoundaryDisposition `
+                    -Disposition "sync-runtime-guard" `
+                    -ActionRequired $false `
+                    -Reason "HttpTinyClient's deprecated blocking API checks for an active Tokio runtime only to reject nested blocking calls and direct callers to the async API." `
+                    -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
             if ($path -eq "rocketmq-namesrv/src/bootstrap.rs" -and $Match.Text -match "Handle::try_current") {
                 return New-BoundaryDisposition `
                     -Disposition "current-runtime-compat-adapter" `
