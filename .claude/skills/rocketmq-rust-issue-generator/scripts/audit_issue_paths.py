@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Detect local filesystem paths in a GitHub issue draft."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+
+PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    (
+        "windows drive path",
+        re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z]:[\\/][^\s`'\"<>|]+)"),
+    ),
+    (
+        "windows UNC path",
+        re.compile(r"(?<![A-Za-z0-9_])(?:\\\\[^\s\\/:*?\"<>|]+\\[^\s`'\"<>|]+)"),
+    ),
+    (
+        "unix user home path",
+        re.compile(r"(?<![A-Za-z0-9_])/(?:Users|home)/[A-Za-z0-9._-]+(?:/[^\s`'\"<>]+)*"),
+    ),
+    (
+        "wsl mount path",
+        re.compile(r"(?<![A-Za-z0-9_])/mnt/[A-Za-z]/[^\s`'\"<>]+"),
+    ),
+    (
+        "tilde home path",
+        re.compile(r"(?<![A-Za-z0-9_])~[\\/][^\s`'\"<>]+"),
+    ),
+    (
+        "file uri",
+        re.compile(r"file://[^\s`'\"<>]+", re.IGNORECASE),
+    ),
+    (
+        "home environment variable",
+        re.compile(
+            r"(?:%USERPROFILE%|%HOMEPATH%|\$HOME|\$\{HOME\}|\$env:USERPROFILE)",
+            re.IGNORECASE,
+        ),
+    ),
+]
+
+
+def read_input(path_arg: str) -> tuple[str, str]:
+    if path_arg == "-":
+        return "<stdin>", sys.stdin.read()
+
+    path = Path(path_arg)
+    return str(path), path.read_text(encoding="utf-8")
+
+
+def scan_text(text: str) -> list[tuple[int, str, str]]:
+    findings: list[tuple[int, str, str]] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        for name, pattern in PATTERNS:
+            for match in pattern.finditer(line):
+                findings.append((line_no, name, match.group(0)))
+    return findings
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Fail if a GitHub issue draft contains local filesystem paths.",
+    )
+    parser.add_argument(
+        "draft",
+        help="Issue draft markdown file, or '-' to read from standard input.",
+    )
+    args = parser.parse_args()
+
+    source, text = read_input(args.draft)
+    findings = scan_text(text)
+
+    if not findings:
+        print(f"OK: no local paths detected in {source}")
+        return 0
+
+    print(f"Local path findings in {source}:", file=sys.stderr)
+    for line_no, name, value in findings:
+        print(f"  line {line_no}: {name}: {value}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

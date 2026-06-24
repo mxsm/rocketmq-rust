@@ -1,0 +1,29 @@
+{
+  "skill_name": "rocketmq-rust-pr-submitter",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create a PR title and body for issue 7544. The change adds runtime audit CI enforcement for RocketMQ Rust. Validation run: .\\scripts\\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline passed.",
+      "expected_output": "Uses title format `[ISSUE #7544] ✨ ...`, includes the three PULL_REQUEST_TEMPLATE headings in order, uses `- Fixes #7544`, describes runtime audit CI enforcement, and lists the audit command as passed.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Generate only a PR title for issue 8123. This is a broker auth bug fix.",
+      "expected_output": "Returns only title candidates, each matching `[ISSUE #8123] 🐛 <summary>`, with no PR body.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Prepare ready-to-submit PR title and body for issue 8201 adding consume queue recovery regression tests. I have not run tests yet.",
+      "expected_output": "Uses title format `[ISSUE #8201] 🧪 ...`, uses the PR template body, and honestly states that validation was not run instead of claiming tests passed.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Create ready-to-submit PR title/body for issue 8300. The source notes mention a local file C:\\repo\\target\\debug\\broker.log, but the public PR body must not expose local paths.",
+      "expected_output": "Uses `[ISSUE #8300]` with an appropriate emoji, preserves the PR template headings, rewrites the local log path generically, and leaves no local absolute path in the title or body.",
+      "files": []
+    }
+  ]
+}

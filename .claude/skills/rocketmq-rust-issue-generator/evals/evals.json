@@ -1,0 +1,29 @@
+{
+  "skill_name": "rocketmq-rust-issue-generator",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Generate only an issue title for enforcing the Tokio runtime boundary audit in CI for rocketmq-rust.",
+      "expected_output": "Returns only concise title candidates, chooses the exact enhancement template prefix including emoji (`[Enhancement✨] `) when appropriate, and does not generate a full issue body.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Turn my rough rocketmq-rust issue draft into a standard GitHub issue. The draft mentions feature.yml, architecture.yml, and fixed sections like Description/Motivation/Proposal, but the final issue must use the repository's real ISSUE_TEMPLATE files.",
+      "expected_output": "Verifies actual .github/ISSUE_TEMPLATE files, avoids nonexistent template names, preserves the selected template title prefix including emoji and field order, and maps RocketMQ-specific context into the correct fields without inventing extra required sections.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Create a GitHub issue draft from the repository issue templates for a broker auth bug. I reproduced it from a local checkout and the log mentions a drive-letter workspace path. The issue must be ready for maintainers and must not include local machine paths.",
+      "expected_output": "Uses the bug report template, keeps the `[Bug🐛] ` title prefix and all template sections in order, does not falsely check prerequisites, summarizes the log without local absolute paths, and reports that the path audit passed.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Generate an issue for missing unit tests around consume queue recovery in rocketmq-rust. Use the repo's ISSUE_TEMPLATE files and make it suitable for GitHub.",
+      "expected_output": "Selects the unit test template, keeps the `[Test🧪] ` title prefix, fills Test Scope and Test Cases with actionable items, includes all required fields, and uses only crate/module names or repository-relative paths when useful.",
+      "files": []
+    }
+  ]
+}
