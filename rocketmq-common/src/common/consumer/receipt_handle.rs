@@ -18,7 +18,9 @@
 //! for acknowledging messages in a pop consumer scenario.
 
 use std::fmt;
+use std::str::FromStr;
 
+use cheetah_string::CheetahBuilder;
 use cheetah_string::CheetahString;
 
 use crate::common::key_builder::KeyBuilder;
@@ -29,6 +31,34 @@ use crate::TimeUtils;
 pub const NORMAL_TOPIC: &str = "0";
 pub const RETRY_TOPIC: &str = "1";
 pub const RETRY_TOPIC_V2: &str = "2";
+
+const REQUIRED_RECEIPT_HANDLE_FIELD_COUNT: usize = 8;
+const RECEIPT_HANDLE_FIELD_COUNT: usize = 9;
+
+fn push_receipt_handle_field(builder: &mut CheetahBuilder, field: &str) {
+    if !builder.is_empty() {
+        builder.push_str(MessageConst::KEY_SEPARATOR);
+    }
+    builder.push_str(field);
+}
+
+fn next_receipt_handle_field<'a, I>(fields: &mut I, field_name: &str) -> Result<&'a str, String>
+where
+    I: Iterator<Item = &'a str>,
+{
+    fields.next().ok_or_else(|| format!("Missing field: {field_name}"))
+}
+
+fn parse_receipt_handle_field<'a, I, T>(fields: &mut I, field_name: &str) -> Result<T, String>
+where
+    I: Iterator<Item = &'a str>,
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    next_receipt_handle_field(fields, field_name)?
+        .parse::<T>()
+        .map_err(|e| format!("Failed to parse {field_name}: {e}"))
+}
 
 /// Receipt handle for consumer message acknowledgment
 ///
@@ -115,26 +145,38 @@ impl ReceiptHandle {
     /// assert!(encoded.contains("broker-a"));
     /// ```
     pub fn encode(&self) -> String {
-        format!(
-            "{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
-            self.start_offset,
-            MessageConst::KEY_SEPARATOR,
-            self.retrieve_time,
-            MessageConst::KEY_SEPARATOR,
-            self.invisible_time,
-            MessageConst::KEY_SEPARATOR,
-            self.revive_queue_id,
-            MessageConst::KEY_SEPARATOR,
-            self.topic_type,
-            MessageConst::KEY_SEPARATOR,
-            self.broker_name,
-            MessageConst::KEY_SEPARATOR,
-            self.queue_id,
-            MessageConst::KEY_SEPARATOR,
-            self.offset,
-            MessageConst::KEY_SEPARATOR,
-            self.commit_log_offset
-        )
+        let start_offset = self.start_offset.to_string();
+        let retrieve_time = self.retrieve_time.to_string();
+        let invisible_time = self.invisible_time.to_string();
+        let revive_queue_id = self.revive_queue_id.to_string();
+        let queue_id = self.queue_id.to_string();
+        let offset = self.offset.to_string();
+        let commit_log_offset = self.commit_log_offset.to_string();
+
+        let mut builder = CheetahBuilder::with_capacity(
+            start_offset.len()
+                + retrieve_time.len()
+                + invisible_time.len()
+                + revive_queue_id.len()
+                + self.topic_type.len()
+                + self.broker_name.len()
+                + queue_id.len()
+                + offset.len()
+                + commit_log_offset.len()
+                + MessageConst::KEY_SEPARATOR.len() * (RECEIPT_HANDLE_FIELD_COUNT - 1),
+        );
+
+        push_receipt_handle_field(&mut builder, &start_offset);
+        push_receipt_handle_field(&mut builder, &retrieve_time);
+        push_receipt_handle_field(&mut builder, &invisible_time);
+        push_receipt_handle_field(&mut builder, &revive_queue_id);
+        push_receipt_handle_field(&mut builder, self.topic_type.as_str());
+        push_receipt_handle_field(&mut builder, self.broker_name.as_str());
+        push_receipt_handle_field(&mut builder, &queue_id);
+        push_receipt_handle_field(&mut builder, &offset);
+        push_receipt_handle_field(&mut builder, &commit_log_offset);
+
+        builder.into_string()
     }
 
     /// Check if the receipt handle has expired
@@ -195,43 +237,24 @@ impl ReceiptHandle {
     /// assert_eq!(handle.broker_name(), "broker-a");
     /// ```
     pub fn decode(receipt_handle: &str) -> Result<Self, String> {
-        let data_list: Vec<&str> = receipt_handle.split(MessageConst::KEY_SEPARATOR).collect();
+        let field_count = receipt_handle.split(MessageConst::KEY_SEPARATOR).count();
 
-        if data_list.len() < 8 {
-            return Err(format!("Parse failed, dataList size {}", data_list.len()));
+        if field_count < REQUIRED_RECEIPT_HANDLE_FIELD_COUNT {
+            return Err(format!("Parse failed, dataList size {}", field_count));
         }
 
-        let start_offset = data_list[0]
-            .parse::<i64>()
-            .map_err(|e| format!("Failed to parse start_offset: {}", e))?;
+        let mut fields = receipt_handle.split(MessageConst::KEY_SEPARATOR);
+        let start_offset = parse_receipt_handle_field::<_, i64>(&mut fields, "start_offset")?;
+        let retrieve_time = parse_receipt_handle_field::<_, i64>(&mut fields, "retrieve_time")?;
+        let invisible_time = parse_receipt_handle_field::<_, i64>(&mut fields, "invisible_time")?;
+        let revive_queue_id = parse_receipt_handle_field::<_, i32>(&mut fields, "revive_queue_id")?;
+        let topic_type = next_receipt_handle_field(&mut fields, "topic_type")?;
+        let broker_name = next_receipt_handle_field(&mut fields, "broker_name")?;
+        let queue_id = parse_receipt_handle_field::<_, i32>(&mut fields, "queue_id")?;
+        let offset = parse_receipt_handle_field::<_, i64>(&mut fields, "offset")?;
 
-        let retrieve_time = data_list[1]
-            .parse::<i64>()
-            .map_err(|e| format!("Failed to parse retrieve_time: {}", e))?;
-
-        let invisible_time = data_list[2]
-            .parse::<i64>()
-            .map_err(|e| format!("Failed to parse invisible_time: {}", e))?;
-
-        let revive_queue_id = data_list[3]
-            .parse::<i32>()
-            .map_err(|e| format!("Failed to parse revive_queue_id: {}", e))?;
-
-        let topic_type = CheetahString::from_string(data_list[4].to_string());
-        let broker_name = CheetahString::from_string(data_list[5].to_string());
-
-        let queue_id = data_list[6]
-            .parse::<i32>()
-            .map_err(|e| format!("Failed to parse queue_id: {}", e))?;
-
-        let offset = data_list[7]
-            .parse::<i64>()
-            .map_err(|e| format!("Failed to parse offset: {}", e))?;
-
-        let commit_log_offset = if data_list.len() >= 9 {
-            data_list[8]
-                .parse::<i64>()
-                .map_err(|e| format!("Failed to parse commit_log_offset: {}", e))?
+        let commit_log_offset = if field_count >= RECEIPT_HANDLE_FIELD_COUNT {
+            parse_receipt_handle_field::<_, i64>(&mut fields, "commit_log_offset")?
         } else {
             -1
         };
@@ -241,8 +264,8 @@ impl ReceiptHandle {
             .retrieve_time(retrieve_time)
             .invisible_time(invisible_time)
             .revive_queue_id(revive_queue_id)
-            .topic_type(topic_type.as_str())
-            .broker_name(broker_name.as_str())
+            .topic_type(topic_type)
+            .broker_name(broker_name)
             .queue_id(queue_id)
             .offset(offset)
             .commit_log_offset(commit_log_offset)
@@ -612,6 +635,15 @@ mod tests {
         let handle = ReceiptHandle::decode(encoded).unwrap();
 
         assert_eq!(handle.commit_log_offset(), -1);
+    }
+
+    #[test]
+    fn test_decode_ignores_trailing_fields() {
+        let encoded = "100 1000000 30000 0 0 broker-a 1 200 5000 ignored";
+        let handle = ReceiptHandle::decode(encoded).unwrap();
+
+        assert_eq!(handle.commit_log_offset(), 5000);
+        assert_eq!(handle.receipt_handle(), encoded);
     }
 
     #[test]
