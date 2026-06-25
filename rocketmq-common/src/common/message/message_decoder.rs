@@ -196,7 +196,9 @@ pub fn message_properties_to_string(properties: &HashMap<CheetahString, CheetahS
     builder.finish_string()
 }
 
-fn cheetah_from_utf8_lossy(bytes: &[u8]) -> CheetahString {
+/// Converts UTF-8 message protocol bytes into a [`CheetahString`], preserving
+/// `String::from_utf8_lossy` compatibility for invalid input.
+pub fn cheetah_from_utf8_lossy(bytes: &[u8]) -> CheetahString {
     match String::from_utf8_lossy(bytes) {
         Cow::Borrowed(value) => CheetahString::from_slice(value),
         Cow::Owned(value) => CheetahString::from_string_owned(value),

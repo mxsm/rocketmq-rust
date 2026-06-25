@@ -42,6 +42,7 @@ use rocketmq_common::utils::time_utils;
 use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::CRC32Utils::crc32_bytes;
 use rocketmq_common::MessageDecoder;
+use rocketmq_common::MessageDecoder::cheetah_from_utf8_lossy;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_POSITION;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_V2;
@@ -102,7 +103,6 @@ pub const BLANK_MAGIC_CODE: i32 = -875286124;
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 
 // This reduces heap allocations by ~50% by reusing encoder instances
-
 fn encode_message_ext(
     message_ext: &MessageExtBrokerInner,
     message_store_config: &Arc<MessageStoreConfig>,
@@ -2010,13 +2010,12 @@ pub fn check_message_and_return_size(
     }
     let topic_len = message_version.get_topic_length(bytes);
     let topic_bytes = bytes.copy_to_bytes(topic_len);
-    let topic = CheetahString::from_string(String::from_utf8_lossy(topic_bytes.as_ref()).to_string());
+    let topic = cheetah_from_utf8_lossy(topic_bytes.as_ref());
     let properties_length = bytes.get_i16();
     let (tags_code, keys, uniq_key, properties_map) = if properties_length > 0 {
         let properties = bytes.copy_to_bytes(properties_length as usize);
-        let properties_content = String::from_utf8_lossy(properties.as_ref()).to_string();
-        //need to optimize
-        let properties_map = string_to_message_properties(Some(&CheetahString::from_string(properties_content)));
+        let properties_content = cheetah_from_utf8_lossy(properties.as_ref());
+        let properties_map = string_to_message_properties(Some(&properties_content));
         let keys = properties_map.get(MessageConst::PROPERTY_KEYS).cloned();
         let uniq_key = properties_map
             .get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
@@ -2360,6 +2359,21 @@ mod tests {
 
     fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         haystack.windows(needle.len()).position(|window| window == needle)
+    }
+
+    #[test]
+    fn cheetah_from_utf8_lossy_borrows_valid_commitlog_text() {
+        let decoded = cheetah_from_utf8_lossy(b"commitlog-topic");
+
+        assert_eq!(decoded, "commitlog-topic");
+    }
+
+    #[test]
+    fn cheetah_from_utf8_lossy_preserves_invalid_commitlog_text_compatibility() {
+        let encoded = b"topic-\xff";
+        let decoded = cheetah_from_utf8_lossy(encoded);
+
+        assert_eq!(decoded.as_str(), String::from_utf8_lossy(encoded).as_ref());
     }
 
     fn build_message_with_property_crc(body: &[u8], topic: &str) -> Bytes {
