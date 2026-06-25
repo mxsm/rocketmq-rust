@@ -23,7 +23,12 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 
+use crate::route::types::public_name_from_route;
+use crate::route::types::route_broker_name;
+use crate::route::types::route_topic_name;
 use crate::route::types::BrokerName;
+use crate::route::types::RouteBrokerName;
+use crate::route::types::RouteTopicName;
 use crate::route::types::TopicName;
 
 /// Topic queue mapping info table: Topic -> (BrokerName -> TopicQueueMappingInfo)
@@ -52,7 +57,7 @@ use crate::route::types::TopicName;
 pub struct TopicQueueMappingInfoTable {
     // Outer map: Topic -> Inner map
     // Inner map: BrokerName -> TopicQueueMappingInfo
-    inner: DashMap<TopicName, DashMap<BrokerName, Arc<TopicQueueMappingInfo>>>,
+    inner: DashMap<RouteTopicName, DashMap<RouteBrokerName, Arc<TopicQueueMappingInfo>>>,
 }
 
 impl Default for TopicQueueMappingInfoTable {
@@ -92,7 +97,10 @@ impl TopicQueueMappingInfoTable {
         broker_name: BrokerName,
         mapping_info: Arc<TopicQueueMappingInfo>,
     ) -> Option<Arc<TopicQueueMappingInfo>> {
-        self.inner.entry(topic).or_default().insert(broker_name, mapping_info)
+        self.inner
+            .entry(route_topic_name(topic))
+            .or_default()
+            .insert(route_broker_name(broker_name), mapping_info)
     }
 
     /// Get topic queue mapping info for a specific broker
@@ -120,7 +128,7 @@ impl TopicQueueMappingInfoTable {
         self.inner.get(topic).map(|broker_map| {
             broker_map
                 .iter()
-                .map(|entry| (entry.key().clone(), (**entry.value()).clone()))
+                .map(|entry| (public_name_from_route(entry.key()), (**entry.value()).clone()))
                 .collect()
         })
     }
@@ -146,8 +154,13 @@ impl TopicQueueMappingInfoTable {
     ///
     /// # Returns
     /// Removed broker map if existed
-    pub fn remove_topic(&self, topic: &str) -> Option<DashMap<BrokerName, Arc<TopicQueueMappingInfo>>> {
-        self.inner.remove(topic).map(|(_, v)| v)
+    pub fn remove_topic(&self, topic: &str) -> Option<HashMap<BrokerName, Arc<TopicQueueMappingInfo>>> {
+        self.inner.remove(topic).map(|(_, broker_map)| {
+            broker_map
+                .into_iter()
+                .map(|(broker_name, mapping_info)| (public_name_from_route(&broker_name), mapping_info))
+                .collect()
+        })
     }
 
     /// Check if topic has any mapping info
@@ -189,7 +202,10 @@ impl TopicQueueMappingInfoTable {
     /// # Returns
     /// Vector of topic names
     pub fn get_all_topics(&self) -> Vec<TopicName> {
-        self.inner.iter().map(|entry| entry.key().clone()).collect()
+        self.inner
+            .iter()
+            .map(|entry| public_name_from_route(entry.key()))
+            .collect()
     }
 
     /// Get all broker names for a topic
@@ -200,9 +216,12 @@ impl TopicQueueMappingInfoTable {
     /// # Returns
     /// Vector of broker names if topic exists
     pub fn get_brokers_for_topic(&self, topic: &str) -> Option<Vec<BrokerName>> {
-        self.inner
-            .get(topic)
-            .map(|broker_map| broker_map.iter().map(|entry| entry.key().clone()).collect())
+        self.inner.get(topic).map(|broker_map| {
+            broker_map
+                .iter()
+                .map(|entry| public_name_from_route(entry.key()))
+                .collect()
+        })
     }
 
     /// Cleanup empty topics (topics with no broker mappings)
@@ -233,9 +252,9 @@ impl TopicQueueMappingInfoTable {
                 let broker_map: HashMap<BrokerName, Arc<TopicQueueMappingInfo>> = entry
                     .value()
                     .iter()
-                    .map(|broker_entry| (broker_entry.key().clone(), broker_entry.value().clone()))
+                    .map(|broker_entry| (public_name_from_route(broker_entry.key()), broker_entry.value().clone()))
                     .collect();
-                (entry.key().clone(), broker_map)
+                (public_name_from_route(entry.key()), broker_map)
             })
             .collect()
     }

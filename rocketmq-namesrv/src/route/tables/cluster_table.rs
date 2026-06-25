@@ -23,8 +23,13 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use dashmap::DashSet;
 
+use crate::route::types::public_name_from_route;
+use crate::route::types::route_broker_name;
+use crate::route::types::route_cluster_name;
 use crate::route::types::BrokerName;
 use crate::route::types::ClusterName;
+use crate::route::types::RouteBrokerName;
+use crate::route::types::RouteClusterName;
 
 /// Cluster address table: ClusterName -> Set<BrokerName>
 ///
@@ -47,7 +52,7 @@ use crate::route::types::ClusterName;
 /// ```
 #[derive(Clone)]
 pub struct ClusterAddrTable {
-    inner: DashMap<ClusterName, DashSet<BrokerName>>,
+    inner: DashMap<RouteClusterName, DashSet<RouteBrokerName>>,
 }
 
 impl ClusterAddrTable {
@@ -69,13 +74,16 @@ impl ClusterAddrTable {
     /// Add a broker to a cluster
     ///
     /// # Arguments
-    /// * `cluster_name` - Cluster name (zero-copy Arc<str>)
-    /// * `broker_name` - Broker name to add (zero-copy Arc<str>)
+    /// * `cluster_name` - Cluster name
+    /// * `broker_name` - Broker name to add
     ///
     /// # Returns
     /// true if broker was newly added, false if already existed
     pub fn add_broker(&self, cluster_name: ClusterName, broker_name: BrokerName) -> bool {
-        self.inner.entry(cluster_name).or_default().insert(broker_name)
+        self.inner
+            .entry(route_cluster_name(cluster_name))
+            .or_default()
+            .insert(route_broker_name(broker_name))
     }
 
     /// Remove a broker from a cluster
@@ -113,11 +121,16 @@ impl ClusterAddrTable {
     /// * `cluster_name` - Cluster name
     ///
     /// # Returns
-    /// Vector of broker names (CheetahString for zero-copy)
+    /// Vector of public broker names.
     pub fn get_brokers(&self, cluster_name: &str) -> Vec<BrokerName> {
         self.inner
             .get(cluster_name)
-            .map(|brokers| brokers.iter().map(|broker| broker.key().clone()).collect())
+            .map(|brokers| {
+                brokers
+                    .iter()
+                    .map(|broker| public_name_from_route(broker.key()))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -141,9 +154,12 @@ impl ClusterAddrTable {
     /// Get all cluster names
     ///
     /// # Returns
-    /// Vector of cluster names (CheetahString for zero-copy)
+    /// Vector of public cluster names.
     pub fn get_all_clusters(&self) -> Vec<ClusterName> {
-        self.inner.iter().map(|entry| entry.key().clone()).collect()
+        self.inner
+            .iter()
+            .map(|entry| public_name_from_route(entry.key()))
+            .collect()
     }
 
     /// Get all clusters with their brokers
@@ -154,8 +170,8 @@ impl ClusterAddrTable {
         self.inner
             .iter()
             .map(|entry| {
-                let cluster = entry.key().clone();
-                let brokers = entry.value().iter().map(|b| b.key().clone()).collect();
+                let cluster = public_name_from_route(entry.key());
+                let brokers = entry.value().iter().map(|b| public_name_from_route(b.key())).collect();
                 (cluster, brokers)
             })
             .collect()
@@ -164,8 +180,8 @@ impl ClusterAddrTable {
     /// Append cluster names and broker names to an output topic list.
     pub fn append_cluster_and_broker_names(&self, topic_list: &mut Vec<CheetahString>) {
         for entry in self.inner.iter() {
-            topic_list.push(entry.key().clone());
-            topic_list.extend(entry.value().iter().map(|broker| broker.key().clone()));
+            topic_list.push(public_name_from_route(entry.key()));
+            topic_list.extend(entry.value().iter().map(|broker| public_name_from_route(broker.key())));
         }
     }
 
@@ -173,8 +189,12 @@ impl ClusterAddrTable {
     pub fn snapshot(&self) -> HashMap<ClusterName, HashSet<BrokerName>> {
         let mut snapshot = HashMap::with_capacity(self.inner.len());
         for entry in self.inner.iter() {
-            let brokers = entry.value().iter().map(|broker| broker.key().clone()).collect();
-            snapshot.insert(entry.key().clone(), brokers);
+            let brokers = entry
+                .value()
+                .iter()
+                .map(|broker| public_name_from_route(broker.key()))
+                .collect();
+            snapshot.insert(public_name_from_route(entry.key()), brokers);
         }
         snapshot
     }

@@ -15,12 +15,14 @@
 //! Type definitions for route management system
 //!
 //! This module contains optimized type definitions using:
-//! - `CheetahString` instead of `String` for zero-copy sharing and consistency
+//! - `CheetahString` instead of `String` for public route names
+//! - `CheetahStr` for immutable internal route table keys
 //! - `Arc<T>` for immutable shared data
 //! - Strong typing for better API safety
 
 use std::sync::Arc;
 
+use cheetah_string::CheetahStr;
 use cheetah_string::CheetahString;
 use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
@@ -29,7 +31,7 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQu
 use crate::route::tables::BrokerLiveInfo;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
-/// Topic name type - uses CheetahString for zero-copy sharing
+/// Public topic name type.
 pub type TopicName = CheetahString;
 
 /// Broker name type
@@ -37,6 +39,35 @@ pub type BrokerName = CheetahString;
 
 /// Cluster name type
 pub type ClusterName = CheetahString;
+
+/// Internal route topic key type.
+pub(crate) type RouteTopicName = CheetahStr;
+
+/// Internal route broker key type.
+pub(crate) type RouteBrokerName = CheetahStr;
+
+/// Internal route cluster key type.
+pub(crate) type RouteClusterName = CheetahStr;
+
+#[inline]
+pub(crate) fn route_topic_name(topic: TopicName) -> RouteTopicName {
+    CheetahStr::from(topic)
+}
+
+#[inline]
+pub(crate) fn route_broker_name(broker_name: BrokerName) -> RouteBrokerName {
+    CheetahStr::from(broker_name)
+}
+
+#[inline]
+pub(crate) fn route_cluster_name(cluster_name: ClusterName) -> RouteClusterName {
+    CheetahStr::from(cluster_name)
+}
+
+#[inline]
+pub(crate) fn public_name_from_route(route_name: &CheetahStr) -> CheetahString {
+    CheetahString::from_slice(route_name.as_str())
+}
 
 /// Broker address string
 pub type BrokerAddr = CheetahString;

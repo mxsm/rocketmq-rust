@@ -23,7 +23,10 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 
+use crate::route::types::public_name_from_route;
+use crate::route::types::route_broker_name;
 use crate::route::types::BrokerName;
+use crate::route::types::RouteBrokerName;
 
 /// Broker address table: BrokerName -> BrokerData
 ///
@@ -45,7 +48,7 @@ use crate::route::types::BrokerName;
 /// ```
 #[derive(Clone)]
 pub struct BrokerAddrTable {
-    inner: DashMap<BrokerName, Arc<BrokerData>>,
+    inner: DashMap<RouteBrokerName, Arc<BrokerData>>,
 }
 
 impl BrokerAddrTable {
@@ -67,13 +70,13 @@ impl BrokerAddrTable {
     /// Insert or update broker data
     ///
     /// # Arguments
-    /// * `broker_name` - Broker name (zero-copy Arc<str>)
+    /// * `broker_name` - Broker name
     /// * `broker_data` - Broker configuration including addresses
     ///
     /// # Returns
     /// Previous broker data if existed
     pub fn insert(&self, broker_name: BrokerName, broker_data: BrokerData) -> Option<Arc<BrokerData>> {
-        self.inner.insert(broker_name, Arc::new(broker_data))
+        self.inner.insert(route_broker_name(broker_name), Arc::new(broker_data))
     }
 
     /// Get broker data by name
@@ -106,9 +109,12 @@ impl BrokerAddrTable {
     /// Get all broker names
     ///
     /// # Returns
-    /// Vector of broker names (CheetahString for zero-copy)
+    /// Vector of public broker names.
     pub fn get_all_broker_names(&self) -> Vec<BrokerName> {
-        self.inner.iter().map(|entry| entry.key().clone()).collect()
+        self.inner
+            .iter()
+            .map(|entry| public_name_from_route(entry.key()))
+            .collect()
     }
 
     /// Get all broker data entries
@@ -118,7 +124,7 @@ impl BrokerAddrTable {
     pub fn get_all_brokers(&self) -> Vec<(BrokerName, Arc<BrokerData>)> {
         self.inner
             .iter()
-            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
+            .map(|entry| (public_name_from_route(entry.key()), Arc::clone(entry.value())))
             .collect()
     }
 
@@ -129,7 +135,7 @@ impl BrokerAddrTable {
         for entry in self.inner.iter() {
             for (broker_id, addr) in entry.value().broker_addrs() {
                 if addr.as_str() == broker_addr {
-                    return Some((entry.key().clone(), *broker_id));
+                    return Some((public_name_from_route(entry.key()), *broker_id));
                 }
             }
         }
@@ -145,7 +151,7 @@ impl BrokerAddrTable {
 
             for (broker_id, addr) in entry.value().broker_addrs() {
                 if addr.as_str() == broker_addr {
-                    return Some((entry.key().clone(), *broker_id));
+                    return Some((public_name_from_route(entry.key()), *broker_id));
                 }
             }
         }
@@ -166,7 +172,7 @@ impl BrokerAddrTable {
     pub fn snapshot(&self) -> HashMap<BrokerName, BrokerData> {
         let mut snapshot = HashMap::with_capacity(self.inner.len());
         for entry in self.inner.iter() {
-            snapshot.insert(entry.key().clone(), entry.value().as_ref().clone());
+            snapshot.insert(public_name_from_route(entry.key()), entry.value().as_ref().clone());
         }
         snapshot
     }
@@ -182,7 +188,7 @@ impl BrokerAddrTable {
         self.inner
             .iter()
             .filter(|entry| entry.value().cluster() == cluster_name)
-            .map(|entry| entry.key().clone())
+            .map(|entry| public_name_from_route(entry.key()))
             .collect()
     }
 

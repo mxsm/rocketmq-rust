@@ -16,13 +16,19 @@
 //!
 //! Manages topic -> broker -> queue data mappings using nested DashMap.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 
+use crate::route::types::public_name_from_route;
+use crate::route::types::route_broker_name;
+use crate::route::types::route_topic_name;
 use crate::route::types::BrokerName;
+use crate::route::types::RouteBrokerName;
+use crate::route::types::RouteTopicName;
 use crate::route::types::TopicName;
 
 /// Topic queue table: Topic -> (Broker -> QueueData)
@@ -48,9 +54,9 @@ use crate::route::types::TopicName;
 pub struct TopicQueueTable {
     /// Outer map: Topic name -> Broker map
     /// Inner map: Broker name -> Queue data
-    inner: DashMap<TopicName, DashMap<BrokerName, Arc<QueueData>>>,
+    inner: DashMap<RouteTopicName, DashMap<RouteBrokerName, Arc<QueueData>>>,
     /// Reverse index: Broker name -> topic set
-    broker_topics: DashMap<BrokerName, HashSet<TopicName>>,
+    broker_topics: DashMap<RouteBrokerName, HashSet<RouteTopicName>>,
 }
 
 impl TopicQueueTable {
@@ -78,20 +84,22 @@ impl TopicQueueTable {
     /// Insert or update queue data for a topic-broker pair
     ///
     /// # Arguments
-    /// * `topic` - Topic name (zero-copy Arc<str>)
-    /// * `broker` - Broker name (zero-copy Arc<str>)
+    /// * `topic` - Topic name
+    /// * `broker` - Broker name
     /// * `queue_data` - Queue configuration
     ///
     /// # Returns
     /// Previous queue data if existed
     pub fn insert(&self, topic: TopicName, broker: BrokerName, queue_data: QueueData) -> Option<Arc<QueueData>> {
-        let index_topic = topic.clone();
+        let route_topic = route_topic_name(topic);
+        let route_broker = route_broker_name(broker);
+        let index_topic = route_topic.clone();
         let previous = self
             .inner
-            .entry(topic)
+            .entry(route_topic)
             .or_default()
-            .insert(broker.clone(), Arc::new(queue_data));
-        self.broker_topics.entry(broker).or_default().insert(index_topic);
+            .insert(route_broker.clone(), Arc::new(queue_data));
+        self.broker_topics.entry(route_broker).or_default().insert(index_topic);
         previous
     }
 
@@ -122,7 +130,7 @@ impl TopicQueueTable {
             .map(|brokers| {
                 brokers
                     .iter()
-                    .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
+                    .map(|entry| (public_name_from_route(entry.key()), Arc::clone(entry.value())))
                     .collect()
             })
             .unwrap_or_default()
@@ -138,9 +146,9 @@ impl TopicQueueTable {
     /// * `topic` - A string slice representing the name of the topic to look up.
     ///
     /// # Returns
-    /// * `Option<dashmap::mapref::one::Ref<'_, TopicName, DashMap<BrokerName, Arc<QueueData>>>>`
-    ///   - `Some` if the topic exists, containing a reference to the `DashMap` of brokers and their
-    ///     queue data.
+    /// * `Option<HashMap<BrokerName, Arc<QueueData>>>`
+    ///   - `Some` if the topic exists, containing a public snapshot of brokers and their queue
+    ///     data.
     ///   - `None` if the topic does not exist.
     ///
     /// # Example
@@ -149,11 +157,13 @@ impl TopicQueueTable {
     /// if let Some(broker_map) = topic_map {
     ///     // Access broker-specific queue data
     /// }
-    pub fn get_topic_queues_map(
-        &self,
-        topic: &str,
-    ) -> Option<dashmap::mapref::one::Ref<'_, TopicName, DashMap<BrokerName, Arc<QueueData>>>> {
-        self.inner.get(topic)
+    pub fn get_topic_queues_map(&self, topic: &str) -> Option<HashMap<BrokerName, Arc<QueueData>>> {
+        self.inner.get(topic).map(|brokers| {
+            brokers
+                .iter()
+                .map(|entry| (public_name_from_route(entry.key()), Arc::clone(entry.value())))
+                .collect()
+        })
     }
 
     /// Remove a broker from a topic
@@ -201,9 +211,12 @@ impl TopicQueueTable {
     /// Get all topic names
     ///
     /// # Returns
-    /// Vector of topic names (CheetahString for zero-copy)
+    /// Vector of public topic names.
     pub fn get_all_topics(&self) -> Vec<TopicName> {
-        self.inner.iter().map(|entry| entry.key().clone()).collect()
+        self.inner
+            .iter()
+            .map(|entry| public_name_from_route(entry.key()))
+            .collect()
     }
 
     /// Get number of topics
@@ -297,7 +310,7 @@ impl TopicQueueTable {
             .iter()
             .filter_map(|entry| {
                 let first_queue = entry.value().iter().next()?;
-                predicate(first_queue.value().as_ref()).then(|| entry.key().clone())
+                predicate(first_queue.value().as_ref()).then(|| public_name_from_route(entry.key()))
             })
             .collect()
     }
@@ -310,7 +323,7 @@ impl TopicQueueTable {
                 topics
                     .iter()
                     .filter(|topic| self.get(topic.as_str(), broker_name).is_some())
-                    .cloned()
+                    .map(public_name_from_route)
                     .collect()
             })
             .unwrap_or_default()
@@ -327,7 +340,7 @@ impl TopicQueueTable {
             if let Some(broker_topics) = self.broker_topics.get(broker_name.as_str()) {
                 for topic in broker_topics.iter() {
                     if self.get(topic.as_str(), broker_name.as_str()).is_some() {
-                        topics.push(topic.clone());
+                        topics.push(public_name_from_route(topic));
                     }
                 }
             }
@@ -347,7 +360,7 @@ impl TopicQueueTable {
             if let Some(broker_topics) = self.broker_topics.get(broker_name.as_str()) {
                 for topic in broker_topics.iter() {
                     if self.get(topic.as_str(), broker_name.as_str()).is_some() {
-                        pairs.push((topic.clone(), broker_name.clone()));
+                        pairs.push((public_name_from_route(topic), broker_name.clone()));
                     }
                 }
             }
@@ -365,7 +378,7 @@ impl TopicQueueTable {
                     .iter()
                     .filter_map(|topic| {
                         self.get(topic.as_str(), broker_name)
-                            .map(|queue_data| (topic.clone(), queue_data))
+                            .map(|queue_data| (public_name_from_route(topic), queue_data))
                     })
                     .collect()
             })
