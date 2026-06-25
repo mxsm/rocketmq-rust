@@ -2528,6 +2528,7 @@ td code,
 
 .message-results-wide table {
   min-width: 1890px;
+  table-layout: fixed;
 }
 
 .message-results-wide th,
@@ -2538,6 +2539,11 @@ td code,
 
 .message-results-wide tbody tr:nth-child(even) td {
   background: color-mix(in srgb, var(--surface-2) 32%, transparent);
+}
+
+.message-results-wide th:nth-child(6),
+.message-results-wide td:nth-child(6) {
+  overflow: hidden;
 }
 
 .message-id-cell {
@@ -2591,12 +2597,42 @@ td code,
 }
 
 .message-body-preview {
-  display: inline-block;
+  display: block;
   max-width: 100%;
   overflow: hidden;
   color: var(--muted);
+  cursor: help;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.message-body-preview:focus {
+  outline: 2px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.message-body-preview-empty {
+  cursor: default;
+}
+
+.message-body-hover-toast {
+  position: fixed;
+  z-index: 1200;
+  max-width: min(760px, calc(100vw - 32px));
+  max-height: min(320px, calc(100vh - 32px));
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--primary) 36%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface-2) 94%, var(--primary));
+  box-shadow: 0 18px 52px color-mix(in srgb, #000 42%, transparent);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .message-table-actions {
