@@ -5,8 +5,16 @@ export interface MessageView {
   tags?: string | null;
   bornTimestamp: number;
   storeTimestamp: number;
+  bornHost: string;
+  storeHost: string;
   queueId: number;
   queueOffset: number;
+  storeSize: number;
+  reconsumeTimes: number;
+  bodyCRC: number;
+  sysFlag: number;
+  flag: number;
+  preparedTransactionOffset: number;
   body: string;
   properties: Record<string, string>;
 }

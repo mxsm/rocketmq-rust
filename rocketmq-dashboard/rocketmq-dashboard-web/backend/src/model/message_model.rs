@@ -36,8 +36,17 @@ pub struct MessageView {
     pub tags: Option<String>,
     pub born_timestamp: i64,
     pub store_timestamp: i64,
+    pub born_host: String,
+    pub store_host: String,
     pub queue_id: i32,
     pub queue_offset: i64,
+    pub store_size: i32,
+    pub reconsume_times: i32,
+    #[serde(rename = "bodyCRC")]
+    pub body_crc: u32,
+    pub sys_flag: i32,
+    pub flag: i32,
+    pub prepared_transaction_offset: i64,
     pub body: String,
     pub properties: BTreeMap<String, String>,
 }
