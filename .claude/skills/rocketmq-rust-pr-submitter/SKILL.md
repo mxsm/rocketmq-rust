@@ -1,16 +1,16 @@
 ---
 name: rocketmq-rust-pr-submitter
-description: Use when the user asks to prepare, submit, publish, or optimize a pull request for the rocketmq-rust project, especially when the PR must follow the `[ISSUE #issue_id] <emoji> <summary>` title convention, the `.github/PULL_REQUEST_TEMPLATE.md` body format (Fixes, Brief Description, How Did You Test This Change), and must not be created as a draft PR unless the user explicitly requests one.
+description: Use when the user asks to prepare, submit, publish, or optimize a pull request for the rocketmq-rust project, especially when the PR title or commit message must follow the `[ISSUE #issue_id]<emoji><summary>` convention, the `.github/PULL_REQUEST_TEMPLATE.md` body format, and the PR must not be draft unless explicitly requested.
 ---
 
 # RocketMQ Rust PR Submitter
 
-Prepare RocketMQ Rust PR titles and bodies from `.github/PULL_REQUEST_TEMPLATE.md`. Connects PR to issue via `[ISSUE #id]` title prefix and `Fixes #id` body line.
+Prepare RocketMQ Rust PR titles, commit messages, and bodies from `.github/PULL_REQUEST_TEMPLATE.md`. Connects PR to issue via `[ISSUE #id]` title/commit prefix and `Fixes #id` body line.
 
 ## When to Use
 
 - User asks to create, prepare, or publish a PR for rocketmq-rust
-- PR title must follow `[ISSUE #issue_id] <emoji> <summary>` format
+- PR title or commit message must follow `[ISSUE #issue_id]<emoji><summary>` format
 - PR body must follow the repository's real PR template (not a custom format)
 - Issue id is available from user request, branch name, or commit history
 
@@ -42,9 +42,15 @@ Priority order: user request → branch name (`issue-7544`, `fix-7544`) → comm
 
 ### 3. Write Title
 ```
-[ISSUE #issue_id] <emoji> <summary>
+[ISSUE #issue_id]<emoji><summary>
 ```
-Exactly one space after `]` and after emoji. No extra prefixes (conventional commit, branch name). Keep summary short and action-oriented.
+Do not put spaces between `]`, the emoji, and the summary. No extra prefixes (conventional commit, branch name). Keep the summary short and action-oriented.
+
+If creating a commit as part of the PR workflow, use the exact same compact format for the commit message:
+
+```
+[ISSUE #issue_id]<emoji><summary>
+```
 
 ### 4. Write Body
 ```markdown
@@ -79,7 +85,7 @@ Preserve template headings exactly. Keep paths repository-relative. In the test 
 | Leaving `#issue_id` placeholder | Replace with numeric id in both title and body |
 | Creating draft PR by default | Normal ready-for-review PR unless user says "draft PR" |
 | Claiming unrun validation passed | State "validation not run" honestly in test section |
-| Adding extra prefixes (conventional commit, branch name) | Only `[ISSUE #id] <emoji> <summary>` |
+| Adding spaces or extra prefixes | Only `[ISSUE #id]<emoji><summary>` for PR titles and commit messages |
 | Wrong emoji for change type | Match to linked issue type; default to ✨ |
 
 ## Output Format
@@ -87,7 +93,7 @@ Preserve template headings exactly. Keep paths repository-relative. In the test 
 **Full prepare request:**
 ```
 Title:
-[ISSUE #issue_id] <emoji> <summary>
+[ISSUE #issue_id]<emoji><summary>
 
 Body:
 ### Which Issue(s) This PR Fixes(Closes)
@@ -99,7 +105,8 @@ Body:
 
 ## Final Check
 
-- Title matches `[ISSUE #number] <emoji> <summary>`
+- Title matches `[ISSUE #number]<emoji><summary>`
+- Commit message, when created, matches `[ISSUE #number]<emoji><summary>`
 - Body includes three PR template headings in order with `- Fixes #number`
 - Test section doesn't claim unrun commands passed
 - No local absolute paths or machine-specific roots

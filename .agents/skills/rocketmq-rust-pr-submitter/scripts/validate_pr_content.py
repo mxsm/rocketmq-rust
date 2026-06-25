@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 TITLE_RE = re.compile(
-    r"^\[ISSUE #(?P<issue>\d+)\] (?P<emoji>🐛|📝|✨|🚀|♻️|🧪) (?P<summary>.+\S)$",
+    r"^\[ISSUE #(?P<issue>\d+)\](?P<emoji>🐛|📝|✨|🚀|♻️|🧪)(?P<summary>\S(?:.*\S)?)$",
 )
 
 LOCAL_PATH_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
@@ -93,7 +93,7 @@ def main() -> int:
 
     title_match = TITLE_RE.match(args.title)
     if title_match is None:
-        errors.append("title must match: [ISSUE #issue_id] <emoji> <summary>")
+        errors.append("title must match: [ISSUE #issue_id]<emoji><summary>")
         title_issue = None
     else:
         title_issue = title_match.group("issue")
