@@ -2246,6 +2246,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2868,9 +2877,9 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "openraft"
-version = "0.10.0-alpha.21"
+version = "0.10.0-alpha.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f40148cf75ead81993d5910bc72275e542e4e01a90241bf1905236843fe3009d"
+checksum = "71c9994f816c3b71255e2b5e1c53c8feed5a8a5d5deca74f3f4e318a72615684"
 dependencies = [
  "anyerror",
  "backoff-series",
@@ -2881,7 +2890,7 @@ dependencies = [
  "derive_more",
  "display-more",
  "futures-util",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "maplit",
  "openraft-macros",
  "openraft-rt",
@@ -2897,9 +2906,9 @@ dependencies = [
 
 [[package]]
 name = "openraft-macros"
-version = "0.10.0-alpha.21"
+version = "0.10.0-alpha.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ec23cd291c763fb17d8dabf7cc4eacaefd45d02e52a4df88ce50c702f030689"
+checksum = "c8b12005e854b4bbd471dcd27e98288a921b6e57c96f0ceb5e689e9e0ab04c7b"
 dependencies = [
  "chrono",
  "proc-macro2",
@@ -2910,9 +2919,9 @@ dependencies = [
 
 [[package]]
 name = "openraft-rt"
-version = "0.10.0-alpha.21"
+version = "0.10.0-alpha.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a31c2d12e376df204612bb2016d652ea2d48b8edeaa04263facbe2fc7a11e3ef"
+checksum = "e33af8e5c55654111ea638c683ae6d953d98758c83d810249e4bece6ae242803"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -2923,9 +2932,9 @@ dependencies = [
 
 [[package]]
 name = "openraft-rt-tokio"
-version = "0.10.0-alpha.21"
+version = "0.10.0-alpha.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8c01f2a456a864282bc4eaf76f1f78ab040d80416fd30fd15b8ab88faa337a"
+checksum = "38b2718987a0b9fc347aaf8583f4b61726aa670e715999f63609ca883edacaf5"
 dependencies = [
  "futures-util",
  "openraft-rt",
