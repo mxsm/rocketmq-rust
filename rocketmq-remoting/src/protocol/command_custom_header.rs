@@ -115,6 +115,24 @@ pub trait CommandCustomHeader: AsAny {
             )),
         }
     }
+
+    /// Retrieves a borrowed value associated with the specified field from the provided map.
+    #[inline(always)]
+    fn get_and_check_not_none_ref<'a>(
+        &self,
+        map: &'a HashMap<CheetahString, CheetahString>,
+        field: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<&'a CheetahString> {
+        match map.get(field) {
+            Some(value) => Ok(value),
+            None => Err(rocketmq_error::RocketMQError::Serialization(
+                rocketmq_error::SerializationError::DecodeFailed {
+                    format: "header",
+                    message: format!("The field {field} is required."),
+                },
+            )),
+        }
+    }
 }
 
 pub trait AsAny: Any {

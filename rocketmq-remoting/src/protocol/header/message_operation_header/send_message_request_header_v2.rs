@@ -88,58 +88,31 @@ pub struct SendMessageRequestHeaderV2 {
 impl CommandCustomHeader for SendMessageRequestHeaderV2 {
     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::with_capacity(14);
-        map.insert(CheetahString::from_static_str(FIELD_A), self.a.clone());
-        map.insert(CheetahString::from_static_str(FIELD_B), self.b.clone());
-        map.insert(CheetahString::from_static_str(FIELD_C), self.c.clone());
-        map.insert(
-            CheetahString::from_static_str(FIELD_D),
-            CheetahString::from_string(self.d.to_string()),
-        );
-        map.insert(
-            CheetahString::from_static_str(FIELD_E),
-            CheetahString::from_string(self.e.to_string()),
-        );
-        map.insert(
-            CheetahString::from_static_str(FIELD_F),
-            CheetahString::from_string(self.f.to_string()),
-        );
-        map.insert(
-            CheetahString::from_static_str(FIELD_G),
-            CheetahString::from_string(self.g.to_string()),
-        );
-        map.insert(
-            CheetahString::from_static_str(FIELD_H),
-            CheetahString::from_string(self.h.to_string()),
-        );
+        map.insert(KEY_A.clone(), self.a.clone());
+        map.insert(KEY_B.clone(), self.b.clone());
+        map.insert(KEY_C.clone(), self.c.clone());
+        map.insert(KEY_D.clone(), CheetahString::from_string_owned(self.d.to_string()));
+        map.insert(KEY_E.clone(), CheetahString::from_string_owned(self.e.to_string()));
+        map.insert(KEY_F.clone(), CheetahString::from_string_owned(self.f.to_string()));
+        map.insert(KEY_G.clone(), CheetahString::from_string_owned(self.g.to_string()));
+        map.insert(KEY_H.clone(), CheetahString::from_string_owned(self.h.to_string()));
         if let Some(ref value) = self.i {
-            map.insert(CheetahString::from_static_str(FIELD_I), value.clone());
+            map.insert(KEY_I.clone(), value.clone());
         }
         if let Some(value) = self.j {
-            map.insert(
-                CheetahString::from_static_str(FIELD_J),
-                CheetahString::from_string(value.to_string()),
-            );
+            map.insert(KEY_J.clone(), CheetahString::from_string_owned(value.to_string()));
         }
         if let Some(value) = self.k {
-            map.insert(
-                CheetahString::from_static_str(FIELD_K),
-                CheetahString::from_string(value.to_string()),
-            );
+            map.insert(KEY_K.clone(), CheetahString::from_string_owned(value.to_string()));
         }
         if let Some(value) = self.l {
-            map.insert(
-                CheetahString::from_static_str(FIELD_L),
-                CheetahString::from_string(value.to_string()),
-            );
+            map.insert(KEY_L.clone(), CheetahString::from_string_owned(value.to_string()));
         }
         if let Some(value) = self.m {
-            map.insert(
-                CheetahString::from_static_str(FIELD_M),
-                CheetahString::from_string(value.to_string()),
-            );
+            map.insert(KEY_M.clone(), CheetahString::from_string_owned(value.to_string()));
         }
         if let Some(ref value) = self.n {
-            map.insert(CheetahString::from_static_str(FIELD_N), value.clone());
+            map.insert(KEY_N.clone(), value.clone());
         }
         if let Some(ref value) = self.topic_request_header {
             if let Some(value) = value.to_map() {
@@ -210,45 +183,45 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
     fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> rocketmq_error::RocketMQResult<()> {
         // Use static keys to avoid repeated allocations
 
-        self.a = self.get_and_check_not_none(fields, &KEY_A)?; //producerGroup
-        self.b = self.get_and_check_not_none(fields, &KEY_B)?; //topic
-        self.c = self.get_and_check_not_none(fields, &KEY_C)?; //defaultTopic
-        self.d = self.get_and_check_not_none(fields, &KEY_D)?.parse().map_err(|_| {
+        self.a = self.get_and_check_not_none_ref(fields, &KEY_A)?.clone(); //producerGroup
+        self.b = self.get_and_check_not_none_ref(fields, &KEY_B)?.clone(); //topic
+        self.c = self.get_and_check_not_none_ref(fields, &KEY_C)?.clone(); //defaultTopic
+        self.d = self.get_and_check_not_none_ref(fields, &KEY_D)?.parse().map_err(|_| {
             rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                 format: "header",
                 message: "Parse field d error".to_string(),
             })
         })?; //defaultTopicQueueNums
-        self.e = self.get_and_check_not_none(fields, &KEY_E)?.parse().map_err(|_| {
+        self.e = self.get_and_check_not_none_ref(fields, &KEY_E)?.parse().map_err(|_| {
             rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                 format: "header",
                 message: "Parse field e error".to_string(),
             })
         })?; //queueId
-        self.f = self.get_and_check_not_none(fields, &KEY_F)?.parse().map_err(|_| {
+        self.f = self.get_and_check_not_none_ref(fields, &KEY_F)?.parse().map_err(|_| {
             rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                 format: "header",
                 message: "Parse field f error".to_string(),
             })
         })?; //sysFlag
-        self.g = self.get_and_check_not_none(fields, &KEY_G)?.parse().map_err(|_| {
+        self.g = self.get_and_check_not_none_ref(fields, &KEY_G)?.parse().map_err(|_| {
             rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                 format: "header",
                 message: "Parse field g error".to_string(),
             })
         })?; //bornTimestamp
-        self.h = self.get_and_check_not_none(fields, &KEY_H)?.parse().map_err(|_| {
+        self.h = self.get_and_check_not_none_ref(fields, &KEY_H)?.parse().map_err(|_| {
             rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                 format: "header",
                 message: "Parse field h error".to_string(),
             })
         })?; //flag
 
-        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_I)) {
+        if let Some(v) = fields.get(&KEY_I) {
             self.i = Some(v.clone());
         }
 
-        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_J)) {
+        if let Some(v) = fields.get(&KEY_J) {
             self.j = Some(v.parse().map_err(|_| {
                 rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                     format: "header",
@@ -257,7 +230,7 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
             })?);
         }
 
-        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_K)) {
+        if let Some(v) = fields.get(&KEY_K) {
             self.k = Some(v.parse().map_err(|_| {
                 rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                     format: "header",
@@ -266,7 +239,7 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
             })?);
         }
 
-        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_L)) {
+        if let Some(v) = fields.get(&KEY_L) {
             self.l = Some(v.parse().map_err(|_| {
                 rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                     format: "header",
@@ -275,7 +248,7 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
             })?);
         }
 
-        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_M)) {
+        if let Some(v) = fields.get(&KEY_M) {
             self.m = Some(v.parse().map_err(|_| {
                 rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                     format: "header",
@@ -284,7 +257,7 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
             })?);
         }
 
-        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_N)) {
+        if let Some(v) = fields.get(&KEY_N) {
             self.n = Some(v.clone());
         }
         Ok(())
