@@ -2211,8 +2211,16 @@ fn map_message(message: &MessageExt) -> MessageView {
         tags: message.get_tags().map(|tags| tags.to_string()),
         born_timestamp: message.born_timestamp(),
         store_timestamp: message.store_timestamp(),
+        born_host: message.born_host().to_string(),
+        store_host: message.store_host().to_string(),
         queue_id: message.queue_id(),
         queue_offset: message.queue_offset(),
+        store_size: message.store_size(),
+        reconsume_times: message.reconsume_times(),
+        body_crc: message.body_crc(),
+        sys_flag: message.sys_flag(),
+        flag: message.flag(),
+        prepared_transaction_offset: message.prepared_transaction_offset(),
         body,
         properties,
     }
@@ -2336,6 +2344,7 @@ fn required_request_field<'a>(value: Option<&'a str>, label: &str) -> Result<&'a
 mod tests {
     use super::build_order_conf;
     use super::classify_topic;
+    use super::map_message;
     use super::normalize_message_type;
     use super::parse_rate_value;
     use super::select_consume_tps_value;
@@ -2343,6 +2352,9 @@ mod tests {
     use crate::model::TopicRouteBroker;
     use crate::model::TopicRouteInfo;
     use crate::model::TopicRouteQueue;
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::message_builder::MessageBuilder;
+    use rocketmq_common::common::message::message_ext::MessageExt;
     use std::collections::BTreeMap;
     use std::collections::HashSet;
 
@@ -2389,6 +2401,42 @@ mod tests {
         let brokers = HashSet::from(["broker-b".to_string(), "broker-a".to_string()]);
 
         assert_eq!(build_order_conf(&brokers, 8), "broker-a:8;broker-b:8");
+    }
+
+    #[test]
+    fn map_message_populates_dashboard_message_info_fields() {
+        let message = MessageBuilder::new()
+            .topic("TopicTest")
+            .body_slice(b"hello")
+            .tags("TagA")
+            .key("KeyA")
+            .flag_bits(9)
+            .build_unchecked();
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_msg_id(CheetahString::from_static_str("store-msg-id"));
+        message_ext.set_born_host("172.20.48.1:61266".parse().expect("born host"));
+        message_ext.set_store_host("172.20.48.1:10911".parse().expect("store host"));
+        message_ext.set_store_size(128);
+        message_ext.set_reconsume_times(2);
+        message_ext.set_body_crc(613_185_359);
+        message_ext.set_sys_flag(7);
+        message_ext.set_prepared_transaction_offset(42);
+
+        let view = map_message(&message_ext);
+
+        assert_eq!(view.born_host, "172.20.48.1:61266");
+        assert_eq!(view.store_host, "172.20.48.1:10911");
+        assert_eq!(view.store_size, 128);
+        assert_eq!(view.reconsume_times, 2);
+        assert_eq!(view.body_crc, 613_185_359);
+        assert_eq!(view.sys_flag, 7);
+        assert_eq!(view.flag, 9);
+        assert_eq!(view.prepared_transaction_offset, 42);
+        assert_eq!(
+            serde_json::to_value(&view).expect("message view should serialize")["bodyCRC"],
+            613_185_359
+        );
     }
 
     #[test]
