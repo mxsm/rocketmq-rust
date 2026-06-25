@@ -1,6 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { Clock3, Copy, DatabaseZap, Eye, GitBranch, Hash, KeyRound, RefreshCw, RotateCcw, Search, Send, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type FocusEvent, type MouseEvent } from 'react';
 import { messageApi } from '../api/message_api';
 import { topicApi } from '../api/topic_api';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -14,6 +14,8 @@ import type { MutationResult } from '../types/topic';
 
 type QueryMode = 'topic' | 'key' | 'id';
 type NoticeTone = 'success' | 'warning' | 'danger';
+type BodyToast = { body: string; x: number; y: number };
+type BodyToastPoint = { clientX: number; clientY: number };
 
 const queryModes: Array<{ key: QueryMode; label: string; description: string }> = [
   {
@@ -52,6 +54,7 @@ export default function MessageQueryPage() {
   const [trace, setTrace] = useState<MessageTraceView | null>(null);
   const [traceLoading, setTraceLoading] = useState(false);
   const [resending, setResending] = useState(false);
+  const [bodyToast, setBodyToast] = useState<BodyToast | null>(null);
 
   const activeMode = queryModes.find((item) => item.key === mode) ?? queryModes[0];
 
@@ -185,6 +188,14 @@ export default function MessageQueryPage() {
     setNotice({ tone: 'success', message: `Copied message ID ${truncateMiddle(messageId, 26)}.` });
   };
 
+  const showBodyToast = (body: string, point: BodyToastPoint) => {
+    if (!body) {
+      setBodyToast(null);
+      return;
+    }
+    setBodyToast({ body, ...bodyToastPosition(point) });
+  };
+
   const columns: DataTableColumn<MessageView>[] = [
     {
       header: 'Message ID',
@@ -215,7 +226,7 @@ export default function MessageQueryPage() {
     {
       header: 'Body',
       width: '260px',
-      render: (row) => <span className="message-body-preview" title={row.body}>{row.body || '-'}</span>
+      render: (row) => <MessageBodyPreview body={row.body} onShow={showBodyToast} onHide={() => setBodyToast(null)} />
     },
     {
       header: 'Operation',
@@ -256,6 +267,11 @@ export default function MessageQueryPage() {
       />
 
       {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
+      {bodyToast ? (
+        <div className="message-body-hover-toast" role="tooltip" style={{ left: bodyToast.x, top: bodyToast.y }}>
+          {bodyToast.body}
+        </div>
+      ) : null}
 
       <section className="message-query-panel">
         <div className="message-mode-row">
@@ -396,6 +412,40 @@ function MessageMetric({ label, value, detail, icon }: MessageMetricProps) {
       </div>
       <div className="message-metric-icon">{icon}</div>
     </article>
+  );
+}
+
+interface MessageBodyPreviewProps {
+  body: string;
+  onShow: (body: string, point: BodyToastPoint) => void;
+  onHide: () => void;
+}
+
+function MessageBodyPreview({ body, onShow, onHide }: MessageBodyPreviewProps) {
+  if (!body) {
+    return <span className="message-body-preview message-body-preview-empty">-</span>;
+  }
+
+  const showFromMouse = (event: MouseEvent<HTMLElement>) => {
+    onShow(body, { clientX: event.clientX, clientY: event.clientY });
+  };
+  const showFromFocus = (event: FocusEvent<HTMLElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    onShow(body, { clientX: rect.left, clientY: rect.bottom });
+  };
+
+  return (
+    <span
+      className="message-body-preview"
+      tabIndex={0}
+      onMouseEnter={showFromMouse}
+      onMouseMove={showFromMouse}
+      onMouseLeave={onHide}
+      onFocus={showFromFocus}
+      onBlur={onHide}
+    >
+      {body}
+    </span>
   );
 }
 
@@ -654,6 +704,19 @@ function truncateMiddle(value: string, maxLength: number) {
   if (value.length <= maxLength) return value;
   const edge = Math.floor((maxLength - 3) / 2);
   return `${value.slice(0, edge)}...${value.slice(-edge)}`;
+}
+
+function bodyToastPosition(point: BodyToastPoint) {
+  const offset = 14;
+  const toastMaxWidth = 760;
+  const toastMaxHeight = 320;
+  const viewportPadding = 16;
+  const maxLeft = Math.max(viewportPadding, window.innerWidth - toastMaxWidth - viewportPadding);
+  const maxTop = Math.max(viewportPadding, window.innerHeight - toastMaxHeight - viewportPadding);
+  return {
+    x: Math.min(Math.max(point.clientX + offset, viewportPadding), maxLeft),
+    y: Math.min(Math.max(point.clientY + offset, viewportPadding), maxTop)
+  };
 }
 
 function pad2(value: number) {
