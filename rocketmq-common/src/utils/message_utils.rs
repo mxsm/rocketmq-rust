@@ -19,6 +19,7 @@ use std::net::Ipv6Addr;
 use std::net::SocketAddr;
 
 use bytes::BufMut;
+use cheetah_string::CheetahFinder;
 
 use crate::common::message::message_ext::MessageExt;
 use crate::common::message::MessageConst;
@@ -117,11 +118,14 @@ pub fn delete_property(properties_string: &str, name: &str) -> String {
         return properties_string.to_string();
     }
 
-    fn find_from(haystack: &str, needle: &str, start: usize) -> Option<usize> {
-        haystack.get(start..)?.find(needle).map(|offset| start + offset)
+    fn find_from(finder: &CheetahFinder<'_>, haystack: &str, start: usize) -> Option<usize> {
+        haystack
+            .get(start..)
+            .and_then(|remaining| finder.find_in(remaining).map(|offset| start + offset))
     }
 
-    let Some(_) = find_from(properties_string, name, 0) else {
+    let finder = CheetahFinder::new(name);
+    let Some(_) = find_from(&finder, properties_string, 0) else {
         return properties_string.to_string();
     };
 
@@ -134,7 +138,7 @@ pub fn delete_property(properties_string: &str, name: &str) -> String {
     loop {
         let mut start_idx = idx0;
         let idx1 = loop {
-            let Some(candidate_idx) = find_from(properties_string, name, start_idx) else {
+            let Some(candidate_idx) = find_from(&finder, properties_string, start_idx) else {
                 break None;
             };
             start_idx = candidate_idx + name.len();
@@ -453,6 +457,44 @@ mod tests {
         let name = "key1";
         let result = delete_property(properties_string, name);
         assert_eq!(result, "key2\u{0001}value2\u{0002}");
+    }
+
+    #[test]
+    fn delete_property_handles_single_character_key() {
+        let properties_string = "a\u{0001}alpha\u{0002}ba\u{0001}keep";
+
+        assert_eq!(delete_property(properties_string, "a"), "ba\u{0001}keep");
+        assert_eq!(delete_property_v2(properties_string, "a"), "ba\u{0001}keep");
+    }
+
+    #[test]
+    fn delete_property_handles_multi_character_key_boundaries() {
+        let properties_string = "Order\u{0001}remove\u{0002}OrderId\u{0001}keep";
+
+        assert_eq!(delete_property(properties_string, "Order"), "OrderId\u{0001}keep");
+        assert_eq!(delete_property_v2(properties_string, "Order"), "OrderId\u{0001}keep");
+    }
+
+    #[test]
+    fn delete_property_preserves_input_for_empty_name() {
+        let properties_string = "key\u{0001}value";
+
+        assert_eq!(delete_property(properties_string, ""), properties_string);
+        assert_eq!(delete_property_v2(properties_string, ""), properties_string);
+    }
+
+    #[test]
+    fn delete_property_preserves_unicode_value_boundaries() {
+        let properties_string = "region\u{0001}\u{534e}\u{4e1c}\u{0002}tier\u{0001}gold";
+
+        assert_eq!(
+            delete_property(properties_string, "tier"),
+            "region\u{0001}\u{534e}\u{4e1c}\u{0002}"
+        );
+        assert_eq!(
+            delete_property_v2(properties_string, "tier"),
+            "region\u{0001}\u{534e}\u{4e1c}\u{0002}"
+        );
     }
 
     #[test]
