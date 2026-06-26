@@ -31,14 +31,16 @@ rust-version.workspace = true
 rocketmq-admin-core = { version = "1.0.0", path = "../rocketmq-admin-core" }
 rocketmq-common     = { workspace = true }
 rocketmq-remoting   = { workspace = true }
-rocketmq-rust = { workspace = true }
-ratatui       = { version = "0.30.1" }
-crossterm     = { version = "0.29", features = ["event-stream"] }
+rocketmq-runtime    = { workspace = true }
+rocketmq-rust       = { workspace = true }
+ratatui             = { version = "0.30.1" }
+crossterm           = { version = "0.29", features = ["event-stream"] }
 
 tokio.workspace = true
 tokio-stream    = { workspace = true }
+tracing         = { workspace = true }
 
-anyhow = { workspace = true }
-serde  = { workspace = true, features = ["derive"] }
+anyhow     = { workspace = true }
+serde      = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-strum  = { workspace = true, features = ["derive"] }
+strum      = { workspace = true, features = ["derive"] }

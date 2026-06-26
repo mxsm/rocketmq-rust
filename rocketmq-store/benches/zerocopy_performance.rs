@@ -39,6 +39,7 @@ use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBroker
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_store::base::append_message_callback::AppendMessageCallback;
 use rocketmq_store::base::append_message_callback::DefaultAppendMessageCallback;
+use rocketmq_store::base::message_encoder_pool::encode_message_with_pool;
 use rocketmq_store::base::put_message_context::PutMessageContext;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
@@ -47,7 +48,7 @@ use tempfile::TempDir;
 /// Setup: Create a test MappedFile and message
 fn setup_test_environment(file_size: u64) -> (Arc<DefaultMappedFile>, TempDir, DefaultAppendMessageCallback) {
     let temp_dir = TempDir::new().unwrap();
-    let file_path = temp_dir.path().join("test_commitlog");
+    let file_path = temp_dir.path().join("00000000000000000000");
 
     let mapped_file = Arc::new(DefaultMappedFile::new(
         CheetahString::from_string(file_path.to_string_lossy().to_string()),
@@ -87,8 +88,11 @@ fn create_test_message_with_encoding(body_size: usize) -> MessageExtBrokerInner 
             .as_millis() as i64,
     );
 
-    // Pre-encode the message (simulating the encoding phase)
-    // Note: In real implementation, this would call the encoder
+    let config = Arc::new(MessageStoreConfig::default());
+    let (encode_result, encoded_buff) = encode_message_with_pool(&msg_inner, &config);
+    assert!(encode_result.is_none());
+    msg_inner.encoded_buff = Some(encoded_buff);
+
     msg_inner
 }
 
@@ -107,10 +111,10 @@ fn bench_zerocopy_vs_standard(c: &mut Criterion) {
         // Benchmark standard path
         group.bench_with_input(BenchmarkId::new("standard_append", size), &size, |b, &size| {
             let (mapped_file, _temp, callback) = setup_test_environment(10 * 1024 * 1024);
-            let mut message = create_test_message_with_encoding(size);
             let context = PutMessageContext::default();
 
             b.iter(|| {
+                let mut message = create_test_message_with_encoding(size);
                 let result = callback.do_append(
                     std::hint::black_box(0),
                     std::hint::black_box(mapped_file.as_ref()),
@@ -125,10 +129,10 @@ fn bench_zerocopy_vs_standard(c: &mut Criterion) {
         // Benchmark zero-copy path
         group.bench_with_input(BenchmarkId::new("zerocopy_append", size), &size, |b, &size| {
             let (mapped_file, _temp, callback) = setup_test_environment(10 * 1024 * 1024);
-            let mut message = create_test_message_with_encoding(size);
             let context = PutMessageContext::default();
 
             b.iter(|| {
+                let mut message = create_test_message_with_encoding(size);
                 let result = callback.do_append_zerocopy(
                     std::hint::black_box(0),
                     std::hint::black_box(mapped_file.as_ref()),
@@ -156,10 +160,10 @@ fn bench_memory_allocation(c: &mut Criterion) {
 
     group.bench_function("standard_allocations", |b| {
         let (mapped_file, _temp, callback) = setup_test_environment(10 * 1024 * 1024);
-        let mut message = create_test_message_with_encoding(msg_size);
         let context = PutMessageContext::default();
 
         b.iter(|| {
+            let mut message = create_test_message_with_encoding(msg_size);
             // Standard path creates intermediate BytesMut buffer
             let result = callback.do_append(
                 std::hint::black_box(0),
@@ -174,10 +178,10 @@ fn bench_memory_allocation(c: &mut Criterion) {
 
     group.bench_function("zerocopy_allocations", |b| {
         let (mapped_file, _temp, callback) = setup_test_environment(10 * 1024 * 1024);
-        let mut message = create_test_message_with_encoding(msg_size);
         let context = PutMessageContext::default();
 
         b.iter(|| {
+            let mut message = create_test_message_with_encoding(msg_size);
             // Zero-copy directly writes to mmap, no intermediate buffer
             let result = callback.do_append_zerocopy(
                 std::hint::black_box(0),
@@ -207,10 +211,10 @@ fn bench_zerocopy_throughput_by_size(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             let (mapped_file, _temp, callback) = setup_test_environment(100 * 1024 * 1024);
-            let mut message = create_test_message_with_encoding(size);
             let context = PutMessageContext::default();
 
             b.iter(|| {
+                let mut message = create_test_message_with_encoding(size);
                 let result = callback.do_append_zerocopy(
                     std::hint::black_box(0),
                     std::hint::black_box(mapped_file.as_ref()),
@@ -251,10 +255,10 @@ fn bench_concurrent_zerocopy(c: &mut Criterion) {
                         let iter_count = iters / thread_count as u64;
 
                         std::thread::spawn(move || {
-                            let mut message = create_test_message_with_encoding(1024);
                             let context = PutMessageContext::default();
 
                             for _ in 0..iter_count {
+                                let mut message = create_test_message_with_encoding(1024);
                                 let result = callback.do_append_zerocopy(
                                     0,
                                     mapped_file.as_ref(),
@@ -295,11 +299,11 @@ fn bench_cache_efficiency(c: &mut Criterion) {
         let (mapped_file, _temp, callback) = setup_test_environment(100 * 1024 * 1024);
 
         b.iter(|| {
-            let mut message = create_test_message_with_encoding(msg_size);
             let context = PutMessageContext::default();
 
             // Sequential writes (good cache locality)
             for _ in 0..batch_size {
+                let mut message = create_test_message_with_encoding(msg_size);
                 let result = callback.do_append_zerocopy(
                     std::hint::black_box(0),
                     std::hint::black_box(mapped_file.as_ref()),
@@ -325,10 +329,10 @@ fn bench_latency_percentiles(c: &mut Criterion) {
 
     group.bench_function("zerocopy_latency", |b| {
         let (mapped_file, _temp, callback) = setup_test_environment(100 * 1024 * 1024);
-        let mut message = create_test_message_with_encoding(1024);
         let context = PutMessageContext::default();
 
         b.iter(|| {
+            let mut message = create_test_message_with_encoding(1024);
             let start = Instant::now();
             let result = callback.do_append_zerocopy(
                 std::hint::black_box(0),

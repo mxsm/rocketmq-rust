@@ -32,6 +32,7 @@ rocketmq-admin-core = { version = "1.0.0", path = "../rocketmq-admin-core", feat
 rocketmq-common     = { workspace = true }
 rocketmq-error      = { workspace = true }
 rocketmq-remoting   = { workspace = true }
+rocketmq-runtime    = { workspace = true }
 rocketmq-rust       = { workspace = true }
 
 bytes = { workspace = true }

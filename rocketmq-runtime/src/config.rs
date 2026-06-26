@@ -23,6 +23,7 @@ pub struct RuntimeConfig {
     pub worker_threads: usize,
     pub max_blocking_threads: usize,
     pub thread_name: String,
+    pub thread_stack_size: Option<usize>,
     pub thread_keep_alive: Duration,
     pub shutdown_timeout: Duration,
     pub blocking_pool_policy: BlockingPoolPolicy,
@@ -46,6 +47,14 @@ impl RuntimeConfig {
         Self::server_default("rocketmq-namesrv")
     }
 
+    pub fn proxy_default() -> Self {
+        Self::server_default("rocketmq-proxy")
+    }
+
+    pub fn controller_default() -> Self {
+        Self::server_default("rocketmq-controller")
+    }
+
     pub fn validate(&self) -> RuntimeResult<()> {
         if self.worker_threads == 0 {
             return Err(RuntimeError::InvalidConfig(
@@ -60,6 +69,11 @@ impl RuntimeConfig {
         if self.thread_name.trim().is_empty() {
             return Err(RuntimeError::InvalidConfig("thread_name must not be empty".to_string()));
         }
+        if matches!(self.thread_stack_size, Some(0)) {
+            return Err(RuntimeError::InvalidConfig(
+                "thread_stack_size must be greater than zero when set".to_string(),
+            ));
+        }
         self.blocking_pool_policy.validate()?;
         Ok(())
     }
@@ -73,6 +87,7 @@ impl Default for RuntimeConfig {
             worker_threads: parallelism,
             max_blocking_threads: parallelism * 4,
             thread_name: "rocketmq-runtime".to_string(),
+            thread_stack_size: None,
             thread_keep_alive: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             blocking_pool_policy: BlockingPoolPolicy {

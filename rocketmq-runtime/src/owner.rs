@@ -38,6 +38,9 @@ impl RuntimeOwner {
             .max_blocking_threads(config.max_blocking_threads)
             .thread_name(config.thread_name.clone())
             .thread_keep_alive(config.thread_keep_alive);
+        if let Some(thread_stack_size) = config.thread_stack_size {
+            builder.thread_stack_size(thread_stack_size);
+        }
         if config.enable_io {
             builder.enable_io();
         }

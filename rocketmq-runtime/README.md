@@ -23,6 +23,8 @@ lifecycle are explicit:
 
 - application entrypoints create a `RuntimeOwner` or bind a `RuntimeContext`
   to the current Tokio runtime;
+- broker, namesrv, proxy, controller, and admin tool entrypoints derive their
+  component `ServiceContext` from the runtime owner;
 - every service receives a `ServiceContext`;
 - every long-running task is spawned through a `TaskGroup`;
 - every periodic task is registered through a `ScheduledTaskGroup`;
@@ -52,7 +54,7 @@ flowchart TD
 
 | Type | Responsibility |
 | --- | --- |
-| `RuntimeConfig` | Configures Tokio worker threads, blocking-thread limit, thread name, keep-alive, shutdown timeout, IO/time drivers, and blocking policy. |
+| `RuntimeConfig` | Configures Tokio worker threads, blocking-thread limit, thread name, optional worker stack size, keep-alive, shutdown timeout, IO/time drivers, and blocking policy. |
 | `RuntimeOwner` | Owns a dedicated Tokio multi-thread runtime and exposes `RuntimeContext`. It separates async task shutdown from blocking runtime shutdown. |
 | `RuntimeContext` | Binds runtime handle, root `TaskGroup`, `BlockingExecutor`, and diagnostics. It can be created from an owned runtime or the current Tokio runtime. |
 | `RuntimeHandle` | Lightweight wrapper around `tokio::runtime::Handle`; it is handle access, not lifecycle ownership. |
@@ -207,6 +209,19 @@ New RocketMQ code should follow these rules:
   work as an emergency cleanup path;
 - keep diagnostics and benchmark tooling as validation artifacts rather than
   production-critical runtime dependencies.
+
+## Workspace Integration
+
+The unified model is the production entrypoint for broker, namesrv, proxy,
+controller, client fallback runtime, remoting, store, tieredstore, common
+statistics helpers, observability lifecycle, and admin tools. Standalone
+dashboard applications keep their host runtime boundary documented unless
+their runtime owner, admin session, diagnostics API, or UI contract changes.
+
+Compatibility adapters that intentionally remain include the deprecated
+`RocketMQRuntime`, client fallback runtime, store static blocking executor,
+foundation service task helper, and dedicated OS-thread services with explicit
+stop and join behavior.
 
 ## Diagnostics And Benchmarks
 

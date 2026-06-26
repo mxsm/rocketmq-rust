@@ -12,6 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Runtime substrate for the RocketMQ Rust unified thread model.
+//!
+//! This crate standardizes how components own or borrow a Tokio runtime, how
+//! they derive service-level task scopes through [`ServiceContext`], how
+//! [`TaskGroup`] and [`ScheduledTaskGroup`] track long-running and periodic
+//! tasks, how [`BlockingExecutor`] isolates short blocking work, and how
+//! [`ShutdownReport`] records verifiable shutdown evidence.
+//!
+//! New production code should prefer [`RuntimeOwner`], [`RuntimeContext`], and
+//! [`ServiceContext`]. [`RocketMQRuntime`] remains only as a deprecated
+//! compatibility boundary.
+
 pub mod actor;
 pub mod blocking;
 pub mod config;
