@@ -36,14 +36,13 @@ fn production_tokio_entrypoints_set_max_blocking_threads() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("runtime crate should be inside the workspace");
-    let entrypoints = [
+    let explicit_tokio_entrypoints = [
         "rocketmq-broker/src/bin/broker_bootstrap_server.rs",
-        "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
         "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
         "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs",
     ];
 
-    for entrypoint in entrypoints {
+    for entrypoint in explicit_tokio_entrypoints {
         let source = fs::read_to_string(workspace_root.join(entrypoint))
             .unwrap_or_else(|error| panic!("failed to read {entrypoint}: {error}"));
         assert!(
@@ -55,6 +54,40 @@ fn production_tokio_entrypoints_set_max_blocking_threads() {
             "{entrypoint} must set max_blocking_threads explicitly"
         );
     }
+}
+
+#[test]
+fn namesrv_entrypoint_uses_runtime_owner_and_service_context() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("runtime crate should be inside the workspace");
+    let entrypoint = "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs";
+    let source = fs::read_to_string(workspace_root.join(entrypoint))
+        .unwrap_or_else(|error| panic!("failed to read {entrypoint}: {error}"));
+
+    assert!(
+        source.contains("RuntimeOwner::new(namesrv_runtime_config())"),
+        "{entrypoint} must use RuntimeOwner as the owned runtime boundary"
+    );
+    assert!(
+        source.contains("ENTRYPOINT_MAX_BLOCKING_THREADS"),
+        "{entrypoint} must preserve the explicit blocking-thread cap"
+    );
+    assert!(
+        source.contains(".set_service_context(service_context)"),
+        "{entrypoint} must inject a ServiceContext into the namesrv bootstrap"
+    );
+}
+
+#[test]
+fn namesrv_runtime_config_uses_namesrv_thread_name() {
+    let config = RuntimeConfig::namesrv_default();
+
+    assert_eq!(config.thread_name, "rocketmq-namesrv");
+    assert!(config.worker_threads > 0);
+    assert!(config.max_blocking_threads > 0);
+    assert!(config.enable_io);
+    assert!(config.enable_time);
 }
 
 #[test]
