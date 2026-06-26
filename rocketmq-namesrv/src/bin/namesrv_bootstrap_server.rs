@@ -65,15 +65,7 @@ fn main() -> Result<()> {
     match (run_result, shutdown_result) {
         (Err(error), _) => Err(error),
         (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(report)) => {
-            if !report.is_healthy() {
-                tracing::warn!(
-                    report = %report.to_json(),
-                    "namesrv runtime shutdown report is unhealthy"
-                );
-            }
-            Ok(())
-        }
+        (Ok(()), Ok(_)) => Ok(()),
     }
 }
 

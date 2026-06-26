@@ -77,6 +77,10 @@ fn namesrv_entrypoint_uses_runtime_owner_and_service_context() {
         source.contains(".set_service_context(service_context)"),
         "{entrypoint} must inject a ServiceContext into the namesrv bootstrap"
     );
+    assert!(
+        !source.contains("namesrv runtime shutdown report is unhealthy"),
+        "{entrypoint} must not emit a duplicate runtime shutdown health warning"
+    );
 }
 
 #[test]
