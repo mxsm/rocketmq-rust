@@ -374,7 +374,15 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             // Spawn dedicated task for this connection
             if let Err(error) =
                 connection_task_group.spawn("rocketmq.remoting.connection", TaskKind::Worker, async move {
-                    let Some(connection) = tls_runtime.into_connection(socket, remote_addr).await else {
+                    let mut shutdown = Shutdown::new(notify_shutdown);
+                    let connection = tokio::select! {
+                        connection = tls_runtime.into_connection(socket, remote_addr) => connection,
+                        () = shutdown.recv() => {
+                            drop(permit);
+                            return;
+                        }
+                    };
+                    let Some(connection) = connection else {
                         drop(permit);
                         return;
                     };
@@ -412,7 +420,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                         connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
                             channel: channel.clone(),
                         }),
-                        shutdown: Shutdown::new(notify_shutdown),
+                        shutdown,
                         _shutdown_complete: shutdown_complete_tx,
                         conn_disconnect_notify,
                         cmd_handler,
@@ -1015,6 +1023,38 @@ mod tests {
             .expect("server should shut down before timeout")
             .expect("server task should not panic")
             .expect("server should return shutdown report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn run_shutdown_cancels_connection_before_tls_peek_completes() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener should have local addr");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_task = tokio::spawn(run_with_report(
+            listener,
+            async {
+                let _ = shutdown_rx.await;
+            },
+            DefaultRemotingRequestProcessor,
+            None,
+            Vec::new(),
+            None,
+        ));
+
+        let client = TcpStream::connect(addr).await.expect("client should connect");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let _ = shutdown_tx.send(());
+        let report = tokio::time::timeout(Duration::from_secs(1), server_task)
+            .await
+            .expect("server should shut down even when a connection has not sent its first byte")
+            .expect("server task should not panic")
+            .expect("server should return shutdown report");
+        drop(client);
+
         assert!(report.is_healthy(), "{}", report.to_json());
     }
 

@@ -1673,7 +1673,9 @@ mod tests {
     use rocketmq_remoting::protocol::RemotingSerializable;
     use rocketmq_remoting::runtime::processor::RequestProcessor;
     use rocketmq_runtime::RuntimeContext;
+    use tokio::net::TcpStream as TokioTcpStream;
     use tokio::sync::broadcast;
+    use tokio::sync::oneshot;
     use tokio::time::sleep;
 
     use super::*;
@@ -3332,6 +3334,51 @@ mod tests {
             .expect("namesrv report should include remoting server report");
         assert!(remoting_report.is_healthy(), "{}", remoting_report.to_json());
         assert_eq!(remoting_report.leaked, 0, "{}", remoting_report.to_json());
+    }
+
+    #[tokio::test]
+    async fn boot_shutdown_is_healthy_with_connection_waiting_for_first_byte() {
+        let server_config = namesrv_server_config();
+        let addr = format!("127.0.0.1:{}", server_config.listen_port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let bootstrap = Builder::new().set_server_config(server_config).build();
+        let server_task = tokio::spawn(async move {
+            bootstrap
+                .boot_with_shutdown_report(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+
+        let client = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match TokioTcpStream::connect(&addr).await {
+                    Ok(stream) => break stream,
+                    Err(_) => sleep(Duration::from_millis(10)).await,
+                }
+            }
+        })
+        .await
+        .expect("namesrv should accept TCP connections before timeout");
+        sleep(Duration::from_millis(50)).await;
+
+        let _ = shutdown_tx.send(());
+        let report = tokio::time::timeout(Duration::from_secs(5), server_task)
+            .await
+            .expect("namesrv should shut down before the server task join timeout")
+            .expect("namesrv task should not panic")
+            .expect("namesrv should return shutdown report");
+        drop(client);
+
+        assert!(report.is_healthy(), "{report:?}");
+        assert!(
+            report.server.as_ref().is_some_and(ShutdownReport::is_healthy),
+            "server shutdown report should be present and healthy: {report:?}"
+        );
+        assert!(
+            report.remoting_server.as_ref().is_some_and(ShutdownReport::is_healthy),
+            "remoting server shutdown report should be present and healthy: {report:?}"
+        );
     }
 
     #[tokio::test]
