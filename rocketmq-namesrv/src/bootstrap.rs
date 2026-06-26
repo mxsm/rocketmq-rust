@@ -37,6 +37,7 @@ use rocketmq_controller::ControllerManager;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
+use rocketmq_remoting::clients::rocketmq_tokio_client::RemotingClientShutdownReport;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -187,6 +188,7 @@ pub struct NameServerShutdownReport {
     pub route_unregistration: Option<ShutdownReport>,
     pub server: Option<ShutdownReport>,
     pub remoting_server: Option<ShutdownReport>,
+    pub remoting_client: Option<RemotingClientShutdownReport>,
     pub root: Option<ShutdownReport>,
 }
 
@@ -201,6 +203,10 @@ impl NameServerShutdownReport {
                 .is_none_or(ShutdownReport::is_healthy)
             && self.server.as_ref().is_none_or(ShutdownReport::is_healthy)
             && self.remoting_server.as_ref().is_none_or(ShutdownReport::is_healthy)
+            && self
+                .remoting_client
+                .as_ref()
+                .is_none_or(RemotingClientShutdownReport::is_healthy)
             && self.root.as_ref().is_none_or(ShutdownReport::is_healthy)
     }
 }
@@ -523,7 +529,11 @@ impl NameServerRuntime {
 
     /// Initialize network server for handling client requests
     fn initialize_network_components(&mut self) {
-        let server = RocketMQServer::new(Arc::new(self.inner.server_config().clone()));
+        let config = Arc::new(self.inner.server_config().clone());
+        let server = match self.inner.service_context.as_ref() {
+            Some(context) => RocketMQServer::new_with_service_context(config, context.child("namesrv.remoting-server")),
+            None => RocketMQServer::new(config),
+        };
         self.server_inner = Some(server);
         debug!(
             "Network server initialized on port {}",
@@ -767,6 +777,16 @@ impl NameServerRuntime {
         );
         shutdown_report.server = self.wait_for_server_task(TASK_JOIN_TIMEOUT).await;
         shutdown_report.remoting_server = self.wait_for_remoting_server_report(TASK_JOIN_TIMEOUT).await;
+        let remoting_client_report = self
+            .inner
+            .remoting_client
+            .mut_from_ref()
+            .shutdown_with_report(TASK_JOIN_TIMEOUT)
+            .await;
+        if !remoting_client_report.is_healthy() {
+            warn!("NameServer remoting client shutdown report is unhealthy: {remoting_client_report:?}");
+        }
+        shutdown_report.remoting_client = Some(remoting_client_report);
 
         if let Some(task_group) = self.inner.task_group.get().cloned() {
             let report = task_group.shutdown(TASK_JOIN_TIMEOUT).await;
@@ -986,11 +1006,20 @@ impl Builder {
             name_server_config.use_route_info_manager_v2
         );
 
+        let service_context = self
+            .service_context
+            .as_ref()
+            .map(|context| context.child("rocketmq-namesrv"));
+
         // Create remoting client
-        let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
-            Arc::new(tokio_client_config.clone()),
-            DefaultRemotingRequestProcessor,
-        ));
+        let remoting_client = ArcMut::new(match service_context.as_ref() {
+            Some(context) => RocketmqDefaultClient::new_with_service_context(
+                Arc::new(tokio_client_config.clone()),
+                DefaultRemotingRequestProcessor,
+                context.child("namesrv.remoting-client"),
+            ),
+            None => RocketmqDefaultClient::new(Arc::new(tokio_client_config.clone()), DefaultRemotingRequestProcessor),
+        });
 
         // Create inner with empty components first
         let mut inner = ArcMut::new(NameServerRuntimeInner {
@@ -1004,7 +1033,7 @@ impl Builder {
             controller_config,
             controller_manager: None,
             cluster_test_route_lookup,
-            service_context: self.service_context,
+            service_context,
             task_group: OnceLock::new(),
             in_flight_requests: Arc::new(InFlightRequestTracker::default()),
         });
@@ -1083,8 +1112,7 @@ impl NameServerRuntimeInner {
         }
 
         if let Some(service_context) = self.service_context.as_ref() {
-            let task_group = service_context.task_group().child("rocketmq-namesrv");
-            let _ = self.task_group.set(task_group);
+            let _ = self.task_group.set(service_context.task_group().clone());
             return self.task_group.get().cloned();
         }
 
@@ -1645,7 +1673,9 @@ mod tests {
     use rocketmq_remoting::protocol::RemotingSerializable;
     use rocketmq_remoting::runtime::processor::RequestProcessor;
     use rocketmq_runtime::RuntimeContext;
+    use tokio::net::TcpStream as TokioTcpStream;
     use tokio::sync::broadcast;
+    use tokio::sync::oneshot;
     use tokio::time::sleep;
 
     use super::*;
@@ -1683,6 +1713,30 @@ mod tests {
 
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn service_context_shutdown_report_includes_remoting_client() {
+        let context = RuntimeContext::from_current("namesrv-runtime-owner-test");
+        let service = context.service_context("namesrv-service");
+        let bootstrap = Builder::new()
+            .set_server_config(namesrv_server_config())
+            .set_service_context(service)
+            .build();
+
+        let report = bootstrap
+            .boot_with_shutdown_report(async {})
+            .await
+            .expect("namesrv should boot and return shutdown report");
+
+        assert!(report.is_healthy(), "{report:?}");
+        assert!(
+            report
+                .remoting_client
+                .as_ref()
+                .is_some_and(RemotingClientShutdownReport::is_healthy),
+            "remoting client shutdown report should be present and healthy: {report:?}"
+        );
     }
 
     #[tokio::test]
@@ -3280,6 +3334,51 @@ mod tests {
             .expect("namesrv report should include remoting server report");
         assert!(remoting_report.is_healthy(), "{}", remoting_report.to_json());
         assert_eq!(remoting_report.leaked, 0, "{}", remoting_report.to_json());
+    }
+
+    #[tokio::test]
+    async fn boot_shutdown_is_healthy_with_connection_waiting_for_first_byte() {
+        let server_config = namesrv_server_config();
+        let addr = format!("127.0.0.1:{}", server_config.listen_port);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let bootstrap = Builder::new().set_server_config(server_config).build();
+        let server_task = tokio::spawn(async move {
+            bootstrap
+                .boot_with_shutdown_report(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+
+        let client = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match TokioTcpStream::connect(&addr).await {
+                    Ok(stream) => break stream,
+                    Err(_) => sleep(Duration::from_millis(10)).await,
+                }
+            }
+        })
+        .await
+        .expect("namesrv should accept TCP connections before timeout");
+        sleep(Duration::from_millis(50)).await;
+
+        let _ = shutdown_tx.send(());
+        let report = tokio::time::timeout(Duration::from_secs(5), server_task)
+            .await
+            .expect("namesrv should shut down before the server task join timeout")
+            .expect("namesrv task should not panic")
+            .expect("namesrv should return shutdown report");
+        drop(client);
+
+        assert!(report.is_healthy(), "{report:?}");
+        assert!(
+            report.server.as_ref().is_some_and(ShutdownReport::is_healthy),
+            "server shutdown report should be present and healthy: {report:?}"
+        );
+        assert!(
+            report.remoting_server.as_ref().is_some_and(ShutdownReport::is_healthy),
+            "remoting server shutdown report should be present and healthy: {report:?}"
+        );
     }
 
     #[tokio::test]

@@ -42,6 +42,10 @@ impl RuntimeConfig {
         Self::server_default("rocketmq-broker")
     }
 
+    pub fn namesrv_default() -> Self {
+        Self::server_default("rocketmq-namesrv")
+    }
+
     pub fn validate(&self) -> RuntimeResult<()> {
         if self.worker_threads == 0 {
             return Err(RuntimeError::InvalidConfig(

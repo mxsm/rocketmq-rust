@@ -30,6 +30,7 @@ use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_runtime::TaskId;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
+use serde::Serialize;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -199,13 +200,13 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RemotingClientConnectionShutdownReport {
     pub addr: CheetahString,
     pub report: ShutdownReport,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct RemotingClientShutdownReport {
     pub background: Option<ShutdownReport>,
     pub workers: Option<ShutdownReport>,

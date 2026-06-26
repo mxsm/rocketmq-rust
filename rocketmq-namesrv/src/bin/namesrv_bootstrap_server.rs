@@ -35,6 +35,9 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_error::Result;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_remoting::protocol::remoting_command;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::ServiceContext;
 use serde::Deserialize;
 use tracing::error;
 use tracing::info;
@@ -51,15 +54,36 @@ const LOGO: &str = r#"
 const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 
 fn main() -> Result<()> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .max_blocking_threads(ENTRYPOINT_MAX_BLOCKING_THREADS)
-        .enable_all()
-        .build()
-        .context("failed to build namesrv Tokio runtime")?;
-    runtime.block_on(run())
+    let owner = RuntimeOwner::new(namesrv_runtime_config()).context("failed to build namesrv runtime")?;
+    let service_context = owner.context().service_context("rocketmq-namesrv-runtime");
+
+    let run_result = owner.block_on(run(service_context));
+    let shutdown_result = owner
+        .shutdown_runtime_blocking()
+        .context("failed to shutdown namesrv runtime");
+
+    match (run_result, shutdown_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(report)) => {
+            if !report.is_healthy() {
+                tracing::warn!(
+                    report = %report.to_json(),
+                    "namesrv runtime shutdown report is unhealthy"
+                );
+            }
+            Ok(())
+        }
+    }
 }
 
-async fn run() -> Result<()> {
+fn namesrv_runtime_config() -> RuntimeConfig {
+    let mut config = RuntimeConfig::namesrv_default();
+    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
+    config
+}
+
+async fn run(service_context: ServiceContext) -> Result<()> {
     // Parse command line arguments first
     let args = Args::parse();
 
@@ -105,6 +129,7 @@ async fn run() -> Result<()> {
                 .set_name_server_config(namesrv_config)
                 .set_server_config(server_config)
                 .set_controller_config_opt(controller_config)
+                .set_service_context(service_context)
                 .build()
                 .boot()
                 .await?;
