@@ -22,12 +22,14 @@ use std::sync::LazyLock;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
 use rocketmq_rust::ArcMut;
+use serde::Serialize;
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -80,6 +82,46 @@ pub struct ProcessQueue {
     last_pull_timestamp: AtomicU64,
     last_consume_timestamp: AtomicU64,
     last_lock_timestamp: AtomicU64,
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessQueueOperationProbe {
+    pub message_count: usize,
+    pub body_size: usize,
+    pub dispatch_to_consume: bool,
+    pub max_span: u64,
+    pub taken_count: usize,
+    pub next_offset: i64,
+    pub final_msg_count: u64,
+    pub final_msg_size: u64,
+}
+
+#[doc(hidden)]
+pub struct ProcessQueueOperationFixture {
+    process_queue: ProcessQueue,
+    messages: Vec<ArcMut<MessageExt>>,
+    message_count: usize,
+    body_size: usize,
+    dispatch_to_consume: bool,
+}
+
+impl ProcessQueueOperationFixture {
+    pub fn new(message_count: usize, body_size: usize) -> Self {
+        Self {
+            process_queue: ProcessQueue::new(),
+            messages: benchmark_messages(message_count, body_size),
+            message_count,
+            body_size,
+            dispatch_to_consume: false,
+        }
+    }
+
+    pub async fn seeded(message_count: usize, body_size: usize) -> Self {
+        let mut fixture = Self::new(message_count, body_size);
+        fixture.dispatch_to_consume = fixture.process_queue.put_message(&fixture.messages).await;
+        fixture
+    }
 }
 
 impl Default for ProcessQueue {
@@ -476,6 +518,116 @@ impl ProcessQueue {
     }
 }
 
+fn benchmark_messages(message_count: usize, body_size: usize) -> Vec<ArcMut<MessageExt>> {
+    (0..message_count)
+        .map(|index| {
+            let message = Message::builder()
+                .topic("BenchmarkTopic")
+                .body(vec![b'x'; body_size])
+                .build()
+                .expect("benchmark message should be valid");
+            let mut message_ext = MessageExt::default();
+            message_ext.set_message_inner(message);
+            message_ext.set_broker_name(CheetahString::from_static_str("benchmark-broker"));
+            message_ext.set_queue_id(0);
+            message_ext.set_queue_offset(index as i64);
+            ArcMut::new(message_ext)
+        })
+        .collect()
+}
+
+#[doc(hidden)]
+pub async fn run_process_queue_put_probe(fixture: ProcessQueueOperationFixture) -> ProcessQueueOperationProbe {
+    let ProcessQueueOperationFixture {
+        process_queue,
+        messages,
+        message_count,
+        body_size,
+        ..
+    } = fixture;
+    let dispatch_to_consume = process_queue.put_message(&messages).await;
+
+    ProcessQueueOperationProbe {
+        message_count,
+        body_size,
+        dispatch_to_consume,
+        max_span: process_queue.get_max_span().await,
+        taken_count: 0,
+        next_offset: -1,
+        final_msg_count: process_queue.msg_count(),
+        final_msg_size: process_queue.msg_size(),
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_process_queue_take_probe(fixture: ProcessQueueOperationFixture) -> ProcessQueueOperationProbe {
+    let ProcessQueueOperationFixture {
+        process_queue,
+        message_count,
+        body_size,
+        dispatch_to_consume,
+        ..
+    } = fixture;
+    let taken = process_queue.take_messages(message_count as u32).await;
+
+    ProcessQueueOperationProbe {
+        message_count,
+        body_size,
+        dispatch_to_consume,
+        max_span: process_queue.get_max_span().await,
+        taken_count: taken.len(),
+        next_offset: -1,
+        final_msg_count: process_queue.msg_count(),
+        final_msg_size: process_queue.msg_size(),
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_process_queue_remove_probe(fixture: ProcessQueueOperationFixture) -> ProcessQueueOperationProbe {
+    let ProcessQueueOperationFixture {
+        process_queue,
+        messages,
+        message_count,
+        body_size,
+        dispatch_to_consume,
+    } = fixture;
+    let next_offset = process_queue.remove_message(&messages).await;
+
+    ProcessQueueOperationProbe {
+        message_count,
+        body_size,
+        dispatch_to_consume,
+        max_span: process_queue.get_max_span().await,
+        taken_count: 0,
+        next_offset,
+        final_msg_count: process_queue.msg_count(),
+        final_msg_size: process_queue.msg_size(),
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_process_queue_max_span_probe(fixture: ProcessQueueOperationFixture) -> ProcessQueueOperationProbe {
+    let ProcessQueueOperationFixture {
+        process_queue,
+        message_count,
+        body_size,
+        dispatch_to_consume,
+        ..
+    } = fixture;
+    let max_span = process_queue.get_max_span().await;
+
+    ProcessQueueOperationProbe {
+        message_count,
+        body_size,
+        dispatch_to_consume,
+        max_span,
+        taken_count: 0,
+        next_offset: -1,
+        final_msg_count: process_queue.msg_count(),
+        final_msg_size: process_queue.msg_size(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -495,6 +647,30 @@ mod tests {
             messages.push(ArcMut::new(msg));
         }
         messages
+    }
+
+    #[tokio::test]
+    async fn test_process_queue_operation_probes_report_expected_metrics() {
+        let put = run_process_queue_put_probe(ProcessQueueOperationFixture::new(4, 64)).await;
+        assert_eq!(put.message_count, 4);
+        assert_eq!(put.body_size, 64);
+        assert!(put.dispatch_to_consume);
+        assert_eq!(put.max_span, 3);
+        assert_eq!(put.final_msg_count, 4);
+        assert_eq!(put.final_msg_size, 256);
+
+        let taken = run_process_queue_take_probe(ProcessQueueOperationFixture::seeded(4, 64).await).await;
+        assert_eq!(taken.taken_count, 4);
+        assert_eq!(taken.final_msg_count, 4);
+
+        let removed = run_process_queue_remove_probe(ProcessQueueOperationFixture::seeded(4, 64).await).await;
+        assert_eq!(removed.next_offset, 4);
+        assert_eq!(removed.final_msg_count, 0);
+        assert_eq!(removed.final_msg_size, 0);
+
+        let max_span = run_process_queue_max_span_probe(ProcessQueueOperationFixture::seeded(4, 64).await).await;
+        assert_eq!(max_span.max_span, 3);
+        assert_eq!(max_span.final_msg_count, 4);
     }
 
     #[tokio::test]

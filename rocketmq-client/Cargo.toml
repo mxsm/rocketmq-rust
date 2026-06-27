@@ -96,6 +96,14 @@ name    = "client_hot_path_benchmark"
 harness = false
 
 [[bench]]
+name    = "client_send_pipeline_benchmark"
+harness = false
+
+[[bench]]
+name    = "client_consume_pipeline_benchmark"
+harness = false
+
+[[bench]]
 name    = "client_runtime_spawn_benchmark"
 harness = false
 
