@@ -63,6 +63,9 @@ pub const QUEUE_OFFSET_POSITION: usize = 4 + 4 + 4 + 4 + 4;
 pub const SYSFLAG_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8;
 pub const BORN_TIMESTAMP_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
 
+const SMALL_PROPERTIES_PREALLOC_THRESHOLD: usize = 16;
+const SMALL_PROPERTY_PREALLOC_BYTES: usize = 34;
+
 fn get_i16_checked(buffer: &mut Bytes) -> Option<i16> {
     if buffer.remaining() < 2 {
         None
@@ -176,16 +179,28 @@ pub fn str_to_message_properties(properties: Option<&str>) -> HashMap<CheetahStr
     map
 }
 
+/// Encodes message properties with RocketMQ's name/value and property
+/// separators.
+#[inline]
 pub fn message_properties_to_string(properties: &HashMap<CheetahString, CheetahString>) -> CheetahString {
-    let mut len = 0;
-    for (name, value) in properties.iter() {
-        len += name.len();
-
-        len += value.len();
-        len += 2; // separator
+    if properties.is_empty() {
+        return CheetahString::empty();
     }
 
-    let mut builder = CheetahBuilder::with_capacity(len);
+    let property_count = properties.len();
+    let capacity = if property_count <= SMALL_PROPERTIES_PREALLOC_THRESHOLD {
+        property_count * SMALL_PROPERTY_PREALLOC_BYTES
+    } else {
+        let mut len = 0;
+        for (name, value) in properties.iter() {
+            len += name.len();
+            len += value.len();
+            len += 2; // separator
+        }
+        len
+    };
+
+    let mut builder = CheetahBuilder::with_capacity(capacity);
     for (name, value) in properties.iter() {
         builder.push_str(name.as_str());
         builder.push(NAME_VALUE_SEPARATOR);
@@ -980,6 +995,38 @@ mod tests {
         let encoded = message_properties_to_string(&properties);
 
         assert_eq!(encoded, "key\u{0001}value\u{0002}");
+    }
+
+    #[test]
+    fn message_properties_to_string_empty_properties_returns_empty_string() {
+        let properties = HashMap::new();
+
+        let encoded = message_properties_to_string(&properties);
+
+        assert!(encoded.is_empty());
+    }
+
+    #[test]
+    fn message_properties_to_string_round_trips_small_property_map() {
+        let properties = [
+            ("topic", "benchmark-topic"),
+            ("keys", "key-a"),
+            ("tags", "tag-a"),
+            ("trace", "trace-001"),
+        ]
+        .into_iter()
+        .map(|(key, value)| {
+            (
+                CheetahString::from_static_str(key),
+                CheetahString::from_static_str(value),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+        let encoded = message_properties_to_string(&properties);
+        let decoded = string_to_message_properties(Some(&encoded));
+
+        assert_eq!(decoded, properties);
     }
 
     #[test]

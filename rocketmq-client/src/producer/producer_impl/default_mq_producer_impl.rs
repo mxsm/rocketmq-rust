@@ -16,6 +16,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -28,6 +29,8 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rand::random;
 use rocketmq_common::common::base::service_state::ServiceState;
+use rocketmq_common::common::compression::compression_type::CompressionType;
+use rocketmq_common::common::compression::compressor::Compressor;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_enum::MessageType;
@@ -102,6 +105,34 @@ use crate::runtime::spawn_client_task_on;
 
 type Topic = CheetahString;
 type TopicPublishInfoSnapshot = Arc<TopicPublishInfo>;
+
+#[derive(Clone)]
+struct ProducerSendConfigSnapshot {
+    producer_group: CheetahString,
+    create_topic_key: CheetahString,
+    default_topic_queue_nums: i32,
+    compress_msg_body_over_howmuch: usize,
+    compress_level: i32,
+    compress_type: CompressionType,
+    compressor: Option<&'static (dyn Compressor + Send + Sync)>,
+    unit_mode: bool,
+}
+
+impl ProducerSendConfigSnapshot {
+    fn new(client_config: &ClientConfig, producer_config: &ProducerConfig) -> Self {
+        Self {
+            producer_group: producer_config.producer_group().clone(),
+            create_topic_key: producer_config.create_topic_key().clone(),
+            default_topic_queue_nums: producer_config.default_topic_queue_nums() as i32,
+            compress_msg_body_over_howmuch: producer_config.compress_msg_body_over_howmuch() as usize,
+            compress_level: producer_config.compress_level(),
+            compress_type: producer_config.compress_type(),
+            compressor: producer_config.compressor(),
+            unit_mode: client_config.unit_mode,
+        }
+    }
+}
+
 const QUERY_UNIQ_KEY_LOOKBACK_MILLIS: u64 = 3 * 24 * 60 * 60 * 1000;
 const PRODUCER_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const PRODUCER_TASK_FORCE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -271,6 +302,7 @@ pub struct DefaultMQProducerImpl {
     // ===== Immutable configuration =====
     client_config: ClientConfig,
     producer_config: Arc<ProducerConfig>,
+    send_config: ProducerSendConfigSnapshot,
 
     // ===== Atomic state machine =====
     state: AtomicU8, // ProducerState
@@ -302,6 +334,7 @@ pub struct DefaultMQProducerImpl {
     transaction_check_env: Option<TransactionCheckEnv>,
     producer_task_tracker: TaskTracker,
     producer_task_shutdown: CancellationToken,
+    compressor_missing_logged: AtomicBool,
 }
 
 #[allow(unused_must_use)]
@@ -324,9 +357,11 @@ impl DefaultMQProducerImpl {
         );
         let topic_publish_info_table = Arc::new(DashMap::new());
         let (state_changes, _) = watch::channel(ProducerState::Created);
+        let send_config = ProducerSendConfigSnapshot::new(&client_config, &producer_config);
         DefaultMQProducerImpl {
             client_config: client_config.clone(),
             producer_config: Arc::new(producer_config),
+            send_config,
             state: AtomicU8::new(ProducerState::Created as u8),
             state_changes,
             service_state: ServiceState::CreateJust,
@@ -348,6 +383,7 @@ impl DefaultMQProducerImpl {
             transaction_check_env: None,
             producer_task_tracker: TaskTracker::new(),
             producer_task_shutdown: CancellationToken::new(),
+            compressor_missing_logged: AtomicBool::new(false),
         }
     }
 
@@ -507,6 +543,8 @@ impl DefaultMQProducerImpl {
             .back_pressure_for_async_send_size()
             .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE) as usize;
 
+        self.send_config = ProducerSendConfigSnapshot::new(&self.client_config, &producer_config);
+        self.compressor_missing_logged.store(false, Ordering::Relaxed);
         self.producer_config = Arc::new(producer_config);
         Self::resize_available_permits(&self.semaphore_async_send_num, old_num_total, new_num_total);
         Self::resize_available_permits(&self.semaphore_async_send_size, old_size_total, new_size_total);
@@ -741,7 +779,7 @@ impl DefaultMQProducerImpl {
             tracing::debug!("Oneway batch send skipped: MQClientInstance is not available");
             return;
         };
-        let producer_config = self.producer_config.clone();
+        let send_config = self.send_config.clone();
         let client_config = self.client_config.clone();
 
         let task = async move {
@@ -762,7 +800,7 @@ impl DefaultMQProducerImpl {
                 &mut msg,
                 &mq,
                 &broker_name,
-                &producer_config,
+                &send_config,
                 client_config.namespace.as_deref(),
             ) {
                 Ok(req) => req,
@@ -1483,7 +1521,7 @@ impl DefaultMQProducerImpl {
         let mut msg_body_compressed = false;
         if self.try_to_compress_message(msg) {
             sys_flag |= MessageSysFlag::COMPRESSED_FLAG;
-            sys_flag |= self.producer_config.compress_type().get_compression_flag();
+            sys_flag |= self.send_config.compress_type.get_compression_flag();
             msg_body_compressed = true;
         }
 
@@ -1499,12 +1537,12 @@ impl DefaultMQProducerImpl {
         if self.has_check_forbidden_hook() {
             let check_forbidden_context = CheckForbiddenContext {
                 name_srv_addr: self.client_config.get_namesrv_addr(),
-                group: Some(self.producer_config.producer_group().clone()),
+                group: Some(self.send_config.producer_group.clone()),
                 communication_mode: Some(communication_mode),
                 broker_addr: Some(broker_addr.clone()),
                 message: Some(msg),
                 mq: Some(mq),
-                unit_mode: self.is_unit_mode(),
+                unit_mode: self.send_config.unit_mode,
                 ..Default::default()
             };
             self.execute_check_forbidden_hook(&check_forbidden_context)?;
@@ -1514,22 +1552,22 @@ impl DefaultMQProducerImpl {
         #[cfg(feature = "observability")]
         rocketmq_observability::propagation::inject_current_context_into_message(msg);
 
-        let producer_group = self.producer_config.producer_group();
+        let producer_group = &self.send_config.producer_group;
         let topic = msg.topic();
-        let create_topic_key = self.producer_config.create_topic_key();
+        let create_topic_key = &self.send_config.create_topic_key;
 
         let mut request_header = SendMessageRequestHeader {
             producer_group: producer_group.clone(),
             topic: topic.clone(),
             default_topic: create_topic_key.clone(),
-            default_topic_queue_nums: self.producer_config.default_topic_queue_nums() as i32,
+            default_topic_queue_nums: self.send_config.default_topic_queue_nums,
             queue_id: mq.queue_id(),
             sys_flag,
             born_timestamp: current_millis() as i64,
             flag: msg.get_flag(),
             properties: Some(MessageDecoder::message_properties_to_string(msg.get_properties())),
             reconsume_times: Some(0),
-            unit_mode: Some(self.is_unit_mode()),
+            unit_mode: Some(self.send_config.unit_mode),
             batch: Some(batch),
             topic_request_header: Some(TopicRequestHeader {
                 rpc_request_header: Some(RpcRequestHeader {
@@ -1757,23 +1795,33 @@ impl DefaultMQProducerImpl {
 
         if let Some(message) = msg.as_any_mut().downcast_mut::<Message>() {
             let body_len = message.body_slice().len();
-            if body_len >= self.producer_config.compress_msg_body_over_howmuch() as usize {
-                let Some(compressor) = self.producer_config.compressor() else {
-                    tracing::error!("tryToCompressMessage exception: compressor is not configured");
-                    return false;
-                };
-                match compressor.compress(message.body_slice(), self.producer_config.compress_level()) {
-                    Ok(data) => {
-                        // Store the compressed data to compressed_body field
-                        // (Rust design: preserve original body + store compressed separately)
-                        msg.set_compressed_body_mut(data);
-                        return true;
-                    }
-                    Err(e) => {
-                        tracing::error!("tryToCompressMessage exception: {:?}", e);
-                        if tracing::enabled!(tracing::Level::DEBUG) {
-                            tracing::debug!("Message: {:?}", msg);
-                        }
+            if body_len < self.send_config.compress_msg_body_over_howmuch {
+                return false;
+            }
+
+            let Some(compressor) = self.send_config.compressor else {
+                if self
+                    .compressor_missing_logged
+                    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    tracing::warn!("tryToCompressMessage skipped: compressor is not configured");
+                } else {
+                    tracing::debug!("tryToCompressMessage skipped: compressor is not configured");
+                }
+                return false;
+            };
+            match compressor.compress(message.body_slice(), self.send_config.compress_level) {
+                Ok(data) => {
+                    // Store the compressed data to compressed_body field
+                    // (Rust design: preserve original body + store compressed separately)
+                    msg.set_compressed_body_mut(data);
+                    return true;
+                }
+                Err(e) => {
+                    tracing::error!("tryToCompressMessage exception: {:?}", e);
+                    if tracing::enabled!(tracing::Level::DEBUG) {
+                        tracing::debug!("Message: {:?}", msg);
                     }
                 }
             }
@@ -2919,7 +2967,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
     }
 
     fn is_unit_mode(&self) -> bool {
-        self.client_config.unit_mode
+        self.send_config.unit_mode
     }
 }
 
@@ -3486,7 +3534,7 @@ fn build_oneway_request_internal<T>(
     msg: &mut T,
     mq: &MessageQueue,
     broker_name: &CheetahString,
-    producer_config: &ProducerConfig,
+    send_config: &ProducerSendConfigSnapshot,
     namespace: Option<&str>,
 ) -> rocketmq_error::RocketMQResult<RemotingCommand>
 where
@@ -3501,17 +3549,17 @@ where
 
     // Build request header (simplified for oneway)
     let request_header = SendMessageRequestHeader {
-        producer_group: CheetahString::from_string(producer_config.producer_group().to_string()),
-        topic: CheetahString::from_string(msg.topic().to_string()),
-        default_topic: CheetahString::from_string(producer_config.create_topic_key().to_string()),
-        default_topic_queue_nums: producer_config.default_topic_queue_nums() as i32,
+        producer_group: send_config.producer_group.clone(),
+        topic: msg.topic().clone(),
+        default_topic: send_config.create_topic_key.clone(),
+        default_topic_queue_nums: send_config.default_topic_queue_nums,
         queue_id: mq.queue_id(),
         sys_flag: 0,
         born_timestamp: current_millis() as i64,
         flag: msg.get_flag(),
         properties: Some(MessageDecoder::message_properties_to_string(msg.get_properties())),
         reconsume_times: Some(0),
-        unit_mode: Some(false),
+        unit_mode: Some(send_config.unit_mode),
         batch: Some(false),
         topic_request_header: Some(TopicRequestHeader {
             rpc_request_header: Some(RpcRequestHeader {
@@ -3551,9 +3599,30 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
 
+    use bytes::Bytes;
+
     use super::*;
     use crate::producer::default_mq_producer::DefaultMQProducer;
     use crate::producer::transaction_listener::TransactionListener;
+
+    struct CountingCompressor {
+        calls: AtomicUsize,
+    }
+
+    impl Compressor for CountingCompressor {
+        fn compress(&self, src: &[u8], _level: i32) -> rocketmq_error::RocketMQResult<Bytes> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(Bytes::copy_from_slice(src))
+        }
+
+        fn decompress(&self, src: &[u8]) -> rocketmq_error::RocketMQResult<Bytes> {
+            Ok(Bytes::copy_from_slice(src))
+        }
+    }
+
+    static COUNTING_COMPRESSOR: CountingCompressor = CountingCompressor {
+        calls: AtomicUsize::new(0),
+    };
 
     fn running_producer_without_client() -> DefaultMQProducerImpl {
         let mut producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
@@ -4121,6 +4190,44 @@ mod tests {
         assert!(Arc::ptr_eq(&cached, &info));
         assert_eq!(cached.message_queue_list.len(), 256);
         assert!(producer.select_one_message_queue(&cached, None, false).is_some());
+    }
+
+    #[test]
+    fn replace_producer_config_refreshes_send_config_snapshot() {
+        let mut producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+        let configured = DefaultMQProducer::builder()
+            .producer_group("snapshot-group")
+            .create_topic_key("SnapshotTopic")
+            .default_topic_queue_nums(12)
+            .compress_msg_body_over_howmuch(8192)
+            .compressor(&COUNTING_COMPRESSOR)
+            .build();
+
+        producer.replace_producer_config(configured.producer_config().clone());
+
+        assert_eq!(producer.send_config.producer_group, "snapshot-group");
+        assert_eq!(producer.send_config.create_topic_key, "SnapshotTopic");
+        assert_eq!(producer.send_config.default_topic_queue_nums, 12);
+        assert_eq!(producer.send_config.compress_msg_body_over_howmuch, 8192);
+        assert!(producer.send_config.compressor.is_some());
+    }
+
+    #[test]
+    fn compression_below_threshold_does_not_access_compressor() {
+        COUNTING_COMPRESSOR.calls.store(0, Ordering::Relaxed);
+        let configured = DefaultMQProducer::builder()
+            .producer_group("compress-threshold-group")
+            .compress_msg_body_over_howmuch(1024)
+            .compressor(&COUNTING_COMPRESSOR)
+            .build();
+        let producer = DefaultMQProducerImpl::new(ClientConfig::default(), configured.producer_config().clone(), None);
+        let mut msg = Message::builder()
+            .topic("TopicTest")
+            .body(vec![b'a'; 128])
+            .build_unchecked();
+
+        assert!(!producer.try_to_compress_message(&mut msg));
+        assert_eq!(COUNTING_COMPRESSOR.calls.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

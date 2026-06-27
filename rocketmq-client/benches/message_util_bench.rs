@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::hint::black_box;
 
+use cheetah_string::CheetahBuilder;
 use cheetah_string::CheetahString;
 use criterion::criterion_group;
 use criterion::criterion_main;
@@ -21,9 +23,12 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_client_rust::utils::message_util::MessageUtil;
+use rocketmq_common::common::message::message_decoder::NAME_VALUE_SEPARATOR;
+use rocketmq_common::common::message::message_decoder::PROPERTY_SEPARATOR;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::MessageAccessor::MessageAccessor;
+use rocketmq_common::MessageDecoder;
 
 // ============================================================================
 // Helper functions to create test messages
@@ -72,6 +77,35 @@ fn create_test_message_minimal() -> Message {
         CheetahString::from_static_str("DefaultCluster"),
     );
     msg
+}
+
+fn create_properties(count: usize) -> HashMap<CheetahString, CheetahString> {
+    (0..count)
+        .map(|index| {
+            (
+                CheetahString::from_string(format!("property-key-{index}")),
+                CheetahString::from_string(format!("property-value-{index}")),
+            )
+        })
+        .collect()
+}
+
+fn legacy_message_properties_to_string(properties: &HashMap<CheetahString, CheetahString>) -> CheetahString {
+    let mut len = 0;
+    for (name, value) in properties.iter() {
+        len += name.len();
+        len += value.len();
+        len += 2;
+    }
+
+    let mut builder = CheetahBuilder::with_capacity(len);
+    for (name, value) in properties.iter() {
+        builder.push_str(name.as_str());
+        builder.push(NAME_VALUE_SEPARATOR);
+        builder.push_str(value.as_str());
+        builder.push(PROPERTY_SEPARATOR);
+    }
+    builder.finish_string()
 }
 
 // ============================================================================
@@ -247,6 +281,35 @@ fn bench_static_cache_effectiveness(c: &mut Criterion) {
 }
 
 // ============================================================================
+// Benchmark: message_properties_to_string
+// ============================================================================
+
+fn bench_message_properties_to_string(c: &mut Criterion) {
+    let mut group = c.benchmark_group("message_properties_to_string");
+
+    for property_count in [0usize, 1, 4, 16] {
+        group.throughput(Throughput::Elements(property_count.max(1) as u64));
+        let properties = create_properties(property_count);
+        group.bench_with_input(
+            BenchmarkId::new("legacy", property_count),
+            &properties,
+            |b, properties| {
+                b.iter(|| black_box(legacy_message_properties_to_string(black_box(properties))));
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("optimized", property_count),
+            &properties,
+            |b, properties| {
+                b.iter(|| black_box(MessageDecoder::message_properties_to_string(black_box(properties))));
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ============================================================================
 // Register all benchmarks
 // ============================================================================
 
@@ -259,6 +322,7 @@ criterion_group!(
     bench_high_throughput,
     bench_memory_pattern,
     bench_static_cache_effectiveness,
+    bench_message_properties_to_string,
 );
 
 criterion_main!(benches);

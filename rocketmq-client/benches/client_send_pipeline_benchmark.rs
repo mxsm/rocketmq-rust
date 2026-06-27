@@ -34,6 +34,7 @@ use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -49,6 +50,22 @@ fn build_message(body_size: usize) -> Message {
         .body(vec![b'x'; body_size])
         .build()
         .expect("benchmark message should be valid")
+}
+
+fn build_message_with_properties(body_size: usize, property_count: usize) -> Message {
+    let mut message = Message::builder()
+        .topic("BenchmarkTopic")
+        .body(vec![b'x'; body_size])
+        .build()
+        .expect("benchmark message should be valid");
+    for index in 0..property_count {
+        MessageAccessor::put_property(
+            &mut message,
+            CheetahString::from_string(format!("property-key-{index}")),
+            CheetahString::from_string(format!("property-value-{index}")),
+        );
+    }
+    message
 }
 
 fn build_send_header(message: &Message) -> SendMessageRequestHeader {
@@ -101,6 +118,20 @@ fn bench_request_construction(c: &mut Criterion) {
                 |message| black_box(build_send_request(message)),
                 BatchSize::SmallInput,
             );
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_send_header_construction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("client_send_pipeline/send_header_construction");
+    group.throughput(Throughput::Elements(1));
+
+    for property_count in [0usize, 1, 4, 16] {
+        let message = build_message_with_properties(128, property_count);
+        group.bench_with_input(BenchmarkId::from_parameter(property_count), &message, |b, message| {
+            b.iter(|| black_box(build_send_header(black_box(message))));
         });
     }
 
@@ -183,6 +214,7 @@ criterion_group!(
     benches,
     bench_message_construction,
     bench_request_construction,
+    bench_send_header_construction,
     bench_async_backpressure_envelope,
     bench_callback_dispatch,
 );
