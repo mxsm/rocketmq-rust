@@ -302,6 +302,45 @@ struct AsyncSendHookContext {
     trace_start_time: Option<u64>,
 }
 
+struct AsyncRetryRequest {
+    template: Option<RemotingCommand>,
+}
+
+impl AsyncRetryRequest {
+    fn new(mut request: RemotingCommand) -> Self {
+        request.materialize_custom_header_to_ext_fields();
+        Self {
+            template: Some(request),
+        }
+    }
+
+    fn next_attempt(&mut self, keep_template_for_retry: bool) -> RemotingCommand {
+        if keep_template_for_retry {
+            return self
+                .template
+                .as_ref()
+                .expect("async retry request template should be available")
+                .clone();
+        }
+
+        self.template
+            .take()
+            .expect("async retry final request should be available")
+    }
+
+    fn set_retry_opaque(&mut self, opaque: i32) {
+        self.template
+            .as_mut()
+            .expect("async retry request template should be available")
+            .set_opaque_mut(opaque);
+    }
+
+    #[cfg(test)]
+    fn is_consumed(&self) -> bool {
+        self.template.is_none()
+    }
+}
+
 pub struct MQClientAPIImpl {
     remoting_client: ArcMut<RocketmqDefaultClient<ClientRemotingProcessor>>,
     top_addressing: Arc<Box<dyn TopAddressing>>,
@@ -2547,7 +2586,7 @@ impl MQClientAPIImpl {
         msg_uniq_id: Option<CheetahString>,
         is_batch_message: bool,
         timeout_millis: u64,
-        mut current_request: RemotingCommand,
+        current_request: RemotingCommand,
         send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<TopicPublishInfo>,
         instance: Option<ArcMut<MQClientInstance>>,
@@ -2557,6 +2596,7 @@ impl MQClientAPIImpl {
     ) {
         let begin_start_time_all = Instant::now();
         let mut retry_count = 0_u32;
+        let mut retry_request = AsyncRetryRequest::new(current_request);
 
         loop {
             let elapsed = (Instant::now() - begin_start_time_all).as_millis() as u64;
@@ -2576,8 +2616,10 @@ impl MQClientAPIImpl {
 
             let remaining_timeout = timeout_millis - elapsed;
             let begin_attempt_time = Instant::now();
+            let keep_request_for_retry = retry_count < retry_times_when_send_failed;
+            let attempt_request = retry_request.next_attempt(keep_request_for_retry);
             let result = remoting_client
-                .invoke_request(Some(&current_addr), current_request.clone(), remaining_timeout)
+                .invoke_request(Some(&current_addr), attempt_request, remaining_timeout)
                 .await;
             let cost = (Instant::now() - begin_attempt_time).as_millis() as u64;
 
@@ -2712,7 +2754,7 @@ impl MQClientAPIImpl {
                             );
                             current_addr = retry_addr;
                             current_broker_name = retry_broker_name;
-                            current_request.set_opaque_mut(RemotingCommand::create_new_request_id());
+                            retry_request.set_retry_opaque(RemotingCommand::create_new_request_id());
                             continue;
                         }
                     }
@@ -6525,6 +6567,7 @@ mod tests {
 
     use rocketmq_common::common::lite::LiteSubscriptionAction;
     use rocketmq_remoting::protocol::command_custom_header::CommandCustomHeader;
+    use rocketmq_remoting::protocol::command_custom_header::FromMap;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 
     use super::*;
@@ -6540,6 +6583,33 @@ mod tests {
             MessageQueue::from_parts("topicA", "broker-b", 1),
         ];
         info
+    }
+
+    #[derive(Debug)]
+    struct AsyncRetryTestHeader {
+        retry_marker: CheetahString,
+    }
+
+    impl CommandCustomHeader for AsyncRetryTestHeader {
+        fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+            Some(HashMap::from([(
+                CheetahString::from_static_str("retryMarker"),
+                self.retry_marker.clone(),
+            )]))
+        }
+    }
+
+    impl FromMap for AsyncRetryTestHeader {
+        type Error = rocketmq_error::RocketMQError;
+        type Target = Self;
+
+        fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self, Self::Error> {
+            let retry_marker = map
+                .get(&CheetahString::from_static_str("retryMarker"))
+                .cloned()
+                .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("missing retryMarker test header"))?;
+            Ok(Self { retry_marker })
+        }
     }
 
     struct DropFlag(Arc<AtomicBool>);
@@ -7443,5 +7513,112 @@ mod tests {
         assert!(!MQClientAPIImpl::should_retry_async_send_error(
             &rocketmq_error::RocketMQError::ClientShuttingDown,
         ));
+    }
+
+    #[test]
+    fn async_retry_request_reuses_final_attempt_after_first_failure() {
+        let retry_key = CheetahString::from_static_str("retry-key");
+        let retry_value = CheetahString::from_static_str("retry-value");
+        let mut request = RemotingCommand::create_request_command(RequestCode::SendMessageV2, EmptyHeader {})
+            .set_body(bytes::Bytes::from_static(b"retry-body"))
+            .set_ext_fields(HashMap::from([(retry_key.clone(), retry_value.clone())]));
+        let initial_opaque = RemotingCommand::create_new_request_id();
+        let retry_opaque = RemotingCommand::create_new_request_id();
+        request.set_opaque_mut(initial_opaque);
+
+        let mut retry_request = AsyncRetryRequest::new(request);
+        let first_attempt = retry_request.next_attempt(true);
+
+        assert_eq!(first_attempt.opaque(), initial_opaque);
+        assert_eq!(
+            first_attempt.body().map(bytes::Bytes::as_ref),
+            Some(b"retry-body".as_slice())
+        );
+        assert_eq!(
+            first_attempt
+                .ext_fields()
+                .and_then(|fields| fields.get(&retry_key))
+                .map(CheetahString::as_str),
+            Some(retry_value.as_str())
+        );
+        assert!(!retry_request.is_consumed());
+
+        retry_request.set_retry_opaque(retry_opaque);
+        let second_attempt = retry_request.next_attempt(false);
+
+        assert_eq!(second_attempt.opaque(), retry_opaque);
+        assert_eq!(
+            second_attempt.body().map(bytes::Bytes::as_ref),
+            Some(b"retry-body".as_slice())
+        );
+        assert_eq!(
+            second_attempt
+                .ext_fields()
+                .and_then(|fields| fields.get(&retry_key))
+                .map(CheetahString::as_str),
+            Some(retry_value.as_str())
+        );
+        assert!(retry_request.is_consumed());
+    }
+
+    #[test]
+    fn async_retry_request_consumes_immediate_final_attempt_without_clone_template() {
+        let mut request = RemotingCommand::create_request_command(RequestCode::SendMessageV2, EmptyHeader {})
+            .set_body(bytes::Bytes::from_static(b"single-attempt-body"));
+        let initial_opaque = RemotingCommand::create_new_request_id();
+        request.set_opaque_mut(initial_opaque);
+
+        let mut retry_request = AsyncRetryRequest::new(request);
+        let attempt = retry_request.next_attempt(false);
+
+        assert_eq!(attempt.opaque(), initial_opaque);
+        assert_eq!(
+            attempt.body().map(bytes::Bytes::as_ref),
+            Some(b"single-attempt-body".as_slice())
+        );
+        assert!(retry_request.is_consumed());
+    }
+
+    #[test]
+    fn async_retry_request_materializes_custom_header_for_clone_and_final_attempt() {
+        let header_value = CheetahString::from_static_str("retry-header-value");
+        let request = RemotingCommand::create_request_command(
+            RequestCode::SendMessageV2,
+            AsyncRetryTestHeader {
+                retry_marker: header_value.clone(),
+            },
+        );
+
+        let mut retry_request = AsyncRetryRequest::new(request);
+        let first_attempt = retry_request.next_attempt(true);
+
+        assert_eq!(
+            first_attempt
+                .ext_fields()
+                .and_then(|fields| fields.get(&CheetahString::from_static_str("retryMarker")))
+                .map(CheetahString::as_str),
+            Some(header_value.as_str())
+        );
+        let decoded_first = first_attempt
+            .decode_command_custom_header::<AsyncRetryTestHeader>()
+            .expect("materialized custom header should decode from cloned retry attempt");
+        assert_eq!(decoded_first.retry_marker.as_str(), header_value.as_str());
+        assert!(!retry_request.is_consumed());
+
+        retry_request.set_retry_opaque(RemotingCommand::create_new_request_id());
+        let final_attempt = retry_request.next_attempt(false);
+
+        assert_eq!(
+            final_attempt
+                .ext_fields()
+                .and_then(|fields| fields.get(&CheetahString::from_static_str("retryMarker")))
+                .map(CheetahString::as_str),
+            Some(header_value.as_str())
+        );
+        let decoded_final = final_attempt
+            .decode_command_custom_header::<AsyncRetryTestHeader>()
+            .expect("materialized custom header should decode from final retry attempt");
+        assert_eq!(decoded_final.retry_marker.as_str(), header_value.as_str());
+        assert!(retry_request.is_consumed());
     }
 }

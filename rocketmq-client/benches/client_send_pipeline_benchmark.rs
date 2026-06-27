@@ -18,6 +18,7 @@
 //! network: message construction, request command construction, callback
 //! dispatch, and async backpressure permit acquisition.
 
+use std::collections::HashMap;
 use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
@@ -105,6 +106,68 @@ fn build_send_request(mut message: Message) -> RemotingCommand {
     let header = build_send_header(&message);
     let body = message.get_body().cloned().unwrap_or_else(|| Bytes::from_static(b""));
     RemotingCommand::create_request_command(RequestCode::SendMessageV2, header).set_body(body)
+}
+
+fn build_retry_request(body_size: usize, ext_field_count: usize) -> RemotingCommand {
+    let mut request = build_send_request(build_message(body_size));
+    if ext_field_count > 0 {
+        let ext_fields = (0..ext_field_count)
+            .map(|index| {
+                (
+                    CheetahString::from_string(format!("retry-key-{index}")),
+                    CheetahString::from_string(format!("retry-value-{index}")),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        request = request.set_ext_fields(ext_fields);
+    }
+    request
+}
+
+fn observe_retry_request(request: &RemotingCommand) -> usize {
+    let body_len = request.body().map_or(0, Bytes::len);
+    let ext_field_len = request.ext_fields().map_or(0, HashMap::len);
+    body_len ^ ext_field_len ^ request.opaque() as usize
+}
+
+fn simulate_retry_clone_every_attempt(mut template: RemotingCommand, attempts: usize) -> usize {
+    let mut observed = 0usize;
+    for attempt in 0..attempts {
+        let mut request = template.clone();
+        request.make_custom_header_to_net();
+        observed ^= observe_retry_request(&request);
+        if attempt + 1 < attempts {
+            template.set_opaque_mut(RemotingCommand::create_new_request_id());
+        }
+    }
+    observed
+}
+
+fn simulate_retry_reuse_final_attempt(template: RemotingCommand, attempts: usize) -> usize {
+    let mut template = template;
+    template.materialize_custom_header_to_ext_fields();
+    let mut template = Some(template);
+    let mut observed = 0usize;
+    for attempt in 0..attempts {
+        let keep_template_for_retry = attempt + 1 < attempts;
+        let mut request = if keep_template_for_retry {
+            template
+                .as_ref()
+                .expect("retry request template should be available")
+                .clone()
+        } else {
+            template.take().expect("retry final request should be available")
+        };
+        request.make_custom_header_to_net();
+        observed ^= observe_retry_request(&request);
+        if keep_template_for_retry {
+            template
+                .as_mut()
+                .expect("retry request template should be available")
+                .set_opaque_mut(RemotingCommand::create_new_request_id());
+        }
+    }
+    observed
 }
 
 fn percentile_duration(samples: &mut [Duration], percentile: usize) -> Duration {
@@ -328,6 +391,45 @@ fn bench_callback_dispatch(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_async_retry_request_reuse(c: &mut Criterion) {
+    let mut group = c.benchmark_group("client_send_pipeline/async_retry_request_reuse");
+    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(1));
+
+    for (label, body_size, ext_field_count) in [
+        ("no_body_no_ext", 0usize, 0usize),
+        ("small_body", 1024, 0),
+        ("large_body", 128 * 1024, 0),
+        ("many_ext_fields", 1024, 64),
+    ] {
+        group.throughput(Throughput::Bytes(body_size as u64));
+        for (strategy, simulate) in [
+            (
+                "clone_every_attempt",
+                simulate_retry_clone_every_attempt as fn(RemotingCommand, usize) -> usize,
+            ),
+            (
+                "reuse_final_attempt",
+                simulate_retry_reuse_final_attempt as fn(RemotingCommand, usize) -> usize,
+            ),
+        ] {
+            group.bench_with_input(
+                BenchmarkId::new(strategy, label),
+                &(body_size, ext_field_count),
+                |b, &(body_size, ext_field_count)| {
+                    b.iter_batched(
+                        || build_retry_request(body_size, ext_field_count),
+                        |request| black_box(simulate(request, 2)),
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
 fn bench_async_send_scheduling_layers(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("benchmark runtime should start");
     write_async_send_scheduling_report_artifact(&runtime);
@@ -367,6 +469,7 @@ criterion_group!(
     bench_send_header_construction,
     bench_async_backpressure_envelope,
     bench_callback_dispatch,
+    bench_async_retry_request_reuse,
     bench_async_send_scheduling_layers,
 );
 criterion_main!(benches);
