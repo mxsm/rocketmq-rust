@@ -101,6 +101,7 @@ use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task_on;
 
 type Topic = CheetahString;
+type TopicPublishInfoSnapshot = Arc<TopicPublishInfo>;
 const QUERY_UNIQ_KEY_LOOKBACK_MILLIS: u64 = 3 * 24 * 60 * 60 * 1000;
 const PRODUCER_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const PRODUCER_TASK_FORCE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -286,7 +287,7 @@ pub struct DefaultMQProducerImpl {
     pending_end_transaction_hooks: parking_lot::Mutex<Option<Vec<Arc<dyn EndTransactionHook>>>>,
     pending_forbidden_hooks: parking_lot::Mutex<Option<Vec<Arc<dyn CheckForbiddenHook>>>>,
 
-    topic_publish_info_table: Arc<DashMap<Topic, TopicPublishInfo>>,
+    topic_publish_info_table: Arc<DashMap<Topic, TopicPublishInfoSnapshot>>,
 
     rpc_hook: Option<Arc<dyn RPCHook>>,
     client_instance: Option<ArcMut<MQClientInstance>>,
@@ -719,7 +720,7 @@ impl DefaultMQProducerImpl {
                 if info.ok() {
                     if let Some(mq) = self.select_one_message_queue(&info, None, false) {
                         // Spawn background task for each message
-                        self.spawn_oneway_send(msg, mq, info, timeout);
+                        self.spawn_oneway_send(msg, mq, timeout);
                         sent_count += 1;
                     }
                 }
@@ -732,7 +733,7 @@ impl DefaultMQProducerImpl {
     /// Spawn a background task for oneway message sending.
     ///
     /// This is a helper method for send_oneway_batch to avoid code duplication.
-    fn spawn_oneway_send<T>(&self, msg: T, mq: MessageQueue, topic_publish_info: TopicPublishInfo, timeout: u64)
+    fn spawn_oneway_send<T>(&self, msg: T, mq: MessageQueue, timeout: u64)
     where
         T: MessageTrait + Send + Sync + 'static,
     {
@@ -742,7 +743,6 @@ impl DefaultMQProducerImpl {
         };
         let producer_config = self.producer_config.clone();
         let client_config = self.client_config.clone();
-        let topic_publish_info = Arc::new(topic_publish_info);
 
         let task = async move {
             // Prepare message in background task
@@ -1808,23 +1808,32 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    async fn try_to_find_topic_publish_info(&self, topic: &Topic) -> Option<TopicPublishInfo> {
-        let mut topic_publish_info = self.topic_publish_info_table.get(topic).map(|v| v.clone());
-        if !topic_publish_info.as_ref().is_some_and(TopicPublishInfo::ok) {
+    async fn try_to_find_topic_publish_info(&self, topic: &Topic) -> Option<TopicPublishInfoSnapshot> {
+        let mut topic_publish_info = self
+            .topic_publish_info_table
+            .get(topic)
+            .map(|entry| Arc::clone(entry.value()));
+        if !topic_publish_info.as_ref().is_some_and(|info| info.ok()) {
             self.topic_publish_info_table
-                .insert(topic.clone(), TopicPublishInfo::new());
+                .insert(topic.clone(), Arc::new(TopicPublishInfo::new()));
             let Ok(client_instance) = self.client_instance() else {
                 tracing::debug!(
                     "Skip topic route refresh for {} because MQClientInstance is not available",
                     topic
                 );
-                return self.topic_publish_info_table.get(topic).map(|v| v.clone());
+                return self
+                    .topic_publish_info_table
+                    .get(topic)
+                    .map(|entry| Arc::clone(entry.value()));
             };
             client_instance
                 .mut_from_ref()
                 .update_topic_route_info_from_name_server_topic(topic)
                 .await;
-            topic_publish_info = self.topic_publish_info_table.get(topic).map(|v| v.clone());
+            topic_publish_info = self
+                .topic_publish_info_table
+                .get(topic)
+                .map(|entry| Arc::clone(entry.value()));
         }
 
         let topic_publish_info_ref = topic_publish_info.as_ref()?;
@@ -1843,7 +1852,9 @@ impl DefaultMQProducerImpl {
             .mut_from_ref()
             .update_topic_route_info_from_name_server_default(topic, true, Some(&self.producer_config))
             .await;
-        self.topic_publish_info_table.get(topic).map(|v| v.clone())
+        self.topic_publish_info_table
+            .get(topic)
+            .map(|entry| Arc::clone(entry.value()))
     }
 
     fn make_sure_state_ok(&self) -> rocketmq_error::RocketMQResult<()> {
@@ -2904,7 +2915,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
         let Some(info) = info else {
             return;
         };
-        self.topic_publish_info_table.insert(topic, info);
+        self.topic_publish_info_table.insert(topic, Arc::new(info));
     }
 
     fn is_unit_mode(&self) -> bool {
@@ -3225,7 +3236,7 @@ impl DefaultMQProducerImpl {
             let new_topic =
                 NamespaceUtil::wrap_namespace(self.client_config.get_namespace().unwrap_or_default().as_str(), topic);
             let topic_publish_info = self.try_to_find_topic_publish_info(&new_topic).await;
-            if !topic_publish_info.as_ref().is_some_and(TopicPublishInfo::ok) {
+            if !topic_publish_info.as_ref().is_some_and(|info| info.ok()) {
                 warn!(
                     "No route info of this topic: {} {}",
                     new_topic,
@@ -3438,7 +3449,7 @@ impl DefaultMQProducerImpl {
 
 pub(crate) struct DefaultServiceDetector {
     client_instance: ArcMut<MQClientInstance>,
-    topic_publish_info_table: Arc<DashMap<CheetahString /* topic */, TopicPublishInfo>>,
+    topic_publish_info_table: Arc<DashMap<CheetahString /* topic */, TopicPublishInfoSnapshot>>,
 }
 
 impl ServiceDetector for DefaultServiceDetector {
@@ -4052,11 +4063,11 @@ mod tests {
         producer.client_instance = Some(client_instance);
         producer.topic_publish_info_table.insert(
             CheetahString::from_static_str("ns-a%TopicTest"),
-            TopicPublishInfo {
+            Arc::new(TopicPublishInfo {
                 have_topic_router_info: true,
                 message_queue_list: vec![MessageQueue::from_parts("ns-a%TopicTest", "broker-a", 0)],
                 ..Default::default()
-            },
+            }),
         );
         let mut msg = Message::builder()
             .topic("ns-a%TopicTest")
@@ -4084,6 +4095,32 @@ mod tests {
         assert_eq!(seen.1.as_deref(), Some("TopicTest"));
         assert_eq!(msg.topic(), "ns-a%TopicTest");
         assert_eq!(selected.topic(), "ns-a%TopicTest");
+    }
+
+    #[tokio::test]
+    async fn cached_topic_publish_info_is_returned_as_shared_snapshot() {
+        let topic = CheetahString::from_static_str("TopicTest");
+        let producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+        let info = Arc::new(TopicPublishInfo {
+            have_topic_router_info: true,
+            message_queue_list: (0..256)
+                .map(|queue_id| MessageQueue::from_parts("TopicTest", "broker-a", queue_id))
+                .collect(),
+            ..Default::default()
+        });
+
+        producer
+            .topic_publish_info_table
+            .insert(topic.clone(), Arc::clone(&info));
+
+        let cached = producer
+            .try_to_find_topic_publish_info(&topic)
+            .await
+            .expect("cached route should be returned");
+
+        assert!(Arc::ptr_eq(&cached, &info));
+        assert_eq!(cached.message_queue_list.len(), 256);
+        assert!(producer.select_one_message_queue(&cached, None, false).is_some());
     }
 
     #[tokio::test]

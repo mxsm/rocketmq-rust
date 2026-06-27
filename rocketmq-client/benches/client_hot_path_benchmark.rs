@@ -23,6 +23,7 @@
 use std::collections::HashSet;
 use std::hint::black_box;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -36,15 +37,19 @@ use rocketmq_client_rust::common::session_credentials::SessionCredentials;
 use rocketmq_client_rust::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_consistent_hash::AllocateMessageQueueConsistentHash;
 use rocketmq_client_rust::producer::message_queue_selector::MessageQueueSelector;
+use rocketmq_client_rust::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByHash;
 use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByMachineRoom;
 use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByRandom;
 use rocketmq_client_rust::AclClientRPCHook;
+use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 
@@ -132,6 +137,60 @@ fn bench_queue_selectors(c: &mut Criterion) {
     group.bench_function("machine_room_selector", |b| {
         b.iter(|| black_box(machine_room_selector.select(&queues, &msg, &())))
     });
+
+    group.finish();
+}
+
+fn build_topic_publish_info(queue_count: i32) -> TopicPublishInfo {
+    let mut info = TopicPublishInfo::new();
+    info.have_topic_router_info = true;
+    info.message_queue_list = build_queues(queue_count);
+    info.topic_route_data = Some(TopicRouteData {
+        queue_datas: (0..queue_count)
+            .map(|queue_id| {
+                QueueData::new(
+                    CheetahString::from_string(format!("broker-{queue_id}")),
+                    1,
+                    1,
+                    PermName::PERM_READ | PermName::PERM_WRITE,
+                    0,
+                )
+            })
+            .collect(),
+        ..Default::default()
+    });
+    info
+}
+
+fn bench_producer_route_snapshot(c: &mut Criterion) {
+    let mut group = c.benchmark_group("producer_route_snapshot");
+    group.throughput(Throughput::Elements(1));
+
+    for queue_count in [4i32, 64, 256, 1024] {
+        let owned_info = build_topic_publish_info(queue_count);
+        group.bench_with_input(
+            BenchmarkId::new("owned_clone_and_select", queue_count),
+            &owned_info,
+            |b, info| {
+                b.iter(|| {
+                    let info = black_box(info).clone();
+                    black_box(info.select_one_message_queue())
+                })
+            },
+        );
+
+        let shared_info = Arc::new(build_topic_publish_info(queue_count));
+        group.bench_with_input(
+            BenchmarkId::new("arc_snapshot_clone_and_select", queue_count),
+            &shared_info,
+            |b, info| {
+                b.iter(|| {
+                    let info = Arc::clone(black_box(info));
+                    black_box(info.select_one_message_queue())
+                })
+            },
+        );
+    }
 
     group.finish();
 }
@@ -245,6 +304,7 @@ criterion_group!(
     benches,
     bench_acl_signing,
     bench_queue_selectors,
+    bench_producer_route_snapshot,
     bench_consistent_hash_rebalance,
     bench_producer_batch_encode,
     bench_lite_pull_batch_clone,
