@@ -129,9 +129,11 @@ fn wait_for_tasks_finished(task_handles: &[ClientRuntimeTaskHandle]) {
 
 fn percentile_duration_micros(samples: &[Duration], percentile: usize) -> u128 {
     assert!(!samples.is_empty(), "percentile requires at least one sample");
+    assert!(percentile <= 100, "percentile must be between 0 and 100");
     let mut sorted = samples.to_vec();
     sorted.sort_unstable();
-    let index = ((sorted.len() - 1) * percentile) / 100;
+    let rank = (sorted.len() * percentile).div_ceil(100);
+    let index = rank.saturating_sub(1);
     sorted[index].as_micros()
 }
 

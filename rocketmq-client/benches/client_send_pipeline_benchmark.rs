@@ -109,8 +109,11 @@ fn build_send_request(mut message: Message) -> RemotingCommand {
 
 fn percentile_duration(samples: &mut [Duration], percentile: usize) -> Duration {
     assert!(!samples.is_empty(), "percentile requires at least one sample");
+    assert!(percentile <= 100, "percentile must be between 0 and 100");
     samples.sort_unstable();
-    samples[((samples.len() - 1) * percentile) / 100]
+    let rank = (samples.len() * percentile).div_ceil(100);
+    let index = rank.saturating_sub(1);
+    samples[index]
 }
 
 fn run_async_send_scheduling(
@@ -124,15 +127,16 @@ fn run_async_send_scheduling(
 
         for _ in 0..task_count {
             let tx = tx.clone();
+            let submitted_at = Instant::now();
             if nested_api_spawn {
                 tokio::spawn(async move {
                     tokio::spawn(async move {
-                        let _ = tx.send(started_at.elapsed());
+                        let _ = tx.send(submitted_at.elapsed());
                     });
                 });
             } else {
                 tokio::spawn(async move {
-                    let _ = tx.send(started_at.elapsed());
+                    let _ = tx.send(submitted_at.elapsed());
                 });
             }
         }
