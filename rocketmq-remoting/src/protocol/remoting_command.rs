@@ -93,6 +93,8 @@ pub struct RemotingCommand {
     suspended: bool,
     #[serde(skip)]
     command_custom_header: Option<ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
+    #[serde(skip)]
+    custom_header_to_net: bool,
     #[serde(rename = "serializeTypeCurrentRPC")]
     serialize_type: SerializeType,
 }
@@ -110,6 +112,7 @@ impl Clone for RemotingCommand {
             body: self.body.clone(),
             suspended: self.suspended,
             command_custom_header: self.command_custom_header.clone(),
+            custom_header_to_net: self.custom_header_to_net,
             serialize_type: self.serialize_type,
         }
     }
@@ -147,6 +150,7 @@ impl Default for RemotingCommand {
             body: None,
             suspended: false,
             command_custom_header: None,
+            custom_header_to_net: false,
             serialize_type: *SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER,
         }
     }
@@ -209,6 +213,7 @@ impl RemotingCommand {
         T: CommandCustomHeader + Sync + Send + 'static,
     {
         self.command_custom_header = Some(ArcMut::new(Box::new(command_custom_header)));
+        self.custom_header_to_net = false;
         self
     }
 
@@ -217,6 +222,7 @@ impl RemotingCommand {
         command_custom_header: Option<ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
     ) -> Self {
         self.command_custom_header = command_custom_header;
+        self.custom_header_to_net = false;
         self
     }
 
@@ -225,6 +231,7 @@ impl RemotingCommand {
         T: CommandCustomHeader + Sync + Send + 'static,
     {
         self.command_custom_header = Some(ArcMut::new(Box::new(command_custom_header)));
+        self.custom_header_to_net = false;
     }
 
     pub fn set_code(mut self, code: impl Into<i32>) -> Self {
@@ -297,6 +304,7 @@ impl RemotingCommand {
     #[inline]
     pub fn set_ext_fields(mut self, ext_fields: HashMap<CheetahString, CheetahString>) -> Self {
         self.ext_fields = Some(ext_fields);
+        self.custom_header_to_net = false;
         self
     }
 
@@ -426,6 +434,10 @@ impl RemotingCommand {
     /// Convert custom header to network format (merge into ext_fields)
     #[inline]
     pub fn make_custom_header_to_net(&mut self) {
+        if self.custom_header_to_net {
+            return;
+        }
+
         if let Some(header) = &self.command_custom_header {
             if let Some(header_map) = header.to_map() {
                 match &mut self.ext_fields {
@@ -441,6 +453,12 @@ impl RemotingCommand {
                 }
             }
         }
+        self.custom_header_to_net = true;
+    }
+
+    #[inline]
+    pub fn materialize_custom_header_to_ext_fields(&mut self) {
+        self.make_custom_header_to_net();
     }
 
     #[inline]
@@ -894,6 +912,7 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
+        self.custom_header_to_net = false;
         match self.command_custom_header.as_mut() {
             None => None,
             Some(value) => value.as_mut().as_any_mut().downcast_mut::<T>(),
@@ -914,6 +933,7 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
+        self.custom_header_to_net = false;
         match self.command_custom_header.as_mut() {
             None => Err(Self::custom_header_missing_error::<T>()),
             Some(value) => value
@@ -939,6 +959,7 @@ impl RemotingCommand {
     }
 
     pub fn command_custom_header_mut(&mut self) -> Option<&mut dyn CommandCustomHeader> {
+        self.custom_header_to_net = false;
         match self.command_custom_header.as_mut() {
             None => None,
             Some(value) => Some(value.as_mut().as_mut()),
@@ -1042,7 +1063,30 @@ mod tests {
 
     impl CommandCustomHeader for TestCustomHeader {
         fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-            Some(HashMap::new())
+            Some(HashMap::from([(
+                CheetahString::from_static_str("value"),
+                CheetahString::from_string(self.value.to_string()),
+            )]))
+        }
+    }
+
+    impl FromMap for TestCustomHeader {
+        type Error = rocketmq_error::RocketMQError;
+        type Target = Self;
+
+        fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self, Self::Error> {
+            let value = map
+                .get(&CheetahString::from_static_str("value"))
+                .ok_or_else(|| {
+                    rocketmq_error::RocketMQError::illegal_argument("missing value test custom header field")
+                })?
+                .parse::<i32>()
+                .map_err(|error| {
+                    rocketmq_error::RocketMQError::illegal_argument(format!(
+                        "invalid value test custom header field: {error}"
+                    ))
+                })?;
+            Ok(Self { value })
         }
     }
 
@@ -1115,6 +1159,24 @@ mod tests {
 
         let header = command.try_read_custom_header_ref::<TestCustomHeader>().unwrap();
         assert_eq!(header.value, 9);
+    }
+
+    #[test]
+    fn materialize_custom_header_to_ext_fields_keeps_header_decodable_and_header_object_visible() {
+        let mut command = RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 });
+
+        command.materialize_custom_header_to_ext_fields();
+
+        assert!(command.command_custom_header_ref().is_some());
+        assert_eq!(
+            command
+                .ext_fields()
+                .and_then(|fields| fields.get(&CheetahString::from_static_str("value")))
+                .map(CheetahString::as_str),
+            Some("7")
+        );
+        let decoded = command.decode_command_custom_header::<TestCustomHeader>().unwrap();
+        assert_eq!(decoded.value, 7);
     }
 
     #[test]
