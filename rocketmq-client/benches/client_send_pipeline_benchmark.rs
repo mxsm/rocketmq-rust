@@ -18,8 +18,14 @@
 //! network: message construction, request command construction, callback
 //! dispatch, and async backpressure permit acquisition.
 
+use std::fs;
 use std::hint::black_box;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -41,6 +47,14 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use tokio::sync::Semaphore;
+
+#[derive(Debug)]
+struct AsyncSchedulingOutput {
+    task_count: usize,
+    elapsed: Duration,
+    p99_latency: Duration,
+    submitted_tasks: usize,
+}
 
 fn build_message(body_size: usize) -> Message {
     Message::builder()
@@ -91,6 +105,106 @@ fn build_send_request(mut message: Message) -> RemotingCommand {
     let header = build_send_header(&message);
     let body = message.get_body().cloned().unwrap_or_else(|| Bytes::from_static(b""));
     RemotingCommand::create_request_command(RequestCode::SendMessageV2, header).set_body(body)
+}
+
+fn percentile_duration(samples: &mut [Duration], percentile: usize) -> Duration {
+    assert!(!samples.is_empty(), "percentile requires at least one sample");
+    samples.sort_unstable();
+    samples[((samples.len() - 1) * percentile) / 100]
+}
+
+fn run_async_send_scheduling(
+    runtime: &tokio::runtime::Runtime,
+    task_count: usize,
+    nested_api_spawn: bool,
+) -> AsyncSchedulingOutput {
+    runtime.block_on(async move {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let started_at = Instant::now();
+
+        for _ in 0..task_count {
+            let tx = tx.clone();
+            if nested_api_spawn {
+                tokio::spawn(async move {
+                    tokio::spawn(async move {
+                        let _ = tx.send(started_at.elapsed());
+                    });
+                });
+            } else {
+                tokio::spawn(async move {
+                    let _ = tx.send(started_at.elapsed());
+                });
+            }
+        }
+        drop(tx);
+
+        let mut latencies = Vec::with_capacity(task_count);
+        while let Some(latency) = rx.recv().await {
+            latencies.push(latency);
+            if latencies.len() == task_count {
+                break;
+            }
+        }
+
+        assert_eq!(latencies.len(), task_count);
+        let elapsed = started_at.elapsed();
+        let p99_latency = percentile_duration(&mut latencies, 99);
+        AsyncSchedulingOutput {
+            task_count,
+            elapsed,
+            p99_latency,
+            submitted_tasks: if nested_api_spawn { task_count * 2 } else { task_count },
+        }
+    })
+}
+
+fn scheduling_output_json(output: &AsyncSchedulingOutput) -> serde_json::Value {
+    serde_json::json!({
+        "task_count": output.task_count,
+        "submitted_tasks": output.submitted_tasks,
+        "elapsed_us": output.elapsed.as_micros(),
+        "p99_latency_us": output.p99_latency.as_micros(),
+    })
+}
+
+fn write_async_send_scheduling_report_artifact(runtime: &tokio::runtime::Runtime) {
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("rocketmq-client should live below workspace root")
+        .to_path_buf();
+    let output_dir = workspace_root.join("target/runtime-baseline/prototype");
+    fs::create_dir_all(&output_dir).expect("runtime benchmark artifact directory should be created");
+
+    let generated_at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_millis();
+    let cases = [10_000usize, 100_000]
+        .into_iter()
+        .map(|task_count| {
+            let single = run_async_send_scheduling(runtime, task_count, false);
+            let nested = run_async_send_scheduling(runtime, task_count, true);
+            let submitted_task_reduction_percent =
+                100.0 * (nested.submitted_tasks - single.submitted_tasks) as f64 / nested.submitted_tasks as f64;
+            serde_json::json!({
+                "task_count": task_count,
+                "single_spawn": scheduling_output_json(&single),
+                "nested_spawn": scheduling_output_json(&nested),
+                "submitted_task_reduction_percent": submitted_task_reduction_percent,
+            })
+        })
+        .collect::<Vec<_>>();
+    let payload = serde_json::json!({
+        "case": "client_send_pipeline.async_send_scheduling_layers",
+        "generated_at_unix_ms": generated_at_unix_ms,
+        "cases": cases,
+    });
+    let path = output_dir.join("client-async-send-scheduling-report.json");
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&payload).expect("async send scheduling artifact should serialize"),
+    )
+    .expect("async send scheduling artifact should be written");
 }
 
 fn bench_message_construction(c: &mut Criterion) {
@@ -210,6 +324,38 @@ fn bench_callback_dispatch(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_async_send_scheduling_layers(c: &mut Criterion) {
+    let runtime = tokio::runtime::Runtime::new().expect("benchmark runtime should start");
+    write_async_send_scheduling_report_artifact(&runtime);
+
+    let mut group = c.benchmark_group("client_send_pipeline/async_send_scheduling_layers");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(1));
+
+    for task_count in [10_000usize, 100_000] {
+        group.throughput(Throughput::Elements(task_count as u64));
+        for (label, nested_api_spawn) in [("single_spawn", false), ("nested_spawn", true)] {
+            group.bench_with_input(
+                BenchmarkId::new(label, task_count),
+                &(task_count, nested_api_spawn),
+                |b, &(task_count, nested_api_spawn)| {
+                    b.iter(|| {
+                        let output = run_async_send_scheduling(&runtime, task_count, nested_api_spawn);
+                        black_box((
+                            output.task_count,
+                            output.elapsed,
+                            output.p99_latency,
+                            output.submitted_tasks,
+                        ));
+                    });
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_message_construction,
@@ -217,5 +363,6 @@ criterion_group!(
     bench_send_header_construction,
     bench_async_backpressure_envelope,
     bench_callback_dispatch,
+    bench_async_send_scheduling_layers,
 );
 criterion_main!(benches);

@@ -127,6 +127,14 @@ fn wait_for_tasks_finished(task_handles: &[ClientRuntimeTaskHandle]) {
     }
 }
 
+fn percentile_duration_micros(samples: &[Duration], percentile: usize) -> u128 {
+    assert!(!samples.is_empty(), "percentile requires at least one sample");
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    let index = ((sorted.len() - 1) * percentile) / 100;
+    sorted[index].as_micros()
+}
+
 fn snapshot_json(snapshot: ClientSharedFallbackSnapshot) -> serde_json::Value {
     serde_json::json!({
         "state": format!("{:?}", snapshot.state),
@@ -145,7 +153,10 @@ fn snapshot_json(snapshot: ClientSharedFallbackSnapshot) -> serde_json::Value {
 }
 
 fn write_client_runtime_report_artifact() {
-    let output = run_fallback_spawn(128);
+    let sample_count = 10;
+    let outputs = (0..sample_count).map(|_| run_fallback_spawn(128)).collect::<Vec<_>>();
+    let elapsed_samples = outputs.iter().map(|output| output.elapsed).collect::<Vec<_>>();
+    let output = outputs.last().expect("runtime report should have at least one sample");
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("rocketmq-client should live below workspace root")
@@ -162,8 +173,12 @@ fn write_client_runtime_report_artifact() {
         "generated_at_unix_ms": generated_at_unix_ms,
         "fallback_spawn": {
             "task_count": output.task_count,
+            "sample_count": sample_count,
             "elapsed_ms": output.elapsed.as_millis(),
             "elapsed_us": output.elapsed.as_micros(),
+            "elapsed_p50_us": percentile_duration_micros(&elapsed_samples, 50),
+            "elapsed_p95_us": percentile_duration_micros(&elapsed_samples, 95),
+            "elapsed_p99_us": percentile_duration_micros(&elapsed_samples, 99),
             "acquire_count_delta": output.acquire_count_delta,
             "runtime_created_delta": output.runtime_created_delta,
             "runtime_reused_delta": output.runtime_reused_delta,
