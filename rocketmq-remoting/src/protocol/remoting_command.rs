@@ -919,10 +919,11 @@ impl RemotingCommand {
         }
     }
 
-    pub fn read_custom_header_mut_from_ref<T>(&self) -> Option<&mut T>
+    pub fn read_custom_header_mut_from_ref<T>(&mut self) -> Option<&mut T>
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
+        self.custom_header_to_net = false;
         match self.command_custom_header.as_ref() {
             None => None,
             Some(value) => value.mut_from_ref().as_any_mut().downcast_mut::<T>(),
@@ -1177,6 +1178,28 @@ mod tests {
         );
         let decoded = command.decode_command_custom_header::<TestCustomHeader>().unwrap();
         assert_eq!(decoded.value, 7);
+    }
+
+    #[test]
+    fn read_custom_header_mut_from_ref_invalidates_materialized_ext_fields() {
+        let mut command = RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 });
+        command.materialize_custom_header_to_ext_fields();
+
+        let header = command
+            .read_custom_header_mut_from_ref::<TestCustomHeader>()
+            .expect("test header should be available");
+        header.value = 9;
+        command.make_custom_header_to_net();
+
+        assert_eq!(
+            command
+                .ext_fields()
+                .and_then(|fields| fields.get(&CheetahString::from_static_str("value")))
+                .map(CheetahString::as_str),
+            Some("9")
+        );
+        let decoded = command.decode_command_custom_header::<TestCustomHeader>().unwrap();
+        assert_eq!(decoded.value, 9);
     }
 
     #[test]
