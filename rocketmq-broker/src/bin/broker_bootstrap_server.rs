@@ -27,6 +27,9 @@ use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
 use rocketmq_remoting::protocol::remoting_command;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::ServiceContext;
 #[cfg(feature = "tieredstore")]
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -46,15 +49,36 @@ const LOGO: &str = r#"
 const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 
 fn main() -> Result<()> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .max_blocking_threads(ENTRYPOINT_MAX_BLOCKING_THREADS)
-        .enable_all()
-        .build()
-        .context("failed to build broker Tokio runtime")?;
-    runtime.block_on(run())
+    let owner = RuntimeOwner::new(broker_runtime_config()).context("failed to build broker runtime")?;
+    let service_context = owner.context().service_context("rocketmq-broker-runtime");
+
+    let run_result = owner.block_on(run(service_context));
+    let shutdown_result = owner
+        .shutdown_runtime_blocking()
+        .context("failed to shutdown broker runtime");
+
+    match (run_result, shutdown_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(report)) => {
+            if !report.is_healthy() {
+                tracing::warn!(
+                    report = %report.to_json(),
+                    "broker runtime shutdown report is unhealthy"
+                );
+            }
+            Ok(())
+        }
+    }
 }
 
-async fn run() -> Result<()> {
+fn broker_runtime_config() -> RuntimeConfig {
+    let mut config = RuntimeConfig::broker_default();
+    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
+    config
+}
+
+async fn run(service_context: ServiceContext) -> Result<()> {
     // Initialize logger
     rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO)?;
 
@@ -115,6 +139,7 @@ async fn run() -> Result<()> {
     Builder::new()
         .set_broker_config(broker_config)
         .set_message_store_config(message_store_config)
+        .set_service_context(service_context)
         .build()
         .boot()
         .await;

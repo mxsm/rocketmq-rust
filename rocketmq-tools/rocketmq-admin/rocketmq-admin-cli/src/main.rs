@@ -16,6 +16,8 @@ use rocketmq_admin_cli::rocketmq_cli::RocketMQCli;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_remoting::protocol::remoting_command;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 
 const CLI_RUNTIME_STACK_SIZE: usize = 16 * 1024 * 1024;
 
@@ -24,18 +26,30 @@ fn main() {
         .name("rocketmq-admin-cli-main".to_string())
         .stack_size(CLI_RUNTIME_STACK_SIZE)
         .spawn(|| {
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .thread_stack_size(CLI_RUNTIME_STACK_SIZE)
-                .build()
-                .expect("failed to build rocketmq-admin-cli runtime");
-            runtime.block_on(async_main());
+            let owner =
+                RuntimeOwner::new(admin_cli_runtime_config()).expect("failed to build rocketmq-admin-cli runtime");
+            owner.block_on(async_main());
+            let report = owner
+                .shutdown_runtime_blocking()
+                .expect("failed to shutdown rocketmq-admin-cli runtime");
+            if !report.is_healthy() {
+                tracing::warn!(
+                    report = %report.to_json(),
+                    "rocketmq-admin-cli runtime shutdown report is unhealthy"
+                );
+            }
         })
         .expect("failed to spawn rocketmq-admin-cli main thread");
 
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
+}
+
+fn admin_cli_runtime_config() -> RuntimeConfig {
+    let mut config = RuntimeConfig::server_default("rocketmq-admin-cli");
+    config.thread_stack_size = Some(CLI_RUNTIME_STACK_SIZE);
+    config
 }
 
 async fn async_main() {

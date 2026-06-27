@@ -21,22 +21,50 @@ use rocketmq_proxy::ProxyError;
 use rocketmq_proxy::ProxyMode;
 use rocketmq_proxy::ProxyResult;
 use rocketmq_proxy::ProxyRuntime;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::ServiceContext;
 use tracing::info;
 
 const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 
 fn main() -> ProxyResult<()> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .max_blocking_threads(ENTRYPOINT_MAX_BLOCKING_THREADS)
-        .enable_all()
-        .build()
-        .map_err(|error| ProxyError::Transport {
-            message: format!("failed to build proxy Tokio runtime: {error}"),
-        })?;
-    runtime.block_on(run())
+    let owner = RuntimeOwner::new(proxy_runtime_config()).map_err(proxy_runtime_error("build proxy runtime"))?;
+    let service_context = owner.context().service_context("rocketmq-proxy-runtime");
+
+    let run_result = owner.block_on(run(service_context));
+    let shutdown_result = owner
+        .shutdown_runtime_blocking()
+        .map_err(proxy_runtime_error("shutdown proxy runtime"));
+
+    match (run_result, shutdown_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(report)) => {
+            if !report.is_healthy() {
+                tracing::warn!(
+                    report = %report.to_json(),
+                    "proxy runtime shutdown report is unhealthy"
+                );
+            }
+            Ok(())
+        }
+    }
 }
 
-async fn run() -> ProxyResult<()> {
+fn proxy_runtime_config() -> RuntimeConfig {
+    let mut config = RuntimeConfig::proxy_default();
+    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
+    config
+}
+
+fn proxy_runtime_error(action: &'static str) -> impl FnOnce(rocketmq_runtime::RuntimeError) -> ProxyError {
+    move |error| ProxyError::Transport {
+        message: format!("failed to {action}: {error}"),
+    }
+}
+
+async fn run(service_context: ServiceContext) -> ProxyResult<()> {
     rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO)?;
 
     let args = Args::parse()?;
@@ -56,7 +84,9 @@ async fn run() -> ProxyResult<()> {
         config.mode, config.grpc.listen_addr, config.remoting.enabled, config.remoting.listen_addr
     );
 
-    ProxyRuntime::new(config)
+    ProxyRuntime::builder(config)
+        .with_service_context(service_context)
+        .build()
         .serve_with_shutdown(async {
             if let Err(error) = tokio::signal::ctrl_c().await {
                 eprintln!("failed to listen for ctrl-c: {error}");

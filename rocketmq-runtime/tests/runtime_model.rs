@@ -32,28 +32,82 @@ impl Drop for DropCounter {
 }
 
 #[test]
-fn production_tokio_entrypoints_set_max_blocking_threads() {
+fn owned_runtime_entrypoints_use_runtime_owner() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("runtime crate should be inside the workspace");
-    let explicit_tokio_entrypoints = [
-        "rocketmq-broker/src/bin/broker_bootstrap_server.rs",
-        "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
-        "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs",
+    let runtime_owner_entrypoints = [
+        (
+            "rocketmq-broker/src/bin/broker_bootstrap_server.rs",
+            "RuntimeOwner::new(broker_runtime_config())",
+            "broker runtime shutdown report is unhealthy",
+        ),
+        (
+            "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
+            "RuntimeOwner::new(namesrv_runtime_config())",
+            "namesrv runtime shutdown report is unhealthy",
+        ),
+        (
+            "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+            "RuntimeOwner::new(proxy_runtime_config())",
+            "proxy runtime shutdown report is unhealthy",
+        ),
+        (
+            "rocketmq-controller/src/bin/controller_bootstrap.rs",
+            "RuntimeOwner::new(controller_runtime_config())",
+            "controller runtime shutdown report is unhealthy",
+        ),
+        (
+            "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs",
+            "RuntimeOwner::new(admin_tui_runtime_config())",
+            "rocketmq-admin-tui runtime shutdown report is unhealthy",
+        ),
+        (
+            "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/main.rs",
+            "RuntimeOwner::new(admin_cli_runtime_config())",
+            "rocketmq-admin-cli runtime shutdown report is unhealthy",
+        ),
     ];
 
-    for entrypoint in explicit_tokio_entrypoints {
+    for (entrypoint, runtime_owner_call, shutdown_warning) in runtime_owner_entrypoints {
         let source = fs::read_to_string(workspace_root.join(entrypoint))
             .unwrap_or_else(|error| panic!("failed to read {entrypoint}: {error}"));
         assert!(
-            source.contains("tokio::runtime::Builder::new_multi_thread()"),
-            "{entrypoint} must build its Tokio runtime explicitly"
+            source.contains(runtime_owner_call),
+            "{entrypoint} must use RuntimeOwner as the owned runtime boundary"
         );
         assert!(
-            source.contains(".max_blocking_threads(ENTRYPOINT_MAX_BLOCKING_THREADS)"),
-            "{entrypoint} must set max_blocking_threads explicitly"
+            source.contains(shutdown_warning),
+            "{entrypoint} must keep the runtime shutdown health warning"
         );
     }
+}
+
+#[test]
+fn broker_entrypoint_uses_runtime_owner_and_service_context() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("runtime crate should be inside the workspace");
+    let entrypoint = "rocketmq-broker/src/bin/broker_bootstrap_server.rs";
+    let source = fs::read_to_string(workspace_root.join(entrypoint))
+        .unwrap_or_else(|error| panic!("failed to read {entrypoint}: {error}"));
+
+    assert!(
+        source.contains("RuntimeOwner::new(broker_runtime_config())"),
+        "{entrypoint} must use RuntimeOwner as the owned runtime boundary"
+    );
+    assert!(
+        source.contains("ENTRYPOINT_MAX_BLOCKING_THREADS"),
+        "{entrypoint} must preserve the explicit blocking-thread cap"
+    );
+    assert!(
+        source.contains(".set_service_context(service_context)"),
+        "{entrypoint} must inject a ServiceContext into the broker bootstrap"
+    );
+    assert!(
+        source.contains("broker runtime shutdown report is unhealthy"),
+        "{entrypoint} must keep the broker-specific runtime shutdown health warning"
+    );
 }
 
 #[test]
@@ -92,6 +146,25 @@ fn namesrv_runtime_config_uses_namesrv_thread_name() {
     assert!(config.max_blocking_threads > 0);
     assert!(config.enable_io);
     assert!(config.enable_time);
+}
+
+#[test]
+fn server_runtime_config_supports_optional_thread_stack_size() {
+    let mut config = RuntimeConfig::server_default("rocketmq-admin-cli");
+    assert_eq!(config.thread_stack_size, None);
+
+    config.thread_stack_size = Some(16 * 1024 * 1024);
+    RuntimeOwner::new(config)
+        .expect("runtime owner should accept a positive thread stack size")
+        .shutdown_runtime_blocking()
+        .expect("runtime owner should shutdown outside Tokio runtime");
+
+    let mut invalid = RuntimeConfig::server_default("invalid-stack-runtime");
+    invalid.thread_stack_size = Some(0);
+    assert!(matches!(
+        RuntimeOwner::new(invalid),
+        Err(RuntimeError::InvalidConfig(message)) if message.contains("thread_stack_size")
+    ));
 }
 
 #[test]

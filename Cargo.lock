@@ -4031,6 +4031,7 @@ dependencies = [
  "rocketmq-common",
  "rocketmq-error",
  "rocketmq-remoting",
+ "rocketmq-runtime",
  "rocketmq-rust",
  "serde",
  "serde_json",
@@ -4070,12 +4071,14 @@ dependencies = [
  "rocketmq-admin-core",
  "rocketmq-common",
  "rocketmq-remoting",
+ "rocketmq-runtime",
  "rocketmq-rust",
  "serde",
  "serde_json",
  "strum",
  "tokio",
  "tokio-stream",
+ "tracing",
 ]
 
 [[package]]

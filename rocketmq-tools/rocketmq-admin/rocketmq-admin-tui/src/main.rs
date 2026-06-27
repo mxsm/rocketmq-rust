@@ -23,14 +23,38 @@ mod view_model;
 
 use crate::rocketmq_tui_app::RocketmqTuiApp;
 
+use anyhow::Context;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
+
 const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 
 fn main() -> anyhow::Result<()> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .max_blocking_threads(ENTRYPOINT_MAX_BLOCKING_THREADS)
-        .enable_all()
-        .build()?;
-    runtime.block_on(run())
+    let owner = RuntimeOwner::new(admin_tui_runtime_config()).context("failed to build rocketmq-admin-tui runtime")?;
+    let run_result = owner.block_on(run());
+    let shutdown_result = owner
+        .shutdown_runtime_blocking()
+        .context("failed to shutdown rocketmq-admin-tui runtime");
+
+    match (run_result, shutdown_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(report)) => {
+            if !report.is_healthy() {
+                tracing::warn!(
+                    report = %report.to_json(),
+                    "rocketmq-admin-tui runtime shutdown report is unhealthy"
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+fn admin_tui_runtime_config() -> RuntimeConfig {
+    let mut config = RuntimeConfig::server_default("rocketmq-admin-tui");
+    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
+    config
 }
 
 async fn run() -> anyhow::Result<()> {

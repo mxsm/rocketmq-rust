@@ -17,6 +17,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use futures::FutureExt;
+use rocketmq_runtime::ServiceContext;
 
 use crate::auth::build_cluster_acl_rpc_hook;
 use crate::auth::ProxyAuthRuntime;
@@ -46,6 +47,7 @@ pub struct ProxyRuntimeBuilder {
     hooks: Option<ProxyHookChain>,
     metrics: Option<ProxyMetrics>,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+    service_context: Option<ServiceContext>,
 }
 
 impl ProxyRuntimeBuilder {
@@ -79,6 +81,11 @@ impl ProxyRuntimeBuilder {
         self
     }
 
+    pub fn with_service_context(mut self, service_context: ServiceContext) -> Self {
+        self.service_context = Some(service_context);
+        self
+    }
+
     pub fn build(self) -> ProxyRuntime<DefaultMessagingProcessor> {
         let local_mode_supported = true;
         let (service_manager, remoting_backend) = match self.service_manager {
@@ -98,6 +105,7 @@ impl ProxyRuntimeBuilder {
             self.hooks.unwrap_or_default(),
             self.metrics.unwrap_or_default(),
             remoting_backend,
+            self.service_context,
         )
     }
 }
@@ -111,6 +119,7 @@ pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     auth_runtime: Option<ProxyAuthRuntime>,
     auth_metadata_service: Option<Arc<dyn MetadataService>>,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+    service_context: Option<ServiceContext>,
 }
 
 impl ProxyRuntime<DefaultMessagingProcessor> {
@@ -123,6 +132,7 @@ impl ProxyRuntime<DefaultMessagingProcessor> {
             hooks: None,
             metrics: None,
             remoting_backend: None,
+            service_context: None,
         }
     }
 
@@ -146,6 +156,7 @@ where
             ProxyHookChain::default(),
             ProxyMetrics::default(),
             None,
+            None,
         )
     }
 
@@ -159,6 +170,7 @@ where
         hooks: ProxyHookChain,
         metrics: ProxyMetrics,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+        service_context: Option<ServiceContext>,
     ) -> Self {
         #[cfg(feature = "observability")]
         crate::observability::init_observability_metrics(&config);
@@ -178,6 +190,7 @@ where
             auth_runtime,
             auth_metadata_service,
             remoting_backend,
+            service_context,
         }
     }
 
@@ -202,6 +215,7 @@ where
             auth_runtime,
             auth_metadata_service,
             remoting_backend,
+            service_context,
         } = self;
         if matches!(config.mode, ProxyMode::Local) && !local_mode_supported {
             return Err(crate::error::ProxyError::not_implemented(
@@ -217,7 +231,14 @@ where
         let auth_runtime_for_shutdown = auth_runtime.clone();
         let grpc_service = grpc_service.with_auth_runtime(auth_runtime.clone());
         if !config.remoting.enabled {
-            let result = server::serve(config, grpc_service, shutdown).await;
+            let result = match service_context.as_ref().map(|context| context.task_group().clone()) {
+                Some(parent_task_group) => {
+                    server::serve_with_report_with_task_group(config, grpc_service, shutdown, parent_task_group)
+                        .await
+                        .map(|_| ())
+                }
+                None => server::serve(config, grpc_service, shutdown).await,
+            };
             let shutdown_result = match auth_runtime_for_shutdown {
                 Some(auth_runtime) => Some(auth_runtime.shutdown().await),
                 None => None,
@@ -239,15 +260,49 @@ where
         let remoting_shutdown = async move {
             shared_shutdown.await;
         };
-        let grpc_future = server::serve(config.clone(), grpc_service, grpc_shutdown);
-        let remoting_future = remoting::serve(
-            config,
-            processor,
-            sessions,
-            auth_runtime,
-            remoting_backend,
-            remoting_shutdown,
-        );
+        let grpc_parent_task_group = service_context.as_ref().map(|context| context.task_group().clone());
+        let remoting_service_context = service_context.map(|context| context.child("rocketmq-proxy.remoting"));
+        let grpc_config = config.clone();
+        let remoting_config = config;
+        let grpc_future = async move {
+            match grpc_parent_task_group {
+                Some(parent_task_group) => server::serve_with_report_with_task_group(
+                    grpc_config,
+                    grpc_service,
+                    grpc_shutdown,
+                    parent_task_group,
+                )
+                .await
+                .map(|_| ()),
+                None => server::serve(grpc_config, grpc_service, grpc_shutdown).await,
+            }
+        };
+        let remoting_future = async move {
+            match remoting_service_context {
+                Some(service_context) => remoting::serve_with_service_context(
+                    service_context,
+                    remoting_config,
+                    processor,
+                    sessions,
+                    auth_runtime,
+                    remoting_backend,
+                    remoting_shutdown,
+                )
+                .await
+                .map(|_| ()),
+                None => {
+                    remoting::serve(
+                        remoting_config,
+                        processor,
+                        sessions,
+                        auth_runtime,
+                        remoting_backend,
+                        remoting_shutdown,
+                    )
+                    .await
+                }
+            }
+        };
         let (grpc_result, remoting_result) = tokio::join!(grpc_future, remoting_future);
         let shutdown_result = match auth_runtime_for_shutdown {
             Some(auth_runtime) => Some(auth_runtime.shutdown().await),

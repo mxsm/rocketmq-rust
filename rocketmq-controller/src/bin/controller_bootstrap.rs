@@ -23,6 +23,9 @@ use rocketmq_controller::ControllerManager;
 use rocketmq_error::ControllerError;
 use rocketmq_error::Result;
 use rocketmq_remoting::protocol::remoting_command;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::ServiceContext;
 use rocketmq_rust::ArcMut;
 use tracing::info;
 
@@ -46,8 +49,40 @@ use tracing::info;
 /// # Print configuration and exit
 /// rocketmq-controller-rust --print-config-item
 /// ```
-#[rocketmq_rust::main]
-pub async fn main() -> Result<()> {
+const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
+
+pub fn main() -> Result<()> {
+    let owner = RuntimeOwner::new(controller_runtime_config())
+        .map_err(|error| ControllerError::Internal(format!("failed to build controller runtime: {error}")))?;
+    let service_context = owner.context().service_context("rocketmq-controller-runtime");
+
+    let run_result = owner.block_on(run(service_context));
+    let shutdown_result = owner
+        .shutdown_runtime_blocking()
+        .map_err(|error| ControllerError::Internal(format!("failed to shutdown controller runtime: {error}")));
+
+    match (run_result, shutdown_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(()), Ok(report)) => {
+            if !report.is_healthy() {
+                tracing::warn!(
+                    report = %report.to_json(),
+                    "controller runtime shutdown report is unhealthy"
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+fn controller_runtime_config() -> RuntimeConfig {
+    let mut config = RuntimeConfig::controller_default();
+    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
+    config
+}
+
+async fn run(service_context: ServiceContext) -> Result<()> {
     // Initialize logger
     rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO)?;
 
@@ -86,7 +121,7 @@ pub async fn main() -> Result<()> {
 
     // Create controller manager
     info!("Creating Controller Manager...");
-    let controller_manager = ControllerManager::new(config).await?;
+    let controller_manager = ControllerManager::new_with_service_context(config, service_context).await?;
     let controller_manager = ArcMut::new(controller_manager);
     // Initialize controller
     info!("Initializing Controller...");

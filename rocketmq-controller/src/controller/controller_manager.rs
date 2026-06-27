@@ -63,6 +63,7 @@ use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
@@ -428,18 +429,27 @@ impl ControllerManager {
     /// - Metadata store creation fails
     /// - Configuration is invalid
     pub async fn new(config: ControllerConfig) -> Result<Self> {
-        Self::new_with_optional_task_group(config, None).await
+        Self::new_with_optional_runtime_context(config, None, None).await
     }
 
     pub async fn new_with_task_group(config: ControllerConfig, parent_task_group: TaskGroup) -> Result<Self> {
-        Self::new_with_optional_task_group(config, Some(parent_task_group)).await
+        Self::new_with_optional_runtime_context(config, None, Some(parent_task_group)).await
     }
 
-    async fn new_with_optional_task_group(
+    pub async fn new_with_service_context(config: ControllerConfig, service_context: ServiceContext) -> Result<Self> {
+        Self::new_with_optional_runtime_context(config, Some(service_context), None).await
+    }
+
+    async fn new_with_optional_runtime_context(
         config: ControllerConfig,
+        service_context: Option<ServiceContext>,
         parent_task_group: Option<TaskGroup>,
     ) -> Result<Self> {
         let config = ArcMut::new(config);
+        let parent_task_group = service_context
+            .as_ref()
+            .map(|context| context.task_group().clone())
+            .or(parent_task_group);
 
         info!("Creating controller manager with config: {:?}", config);
 
@@ -484,7 +494,13 @@ impl ControllerManager {
             listen_port,
             ..Default::default()
         };
-        let remoting_server = Some(RocketMQServer::new(Arc::new(server_config)));
+        let remoting_server = Some(match service_context.as_ref() {
+            Some(service_context) => RocketMQServer::new_with_service_context(
+                Arc::new(server_config),
+                service_context.child("controller.remoting-server"),
+            ),
+            None => RocketMQServer::new(Arc::new(server_config)),
+        });
         info!("Remoting server created on port {}", listen_port);
 
         // Initialize remoting client for outbound RPC
@@ -787,11 +803,21 @@ impl ControllerManager {
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             *self.remoting_server_shutdown_tx.lock() = Some(shutdown_tx);
             if let Err(error) = manager_task_group.spawn_service("controller.remoting-server", async move {
-                server
-                    .run_with_shutdown(request_processor, broker_housekeeping_service, async move {
+                let report = server
+                    .run_with_shutdown_report(request_processor, broker_housekeeping_service, async move {
                         let _ = shutdown_rx.await;
                     })
                     .await;
+                match report.as_ref() {
+                    Some(report) if !report.is_healthy() => {
+                        warn!(
+                            report = %report.to_json(),
+                            "Controller remoting server shutdown report is unhealthy"
+                        );
+                    }
+                    None => warn!("Controller remoting server stopped without a shutdown report"),
+                    _ => {}
+                }
             }) {
                 return Err(ControllerError::Internal(format!(
                     "Failed to spawn controller remoting server task: {error}"

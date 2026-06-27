@@ -82,7 +82,10 @@ use rocketmq_remoting::remoting_server::rocketmq_tokio_server;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ShutdownReport;
 use tokio::net::TcpListener;
+use tracing::warn;
 
 use crate::auth::build_cluster_acl_rpc_hook;
 use crate::auth::is_auth_error;
@@ -196,20 +199,92 @@ where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
+    serve_with_optional_service_context(
+        None,
+        config,
+        processor,
+        sessions,
+        auth_runtime,
+        remoting_backend,
+        shutdown,
+    )
+    .await
+    .map(|_| ())
+}
+
+#[doc(hidden)]
+pub async fn serve_with_service_context<P, F>(
+    service_context: ServiceContext,
+    config: Arc<ProxyConfig>,
+    processor: Arc<P>,
+    sessions: ClientSessionRegistry,
+    auth_runtime: Option<ProxyAuthRuntime>,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+    shutdown: F,
+) -> ProxyResult<Option<ShutdownReport>>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ()> + Send + 'static,
+{
+    serve_with_optional_service_context(
+        Some(service_context),
+        config,
+        processor,
+        sessions,
+        auth_runtime,
+        remoting_backend,
+        shutdown,
+    )
+    .await
+}
+
+async fn serve_with_optional_service_context<P, F>(
+    service_context: Option<ServiceContext>,
+    config: Arc<ProxyConfig>,
+    processor: Arc<P>,
+    sessions: ClientSessionRegistry,
+    auth_runtime: Option<ProxyAuthRuntime>,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+    shutdown: F,
+) -> ProxyResult<Option<ShutdownReport>>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ()> + Send + 'static,
+{
     let addr = config.remoting.socket_addr()?;
     let listener = TcpListener::bind(addr).await.map_err(|error| ProxyError::Transport {
         message: format!("proxy remoting server failed to bind {addr}: {error}"),
     })?;
-    rocketmq_tokio_server::run(
-        listener,
-        shutdown,
-        ProxyRemotingRequestProcessor::new(config, processor, sessions, auth_runtime, remoting_backend),
-        None,
-        Vec::new(),
-        None,
-    )
-    .await;
-    Ok(())
+    let request_processor =
+        ProxyRemotingRequestProcessor::new(config, processor, sessions, auth_runtime, remoting_backend);
+    let report = match service_context {
+        Some(service_context) => {
+            rocketmq_tokio_server::run_with_report_with_service_context(
+                service_context,
+                listener,
+                shutdown,
+                request_processor,
+                None,
+                Vec::new(),
+                None,
+            )
+            .await
+        }
+        None => {
+            rocketmq_tokio_server::run_with_report(listener, shutdown, request_processor, None, Vec::new(), None).await
+        }
+    };
+    match report.as_ref() {
+        Some(report) if !report.is_healthy() => {
+            warn!(
+                report = %report.to_json(),
+                "Proxy remoting server task shutdown report is unhealthy"
+            );
+        }
+        None => warn!("Proxy remoting server stopped without a shutdown report"),
+        _ => {}
+    }
+    Ok(report)
 }
 
 pub struct ProxyRemotingDispatcher<P> {
