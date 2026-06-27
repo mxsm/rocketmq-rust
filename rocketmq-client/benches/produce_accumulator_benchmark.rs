@@ -19,7 +19,10 @@
 
 use std::collections::HashMap;
 use std::hint::black_box;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use criterion::criterion_group;
@@ -138,6 +141,69 @@ async fn bench_dashmap_concurrent_insert(num_keys: usize, operations_per_key: us
     }
 
     // Wait for all tasks
+    for task in tasks {
+        let _ = task.await;
+    }
+
+    start.elapsed()
+}
+
+fn reserve_with_lock(counter: &AtomicU64, lock: &StdMutex<()>, body_size: u64, limit: u64) -> bool {
+    let _guard = lock.lock().expect("benchmark reservation lock should not be poisoned");
+    let current = counter.load(Ordering::Acquire);
+    let Some(next) = current.checked_add(body_size) else {
+        return false;
+    };
+    if next > limit {
+        return false;
+    }
+    counter.store(next, Ordering::Release);
+    true
+}
+
+fn reserve_with_fetch_update(counter: &AtomicU64, body_size: u64, limit: u64) -> bool {
+    counter
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            let next = current.checked_add(body_size)?;
+            (next <= limit).then_some(next)
+        })
+        .is_ok()
+}
+
+async fn bench_capacity_reservation(
+    num_keys: usize,
+    operations_per_key: usize,
+    workers_per_key: usize,
+    use_fetch_update: bool,
+) -> Duration {
+    let counter = Arc::new(AtomicU64::new(0));
+    let lock = Arc::new(StdMutex::new(()));
+    let total_operations = num_keys * operations_per_key;
+    let limit = total_operations as u64 + 1;
+    let operations_per_worker = operations_per_key / workers_per_key.max(1);
+    let start = std::time::Instant::now();
+    let mut tasks = Vec::new();
+
+    for _key_id in 0..num_keys {
+        for _ in 0..workers_per_key {
+            let counter = counter.clone();
+            let lock = lock.clone();
+            let task = tokio::spawn(async move {
+                let mut accepted = 0usize;
+                for _ in 0..operations_per_worker {
+                    let reserved = if use_fetch_update {
+                        reserve_with_fetch_update(&counter, 1, limit)
+                    } else {
+                        reserve_with_lock(&counter, &lock, 1, limit)
+                    };
+                    accepted += usize::from(reserved);
+                }
+                black_box(accepted);
+            });
+            tasks.push(task);
+        }
+    }
+
     for task in tasks {
         let _ = task.await;
     }
@@ -284,6 +350,35 @@ fn bench_concurrent_insert(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_capacity_reservation_control(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("capacity_reservation");
+
+    for num_keys in [1usize, 4, 16, 64] {
+        let operations_per_key = 256;
+        let workers_per_key = if num_keys == 1 { 64 } else { 4 };
+        group.throughput(Throughput::Elements((num_keys * operations_per_key) as u64));
+
+        for (label, use_fetch_update) in [("Mutex_Lock", false), ("Atomic_FetchUpdate", true)] {
+            group.bench_with_input(BenchmarkId::new(label, num_keys), &num_keys, |b, &num_keys| {
+                b.to_async(&rt).iter(|| async move {
+                    bench_capacity_reservation(num_keys, operations_per_key, workers_per_key, use_fetch_update).await
+                });
+            });
+        }
+    }
+
+    group.throughput(Throughput::Elements(40 * 50));
+    for (label, use_fetch_update) in [("Mutex_Lock_40x50", false), ("Atomic_FetchUpdate_40x50", true)] {
+        group.bench_function(label, |b| {
+            b.to_async(&rt)
+                .iter(|| async move { bench_capacity_reservation(40, 50, 2, use_fetch_update).await });
+        });
+    }
+
+    group.finish();
+}
+
 /// Benchmark Group: Mixed Read/Write Operations
 fn bench_mixed_operations(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
@@ -368,6 +463,7 @@ fn bench_high_contention(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_concurrent_insert,
+    bench_capacity_reservation_control,
     bench_mixed_operations,
     bench_multi_topic_scenario,
     bench_high_contention

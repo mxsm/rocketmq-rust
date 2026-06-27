@@ -19,6 +19,7 @@ use std::hash::Hasher;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -62,7 +63,6 @@ pub struct ProduceAccumulator {
     guard_thread_for_async_send: GuardForAsyncSendService,
     currently_hold_size: Arc<AtomicU64>,
     instance_name: String,
-    currently_hold_size_lock: Arc<parking_lot::Mutex<()>>,
     sync_send_batchs: Arc<DashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>,
     async_send_batchs: Arc<DashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>,
 }
@@ -145,11 +145,13 @@ impl ProduceAccumulator {
     pub fn shutdown(&mut self) {
         self.guard_thread_for_sync_send.shutdown();
         self.guard_thread_for_async_send.shutdown();
+        self.release_pending_batches_on_shutdown();
     }
 
     pub async fn shutdown_async(&mut self) {
         self.guard_thread_for_sync_send.shutdown_async().await;
         self.guard_thread_for_async_send.shutdown_async().await;
+        self.release_pending_batches_on_shutdown_async().await;
     }
 
     fn guard_task_count(&self) -> usize {
@@ -157,17 +159,78 @@ impl ProduceAccumulator {
     }
 
     pub(crate) fn try_add_message<T: MessageTrait>(&self, message: &T) -> bool {
-        let lock = self.currently_hold_size_lock.lock();
-        if self.currently_hold_size.load(Ordering::Acquire) as usize >= self.total_hold_size {
-            drop(lock);
-            return false;
-        }
         let body_size = message.get_body().map_or(0, |body| body.len()) as u64;
-        if body_size > 0 {
-            self.currently_hold_size.fetch_add(body_size, Ordering::AcqRel);
+        if body_size == 0 {
+            return true;
         }
-        drop(lock);
-        true
+        self.currently_hold_size
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                let next = current.checked_add(body_size)?;
+                (next <= self.total_hold_size as u64).then_some(next)
+            })
+            .is_ok()
+    }
+
+    fn release_hold_size(&self, size: u64) {
+        release_hold_size(&self.currently_hold_size, size);
+    }
+
+    fn release_pending_batches_on_shutdown(&self) {
+        let error_message = "ProduceAccumulator is shutdown";
+        let sync_batches = self
+            .sync_send_batchs
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        self.sync_send_batchs.clear();
+        for batch in sync_batches {
+            match batch.try_lock() {
+                Ok(mut batch_guard) => {
+                    close_pending_batch(&mut batch_guard, &self.currently_hold_size, error_message, false);
+                }
+                Err(_) => tracing::warn!("skip locked sync batch during ProduceAccumulator shutdown"),
+            }
+        }
+
+        let async_batches = self
+            .async_send_batchs
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        self.async_send_batchs.clear();
+        for batch in async_batches {
+            match batch.try_lock() {
+                Ok(mut batch_guard) => {
+                    close_pending_batch(&mut batch_guard, &self.currently_hold_size, error_message, true);
+                }
+                Err(_) => tracing::warn!("skip locked async batch during ProduceAccumulator shutdown"),
+            }
+        }
+    }
+
+    async fn release_pending_batches_on_shutdown_async(&self) {
+        let error_message = "ProduceAccumulator is shutdown";
+        let sync_batches = self
+            .sync_send_batchs
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        self.sync_send_batchs.clear();
+        for batch in sync_batches {
+            let mut batch_guard = batch.lock().await;
+            close_pending_batch(&mut batch_guard, &self.currently_hold_size, error_message, false);
+        }
+
+        let async_batches = self
+            .async_send_batchs
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        self.async_send_batchs.clear();
+        for batch in async_batches {
+            let mut batch_guard = batch.lock().await;
+            close_pending_batch(&mut batch_guard, &self.currently_hold_size, error_message, true);
+        }
     }
 
     pub(crate) async fn send<M: MessageTrait + Send + Sync + 'static>(
@@ -182,37 +245,42 @@ impl ProduceAccumulator {
             .get_or_create_sync_send_batch(partition_key.clone(), &default_mq_producer)
             .await;
 
+        let reserved_size = message.get_body().map_or(0, |body| body.len()) as u64;
+
         // Lock the batch for exclusive access and add message
-        let add_result = {
+        let add_outcome = {
             let mut batch_guard = batch.lock().await;
-            batch_guard.add(message, None)?
+            batch_guard.add(message, None, self.hold_size, self.hold_ms as u64)?
         }; // batch_guard dropped here
 
         // Check if add failed (batch closed)
-        if !add_result {
+        let Some(add_outcome) = add_outcome else {
             // Batch is closed, cannot retry because message is already consumed
             self.sync_send_batchs.remove(&partition_key);
+            self.release_hold_size(reserved_size);
             return Err(crate::mq_client_err!("Batch is closed, cannot add message"));
-        }
-
-        // Get the message index (count - 1 at the time of add)
-        let msg_index = {
-            let batch_guard = batch.lock().await;
-            batch_guard.count - 1
         };
+
+        let msg_index = add_outcome.index;
+        let notify = add_outcome.notify;
+        if add_outcome.should_flush {
+            let batch_to_send = self.sync_send_batchs.remove(&partition_key).map(|(_, v)| v);
+            if let Some(batch_arc) = batch_to_send {
+                self.send_batch_sync(batch_arc).await?;
+            }
+        }
 
         // Wait for batch to be ready and sent
         loop {
             // Check if batch is closed (sent)
-            let (is_closed, should_send, notify) = {
+            let (state, should_send) = {
                 let batch_guard = batch.lock().await;
-                let is_closed = batch_guard.closed.load(Ordering::Acquire);
+                let state = batch_guard.state();
                 let should_send = batch_guard.ready_to_send(self.hold_size, self.hold_ms as u64);
-                let notify = batch_guard.completion_notify.clone();
-                (is_closed, should_send, notify)
+                (state, should_send)
             };
 
-            if is_closed {
+            if state == BatchState::Closed {
                 // Batch has been sent, get result
                 let (error, result) = {
                     let batch_guard = batch.lock().await;
@@ -231,7 +299,7 @@ impl ProduceAccumulator {
                 return Ok(result);
             }
 
-            if should_send {
+            if state == BatchState::Open && should_send {
                 // Try to remove and send the batch
                 let batch_to_send = self.sync_send_batchs.remove(&partition_key).map(|(_, v)| v);
 
@@ -239,11 +307,12 @@ impl ProduceAccumulator {
                     // Send the batch (without holding the lock)
                     self.send_batch_sync(batch_arc).await?;
                     // Continue to wait loop to get result
+                    continue;
                 }
-            } else {
-                // Wait for notification instead of polling
-                notify.notified().await;
             }
+
+            // Wait for notification instead of polling
+            notify.notified().await;
         }
     }
 
@@ -263,22 +332,19 @@ impl ProduceAccumulator {
             .get_or_create_async_send_batch(partition_key.clone(), &default_mq_producer)
             .await;
 
+        let reserved_size = message.get_body().map_or(0, |body| body.len()) as u64;
+
         // Lock the batch for exclusive access
-        let add_result = {
+        let add_outcome = {
             let mut batch_guard = batch.lock().await;
-            batch_guard.add(message, send_callback)?
+            batch_guard.add(message, send_callback, self.hold_size, self.hold_ms as u64)?
         }; // batch_guard dropped here
 
         // Try to add message to batch
-        match add_result {
-            true => {
+        match add_outcome {
+            Some(add_outcome) => {
                 // Message added successfully, check if ready to send
-                let should_send = {
-                    let batch_guard = batch.lock().await;
-                    batch_guard.ready_to_send(self.hold_size, self.hold_ms as u64)
-                };
-
-                if should_send {
+                if add_outcome.should_flush {
                     // Remove batch from map
                     let batch_to_send = self.async_send_batchs.remove(&partition_key).map(|(_, v)| v);
 
@@ -289,9 +355,10 @@ impl ProduceAccumulator {
                 }
                 Ok(())
             }
-            false => {
+            None => {
                 // Batch is closed, remove it and return error
                 self.async_send_batchs.remove(&partition_key);
+                self.release_hold_size(reserved_size);
                 Err(crate::mq_client_err!("Batch is closed, please retry"))
             }
         }
@@ -334,9 +401,16 @@ impl ProduceAccumulator {
         // Extract all data from the batch without holding the lock across await
         let (messages, mq, mut producer, total_size, count, notify, aggregate_key, keys) = {
             let mut batch_guard = batch.lock().await;
-            batch_guard.closed.store(true, Ordering::Release);
+            if !batch_guard.try_mark_closing() {
+                return Ok(());
+            }
+            let notify = batch_guard.completion_notify.clone();
 
             if batch_guard.messages.is_empty() {
+                let error = crate::mq_client_err!("No messages to send");
+                batch_guard.send_error = Some(error.to_string());
+                batch_guard.mark_closed();
+                notify.notify_waiters();
                 return Err(crate::mq_client_err!("No messages to send"));
             }
 
@@ -345,29 +419,39 @@ impl ProduceAccumulator {
             let mq = batch_guard.aggregate_key.mq.clone();
             let producer = batch_guard.default_mq_producer.clone();
             let count = batch_guard.count;
-            let notify = batch_guard.completion_notify.clone();
             let aggregate_key = batch_guard.aggregate_key.clone();
             let keys = batch_guard.keys.clone();
 
             (messages, mq, producer, total_size, count, notify, aggregate_key, keys)
         }; // Lock released here
 
-        let batch_msg = build_message_batch(messages, &aggregate_key, &keys)?;
+        let batch_msg = match build_message_batch(messages, &aggregate_key, &keys) {
+            Ok(batch_msg) => batch_msg,
+            Err(error) => {
+                self.release_hold_size(total_size);
+                let mut batch_guard = batch.lock().await;
+                batch_guard.send_error = Some(error.to_string());
+                batch_guard.mark_closed();
+                notify.notify_waiters();
+                return Err(error);
+            }
+        };
 
         // Send without holding any locks
         let send_result = match producer.send_direct(batch_msg, mq, None).await {
             Ok(result) => result,
             Err(error) => {
-                self.currently_hold_size.fetch_sub(total_size, Ordering::AcqRel);
+                self.release_hold_size(total_size);
                 let mut batch_guard = batch.lock().await;
                 batch_guard.send_error = Some(error.to_string());
+                batch_guard.mark_closed();
                 notify.notify_waiters();
                 return Err(error);
             }
         };
 
         // Decrement currently_hold_size
-        self.currently_hold_size.fetch_sub(total_size, Ordering::AcqRel);
+        self.release_hold_size(total_size);
 
         // Store results in batch for waiting threads to retrieve
         if let Some(result) = send_result {
@@ -376,12 +460,17 @@ impl ProduceAccumulator {
                 Err(error) => {
                     let mut batch_guard = batch.lock().await;
                     batch_guard.send_error = Some(error.to_string());
+                    batch_guard.mark_closed();
                     notify.notify_waiters();
                     return Err(error);
                 }
             };
             let mut batch_guard = batch.lock().await;
             batch_guard.send_results = Some(send_results);
+            batch_guard.mark_closed();
+        } else {
+            let batch_guard = batch.lock().await;
+            batch_guard.mark_closed();
         }
 
         // Notify all waiting threads
@@ -393,12 +482,19 @@ impl ProduceAccumulator {
     /// Send a batch asynchronously (extracted to avoid holding lock across await)
     async fn send_batch_async(&self, batch: Arc<Mutex<MessageAccumulation>>) -> rocketmq_error::RocketMQResult<()> {
         // Extract all data from the batch without holding the lock across await
-        let (messages, mq, mut producer, total_size, callbacks, aggregate_key, keys) = {
+        let (messages, mq, mut producer, total_size, callbacks, aggregate_key, keys, notify) = {
             let mut batch_guard = batch.lock().await;
-            batch_guard.closed.store(true, Ordering::Release);
+            if !batch_guard.try_mark_closing() {
+                return Ok(());
+            }
+            let notify = batch_guard.completion_notify.clone();
 
             if batch_guard.messages.is_empty() {
-                return Err(crate::mq_client_err!("No messages to send"));
+                let error = crate::mq_client_err!("No messages to send");
+                batch_guard.send_error = Some(error.to_string());
+                batch_guard.mark_closed();
+                notify.notify_waiters();
+                return Err(error);
             }
 
             let total_size = batch_guard.messages_size.load(Ordering::Acquire) as u64;
@@ -409,17 +505,41 @@ impl ProduceAccumulator {
             let aggregate_key = batch_guard.aggregate_key.clone();
             let keys = batch_guard.keys.clone();
 
-            (messages, mq, producer, total_size, callbacks, aggregate_key, keys)
+            (
+                messages,
+                mq,
+                producer,
+                total_size,
+                callbacks,
+                aggregate_key,
+                keys,
+                notify,
+            )
         }; // Lock released here
 
-        let batch_msg = build_message_batch(messages, &aggregate_key, &keys)?;
+        let batch_msg = match build_message_batch(messages, &aggregate_key, &keys) {
+            Ok(batch_msg) => batch_msg,
+            Err(error) => {
+                self.release_hold_size(total_size);
+                let mut batch_guard = batch.lock().await;
+                batch_guard.send_error = Some(error.to_string());
+                batch_guard.mark_closed();
+                notify.notify_waiters();
+                for callback in &callbacks {
+                    callback.on_exception(&error);
+                }
+                return Err(error);
+            }
+        };
 
         let currently_hold_size = self.currently_hold_size.clone();
         let callback_currently_hold_size = currently_hold_size.clone();
+        let callbacks = Arc::new(callbacks);
+        let callbacks_for_send_error = callbacks.clone();
 
         // Create combined callback
         let combined_callback = move |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-            callback_currently_hold_size.fetch_sub(total_size, Ordering::AcqRel);
+            release_hold_size(&callback_currently_hold_size, total_size);
             // Invoke all registered callbacks
             if let Some(result) = result {
                 match split_send_results(result, callbacks.len()) {
@@ -429,13 +549,13 @@ impl ProduceAccumulator {
                         }
                     }
                     Err(error) => {
-                        for callback in &callbacks {
+                        for callback in callbacks.iter() {
                             callback.on_exception(&error);
                         }
                     }
                 }
             } else if let Some(error) = error {
-                for callback in &callbacks {
+                for callback in callbacks.iter() {
                     callback.on_exception(error);
                 }
             }
@@ -446,11 +566,55 @@ impl ProduceAccumulator {
             .send_direct(batch_msg, mq, Some(Arc::new(combined_callback)))
             .await;
 
-        if send_result.is_err() {
-            currently_hold_size.fetch_sub(total_size, Ordering::AcqRel);
+        if let Err(error) = &send_result {
+            release_hold_size(&currently_hold_size, total_size);
+            let mut batch_guard = batch.lock().await;
+            batch_guard.send_error = Some(error.to_string());
+            batch_guard.mark_closed();
+            notify.notify_waiters();
+            for callback in callbacks_for_send_error.iter() {
+                callback.on_exception(error);
+            }
+        } else {
+            let batch_guard = batch.lock().await;
+            batch_guard.mark_closed();
+            notify.notify_waiters();
         }
 
         send_result.map(|_| ())
+    }
+}
+
+fn release_hold_size(currently_hold_size: &AtomicU64, size: u64) {
+    if size == 0 {
+        return;
+    }
+    let _ = currently_hold_size.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        Some(current.saturating_sub(size))
+    });
+}
+
+fn close_pending_batch(
+    batch: &mut MessageAccumulation,
+    currently_hold_size: &AtomicU64,
+    error_message: &str,
+    notify_callbacks: bool,
+) {
+    if !batch.try_mark_closing() {
+        return;
+    }
+
+    let total_size = batch.messages_size.load(Ordering::Acquire) as u64;
+    release_hold_size(currently_hold_size, total_size);
+    batch.send_error = Some(error_message.to_string());
+    batch.mark_closed();
+    batch.completion_notify.notify_waiters();
+
+    if notify_callbacks {
+        let error = crate::mq_client_err!(error_message.to_string());
+        for callback in &batch.send_callbacks {
+            callback.on_exception(&error);
+        }
     }
 }
 
@@ -604,6 +768,40 @@ mod tests {
     }
 
     #[test]
+    fn try_add_message_concurrent_capacity_reservation_does_not_exceed_limit() {
+        let mut accumulator = ProduceAccumulator::new("test");
+        accumulator.set_total_batch_max_bytes(64).unwrap();
+        let accumulator = Arc::new(accumulator);
+        let successes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let message = Message::builder()
+            .topic("test-topic")
+            .body_slice(b"x")
+            .build_unchecked();
+
+        let threads = (0..16)
+            .map(|_| {
+                let accumulator = accumulator.clone();
+                let successes = successes.clone();
+                let message = message.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..16 {
+                        if accumulator.try_add_message(&message) {
+                            successes.fetch_add(1, Ordering::AcqRel);
+                        }
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for thread in threads {
+            thread.join().expect("capacity reservation thread should finish");
+        }
+
+        assert!(successes.load(Ordering::Acquire) <= 64);
+        assert!(accumulator.currently_hold_size.load(Ordering::Acquire) <= 64);
+    }
+
+    #[test]
     fn message_accumulation_ready_to_send_requires_size_over_hold_size_like_java() {
         let producer = DefaultMQProducer::default();
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
@@ -613,10 +811,77 @@ mod tests {
             .body_slice(b"hello")
             .build_unchecked();
 
-        accumulation.add(message, None).unwrap();
+        assert!(accumulation.add(message, None, 5, 30_000).unwrap().is_some());
 
         assert!(!accumulation.ready_to_send(5, 30_000));
         assert!(accumulation.ready_to_send(4, 30_000));
+    }
+
+    #[test]
+    fn message_accumulation_add_returns_index_and_flush_decision() {
+        let producer = DefaultMQProducer::default();
+        let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
+        let mut accumulation = MessageAccumulation::new(aggregate_key, ArcMut::new(producer));
+        let first = Message::builder()
+            .topic("test-topic")
+            .body_slice(b"abc")
+            .build_unchecked();
+        let second = Message::builder()
+            .topic("test-topic")
+            .body_slice(b"def")
+            .build_unchecked();
+
+        let first_outcome = accumulation
+            .add(first, None, 5, 30_000)
+            .unwrap()
+            .expect("first message should be added");
+        let second_outcome = accumulation
+            .add(second, None, 5, 30_000)
+            .unwrap()
+            .expect("second message should be added");
+
+        assert_eq!(first_outcome.index, 0);
+        assert!(!first_outcome.should_flush);
+        assert_eq!(second_outcome.index, 1);
+        assert!(second_outcome.should_flush);
+    }
+
+    #[test]
+    fn message_accumulation_closing_state_is_claimed_once() {
+        let producer = DefaultMQProducer::default();
+        let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
+        let accumulation = MessageAccumulation::new(aggregate_key, ArcMut::new(producer));
+
+        assert_eq!(accumulation.state(), BatchState::Open);
+        assert!(accumulation.try_mark_closing());
+        assert_eq!(accumulation.state(), BatchState::Closing);
+        assert!(!accumulation.try_mark_closing());
+        accumulation.mark_closed();
+        assert_eq!(accumulation.state(), BatchState::Closed);
+    }
+
+    #[test]
+    fn close_pending_batch_does_not_release_batch_already_claimed_for_send() {
+        let producer = DefaultMQProducer::default();
+        let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
+        let mut accumulation = MessageAccumulation::new(aggregate_key, ArcMut::new(producer));
+        let message = Message::builder()
+            .topic("test-topic")
+            .body_slice(b"hello")
+            .build_unchecked();
+        assert!(accumulation.add(message, None, usize::MAX, 30_000).unwrap().is_some());
+        assert!(accumulation.try_mark_closing());
+
+        let currently_hold_size = AtomicU64::new(5);
+        close_pending_batch(
+            &mut accumulation,
+            &currently_hold_size,
+            "ProduceAccumulator is shutdown",
+            false,
+        );
+
+        assert_eq!(accumulation.state(), BatchState::Closing);
+        assert_eq!(currently_hold_size.load(Ordering::Acquire), 5);
     }
 
     #[test]
@@ -642,8 +907,8 @@ mod tests {
             .body_slice(b"world")
             .build_unchecked();
 
-        accumulation.add(first, None).unwrap();
-        accumulation.add(second, None).unwrap();
+        assert!(accumulation.add(first, None, usize::MAX, 30_000).unwrap().is_some());
+        assert!(accumulation.add(second, None, usize::MAX, 30_000).unwrap().is_some());
 
         let messages = std::mem::take(&mut accumulation.messages);
         let batch = build_message_batch(messages, &accumulation.aggregate_key, &accumulation.keys).unwrap();
@@ -698,6 +963,40 @@ mod tests {
 
         assert!(accumulator.guard_thread_for_sync_send.task_handle.is_none());
         assert!(accumulator.guard_thread_for_async_send.task_handle.is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_async_releases_pending_async_batch_hold_size_and_callbacks() {
+        let accumulator = ProduceAccumulator::new("accumulator-shutdown-release-test");
+        let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
+        let mut accumulation =
+            MessageAccumulation::new(aggregate_key.clone(), ArcMut::new(DefaultMQProducer::default()));
+        let callback_invoked = Arc::new(AtomicBool::new(false));
+        let callback_invoked_for_callback = callback_invoked.clone();
+        let callback: ArcSendCallback = Arc::new(
+            move |_result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
+                assert!(error.is_some());
+                callback_invoked_for_callback.store(true, Ordering::Release);
+            },
+        );
+        let message = Message::builder()
+            .topic("test-topic")
+            .body_slice(b"hello")
+            .build_unchecked();
+        assert!(accumulation
+            .add(message, Some(callback), usize::MAX, 30_000)
+            .unwrap()
+            .is_some());
+        accumulator.currently_hold_size.store(5, Ordering::Release);
+        accumulator
+            .async_send_batchs
+            .insert(aggregate_key, Arc::new(Mutex::new(accumulation)));
+
+        accumulator.release_pending_batches_on_shutdown_async().await;
+
+        assert_eq!(accumulator.currently_hold_size.load(Ordering::Acquire), 0);
+        assert!(callback_invoked.load(Ordering::Acquire));
+        assert!(accumulator.async_send_batchs.is_empty());
     }
 
     #[tokio::test]
@@ -894,7 +1193,7 @@ struct MessageAccumulation {
     messages: Vec<Box<dyn MessageTrait + Send + Sync + 'static>>,
     send_callbacks: Vec<ArcSendCallback>,
     keys: HashSet<String>,
-    closed: Arc<AtomicBool>,
+    state: AtomicU8,
     send_results: Option<Vec<SendResult>>, // Stores results for sync send
     send_error: Option<String>,
     aggregate_key: AggregateKey,
@@ -904,6 +1203,30 @@ struct MessageAccumulation {
     completion_notify: Arc<tokio::sync::Notify>,
 }
 
+#[derive(Clone)]
+struct AddOutcome {
+    index: usize,
+    should_flush: bool,
+    notify: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BatchState {
+    Open = 0,
+    Closing = 1,
+    Closed = 2,
+}
+
+impl BatchState {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::Open,
+            1 => Self::Closing,
+            _ => Self::Closed,
+        }
+    }
+}
+
 impl MessageAccumulation {
     pub fn new(aggregate_key: AggregateKey, default_mq_producer: ArcMut<DefaultMQProducer>) -> Self {
         Self {
@@ -911,7 +1234,7 @@ impl MessageAccumulation {
             messages: vec![],
             send_callbacks: vec![],
             keys: HashSet::new(),
-            closed: Arc::new(AtomicBool::new(false)),
+            state: AtomicU8::new(BatchState::Open as u8),
             send_results: None,
             send_error: None,
             aggregate_key,
@@ -920,6 +1243,25 @@ impl MessageAccumulation {
             create_time: current_millis(),
             completion_notify: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    fn state(&self) -> BatchState {
+        BatchState::from_u8(self.state.load(Ordering::Acquire))
+    }
+
+    fn try_mark_closing(&self) -> bool {
+        self.state
+            .compare_exchange(
+                BatchState::Open as u8,
+                BatchState::Closing as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    fn mark_closed(&self) {
+        self.state.store(BatchState::Closed as u8, Ordering::Release);
     }
 
     /// Check if batch is ready to send based on size or time thresholds
@@ -943,10 +1285,12 @@ impl MessageAccumulation {
         &mut self,
         msg: M,
         send_callback: Option<ArcSendCallback>,
-    ) -> rocketmq_error::RocketMQResult<bool> {
+        hold_size: usize,
+        hold_ms: u64,
+    ) -> rocketmq_error::RocketMQResult<Option<AddOutcome>> {
         // Check if batch is already closed
-        if self.closed.load(Ordering::Acquire) {
-            return Ok(false);
+        if self.state() != BatchState::Open {
+            return Ok(None);
         }
 
         // Calculate message body size
@@ -974,9 +1318,14 @@ impl MessageAccumulation {
         }
 
         // Increment count
+        let index = self.count;
         self.count += 1;
 
-        Ok(true)
+        Ok(Some(AddOutcome {
+            index,
+            should_flush: self.ready_to_send(hold_size, hold_ms),
+            notify: self.completion_notify.clone(),
+        }))
     }
 }
 
@@ -1107,7 +1456,7 @@ impl GuardForSyncSendService {
                     let batch_guard = batch.lock().await;
                     let messages_size = batch_guard.messages_size.load(Ordering::Acquire);
                     if messages_size == 0 {
-                        batch_guard.closed.store(true, Ordering::Release);
+                        batch_guard.mark_closed();
                         to_remove.push(key.clone());
                     }
                 }
@@ -1209,8 +1558,7 @@ impl GuardForAsyncSendService {
                     // Quick check without locking first
                     let should_check = {
                         let batch_guard = batch.lock().await;
-                        let is_closed = batch_guard.closed.load(Ordering::Acquire);
-                        !is_closed && batch_guard.ready_to_send(hold_size, hold_ms as u64)
+                        batch_guard.state() == BatchState::Open && batch_guard.ready_to_send(hold_size, hold_ms as u64)
                     };
 
                     if should_check {
@@ -1248,7 +1596,7 @@ impl GuardForAsyncSendService {
                 for key in empty_keys {
                     if let Some((_, batch)) = batches.remove(&key) {
                         let batch_guard = batch.lock().await;
-                        batch_guard.closed.store(true, Ordering::Release);
+                        batch_guard.mark_closed();
                     }
                 }
             }
@@ -1263,12 +1611,19 @@ impl GuardForAsyncSendService {
         currently_hold_size: Arc<AtomicU64>,
     ) -> rocketmq_error::RocketMQResult<()> {
         // Extract all data from the batch without holding the lock across await
-        let (messages, mq, mut producer, total_size, callbacks, aggregate_key, keys) = {
+        let (messages, mq, mut producer, total_size, callbacks, aggregate_key, keys, notify) = {
             let mut batch_guard = batch.lock().await;
-            batch_guard.closed.store(true, Ordering::Release);
+            if !batch_guard.try_mark_closing() {
+                return Ok(());
+            }
+            let notify = batch_guard.completion_notify.clone();
 
             if batch_guard.messages.is_empty() {
-                return Err(crate::mq_client_err!("No messages to send"));
+                let error = crate::mq_client_err!("No messages to send");
+                batch_guard.send_error = Some(error.to_string());
+                batch_guard.mark_closed();
+                notify.notify_waiters();
+                return Err(error);
             }
 
             let total_size = batch_guard.messages_size.load(Ordering::Acquire) as u64;
@@ -1279,16 +1634,40 @@ impl GuardForAsyncSendService {
             let aggregate_key = batch_guard.aggregate_key.clone();
             let keys = batch_guard.keys.clone();
 
-            (messages, mq, producer, total_size, callbacks, aggregate_key, keys)
+            (
+                messages,
+                mq,
+                producer,
+                total_size,
+                callbacks,
+                aggregate_key,
+                keys,
+                notify,
+            )
         }; // Lock released here
 
-        let batch_msg = build_message_batch(messages, &aggregate_key, &keys)?;
+        let batch_msg = match build_message_batch(messages, &aggregate_key, &keys) {
+            Ok(batch_msg) => batch_msg,
+            Err(error) => {
+                release_hold_size(&currently_hold_size, total_size);
+                let mut batch_guard = batch.lock().await;
+                batch_guard.send_error = Some(error.to_string());
+                batch_guard.mark_closed();
+                notify.notify_waiters();
+                for callback in &callbacks {
+                    callback.on_exception(&error);
+                }
+                return Err(error);
+            }
+        };
 
         let callback_currently_hold_size = currently_hold_size.clone();
+        let callbacks = Arc::new(callbacks);
+        let callbacks_for_send_error = callbacks.clone();
 
         // Create combined callback
         let combined_callback = move |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-            callback_currently_hold_size.fetch_sub(total_size, Ordering::AcqRel);
+            release_hold_size(&callback_currently_hold_size, total_size);
             if let Some(result) = result {
                 match split_send_results(result, callbacks.len()) {
                     Ok(send_results) => {
@@ -1297,13 +1676,13 @@ impl GuardForAsyncSendService {
                         }
                     }
                     Err(error) => {
-                        for callback in &callbacks {
+                        for callback in callbacks.iter() {
                             callback.on_exception(&error);
                         }
                     }
                 }
             } else if let Some(error) = error {
-                for callback in &callbacks {
+                for callback in callbacks.iter() {
                     callback.on_exception(error);
                 }
             }
@@ -1314,8 +1693,19 @@ impl GuardForAsyncSendService {
             .send_direct(batch_msg, mq, Some(Arc::new(combined_callback)))
             .await;
 
-        if send_result.is_err() {
-            currently_hold_size.fetch_sub(total_size, Ordering::AcqRel);
+        if let Err(error) = &send_result {
+            release_hold_size(&currently_hold_size, total_size);
+            let mut batch_guard = batch.lock().await;
+            batch_guard.send_error = Some(error.to_string());
+            batch_guard.mark_closed();
+            notify.notify_waiters();
+            for callback in callbacks_for_send_error.iter() {
+                callback.on_exception(error);
+            }
+        } else {
+            let batch_guard = batch.lock().await;
+            batch_guard.mark_closed();
+            notify.notify_waiters();
         }
 
         send_result.map(|_| ())

@@ -1515,10 +1515,10 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + std::marker::Sync + 'static,
     {
+        Validators::check_message(Some(&msg), self.producer_config())?;
         if !self.can_batch(&msg) {
             self.send_direct(msg, mq, send_callback).await
         } else {
-            Validators::check_message(Some(&msg), self.producer_config())?;
             MessageClientIDSetter::set_uniq_id(&mut msg);
             if send_callback.is_none() {
                 let mq_producer = self.clone();
@@ -1537,13 +1537,6 @@ impl DefaultMQProducer {
     where
         M: MessageTrait,
     {
-        // produceAccumulator is full
-        let Some(produce_accumulator) = self.producer_config.produce_accumulator.as_ref() else {
-            return false;
-        };
-        if !produce_accumulator.try_add_message(msg) {
-            return false;
-        }
         // delay message do not support batch processing
         if msg.delay_time_level() > 0
             || msg.get_delay_time_ms() > 0
@@ -1558,6 +1551,13 @@ impl DefaultMQProducer {
         }
         // message which have been assigned to producer group do not support batch processing
         if msg.get_properties().contains_key(MessageConst::PROPERTY_PRODUCER_GROUP) {
+            return false;
+        }
+        // produceAccumulator is full
+        let Some(produce_accumulator) = self.producer_config.produce_accumulator.as_ref() else {
+            return false;
+        };
+        if !produce_accumulator.try_add_message(msg) {
             return false;
         }
         true
