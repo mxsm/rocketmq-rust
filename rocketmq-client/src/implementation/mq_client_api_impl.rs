@@ -48,7 +48,6 @@ use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task;
-use crate::runtime::spawn_client_task_on;
 use cheetah_string::CheetahString;
 
 use crate::base::validators::Validators;
@@ -2352,7 +2351,8 @@ impl MQClientAPIImpl {
                     retry_times_when_send_failed,
                     context,
                     producer,
-                );
+                )
+                .await;
                 Ok(None)
             }
             CommunicationMode::Oneway => {
@@ -2445,7 +2445,7 @@ impl MQClientAPIImpl {
         self.process_send_response(broker_name, msg, &response, addr)
     }
 
-    fn send_message_async<T: MessageTrait>(
+    async fn send_message_async<T: MessageTrait>(
         &mut self,
         addr: &CheetahString,
         broker_name: &CheetahString,
@@ -2497,7 +2497,6 @@ impl MQClientAPIImpl {
         let instance_cloned = instance.clone();
         let mq_fault_strategy = producer.mq_fault_strategy.clone();
         let callback_executor = producer.producer_config().callback_executor().cloned();
-        let async_sender_executor = producer.producer_config().async_sender_executor().cloned();
 
         // Clone the context data that we need for hook execution
         // We'll use the execute_send_message_hook_after method which requires a context
@@ -2515,28 +2514,25 @@ impl MQClientAPIImpl {
             trace_start_time: c.trace_start_time,
         });
 
-        let async_send_task = async move {
-            Self::send_message_async_impl(
-                remoting_client,
-                client_config,
-                mq_fault_strategy,
-                current_addr,
-                current_broker_name,
-                msg_topic,
-                msg_uniq_id,
-                is_batch_message,
-                timeout_millis,
-                current_request,
-                send_callback,
-                topic_publish_info_cloned,
-                instance_cloned,
-                retry_times_when_send_failed,
-                context_data,
-                callback_executor,
-            )
-            .await;
-        };
-        Self::spawn_async_send_task(async_sender_executor, async_send_task);
+        Self::send_message_async_impl(
+            remoting_client,
+            client_config,
+            mq_fault_strategy,
+            current_addr,
+            current_broker_name,
+            msg_topic,
+            msg_uniq_id,
+            is_batch_message,
+            timeout_millis,
+            current_request,
+            send_callback,
+            topic_publish_info_cloned,
+            instance_cloned,
+            retry_times_when_send_failed,
+            context_data,
+            callback_executor,
+        )
+        .await;
     }
 
     /// Background task implementation for async message sending.
@@ -2812,15 +2808,6 @@ impl MQClientAPIImpl {
 
     fn boxed_context_error(message: String) -> Arc<Box<dyn StdError + Send + Sync>> {
         Arc::new(Box::new(std::io::Error::other(message)))
-    }
-
-    fn spawn_async_send_task<F>(async_sender_executor: Option<tokio::runtime::Handle>, task: F)
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        if let Err(error) = spawn_client_task_on("rocketmq-client-async-send", async_sender_executor.as_ref(), task) {
-            warn!("Failed to spawn rocketmq-client-async-send task: {}", error);
-        }
     }
 
     fn spawn_api_background_task<F>(
@@ -7111,42 +7098,6 @@ mod tests {
         assert_eq!(thread_name, "rocketmq-callback-error");
         assert!(!has_result);
         assert_eq!(error.as_deref(), Some("callback failure"));
-    }
-
-    #[test]
-    fn async_send_task_uses_configured_async_sender_executor_like_java() {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("rocketmq-async-sender")
-            .enable_all()
-            .build()
-            .expect("async sender runtime should build");
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        MQClientAPIImpl::spawn_async_send_task(Some(runtime.handle().clone()), async move {
-            tx.send(std::thread::current().name().unwrap_or_default().to_string())
-                .expect("test receiver should be alive");
-        });
-
-        let thread_name = rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("async send task should run on configured runtime");
-        assert_eq!(thread_name, "rocketmq-async-sender");
-    }
-
-    #[test]
-    fn async_send_task_without_tokio_runtime_runs_on_fallback_thread() {
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        MQClientAPIImpl::spawn_async_send_task(None, async move {
-            tx.send(std::thread::current().name().unwrap_or_default().to_string())
-                .expect("test receiver should be alive");
-        });
-
-        let thread_name = rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("async send task should run on fallback runtime");
-        assert_eq!(thread_name, "rocketmq-client-fallback");
     }
 
     #[tokio::test]

@@ -3664,6 +3664,76 @@ mod tests {
         assert_eq!(thread_name, "rocketmq-client-fallback");
     }
 
+    #[test]
+    fn execute_async_message_send_uses_configured_async_sender_executor() {
+        let async_sender_runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("rocketmq-producer-async-sender")
+            .enable_all()
+            .build()
+            .expect("async sender runtime should build");
+        let caller_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("caller runtime should build");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut producer = running_producer_without_client();
+        producer.set_async_sender_executor(async_sender_runtime.handle().clone());
+
+        caller_runtime.block_on(async {
+            producer
+                .execute_async_message_send(
+                    async move {
+                        let current_thread = std::thread::current();
+                        let thread_name = current_thread.name().unwrap_or_default().to_string();
+                        tx.send(thread_name).expect("test receiver should still be open");
+                    },
+                    None,
+                    1000,
+                    Instant::now(),
+                    1,
+                )
+                .await
+                .expect("async send should spawn on configured runtime");
+        });
+
+        let thread_name = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("configured producer task should complete");
+        assert_eq!(thread_name, "rocketmq-producer-async-sender");
+    }
+
+    #[test]
+    fn spawn_producer_task_uses_explicit_executor() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("rocketmq-producer-explicit-executor")
+            .enable_all()
+            .build()
+            .expect("producer task runtime should build");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tracker = TaskTracker::new();
+        let shutdown_token = CancellationToken::new();
+
+        spawn_producer_task(
+            Some(runtime.handle()),
+            "rocketmq-client-producer-test",
+            &tracker,
+            &shutdown_token,
+            async move {
+                let current_thread = std::thread::current();
+                let thread_name = current_thread.name().unwrap_or_default().to_string();
+                tx.send(thread_name).expect("test receiver should still be open");
+            },
+        )
+        .expect("producer task should spawn on configured runtime");
+
+        let thread_name = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("configured producer task should complete");
+        assert_eq!(thread_name, "rocketmq-producer-explicit-executor");
+    }
+
     #[tokio::test]
     async fn tracked_producer_task_cancellation_stops_pending_task() {
         struct DropFlag(Arc<AtomicBool>);
