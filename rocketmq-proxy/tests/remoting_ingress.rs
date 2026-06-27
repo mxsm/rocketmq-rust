@@ -48,6 +48,8 @@ use std::collections::BTreeMap;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
+static REMOTING_INGRESS_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ObservedRouteContext {
     local_addr: Option<String>,
@@ -109,6 +111,7 @@ impl MetadataService for StaticMetadataService {
 
 #[tokio::test]
 async fn query_route_over_remoting_integration_injects_transport_context() {
+    let _guard = REMOTING_INGRESS_TEST_LOCK.lock().await;
     let route_service = Arc::new(RecordingRouteService::default());
     let service_manager = Arc::new(ClusterServiceManager::with_services(
         route_service.clone(),
@@ -119,8 +122,10 @@ async fn query_route_over_remoting_integration_injects_transport_context() {
         Arc::new(DefaultTransactionService),
     ));
 
-    let grpc_addr = free_local_addr();
-    let remoting_addr = free_local_addr();
+    let ProxyTestAddrs {
+        grpc: grpc_addr,
+        remoting: remoting_addr,
+    } = free_proxy_test_addrs();
     let runtime = ProxyRuntime::builder(ProxyConfig {
         grpc: GrpcConfig {
             listen_addr: grpc_addr.to_string(),
@@ -195,6 +200,7 @@ async fn query_route_over_remoting_integration_injects_transport_context() {
 
 #[tokio::test]
 async fn query_route_over_remoting_integration_enforces_auth_enabled_runtime() {
+    let _guard = REMOTING_INGRESS_TEST_LOCK.lock().await;
     let test_dir = std::env::temp_dir().join(format!("rocketmq-rust-proxy-remoting-auth-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&test_dir).expect("create proxy remoting auth test dir");
     let acl_file = test_dir.join("plain_acl.yml");
@@ -229,8 +235,10 @@ accounts:
         Arc::new(DefaultTransactionService),
     ));
 
-    let grpc_addr = free_local_addr();
-    let remoting_addr = free_local_addr();
+    let ProxyTestAddrs {
+        grpc: grpc_addr,
+        remoting: remoting_addr,
+    } = free_proxy_test_addrs();
     let runtime = ProxyRuntime::builder(ProxyConfig {
         grpc: GrpcConfig {
             listen_addr: grpc_addr.to_string(),
@@ -300,6 +308,7 @@ accounts:
 
 #[tokio::test]
 async fn request_code_not_supported_over_remoting_integration_returns_compatible_response() {
+    let _guard = REMOTING_INGRESS_TEST_LOCK.lock().await;
     let service_manager = Arc::new(ClusterServiceManager::with_services(
         Arc::new(RecordingRouteService::default()),
         Arc::new(StaticMetadataService),
@@ -309,8 +318,10 @@ async fn request_code_not_supported_over_remoting_integration_returns_compatible
         Arc::new(DefaultTransactionService),
     ));
 
-    let grpc_addr = free_local_addr();
-    let remoting_addr = free_local_addr();
+    let ProxyTestAddrs {
+        grpc: grpc_addr,
+        remoting: remoting_addr,
+    } = free_proxy_test_addrs();
     let runtime = ProxyRuntime::builder(ProxyConfig {
         grpc: GrpcConfig {
             listen_addr: grpc_addr.to_string(),
@@ -416,9 +427,17 @@ fn sign_remoting_command(command: &mut RemotingCommand, access_key: &str, secret
     command.add_ext_field("Signature", signature.as_str());
 }
 
-fn free_local_addr() -> SocketAddr {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local port probe");
-    let addr = listener.local_addr().expect("discover local addr");
-    drop(listener);
-    addr
+struct ProxyTestAddrs {
+    grpc: SocketAddr,
+    remoting: SocketAddr,
+}
+
+fn free_proxy_test_addrs() -> ProxyTestAddrs {
+    let grpc_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local grpc port probe");
+    let remoting_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local remoting port probe");
+    let grpc = grpc_listener.local_addr().expect("discover local grpc addr");
+    let remoting = remoting_listener.local_addr().expect("discover local remoting addr");
+    drop((grpc_listener, remoting_listener));
+
+    ProxyTestAddrs { grpc, remoting }
 }
