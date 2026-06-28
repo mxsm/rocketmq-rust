@@ -85,8 +85,14 @@ pub fn preallocate_file(file: &File, len: u64) -> FilePreallocateOutcome {
     }
 }
 
+#[cfg(unix)]
 fn is_unsupported_preallocate_errno(errno: i32) -> bool {
     errno == PREALLOCATE_UNSUPPORTED_ERRNO || errno == libc::ENOSYS || errno == libc::EINVAL
+}
+
+#[cfg(not(unix))]
+fn is_unsupported_preallocate_errno(errno: i32) -> bool {
+    errno == PREALLOCATE_UNSUPPORTED_ERRNO
 }
 
 #[cfg(unix)]
