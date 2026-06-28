@@ -121,6 +121,7 @@ use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::flush_disk_type::FlushDiskType;
+use crate::config::message_store_config::LinuxMemoryLockMode;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::config::store_path_config_helper::get_store_path_batch_consume_queue;
 use crate::config::store_path_config_helper::get_store_path_consume_queue_ext;
@@ -925,6 +926,17 @@ impl LocalFileMessageStore {
                 "RocksDB-specific configuration requires store_type=RocksDB: {}",
                 enabled_rocksdb_options.join(", ")
             )));
+        }
+        if self.message_store_config.linux_memory_lock_mode == LinuxMemoryLockMode::ActiveFile
+            && self.message_store_config.linux_memory_lock_budget_bytes == 0
+            && !self.message_store_config.linux_memory_lock_warn_only
+        {
+            return Err(StoreError::General(
+                "linux_memory_lock_mode=active_file requires explicit linux_memory_lock_budget_bytes when \
+                 linux_memory_lock_warn_only=false; set linux_memory_lock_budget_bytes or \
+                 linux_memory_lock_warn_only=true"
+                    .to_string(),
+            ));
         }
         Ok(())
     }
@@ -4689,6 +4701,7 @@ mod tests {
     use crate::base::store_checkpoint::StoreCheckpoint;
     use crate::base::store_enum::StoreType;
     use crate::config::flush_disk_type::FlushDiskType;
+    use crate::config::message_store_config::LinuxMemoryLockMode;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::filter::MessageFilter;
     use crate::hook::put_message_hook::PutMessageHook;
@@ -5100,6 +5113,62 @@ mod tests {
                 && message.contains("rocksdb_cq_double_write_enable")
                 && message.contains("trans_rocksdb_enable")
         ));
+    }
+
+    #[tokio::test]
+    async fn init_rejects_strict_active_file_memory_lock_without_explicit_budget() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                linux_memory_lock_mode: LinuxMemoryLockMode::ActiveFile,
+                linux_memory_lock_budget_bytes: 0,
+                linux_memory_lock_warn_only: false,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        let error = store
+            .init()
+            .await
+            .expect_err("strict active_file memory locking should require explicit budget");
+        assert!(matches!(
+            error,
+            StoreError::General(message)
+                if message.contains("active_file")
+                    && message.contains("linux_memory_lock_budget_bytes")
+                    && message.contains("linux_memory_lock_warn_only=true")
+        ));
+
+        let warn_only_dir = tempdir().unwrap();
+        let mut warn_only_store = new_configured_test_store(
+            &warn_only_dir,
+            MessageStoreConfig {
+                linux_memory_lock_mode: LinuxMemoryLockMode::ActiveFile,
+                linux_memory_lock_budget_bytes: 0,
+                linux_memory_lock_warn_only: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+        warn_only_store
+            .init()
+            .await
+            .expect("warn-only active_file memory locking should degrade without explicit budget");
+
+        let explicit_budget_dir = tempdir().unwrap();
+        let mut explicit_budget_store = new_configured_test_store(
+            &explicit_budget_dir,
+            MessageStoreConfig {
+                linux_memory_lock_mode: LinuxMemoryLockMode::ActiveFile,
+                linux_memory_lock_budget_bytes: 64 * 1024 * 1024,
+                linux_memory_lock_warn_only: false,
+                ..MessageStoreConfig::default()
+            },
+        );
+        explicit_budget_store
+            .init()
+            .await
+            .expect("strict active_file memory locking should accept an explicit budget");
     }
 
     #[tokio::test]
