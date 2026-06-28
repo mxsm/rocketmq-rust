@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BinaryHeap;
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -24,6 +28,8 @@ use rocketmq_error::RocketMQError;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::Shutdown;
 use serde::Serialize;
+use tokio::sync::mpsc;
+use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::error;
@@ -44,6 +50,9 @@ const DEFAULT_QUEUE_CAPACITY: usize = 4096;
 
 /// Default shutdown timeout in milliseconds
 const DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 1000;
+
+type BoxedMessageRequest = Box<dyn MessageRequest + Send + 'static>;
+type MessageRequestSender = tokio::sync::mpsc::Sender<BoxedMessageRequest>;
 
 /// RocketMQ Consumer Pull Message Service
 ///
@@ -77,11 +86,17 @@ pub struct PullMessageService {
     /// Main service loop task handle
     main_task_handle: Arc<tokio::sync::Mutex<Option<ClientTrackedTaskHandle>>>,
 
-    /// Tracks delayed one-shot tasks submitted by execute_*_later APIs.
+    /// Tracks the shared delayed scheduler and immediate generic tasks.
     scheduled_task_tracker: TaskTracker,
 
-    /// Cancels delayed one-shot tasks during shutdown.
+    /// Cancels delayed scheduler and tracked generic tasks during shutdown.
     scheduled_task_shutdown: CancellationToken,
+
+    /// Shared delayed scheduler command channel.
+    delayed_scheduler_tx: Arc<StdMutex<Option<mpsc::UnboundedSender<DelayedScheduleCommand>>>>,
+
+    /// Shared delayed scheduler metrics.
+    delayed_scheduler_metrics: Arc<DelayedSchedulerMetrics>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,6 +105,251 @@ pub struct PullMessageServiceLifecycleProbe {
     pub task_count_before_shutdown: usize,
     pub task_count_after_shutdown: usize,
     pub shutdown_elapsed_us: u128,
+    pub delayed_scheduler: PullMessageServiceDelayedSchedulerSnapshot,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct PullMessageServiceDelayedSchedulerSnapshot {
+    pub queue_depth: usize,
+    pub submitted_count: u64,
+    pub expired_count: u64,
+    pub cancelled_count: u64,
+    pub scheduler_task_count: usize,
+}
+
+#[derive(Default)]
+struct DelayedSchedulerMetrics {
+    queue_depth: AtomicUsize,
+    submitted_count: AtomicU64,
+    expired_count: AtomicU64,
+    cancelled_count: AtomicU64,
+    scheduler_running: AtomicBool,
+}
+
+impl DelayedSchedulerMetrics {
+    fn record_submitted(&self) {
+        self.submitted_count.fetch_add(1, Ordering::Relaxed);
+        self.queue_depth.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_expired(&self) {
+        self.expired_count.fetch_add(1, Ordering::Relaxed);
+        self.decrement_depth(1);
+    }
+
+    fn record_cancelled(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        self.cancelled_count.fetch_add(count as u64, Ordering::Relaxed);
+        self.decrement_depth(count);
+    }
+
+    fn decrement_depth(&self, count: usize) {
+        let _ = self
+            .queue_depth
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                Some(current.saturating_sub(count))
+            });
+    }
+
+    fn snapshot(&self) -> PullMessageServiceDelayedSchedulerSnapshot {
+        PullMessageServiceDelayedSchedulerSnapshot {
+            queue_depth: self.queue_depth.load(Ordering::Relaxed),
+            submitted_count: self.submitted_count.load(Ordering::Relaxed),
+            expired_count: self.expired_count.load(Ordering::Relaxed),
+            cancelled_count: self.cancelled_count.load(Ordering::Relaxed),
+            scheduler_task_count: usize::from(self.scheduler_running.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+struct DelayedScheduleCommand {
+    deadline: TokioInstant,
+    payload: DelayedSchedulePayload,
+}
+
+enum DelayedSchedulePayload {
+    Pull {
+        request: PullRequest,
+        tx: Option<MessageRequestSender>,
+    },
+    Pop {
+        request: PopRequest,
+        tx: Option<MessageRequestSender>,
+    },
+    Task(Box<dyn FnOnce() + Send + 'static>),
+}
+
+impl DelayedSchedulePayload {
+    async fn execute(self, stopped: &AtomicBool) {
+        if stopped.load(Ordering::Acquire) {
+            return;
+        }
+
+        match self {
+            Self::Pull { request, tx } => {
+                if let Some(tx) = tx {
+                    if let Err(error) = tx.send(Box::new(request)).await {
+                        warn!("Failed to send pull request: {:?}", error);
+                    }
+                }
+            }
+            Self::Pop { request, tx } => {
+                if let Some(tx) = tx {
+                    if let Err(error) = tx.send(Box::new(request)).await {
+                        warn!("Failed to send pop request: {:?}", error);
+                    }
+                }
+            }
+            Self::Task(task) => task(),
+        }
+    }
+}
+
+struct DelayedQueueEntry {
+    deadline: TokioInstant,
+    sequence: u64,
+    payload: DelayedSchedulePayload,
+}
+
+impl PartialEq for DelayedQueueEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.deadline == other.deadline && self.sequence == other.sequence
+    }
+}
+
+impl Eq for DelayedQueueEntry {}
+
+impl Ord for DelayedQueueEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other
+            .deadline
+            .cmp(&self.deadline)
+            .then_with(|| other.sequence.cmp(&self.sequence))
+    }
+}
+
+impl PartialOrd for DelayedQueueEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+struct DelayedSchedulerRunningGuard {
+    metrics: Arc<DelayedSchedulerMetrics>,
+}
+
+impl DelayedSchedulerRunningGuard {
+    fn new(metrics: Arc<DelayedSchedulerMetrics>) -> Self {
+        metrics.scheduler_running.store(true, Ordering::Release);
+        Self { metrics }
+    }
+}
+
+impl Drop for DelayedSchedulerRunningGuard {
+    fn drop(&mut self) {
+        self.metrics.scheduler_running.store(false, Ordering::Release);
+    }
+}
+
+async fn run_delayed_scheduler(
+    mut rx: mpsc::UnboundedReceiver<DelayedScheduleCommand>,
+    shutdown_token: CancellationToken,
+    stopped: Arc<AtomicBool>,
+    metrics: Arc<DelayedSchedulerMetrics>,
+) {
+    let _running = DelayedSchedulerRunningGuard::new(metrics.clone());
+    let mut delayed_queue = BinaryHeap::new();
+    let mut sequence = 0u64;
+
+    loop {
+        if shutdown_token.is_cancelled() {
+            cancel_delayed_queue(&mut delayed_queue, &mut rx, &metrics);
+            break;
+        }
+
+        match delayed_queue.peek().map(|entry: &DelayedQueueEntry| entry.deadline) {
+            Some(deadline) if deadline <= TokioInstant::now() => {
+                drain_expired_delayed_requests(&mut delayed_queue, &stopped, &metrics).await;
+            }
+            Some(deadline) => {
+                tokio::select! {
+                    biased;
+                    _ = tokio::time::sleep_until(deadline) => {
+                        drain_expired_delayed_requests(&mut delayed_queue, &stopped, &metrics).await;
+                    }
+                    command = rx.recv() => {
+                        if let Some(command) = command {
+                            push_delayed_command(&mut delayed_queue, command, &mut sequence);
+                        } else {
+                            cancel_delayed_queue(&mut delayed_queue, &mut rx, &metrics);
+                            break;
+                        }
+                    }
+                    _ = shutdown_token.cancelled() => {
+                        cancel_delayed_queue(&mut delayed_queue, &mut rx, &metrics);
+                        break;
+                    }
+                }
+            }
+            None => {
+                tokio::select! {
+                    command = rx.recv() => {
+                        if let Some(command) = command {
+                            push_delayed_command(&mut delayed_queue, command, &mut sequence);
+                        } else {
+                            cancel_delayed_queue(&mut delayed_queue, &mut rx, &metrics);
+                            break;
+                        }
+                    }
+                    _ = shutdown_token.cancelled() => {
+                        cancel_delayed_queue(&mut delayed_queue, &mut rx, &metrics);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn push_delayed_command(
+    delayed_queue: &mut BinaryHeap<DelayedQueueEntry>,
+    command: DelayedScheduleCommand,
+    sequence: &mut u64,
+) {
+    delayed_queue.push(DelayedQueueEntry {
+        deadline: command.deadline,
+        sequence: *sequence,
+        payload: command.payload,
+    });
+    *sequence = sequence.wrapping_add(1);
+}
+
+async fn drain_expired_delayed_requests(
+    delayed_queue: &mut BinaryHeap<DelayedQueueEntry>,
+    stopped: &AtomicBool,
+    metrics: &DelayedSchedulerMetrics,
+) {
+    let now = TokioInstant::now();
+    while delayed_queue.peek().is_some_and(|entry| entry.deadline <= now) {
+        let entry = delayed_queue.pop().expect("entry should exist after peek");
+        metrics.record_expired();
+        entry.payload.execute(stopped).await;
+    }
+}
+
+fn cancel_delayed_queue(
+    delayed_queue: &mut BinaryHeap<DelayedQueueEntry>,
+    rx: &mut mpsc::UnboundedReceiver<DelayedScheduleCommand>,
+    metrics: &DelayedSchedulerMetrics,
+) {
+    let mut cancelled = delayed_queue.len();
+    delayed_queue.clear();
+    while rx.try_recv().is_ok() {
+        cancelled += 1;
+    }
+    metrics.record_cancelled(cancelled);
 }
 
 impl PullMessageService {
@@ -108,6 +368,8 @@ impl PullMessageService {
             main_task_handle: Arc::new(tokio::sync::Mutex::new(None)),
             scheduled_task_tracker: TaskTracker::new(),
             scheduled_task_shutdown: CancellationToken::new(),
+            delayed_scheduler_tx: Arc::new(StdMutex::new(None)),
+            delayed_scheduler_metrics: Arc::new(DelayedSchedulerMetrics::default()),
         }
     }
 
@@ -178,6 +440,61 @@ impl PullMessageService {
             .unwrap_or_default()
     }
 
+    pub fn delayed_scheduler_snapshot(&self) -> PullMessageServiceDelayedSchedulerSnapshot {
+        self.delayed_scheduler_metrics.snapshot()
+    }
+
+    fn submit_delayed(&self, payload: DelayedSchedulePayload, time_delay: u64) {
+        self.delayed_scheduler_metrics.record_submitted();
+        let Some(tx) = self.ensure_delayed_scheduler_started() else {
+            self.delayed_scheduler_metrics.record_cancelled(1);
+            return;
+        };
+
+        if tx
+            .send(DelayedScheduleCommand {
+                deadline: TokioInstant::now() + Duration::from_millis(time_delay),
+                payload,
+            })
+            .is_err()
+        {
+            self.delayed_scheduler_metrics.record_cancelled(1);
+        }
+    }
+
+    fn ensure_delayed_scheduler_started(&self) -> Option<mpsc::UnboundedSender<DelayedScheduleCommand>> {
+        if self.scheduled_task_shutdown.is_cancelled() {
+            return None;
+        }
+
+        let mut guard = self
+            .delayed_scheduler_tx
+            .lock()
+            .expect("delayed scheduler sender lock should not be poisoned");
+        if let Some(tx) = guard.as_ref() {
+            return Some(tx.clone());
+        }
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let tracked_task = self.scheduled_task_tracker.track_future(run_delayed_scheduler(
+            rx,
+            self.scheduled_task_shutdown.clone(),
+            self.stopped.clone(),
+            self.delayed_scheduler_metrics.clone(),
+        ));
+
+        match spawn_client_task("rocketmq-client-pull-delayed-scheduler", tracked_task) {
+            Ok(_) => {
+                *guard = Some(tx.clone());
+                Some(tx)
+            }
+            Err(error) => {
+                error!("Failed to spawn PullMessageService delayed scheduler: {}", error);
+                None
+            }
+        }
+    }
+
     /// Processes a message request (Pull or Pop)
     ///
     /// # Arguments
@@ -244,26 +561,12 @@ impl PullMessageService {
             return;
         }
 
-        let this = self.clone();
-        let request = pull_request.clone();
-
-        spawn_scheduled_pull_message_task(
-            "rocketmq-client-pull-request-delay",
-            &self.scheduled_task_tracker,
-            &self.scheduled_task_shutdown,
-            async move {
-                tokio::time::sleep(Duration::from_millis(time_delay)).await;
-
-                if this.is_stopped() {
-                    return;
-                }
-
-                if let Some(tx) = &this.tx {
-                    if let Err(e) = tx.send(Box::new(request)).await {
-                        warn!("Failed to send pull request: {:?}", e);
-                    }
-                }
+        self.submit_delayed(
+            DelayedSchedulePayload::Pull {
+                request: pull_request,
+                tx: self.tx.clone(),
             },
+            time_delay,
         );
     }
 
@@ -296,26 +599,12 @@ impl PullMessageService {
             return;
         }
 
-        let this = self.clone();
-        let request = pop_request.clone();
-
-        spawn_scheduled_pull_message_task(
-            "rocketmq-client-pop-request-delay",
-            &self.scheduled_task_tracker,
-            &self.scheduled_task_shutdown,
-            async move {
-                tokio::time::sleep(Duration::from_millis(time_delay)).await;
-
-                if this.is_stopped() {
-                    return;
-                }
-
-                if let Some(tx) = &this.tx {
-                    if let Err(e) = tx.send(Box::new(request)).await {
-                        warn!("Failed to send pop request: {:?}", e);
-                    }
-                }
+        self.submit_delayed(
+            DelayedSchedulePayload::Pop {
+                request: pop_request,
+                tx: self.tx.clone(),
             },
+            time_delay,
         );
     }
 
@@ -352,19 +641,7 @@ impl PullMessageService {
             return;
         }
 
-        let stopped = self.stopped.clone();
-        spawn_scheduled_pull_message_task(
-            "rocketmq-client-pull-task-delay",
-            &self.scheduled_task_tracker,
-            &self.scheduled_task_shutdown,
-            async move {
-                tokio::time::sleep(Duration::from_millis(time_delay)).await;
-                if stopped.load(Ordering::Acquire) {
-                    return;
-                }
-                task();
-            },
-        );
+        self.submit_delayed(DelayedSchedulePayload::Task(Box::new(task)), time_delay);
     }
 
     /// Executes a generic task immediately (equivalent to Java's executeTask)
@@ -408,6 +685,10 @@ impl PullMessageService {
         // 1. Set stopped flag
         self.stopped.store(true, Ordering::Release);
         self.scheduled_task_shutdown.cancel();
+        self.delayed_scheduler_tx
+            .lock()
+            .expect("delayed scheduler sender lock should not be poisoned")
+            .take();
 
         // 2. Send shutdown signal
         if let Some(tx_shutdown) = &self.tx_shutdown {
@@ -470,6 +751,7 @@ pub async fn run_pull_message_service_lifecycle_probe() -> PullMessageServiceLif
     let shutdown_result = service.shutdown(1_000).await;
     let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
     let task_count_after_shutdown = service.main_task_count().await;
+    let delayed_scheduler = service.delayed_scheduler_snapshot();
 
     instance.shutdown().await;
 
@@ -481,6 +763,7 @@ pub async fn run_pull_message_service_lifecycle_probe() -> PullMessageServiceLif
         task_count_before_shutdown,
         task_count_after_shutdown,
         shutdown_elapsed_us,
+        delayed_scheduler,
     }
 }
 

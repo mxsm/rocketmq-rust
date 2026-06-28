@@ -24,6 +24,7 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -175,6 +176,36 @@ async fn test_delayed_task_cancelled_after_shutdown() {
 }
 
 #[tokio::test]
+async fn test_delayed_requests_use_single_scheduler_task() {
+    let mut service = PullMessageService::new();
+    let instance = create_mock_client_instance();
+    service.start(instance).await.unwrap();
+
+    for i in 0..1000 {
+        let pull_request = create_test_pull_request(&format!("group_{}", i % 10), &format!("topic_{}", i % 5));
+        service.execute_pull_request_later(pull_request, 60_000);
+    }
+
+    let mut snapshot = service.delayed_scheduler_snapshot();
+    for _ in 0..100 {
+        if snapshot.scheduler_task_count == 1 && snapshot.queue_depth == 1000 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        snapshot = service.delayed_scheduler_snapshot();
+    }
+
+    assert_eq!(snapshot.submitted_count, 1000);
+    assert_eq!(snapshot.queue_depth, 1000);
+    assert_eq!(snapshot.scheduler_task_count, 1);
+
+    service.shutdown(1000).await.unwrap();
+    let snapshot = service.delayed_scheduler_snapshot();
+    assert_eq!(snapshot.queue_depth, 0);
+    assert_eq!(snapshot.cancelled_count, 1000);
+}
+
+#[tokio::test]
 async fn test_execute_task() {
     let mut service = PullMessageService::new();
     let instance = create_mock_client_instance();
@@ -217,6 +248,47 @@ async fn test_execute_task_later() {
     // Wait for delayed execution
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    service.shutdown(1000).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_delayed_tasks_with_same_deadline_keep_insert_order() {
+    let service = PullMessageService::new();
+    let observed = Arc::new(StdMutex::new(Vec::new()));
+
+    for index in 0..8 {
+        let observed = observed.clone();
+        service.execute_task_later(
+            move || {
+                observed
+                    .lock()
+                    .expect("observed order lock should not be poisoned")
+                    .push(index);
+            },
+            20,
+        );
+    }
+
+    for _ in 0..100 {
+        if observed
+            .lock()
+            .expect("observed order lock should not be poisoned")
+            .len()
+            == 8
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    assert_eq!(
+        *observed.lock().expect("observed order lock should not be poisoned"),
+        (0..8).collect::<Vec<_>>()
+    );
+    let snapshot = service.delayed_scheduler_snapshot();
+    assert_eq!(snapshot.queue_depth, 0);
+    assert_eq!(snapshot.expired_count, 8);
 
     service.shutdown(1000).await.unwrap();
 }
