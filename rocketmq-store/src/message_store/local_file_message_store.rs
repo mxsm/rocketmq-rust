@@ -470,9 +470,13 @@ impl LocalFileMessageStore {
             dispatcher_vec: vec![build_consume_queue, build_index],
         });
 
-        let transient_store_pool = TransientStorePool::new(
+        let memory_lock_budget_bytes = message_store_config.effective_linux_memory_lock_budget_bytes(
+            crate::platform::current_store_platform_capability().memory_lock_limit_bytes,
+        );
+        let transient_store_pool = TransientStorePool::new_with_memory_lock_budget(
             message_store_config.transient_store_pool_size,
             message_store_config.mapped_file_size_commit_log,
+            memory_lock_budget_bytes,
         );
         let transient_store_pool_enable = message_store_config.transient_store_pool_enable
             && (broker_config.enable_controller_mode || message_store_config.broker_role != BrokerRole::Slave);
