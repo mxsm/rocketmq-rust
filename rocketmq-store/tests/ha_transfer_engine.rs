@@ -193,6 +193,33 @@ fn sendfile_transfer_selection_falls_back_to_vectored_then_bytes() {
 }
 
 #[test]
+fn sendfile_availability_gate_falls_back_for_non_linux_tls_or_missing_capability() {
+    for blocked_gate in ["non-linux", "tls-transport", "missing-capability"] {
+        let selection = select_transfer_engine_with_availability(
+            TransferEnginePreference::Sendfile,
+            TransferEngineAvailability {
+                vectored_write_available: true,
+                sendfile_available: false,
+                io_uring_available: false,
+            },
+        );
+        let auto_selection = select_transfer_engine_with_availability(
+            TransferEnginePreference::Auto,
+            TransferEngineAvailability {
+                vectored_write_available: true,
+                sendfile_available: false,
+                io_uring_available: false,
+            },
+        );
+
+        assert_eq!(selection.engine, TransferEngineKind::Vectored, "{blocked_gate}");
+        assert_eq!(selection.fallback_reason, Some("sendfile unavailable"));
+        assert_eq!(auto_selection.engine, TransferEngineKind::Vectored, "{blocked_gate}");
+        assert_eq!(auto_selection.fallback_reason, None);
+    }
+}
+
+#[test]
 fn auto_transfer_selection_prefers_sendfile_then_vectored_then_bytes() {
     let sendfile_selection = select_transfer_engine_with_availability(
         TransferEnginePreference::Auto,
