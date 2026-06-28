@@ -407,9 +407,44 @@ pub const JAVA_METRICS: &[MetricDescriptor] = &[
         source: MetricSource::Store,
     },
     MetricDescriptor {
+        name: metrics::STORE_COMMITLOG_SEGMENT_LEASE_ACTIVE,
+        kind: MetricKind::ObservableGauge,
+        unit: "{lease}",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_HA_ACK_LATENCY_MILLIS,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_HA_REPLICATION_LAG_BYTES,
+        kind: MetricKind::ObservableGauge,
+        unit: "By",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
         name: metrics::STORE_LINUX_SENDFILE_BYTES_TOTAL,
         kind: MetricKind::Counter,
         unit: "By",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_LINUX_MLOCK_BYTES,
+        kind: MetricKind::ObservableGauge,
+        unit: "By",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS,
+        kind: MetricKind::Histogram,
+        unit: "ms",
         labels: &[],
         source: MetricSource::Store,
     },
@@ -781,7 +816,12 @@ mod tests {
         "rocketmq_storage_flush_behind_bytes",
         "rocketmq_storage_message_reserve_time",
         "rocketmq_storage_size",
+        "rocketmq_store_commitlog_segment_lease_active",
+        "rocketmq_store_ha_ack_latency_millis",
+        "rocketmq_store_ha_replication_lag_bytes",
         "rocketmq_store_linux_sendfile_bytes_total",
+        "rocketmq_store_linux_mlock_bytes",
+        "rocketmq_store_linux_page_cache_warmup_millis",
         "rocketmq_store_transfer_batch_total",
         "rocketmq_store_transfer_bytes_total",
         "rocketmq_store_transfer_engine_total",
@@ -898,5 +938,50 @@ mod tests {
         assert_eq!(linux_sendfile_bytes.kind, MetricKind::Counter);
         assert_eq!(linux_sendfile_bytes.unit, "By");
         assert_eq!(linux_sendfile_bytes.source, MetricSource::Store);
+
+        let ha_replication_lag = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_HA_REPLICATION_LAG_BYTES)
+            .expect("ha replication lag descriptor");
+        assert_eq!(ha_replication_lag.kind, MetricKind::ObservableGauge);
+        assert_eq!(ha_replication_lag.unit, "By");
+        assert_eq!(ha_replication_lag.source, MetricSource::Store);
+        assert!(ha_replication_lag.labels.is_empty());
+
+        let ha_ack_latency = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_HA_ACK_LATENCY_MILLIS)
+            .expect("ha ack latency descriptor");
+        assert_eq!(ha_ack_latency.kind, MetricKind::Histogram);
+        assert_eq!(ha_ack_latency.unit, "ms");
+        assert_eq!(ha_ack_latency.source, MetricSource::Store);
+        assert!(ha_ack_latency.labels.is_empty());
+
+        let linux_mlock_bytes = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_LINUX_MLOCK_BYTES)
+            .expect("linux mlock bytes descriptor");
+        assert_eq!(linux_mlock_bytes.kind, MetricKind::ObservableGauge);
+        assert_eq!(linux_mlock_bytes.unit, "By");
+        assert_eq!(linux_mlock_bytes.source, MetricSource::Store);
+        assert!(linux_mlock_bytes.labels.is_empty());
+
+        let warmup_latency = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS)
+            .expect("linux page-cache warmup descriptor");
+        assert_eq!(warmup_latency.kind, MetricKind::Histogram);
+        assert_eq!(warmup_latency.unit, "ms");
+        assert_eq!(warmup_latency.source, MetricSource::Store);
+        assert!(warmup_latency.labels.is_empty());
+
+        let lease_active = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_COMMITLOG_SEGMENT_LEASE_ACTIVE)
+            .expect("commitlog segment lease descriptor");
+        assert_eq!(lease_active.kind, MetricKind::ObservableGauge);
+        assert_eq!(lease_active.unit, "{lease}");
+        assert_eq!(lease_active.source, MetricSource::Store);
+        assert!(lease_active.labels.is_empty());
     }
 }

@@ -18,9 +18,14 @@ pub use crate::semantic::metrics::STORAGE_FLUSH_BEHIND_BYTES;
 pub use crate::semantic::metrics::STORAGE_MESSAGE_RESERVE_TIME;
 pub use crate::semantic::metrics::STORAGE_SIZE;
 pub use crate::semantic::metrics::STORE_APPEND_LATENCY;
+pub use crate::semantic::metrics::STORE_COMMITLOG_SEGMENT_LEASE_ACTIVE;
 pub use crate::semantic::metrics::STORE_DISK_USAGE;
 pub use crate::semantic::metrics::STORE_DISPATCH_LATENCY;
 pub use crate::semantic::metrics::STORE_FLUSH_LATENCY;
+pub use crate::semantic::metrics::STORE_HA_ACK_LATENCY_MILLIS;
+pub use crate::semantic::metrics::STORE_HA_REPLICATION_LAG_BYTES;
+pub use crate::semantic::metrics::STORE_LINUX_MLOCK_BYTES;
+pub use crate::semantic::metrics::STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS;
 pub use crate::semantic::metrics::STORE_LINUX_SENDFILE_BYTES_TOTAL;
 pub use crate::semantic::metrics::STORE_TRANSFER_BATCH_TOTAL;
 pub use crate::semantic::metrics::STORE_TRANSFER_BYTES_TOTAL;
@@ -184,6 +189,56 @@ pub fn record_linux_sendfile_bytes(bytes: u64) {
     let _ = bytes;
 }
 
+pub fn record_ha_replication_lag_bytes(bytes: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_ha_replication_lag_bytes(bytes, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = bytes;
+}
+
+pub fn record_ha_ack_latency_millis(latency_ms: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_ha_ack_latency_millis(latency_ms, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = latency_ms;
+}
+
+pub fn record_linux_mlock_bytes(bytes: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_linux_mlock_bytes(bytes, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = bytes;
+}
+
+pub fn record_linux_page_cache_warmup_millis(latency_ms: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_linux_page_cache_warmup_millis(latency_ms, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = latency_ms;
+}
+
+pub fn record_commitlog_segment_lease_active(count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_commitlog_segment_lease_active(count, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = count;
+}
+
 #[cfg(not(feature = "otel-metrics"))]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StoreMetrics;
@@ -226,6 +281,21 @@ impl StoreMetrics {
 
     #[inline]
     pub fn record_linux_sendfile_bytes_total(&self, _bytes: u64) {}
+
+    #[inline]
+    pub fn record_ha_replication_lag_bytes(&self, _bytes: u64) {}
+
+    #[inline]
+    pub fn record_ha_ack_latency_millis(&self, _latency_ms: u64) {}
+
+    #[inline]
+    pub fn record_linux_mlock_bytes(&self, _bytes: u64) {}
+
+    #[inline]
+    pub fn record_linux_page_cache_warmup_millis(&self, _latency_ms: u64) {}
+
+    #[inline]
+    pub fn record_commitlog_segment_lease_active(&self, _count: u64) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -242,6 +312,11 @@ pub struct StoreMetrics {
     transfer_fallback_total: opentelemetry::metrics::Counter<u64>,
     transfer_partial_write_total: opentelemetry::metrics::Counter<u64>,
     linux_sendfile_bytes_total: opentelemetry::metrics::Counter<u64>,
+    ha_replication_lag_bytes: opentelemetry::metrics::Gauge<u64>,
+    ha_ack_latency_millis: opentelemetry::metrics::Histogram<u64>,
+    linux_mlock_bytes: opentelemetry::metrics::Gauge<u64>,
+    linux_page_cache_warmup_millis: opentelemetry::metrics::Histogram<u64>,
+    commitlog_segment_lease_active: opentelemetry::metrics::Gauge<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -313,6 +388,36 @@ impl StoreMetrics {
             .with_unit("By")
             .build();
 
+        let ha_replication_lag_bytes = meter
+            .u64_gauge(STORE_HA_REPLICATION_LAG_BYTES)
+            .with_description("HA replication lag in bytes")
+            .with_unit("By")
+            .build();
+
+        let ha_ack_latency_millis = meter
+            .u64_histogram(STORE_HA_ACK_LATENCY_MILLIS)
+            .with_description("HA replication ack latency")
+            .with_unit("ms")
+            .build();
+
+        let linux_mlock_bytes = meter
+            .u64_gauge(STORE_LINUX_MLOCK_BYTES)
+            .with_description("Current Linux mlock bytes tracked by store")
+            .with_unit("By")
+            .build();
+
+        let linux_page_cache_warmup_millis = meter
+            .u64_histogram(STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS)
+            .with_description("Linux page cache warmup latency")
+            .with_unit("ms")
+            .build();
+
+        let commitlog_segment_lease_active = meter
+            .u64_gauge(STORE_COMMITLOG_SEGMENT_LEASE_ACTIVE)
+            .with_description("Active commitlog segment leases")
+            .with_unit("{lease}")
+            .build();
+
         Self {
             append_latency,
             flush_latency,
@@ -325,6 +430,11 @@ impl StoreMetrics {
             transfer_fallback_total,
             transfer_partial_write_total,
             linux_sendfile_bytes_total,
+            ha_replication_lag_bytes,
+            ha_ack_latency_millis,
+            linux_mlock_bytes,
+            linux_page_cache_warmup_millis,
+            commitlog_segment_lease_active,
         }
     }
 
@@ -439,6 +549,31 @@ impl StoreMetrics {
     pub fn record_linux_sendfile_bytes_total(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
         self.linux_sendfile_bytes_total.add(bytes, attributes);
     }
+
+    #[inline]
+    pub fn record_ha_replication_lag_bytes(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.ha_replication_lag_bytes.record(bytes, attributes);
+    }
+
+    #[inline]
+    pub fn record_ha_ack_latency_millis(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.ha_ack_latency_millis.record(latency_ms, attributes);
+    }
+
+    #[inline]
+    pub fn record_linux_mlock_bytes(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.linux_mlock_bytes.record(bytes, attributes);
+    }
+
+    #[inline]
+    pub fn record_linux_page_cache_warmup_millis(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.linux_page_cache_warmup_millis.record(latency_ms, attributes);
+    }
+
+    #[inline]
+    pub fn record_commitlog_segment_lease_active(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.commitlog_segment_lease_active.record(count, attributes);
+    }
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -501,6 +636,11 @@ mod tests {
         metrics.record_transfer_fallback_total(1, &transfer_fallback_attributes("io_uring", "vectored", "unsupported"));
         metrics.record_transfer_partial_write_total(2, &[]);
         metrics.record_linux_sendfile_bytes_total(512, &[]);
+        metrics.record_ha_replication_lag_bytes(4096, &[]);
+        metrics.record_ha_ack_latency_millis(12, &[]);
+        metrics.record_linux_mlock_bytes(8192, &[]);
+        metrics.record_linux_page_cache_warmup_millis(20, &[]);
+        metrics.record_commitlog_segment_lease_active(3, &[]);
         record_delay_message_latency(30);
     }
 
@@ -551,5 +691,10 @@ mod helper_tests {
         record_transfer_fallback("io_uring", "vectored", "unsupported", 1);
         record_transfer_partial_write(2);
         record_linux_sendfile_bytes(512);
+        record_ha_replication_lag_bytes(4096);
+        record_ha_ack_latency_millis(12);
+        record_linux_mlock_bytes(8192);
+        record_linux_page_cache_warmup_millis(20);
+        record_commitlog_segment_lease_active(3);
     }
 }
