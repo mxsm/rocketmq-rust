@@ -34,6 +34,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
+use crate::consumer::consumer_impl::process_queue_store::ProcessQueueMessageStore;
 use crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME;
 
 pub static REBALANCE_LOCK_MAX_LIVE_TIME: LazyLock<u64> = LazyLock::new(|| {
@@ -51,7 +52,7 @@ pub static REBALANCE_LOCK_INTERVAL: LazyLock<u64> = LazyLock::new(|| {
 });
 
 struct ProcessQueueStore {
-    msg_tree_map: BTreeMap<i64, ArcMut<MessageExt>>,
+    messages: ProcessQueueMessageStore,
     consuming_msg_orderly_tree_map: BTreeMap<i64, ArcMut<MessageExt>>,
     queue_offset_max: i64,
 }
@@ -59,7 +60,7 @@ struct ProcessQueueStore {
 impl ProcessQueueStore {
     fn new() -> Self {
         ProcessQueueStore {
-            msg_tree_map: BTreeMap::new(),
+            messages: ProcessQueueMessageStore::new(),
             consuming_msg_orderly_tree_map: BTreeMap::new(),
             queue_offset_max: 0,
         }
@@ -196,11 +197,11 @@ impl ProcessQueue {
             return;
         }
 
-        let loop_ = 16.min(self.store.read().await.msg_tree_map.len());
+        let loop_ = 16.min(self.store.read().await.messages.len());
         for _ in 0..loop_ {
             let msg = {
                 let store = self.store.read().await;
-                if let Some((_, value)) = store.msg_tree_map.first_key_value() {
+                if let Some((_, value)) = store.messages.first() {
                     let consume_start_time_stamp = MessageAccessor::get_consume_start_time_stamp(value.as_ref());
                     if let Some(ts_str) = consume_start_time_stamp {
                         if let Ok(ts) = ts_str.parse::<u64>() {
@@ -244,9 +245,9 @@ impl ProcessQueue {
             let should_remove = {
                 let store = self.store.read().await;
                 store
-                    .msg_tree_map
-                    .first_key_value()
-                    .is_some_and(|(offset, _)| queue_offset == *offset)
+                    .messages
+                    .first_offset()
+                    .is_some_and(|offset| queue_offset == offset)
             };
             if should_remove {
                 self.remove_message(&[msg]).await;
@@ -274,9 +275,10 @@ impl ProcessQueue {
         let mut inserted_max_offset = i64::MIN;
         {
             let mut store = self.store.write().await;
+            store.messages.reserve(messages.len());
             for message in messages {
                 let queue_offset = message.queue_offset;
-                if store.msg_tree_map.insert(queue_offset, message.clone()).is_none() {
+                if store.messages.insert(queue_offset, message.clone()).is_none() {
                     valid_msg_cnt += 1;
                     inserted_body_size += message.body().map_or(0, |body| body.len()) as u64;
                     inserted_min_offset = inserted_min_offset.min(queue_offset);
@@ -287,7 +289,7 @@ impl ProcessQueue {
                 }
             }
 
-            if !store.msg_tree_map.is_empty() && !self.consuming.load(Ordering::Acquire) {
+            if !store.messages.is_empty() && !self.consuming.load(Ordering::Acquire) {
                 dispatch_to_consume = true;
                 self.consuming.store(true, Ordering::Release);
             }
@@ -324,7 +326,7 @@ impl ProcessQueue {
 
         self.last_consume_timestamp.store(now, Ordering::Release);
 
-        if store.msg_tree_map.is_empty() {
+        if store.messages.is_empty() {
             return -1;
         }
 
@@ -337,7 +339,7 @@ impl ProcessQueue {
 
         for message in messages {
             let queue_offset = message.queue_offset;
-            if store.msg_tree_map.remove(&queue_offset).is_some() {
+            if store.messages.remove(&queue_offset).is_some() {
                 removed_cnt += 1;
                 removed_body_size += message.body().map_or(0, |body| body.len()) as u64;
                 if !snapshot_touched {
@@ -354,15 +356,15 @@ impl ProcessQueue {
             if prev == removed_cnt {
                 self.msg_size.store(0, Ordering::Release);
             }
-            if store.msg_tree_map.is_empty() {
+            if store.messages.is_empty() {
                 self.reset_offset_snapshot();
             } else if snapshot_touched {
                 self.refresh_offset_snapshot(&store);
             }
         }
 
-        if let Some((first_offset, _)) = store.msg_tree_map.first_key_value() {
-            result = *first_offset;
+        if let Some(first_offset) = store.messages.first_offset() {
+            result = first_offset;
         }
 
         result
@@ -371,7 +373,7 @@ impl ProcessQueue {
     pub(crate) async fn rollback(&self) {
         let mut store = self.store.write().await;
         let mut consuming = std::mem::take(&mut store.consuming_msg_orderly_tree_map);
-        store.msg_tree_map.append(&mut consuming);
+        store.messages.append_from_btree_map(&mut consuming);
         self.refresh_offset_snapshot(&store);
     }
 
@@ -403,7 +405,7 @@ impl ProcessQueue {
         let mut store = self.store.write().await;
         for message in messages {
             store.consuming_msg_orderly_tree_map.remove(&message.queue_offset);
-            store.msg_tree_map.insert(message.queue_offset, message.clone());
+            store.messages.insert(message.queue_offset, message.clone());
         }
         self.refresh_offset_snapshot(&store);
     }
@@ -416,7 +418,7 @@ impl ProcessQueue {
         self.last_consume_timestamp.store(now, Ordering::Release);
 
         for _ in 0..batch_size {
-            if let Some((offset, message)) = store.msg_tree_map.pop_first() {
+            if let Some((offset, message)) = store.messages.pop_first() {
                 store.consuming_msg_orderly_tree_map.insert(offset, message.clone());
                 messages.push(message);
             } else {
@@ -426,11 +428,11 @@ impl ProcessQueue {
 
         if messages.is_empty() {
             self.consuming.store(false, Ordering::Release);
-            if store.msg_tree_map.is_empty() {
+            if store.messages.is_empty() {
                 self.reset_offset_snapshot();
             }
-        } else if let Some((min_offset, _)) = store.msg_tree_map.first_key_value() {
-            self.min_offset_snapshot.store(*min_offset, Ordering::Release);
+        } else if let Some(min_offset) = store.messages.first_offset() {
+            self.min_offset_snapshot.store(min_offset, Ordering::Release);
         } else {
             self.reset_offset_snapshot();
         }
@@ -439,16 +441,12 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn contains_message(&self, message_ext: &MessageExt) -> bool {
-        self.store
-            .read()
-            .await
-            .msg_tree_map
-            .contains_key(&message_ext.queue_offset)
+        self.store.read().await.messages.contains_key(&message_ext.queue_offset)
     }
 
     pub(crate) async fn clear(&self) {
         let mut store = self.store.write().await;
-        store.msg_tree_map.clear();
+        store.messages.clear();
         store.consuming_msg_orderly_tree_map.clear();
         store.queue_offset_max = 0;
         self.msg_count.store(0, Ordering::Release);
@@ -473,15 +471,12 @@ impl ProcessQueue {
     }
 
     fn refresh_offset_snapshot(&self, store: &ProcessQueueStore) {
-        match (
-            store.msg_tree_map.first_key_value(),
-            store.msg_tree_map.last_key_value(),
-        ) {
-            (Some((min_offset, _)), Some((max_offset, _))) => {
-                self.min_offset_snapshot.store(*min_offset, Ordering::Release);
-                self.max_offset_snapshot.store(*max_offset, Ordering::Release);
+        match store.messages.offset_span() {
+            Some((min_offset, max_offset)) => {
+                self.min_offset_snapshot.store(min_offset, Ordering::Release);
+                self.max_offset_snapshot.store(max_offset, Ordering::Release);
             }
-            _ => self.reset_offset_snapshot(),
+            None => self.reset_offset_snapshot(),
         }
     }
 
@@ -493,14 +488,12 @@ impl ProcessQueue {
     pub(crate) async fn fill_process_queue_info(&self, info: &mut ProcessQueueInfo) {
         let store = self.store.read().await;
 
-        if !store.msg_tree_map.is_empty() {
-            if let Some((min_offset, _)) = store.msg_tree_map.first_key_value() {
-                info.cached_msg_min_offset = *min_offset as u64;
+        if !store.messages.is_empty() {
+            if let Some((min_offset, max_offset)) = store.messages.offset_span() {
+                info.cached_msg_min_offset = min_offset as u64;
+                info.cached_msg_max_offset = max_offset as u64;
             }
-            if let Some((max_offset, _)) = store.msg_tree_map.last_key_value() {
-                info.cached_msg_max_offset = *max_offset as u64;
-            }
-            info.cached_msg_count = store.msg_tree_map.len() as u32;
+            info.cached_msg_count = store.messages.len() as u32;
         }
 
         info.cached_msg_size_in_mib = (self.msg_size.load(Ordering::Acquire) / (1024 * 1024)) as u32;
@@ -525,13 +518,7 @@ impl ProcessQueue {
     /// Returns `Some((min_offset, max_offset))` of the pending message tree, or `None` if empty.
     pub(crate) async fn get_offset_span(&self) -> Option<(i64, i64)> {
         let store = self.store.read().await;
-        match (
-            store.msg_tree_map.first_key_value(),
-            store.msg_tree_map.last_key_value(),
-        ) {
-            (Some((min, _)), Some((max, _))) => Some((*min, *max)),
-            _ => None,
-        }
+        store.messages.offset_span()
     }
 
     pub(crate) fn set_last_pull_timestamp(&self, last_pull_timestamp: u64) {
@@ -558,7 +545,7 @@ impl ProcessQueue {
         if self.msg_count.load(Ordering::Acquire) <= 0 {
             return false;
         }
-        !self.store.read().await.msg_tree_map.is_empty()
+        !self.store.read().await.messages.is_empty()
     }
 
     pub(crate) fn get_last_pull_timestamp(&self) -> u64 {
@@ -951,13 +938,13 @@ mod tests {
         let taken = pq.take_messages(5).await;
         assert_eq!(taken.len(), 5);
 
-        let msg_tree_map_len = pq.store.read().await.msg_tree_map.len();
-        assert_eq!(msg_tree_map_len, 5);
+        let pending_len = pq.store.read().await.messages.len();
+        assert_eq!(pending_len, 5);
 
         pq.rollback().await;
 
-        let msg_tree_map_len_after = pq.store.read().await.msg_tree_map.len();
-        assert_eq!(msg_tree_map_len_after, 10);
+        let pending_len_after = pq.store.read().await.messages.len();
+        assert_eq!(pending_len_after, 10);
 
         let consuming_map_len = pq.store.read().await.consuming_msg_orderly_tree_map.len();
         assert_eq!(consuming_map_len, 0);
@@ -1067,8 +1054,8 @@ mod tests {
         assert_eq!(pq.msg_count(), 0);
         assert_eq!(pq.msg_size(), 0);
 
-        let msg_tree_map_len = pq.store.read().await.msg_tree_map.len();
-        assert_eq!(msg_tree_map_len, 0);
+        let pending_len = pq.store.read().await.messages.len();
+        assert_eq!(pending_len, 0);
 
         let consuming_map_len = pq.store.read().await.consuming_msg_orderly_tree_map.len();
         assert_eq!(consuming_map_len, 0);
@@ -1124,6 +1111,49 @@ mod tests {
 
         pq.put_message(&inner_msgs).await;
         assert_eq!(pq.get_max_span().await, 10);
+    }
+
+    #[tokio::test]
+    async fn test_contiguous_offsets_use_vecdeque_store() {
+        let pq = ProcessQueue::new();
+        let msgs = create_test_messages(8);
+
+        pq.put_message(&msgs).await;
+
+        let store = pq.store.read().await;
+        assert_eq!(store.messages.storage_kind(), "contiguous");
+        assert_eq!(store.messages.len(), 8);
+        assert_eq!(store.messages.offset_span(), Some((0, 7)));
+    }
+
+    #[tokio::test]
+    async fn test_unordered_offsets_fallback_to_btree_store() {
+        let pq = ProcessQueue::new();
+        let msgs = create_test_messages_with_offsets(&[10, 5, 7]);
+
+        pq.put_message(&msgs).await;
+
+        let store = pq.store.read().await;
+        assert_eq!(store.messages.storage_kind(), "btree");
+        assert_eq!(store.messages.len(), 3);
+        assert_eq!(store.messages.offset_span(), Some((5, 10)));
+    }
+
+    #[tokio::test]
+    async fn test_middle_remove_downgrades_and_preserves_offsets() {
+        let pq = ProcessQueue::new();
+        let msgs = create_test_messages(5);
+
+        pq.put_message(&msgs).await;
+        pq.remove_message(&[msgs[2].clone()]).await;
+
+        assert_eq!(pq.msg_count(), 4);
+        assert_eq!(pq.get_max_span().await, 4);
+
+        let store = pq.store.read().await;
+        assert_eq!(store.messages.storage_kind(), "btree");
+        assert_eq!(store.messages.offset_span(), Some((0, 4)));
+        assert!(!store.messages.contains_key(&2));
     }
 
     #[tokio::test]

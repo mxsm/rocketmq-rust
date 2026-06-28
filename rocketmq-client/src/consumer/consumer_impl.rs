@@ -28,6 +28,7 @@ pub(crate) mod observability;
 pub mod pop_process_queue;
 pub(crate) mod pop_request;
 pub mod process_queue;
+pub(crate) mod process_queue_store;
 pub(crate) mod pull_api_wrapper;
 pub mod pull_message_service;
 pub mod pull_request;
