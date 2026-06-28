@@ -14,6 +14,7 @@
 
 #![cfg(unix)]
 
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io;
 use std::io::IoSlice;
@@ -36,6 +37,7 @@ use rocketmq_store::ha::transfer_engine::HaTransferEngine;
 use rocketmq_store::ha::transfer_engine::TransferEngineKind;
 use rocketmq_store::transfer::batch::TransferBatch;
 use rocketmq_store::transfer::batch::TransferKind;
+use rocketmq_store::transfer::error::TransferError;
 use rocketmq_store::transfer::segment::SegmentLease;
 use rocketmq_store::transfer::segment::TransferCacheState;
 use tempfile::NamedTempFile;
@@ -187,6 +189,90 @@ async fn sendfile_transfer_engine_records_syscall_proxy_against_vectored_baselin
     assert_eq!(sendfile_stats.fallback_bytes, 0);
 }
 
+#[tokio::test]
+async fn sendfile_transfer_engine_retries_interrupted_and_would_block_without_advancing_offset() {
+    let file = Arc::new(temp_file_with_bytes(b"abcdef"));
+    let header = transfer_header(32768, 6);
+    let batch = TransferBatch {
+        frame_header: header.clone(),
+        segments: vec![SegmentLease::from_file_range(
+            32768,
+            32768,
+            0,
+            6,
+            file,
+            TransferCacheState::Hot,
+        )],
+        total_body_len: 6,
+        start_offset: 32768,
+        next_offset: 32774,
+        kind: TransferKind::Data,
+    };
+    let mut engine = SendfileTransferEngine::with_operation(
+        RecordingWriter::default(),
+        ScriptedSendfile::new(vec![
+            SendfileOutcome::Error(io::ErrorKind::Interrupted),
+            SendfileOutcome::Error(io::ErrorKind::WouldBlock),
+            SendfileOutcome::Write(2),
+            SendfileOutcome::Write(4),
+        ]),
+    );
+
+    let stats = engine.send_batch(&batch).await.expect("sendfile transfer retries");
+
+    let (writer, operation) = engine.into_parts();
+    assert_eq!(writer.written, header);
+    assert_eq!(operation.calls.len(), 4);
+    assert_eq!(operation.calls[0].offset, 0);
+    assert_eq!(operation.calls[1].offset, 0);
+    assert_eq!(operation.calls[2].offset, 0);
+    assert_eq!(operation.calls[3].offset, 2);
+    assert_eq!(operation.calls[0].len, 6);
+    assert_eq!(operation.calls[1].len, 6);
+    assert_eq!(operation.calls[2].len, 6);
+    assert_eq!(operation.calls[3].len, 4);
+    assert_eq!(stats.engine, TransferEngineKind::Sendfile);
+    assert_eq!(stats.bytes_written, header.len() + 6);
+    assert_eq!(stats.sendfile_call_count, 2);
+    assert_eq!(stats.sendfile_bytes, 6);
+    assert_eq!(stats.partial_write_count, 1);
+}
+
+#[tokio::test]
+async fn sendfile_transfer_engine_reports_write_zero_when_connection_closes() {
+    let file = Arc::new(temp_file_with_bytes(b"closed"));
+    let header = transfer_header(65536, 6);
+    let batch = TransferBatch {
+        frame_header: header,
+        segments: vec![SegmentLease::from_file_range(
+            65536,
+            65536,
+            0,
+            6,
+            file,
+            TransferCacheState::Hot,
+        )],
+        total_body_len: 6,
+        start_offset: 65536,
+        next_offset: 65542,
+        kind: TransferKind::Data,
+    };
+    let mut engine = SendfileTransferEngine::with_operation(
+        RecordingWriter::default(),
+        ScriptedSendfile::new(vec![SendfileOutcome::Zero]),
+    );
+
+    let error = engine
+        .send_batch(&batch)
+        .await
+        .expect_err("zero-byte sendfile should report connection close");
+
+    match error {
+        TransferError::Io(error) => assert_eq!(error.kind(), io::ErrorKind::WriteZero),
+        other => panic!("expected WriteZero I/O error, got {other:?}"),
+    }
+}
+
 fn temp_file_with_bytes(bytes: &[u8]) -> File {
     let mut temp = NamedTempFile::new().expect("temp file");
     temp.write_all(bytes).expect("write temp file");
@@ -274,5 +360,36 @@ impl SendfileOperation for RecordingSendfile {
     fn sendfile(&mut self, _out_fd: RawFd, _in_fd: RawFd, offset: u64, len: usize) -> io::Result<usize> {
         self.calls.push(SendfileCall { offset, len });
         Ok(len.min(self.max_chunk))
+    }
+}
+
+enum SendfileOutcome {
+    Write(usize),
+    Error(io::ErrorKind),
+    Zero,
+}
+
+struct ScriptedSendfile {
+    outcomes: VecDeque<SendfileOutcome>,
+    calls: Vec<SendfileCall>,
+}
+
+impl ScriptedSendfile {
+    fn new(outcomes: Vec<SendfileOutcome>) -> Self {
+        Self {
+            outcomes: VecDeque::from(outcomes),
+            calls: Vec::new(),
+        }
+    }
+}
+
+impl SendfileOperation for ScriptedSendfile {
+    fn sendfile(&mut self, _out_fd: RawFd, _in_fd: RawFd, offset: u64, len: usize) -> io::Result<usize> {
+        self.calls.push(SendfileCall { offset, len });
+        match self.outcomes.pop_front().unwrap_or(SendfileOutcome::Write(len)) {
+            SendfileOutcome::Write(written) => Ok(written.min(len)),
+            SendfileOutcome::Error(kind) => Err(io::Error::new(kind, "scripted sendfile error")),
+            SendfileOutcome::Zero => Ok(0),
+        }
     }
 }
