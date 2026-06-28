@@ -41,8 +41,13 @@ impl From<SelectMappedBufferCacheState> for TransferCacheState {
 
 #[derive(Clone)]
 pub enum SegmentSource {
-    Mmap { mapped_file: Arc<DefaultMappedFile> },
-    FileRange { file: Arc<File> },
+    Mmap {
+        mapped_file: Arc<DefaultMappedFile>,
+    },
+    FileRange {
+        file: Arc<File>,
+        mapped_file: Option<Arc<DefaultMappedFile>>,
+    },
     Bytes,
 }
 
@@ -94,6 +99,30 @@ impl SegmentLease {
         }
     }
 
+    pub fn from_file_range(
+        global_offset: i64,
+        file_offset: u64,
+        position_in_file: u64,
+        len: usize,
+        file: Arc<File>,
+        cache_state: TransferCacheState,
+    ) -> Self {
+        Self {
+            segment: CommitLogSegment {
+                global_offset,
+                file_offset,
+                position_in_file,
+                len,
+                source: SegmentSource::FileRange {
+                    file,
+                    mapped_file: None,
+                },
+                cache_state,
+            },
+            bytes: None,
+        }
+    }
+
     pub fn from_select_result(global_offset: i64, mut result: SelectMappedBufferResult) -> Option<Self> {
         if result.size <= 0 {
             return None;
@@ -107,7 +136,13 @@ impl SegmentLease {
             .map(|mapped_file| mapped_file.get_file_from_offset())
             .unwrap_or_else(|| global_offset.saturating_sub(position_in_file as i64) as u64);
         let source = match mapped_file {
-            Some(mapped_file) => SegmentSource::Mmap { mapped_file },
+            Some(mapped_file) => match mapped_file.get_file().try_clone() {
+                Ok(file) => SegmentSource::FileRange {
+                    file: Arc::new(file),
+                    mapped_file: Some(mapped_file),
+                },
+                Err(_) => SegmentSource::Mmap { mapped_file },
+            },
             None => SegmentSource::Bytes,
         };
 
@@ -134,7 +169,7 @@ impl SegmentLease {
 
     pub fn as_file_range(&self) -> Option<FileRange> {
         match &self.segment.source {
-            SegmentSource::FileRange { file } => Some(FileRange {
+            SegmentSource::FileRange { file, .. } => Some(FileRange {
                 file: file.clone(),
                 position: self.segment.position_in_file,
                 len: self.segment.len,
@@ -154,8 +189,13 @@ impl SegmentLease {
 
 impl Drop for SegmentLease {
     fn drop(&mut self) {
-        if let SegmentSource::Mmap { mapped_file } = &self.segment.source {
-            mapped_file.release();
+        match &self.segment.source {
+            SegmentSource::Mmap { mapped_file }
+            | SegmentSource::FileRange {
+                mapped_file: Some(mapped_file),
+                ..
+            } => mapped_file.release(),
+            SegmentSource::FileRange { mapped_file: None, .. } | SegmentSource::Bytes => {}
         }
     }
 }

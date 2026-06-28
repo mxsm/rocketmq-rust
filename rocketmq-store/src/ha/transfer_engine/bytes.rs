@@ -62,12 +62,15 @@ where
             body_bytes: batch.total_body_len,
             frame_count: 1,
             write_call_count,
+            sendfile_call_count: 0,
+            sendfile_bytes: 0,
+            fallback_bytes: 0,
             partial_write_count: write_call_count.saturating_sub(expected_write_calls),
         })
     }
 }
 
-async fn write_all_counted<W>(writer: &mut W, mut bytes: &[u8]) -> TransferResult<(usize, usize)>
+pub(crate) async fn write_all_counted<W>(writer: &mut W, mut bytes: &[u8]) -> TransferResult<(usize, usize)>
 where
     W: AsyncWrite + Unpin,
 {
