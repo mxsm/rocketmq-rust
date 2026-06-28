@@ -183,3 +183,7 @@ harness = false
 [[bench]]
 name    = "store_kv_compaction_lifecycle_bench"
 harness = false
+
+[[bench]]
+name    = "ha_transfer_benchmark"
+harness = false
