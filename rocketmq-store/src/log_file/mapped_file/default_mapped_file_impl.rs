@@ -1780,6 +1780,25 @@ mod tests {
     }
 
     #[test]
+    fn warm_mapped_file_preserves_write_commit_and_flush_positions() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        assert!(mapped_file.append_message_bytes(b"warm-position"));
+        let wrote_position = mapped_file.get_wrote_position();
+        let committed_position = mapped_file.get_committed_position();
+        let flushed_position = mapped_file.get_flushed_position();
+
+        mapped_file.warm_mapped_file(FlushDiskType::AsyncFlush, 1);
+        mapped_file.warm_mapped_file(FlushDiskType::SyncFlush, 1);
+
+        assert_eq!(mapped_file.get_wrote_position(), wrote_position);
+        assert_eq!(mapped_file.get_committed_position(), committed_position);
+        assert_eq!(mapped_file.get_flushed_position(), flushed_position);
+        let metrics = mapped_file.get_metrics().unwrap();
+        assert_eq!(metrics.warm_operations(), 2);
+        assert_eq!(metrics.warm_bytes(), mapped_file.get_file_size() * 2);
+    }
+
+    #[test]
     fn is_loaded_rejects_invalid_ranges() {
         let (_temp_dir, mapped_file) = create_test_file();
 
