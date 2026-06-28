@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(unix)]
+use crate::ha::transfer_engine::sendfile::SendfileWriteTarget;
 use ::bytes::Bytes;
 use tokio::io::AsyncWrite;
 
 use crate::ha::transfer_engine::bytes::BytesTransferEngine;
+#[cfg(unix)]
+use crate::ha::transfer_engine::sendfile::SendfileTransferEngine;
 use crate::ha::transfer_engine::vectored::VectoredTransferEngine;
 use crate::transfer::batch::TransferBatch;
 use crate::transfer::error::TransferError;
@@ -35,14 +39,17 @@ pub enum TransferEngineKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferEnginePreference {
+    Auto,
     Bytes,
     Vectored,
+    Sendfile,
     IoUring,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransferEngineAvailability {
     pub vectored_write_available: bool,
+    pub sendfile_available: bool,
     pub io_uring_available: bool,
 }
 
@@ -73,6 +80,7 @@ pub fn select_transfer_engine(
         preference,
         TransferEngineAvailability {
             vectored_write_available,
+            sendfile_available: false,
             io_uring_available: false,
         },
     )
@@ -83,11 +91,28 @@ pub fn select_transfer_engine_with_availability(
     availability: TransferEngineAvailability,
 ) -> TransferEngineSelection {
     match preference {
+        TransferEnginePreference::Auto if availability.sendfile_available => TransferEngineSelection {
+            engine: TransferEngineKind::Sendfile,
+            fallback_reason: None,
+        },
+        TransferEnginePreference::Auto => select_vectored_transfer_engine(availability.vectored_write_available),
         TransferEnginePreference::Bytes => TransferEngineSelection {
             engine: TransferEngineKind::Bytes,
             fallback_reason: None,
         },
         TransferEnginePreference::Vectored => select_vectored_transfer_engine(availability.vectored_write_available),
+        TransferEnginePreference::Sendfile if availability.sendfile_available => TransferEngineSelection {
+            engine: TransferEngineKind::Sendfile,
+            fallback_reason: None,
+        },
+        TransferEnginePreference::Sendfile if availability.vectored_write_available => TransferEngineSelection {
+            engine: TransferEngineKind::Vectored,
+            fallback_reason: Some("sendfile unavailable"),
+        },
+        TransferEnginePreference::Sendfile => TransferEngineSelection {
+            engine: TransferEngineKind::Bytes,
+            fallback_reason: Some("sendfile and vectored write unavailable"),
+        },
         TransferEnginePreference::IoUring if availability.io_uring_available => TransferEngineSelection {
             engine: TransferEngineKind::IoUring,
             fallback_reason: None,
@@ -120,15 +145,21 @@ fn select_vectored_transfer_engine(vectored_write_available: bool) -> TransferEn
 pub enum HaTransferEngine<W> {
     Bytes(BytesTransferEngine<W>),
     Vectored(VectoredTransferEngine<W>),
+    #[cfg(unix)]
+    Sendfile(SendfileTransferEngine<W>),
 }
 
 impl<W> HaTransferEngine<W> {
     pub fn from_selection(writer: W, engine: TransferEngineKind) -> Self {
         match engine {
             TransferEngineKind::Bytes => Self::Bytes(BytesTransferEngine::new(writer)),
-            TransferEngineKind::Vectored | TransferEngineKind::Sendfile | TransferEngineKind::IoUring => {
+            TransferEngineKind::Vectored | TransferEngineKind::IoUring => {
                 Self::Vectored(VectoredTransferEngine::new(writer))
             }
+            #[cfg(unix)]
+            TransferEngineKind::Sendfile => Self::Sendfile(SendfileTransferEngine::new(writer)),
+            #[cfg(not(unix))]
+            TransferEngineKind::Sendfile => Self::Vectored(VectoredTransferEngine::new(writer)),
         }
     }
 
@@ -136,6 +167,11 @@ impl<W> HaTransferEngine<W> {
         match self {
             Self::Bytes(engine) => engine.into_inner(),
             Self::Vectored(engine) => engine.into_inner(),
+            #[cfg(unix)]
+            Self::Sendfile(engine) => {
+                let (writer, _) = engine.into_parts();
+                writer
+            }
         }
     }
 
@@ -143,10 +179,27 @@ impl<W> HaTransferEngine<W> {
         match self {
             Self::Bytes(_) => TransferEngineKind::Bytes,
             Self::Vectored(_) => TransferEngineKind::Vectored,
+            #[cfg(unix)]
+            Self::Sendfile(_) => TransferEngineKind::Sendfile,
         }
     }
 }
 
+#[cfg(unix)]
+impl<W> HaTransferEngine<W>
+where
+    W: AsyncWrite + SendfileWriteTarget + Unpin,
+{
+    pub async fn send_batch(&mut self, batch: &TransferBatch) -> TransferResult<TransferStats> {
+        match self {
+            Self::Bytes(engine) => engine.send_batch(batch).await,
+            Self::Vectored(engine) => engine.send_batch(batch).await,
+            Self::Sendfile(engine) => engine.send_batch(batch).await,
+        }
+    }
+}
+
+#[cfg(not(unix))]
 impl<W> HaTransferEngine<W>
 where
     W: AsyncWrite + Unpin,

@@ -45,6 +45,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::message_store::MessageStore;
+use crate::config::message_store_config::LinuxTransferEngine;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::default_ha_client::CONTROLLER_REPORT_HEADER_SIZE;
 use crate::ha::default_ha_service::DefaultHAService;
@@ -54,8 +55,9 @@ use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_service::HAService;
-use crate::ha::transfer_engine::select_transfer_engine;
+use crate::ha::transfer_engine::select_transfer_engine_with_availability;
 use crate::ha::transfer_engine::HaTransferEngine;
+use crate::ha::transfer_engine::TransferEngineAvailability;
 use crate::ha::transfer_engine::TransferEngineKind;
 use crate::ha::transfer_engine::TransferEnginePreference;
 use crate::ha::HAConnectionError;
@@ -649,16 +651,28 @@ impl WriteSocketService {
         next_transfer_from_where: Arc<AtomicI64>,
     ) -> Result<Self, HAConnectionError> {
         let enable_controller_mode = message_store_config.enable_controller_mode;
-        let preference = TransferEnginePreference::Vectored;
-        let selection = select_transfer_engine(preference, writer.is_write_vectored());
+        let preference = transfer_engine_preference(&message_store_config);
+        let selection = select_transfer_engine_with_availability(
+            preference,
+            TransferEngineAvailability {
+                vectored_write_available: writer.is_write_vectored(),
+                sendfile_available: message_store_config.effective_linux_ha_sendfile_enable()
+                    && cfg!(target_os = "linux"),
+                io_uring_available: message_store_config.linux_io_uring_enable
+                    && crate::log_file::mapped_file::io_uring_impl::probe_io_uring_runtime_capability()
+                        .basic_path_available(),
+            },
+        );
         if let Some(reason) = selection.fallback_reason {
             info!(
                 "HA transfer engine fallback to {:?} for slave[{}]: {}",
                 selection.engine, client_address, reason
             );
-            ha_service
-                .ha_transfer_metrics()
-                .record_fallback(TransferEngineKind::Vectored, selection.engine, reason);
+            ha_service.ha_transfer_metrics().record_fallback(
+                transfer_engine_kind(preference),
+                selection.engine,
+                reason,
+            );
         } else {
             info!(
                 "HA transfer engine selected {:?} for slave[{}]",
@@ -929,6 +943,26 @@ impl WriteSocketService {
 
     fn get_service_name(&self) -> String {
         format!("WriteSocketService[{}]", self.client_address)
+    }
+}
+
+fn transfer_engine_preference(message_store_config: &MessageStoreConfig) -> TransferEnginePreference {
+    match message_store_config.effective_linux_transfer_engine() {
+        LinuxTransferEngine::Auto => TransferEnginePreference::Auto,
+        LinuxTransferEngine::Bytes => TransferEnginePreference::Bytes,
+        LinuxTransferEngine::Vectored => TransferEnginePreference::Vectored,
+        LinuxTransferEngine::Sendfile => TransferEnginePreference::Sendfile,
+        LinuxTransferEngine::IoUring => TransferEnginePreference::IoUring,
+    }
+}
+
+fn transfer_engine_kind(preference: TransferEnginePreference) -> TransferEngineKind {
+    match preference {
+        TransferEnginePreference::Auto => TransferEngineKind::Vectored,
+        TransferEnginePreference::Bytes => TransferEngineKind::Bytes,
+        TransferEnginePreference::Vectored => TransferEngineKind::Vectored,
+        TransferEnginePreference::Sendfile => TransferEngineKind::Sendfile,
+        TransferEnginePreference::IoUring => TransferEngineKind::IoUring,
     }
 }
 

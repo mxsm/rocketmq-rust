@@ -420,9 +420,9 @@ impl LinuxStorageProfile {
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LinuxTransferEngine {
+    #[default]
     Auto,
     Bytes,
-    #[default]
     Vectored,
     Sendfile,
     IoUring,
@@ -1366,6 +1366,32 @@ impl MessageStoreConfig {
         self.linux_storage_profile.settings()
     }
 
+    pub fn effective_linux_transfer_engine(&self) -> LinuxTransferEngine {
+        if self.linux_transfer_engine != LinuxTransferEngine::Auto {
+            return self.linux_transfer_engine;
+        }
+
+        if self.linux_storage_optimization_enable {
+            return self.effective_linux_storage_profile_settings().transfer_engine;
+        }
+
+        LinuxTransferEngine::Vectored
+    }
+
+    pub fn effective_linux_ha_sendfile_enable(&self) -> bool {
+        if self.linux_ha_sendfile_enable {
+            return true;
+        }
+
+        if self.linux_transfer_engine == LinuxTransferEngine::Sendfile {
+            return true;
+        }
+
+        self.effective_linux_transfer_engine() == LinuxTransferEngine::Sendfile
+            && self.linux_storage_optimization_enable
+            && self.effective_linux_storage_profile_settings().ha_sendfile_enable
+    }
+
     pub fn effective_linux_memory_lock_mode(&self) -> LinuxMemoryLockMode {
         if self.linux_memory_lock_mode != LinuxMemoryLockMode::Off {
             return self.linux_memory_lock_mode;
@@ -2215,6 +2241,45 @@ mod tests {
         assert_eq!(settings.transfer_engine, LinuxTransferEngine::Sendfile);
         assert!(settings.ha_sendfile_enable);
         Ok(())
+    }
+
+    #[test]
+    fn effective_linux_transfer_engine_uses_high_throughput_profile_when_optimization_is_enabled() {
+        let config = MessageStoreConfig {
+            linux_storage_optimization_enable: true,
+            linux_storage_profile: LinuxStorageProfile::HighThroughputReplication,
+            ..Default::default()
+        };
+
+        assert_eq!(config.effective_linux_transfer_engine(), LinuxTransferEngine::Sendfile);
+        assert!(config.effective_linux_ha_sendfile_enable());
+    }
+
+    #[test]
+    fn effective_linux_transfer_engine_preserves_direct_engine_and_disabled_optimization() {
+        let explicit_engine = MessageStoreConfig {
+            linux_storage_optimization_enable: true,
+            linux_storage_profile: LinuxStorageProfile::HighThroughputReplication,
+            linux_transfer_engine: LinuxTransferEngine::Bytes,
+            linux_ha_sendfile_enable: false,
+            ..Default::default()
+        };
+        let disabled_profile = MessageStoreConfig {
+            linux_storage_optimization_enable: false,
+            linux_storage_profile: LinuxStorageProfile::HighThroughputReplication,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            explicit_engine.effective_linux_transfer_engine(),
+            LinuxTransferEngine::Bytes
+        );
+        assert!(!explicit_engine.effective_linux_ha_sendfile_enable());
+        assert_eq!(
+            disabled_profile.effective_linux_transfer_engine(),
+            LinuxTransferEngine::Vectored
+        );
+        assert!(!disabled_profile.effective_linux_ha_sendfile_enable());
     }
 
     #[test]

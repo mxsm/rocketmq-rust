@@ -30,7 +30,9 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use rocketmq_store::ha::transfer_engine::sendfile::SendfileOperation;
 use rocketmq_store::ha::transfer_engine::sendfile::SendfileTransferEngine;
+use rocketmq_store::ha::transfer_engine::sendfile::SendfileWriteTarget;
 use rocketmq_store::ha::transfer_engine::vectored::VectoredTransferEngine;
+use rocketmq_store::ha::transfer_engine::HaTransferEngine;
 use rocketmq_store::ha::transfer_engine::TransferEngineKind;
 use rocketmq_store::transfer::batch::TransferBatch;
 use rocketmq_store::transfer::batch::TransferKind;
@@ -50,6 +52,13 @@ fn segment_lease_from_file_range_exposes_file_position_and_len() {
     assert_eq!(range.position, 5);
     assert_eq!(range.len, 7);
     assert_eq!(lease.len(), 7);
+}
+
+#[test]
+fn ha_transfer_engine_from_sendfile_selection_keeps_sendfile_kind() {
+    let engine = HaTransferEngine::from_selection(RecordingWriter::default(), TransferEngineKind::Sendfile);
+
+    assert_eq!(engine.kind(), TransferEngineKind::Sendfile);
 }
 
 #[tokio::test]
@@ -200,6 +209,12 @@ struct RecordingWriter {
 impl AsRawFd for RecordingWriter {
     fn as_raw_fd(&self) -> RawFd {
         77
+    }
+}
+
+impl SendfileWriteTarget for RecordingWriter {
+    fn sendfile_out_fd(&self) -> RawFd {
+        self.as_raw_fd()
     }
 }
 
