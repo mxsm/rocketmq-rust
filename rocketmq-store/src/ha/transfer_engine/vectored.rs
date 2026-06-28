@@ -75,6 +75,9 @@ where
             body_bytes: batch.total_body_len,
             frame_count: 1,
             write_call_count,
+            sendfile_call_count: 0,
+            sendfile_bytes: 0,
+            fallback_bytes: 0,
             partial_write_count,
         })
     }

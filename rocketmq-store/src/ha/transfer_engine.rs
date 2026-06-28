@@ -22,12 +22,14 @@ use crate::transfer::error::TransferError;
 use crate::transfer::error::TransferResult;
 
 pub mod bytes;
+pub mod sendfile;
 pub mod vectored;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferEngineKind {
     Bytes,
     Vectored,
+    Sendfile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +51,9 @@ pub struct TransferStats {
     pub body_bytes: usize,
     pub frame_count: usize,
     pub write_call_count: usize,
+    pub sendfile_call_count: usize,
+    pub sendfile_bytes: usize,
+    pub fallback_bytes: usize,
     pub partial_write_count: usize,
 }
 
@@ -81,7 +86,9 @@ impl<W> HaTransferEngine<W> {
     pub fn from_selection(writer: W, engine: TransferEngineKind) -> Self {
         match engine {
             TransferEngineKind::Bytes => Self::Bytes(BytesTransferEngine::new(writer)),
-            TransferEngineKind::Vectored => Self::Vectored(VectoredTransferEngine::new(writer)),
+            TransferEngineKind::Vectored | TransferEngineKind::Sendfile => {
+                Self::Vectored(VectoredTransferEngine::new(writer))
+            }
         }
     }
 

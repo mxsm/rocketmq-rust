@@ -2745,6 +2745,9 @@ mod tests {
             segments[0].as_bytes().expect("segment bytes"),
             Bytes::from_static(b"CDEF")
         );
+        let file_range = segments[0].as_file_range().expect("file range");
+        assert_eq!(file_range.position, 12);
+        assert_eq!(file_range.len, 4);
 
         let _ = fs::remove_dir_all(temp_root);
     }
