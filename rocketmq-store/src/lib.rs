@@ -144,6 +144,67 @@ pub mod bench_support {
         pub healthy: bool,
     }
 
+    pub const IO_URING_FLUSH_BENCHMARK_GROUP: &str = "io_uring/flush_semantics";
+
+    pub const DEFAULT_IO_URING_FLUSH_BENCHMARK_WORKLOAD: IoUringFlushBenchmarkWorkload =
+        IoUringFlushBenchmarkWorkload {
+            file_size: 16 * 1024 * 1024,
+            message_size: 4 * 1024,
+            message_count: 64,
+            flush_least_pages: 0,
+        };
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+    pub enum IoUringFlushBenchmarkPath {
+        DefaultMappedFileBaseline,
+        IoUringExperimental,
+    }
+
+    impl IoUringFlushBenchmarkPath {
+        pub const fn as_str(self) -> &'static str {
+            match self {
+                Self::DefaultMappedFileBaseline => "default_mapped_file_baseline",
+                Self::IoUringExperimental => "io_uring_experimental",
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+    pub struct IoUringFlushBenchmarkWorkload {
+        pub file_size: usize,
+        pub message_size: usize,
+        pub message_count: usize,
+        pub flush_least_pages: i32,
+    }
+
+    impl IoUringFlushBenchmarkWorkload {
+        pub const fn total_bytes(self) -> usize {
+            self.message_size * self.message_count
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+    pub struct IoUringFlushBenchmarkCase {
+        pub name: &'static str,
+        pub path: IoUringFlushBenchmarkPath,
+        pub workload: IoUringFlushBenchmarkWorkload,
+    }
+
+    pub fn io_uring_flush_benchmark_cases() -> [IoUringFlushBenchmarkCase; 2] {
+        [
+            IoUringFlushBenchmarkCase {
+                name: "default_mapped_file_flush",
+                path: IoUringFlushBenchmarkPath::DefaultMappedFileBaseline,
+                workload: DEFAULT_IO_URING_FLUSH_BENCHMARK_WORKLOAD,
+            },
+            IoUringFlushBenchmarkCase {
+                name: "io_uring_experimental_flush",
+                path: IoUringFlushBenchmarkPath::IoUringExperimental,
+                workload: DEFAULT_IO_URING_FLUSH_BENCHMARK_WORKLOAD,
+            },
+        ]
+    }
+
     #[cfg(feature = "rocksdb_store")]
     #[derive(Debug, Clone, Serialize)]
     pub struct StoreRocksDbMaintenanceLifecycleProbe {
@@ -665,6 +726,36 @@ mod bench_support_tests {
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
         assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
         assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
+    }
+
+    #[test]
+    fn io_uring_flush_benchmark_cases_share_flush_manager_workload() {
+        use super::bench_support::IoUringFlushBenchmarkPath;
+
+        let cases = super::bench_support::io_uring_flush_benchmark_cases();
+        assert_eq!(
+            super::bench_support::IO_URING_FLUSH_BENCHMARK_GROUP,
+            "io_uring/flush_semantics"
+        );
+        assert_eq!(cases.len(), 2);
+
+        let baseline = cases
+            .iter()
+            .find(|case| case.path == IoUringFlushBenchmarkPath::DefaultMappedFileBaseline)
+            .expect("default mapped-file baseline case should exist");
+        let experimental = cases
+            .iter()
+            .find(|case| case.path == IoUringFlushBenchmarkPath::IoUringExperimental)
+            .expect("io_uring experimental case should exist");
+
+        assert_eq!(baseline.workload, experimental.workload);
+        assert_eq!(baseline.workload.flush_least_pages, 0);
+        assert_eq!(
+            baseline.workload.total_bytes(),
+            baseline.workload.message_size * baseline.workload.message_count
+        );
+        assert!(baseline.name.contains("default"));
+        assert!(experimental.name.contains("io_uring"));
     }
 
     #[cfg(feature = "rocksdb_store")]
