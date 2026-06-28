@@ -265,7 +265,11 @@ pub use crate::producer::produce_accumulator::ProduceAccumulatorGuardLifecyclePr
 #[doc(hidden)]
 pub use crate::producer::request_future_holder::run_request_future_holder_lifecycle_probe;
 #[doc(hidden)]
+pub use crate::producer::request_future_holder::run_request_future_holder_scan_probe;
+#[doc(hidden)]
 pub use crate::producer::request_future_holder::RequestFutureHolderLifecycleProbe;
+#[doc(hidden)]
+pub use crate::producer::request_future_holder::RequestFutureHolderScanProbe;
 pub use crate::producer::DefaultMQProducer;
 pub use crate::producer::JavaHashCode;
 pub use crate::producer::LocalTransactionState;

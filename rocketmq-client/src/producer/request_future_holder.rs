@@ -12,10 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering as CmpOrdering;
+use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
+use std::time::Instant;
 
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use serde::Serialize;
@@ -38,8 +45,41 @@ pub static REQUEST_FUTURE_HOLDER: LazyLock<Arc<RequestFutureHolder>> =
 
 pub struct RequestFutureHolder {
     request_future_table: Arc<RwLock<HashMap<String, Arc<RequestResponseFuture>>>>,
+    deadline_queue: Arc<Mutex<BinaryHeap<DeadlineEntry>>>,
+    deadline_sequence: AtomicU64,
     producer_set: Arc<Mutex<HashSet<String>>>,
     scheduled_task: Arc<Mutex<Option<ClientScheduledTaskHandle>>>,
+}
+
+#[derive(Clone)]
+struct DeadlineEntry {
+    deadline: Instant,
+    sequence: u64,
+    correlation_id: String,
+    request: Weak<RequestResponseFuture>,
+}
+
+impl PartialEq for DeadlineEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.deadline == other.deadline && self.sequence == other.sequence
+    }
+}
+
+impl Eq for DeadlineEntry {}
+
+impl PartialOrd for DeadlineEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DeadlineEntry {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        other
+            .deadline
+            .cmp(&self.deadline)
+            .then_with(|| other.sequence.cmp(&self.sequence))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,30 +94,48 @@ pub struct RequestFutureHolderLifecycleProbe {
     pub healthy: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestFutureHolderScanProbe {
+    pub pending_requests: usize,
+    pub expired_requests: usize,
+    pub callbacks: usize,
+    pub remaining_requests: usize,
+    pub scan_elapsed_us: u128,
+}
+
 impl RequestFutureHolder {
     fn new() -> Self {
         Self {
             request_future_table: Arc::new(RwLock::new(HashMap::new())),
+            deadline_queue: Arc::new(Mutex::new(BinaryHeap::new())),
+            deadline_sequence: AtomicU64::new(0),
             producer_set: Arc::new(Mutex::new(HashSet::new())),
             scheduled_task: Arc::new(Mutex::new(None)),
         }
     }
 
     pub async fn scan_expired_request(&self) {
-        let mut rf_list = Vec::new();
+        let expired_candidates = self.pop_expired_deadline_entries(Instant::now()).await;
+        if expired_candidates.is_empty() {
+            return;
+        }
+
+        let mut rf_list = Vec::with_capacity(expired_candidates.len());
         {
             let mut table = self.request_future_table.write().await;
-            let mut expired_keys = Vec::new();
-
-            for (key, future) in table.iter() {
-                if future.is_timeout() {
-                    expired_keys.push(key.clone());
-                    rf_list.push(future.clone());
+            for candidate in expired_candidates {
+                let Some(indexed_request) = candidate.request.upgrade() else {
+                    continue;
+                };
+                let Some(current_request) = table.get(&candidate.correlation_id) else {
+                    continue;
+                };
+                if !Arc::ptr_eq(current_request, &indexed_request) || !current_request.is_timeout() {
+                    continue;
                 }
-            }
-
-            for key in expired_keys {
-                table.remove(&key);
+                if let Some(removed) = table.remove(&candidate.correlation_id) {
+                    rf_list.push(removed);
+                }
             }
         }
 
@@ -154,8 +212,19 @@ impl RequestFutureHolder {
     }
 
     pub async fn put_request(&self, correlation_id: String, request: Arc<RequestResponseFuture>) {
+        let deadline = request_deadline(&request);
+        let sequence = self.deadline_sequence.fetch_add(1, Ordering::Relaxed);
+        let entry = DeadlineEntry {
+            deadline,
+            sequence,
+            correlation_id: correlation_id.clone(),
+            request: Arc::downgrade(&request),
+        };
+
+        let mut deadline_queue = self.deadline_queue.lock().await;
         let mut table = self.request_future_table.write().await;
         table.insert(correlation_id, request);
+        deadline_queue.push(entry);
     }
 
     pub async fn remove_request(&self, correlation_id: &str) {
@@ -190,6 +259,24 @@ impl RequestFutureHolder {
             .map(ClientScheduledTaskHandle::schedule_snapshot)
             .unwrap_or_default()
     }
+
+    async fn pop_expired_deadline_entries(&self, now: Instant) -> Vec<DeadlineEntry> {
+        let mut deadline_queue = self.deadline_queue.lock().await;
+        let mut expired = Vec::new();
+        while deadline_queue.peek().is_some_and(|entry| entry.deadline <= now) {
+            if let Some(entry) = deadline_queue.pop() {
+                expired.push(entry);
+            }
+        }
+        expired
+    }
+}
+
+fn request_deadline(request: &RequestResponseFuture) -> Instant {
+    request
+        .get_begin_timestamp()
+        .checked_add(Duration::from_millis(request.get_timeout_millis()))
+        .unwrap_or_else(Instant::now)
 }
 
 #[doc(hidden)]
@@ -238,9 +325,55 @@ pub async fn run_request_future_holder_lifecycle_probe() -> RequestFutureHolderL
     }
 }
 
+#[doc(hidden)]
+pub async fn run_request_future_holder_scan_probe(
+    pending_requests: usize,
+    expired_percent: usize,
+) -> RequestFutureHolderScanProbe {
+    let holder = RequestFutureHolder::new();
+    let expired_requests = pending_requests.saturating_mul(expired_percent.min(100)) / 100;
+    let callbacks = Arc::new(AtomicUsize::new(0));
+
+    for index in 0..pending_requests {
+        let callback_count = Arc::clone(&callbacks);
+        let callback = Arc::new(
+            move |_response: Option<&dyn rocketmq_common::common::message::MessageTrait>,
+                  _error: Option<&dyn std::error::Error>| {
+                callback_count.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+        let timeout_millis = if index < expired_requests { 0 } else { 60_000 };
+        let correlation_id = format!("corr-{index}");
+        let request = Arc::new(RequestResponseFuture::new(
+            correlation_id.clone().into(),
+            timeout_millis,
+            Some(callback),
+        ));
+        holder.put_request(correlation_id, request).await;
+    }
+
+    if expired_requests > 0 {
+        tokio::task::yield_now().await;
+    }
+
+    let scan_started_at = Instant::now();
+    holder.scan_expired_request().await;
+    let scan_elapsed_us = scan_started_at.elapsed().as_micros();
+    let remaining_requests = holder.request_future_table.read().await.len();
+
+    RequestFutureHolderScanProbe {
+        pending_requests,
+        expired_requests,
+        callbacks: callbacks.load(Ordering::Relaxed),
+        remaining_requests,
+        scan_elapsed_us,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::time::Instant;
 
@@ -259,6 +392,10 @@ mod tests {
                 .await
                 .as_ref()
                 .is_some_and(ClientScheduledTaskHandle::is_running)
+        }
+
+        async fn request_count(&self) -> usize {
+            self.request_future_table.read().await.len()
         }
     }
 
@@ -325,6 +462,82 @@ mod tests {
 
         assert!(holder.get_request("corr-timeout").await.is_none());
         assert!(callback_called.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn scan_expired_request_skips_removed_lazy_deadline_entry() {
+        let holder = RequestFutureHolder::new();
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let callback_count_inner = Arc::clone(&callback_count);
+        let callback = Arc::new(
+            move |_response: Option<&dyn MessageTrait>, _error: Option<&dyn std::error::Error>| {
+                callback_count_inner.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        let request = Arc::new(RequestResponseFuture::new("corr-removed".into(), 0, Some(callback)));
+
+        holder.put_request("corr-removed".to_string(), request).await;
+        holder.remove_request("corr-removed").await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        holder.scan_expired_request().await;
+
+        assert_eq!(callback_count.load(Ordering::SeqCst), 0);
+        assert_eq!(holder.request_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn scan_expired_request_skips_stale_deadline_after_replace() {
+        let holder = RequestFutureHolder::new();
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let callback_count_inner = Arc::clone(&callback_count);
+        let old_callback = Arc::new(
+            move |_response: Option<&dyn MessageTrait>, _error: Option<&dyn std::error::Error>| {
+                callback_count_inner.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        let old_request = Arc::new(RequestResponseFuture::new(
+            "corr-replaced".into(),
+            0,
+            Some(old_callback),
+        ));
+        let new_request = Arc::new(RequestResponseFuture::new("corr-replaced".into(), 60_000, None));
+
+        holder.put_request("corr-replaced".to_string(), old_request).await;
+        holder
+            .put_request("corr-replaced".to_string(), Arc::clone(&new_request))
+            .await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        holder.scan_expired_request().await;
+
+        assert_eq!(callback_count.load(Ordering::SeqCst), 0);
+        let stored = holder
+            .get_request("corr-replaced")
+            .await
+            .expect("replacement request should remain");
+        assert!(Arc::ptr_eq(&stored, &new_request));
+    }
+
+    #[tokio::test]
+    async fn duplicate_deadline_entries_execute_timeout_callback_once() {
+        let holder = RequestFutureHolder::new();
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let callback_count_inner = Arc::clone(&callback_count);
+        let callback = Arc::new(
+            move |_response: Option<&dyn MessageTrait>, _error: Option<&dyn std::error::Error>| {
+                callback_count_inner.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        let request = Arc::new(RequestResponseFuture::new("corr-duplicate".into(), 0, Some(callback)));
+
+        holder
+            .put_request("corr-duplicate".to_string(), Arc::clone(&request))
+            .await;
+        holder.put_request("corr-duplicate".to_string(), request).await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        holder.scan_expired_request().await;
+
+        assert_eq!(callback_count.load(Ordering::SeqCst), 1);
+        assert!(holder.get_request("corr-duplicate").await.is_none());
     }
 
     #[tokio::test]
