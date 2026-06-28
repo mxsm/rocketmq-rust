@@ -20,4 +20,8 @@ pub enum TransferError {
     InvalidInput(String),
     #[error("commitlog segment selection failed: {0}")]
     SegmentSelection(String),
+    #[error("unsupported transfer segment source: {0}")]
+    UnsupportedSegmentSource(&'static str),
+    #[error("transfer I/O error: {0}")]
+    Io(#[from] std::io::Error),
 }
