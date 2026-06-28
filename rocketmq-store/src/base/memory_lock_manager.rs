@@ -52,18 +52,22 @@ impl MemoryLockCategory {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryLockHandle {
-    addr: *const u8,
+    addr: usize,
     len: usize,
     category: MemoryLockCategory,
 }
 
 impl MemoryLockHandle {
     fn new(addr: *const u8, len: usize, category: MemoryLockCategory) -> Self {
-        Self { addr, len, category }
+        Self {
+            addr: addr as usize,
+            len,
+            category,
+        }
     }
 
     pub fn addr(self) -> *const u8 {
-        self.addr
+        self.addr as *const u8
     }
 
     pub fn len(self) -> usize {
@@ -93,13 +97,9 @@ pub struct MemoryLockManager {
 }
 
 impl MemoryLockManager {
-    pub fn warn_only() -> Self {
-        Self::warn_only_with_budget(0)
-    }
-
-    pub fn warn_only_with_budget(budget_bytes: u64) -> Self {
+    pub fn new(warn_only: bool, budget_bytes: u64) -> Self {
         Self {
-            warn_only: true,
+            warn_only,
             budget_bytes: AtomicU64::new(budget_bytes),
             lock_attempts: AtomicUsize::new(0),
             locked_buffers: AtomicUsize::new(0),
@@ -109,6 +109,14 @@ impl MemoryLockManager {
             lock_failed_bytes: AtomicU64::new(0),
             lock_skipped_bytes: AtomicU64::new(0),
         }
+    }
+
+    pub fn warn_only() -> Self {
+        Self::warn_only_with_budget(0)
+    }
+
+    pub fn warn_only_with_budget(budget_bytes: u64) -> Self {
+        Self::new(true, budget_bytes)
     }
 
     pub fn lock_buffer(&self, addr: *const u8, len: usize) -> RocketMQResult<()> {
