@@ -24,11 +24,11 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
-use futures_util::SinkExt;
 use futures_util::StreamExt;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
+use tokio::io::AsyncWrite;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
@@ -38,10 +38,8 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tokio::time::timeout;
-use tokio_util::codec::BytesCodec;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::FramedRead;
-use tokio_util::codec::FramedWrite;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -56,7 +54,12 @@ use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_service::HAService;
+use crate::ha::transfer_engine::select_transfer_engine;
+use crate::ha::transfer_engine::HaTransferEngine;
+use crate::ha::transfer_engine::TransferEnginePreference;
 use crate::ha::HAConnectionError;
+use crate::transfer::batch::TransferBatch;
+use crate::transfer::batch::TransferKind;
 use crate::transfer::batch::TransferPlan;
 use crate::transfer::planner::TransferPlanInput;
 use crate::transfer::planner::TransferPlanner;
@@ -215,7 +218,6 @@ impl DefaultHAConnection {
 
 impl HAConnection for DefaultHAConnection {
     async fn start(&mut self, conn: WeakArcMut<GeneralHAConnection>) -> Result<(), HAConnectionError> {
-        const CAPACITY: usize = 1024 * 8;
         self.change_current_state(HAConnectionState::Transfer).await;
 
         // Start flow monitor
@@ -233,7 +235,6 @@ impl HAConnection for DefaultHAConnection {
         let retained_stream = TcpStream::from_std(retained_std_stream).map_err(HAConnectionError::Io)?;
         let split_stream = TcpStream::from_std(std_stream).map_err(HAConnectionError::Io)?;
         self.socket_stream = Some(retained_stream);
-        // let framed = Framed::with_capacity(tcp_stream, BytesCodec::new(), CAPACITY);
         let (reader, write) = split_stream.into_split();
 
         // Create shutdown channel
@@ -267,7 +268,7 @@ impl HAConnection for DefaultHAConnection {
 
         // Create and start write service
         let write_service = WriteSocketService::new(
-            FramedWrite::new(write, BytesCodec::new()),
+            write,
             self.client_address.clone(),
             ArcMut::clone(&self.ha_service),
             Arc::clone(&self.current_state),
@@ -619,8 +620,7 @@ impl ReadSocketService {
 
 /// Write Socket Service
 pub struct WriteSocketService {
-    //writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
-    writer: FramedWrite<OwnedWriteHalf, BytesCodec>,
+    writer: HaTransferEngine<OwnedWriteHalf>,
     client_address: String,
     ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
@@ -637,8 +637,7 @@ pub struct WriteSocketService {
 
 impl WriteSocketService {
     pub async fn new(
-        // writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
-        writer: FramedWrite<OwnedWriteHalf, BytesCodec>,
+        writer: OwnedWriteHalf,
         client_address: String,
         ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
@@ -649,6 +648,19 @@ impl WriteSocketService {
         next_transfer_from_where: Arc<AtomicI64>,
     ) -> Result<Self, HAConnectionError> {
         let enable_controller_mode = message_store_config.enable_controller_mode;
+        let selection = select_transfer_engine(TransferEnginePreference::Vectored, writer.is_write_vectored());
+        if let Some(reason) = selection.fallback_reason {
+            info!(
+                "HA transfer engine fallback to {:?} for slave[{}]: {}",
+                selection.engine, client_address, reason
+            );
+        } else {
+            info!(
+                "HA transfer engine selected {:?} for slave[{}]",
+                selection.engine, client_address
+            );
+        }
+        let writer = HaTransferEngine::from_selection(writer, selection.engine);
         Ok(Self {
             writer,
             client_address,
@@ -816,8 +828,7 @@ impl WriteSocketService {
         if let TransferPlan::Data(batch) = plan {
             self.next_transfer_from_where
                 .store(batch.next_offset, Ordering::Relaxed);
-            self.send_data(batch.start_offset, batch.body_bytes(), batch.total_body_len)
-                .await?;
+            self.send_data(batch).await?;
         }
 
         Ok(())
@@ -851,49 +862,45 @@ impl WriteSocketService {
     async fn send_heartbeat(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let next_offset = self.next_transfer_from_where.load(Ordering::Relaxed);
         let confirm_offset = self.ha_service.get_default_message_store().get_confirm_offset();
-        let bytes = encode_transfer_header(
+        let frame_header = encode_transfer_header(
             &mut self.byte_buffer_header,
             next_offset,
             0,
             self.message_store_config.enable_controller_mode,
             confirm_offset,
         );
-        self.writer.send(bytes).await?;
+        let batch = TransferBatch {
+            frame_header,
+            segments: Vec::new(),
+            total_body_len: 0,
+            start_offset: next_offset,
+            next_offset,
+            kind: TransferKind::Heartbeat,
+        };
+        let stats = self.writer.send_batch(&batch).await?;
 
         self.last_write_timestamp.store(current_millis(), Ordering::Relaxed);
-        self.flow_monitor
-            .add_byte_count_transferred(transfer_header_size(self.message_store_config.enable_controller_mode) as i64);
+        self.flow_monitor.add_byte_count_transferred(stats.bytes_written as i64);
         self.last_write_over.store(true, Ordering::Relaxed);
 
         Ok(())
     }
 
-    async fn send_data(
-        &mut self,
-        offset: i64,
-        select_result: Option<Bytes>,
-        size: usize,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send_data(&mut self, mut batch: TransferBatch) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let confirm_offset = self.ha_service.get_default_message_store().get_confirm_offset();
         let header_bytes = encode_transfer_header(
             &mut self.byte_buffer_header,
-            offset,
-            size,
+            batch.start_offset,
+            batch.total_body_len,
             self.message_store_config.enable_controller_mode,
             confirm_offset,
         );
+        batch.frame_header = header_bytes;
 
-        self.writer.send(header_bytes).await?;
-        if let Some(mut data) = select_result {
-            self.writer.send(data.split_to(size)).await?;
-        } else {
-            warn!("No data to send for offset {}", offset);
-        }
+        let stats = self.writer.send_batch(&batch).await?;
 
         self.last_write_timestamp.store(current_millis(), Ordering::Relaxed);
-        self.flow_monitor.add_byte_count_transferred(
-            (transfer_header_size(self.message_store_config.enable_controller_mode) + size) as i64,
-        );
+        self.flow_monitor.add_byte_count_transferred(stats.bytes_written as i64);
         self.last_write_over.store(true, Ordering::Relaxed);
 
         Ok(())

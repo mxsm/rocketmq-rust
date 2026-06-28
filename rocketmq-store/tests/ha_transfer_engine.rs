@@ -1,0 +1,184 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::io;
+use std::io::IoSlice;
+use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
+
+use bytes::BufMut;
+use bytes::Bytes;
+use bytes::BytesMut;
+use rocketmq_store::ha::transfer_engine::bytes::BytesTransferEngine;
+use rocketmq_store::ha::transfer_engine::select_transfer_engine;
+use rocketmq_store::ha::transfer_engine::vectored::VectoredTransferEngine;
+use rocketmq_store::ha::transfer_engine::TransferEngineKind;
+use rocketmq_store::ha::transfer_engine::TransferEnginePreference;
+use rocketmq_store::transfer::batch::TransferBatch;
+use rocketmq_store::transfer::batch::TransferKind;
+use rocketmq_store::transfer::segment::SegmentLease;
+use rocketmq_store::transfer::segment::TransferCacheState;
+use tokio::io::AsyncWrite;
+
+#[tokio::test]
+async fn bytes_transfer_engine_matches_existing_ha_frame_bytes() {
+    let header = transfer_header(128, 4);
+    let body = Bytes::from_static(b"data");
+    let batch = transfer_batch(header.clone(), body.clone());
+    let mut engine = BytesTransferEngine::new(ChunkedWriter::new(usize::MAX));
+
+    let stats = engine.send_batch(&batch).await.expect("bytes transfer");
+
+    let writer = engine.into_inner();
+    let mut expected = header.to_vec();
+    expected.extend_from_slice(&body);
+    assert_eq!(writer.written, expected);
+    assert_eq!(stats.engine, TransferEngineKind::Bytes);
+    assert_eq!(stats.bytes_written, expected.len());
+    assert_eq!(stats.body_bytes, body.len());
+    assert_eq!(stats.frame_count, 1);
+    assert_eq!(stats.write_call_count, 2);
+    assert_eq!(stats.partial_write_count, 0);
+    assert_eq!(writer.write_calls, 2);
+}
+
+#[tokio::test]
+async fn vectored_transfer_engine_handles_partial_writes_without_reordering_frame() {
+    let header = transfer_header(256, 8);
+    let body = Bytes::from_static(b"abcdefgh");
+    let batch = transfer_batch(header.clone(), body.clone());
+    let mut engine = VectoredTransferEngine::new(ChunkedWriter::new(5));
+
+    let stats = engine.send_batch(&batch).await.expect("vectored transfer");
+
+    let writer = engine.into_inner();
+    let mut expected = header.to_vec();
+    expected.extend_from_slice(&body);
+    assert_eq!(writer.written, expected);
+    assert!(writer.vectored_calls > 1);
+    assert_eq!(stats.engine, TransferEngineKind::Vectored);
+    assert_eq!(stats.bytes_written, expected.len());
+    assert_eq!(stats.body_bytes, body.len());
+    assert!(stats.partial_write_count > 0);
+}
+
+#[tokio::test]
+async fn vectored_transfer_engine_reduces_write_calls_for_complete_frame_writes() {
+    let body = Bytes::from(vec![7; 64 * 1024]);
+    let header = transfer_header(512, body.len());
+    let batch = transfer_batch(header, body);
+
+    let mut bytes_engine = BytesTransferEngine::new(ChunkedWriter::new(usize::MAX));
+    let bytes_stats = bytes_engine.send_batch(&batch).await.expect("bytes transfer");
+    let bytes_writer = bytes_engine.into_inner();
+
+    let mut vectored_engine = VectoredTransferEngine::new(ChunkedWriter::new(usize::MAX));
+    let vectored_stats = vectored_engine.send_batch(&batch).await.expect("vectored transfer");
+    let vectored_writer = vectored_engine.into_inner();
+
+    assert_eq!(bytes_stats.write_call_count, 2);
+    assert_eq!(bytes_writer.write_calls, 2);
+    assert_eq!(bytes_writer.vectored_calls, 0);
+    assert_eq!(vectored_stats.write_call_count, 1);
+    assert_eq!(vectored_writer.write_calls, 0);
+    assert_eq!(vectored_writer.vectored_calls, 1);
+    assert_eq!(bytes_writer.written, vectored_writer.written);
+}
+
+#[test]
+fn transfer_engine_selection_falls_back_to_bytes_when_vectored_is_unavailable() {
+    let selection = select_transfer_engine(TransferEnginePreference::Vectored, false);
+
+    assert_eq!(selection.engine, TransferEngineKind::Bytes);
+    assert!(selection.fallback_reason.is_some());
+}
+
+fn transfer_header(offset: i64, body_size: usize) -> Bytes {
+    let mut header = BytesMut::with_capacity(12);
+    header.put_i64(offset);
+    header.put_i32(i32::try_from(body_size).expect("body size fits i32"));
+    header.freeze()
+}
+
+fn transfer_batch(header: Bytes, body: Bytes) -> TransferBatch {
+    let total_body_len = body.len();
+    TransferBatch {
+        frame_header: header,
+        segments: vec![SegmentLease::from_bytes(128, 128, body, TransferCacheState::Hot)],
+        total_body_len,
+        start_offset: 128,
+        next_offset: 128 + total_body_len as i64,
+        kind: TransferKind::Data,
+    }
+}
+
+struct ChunkedWriter {
+    max_write: usize,
+    written: Vec<u8>,
+    write_calls: usize,
+    vectored_calls: usize,
+}
+
+impl ChunkedWriter {
+    fn new(max_write: usize) -> Self {
+        Self {
+            max_write: max_write.max(1),
+            written: Vec::new(),
+            write_calls: 0,
+            vectored_calls: 0,
+        }
+    }
+}
+
+impl AsyncWrite for ChunkedWriter {
+    fn poll_write(mut self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        self.write_calls += 1;
+        let len = buf.len().min(self.max_write);
+        self.written.extend_from_slice(&buf[..len]);
+        Poll::Ready(Ok(len))
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        self.vectored_calls += 1;
+        let mut remaining = self.max_write;
+        let mut written = 0;
+        for buf in bufs {
+            if remaining == 0 {
+                break;
+            }
+            let len = buf.len().min(remaining);
+            self.written.extend_from_slice(&buf[..len]);
+            remaining -= len;
+            written += len;
+        }
+        Poll::Ready(Ok(written))
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        true
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
