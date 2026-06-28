@@ -111,6 +111,8 @@ const REMOTING_RPC_LABELS: &[&str] = &[
 ];
 const STORE_STORAGE_LABELS: &[&str] = &[labels::STORAGE_TYPE, labels::STORAGE_MEDIUM];
 const STORE_TOPIC_LABELS: &[&str] = &[labels::STORAGE_TYPE, labels::STORAGE_MEDIUM, labels::TOPIC];
+const STORE_TRANSFER_ENGINE_LABELS: &[&str] = &[labels::ENGINE];
+const STORE_TRANSFER_FALLBACK_LABELS: &[&str] = &[labels::FROM, labels::TO, labels::REASON];
 const TIMER_BOUND_LABELS: &[&str] = &[
     labels::STORAGE_TYPE,
     labels::STORAGE_MEDIUM,
@@ -402,6 +404,48 @@ pub const JAVA_METRICS: &[MetricDescriptor] = &[
         kind: MetricKind::Histogram,
         unit: "seconds",
         labels: STORE_TOPIC_LABELS,
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_LINUX_SENDFILE_BYTES_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "By",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_TRANSFER_BATCH_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{batch}",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_TRANSFER_BYTES_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "By",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_TRANSFER_ENGINE_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{transfer}",
+        labels: STORE_TRANSFER_ENGINE_LABELS,
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_TRANSFER_FALLBACK_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{fallback}",
+        labels: STORE_TRANSFER_FALLBACK_LABELS,
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_TRANSFER_PARTIAL_WRITE_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{write}",
+        labels: &[],
         source: MetricSource::Store,
     },
     MetricDescriptor {
@@ -737,6 +781,12 @@ mod tests {
         "rocketmq_storage_flush_behind_bytes",
         "rocketmq_storage_message_reserve_time",
         "rocketmq_storage_size",
+        "rocketmq_store_linux_sendfile_bytes_total",
+        "rocketmq_store_transfer_batch_total",
+        "rocketmq_store_transfer_bytes_total",
+        "rocketmq_store_transfer_engine_total",
+        "rocketmq_store_transfer_fallback_total",
+        "rocketmq_store_transfer_partial_write_total",
         "rocketmq_throughput_in_total",
         "rocketmq_throughput_out_total",
         "rocketmq_tiered_store_api_latency",
@@ -817,5 +867,36 @@ mod tests {
             .expect("delay message latency descriptor");
         assert_eq!(delay_message_latency.unit, "seconds");
         assert_eq!(delay_message_latency.labels, STORE_TOPIC_LABELS);
+
+        let transfer_batch = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_TRANSFER_BATCH_TOTAL)
+            .expect("transfer batch descriptor");
+        assert_eq!(transfer_batch.kind, MetricKind::Counter);
+        assert_eq!(transfer_batch.unit, "{batch}");
+        assert_eq!(transfer_batch.source, MetricSource::Store);
+        assert!(transfer_batch.labels.is_empty());
+
+        let transfer_engine = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_TRANSFER_ENGINE_TOTAL)
+            .expect("transfer engine descriptor");
+        assert_eq!(transfer_engine.kind, MetricKind::Counter);
+        assert_eq!(transfer_engine.labels, &[labels::ENGINE]);
+
+        let transfer_fallback = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_TRANSFER_FALLBACK_TOTAL)
+            .expect("transfer fallback descriptor");
+        assert_eq!(transfer_fallback.kind, MetricKind::Counter);
+        assert_eq!(transfer_fallback.labels, &[labels::FROM, labels::TO, labels::REASON]);
+
+        let linux_sendfile_bytes = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_LINUX_SENDFILE_BYTES_TOTAL)
+            .expect("linux sendfile bytes descriptor");
+        assert_eq!(linux_sendfile_bytes.kind, MetricKind::Counter);
+        assert_eq!(linux_sendfile_bytes.unit, "By");
+        assert_eq!(linux_sendfile_bytes.source, MetricSource::Store);
     }
 }

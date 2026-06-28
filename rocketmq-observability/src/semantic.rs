@@ -50,6 +50,12 @@ pub mod metrics {
     pub const STORE_FLUSH_LATENCY: &str = "rocketmq_store_flush_latency";
     pub const STORE_DISPATCH_LATENCY: &str = "rocketmq_store_dispatch_latency";
     pub const STORE_DISK_USAGE: &str = "rocketmq_store_disk_usage";
+    pub const STORE_LINUX_SENDFILE_BYTES_TOTAL: &str = "rocketmq_store_linux_sendfile_bytes_total";
+    pub const STORE_TRANSFER_BATCH_TOTAL: &str = "rocketmq_store_transfer_batch_total";
+    pub const STORE_TRANSFER_BYTES_TOTAL: &str = "rocketmq_store_transfer_bytes_total";
+    pub const STORE_TRANSFER_ENGINE_TOTAL: &str = "rocketmq_store_transfer_engine_total";
+    pub const STORE_TRANSFER_FALLBACK_TOTAL: &str = "rocketmq_store_transfer_fallback_total";
+    pub const STORE_TRANSFER_PARTIAL_WRITE_TOTAL: &str = "rocketmq_store_transfer_partial_write_total";
     pub const STORAGE_SIZE: &str = "rocketmq_storage_size";
     pub const STORAGE_FLUSH_BEHIND_BYTES: &str = "rocketmq_storage_flush_behind_bytes";
     pub const STORAGE_DISPATCH_BEHIND_BYTES: &str = "rocketmq_storage_dispatch_behind_bytes";
@@ -144,6 +150,10 @@ pub mod labels {
     pub const STORAGE_TYPE: &str = "storage_type";
     pub const STORAGE_MEDIUM: &str = "storage_medium";
     pub const TYPE: &str = "type";
+    pub const ENGINE: &str = "engine";
+    pub const FROM: &str = "from";
+    pub const TO: &str = "to";
+    pub const REASON: &str = "reason";
     pub const TIMER_BOUND_SECONDS: &str = "timer_bound_s";
     pub const OPERATION: &str = "operation";
     pub const SUCCESS: &str = "success";
