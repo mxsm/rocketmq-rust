@@ -26,6 +26,7 @@ mod kv;
 pub mod log_file;
 pub(crate) mod message_encoder;
 pub mod message_store;
+pub mod platform;
 pub mod pop;
 pub mod queue;
 #[cfg(feature = "rocksdb_store")]

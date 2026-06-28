@@ -1866,6 +1866,19 @@ impl MessageStore for LocalFileMessageStore {
             }
         }
 
+        let storage_capability = crate::platform::current_store_platform_capability();
+        info!(
+            "Linux storage capability snapshot: os={} page_size={} memory_lock_limit_bytes={} \
+             file_preallocate_supported={}",
+            storage_capability.os_name,
+            storage_capability.page_size,
+            storage_capability
+                .memory_lock_limit_bytes
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            storage_capability.file_preallocate_supported
+        );
+
         if self.is_transient_store_pool_enable() {
             match self.transient_store_pool.init() {
                 Ok(_) => {}
@@ -2550,6 +2563,61 @@ impl MessageStore for LocalFileMessageStore {
             "ioUringBackendStatus".to_string(),
             crate::log_file::mapped_file::io_uring_backend_status()
                 .as_str()
+                .to_string(),
+        );
+        let storage_capability = crate::platform::current_store_platform_capability();
+        result.insert("linuxStorageOs".to_string(), storage_capability.os_name.to_string());
+        result.insert(
+            "linuxStoragePageSize".to_string(),
+            storage_capability.page_size.to_string(),
+        );
+        result.insert(
+            "linuxStorageMemoryLockLimitBytes".to_string(),
+            storage_capability
+                .memory_lock_limit_bytes
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+        result.insert(
+            "linuxStorageFilePreallocateSupported".to_string(),
+            storage_capability.file_preallocate_supported.to_string(),
+        );
+        result.insert(
+            "transientStorePoolLockedBuffers".to_string(),
+            self.transient_store_pool.locked_buffer_count().to_string(),
+        );
+        result.insert(
+            "transientStorePoolLockAttempts".to_string(),
+            self.transient_store_pool.lock_attempt_count().to_string(),
+        );
+        result.insert(
+            "transientStorePoolLockFailedBuffers".to_string(),
+            self.transient_store_pool.lock_failed_buffer_count().to_string(),
+        );
+        result.insert(
+            "transientStorePoolLockSkippedBuffers".to_string(),
+            self.transient_store_pool.lock_skipped_buffer_count().to_string(),
+        );
+        result.insert(
+            "transientStorePoolLockedBytes".to_string(),
+            self.transient_store_pool.locked_bytes().to_string(),
+        );
+        result.insert(
+            "transientStorePoolLockFailedBytes".to_string(),
+            self.transient_store_pool.lock_failed_bytes().to_string(),
+        );
+        result.insert(
+            "transientStorePoolLockSkippedBytes".to_string(),
+            self.transient_store_pool.lock_skipped_bytes().to_string(),
+        );
+        result.insert(
+            "warmMappedFileEnable".to_string(),
+            self.message_store_config.warm_mapped_file_enable.to_string(),
+        );
+        result.insert(
+            "flushLeastPagesWhenWarmMappedFile".to_string(),
+            self.message_store_config
+                .flush_least_pages_when_warm_mapped_file
                 .to_string(),
         );
 
@@ -5319,6 +5387,24 @@ mod tests {
         assert_eq!(runtime_info["storeType"], "RocksDB");
         assert_eq!(runtime_info["rocksdbCqDoubleWriteEnable"], "true");
         assert_eq!(runtime_info["rocksdbCompatibilityMode"], "local_file_compat");
+    }
+
+    #[test]
+    fn runtime_info_reports_linux_storage_lifecycle_fields() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+
+        let runtime_info = store.get_runtime_info();
+
+        assert!(runtime_info.contains_key("linuxStorageOs"));
+        assert!(runtime_info.contains_key("linuxStoragePageSize"));
+        assert!(runtime_info.contains_key("linuxStorageMemoryLockLimitBytes"));
+        assert_eq!(runtime_info["transientStorePoolLockAttempts"], "0");
+        assert_eq!(runtime_info["transientStorePoolLockedBuffers"], "0");
+        assert_eq!(runtime_info["transientStorePoolLockFailedBuffers"], "0");
+        assert_eq!(runtime_info["transientStorePoolLockSkippedBuffers"], "0");
+        assert_eq!(runtime_info["transientStorePoolLockedBytes"], "0");
+        assert_eq!(runtime_info["warmMappedFileEnable"], "false");
     }
 
     #[tokio::test]
