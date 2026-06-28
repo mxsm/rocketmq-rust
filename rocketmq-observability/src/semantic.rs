@@ -55,6 +55,12 @@ pub mod metrics {
     pub const STORE_HA_REPLICATION_LAG_BYTES: &str = "rocketmq_store_ha_replication_lag_bytes";
     pub const STORE_LINUX_SENDFILE_BYTES_TOTAL: &str = "rocketmq_store_linux_sendfile_bytes_total";
     pub const STORE_LINUX_MLOCK_BYTES: &str = "rocketmq_store_linux_mlock_bytes";
+    pub const STORE_LINUX_MLOCK_ATTEMPT_TOTAL: &str = "rocketmq_store_linux_mlock_attempt_total";
+    pub const STORE_LINUX_MLOCK_SUCCESS_TOTAL: &str = "rocketmq_store_linux_mlock_success_total";
+    pub const STORE_LINUX_MLOCK_FAILURE_TOTAL: &str = "rocketmq_store_linux_mlock_failure_total";
+    pub const STORE_LINUX_MLOCK_SKIPPED_TOTAL: &str = "rocketmq_store_linux_mlock_skipped_total";
+    pub const STORE_LINUX_LOCKED_BYTES: &str = "rocketmq_store_linux_locked_bytes";
+    pub const STORE_LINUX_MUNLOCK_FAILURE_TOTAL: &str = "rocketmq_store_linux_munlock_failure_total";
     pub const STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS: &str = "rocketmq_store_linux_page_cache_warmup_millis";
     pub const STORE_TRANSFER_BATCH_TOTAL: &str = "rocketmq_store_transfer_batch_total";
     pub const STORE_TRANSFER_BYTES_TOTAL: &str = "rocketmq_store_transfer_bytes_total";
@@ -155,6 +161,8 @@ pub mod labels {
     pub const STORAGE_TYPE: &str = "storage_type";
     pub const STORAGE_MEDIUM: &str = "storage_medium";
     pub const TYPE: &str = "type";
+    pub const CATEGORY: &str = "category";
+    pub const ERRNO: &str = "errno";
     pub const ENGINE: &str = "engine";
     pub const FROM: &str = "from";
     pub const TO: &str = "to";

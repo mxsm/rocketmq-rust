@@ -111,6 +111,9 @@ const REMOTING_RPC_LABELS: &[&str] = &[
 ];
 const STORE_STORAGE_LABELS: &[&str] = &[labels::STORAGE_TYPE, labels::STORAGE_MEDIUM];
 const STORE_TOPIC_LABELS: &[&str] = &[labels::STORAGE_TYPE, labels::STORAGE_MEDIUM, labels::TOPIC];
+const STORE_MEMORY_LOCK_CATEGORY_LABELS: &[&str] = &[labels::CATEGORY];
+const STORE_MEMORY_LOCK_ERRNO_LABELS: &[&str] = &[labels::CATEGORY, labels::ERRNO];
+const STORE_MEMORY_LOCK_SKIP_LABELS: &[&str] = &[labels::CATEGORY, labels::REASON];
 const STORE_TRANSFER_ENGINE_LABELS: &[&str] = &[labels::ENGINE];
 const STORE_TRANSFER_FALLBACK_LABELS: &[&str] = &[labels::FROM, labels::TO, labels::REASON];
 const TIMER_BOUND_LABELS: &[&str] = &[
@@ -439,6 +442,48 @@ pub const JAVA_METRICS: &[MetricDescriptor] = &[
         kind: MetricKind::ObservableGauge,
         unit: "By",
         labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_LINUX_MLOCK_ATTEMPT_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{operation}",
+        labels: STORE_MEMORY_LOCK_CATEGORY_LABELS,
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_LINUX_MLOCK_SUCCESS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{operation}",
+        labels: STORE_MEMORY_LOCK_CATEGORY_LABELS,
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_LINUX_MLOCK_FAILURE_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{operation}",
+        labels: STORE_MEMORY_LOCK_ERRNO_LABELS,
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_LINUX_MLOCK_SKIPPED_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{operation}",
+        labels: STORE_MEMORY_LOCK_SKIP_LABELS,
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_LINUX_LOCKED_BYTES,
+        kind: MetricKind::ObservableGauge,
+        unit: "By",
+        labels: STORE_MEMORY_LOCK_CATEGORY_LABELS,
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_LINUX_MUNLOCK_FAILURE_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{operation}",
+        labels: STORE_MEMORY_LOCK_ERRNO_LABELS,
         source: MetricSource::Store,
     },
     MetricDescriptor {
@@ -820,7 +865,13 @@ mod tests {
         "rocketmq_store_ha_ack_latency_millis",
         "rocketmq_store_ha_replication_lag_bytes",
         "rocketmq_store_linux_sendfile_bytes_total",
+        "rocketmq_store_linux_locked_bytes",
+        "rocketmq_store_linux_mlock_attempt_total",
         "rocketmq_store_linux_mlock_bytes",
+        "rocketmq_store_linux_mlock_failure_total",
+        "rocketmq_store_linux_mlock_skipped_total",
+        "rocketmq_store_linux_mlock_success_total",
+        "rocketmq_store_linux_munlock_failure_total",
         "rocketmq_store_linux_page_cache_warmup_millis",
         "rocketmq_store_transfer_batch_total",
         "rocketmq_store_transfer_bytes_total",
@@ -983,5 +1034,50 @@ mod tests {
         assert_eq!(lease_active.unit, "{lease}");
         assert_eq!(lease_active.source, MetricSource::Store);
         assert!(lease_active.labels.is_empty());
+
+        let mlock_attempt = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_LINUX_MLOCK_ATTEMPT_TOTAL)
+            .expect("linux mlock attempt descriptor");
+        assert_eq!(mlock_attempt.kind, MetricKind::Counter);
+        assert_eq!(mlock_attempt.unit, "{operation}");
+        assert_eq!(mlock_attempt.labels, &[labels::CATEGORY]);
+        assert_eq!(mlock_attempt.source, MetricSource::Store);
+
+        let mlock_success = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_LINUX_MLOCK_SUCCESS_TOTAL)
+            .expect("linux mlock success descriptor");
+        assert_eq!(mlock_success.kind, MetricKind::Counter);
+        assert_eq!(mlock_success.labels, &[labels::CATEGORY]);
+
+        let mlock_failure = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_LINUX_MLOCK_FAILURE_TOTAL)
+            .expect("linux mlock failure descriptor");
+        assert_eq!(mlock_failure.kind, MetricKind::Counter);
+        assert_eq!(mlock_failure.labels, &[labels::CATEGORY, labels::ERRNO]);
+
+        let mlock_skipped = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_LINUX_MLOCK_SKIPPED_TOTAL)
+            .expect("linux mlock skipped descriptor");
+        assert_eq!(mlock_skipped.kind, MetricKind::Counter);
+        assert_eq!(mlock_skipped.labels, &[labels::CATEGORY, labels::REASON]);
+
+        let locked_bytes = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_LINUX_LOCKED_BYTES)
+            .expect("linux locked bytes descriptor");
+        assert_eq!(locked_bytes.kind, MetricKind::ObservableGauge);
+        assert_eq!(locked_bytes.unit, "By");
+        assert_eq!(locked_bytes.labels, &[labels::CATEGORY]);
+
+        let munlock_failure = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_LINUX_MUNLOCK_FAILURE_TOTAL)
+            .expect("linux munlock failure descriptor");
+        assert_eq!(munlock_failure.kind, MetricKind::Counter);
+        assert_eq!(munlock_failure.labels, &[labels::CATEGORY, labels::ERRNO]);
     }
 }
