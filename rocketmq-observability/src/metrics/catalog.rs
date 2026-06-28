@@ -114,6 +114,7 @@ const STORE_TOPIC_LABELS: &[&str] = &[labels::STORAGE_TYPE, labels::STORAGE_MEDI
 const STORE_MEMORY_LOCK_CATEGORY_LABELS: &[&str] = &[labels::CATEGORY];
 const STORE_MEMORY_LOCK_ERRNO_LABELS: &[&str] = &[labels::CATEGORY, labels::ERRNO];
 const STORE_MEMORY_LOCK_SKIP_LABELS: &[&str] = &[labels::CATEGORY, labels::REASON];
+const STORE_LINUX_STORAGE_DEGRADATION_LABELS: &[&str] = &[labels::OPERATION, labels::REASON, labels::ERRNO];
 const STORE_TRANSFER_ENGINE_LABELS: &[&str] = &[labels::ENGINE];
 const STORE_TRANSFER_FALLBACK_LABELS: &[&str] = &[labels::FROM, labels::TO, labels::REASON];
 const TIMER_BOUND_LABELS: &[&str] = &[
@@ -491,6 +492,13 @@ pub const JAVA_METRICS: &[MetricDescriptor] = &[
         kind: MetricKind::Histogram,
         unit: "ms",
         labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_LINUX_STORAGE_DEGRADATION_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{operation}",
+        labels: STORE_LINUX_STORAGE_DEGRADATION_LABELS,
         source: MetricSource::Store,
     },
     MetricDescriptor {
@@ -873,6 +881,7 @@ mod tests {
         "rocketmq_store_linux_mlock_success_total",
         "rocketmq_store_linux_munlock_failure_total",
         "rocketmq_store_linux_page_cache_warmup_millis",
+        "rocketmq_store_linux_storage_degradation_total",
         "rocketmq_store_transfer_batch_total",
         "rocketmq_store_transfer_bytes_total",
         "rocketmq_store_transfer_engine_total",
@@ -1079,5 +1088,16 @@ mod tests {
             .expect("linux munlock failure descriptor");
         assert_eq!(munlock_failure.kind, MetricKind::Counter);
         assert_eq!(munlock_failure.labels, &[labels::CATEGORY, labels::ERRNO]);
+
+        let storage_degradation = JAVA_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::STORE_LINUX_STORAGE_DEGRADATION_TOTAL)
+            .expect("linux storage degradation descriptor");
+        assert_eq!(storage_degradation.kind, MetricKind::Counter);
+        assert_eq!(storage_degradation.unit, "{operation}");
+        assert_eq!(
+            storage_degradation.labels,
+            &[labels::OPERATION, labels::REASON, labels::ERRNO]
+        );
     }
 }

@@ -79,6 +79,66 @@ fn invalid_input_error(message: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
+const LINUX_STORAGE_DEGRADATION_UNKNOWN_ERRNO: i32 = -1;
+const LINUX_STORAGE_OP_FALLOCATE: &str = "fallocate";
+const LINUX_STORAGE_OP_MADVISE: &str = "madvise";
+const LINUX_STORAGE_OP_PAGE_TOUCH: &str = "page_touch";
+const LINUX_STORAGE_REASON_FAILED: &str = "failed";
+const LINUX_STORAGE_REASON_FLUSH_FAILED: &str = "flush_failed";
+const LINUX_STORAGE_REASON_UNSUPPORTED: &str = "unsupported";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LinuxStorageDegradationEvent {
+    operation: &'static str,
+    reason: &'static str,
+    errno: i32,
+    count: u64,
+}
+
+impl LinuxStorageDegradationEvent {
+    fn new(operation: &'static str, reason: &'static str, errno: i32) -> Self {
+        Self {
+            operation,
+            reason,
+            errno,
+            count: 1,
+        }
+    }
+}
+
+fn errno_from_io_error(error: &io::Error) -> i32 {
+    error.raw_os_error().unwrap_or(LINUX_STORAGE_DEGRADATION_UNKNOWN_ERRNO)
+}
+
+fn file_preallocate_degradation_event(outcome: FilePreallocateOutcome) -> Option<LinuxStorageDegradationEvent> {
+    match outcome {
+        FilePreallocateOutcome::Allocated => None,
+        FilePreallocateOutcome::Unsupported { errno } => Some(LinuxStorageDegradationEvent::new(
+            LINUX_STORAGE_OP_FALLOCATE,
+            LINUX_STORAGE_REASON_UNSUPPORTED,
+            errno,
+        )),
+        FilePreallocateOutcome::Failed { errno } => Some(LinuxStorageDegradationEvent::new(
+            LINUX_STORAGE_OP_FALLOCATE,
+            LINUX_STORAGE_REASON_FAILED,
+            errno,
+        )),
+    }
+}
+
+fn emit_linux_storage_degradation_observability(event: LinuxStorageDegradationEvent) {
+    #[cfg(feature = "observability")]
+    rocketmq_observability::metrics::store::record_linux_storage_degradation(
+        event.operation,
+        event.reason,
+        event.errno,
+        event.count,
+    );
+
+    #[cfg(not(feature = "observability"))]
+    let _ = event;
+}
+
 pub struct DefaultMappedFile {
     reference_resource: ReferenceResourceCounter,
     file: File,
@@ -162,7 +222,11 @@ impl DefaultMappedFile {
             .open(&path_buf)?;
         file.set_len(file_size)?;
         if existing_len < file_size {
-            match preallocate_file(&file, file_size) {
+            let preallocate_outcome = preallocate_file(&file, file_size);
+            if let Some(event) = file_preallocate_degradation_event(preallocate_outcome) {
+                emit_linux_storage_degradation_observability(event);
+            }
+            match preallocate_outcome {
                 FilePreallocateOutcome::Allocated => {}
                 FilePreallocateOutcome::Unsupported { errno } => debug!(
                     "File preallocation is unsupported for mapped file {} and will be skipped, errno={}",
@@ -862,65 +926,14 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize) {
-        let page_size = get_page_size().max(1);
-        let file_size = self.file_size as usize;
-        if file_size == 0 {
-            return;
-        }
-
-        let warmup_started = Instant::now();
-        let flush_every_pages = pages.max(1);
-        let mut last_flush_offset = 0usize;
-        {
-            let mapped_file = self.get_mapped_file_mut();
-            let mut touched_pages = 0usize;
-            let mapped_ptr = mapped_file.as_mut_ptr();
-            for offset in (0..file_size).step_by(page_size) {
-                unsafe {
-                    let page_ptr = mapped_ptr.add(offset);
-                    let value = std::ptr::read_volatile(page_ptr);
-                    std::ptr::write_volatile(page_ptr, value);
-                }
-                touched_pages += 1;
-
-                if flush_disk_type == FlushDiskType::SyncFlush && touched_pages % flush_every_pages == 0 {
-                    let end = (offset + 1).min(file_size);
-                    if let Err(error) = mapped_file.flush_range(last_flush_offset, end - last_flush_offset) {
-                        warn!(
-                            "Failed to flush warmed mapped file range {}-{} for {}: {:?}",
-                            last_flush_offset, end, self.file_name, error
-                        );
-                    } else {
-                        self.last_flush_time.store(current_millis(), Ordering::Relaxed);
-                    }
-                    last_flush_offset = end;
-                }
-            }
-
-            if flush_disk_type == FlushDiskType::SyncFlush && last_flush_offset < file_size {
-                if let Err(error) = mapped_file.flush_range(last_flush_offset, file_size - last_flush_offset) {
-                    warn!(
-                        "Failed to flush final warmed mapped file range {}-{} for {}: {:?}",
-                        last_flush_offset, file_size, self.file_name, error
-                    );
-                } else {
-                    self.last_flush_time.store(current_millis(), Ordering::Relaxed);
-                }
-            }
-        }
-
-        if madvise(self.mmapped_file.as_ptr(), file_size, MADV_WILLNEED) != 0 {
-            warn!(
-                "madvise(MADV_WILLNEED) failed while warming mapped file {}",
-                self.file_name
-            );
-        }
-        let warmup_duration = warmup_started.elapsed();
-        let warmup_millis = u64::try_from(warmup_duration.as_millis()).unwrap_or(u64::MAX);
-        rocketmq_observability::metrics::store::record_linux_page_cache_warmup_millis(warmup_millis);
-        if let Some(metrics) = &self.metrics {
-            metrics.record_warm_with_latency(file_size, warmup_duration);
-        }
+        self.warm_mapped_file_with_ops(
+            flush_disk_type,
+            pages,
+            Self::touch_mapped_page,
+            Self::flush_mapped_file_range,
+            Self::advise_mapped_file,
+            emit_linux_storage_degradation_observability,
+        );
     }
 
     #[inline]
@@ -1172,6 +1185,123 @@ impl DefaultMappedFile {
     #[inline]
     pub fn get_mapped_file_arcmut(&self) -> ArcMut<MmapMut> {
         self.mmapped_file.clone()
+    }
+
+    fn touch_mapped_page(mapped_ptr: *mut u8, offset: usize) -> io::Result<()> {
+        unsafe {
+            let page_ptr = mapped_ptr.add(offset);
+            let value = std::ptr::read_volatile(page_ptr);
+            std::ptr::write_volatile(page_ptr, value);
+        }
+        Ok(())
+    }
+
+    fn flush_mapped_file_range(mapped_file: &mut MmapMut, offset: usize, len: usize) -> io::Result<()> {
+        mapped_file.flush_range(offset, len)
+    }
+
+    fn advise_mapped_file(addr: *const u8, len: usize, advice: i32) -> io::Result<()> {
+        if madvise(addr, len, advice) == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    fn warm_mapped_file_with_ops<T, F, A, R>(
+        &self,
+        flush_disk_type: FlushDiskType,
+        pages: usize,
+        mut touch_page: T,
+        mut flush_range: F,
+        mut advise: A,
+        mut record_degradation: R,
+    ) where
+        T: FnMut(*mut u8, usize) -> io::Result<()>,
+        F: FnMut(&mut MmapMut, usize, usize) -> io::Result<()>,
+        A: FnMut(*const u8, usize, i32) -> io::Result<()>,
+        R: FnMut(LinuxStorageDegradationEvent),
+    {
+        let page_size = get_page_size().max(1);
+        let file_size = self.file_size as usize;
+        if file_size == 0 {
+            return;
+        }
+
+        let warmup_started = Instant::now();
+        let flush_every_pages = pages.max(1);
+        let mut last_flush_offset = 0usize;
+        {
+            let mapped_file = self.get_mapped_file_mut();
+            let mut touched_pages = 0usize;
+            let mapped_ptr = mapped_file.as_mut_ptr();
+            for offset in (0..file_size).step_by(page_size) {
+                if let Err(error) = touch_page(mapped_ptr, offset) {
+                    record_degradation(LinuxStorageDegradationEvent::new(
+                        LINUX_STORAGE_OP_PAGE_TOUCH,
+                        LINUX_STORAGE_REASON_FAILED,
+                        errno_from_io_error(&error),
+                    ));
+                    warn!(
+                        "Failed to touch warmed mapped file page at offset {} for {}: {:?}",
+                        offset, self.file_name, error
+                    );
+                }
+                touched_pages += 1;
+
+                if flush_disk_type == FlushDiskType::SyncFlush && touched_pages % flush_every_pages == 0 {
+                    let end = (offset + 1).min(file_size);
+                    if let Err(error) = flush_range(mapped_file, last_flush_offset, end - last_flush_offset) {
+                        record_degradation(LinuxStorageDegradationEvent::new(
+                            LINUX_STORAGE_OP_PAGE_TOUCH,
+                            LINUX_STORAGE_REASON_FLUSH_FAILED,
+                            errno_from_io_error(&error),
+                        ));
+                        warn!(
+                            "Failed to flush warmed mapped file range {}-{} for {}: {:?}",
+                            last_flush_offset, end, self.file_name, error
+                        );
+                    } else {
+                        self.last_flush_time.store(current_millis(), Ordering::Relaxed);
+                    }
+                    last_flush_offset = end;
+                }
+            }
+
+            if flush_disk_type == FlushDiskType::SyncFlush && last_flush_offset < file_size {
+                if let Err(error) = flush_range(mapped_file, last_flush_offset, file_size - last_flush_offset) {
+                    record_degradation(LinuxStorageDegradationEvent::new(
+                        LINUX_STORAGE_OP_PAGE_TOUCH,
+                        LINUX_STORAGE_REASON_FLUSH_FAILED,
+                        errno_from_io_error(&error),
+                    ));
+                    warn!(
+                        "Failed to flush final warmed mapped file range {}-{} for {}: {:?}",
+                        last_flush_offset, file_size, self.file_name, error
+                    );
+                } else {
+                    self.last_flush_time.store(current_millis(), Ordering::Relaxed);
+                }
+            }
+        }
+
+        if let Err(error) = advise(self.mmapped_file.as_ptr(), file_size, MADV_WILLNEED) {
+            record_degradation(LinuxStorageDegradationEvent::new(
+                LINUX_STORAGE_OP_MADVISE,
+                LINUX_STORAGE_REASON_FAILED,
+                errno_from_io_error(&error),
+            ));
+            warn!(
+                "madvise(MADV_WILLNEED) failed while warming mapped file {}",
+                self.file_name
+            );
+        }
+        let warmup_duration = warmup_started.elapsed();
+        let warmup_millis = u64::try_from(warmup_duration.as_millis()).unwrap_or(u64::MAX);
+        rocketmq_observability::metrics::store::record_linux_page_cache_warmup_millis(warmup_millis);
+        if let Some(metrics) = &self.metrics {
+            metrics.record_warm_with_latency(file_size, warmup_duration);
+        }
     }
 
     pub fn lock_region(
@@ -1869,6 +1999,63 @@ mod tests {
         let metrics = mapped_file.get_metrics().unwrap();
         assert_eq!(metrics.warm_operations(), 2);
         assert_eq!(metrics.warm_bytes(), mapped_file.get_file_size() * 2);
+    }
+
+    #[test]
+    fn preallocate_degradation_events_include_operation_reason_and_errno() {
+        let unsupported = file_preallocate_degradation_event(FilePreallocateOutcome::Unsupported { errno: 95 })
+            .expect("unsupported preallocation should be observable");
+        let failed = file_preallocate_degradation_event(FilePreallocateOutcome::Failed { errno: 28 })
+            .expect("failed preallocation should be observable");
+
+        assert_eq!(
+            unsupported,
+            LinuxStorageDegradationEvent::new(LINUX_STORAGE_OP_FALLOCATE, LINUX_STORAGE_REASON_UNSUPPORTED, 95)
+        );
+        assert_eq!(
+            failed,
+            LinuxStorageDegradationEvent::new(LINUX_STORAGE_OP_FALLOCATE, LINUX_STORAGE_REASON_FAILED, 28)
+        );
+        assert!(file_preallocate_degradation_event(FilePreallocateOutcome::Allocated).is_none());
+    }
+
+    #[test]
+    fn warm_mapped_file_records_warmup_degradation_events_without_position_changes() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        assert!(mapped_file.append_message_bytes(b"warm-degradation"));
+        let wrote_position = mapped_file.get_wrote_position();
+        let committed_position = mapped_file.get_committed_position();
+        let flushed_position = mapped_file.get_flushed_position();
+        let mut events = Vec::new();
+        let mut flush_calls = 0usize;
+
+        mapped_file.warm_mapped_file_with_ops(
+            FlushDiskType::SyncFlush,
+            1,
+            |_, _| Err(io::Error::from_raw_os_error(5)),
+            |_, _, _| {
+                flush_calls += 1;
+                if flush_calls == 1 {
+                    Ok(())
+                } else {
+                    Err(io::Error::from_raw_os_error(28))
+                }
+            },
+            |_, _, _| Err(io::Error::from_raw_os_error(12)),
+            |event| events.push(event),
+        );
+
+        assert_eq!(mapped_file.get_wrote_position(), wrote_position);
+        assert_eq!(mapped_file.get_committed_position(), committed_position);
+        assert_eq!(mapped_file.get_flushed_position(), flushed_position);
+        assert_eq!(
+            events,
+            vec![
+                LinuxStorageDegradationEvent::new(LINUX_STORAGE_OP_PAGE_TOUCH, LINUX_STORAGE_REASON_FAILED, 5),
+                LinuxStorageDegradationEvent::new(LINUX_STORAGE_OP_PAGE_TOUCH, LINUX_STORAGE_REASON_FLUSH_FAILED, 28),
+                LinuxStorageDegradationEvent::new(LINUX_STORAGE_OP_MADVISE, LINUX_STORAGE_REASON_FAILED, 12),
+            ]
+        );
     }
 
     #[test]

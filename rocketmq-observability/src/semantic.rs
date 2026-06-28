@@ -62,6 +62,7 @@ pub mod metrics {
     pub const STORE_LINUX_LOCKED_BYTES: &str = "rocketmq_store_linux_locked_bytes";
     pub const STORE_LINUX_MUNLOCK_FAILURE_TOTAL: &str = "rocketmq_store_linux_munlock_failure_total";
     pub const STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS: &str = "rocketmq_store_linux_page_cache_warmup_millis";
+    pub const STORE_LINUX_STORAGE_DEGRADATION_TOTAL: &str = "rocketmq_store_linux_storage_degradation_total";
     pub const STORE_TRANSFER_BATCH_TOTAL: &str = "rocketmq_store_transfer_batch_total";
     pub const STORE_TRANSFER_BYTES_TOTAL: &str = "rocketmq_store_transfer_bytes_total";
     pub const STORE_TRANSFER_ENGINE_TOTAL: &str = "rocketmq_store_transfer_engine_total";
