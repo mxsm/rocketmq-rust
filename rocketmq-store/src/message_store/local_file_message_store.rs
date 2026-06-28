@@ -2582,6 +2582,43 @@ impl MessageStore for LocalFileMessageStore {
             "linuxStorageFilePreallocateSupported".to_string(),
             storage_capability.file_preallocate_supported.to_string(),
         );
+        let linux_profile_settings = self.message_store_config.effective_linux_storage_profile_settings();
+        result.insert(
+            "linuxStorageOptimizationEnable".to_string(),
+            self.message_store_config.linux_storage_optimization_enable.to_string(),
+        );
+        result.insert(
+            "linuxStorageProfile".to_string(),
+            self.message_store_config.linux_storage_profile.as_str().to_string(),
+        );
+        result.insert(
+            "linuxStorageTransferEngine".to_string(),
+            linux_profile_settings.transfer_engine.as_str().to_string(),
+        );
+        result.insert(
+            "linuxStorageMappedFileWarmMode".to_string(),
+            linux_profile_settings.mapped_file_warm_mode.as_str().to_string(),
+        );
+        result.insert(
+            "linuxStorageMemoryLockMode".to_string(),
+            linux_profile_settings.memory_lock_mode.as_str().to_string(),
+        );
+        result.insert(
+            "linuxStorageMemoryLockWarnOnly".to_string(),
+            linux_profile_settings.memory_lock_warn_only.to_string(),
+        );
+        result.insert(
+            "linuxStorageRecoveryFadvise".to_string(),
+            linux_profile_settings.recovery_fadvise.as_str().to_string(),
+        );
+        result.insert(
+            "linuxStorageHaSendfileEnable".to_string(),
+            linux_profile_settings.ha_sendfile_enable.to_string(),
+        );
+        result.insert(
+            "linuxStorageIoUringEnable".to_string(),
+            linux_profile_settings.io_uring_enable.to_string(),
+        );
         result.insert(
             "transientStorePoolLockedBuffers".to_string(),
             self.transient_store_pool.locked_buffer_count().to_string(),
@@ -5405,6 +5442,12 @@ mod tests {
         assert_eq!(runtime_info["transientStorePoolLockSkippedBuffers"], "0");
         assert_eq!(runtime_info["transientStorePoolLockedBytes"], "0");
         assert_eq!(runtime_info["warmMappedFileEnable"], "false");
+        assert_eq!(runtime_info["linuxStorageProfile"], "balanced");
+        assert_eq!(runtime_info["linuxStorageTransferEngine"], "vectored");
+        assert_eq!(runtime_info["linuxStorageMappedFileWarmMode"], "madvise");
+        assert_eq!(runtime_info["linuxStorageMemoryLockMode"], "off");
+        assert_eq!(runtime_info["linuxStorageHaSendfileEnable"], "false");
+        assert_eq!(runtime_info["linuxStorageIoUringEnable"], "false");
     }
 
     #[tokio::test]

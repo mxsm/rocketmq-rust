@@ -294,6 +294,14 @@ mod defaults {
         true
     }
 
+    pub fn linux_file_preallocate_enable() -> bool {
+        true
+    }
+
+    pub fn linux_memory_lock_warn_only() -> bool {
+        true
+    }
+
     pub fn os_page_cache_busy_timeout_mills() -> u64 {
         1000 // 1 second
     }
@@ -341,6 +349,164 @@ mod defaults {
     pub const fn max_checksum_range() -> usize {
         1024 * 1024 * 1024
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LinuxStorageProfile {
+    #[default]
+    Balanced,
+    LowLatency,
+    HighThroughputReplication,
+    SafeCompat,
+}
+
+impl LinuxStorageProfile {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::LowLatency => "low_latency",
+            Self::HighThroughputReplication => "high_throughput_replication",
+            Self::SafeCompat => "safe_compat",
+        }
+    }
+
+    pub const fn settings(self) -> LinuxStorageProfileSettings {
+        match self {
+            Self::Balanced => LinuxStorageProfileSettings {
+                transfer_engine: LinuxTransferEngine::Vectored,
+                file_preallocate_enable: true,
+                mapped_file_warm_mode: LinuxMappedFileWarmMode::Madvise,
+                memory_lock_mode: LinuxMemoryLockMode::Off,
+                memory_lock_warn_only: true,
+                recovery_fadvise: LinuxRecoveryFadviseMode::Sequential,
+                ha_sendfile_enable: false,
+                io_uring_enable: false,
+            },
+            Self::LowLatency => LinuxStorageProfileSettings {
+                transfer_engine: LinuxTransferEngine::Vectored,
+                file_preallocate_enable: true,
+                mapped_file_warm_mode: LinuxMappedFileWarmMode::MadviseTouch,
+                memory_lock_mode: LinuxMemoryLockMode::ActiveWindow,
+                memory_lock_warn_only: true,
+                recovery_fadvise: LinuxRecoveryFadviseMode::Sequential,
+                ha_sendfile_enable: false,
+                io_uring_enable: false,
+            },
+            Self::HighThroughputReplication => LinuxStorageProfileSettings {
+                transfer_engine: LinuxTransferEngine::Sendfile,
+                file_preallocate_enable: true,
+                mapped_file_warm_mode: LinuxMappedFileWarmMode::Madvise,
+                memory_lock_mode: LinuxMemoryLockMode::Off,
+                memory_lock_warn_only: true,
+                recovery_fadvise: LinuxRecoveryFadviseMode::Sequential,
+                ha_sendfile_enable: true,
+                io_uring_enable: false,
+            },
+            Self::SafeCompat => LinuxStorageProfileSettings {
+                transfer_engine: LinuxTransferEngine::Bytes,
+                file_preallocate_enable: false,
+                mapped_file_warm_mode: LinuxMappedFileWarmMode::Disabled,
+                memory_lock_mode: LinuxMemoryLockMode::Off,
+                memory_lock_warn_only: true,
+                recovery_fadvise: LinuxRecoveryFadviseMode::Disabled,
+                ha_sendfile_enable: false,
+                io_uring_enable: false,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LinuxTransferEngine {
+    Auto,
+    Bytes,
+    #[default]
+    Vectored,
+    Sendfile,
+    IoUring,
+}
+
+impl LinuxTransferEngine {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Bytes => "bytes",
+            Self::Vectored => "vectored",
+            Self::Sendfile => "sendfile",
+            Self::IoUring => "io_uring",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LinuxMappedFileWarmMode {
+    Disabled,
+    #[default]
+    Madvise,
+    Touch,
+    MadviseTouch,
+}
+
+impl LinuxMappedFileWarmMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Madvise => "madvise",
+            Self::Touch => "touch",
+            Self::MadviseTouch => "madvise_touch",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LinuxMemoryLockMode {
+    #[default]
+    Off,
+    ActiveWindow,
+    ActiveFile,
+}
+
+impl LinuxMemoryLockMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::ActiveWindow => "active_window",
+            Self::ActiveFile => "active_file",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LinuxRecoveryFadviseMode {
+    Disabled,
+    #[default]
+    Sequential,
+}
+
+impl LinuxRecoveryFadviseMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Sequential => "sequential",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinuxStorageProfileSettings {
+    pub transfer_engine: LinuxTransferEngine,
+    pub file_preallocate_enable: bool,
+    pub mapped_file_warm_mode: LinuxMappedFileWarmMode,
+    pub memory_lock_mode: LinuxMemoryLockMode,
+    pub memory_lock_warn_only: bool,
+    pub recovery_fadvise: LinuxRecoveryFadviseMode,
+    pub ha_sendfile_enable: bool,
+    pub io_uring_enable: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -657,6 +823,48 @@ pub struct MessageStoreConfig {
 
     #[serde(default)]
     pub warm_mapped_file_enable: bool,
+
+    #[serde(default, alias = "linux_storage_optimization_enable")]
+    pub linux_storage_optimization_enable: bool,
+
+    #[serde(default, alias = "linux_storage_profile")]
+    pub linux_storage_profile: LinuxStorageProfile,
+
+    #[serde(default, alias = "linux_transfer_engine")]
+    pub linux_transfer_engine: LinuxTransferEngine,
+
+    #[serde(
+        default = "defaults::linux_file_preallocate_enable",
+        alias = "linux_file_preallocate_enable"
+    )]
+    pub linux_file_preallocate_enable: bool,
+
+    #[serde(default, alias = "linux_mapped_file_warm_mode")]
+    pub linux_mapped_file_warm_mode: LinuxMappedFileWarmMode,
+
+    #[serde(default, alias = "linux_memory_lock_mode")]
+    pub linux_memory_lock_mode: LinuxMemoryLockMode,
+
+    #[serde(default, alias = "linux_memory_lock_budget_bytes")]
+    pub linux_memory_lock_budget_bytes: usize,
+
+    #[serde(default, alias = "linux_memory_lock_active_window_bytes")]
+    pub linux_memory_lock_active_window_bytes: usize,
+
+    #[serde(
+        default = "defaults::linux_memory_lock_warn_only",
+        alias = "linux_memory_lock_warn_only"
+    )]
+    pub linux_memory_lock_warn_only: bool,
+
+    #[serde(default, alias = "linux_recovery_fadvise")]
+    pub linux_recovery_fadvise: LinuxRecoveryFadviseMode,
+
+    #[serde(default, alias = "linux_ha_sendfile_enable")]
+    pub linux_ha_sendfile_enable: bool,
+
+    #[serde(default, alias = "linux_io_uring_enable")]
+    pub linux_io_uring_enable: bool,
 
     #[serde(default)]
     pub offset_check_in_slave: bool,
@@ -1046,6 +1254,18 @@ impl Default for MessageStoreConfig {
             flush_delay_offset_interval: 10_000,
             clean_file_forcibly_enable: true,
             warm_mapped_file_enable: false,
+            linux_storage_optimization_enable: false,
+            linux_storage_profile: LinuxStorageProfile::default(),
+            linux_transfer_engine: LinuxTransferEngine::default(),
+            linux_file_preallocate_enable: true,
+            linux_mapped_file_warm_mode: LinuxMappedFileWarmMode::default(),
+            linux_memory_lock_mode: LinuxMemoryLockMode::default(),
+            linux_memory_lock_budget_bytes: 0,
+            linux_memory_lock_active_window_bytes: 0,
+            linux_memory_lock_warn_only: true,
+            linux_recovery_fadvise: LinuxRecoveryFadviseMode::default(),
+            linux_ha_sendfile_enable: false,
+            linux_io_uring_enable: false,
             offset_check_in_slave: false,
             debug_lock_enable: false,
             duplication_enable: false,
@@ -1142,6 +1362,10 @@ impl Default for MessageStoreConfig {
 }
 
 impl MessageStoreConfig {
+    pub fn effective_linux_storage_profile_settings(&self) -> LinuxStorageProfileSettings {
+        self.linux_storage_profile.settings()
+    }
+
     pub fn get_store_path_commit_log(&self) -> String {
         if self.store_path_commit_log.is_none() {
             return PathBuf::from(self.store_path_root_dir.to_string())
@@ -1786,6 +2010,10 @@ impl MessageStoreConfig {
 
 #[cfg(test)]
 mod tests {
+    use super::LinuxMappedFileWarmMode;
+    use super::LinuxMemoryLockMode;
+    use super::LinuxStorageProfile;
+    use super::LinuxTransferEngine;
     use super::MessageStoreConfig;
 
     #[test]
@@ -1913,6 +2141,56 @@ mod tests {
     fn serde_defaults_keep_timer_max_delay_sec_java_default() -> Result<(), serde_json::Error> {
         let config: MessageStoreConfig = serde_json::from_str("{}")?;
         assert_eq!(config.timer_max_delay_sec, 3600 * 24 * 3);
+        Ok(())
+    }
+
+    #[test]
+    fn linux_storage_profiles_have_expected_mappings() {
+        let balanced = LinuxStorageProfile::Balanced.settings();
+        assert_eq!(balanced.transfer_engine, LinuxTransferEngine::Vectored);
+        assert!(balanced.file_preallocate_enable);
+        assert_eq!(balanced.mapped_file_warm_mode, LinuxMappedFileWarmMode::Madvise);
+        assert_eq!(balanced.memory_lock_mode, LinuxMemoryLockMode::Off);
+        assert!(!balanced.ha_sendfile_enable);
+
+        let low_latency = LinuxStorageProfile::LowLatency.settings();
+        assert_eq!(low_latency.transfer_engine, LinuxTransferEngine::Vectored);
+        assert_eq!(low_latency.mapped_file_warm_mode, LinuxMappedFileWarmMode::MadviseTouch);
+        assert_eq!(low_latency.memory_lock_mode, LinuxMemoryLockMode::ActiveWindow);
+        assert!(low_latency.memory_lock_warn_only);
+
+        let high_throughput = LinuxStorageProfile::HighThroughputReplication.settings();
+        assert_eq!(high_throughput.transfer_engine, LinuxTransferEngine::Sendfile);
+        assert!(high_throughput.ha_sendfile_enable);
+
+        let safe_compat = LinuxStorageProfile::SafeCompat.settings();
+        assert_eq!(safe_compat.transfer_engine, LinuxTransferEngine::Bytes);
+        assert!(!safe_compat.file_preallocate_enable);
+        assert_eq!(safe_compat.mapped_file_warm_mode, LinuxMappedFileWarmMode::Disabled);
+    }
+
+    #[test]
+    fn serde_loads_snake_case_linux_storage_profile_config() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str(
+            r#"{
+                "linux_storage_optimization_enable": true,
+                "linux_storage_profile": "high_throughput_replication",
+                "linux_memory_lock_budget_bytes": 268435456,
+                "linux_memory_lock_active_window_bytes": 134217728
+            }"#,
+        )?;
+
+        assert!(config.linux_storage_optimization_enable);
+        assert_eq!(
+            config.linux_storage_profile,
+            LinuxStorageProfile::HighThroughputReplication
+        );
+        assert_eq!(config.linux_memory_lock_budget_bytes, 268435456);
+        assert_eq!(config.linux_memory_lock_active_window_bytes, 134217728);
+
+        let settings = config.effective_linux_storage_profile_settings();
+        assert_eq!(settings.transfer_engine, LinuxTransferEngine::Sendfile);
+        assert!(settings.ha_sendfile_enable);
         Ok(())
     }
 
