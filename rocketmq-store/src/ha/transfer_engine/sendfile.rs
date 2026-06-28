@@ -162,6 +162,10 @@ where
                     Ok(0) => return Err(write_zero_error()),
                     Ok(written) => written,
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
                     Err(error) => return Err(TransferError::Io(error)),
                 };
 
