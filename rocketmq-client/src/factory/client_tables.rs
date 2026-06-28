@@ -59,6 +59,9 @@ pub type TopicRouteTable = Arc<DashMap<TopicName, TopicRouteData>>;
 /// Monotonic route snapshot versions, indexed by topic name.
 pub type TopicRouteVersionTable = Arc<DashMap<TopicName, u64>>;
 
+/// Broker address route reference counts, used for O(1) heartbeat failure checks.
+pub type BrokerAddrRouteIndex = Arc<DashMap<BrokerAddr, usize>>;
+
 /// Topic endpoint mapping table for static topics.
 /// Maps topic name to a mapping of message queues to their broker names.
 pub type TopicEndPointsTable = Arc<DashMap<TopicName, HashMap<MessageQueue, BrokerName>>>;
@@ -82,23 +85,16 @@ pub type BrokerHeartbeatFingerprintTable = Arc<DashMap<BrokerAddr, i32>>;
 pub type BrokerSupportV2HeartbeatSet = Arc<DashMap<BrokerAddr, ()>>;
 
 /// Shared route-refresh state used to shard periodic refreshes and expose counters.
+#[derive(Default)]
 pub struct TopicRouteRefreshState {
     pub periodic_cursor: AtomicUsize,
     pub versions: TopicRouteVersionTable,
+    pub broker_addr_route_index: BrokerAddrRouteIndex,
     pub metrics: TopicRouteRefreshMetrics,
 }
 
-impl Default for TopicRouteRefreshState {
-    fn default() -> Self {
-        Self {
-            periodic_cursor: AtomicUsize::new(0),
-            versions: Arc::new(DashMap::default()),
-            metrics: TopicRouteRefreshMetrics::default(),
-        }
-    }
-}
-
 /// Atomic route refresh counters. The snapshot type below is the stable observable shape.
+#[derive(Default)]
 pub struct TopicRouteRefreshMetrics {
     refresh_attempts_total: AtomicU64,
     refresh_success_total: AtomicU64,
@@ -112,25 +108,6 @@ pub struct TopicRouteRefreshMetrics {
     last_periodic_skipped_topics: AtomicU64,
     last_periodic_elapsed_us: AtomicU64,
     last_route_miss_elapsed_us: AtomicU64,
-}
-
-impl Default for TopicRouteRefreshMetrics {
-    fn default() -> Self {
-        Self {
-            refresh_attempts_total: AtomicU64::new(0),
-            refresh_success_total: AtomicU64::new(0),
-            refresh_skipped_total: AtomicU64::new(0),
-            refresh_failed_total: AtomicU64::new(0),
-            periodic_batches_total: AtomicU64::new(0),
-            periodic_topics_total: AtomicU64::new(0),
-            periodic_skipped_topics_total: AtomicU64::new(0),
-            last_periodic_total_topics: AtomicU64::new(0),
-            last_periodic_batch_topics: AtomicU64::new(0),
-            last_periodic_skipped_topics: AtomicU64::new(0),
-            last_periodic_elapsed_us: AtomicU64::new(0),
-            last_route_miss_elapsed_us: AtomicU64::new(0),
-        }
-    }
 }
 
 impl TopicRouteRefreshMetrics {
