@@ -23,6 +23,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use parking_lot::Mutex as ParkingMutex;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
@@ -49,6 +50,7 @@ use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_V2;
 use rocketmq_common::MessageDecoder::SYSFLAG_POSITION;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::time_millis_to_human_string;
+use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
 use tokio::time::Instant;
 use tracing::error;
@@ -60,6 +62,9 @@ use crate::base::append_message_callback::DefaultAppendMessageCallback;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::flush_manager::FlushManager;
+use crate::base::memory_lock_manager::MemoryLockCategory;
+use crate::base::memory_lock_manager::MemoryLockHandle;
+use crate::base::memory_lock_manager::MemoryLockManager;
 use crate::base::message_encoder_pool;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
@@ -72,6 +77,7 @@ use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::swappable::Swappable;
 use crate::base::topic_queue_lock::TopicQueueLock;
 use crate::config::flush_disk_type::FlushDiskType;
+use crate::config::message_store_config::LinuxMemoryLockMode;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::consume_queue::mapped_file_queue::MappedFileWarmupStats;
@@ -105,6 +111,70 @@ pub const BLANK_MAGIC_CODE: i32 = -875286124;
 //CRC32 Format: [PROPERTY_CRC32 + NAME_VALUE_SEPARATOR + 10-digit fixed-length string +
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
+const DEFAULT_COMMITLOG_ACTIVE_WINDOW_LOCK_BYTES: usize = 128 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CommitLogActiveMemoryLockTarget {
+    category: MemoryLockCategory,
+    offset: u64,
+    len: usize,
+}
+
+#[derive(Debug)]
+struct CommitLogActiveMemoryLock {
+    manager: MemoryLockManager,
+    handle: Option<MemoryLockHandle>,
+    file_from_offset: Option<u64>,
+    region_offset: u64,
+    region_len: usize,
+}
+
+impl CommitLogActiveMemoryLock {
+    fn new(warn_only: bool, budget_bytes: u64) -> Self {
+        Self {
+            manager: MemoryLockManager::new(warn_only, budget_bytes),
+            handle: None,
+            file_from_offset: None,
+            region_offset: 0,
+            region_len: 0,
+        }
+    }
+
+    fn is_current(&self, file_from_offset: u64, target: CommitLogActiveMemoryLockTarget) -> bool {
+        let Some(handle) = self.handle else {
+            return false;
+        };
+        if self.file_from_offset != Some(file_from_offset) || handle.category() != target.category {
+            return false;
+        }
+
+        if target.category == MemoryLockCategory::CommitLogActiveWindow {
+            let region_end = self.region_offset.saturating_add(self.region_len as u64);
+            target.offset >= self.region_offset && target.offset < region_end
+        } else {
+            self.region_offset == target.offset && self.region_len == target.len
+        }
+    }
+
+    fn set_current(
+        &mut self,
+        file_from_offset: u64,
+        target: CommitLogActiveMemoryLockTarget,
+        handle: MemoryLockHandle,
+    ) {
+        self.handle = Some(handle);
+        self.file_from_offset = Some(file_from_offset);
+        self.region_offset = target.offset;
+        self.region_len = target.len;
+    }
+
+    fn clear(&mut self) {
+        self.handle = None;
+        self.file_from_offset = None;
+        self.region_offset = 0;
+        self.region_len = 0;
+    }
+}
 
 // This reduces heap allocations by ~50% by reusing encoder instances
 fn encode_message_ext(
@@ -190,6 +260,7 @@ pub struct CommitLog {
     flush_manager: ArcMut<DefaultFlushManager>,
     begin_time_in_lock: Arc<AtomicU64>,
     cold_data_check_service: Arc<ColdDataCheckService>,
+    active_memory_lock: ParkingMutex<CommitLogActiveMemoryLock>,
 }
 
 impl CommitLog {
@@ -205,6 +276,9 @@ impl CommitLog {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         let store_path = message_store_config.get_store_path_commit_log();
         let mapped_file_size = message_store_config.mapped_file_size_commit_log;
+        let memory_lock_budget_bytes = message_store_config.effective_linux_memory_lock_budget_bytes(
+            crate::platform::current_store_platform_capability().memory_lock_limit_bytes,
+        );
         let mapped_file_queue = ArcMut::new(MappedFileQueue::new(
             store_path,
             mapped_file_size as u64,
@@ -228,18 +302,130 @@ impl CommitLog {
             topic_config_table,
             consume_queue_store,
             flush_manager: ArcMut::new(DefaultFlushManager::new(
-                message_store_config,
+                message_store_config.clone(),
                 mapped_file_queue,
                 store_checkpoint,
             )),
             begin_time_in_lock: Arc::new(AtomicU64::new(0)),
             cold_data_check_service: Arc::new(Default::default()),
+            active_memory_lock: ParkingMutex::new(CommitLogActiveMemoryLock::new(
+                message_store_config.linux_memory_lock_warn_only,
+                memory_lock_budget_bytes,
+            )),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn has_allocate_mapped_file_service(&self) -> bool {
         self.mapped_file_queue.allocate_mapped_file_service.is_some()
+    }
+
+    fn active_memory_lock_target(&self, mapped_file: &DefaultMappedFile) -> Option<CommitLogActiveMemoryLockTarget> {
+        Self::active_memory_lock_target_for_config(
+            self.message_store_config.as_ref(),
+            mapped_file.get_wrote_position().max(0) as u64,
+            mapped_file.get_file_size(),
+        )
+    }
+
+    fn active_memory_lock_target_for_config(
+        message_store_config: &MessageStoreConfig,
+        wrote_position: u64,
+        file_size: u64,
+    ) -> Option<CommitLogActiveMemoryLockTarget> {
+        if file_size == 0 {
+            return None;
+        }
+
+        match message_store_config.linux_memory_lock_mode {
+            LinuxMemoryLockMode::Off => None,
+            LinuxMemoryLockMode::ActiveWindow => {
+                if wrote_position >= file_size {
+                    return None;
+                }
+                let requested_len = if message_store_config.linux_memory_lock_active_window_bytes == 0 {
+                    DEFAULT_COMMITLOG_ACTIVE_WINDOW_LOCK_BYTES
+                } else {
+                    message_store_config.linux_memory_lock_active_window_bytes
+                };
+                let remaining = file_size.saturating_sub(wrote_position);
+                let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+                (len > 0).then_some(CommitLogActiveMemoryLockTarget {
+                    category: MemoryLockCategory::CommitLogActiveWindow,
+                    offset: wrote_position,
+                    len,
+                })
+            }
+            LinuxMemoryLockMode::ActiveFile => {
+                let len = usize::try_from(file_size).ok()?;
+                (len > 0).then_some(CommitLogActiveMemoryLockTarget {
+                    category: MemoryLockCategory::CommitLogActiveFile,
+                    offset: 0,
+                    len,
+                })
+            }
+        }
+    }
+
+    fn ensure_active_mapped_file_locked(&self, mapped_file: &DefaultMappedFile) -> RocketMQResult<()> {
+        self.ensure_active_mapped_file_locked_with(mapped_file, crate::utils::ffi::mlock, crate::utils::ffi::munlock)
+    }
+
+    fn ensure_active_mapped_file_locked_with<F, G>(
+        &self,
+        mapped_file: &DefaultMappedFile,
+        mut locker: F,
+        mut unlocker: G,
+    ) -> RocketMQResult<()>
+    where
+        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        let Some(target) = self.active_memory_lock_target(mapped_file) else {
+            return self.release_active_memory_lock_with(&mut unlocker);
+        };
+        let file_from_offset = mapped_file.get_file_from_offset();
+        let mut active_memory_lock = self.active_memory_lock.lock();
+        if active_memory_lock.is_current(file_from_offset, target) {
+            return Ok(());
+        }
+
+        Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlocker)?;
+        if let Some(handle) = mapped_file.lock_region_with(
+            &active_memory_lock.manager,
+            target.category,
+            target.offset,
+            target.len,
+            &mut locker,
+        )? {
+            active_memory_lock.set_current(file_from_offset, target, handle);
+        }
+        Ok(())
+    }
+
+    fn release_active_memory_lock_with<G>(&self, mut unlocker: G) -> RocketMQResult<()>
+    where
+        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        let mut active_memory_lock = self.active_memory_lock.lock();
+        Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlocker)
+    }
+
+    fn release_active_memory_lock_locked<G>(
+        active_memory_lock: &mut CommitLogActiveMemoryLock,
+        mut unlocker: G,
+    ) -> RocketMQResult<()>
+    where
+        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        let Some(handle) = active_memory_lock.handle.take() else {
+            active_memory_lock.clear();
+            return Ok(());
+        };
+
+        active_memory_lock.manager.unlock_region_with(handle, &mut unlocker)?;
+        active_memory_lock.clear();
+        Ok(())
     }
 }
 
@@ -588,6 +774,19 @@ impl CommitLog {
             return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
         }
 
+        if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
+            drop(_put_message_lock);
+            drop(_topic_queue_guard);
+            error!(
+                "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                msg_batch.message_ext_broker_inner.topic(),
+                msg_batch.message_ext_broker_inner.born_host(),
+                error
+            );
+            self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
+            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
+        }
+
         let result = mapped_file.as_ref().unwrap().append_messages(
             &mut msg_batch,
             self.append_message_callback.as_ref(),
@@ -611,6 +810,18 @@ impl CommitLog {
                         "create mapped file error, topic: {}  clientAddr: {}",
                         msg_batch.message_ext_broker_inner.topic(),
                         msg_batch.message_ext_broker_inner.born_host()
+                    );
+                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
+                }
+                if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
+                    drop(_put_message_lock);
+                    drop(_topic_queue_guard);
+                    self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
+                    error!(
+                        "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                        msg_batch.message_ext_broker_inner.topic(),
+                        msg_batch.message_ext_broker_inner.born_host(),
+                        error
                     );
                     return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
                 }
@@ -789,6 +1000,19 @@ impl CommitLog {
             return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
         }
 
+        if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
+            drop(_put_message_lock);
+            drop(_topic_queue_guard);
+            error!(
+                "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                msg.topic(),
+                msg.born_host(),
+                error
+            );
+            self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
+            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
+        }
+
         let result = mapped_file.as_ref().unwrap().append_message(
             &mut msg,
             self.append_message_callback.as_ref(),
@@ -811,6 +1035,18 @@ impl CommitLog {
                         "create mapped file error, topic: {}  clientAddr: {}",
                         msg.topic(),
                         msg.born_host()
+                    );
+                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
+                }
+                if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
+                    drop(_put_message_lock);
+                    drop(_topic_queue_guard);
+                    self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
+                    error!(
+                        "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                        msg.topic(),
+                        msg.born_host(),
+                        error
                     );
                     return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
                 }
@@ -2342,6 +2578,7 @@ impl Swappable for CommitLog {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::Path;
@@ -2349,7 +2586,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::base::memory_lock_manager::MemoryLockCategory;
     use crate::base::message_store::MessageStore;
+    use crate::config::message_store_config::LinuxMemoryLockMode;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
@@ -2405,6 +2644,12 @@ mod tests {
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
         store
+    }
+
+    fn new_test_mapped_file(root: &Path, offset: u64, file_size: u64) -> DefaultMappedFile {
+        fs::create_dir_all(root).expect("create mapped file dir");
+        let file_path = root.join(format!("{offset:020}"));
+        DefaultMappedFile::new(CheetahString::from(file_path.to_string_lossy().as_ref()), file_size)
     }
 
     fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -2570,6 +2815,139 @@ mod tests {
         assert_eq!(store.get_commit_log().calc_need_ack_nums(4), 3);
 
         let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn active_window_memory_lock_target_uses_bounded_default_instead_of_full_file() {
+        let config = MessageStoreConfig {
+            mapped_file_size_commit_log: 1024 * 1024 * 1024,
+            linux_memory_lock_mode: LinuxMemoryLockMode::ActiveWindow,
+            linux_memory_lock_active_window_bytes: 0,
+            ..MessageStoreConfig::default()
+        };
+
+        let file_size = config.mapped_file_size_commit_log as u64;
+        let target = CommitLog::active_memory_lock_target_for_config(&config, 64, file_size)
+            .expect("active window should produce a target");
+
+        assert_eq!(target.category, MemoryLockCategory::CommitLogActiveWindow);
+        assert_eq!(target.offset, 64);
+        assert_eq!(target.len, 128 * 1024 * 1024);
+        assert_ne!(target.len as u64, file_size);
+    }
+
+    #[test]
+    fn active_file_memory_lock_lifecycle_unlocks_old_file_before_locking_new_file() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-commitlog-active-file-lock-{}", current_millis()));
+        let mut store = new_test_message_store_with_config(
+            &temp_root,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 4096,
+                linux_memory_lock_mode: LinuxMemoryLockMode::ActiveFile,
+                linux_memory_lock_budget_bytes: 8192,
+                linux_memory_lock_warn_only: true,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::SyncMaster,
+            false,
+        );
+        let first = new_test_mapped_file(&temp_root, 0, 4096);
+        let second = new_test_mapped_file(&temp_root, 4096, 4096);
+        let events = RefCell::new(Vec::<(&'static str, usize)>::new());
+
+        store
+            .get_commit_log_mut()
+            .ensure_active_mapped_file_locked_with(
+                &first,
+                |_, len| {
+                    events.borrow_mut().push(("lock", len));
+                    Ok(())
+                },
+                |_, len| {
+                    events.borrow_mut().push(("unlock", len));
+                    Ok(())
+                },
+            )
+            .expect("first active file lock should succeed");
+        store
+            .get_commit_log_mut()
+            .ensure_active_mapped_file_locked_with(
+                &second,
+                |_, len| {
+                    events.borrow_mut().push(("lock", len));
+                    Ok(())
+                },
+                |_, len| {
+                    events.borrow_mut().push(("unlock", len));
+                    Ok(())
+                },
+            )
+            .expect("second active file lock should succeed");
+
+        assert_eq!(
+            events.into_inner(),
+            vec![("lock", 4096), ("unlock", 4096), ("lock", 4096)]
+        );
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn active_window_memory_lock_reuses_current_window_until_write_position_leaves_it() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-commitlog-active-window-lock-{}",
+            current_millis()
+        ));
+        let mut store = new_test_message_store_with_config(
+            &temp_root,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 4096,
+                linux_memory_lock_mode: LinuxMemoryLockMode::ActiveWindow,
+                linux_memory_lock_active_window_bytes: 1024,
+                linux_memory_lock_budget_bytes: 2048,
+                linux_memory_lock_warn_only: true,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::SyncMaster,
+            false,
+        );
+        let mapped_file = new_test_mapped_file(&temp_root, 0, 4096);
+        let events = RefCell::new(Vec::<(&'static str, usize)>::new());
+
+        store
+            .get_commit_log_mut()
+            .ensure_active_mapped_file_locked_with(
+                &mapped_file,
+                |_, len| {
+                    events.borrow_mut().push(("lock", len));
+                    Ok(())
+                },
+                |_, len| {
+                    events.borrow_mut().push(("unlock", len));
+                    Ok(())
+                },
+            )
+            .expect("initial active window lock should succeed");
+        mapped_file.set_wrote_position(512);
+        store
+            .get_commit_log_mut()
+            .ensure_active_mapped_file_locked_with(
+                &mapped_file,
+                |_, len| {
+                    events.borrow_mut().push(("lock", len));
+                    Ok(())
+                },
+                |_, len| {
+                    events.borrow_mut().push(("unlock", len));
+                    Ok(())
+                },
+            )
+            .expect("in-window active lock refresh should succeed");
+
+        assert_eq!(events.into_inner(), vec![("lock", 1024)]);
+
+        let _ = fs::remove_dir_all(temp_root);
     }
 
     #[tokio::test]
