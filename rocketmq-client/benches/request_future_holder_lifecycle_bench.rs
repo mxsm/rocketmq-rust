@@ -21,8 +21,10 @@ use std::time::UNIX_EPOCH;
 
 use criterion::criterion_group;
 use criterion::criterion_main;
+use criterion::BenchmarkId;
 use criterion::Criterion;
 use rocketmq_client_rust::run_request_future_holder_lifecycle_probe;
+use rocketmq_client_rust::run_request_future_holder_scan_probe;
 use rocketmq_client_rust::RequestFutureHolderLifecycleProbe;
 
 fn run_lifecycle_probe() -> RequestFutureHolderLifecycleProbe {
@@ -87,6 +89,42 @@ fn bench_request_future_holder_lifecycle(criterion: &mut Criterion) {
             });
         },
     );
+
+    let mut group = criterion.benchmark_group("client_request_future_holder_lifecycle/deadline_scan");
+    group.sample_size(10);
+    let scan_runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(4)
+        .thread_name("rocketmq-client-request-future-scan-bench")
+        .enable_all()
+        .build()
+        .expect("request future holder scan benchmark runtime should start");
+
+    for pending_requests in [1_000usize, 10_000, 100_000] {
+        for expired_percent in [1usize, 10, 100] {
+            group.bench_with_input(
+                BenchmarkId::new(format!("expired_{expired_percent}pct"), pending_requests),
+                &(pending_requests, expired_percent),
+                |bencher, &(pending_requests, expired_percent)| {
+                    bencher.iter_custom(|iters| {
+                        let mut total = Duration::ZERO;
+                        for _ in 0..iters {
+                            let output = scan_runtime
+                                .block_on(run_request_future_holder_scan_probe(pending_requests, expired_percent));
+                            assert_eq!(output.pending_requests, pending_requests);
+                            assert_eq!(output.callbacks, output.expired_requests);
+                            assert_eq!(output.remaining_requests, pending_requests - output.expired_requests);
+                            black_box(output.scan_elapsed_us);
+                            let scan_elapsed_us = output.scan_elapsed_us.min(u128::from(u64::MAX)) as u64;
+                            total += Duration::from_micros(scan_elapsed_us);
+                        }
+                        total
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
 }
 
 criterion_group! {
