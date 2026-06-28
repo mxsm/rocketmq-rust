@@ -392,8 +392,12 @@ impl HAService for DefaultHAService {
         }
     }
 
-    fn in_sync_replicas_nums(&self, _master_put_where: i64) -> i32 {
-        1 + self.connection_count.load(Ordering::Relaxed) as i32
+    fn in_sync_replicas_nums(&self, master_put_where: i64) -> i32 {
+        1 + self
+            .try_snapshot_connections(master_put_where)
+            .into_iter()
+            .filter(|connection| connection.slave_ack_offset >= master_put_where)
+            .count() as i32
     }
 
     fn get_connection_count(&self) -> &AtomicU32 {
@@ -621,6 +625,7 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::TimeUtils::current_millis;
+    use tokio::io::AsyncWriteExt;
 
     use super::*;
     use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
@@ -874,6 +879,50 @@ mod tests {
         service.remove_connection(connection.clone()).await;
 
         assert_eq!(auto_switch_service.get_local_sync_state_set(), HashSet::from([7_i64]));
+
+        connection.shutdown().await;
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn in_sync_replicas_count_requires_slave_ack_to_reach_master_offset() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-default-ha-in-sync-replicas-{}",
+            current_millis()
+        ));
+        let store = new_test_message_store(&temp_root, false);
+        let service = ArcMut::new(DefaultHAService::new(store));
+        let (server_stream, remote_addr, mut client) = new_server_stream().await;
+        let mut connection = AcceptSocketService::build_connection(
+            service.clone(),
+            service.get_default_message_store().message_store_config(),
+            server_stream,
+            remote_addr,
+            false,
+        )
+        .await
+        .expect("build default connection");
+        let connection_weak = ArcMut::downgrade(&connection);
+        connection.start(connection_weak).await.expect("start connection");
+        service.add_connection(connection.clone()).await;
+
+        client
+            .write_all(&64_i64.to_be_bytes())
+            .await
+            .expect("write slave ack offset");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if connection.get_slave_ack_offset() == 64 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("connection should observe slave ack offset");
+
+        assert_eq!(service.in_sync_replicas_nums(64), 2);
+        assert_eq!(service.in_sync_replicas_nums(65), 1);
 
         connection.shutdown().await;
         let _ = std::fs::remove_dir_all(temp_root);

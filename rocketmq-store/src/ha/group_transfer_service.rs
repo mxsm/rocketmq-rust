@@ -288,6 +288,29 @@ mod tests {
     }
 
     #[test]
+    fn all_ack_in_sync_state_set_requires_controller_members() {
+        let request_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
+        let sync_state_set = HashSet::from([7_i64, 9_i64, 10_i64]);
+        let mut acked_replicas = vec![
+            HAAckedReplicaSnapshot {
+                slave_broker_id: Some(9),
+                slave_ack_offset: 128,
+            },
+            HAAckedReplicaSnapshot {
+                slave_broker_id: Some(10),
+                slave_ack_offset: 127,
+            },
+        ];
+
+        assert!(request_ack_nums < 0);
+        assert!(!has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 128));
+
+        acked_replicas[1].slave_ack_offset = 128;
+
+        assert!(has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 128));
+    }
+
+    #[test]
     fn sync_state_set_ack_ignores_non_members() {
         let sync_state_set = HashSet::from([7_i64, 9_i64]);
         let acked_replicas = vec![

@@ -811,6 +811,7 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
     use tempfile::tempdir;
+    use tokio::net::TcpListener;
 
     use super::*;
     use crate::config::message_store_config::MessageStoreConfig;
@@ -886,5 +887,58 @@ mod tests {
         ReaderTask::apply_master_confirm_offset(&store, header.confirm_offset);
 
         assert_eq!(store.get_confirm_offset(), 4);
+    }
+
+    #[tokio::test]
+    async fn reader_task_reports_master_slave_offsets_when_append_offset_mismatches() {
+        let temp_dir = tempdir().expect("temp dir");
+        let mut store = new_test_message_store(temp_dir.path());
+        store.init().await.expect("init message store");
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind loopback listener");
+        let client = TcpStream::connect(listener.local_addr().expect("listener addr"))
+            .await
+            .expect("connect loopback client");
+        let (server, _) = listener.accept().await.expect("accept loopback client");
+        let (reader_half, _) = server.into_split();
+        drop(client);
+
+        let (offset_tx, _offset_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (err_tx, _err_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut reader = ReaderTask {
+            reader: FramedRead::new(reader_half, BytesCodec::new()),
+            buf: BytesMut::from(
+                &encode_transfer_header(
+                    &mut BytesMut::with_capacity(CONTROLLER_TRANSFER_HEADER_SIZE),
+                    8,
+                    0,
+                    true,
+                    4,
+                )[..],
+            ),
+            dispatch_pos: 0,
+            offset_tx,
+            err_tx,
+            store: store.clone(),
+            flow_monitor: Arc::new(FlowMonitor::new(store.message_store_config())),
+            last_read_timestamp: Arc::new(AtomicU64::new(0)),
+            enable_controller_mode: true,
+        };
+
+        let error = reader
+            .dispatch_read()
+            .await
+            .expect_err("offset mismatch should stop dispatch");
+        let message = error.to_string();
+        assert!(message.contains("master pushed offset != slave max"));
+        assert!(message.contains("slave: 4"));
+        assert!(message.contains("master: 8"));
     }
 }
