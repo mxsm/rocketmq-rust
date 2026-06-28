@@ -5530,7 +5530,22 @@ mod tests {
     #[test]
     fn runtime_info_reports_linux_storage_lifecycle_fields() {
         let temp_dir = tempdir().unwrap();
-        let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+        let store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 1024,
+                ..MessageStoreConfig::default()
+            },
+        );
+        assert!(store.get_last_mapped_file(0));
+        let mapped_file = store
+            .commit_log
+            .last_mapped_file_for_testing()
+            .expect("runtime info test should create commitlog mapped file");
+        mapped_file
+            .get_metrics()
+            .expect("mapped file metrics should be enabled")
+            .record_warm_with_latency(4096, Duration::from_millis(12));
 
         let runtime_info = store.get_runtime_info();
 
@@ -5546,10 +5561,10 @@ mod tests {
         assert_eq!(runtime_info["linuxStorageProfile"], "balanced");
         assert_eq!(runtime_info["linuxStorageTransferEngine"], "vectored");
         assert_eq!(runtime_info["linuxStorageMappedFileWarmMode"], "madvise");
-        assert_eq!(runtime_info["linuxStorageMappedFileWarmOperations"], "0");
-        assert_eq!(runtime_info["linuxStorageMappedFileWarmBytes"], "0");
-        assert_eq!(runtime_info["linuxStorageMappedFileWarmTotalMillis"], "0");
-        assert_eq!(runtime_info["linuxStorageMappedFileWarmLastMillis"], "0");
+        assert_eq!(runtime_info["linuxStorageMappedFileWarmOperations"], "1");
+        assert_eq!(runtime_info["linuxStorageMappedFileWarmBytes"], "4096");
+        assert_eq!(runtime_info["linuxStorageMappedFileWarmTotalMillis"], "12");
+        assert_eq!(runtime_info["linuxStorageMappedFileWarmLastMillis"], "12");
         assert_eq!(runtime_info["linuxStorageMemoryLockMode"], "off");
         assert_eq!(runtime_info["linuxStorageHaSendfileEnable"], "false");
         assert_eq!(runtime_info["linuxStorageIoUringEnable"], "false");

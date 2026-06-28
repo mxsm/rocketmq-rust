@@ -1666,6 +1666,11 @@ impl CommitLog {
         self.mapped_file_queue.warmup_stats()
     }
 
+    #[cfg(test)]
+    pub(crate) fn last_mapped_file_for_testing(&self) -> Option<Arc<DefaultMappedFile>> {
+        self.mapped_file_queue.get_last_mapped_file()
+    }
+
     #[inline]
     pub fn flush(&self) -> i64 {
         self.mapped_file_queue.flush(0);
