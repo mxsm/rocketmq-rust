@@ -21,7 +21,9 @@ use std::time::UNIX_EPOCH;
 
 use criterion::criterion_group;
 use criterion::criterion_main;
+use criterion::BatchSize;
 use criterion::Criterion;
+use rocketmq_client_rust::run_trace_queue_depth_accounting_probe;
 use rocketmq_client_rust::run_trace_worker_lifecycle_probe;
 use rocketmq_client_rust::TraceWorkerLifecycleProbe;
 
@@ -84,6 +86,19 @@ fn bench_trace_worker_lifecycle(criterion: &mut Criterion) {
             black_box(output.shutdown_elapsed_us);
         });
     });
+
+    for queued_count in [1usize, 128, 2048] {
+        criterion.bench_function(
+            &format!("client_trace_worker_lifecycle/queue_depth_accounting/{queued_count}"),
+            |bencher| {
+                bencher.iter_batched(
+                    || queued_count,
+                    |queued_count| black_box(run_trace_queue_depth_accounting_probe(queued_count)),
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
 }
 
 criterion_group! {

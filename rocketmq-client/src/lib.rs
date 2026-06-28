@@ -284,6 +284,8 @@ pub use crate::producer::TransactionMQProducer;
 pub use crate::producer::TransactionMQProducerBuilder;
 pub use crate::producer::TransactionSendResult;
 #[doc(hidden)]
+pub use crate::trace::async_trace_dispatcher::run_trace_queue_depth_accounting_probe;
+#[doc(hidden)]
 pub use crate::trace::async_trace_dispatcher::run_trace_worker_lifecycle_probe;
 pub use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 #[doc(hidden)]
