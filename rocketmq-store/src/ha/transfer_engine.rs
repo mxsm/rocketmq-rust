@@ -25,7 +25,7 @@ pub mod bytes;
 pub mod sendfile;
 pub mod vectored;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TransferEngineKind {
     Bytes,
     Vectored,

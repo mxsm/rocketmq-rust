@@ -56,6 +56,7 @@ use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_service::HAService;
 use crate::ha::transfer_engine::select_transfer_engine;
 use crate::ha::transfer_engine::HaTransferEngine;
+use crate::ha::transfer_engine::TransferEngineKind;
 use crate::ha::transfer_engine::TransferEnginePreference;
 use crate::ha::HAConnectionError;
 use crate::transfer::batch::TransferBatch;
@@ -648,12 +649,16 @@ impl WriteSocketService {
         next_transfer_from_where: Arc<AtomicI64>,
     ) -> Result<Self, HAConnectionError> {
         let enable_controller_mode = message_store_config.enable_controller_mode;
-        let selection = select_transfer_engine(TransferEnginePreference::Vectored, writer.is_write_vectored());
+        let preference = TransferEnginePreference::Vectored;
+        let selection = select_transfer_engine(preference, writer.is_write_vectored());
         if let Some(reason) = selection.fallback_reason {
             info!(
                 "HA transfer engine fallback to {:?} for slave[{}]: {}",
                 selection.engine, client_address, reason
             );
+            ha_service
+                .ha_transfer_metrics()
+                .record_fallback(TransferEngineKind::Vectored, selection.engine, reason);
         } else {
             info!(
                 "HA transfer engine selected {:?} for slave[{}]",
@@ -880,6 +885,7 @@ impl WriteSocketService {
         let stats = self.writer.send_batch(&batch).await?;
 
         self.last_write_timestamp.store(current_millis(), Ordering::Relaxed);
+        self.ha_service.ha_transfer_metrics().record_transfer(&stats);
         self.flow_monitor.add_byte_count_transferred(stats.bytes_written as i64);
         self.last_write_over.store(true, Ordering::Relaxed);
 
@@ -900,6 +906,7 @@ impl WriteSocketService {
         let stats = self.writer.send_batch(&batch).await?;
 
         self.last_write_timestamp.store(current_millis(), Ordering::Relaxed);
+        self.ha_service.ha_transfer_metrics().record_transfer(&stats);
         self.flow_monitor.add_byte_count_transferred(stats.bytes_written as i64);
         self.last_write_over.store(true, Ordering::Relaxed);
 
