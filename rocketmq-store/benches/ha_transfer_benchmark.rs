@@ -24,9 +24,15 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_store::bench_support::run_ha_bytes_vectored_benchmark_report;
+#[cfg(target_os = "linux")]
+use rocketmq_store::bench_support::run_ha_vectored_sendfile_benchmark_report;
+#[cfg(target_os = "linux")]
+use rocketmq_store::bench_support::HaSendfileBenchmarkReport;
 use rocketmq_store::bench_support::HaTransferBenchmarkReport;
 
 const BODY_SIZE: usize = 64 * 1024;
+#[cfg(target_os = "linux")]
+const SENDFILE_BODY_SIZE: usize = 4 * 1024 * 1024;
 
 fn run_report(body_size: usize) -> HaTransferBenchmarkReport {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -35,6 +41,18 @@ fn run_report(body_size: usize) -> HaTransferBenchmarkReport {
         .expect("HA transfer benchmark runtime should start");
 
     runtime.block_on(run_ha_bytes_vectored_benchmark_report(body_size))
+}
+
+#[cfg(target_os = "linux")]
+fn run_sendfile_report(body_size: usize) -> HaSendfileBenchmarkReport {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("HA sendfile benchmark runtime should start");
+
+    runtime
+        .block_on(run_ha_vectored_sendfile_benchmark_report(body_size))
+        .expect("HA sendfile benchmark report should run on Linux")
 }
 
 fn workspace_root() -> PathBuf {
@@ -73,8 +91,36 @@ fn write_ha_transfer_report_artifact() {
     .expect("HA transfer benchmark artifact should be written");
 }
 
+#[cfg(target_os = "linux")]
+fn write_ha_sendfile_report_artifact() {
+    let report = run_sendfile_report(SENDFILE_BODY_SIZE);
+    assert!(report.frames_match, "{report:?}");
+    assert!(report.ack_offsets_match, "{report:?}");
+    assert!(report.user_cpu_reduction_percent > 0, "{report:?}");
+
+    let output_dir = benchmark_artifact_dir();
+    fs::create_dir_all(&output_dir).expect("HA sendfile benchmark artifact directory should be created");
+    let generated_at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_millis();
+    let payload = serde_json::json!({
+        "case": "ha_transfer_vectored_vs_sendfile",
+        "generated_at_unix_ms": generated_at_unix_ms,
+        "report": report,
+    });
+    let path = output_dir.join("ha-transfer-vectored-sendfile-report.json");
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&payload).expect("HA sendfile benchmark artifact should serialize"),
+    )
+    .expect("HA sendfile benchmark artifact should be written");
+}
+
 fn bench_ha_transfer(criterion: &mut Criterion) {
     write_ha_transfer_report_artifact();
+    #[cfg(target_os = "linux")]
+    write_ha_sendfile_report_artifact();
 
     let mut group = criterion.benchmark_group("ha_transfer");
     group.throughput(Throughput::Bytes(BODY_SIZE as u64));
@@ -89,6 +135,24 @@ fn bench_ha_transfer(criterion: &mut Criterion) {
         });
     });
     group.finish();
+
+    #[cfg(target_os = "linux")]
+    {
+        let mut sendfile_group = criterion.benchmark_group("ha_transfer_sendfile");
+        sendfile_group.throughput(Throughput::Bytes(SENDFILE_BODY_SIZE as u64));
+        sendfile_group.bench_function("vectored_vs_sendfile_report_4MiB", |bencher| {
+            bencher.iter(|| {
+                let report = run_sendfile_report(black_box(SENDFILE_BODY_SIZE));
+                assert!(report.frames_match, "{report:?}");
+                assert!(report.ack_offsets_match, "{report:?}");
+                black_box(report.write_syscall_reduction_percent);
+                black_box(report.user_cpu_reduction_percent);
+                black_box(report.vectored_baseline.user_cpu_nanos);
+                black_box(report.sendfile_optimized.user_cpu_nanos);
+            });
+        });
+        sendfile_group.finish();
+    }
 }
 
 criterion_group! {
