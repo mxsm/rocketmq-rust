@@ -55,6 +55,14 @@ pub struct MappedFileQueue {
     commit_lock: Arc<Mutex<()>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MappedFileWarmupStats {
+    pub operations: u64,
+    pub bytes: u64,
+    pub total_millis: u64,
+    pub last_millis: u64,
+}
+
 impl Default for MappedFileQueue {
     fn default() -> Self {
         Self {
@@ -352,6 +360,25 @@ impl MappedFileQueue {
     #[inline]
     pub fn get_mapped_files_size(&self) -> usize {
         self.mapped_files.load().len()
+    }
+
+    pub fn warmup_stats(&self) -> MappedFileWarmupStats {
+        let mapped_files = self.mapped_files.load();
+        let mut stats = MappedFileWarmupStats::default();
+        for mapped_file in mapped_files.iter() {
+            let Some(metrics) = mapped_file.get_metrics() else {
+                continue;
+            };
+            let operations = metrics.warm_operations();
+            if operations == 0 {
+                continue;
+            }
+            stats.operations = stats.operations.saturating_add(operations);
+            stats.bytes = stats.bytes.saturating_add(metrics.warm_bytes());
+            stats.total_millis = stats.total_millis.saturating_add(metrics.total_warm_millis());
+            stats.last_millis = metrics.last_warm_millis();
+        }
+        stats
     }
 
     #[inline]
@@ -1308,6 +1335,47 @@ mod tests {
         };
         assert!(queue.load());
         assert_eq!(queue.mapped_files.load().len(), 1);
+    }
+
+    #[test]
+    fn warmup_stats_aggregates_mapped_file_metrics() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let first_path = temp_dir.path().join(offset_to_file_name(0));
+        let second_path = temp_dir.path().join(offset_to_file_name(1024));
+        let first_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(first_path.to_string_lossy().to_string()),
+                1024,
+            )
+            .expect("first mapped file"),
+        );
+        let second_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(second_path.to_string_lossy().to_string()),
+                1024,
+            )
+            .expect("second mapped file"),
+        );
+        first_file
+            .get_metrics()
+            .unwrap()
+            .record_warm_with_latency(1024, std::time::Duration::from_millis(4));
+        second_file
+            .get_metrics()
+            .unwrap()
+            .record_warm_with_latency(2048, std::time::Duration::from_millis(5));
+
+        let queue = MappedFileQueue {
+            mapped_file_size: 1024,
+            mapped_files: ArcSwap::from_pointee(vec![first_file, second_file]),
+            ..MappedFileQueue::default()
+        };
+
+        let stats = queue.warmup_stats();
+        assert_eq!(stats.operations, 2);
+        assert_eq!(stats.bytes, 3072);
+        assert_eq!(stats.total_millis, 9);
+        assert_eq!(stats.last_millis, 5);
     }
 
     #[tokio::test]
