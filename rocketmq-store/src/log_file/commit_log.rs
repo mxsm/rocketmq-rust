@@ -2516,6 +2516,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
+    #[test]
+    fn auto_in_sync_replicas_clamps_required_acks_between_minimum_and_configured_value() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-commitlog-auto-isr-acks-{}", current_millis()));
+        let store = new_test_message_store_with_config(
+            &temp_root,
+            MessageStoreConfig {
+                enable_auto_in_sync_replicas: true,
+                in_sync_replicas: 3,
+                min_in_sync_replicas: 2,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::SyncMaster,
+            false,
+        );
+
+        assert_eq!(store.get_commit_log().calc_need_ack_nums(1), 2);
+        assert_eq!(store.get_commit_log().calc_need_ack_nums(2), 2);
+        assert_eq!(store.get_commit_log().calc_need_ack_nums(4), 3);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn configured_in_sync_replicas_takes_priority_when_auto_in_sync_replicas_is_disabled() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-commitlog-fixed-isr-acks-{}", current_millis()));
+        let store = new_test_message_store_with_config(
+            &temp_root,
+            MessageStoreConfig {
+                enable_auto_in_sync_replicas: false,
+                in_sync_replicas: 3,
+                min_in_sync_replicas: 2,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::SyncMaster,
+            false,
+        );
+
+        assert_eq!(store.get_commit_log().calc_need_ack_nums(1), 3);
+        assert_eq!(store.get_commit_log().calc_need_ack_nums(4), 3);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
     #[tokio::test]
     async fn shutdown_flushes_pending_commitlog_data() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-commitlog-shutdown-{}", current_millis()));
