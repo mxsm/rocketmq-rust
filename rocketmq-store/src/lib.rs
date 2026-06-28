@@ -45,13 +45,20 @@ pub mod utils;
 
 #[doc(hidden)]
 pub mod bench_support {
+    use std::io;
+    use std::io::IoSlice;
+    use std::pin::Pin;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Poll;
     use std::time::Duration;
     use std::time::Instant;
 
+    use bytes::BufMut;
     use bytes::Bytes;
+    use bytes::BytesMut;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use futures_util::future::join_all;
@@ -61,10 +68,14 @@ pub mod bench_support {
     use rocketmq_runtime::ShutdownReport;
     use rocketmq_rust::ArcMut;
     use serde::Serialize;
+    use tokio::io::AsyncWrite;
 
     use crate::base::message_store::MessageStore;
     use crate::base::store_stats_service::StoreStatsService;
     use crate::config::message_store_config::MessageStoreConfig;
+    use crate::ha::transfer_engine::bytes::BytesTransferEngine;
+    use crate::ha::transfer_engine::vectored::VectoredTransferEngine;
+    use crate::ha::transfer_engine::TransferStats;
     use crate::kv::compaction_service::CompactionService;
     use crate::kv::compaction_store::CompactionStore;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
@@ -75,6 +86,10 @@ pub mod bench_support {
     #[cfg(feature = "rocksdb_store")]
     use crate::rocksdb::store::RocksDbStore;
     use crate::timer::timer_message_store::TimerMessageStore;
+    use crate::transfer::batch::TransferBatch;
+    use crate::transfer::batch::TransferKind;
+    use crate::transfer::segment::SegmentLease;
+    use crate::transfer::segment::TransferCacheState;
 
     #[derive(Debug, Clone, Serialize)]
     pub struct StoreBlockingIoProbe {
@@ -142,6 +157,170 @@ pub mod bench_support {
         pub scheduled_failures: u64,
         pub shutdown_elapsed_us: u128,
         pub healthy: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct HaTransferBenchmarkReport {
+        pub batch_count: usize,
+        pub bytes_baseline: HaTransferEngineBenchmarkReport,
+        pub vectored_optimized: HaTransferEngineBenchmarkReport,
+        pub syscall_reduction_percent: usize,
+        pub frames_match: bool,
+        pub ack_offsets_match: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct HaTransferEngineBenchmarkReport {
+        pub engine: &'static str,
+        pub batch_count: usize,
+        pub frame_bytes: usize,
+        pub body_bytes: usize,
+        pub write_syscall_count: usize,
+        pub sendfile_syscall_count: usize,
+        pub partial_write_count: usize,
+        pub ack_offset: i64,
+        pub ack_latency_nanos: u128,
+    }
+
+    struct HaTransferEngineRun {
+        report: HaTransferEngineBenchmarkReport,
+        frame: Vec<u8>,
+    }
+
+    #[derive(Default)]
+    struct HaBenchmarkWriter {
+        written: Vec<u8>,
+    }
+
+    impl AsyncWrite for HaBenchmarkWriter {
+        fn poll_write(mut self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+            self.written.extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_write_vectored(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            bufs: &[IoSlice<'_>],
+        ) -> Poll<io::Result<usize>> {
+            let mut written = 0;
+            for buf in bufs {
+                self.written.extend_from_slice(buf);
+                written += buf.len();
+            }
+            Poll::Ready(Ok(written))
+        }
+
+        fn is_write_vectored(&self) -> bool {
+            true
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    pub async fn run_ha_bytes_vectored_benchmark_report(body_size: usize) -> HaTransferBenchmarkReport {
+        let body = Bytes::from(vec![7; body_size]);
+        let batch = ha_transfer_benchmark_batch(body);
+        let bytes_baseline = run_ha_bytes_benchmark(&batch).await;
+        let vectored_optimized = run_ha_vectored_benchmark(&batch).await;
+        let baseline_syscalls = bytes_baseline.report.write_syscall_count;
+        let optimized_syscalls = vectored_optimized.report.write_syscall_count;
+        let syscall_reduction_percent = baseline_syscalls
+            .saturating_sub(optimized_syscalls)
+            .checked_mul(100)
+            .and_then(|reduction| reduction.checked_div(baseline_syscalls))
+            .unwrap_or(0);
+
+        HaTransferBenchmarkReport {
+            batch_count: bytes_baseline.report.batch_count,
+            frames_match: bytes_baseline.frame == vectored_optimized.frame,
+            ack_offsets_match: bytes_baseline.report.ack_offset == vectored_optimized.report.ack_offset,
+            bytes_baseline: bytes_baseline.report,
+            vectored_optimized: vectored_optimized.report,
+            syscall_reduction_percent,
+        }
+    }
+
+    async fn run_ha_bytes_benchmark(batch: &TransferBatch) -> HaTransferEngineRun {
+        let started = Instant::now();
+        let mut engine = BytesTransferEngine::new(HaBenchmarkWriter::default());
+        let stats = engine.send_batch(batch).await.expect("bytes HA benchmark transfer");
+        let writer = engine.into_inner();
+        let ack_offset = decode_ha_ack_offset(&writer.written);
+        ha_transfer_engine_run("bytes", stats, writer.written, ack_offset, started.elapsed().as_nanos())
+    }
+
+    async fn run_ha_vectored_benchmark(batch: &TransferBatch) -> HaTransferEngineRun {
+        let started = Instant::now();
+        let mut engine = VectoredTransferEngine::new(HaBenchmarkWriter::default());
+        let stats = engine.send_batch(batch).await.expect("vectored HA benchmark transfer");
+        let writer = engine.into_inner();
+        let ack_offset = decode_ha_ack_offset(&writer.written);
+        ha_transfer_engine_run(
+            "vectored",
+            stats,
+            writer.written,
+            ack_offset,
+            started.elapsed().as_nanos(),
+        )
+    }
+
+    fn ha_transfer_engine_run(
+        engine: &'static str,
+        stats: TransferStats,
+        frame: Vec<u8>,
+        ack_offset: i64,
+        ack_latency_nanos: u128,
+    ) -> HaTransferEngineRun {
+        HaTransferEngineRun {
+            report: HaTransferEngineBenchmarkReport {
+                engine,
+                batch_count: stats.frame_count,
+                frame_bytes: stats.bytes_written,
+                body_bytes: stats.body_bytes,
+                write_syscall_count: stats.write_call_count,
+                sendfile_syscall_count: stats.sendfile_call_count,
+                partial_write_count: stats.partial_write_count,
+                ack_offset,
+                ack_latency_nanos,
+            },
+            frame,
+        }
+    }
+
+    fn ha_transfer_benchmark_batch(body: Bytes) -> TransferBatch {
+        let start_offset = 16 * 1024;
+        let body_size = body.len();
+        TransferBatch {
+            frame_header: ha_transfer_benchmark_header(start_offset, body_size),
+            segments: vec![SegmentLease::from_bytes(start_offset, 0, body, TransferCacheState::Hot)],
+            total_body_len: body_size,
+            start_offset,
+            next_offset: start_offset + body_size as i64,
+            kind: TransferKind::Data,
+        }
+    }
+
+    fn ha_transfer_benchmark_header(offset: i64, body_size: usize) -> Bytes {
+        let mut header = BytesMut::with_capacity(12);
+        header.put_i64(offset);
+        header.put_i32(i32::try_from(body_size).expect("HA benchmark body size fits i32"));
+        header.freeze()
+    }
+
+    fn decode_ha_ack_offset(frame: &[u8]) -> i64 {
+        assert!(frame.len() >= 12, "HA benchmark frame must include a header");
+        let offset = i64::from_be_bytes(frame[0..8].try_into().expect("HA benchmark offset header"));
+        let body_len = i32::from_be_bytes(frame[8..12].try_into().expect("HA benchmark body size header"));
+        assert!(body_len >= 0, "HA benchmark body size must be non-negative");
+        assert_eq!(frame.len() - 12, body_len as usize);
+        offset + body_len as i64
     }
 
     pub const IO_URING_FLUSH_BENCHMARK_GROUP: &str = "io_uring/flush_semantics";
@@ -756,6 +935,26 @@ mod bench_support_tests {
         );
         assert!(baseline.name.contains("default"));
         assert!(experimental.name.contains("io_uring"));
+    }
+
+    #[tokio::test]
+    async fn ha_bytes_vectored_benchmark_report_contains_required_comparison_data() {
+        let report = super::bench_support::run_ha_bytes_vectored_benchmark_report(64 * 1024).await;
+
+        assert!(report.frames_match, "{report:?}");
+        assert!(report.ack_offsets_match, "{report:?}");
+        assert_eq!(report.batch_count, 1);
+        assert_eq!(report.bytes_baseline.engine, "bytes");
+        assert_eq!(report.vectored_optimized.engine, "vectored");
+        assert_eq!(report.bytes_baseline.body_bytes, 64 * 1024);
+        assert_eq!(report.vectored_optimized.body_bytes, 64 * 1024);
+        assert_eq!(report.bytes_baseline.frame_bytes, 64 * 1024 + 12);
+        assert_eq!(report.vectored_optimized.frame_bytes, 64 * 1024 + 12);
+        assert_eq!(report.bytes_baseline.write_syscall_count, 2);
+        assert_eq!(report.vectored_optimized.write_syscall_count, 1);
+        assert_eq!(report.syscall_reduction_percent, 50);
+        assert!(report.bytes_baseline.ack_latency_nanos < 1_000_000_000);
+        assert!(report.vectored_optimized.ack_latency_nanos < 1_000_000_000);
     }
 
     #[cfg(feature = "rocksdb_store")]
