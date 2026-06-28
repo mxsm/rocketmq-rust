@@ -927,7 +927,7 @@ impl LocalFileMessageStore {
                 enabled_rocksdb_options.join(", ")
             )));
         }
-        if self.message_store_config.linux_memory_lock_mode == LinuxMemoryLockMode::ActiveFile
+        if self.message_store_config.effective_linux_memory_lock_mode() == LinuxMemoryLockMode::ActiveFile
             && self.message_store_config.linux_memory_lock_budget_bytes == 0
             && !self.message_store_config.linux_memory_lock_warn_only
         {
@@ -2645,7 +2645,10 @@ impl MessageStore for LocalFileMessageStore {
         );
         result.insert(
             "linuxStorageMemoryLockMode".to_string(),
-            linux_profile_settings.memory_lock_mode.as_str().to_string(),
+            self.message_store_config
+                .effective_linux_memory_lock_mode()
+                .as_str()
+                .to_string(),
         );
         result.insert(
             "linuxStorageMemoryLockWarnOnly".to_string(),

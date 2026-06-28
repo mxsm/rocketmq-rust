@@ -1366,6 +1366,18 @@ impl MessageStoreConfig {
         self.linux_storage_profile.settings()
     }
 
+    pub fn effective_linux_memory_lock_mode(&self) -> LinuxMemoryLockMode {
+        if self.linux_memory_lock_mode != LinuxMemoryLockMode::Off {
+            return self.linux_memory_lock_mode;
+        }
+
+        if self.linux_storage_optimization_enable {
+            return self.effective_linux_storage_profile_settings().memory_lock_mode;
+        }
+
+        LinuxMemoryLockMode::Off
+    }
+
     pub fn effective_linux_memory_lock_budget_bytes(&self, memory_lock_limit_bytes: Option<u64>) -> u64 {
         if self.linux_memory_lock_budget_bytes > 0 {
             return self.linux_memory_lock_budget_bytes as u64;
@@ -2229,6 +2241,44 @@ mod tests {
         assert_eq!(config.effective_linux_memory_lock_budget_bytes(None), 0);
         assert_eq!(config.effective_linux_memory_lock_budget_bytes(Some(0)), 0);
         assert_eq!(config.effective_linux_memory_lock_budget_bytes(Some(u64::MAX)), 0);
+    }
+
+    #[test]
+    fn effective_linux_memory_lock_mode_uses_low_latency_profile_when_optimization_is_enabled() {
+        let config = MessageStoreConfig {
+            linux_storage_optimization_enable: true,
+            linux_storage_profile: LinuxStorageProfile::LowLatency,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.effective_linux_memory_lock_mode(),
+            LinuxMemoryLockMode::ActiveWindow
+        );
+    }
+
+    #[test]
+    fn effective_linux_memory_lock_mode_preserves_direct_mode_and_disabled_optimization() {
+        let disabled_profile = MessageStoreConfig {
+            linux_storage_optimization_enable: false,
+            linux_storage_profile: LinuxStorageProfile::LowLatency,
+            ..Default::default()
+        };
+        let explicit_mode = MessageStoreConfig {
+            linux_storage_optimization_enable: true,
+            linux_storage_profile: LinuxStorageProfile::SafeCompat,
+            linux_memory_lock_mode: LinuxMemoryLockMode::ActiveFile,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            disabled_profile.effective_linux_memory_lock_mode(),
+            LinuxMemoryLockMode::Off
+        );
+        assert_eq!(
+            explicit_mode.effective_linux_memory_lock_mode(),
+            LinuxMemoryLockMode::ActiveFile
+        );
     }
 
     #[cfg(not(feature = "tieredstore"))]
