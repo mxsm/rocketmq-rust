@@ -74,6 +74,7 @@ use crate::base::topic_queue_lock::TopicQueueLock;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::consume_queue::mapped_file_queue::MappedFileWarmupStats;
 use crate::ha::ha_service::HAService;
 use crate::log_file::cold_data_check_service::ColdDataCheckService;
 // Import the optimized loader module
@@ -1658,6 +1659,11 @@ impl CommitLog {
     #[inline]
     pub fn get_flushed_where(&self) -> i64 {
         self.mapped_file_queue.get_flushed_where()
+    }
+
+    #[inline]
+    pub fn mapped_file_warmup_stats(&self) -> MappedFileWarmupStats {
+        self.mapped_file_queue.warmup_stats()
     }
 
     #[inline]

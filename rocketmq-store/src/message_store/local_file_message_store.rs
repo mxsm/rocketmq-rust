@@ -2626,6 +2626,23 @@ impl MessageStore for LocalFileMessageStore {
             "linuxStorageMappedFileWarmMode".to_string(),
             linux_profile_settings.mapped_file_warm_mode.as_str().to_string(),
         );
+        let mapped_file_warmup_stats = self.commit_log.mapped_file_warmup_stats();
+        result.insert(
+            "linuxStorageMappedFileWarmOperations".to_string(),
+            mapped_file_warmup_stats.operations.to_string(),
+        );
+        result.insert(
+            "linuxStorageMappedFileWarmBytes".to_string(),
+            mapped_file_warmup_stats.bytes.to_string(),
+        );
+        result.insert(
+            "linuxStorageMappedFileWarmTotalMillis".to_string(),
+            mapped_file_warmup_stats.total_millis.to_string(),
+        );
+        result.insert(
+            "linuxStorageMappedFileWarmLastMillis".to_string(),
+            mapped_file_warmup_stats.last_millis.to_string(),
+        );
         result.insert(
             "linuxStorageMemoryLockMode".to_string(),
             linux_profile_settings.memory_lock_mode.as_str().to_string(),
@@ -5529,6 +5546,10 @@ mod tests {
         assert_eq!(runtime_info["linuxStorageProfile"], "balanced");
         assert_eq!(runtime_info["linuxStorageTransferEngine"], "vectored");
         assert_eq!(runtime_info["linuxStorageMappedFileWarmMode"], "madvise");
+        assert_eq!(runtime_info["linuxStorageMappedFileWarmOperations"], "0");
+        assert_eq!(runtime_info["linuxStorageMappedFileWarmBytes"], "0");
+        assert_eq!(runtime_info["linuxStorageMappedFileWarmTotalMillis"], "0");
+        assert_eq!(runtime_info["linuxStorageMappedFileWarmLastMillis"], "0");
         assert_eq!(runtime_info["linuxStorageMemoryLockMode"], "off");
         assert_eq!(runtime_info["linuxStorageHaSendfileEnable"], "false");
         assert_eq!(runtime_info["linuxStorageIoUringEnable"], "false");
