@@ -21,6 +21,7 @@ pub mod compaction_append_msg_callback;
 pub mod dispatch_request;
 pub mod flush_manager;
 pub mod get_message_result;
+pub mod memory_lock_manager;
 pub mod message_arriving_listener;
 pub mod message_encoder_pool;
 pub mod message_result;

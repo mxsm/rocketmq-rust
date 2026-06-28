@@ -19,6 +19,29 @@ use bytes::Bytes;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectMappedBufferSourceKind {
+    MappedFile,
+    Bytes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectMappedBufferCacheState {
+    Unknown,
+    Hot,
+    Cold,
+}
+
+impl SelectMappedBufferCacheState {
+    pub fn from_residency(is_in_cache: bool) -> Self {
+        if is_in_cache {
+            Self::Hot
+        } else {
+            Self::Cold
+        }
+    }
+}
+
 /// Represents the result of selecting a mapped buffer.
 pub struct SelectMappedBufferResult {
     /// The start offset.
@@ -30,6 +53,12 @@ pub struct SelectMappedBufferResult {
     pub mapped_file: Option<Arc<DefaultMappedFile>>,
     /// Whether the buffer is in cache.
     pub is_in_cache: bool,
+    /// Source kind used for observability and future transfer planning.
+    pub source_kind: SelectMappedBufferSourceKind,
+    /// Offset within the mapped file, when the result comes from a mapped file.
+    pub file_offset: u64,
+    /// Page-cache state observed when the result was selected.
+    pub cache_state: SelectMappedBufferCacheState,
 }
 
 impl Default for SelectMappedBufferResult {
@@ -40,6 +69,9 @@ impl Default for SelectMappedBufferResult {
             size: 0,
             mapped_file: None,
             is_in_cache: true,
+            source_kind: SelectMappedBufferSourceKind::Bytes,
+            file_offset: 0,
+            cache_state: SelectMappedBufferCacheState::Unknown,
         }
     }
 }

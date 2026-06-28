@@ -47,7 +47,9 @@ use crate::base::compaction_append_msg_callback::CompactionAppendMsgCallback;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::put_message_context::PutMessageContext;
+use crate::base::select_result::SelectMappedBufferCacheState;
 use crate::base::select_result::SelectMappedBufferResult;
+use crate::base::select_result::SelectMappedBufferSourceKind;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::log_file::mapped_file::reference_resource::ReferenceResource;
@@ -652,6 +654,9 @@ impl MappedFile for DefaultMappedFile {
                     size,
                     bytes: Some(bytes),
                     is_in_cache,
+                    source_kind: SelectMappedBufferSourceKind::MappedFile,
+                    file_offset: pos as u64,
+                    cache_state: SelectMappedBufferCacheState::from_residency(is_in_cache),
                     mapped_file: None,
                 })
             } else {
@@ -1072,6 +1077,9 @@ impl MappedFile for DefaultMappedFile {
                 size,
                 bytes: Some(bytes),
                 is_in_cache,
+                source_kind: SelectMappedBufferSourceKind::MappedFile,
+                file_offset: pos as u64,
+                cache_state: SelectMappedBufferCacheState::from_residency(is_in_cache),
                 mapped_file: None,
             })
         } else {
@@ -1734,6 +1742,12 @@ mod tests {
         let metrics = mapped_file.get_metrics().unwrap();
         assert_eq!(metrics.cache_hits() + metrics.cache_misses(), 1);
         assert_eq!(result.is_in_cache, metrics.cache_hits() == 1);
+        assert_eq!(result.source_kind, SelectMappedBufferSourceKind::MappedFile);
+        assert_eq!(result.file_offset, 0);
+        assert_eq!(
+            result.cache_state,
+            SelectMappedBufferCacheState::from_residency(result.is_in_cache)
+        );
     }
 
     #[test]
