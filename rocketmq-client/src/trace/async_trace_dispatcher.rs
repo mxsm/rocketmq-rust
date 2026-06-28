@@ -80,6 +80,7 @@ struct TraceDispatcherConfig {
 struct DispatcherState {
     is_started: AtomicBool,
     is_stopped: AtomicBool,
+    queued_count: AtomicUsize,
     discard_count: AtomicU64,
     last_flush_time: AtomicU64,
     send_which_queue: AtomicUsize,
@@ -94,6 +95,7 @@ impl DispatcherState {
         Self {
             is_started: AtomicBool::new(false),
             is_stopped: AtomicBool::new(false),
+            queued_count: AtomicUsize::new(0),
             discard_count: AtomicU64::new(0),
             last_flush_time: AtomicU64::new(0),
             send_which_queue: AtomicUsize::new(0),
@@ -126,6 +128,7 @@ impl TraceFlushResponder {
 enum TraceWorkerCommand {
     Trace(TraceContext),
     Flush(TraceFlushResponder),
+    Shutdown,
 }
 
 enum TraceTaskHandle {
@@ -294,15 +297,9 @@ impl AsyncTraceDispatcher {
         self.state.discard_count.load(Ordering::Relaxed)
     }
 
-    /// Returns the approximate queue depth.
-    ///
-    /// # Note
-    ///
-    /// The tokio mpsc channel does not expose queue size. This method returns 0.
+    /// Returns the approximate number of trace contexts queued for the worker.
     pub fn queue_size(&self) -> usize {
-        // mpsc::Sender doesn't expose queue size directly
-        // This is an approximation
-        0
+        self.state.queued_count.load(Ordering::Acquire)
     }
 
     /// Returns whether the dispatcher has been started.
@@ -403,7 +400,7 @@ impl AsyncTraceDispatcher {
             error!("Flush failed during shutdown: {:?}", error);
         }
 
-        self.state.is_stopped.store(true, Ordering::SeqCst);
+        self.request_worker_shutdown();
 
         let handle = { self.worker_handle.lock().take() };
         if let Some(handle) = handle {
@@ -433,6 +430,13 @@ impl AsyncTraceDispatcher {
     }
 
     pub fn remove_shutdown_hook(&self) {}
+
+    fn request_worker_shutdown(&self) {
+        self.state.is_stopped.store(true, Ordering::SeqCst);
+        if let Err(error) = self.tx.try_send(TraceWorkerCommand::Shutdown) {
+            debug!(%error, "trace worker shutdown command was not queued");
+        }
+    }
 }
 
 impl TraceDispatcher for AsyncTraceDispatcher {
@@ -548,9 +552,11 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         };
 
         // Try to send without blocking
+        self.state.queued_count.fetch_add(1, Ordering::AcqRel);
         match self.tx.try_send(TraceWorkerCommand::Trace(trace_ctx.clone())) {
             Ok(_) => true,
             Err(mpsc::error::TrySendError::Full(_)) => {
+                decrement_queued_trace_count(&self.state);
                 // Queue full, discard and increment counter
                 let count = self.state.discard_count.fetch_add(1, Ordering::Relaxed);
                 warn!(
@@ -560,6 +566,7 @@ impl TraceDispatcher for AsyncTraceDispatcher {
                 false
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
+                decrement_queued_trace_count(&self.state);
                 error!("Trace dispatcher channel closed");
                 false
             }
@@ -623,8 +630,7 @@ impl TraceDispatcher for AsyncTraceDispatcher {
             error!("Flush failed during shutdown: {:?}", e);
         }
 
-        // Set stopped flag
-        self.state.is_stopped.store(true, Ordering::SeqCst);
+        self.request_worker_shutdown();
 
         if let Some(handle) = self.worker_handle.lock().take() {
             let stopped = handle.shutdown(TRACE_WORKER_SHUTDOWN_TIMEOUT);
@@ -690,6 +696,16 @@ where
         .map_err(|error| RocketMQError::Internal(format!("failed to spawn {thread_name} task: {error}")))
 }
 
+fn decrement_queued_trace_count(state: &DispatcherState) {
+    let _ = state
+        .queued_count
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| count.checked_sub(1));
+}
+
+fn reset_queued_trace_count(state: &DispatcherState) {
+    state.queued_count.store(0, Ordering::Release);
+}
+
 // Main worker loop that processes trace contexts in batches.
 // Receives contexts from the channel and flushes when batch size or time threshold is reached.
 async fn worker_loop(
@@ -706,67 +722,100 @@ async fn worker_loop(
 
         if let Err(e) = start_result {
             error!("Failed to start trace producer: {:?}", e);
+            reset_queued_trace_count(&state);
             return Err(e);
         }
         info!("Trace producer started successfully in worker");
     }
 
-    let mut interval = tokio::time::interval(Duration::from_millis(5));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
     let mut buffer = Vec::with_capacity(config.batch_num);
-    let mut last_flush = Instant::now();
+    let mut next_flush_deadline: Option<Instant> = None;
 
     loop {
-        tokio::select! {
-            // Timer tick every 5ms
-            _ = interval.tick() => {
-                if !buffer.is_empty() {
-                    let should_flush = buffer.len() >= config.batch_num
-                        || last_flush.elapsed() >= config.flush_interval;
+        if state.is_stopped.load(Ordering::SeqCst) {
+            if !buffer.is_empty() {
+                if let Err(error) = flush_buffer(&mut buffer, &state, &producer, &config).await {
+                    error!("flush_buffer failed before worker stop: {:?}", error);
+                }
+            }
+            reset_queued_trace_count(&state);
+            info!("Worker loop exiting (stopped flag set)");
+            break;
+        }
 
-                    if should_flush {
+        if buffer.is_empty() {
+            match rx.recv().await {
+                Some(TraceWorkerCommand::Trace(ctx)) => {
+                    decrement_queued_trace_count(&state);
+                    next_flush_deadline = Some(Instant::now() + config.flush_interval);
+                    buffer.push(ctx);
+
+                    if buffer.len() >= config.batch_num {
                         if let Err(error) = flush_buffer(&mut buffer, &state, &producer, &config).await {
                             error!("flush_buffer failed: {:?}", error);
                         }
-                        last_flush = Instant::now();
+                        next_flush_deadline = None;
                     }
                 }
-
-                // Check if we should stop
-                if state.is_stopped.load(Ordering::SeqCst) && buffer.is_empty() {
-                    info!("Worker loop exiting (stopped flag set)");
+                Some(TraceWorkerCommand::Flush(responder)) => {
+                    let result = flush_buffer(&mut buffer, &state, &producer, &config).await;
+                    next_flush_deadline = None;
+                    responder.send(result);
+                }
+                Some(TraceWorkerCommand::Shutdown) => {
+                    state.is_stopped.store(true, Ordering::SeqCst);
+                }
+                None => {
+                    info!("Worker loop exiting (channel closed)");
+                    reset_queued_trace_count(&state);
                     break;
                 }
             }
+            continue;
+        }
 
-            // Receive trace context or detect channel close
+        let flush_delay = next_flush_deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or(config.flush_interval);
+
+        tokio::select! {
+            _ = tokio::time::sleep(flush_delay) => {
+                if !buffer.is_empty() {
+                    if let Err(error) = flush_buffer(&mut buffer, &state, &producer, &config).await {
+                        error!("flush_buffer failed: {:?}", error);
+                    }
+                    next_flush_deadline = None;
+                }
+            }
             result = rx.recv() => {
                 match result {
                     Some(TraceWorkerCommand::Trace(ctx)) => {
+                        decrement_queued_trace_count(&state);
                         buffer.push(ctx);
 
-                        // Flush immediately if batch is full
                         if buffer.len() >= config.batch_num {
                             if let Err(error) = flush_buffer(&mut buffer, &state, &producer, &config).await {
                                 error!("flush_buffer failed: {:?}", error);
                             }
-                            last_flush = Instant::now();
+                            next_flush_deadline = None;
                         }
                     }
                     Some(TraceWorkerCommand::Flush(responder)) => {
                         let result = flush_buffer(&mut buffer, &state, &producer, &config).await;
-                        last_flush = Instant::now();
+                        next_flush_deadline = None;
                         responder.send(result);
                     }
+                    Some(TraceWorkerCommand::Shutdown) => {
+                        state.is_stopped.store(true, Ordering::SeqCst);
+                    }
                     None => {
-                        // Channel closed
                         info!("Worker loop exiting (channel closed)");
                         if !buffer.is_empty() {
                             if let Err(error) = flush_buffer(&mut buffer, &state, &producer, &config).await {
                                 error!("flush_buffer failed before worker exit: {:?}", error);
                             }
                         }
+                        reset_queued_trace_count(&state);
                         break;
                     }
                 }
@@ -968,6 +1017,18 @@ async fn send_trace_message(
 }
 
 #[doc(hidden)]
+pub fn run_trace_queue_depth_accounting_probe(queued_count: usize) -> usize {
+    let dispatcher = AsyncTraceDispatcher::new("TraceProbeGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+    let context = TraceContext::default();
+
+    for _ in 0..queued_count {
+        assert!(dispatcher.append(&context));
+    }
+
+    dispatcher.queue_size()
+}
+
+#[doc(hidden)]
 pub async fn run_trace_worker_lifecycle_probe() -> TraceWorkerLifecycleProbe {
     let started = Arc::new(AtomicBool::new(false));
     let stopped = Arc::new(AtomicBool::new(false));
@@ -1106,6 +1167,37 @@ mod tests {
         assert!(!dispatcher.is_started());
         assert!(!dispatcher.is_stopped());
         assert_eq!(dispatcher.get_discard_count(), 0);
+        assert_eq!(dispatcher.queue_size(), 0);
+    }
+
+    #[test]
+    fn queue_size_tracks_accepted_trace_contexts() {
+        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+
+        let ctx = TraceContext::default();
+
+        assert!(dispatcher.append(&ctx));
+        assert_eq!(dispatcher.queue_size(), 1);
+    }
+
+    #[test]
+    fn queue_size_ignores_rejected_context_types() {
+        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+
+        assert!(!dispatcher.append(&"not a trace context"));
+        assert_eq!(dispatcher.queue_size(), 0);
+    }
+
+    #[test]
+    fn queued_trace_count_decrement_saturates_at_zero() {
+        let state = DispatcherState::new();
+        state.queued_count.store(1, Ordering::Release);
+
+        decrement_queued_trace_count(&state);
+        assert_eq!(state.queued_count.load(Ordering::Acquire), 0);
+
+        decrement_queued_trace_count(&state);
+        assert_eq!(state.queued_count.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -1129,6 +1221,7 @@ mod tests {
         // Should succeed even before start (queue is available)
         let result = dispatcher.append(&ctx);
         assert!(result);
+        assert_eq!(dispatcher.queue_size(), 1);
     }
 
     #[test]
