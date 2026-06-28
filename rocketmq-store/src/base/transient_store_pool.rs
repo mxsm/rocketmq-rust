@@ -34,6 +34,10 @@ pub struct TransientStorePool {
 
 impl TransientStorePool {
     pub fn new(pool_size: usize, file_size: usize) -> Self {
+        Self::new_with_memory_lock_budget(pool_size, file_size, 0)
+    }
+
+    pub fn new_with_memory_lock_budget(pool_size: usize, file_size: usize, memory_lock_budget_bytes: u64) -> Self {
         let available_buffers = Arc::new(Mutex::new(VecDeque::with_capacity(pool_size)));
         let is_real_commit = Arc::new(Mutex::new(true));
         TransientStorePool {
@@ -41,7 +45,7 @@ impl TransientStorePool {
             file_size,
             available_buffers,
             is_real_commit,
-            memory_lock_manager: Arc::new(MemoryLockManager::warn_only()),
+            memory_lock_manager: Arc::new(MemoryLockManager::warn_only_with_budget(memory_lock_budget_bytes)),
         }
     }
 
@@ -160,5 +164,19 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(pool.lock_attempt_count(), 1);
         let _ = pool.destroy();
+    }
+
+    #[test]
+    fn init_applies_configured_memory_lock_budget() {
+        let pool = TransientStorePool::new_with_memory_lock_budget(2, 4096, 4096);
+
+        let result = pool.init_with_locker(|_, _| Ok(()));
+
+        assert!(result.is_ok());
+        assert_eq!(pool.lock_attempt_count(), 2);
+        assert_eq!(pool.locked_buffer_count(), 1);
+        assert_eq!(pool.lock_skipped_buffer_count(), 1);
+        assert_eq!(pool.locked_bytes(), 4096);
+        assert_eq!(pool.lock_skipped_bytes(), 4096);
     }
 }

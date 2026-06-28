@@ -1366,6 +1366,17 @@ impl MessageStoreConfig {
         self.linux_storage_profile.settings()
     }
 
+    pub fn effective_linux_memory_lock_budget_bytes(&self, memory_lock_limit_bytes: Option<u64>) -> u64 {
+        if self.linux_memory_lock_budget_bytes > 0 {
+            return self.linux_memory_lock_budget_bytes as u64;
+        }
+
+        match memory_lock_limit_bytes {
+            Some(limit) if limit > 0 && limit != u64::MAX => limit.saturating_sub(limit / 5),
+            _ => 0,
+        }
+    }
+
     pub fn get_store_path_commit_log(&self) -> String {
         if self.store_path_commit_log.is_none() {
             return PathBuf::from(self.store_path_root_dir.to_string())
@@ -2192,6 +2203,32 @@ mod tests {
         assert_eq!(settings.transfer_engine, LinuxTransferEngine::Sendfile);
         assert!(settings.ha_sendfile_enable);
         Ok(())
+    }
+
+    #[test]
+    fn explicit_linux_memory_lock_budget_wins_over_platform_limit() {
+        let config = MessageStoreConfig {
+            linux_memory_lock_budget_bytes: 4096,
+            ..Default::default()
+        };
+
+        assert_eq!(config.effective_linux_memory_lock_budget_bytes(Some(8192)), 4096);
+    }
+
+    #[test]
+    fn zero_linux_memory_lock_budget_derives_conservative_finite_platform_limit() {
+        let config = MessageStoreConfig::default();
+
+        assert_eq!(config.effective_linux_memory_lock_budget_bytes(Some(10_000)), 8_000);
+    }
+
+    #[test]
+    fn zero_linux_memory_lock_budget_keeps_unbounded_when_limit_is_unknown_zero_or_unlimited() {
+        let config = MessageStoreConfig::default();
+
+        assert_eq!(config.effective_linux_memory_lock_budget_bytes(None), 0);
+        assert_eq!(config.effective_linux_memory_lock_budget_bytes(Some(0)), 0);
+        assert_eq!(config.effective_linux_memory_lock_budget_bytes(Some(u64::MAX)), 0);
     }
 
     #[cfg(not(feature = "tieredstore"))]
