@@ -21,6 +21,12 @@ pub use crate::semantic::metrics::STORE_APPEND_LATENCY;
 pub use crate::semantic::metrics::STORE_DISK_USAGE;
 pub use crate::semantic::metrics::STORE_DISPATCH_LATENCY;
 pub use crate::semantic::metrics::STORE_FLUSH_LATENCY;
+pub use crate::semantic::metrics::STORE_LINUX_SENDFILE_BYTES_TOTAL;
+pub use crate::semantic::metrics::STORE_TRANSFER_BATCH_TOTAL;
+pub use crate::semantic::metrics::STORE_TRANSFER_BYTES_TOTAL;
+pub use crate::semantic::metrics::STORE_TRANSFER_ENGINE_TOTAL;
+pub use crate::semantic::metrics::STORE_TRANSFER_FALLBACK_TOTAL;
+pub use crate::semantic::metrics::STORE_TRANSFER_PARTIAL_WRITE_TOTAL;
 
 #[cfg(feature = "otel-metrics")]
 use std::sync::OnceLock;
@@ -118,6 +124,66 @@ pub fn record_delay_message_latency_from_timestamps(deliver_time_ms: i64, born_t
     }
 }
 
+pub fn record_transfer_batch(count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_transfer_batch_total(count, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = count;
+}
+
+pub fn record_transfer_bytes(bytes: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_transfer_bytes_total(bytes, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = bytes;
+}
+
+pub fn record_transfer_engine(engine: &str, count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_transfer_engine_total(count, &transfer_engine_attributes(engine));
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = (engine, count);
+}
+
+pub fn record_transfer_fallback(from: &str, to: &str, reason: &str, count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_transfer_fallback_total(count, &transfer_fallback_attributes(from, to, reason));
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = (from, to, reason, count);
+}
+
+pub fn record_transfer_partial_write(count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_transfer_partial_write_total(count, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = count;
+}
+
+pub fn record_linux_sendfile_bytes(bytes: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_linux_sendfile_bytes_total(bytes, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = bytes;
+}
+
 #[cfg(not(feature = "otel-metrics"))]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StoreMetrics;
@@ -142,6 +208,24 @@ impl StoreMetrics {
 
     #[inline]
     pub fn record_delay_message_latency(&self, _latency_seconds: u64) {}
+
+    #[inline]
+    pub fn record_transfer_batch_total(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_transfer_bytes_total(&self, _bytes: u64) {}
+
+    #[inline]
+    pub fn record_transfer_engine_total(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_transfer_fallback_total(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_transfer_partial_write_total(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_linux_sendfile_bytes_total(&self, _bytes: u64) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -152,6 +236,12 @@ pub struct StoreMetrics {
     dispatch_latency: opentelemetry::metrics::Histogram<u64>,
     disk_usage: opentelemetry::metrics::Gauge<u64>,
     delay_message_latency: opentelemetry::metrics::Histogram<u64>,
+    transfer_batch_total: opentelemetry::metrics::Counter<u64>,
+    transfer_bytes_total: opentelemetry::metrics::Counter<u64>,
+    transfer_engine_total: opentelemetry::metrics::Counter<u64>,
+    transfer_fallback_total: opentelemetry::metrics::Counter<u64>,
+    transfer_partial_write_total: opentelemetry::metrics::Counter<u64>,
+    linux_sendfile_bytes_total: opentelemetry::metrics::Counter<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -187,12 +277,54 @@ impl StoreMetrics {
             .with_unit("seconds")
             .build();
 
+        let transfer_batch_total = meter
+            .u64_counter(STORE_TRANSFER_BATCH_TOTAL)
+            .with_description("Total number of HA transfer batches")
+            .with_unit("{batch}")
+            .build();
+
+        let transfer_bytes_total = meter
+            .u64_counter(STORE_TRANSFER_BYTES_TOTAL)
+            .with_description("Total HA transfer bytes")
+            .with_unit("By")
+            .build();
+
+        let transfer_engine_total = meter
+            .u64_counter(STORE_TRANSFER_ENGINE_TOTAL)
+            .with_description("Total HA transfer engine selections")
+            .with_unit("{transfer}")
+            .build();
+
+        let transfer_fallback_total = meter
+            .u64_counter(STORE_TRANSFER_FALLBACK_TOTAL)
+            .with_description("Total HA transfer engine fallbacks")
+            .with_unit("{fallback}")
+            .build();
+
+        let transfer_partial_write_total = meter
+            .u64_counter(STORE_TRANSFER_PARTIAL_WRITE_TOTAL)
+            .with_description("Total HA transfer partial writes")
+            .with_unit("{write}")
+            .build();
+
+        let linux_sendfile_bytes_total = meter
+            .u64_counter(STORE_LINUX_SENDFILE_BYTES_TOTAL)
+            .with_description("Total Linux sendfile bytes used by HA transfer")
+            .with_unit("By")
+            .build();
+
         Self {
             append_latency,
             flush_latency,
             dispatch_latency,
             disk_usage,
             delay_message_latency,
+            transfer_batch_total,
+            transfer_bytes_total,
+            transfer_engine_total,
+            transfer_fallback_total,
+            transfer_partial_write_total,
+            linux_sendfile_bytes_total,
         }
     }
 
@@ -277,6 +409,36 @@ impl StoreMetrics {
     pub fn record_delay_message_latency(&self, latency_seconds: u64, attributes: &[opentelemetry::KeyValue]) {
         self.delay_message_latency.record(latency_seconds, attributes);
     }
+
+    #[inline]
+    pub fn record_transfer_batch_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.transfer_batch_total.add(count, attributes);
+    }
+
+    #[inline]
+    pub fn record_transfer_bytes_total(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.transfer_bytes_total.add(bytes, attributes);
+    }
+
+    #[inline]
+    pub fn record_transfer_engine_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.transfer_engine_total.add(count, attributes);
+    }
+
+    #[inline]
+    pub fn record_transfer_fallback_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.transfer_fallback_total.add(count, attributes);
+    }
+
+    #[inline]
+    pub fn record_transfer_partial_write_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.transfer_partial_write_total.add(count, attributes);
+    }
+
+    #[inline]
+    pub fn record_linux_sendfile_bytes_total(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.linux_sendfile_bytes_total.add(bytes, attributes);
+    }
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -295,6 +457,23 @@ fn delay_message_latency_attributes(topic: &str) -> Vec<opentelemetry::KeyValue>
         topic.to_owned(),
     ));
     attrs
+}
+
+#[cfg(feature = "otel-metrics")]
+fn transfer_engine_attributes(engine: &str) -> [opentelemetry::KeyValue; 1] {
+    [opentelemetry::KeyValue::new(
+        crate::semantic::labels::ENGINE,
+        engine.to_owned(),
+    )]
+}
+
+#[cfg(feature = "otel-metrics")]
+fn transfer_fallback_attributes(from: &str, to: &str, reason: &str) -> [opentelemetry::KeyValue; 3] {
+    [
+        opentelemetry::KeyValue::new(crate::semantic::labels::FROM, from.to_owned()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::TO, to.to_owned()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason.to_owned()),
+    ]
 }
 
 #[cfg(all(test, feature = "otel-metrics"))]
@@ -316,6 +495,12 @@ mod tests {
         metrics.record_dispatch_latency(9, &attrs);
         metrics.record_disk_usage(1024, &attrs);
         metrics.record_delay_message_latency(30, &attrs);
+        metrics.record_transfer_batch_total(1, &[]);
+        metrics.record_transfer_bytes_total(1024, &[]);
+        metrics.record_transfer_engine_total(1, &transfer_engine_attributes("sendfile"));
+        metrics.record_transfer_fallback_total(1, &transfer_fallback_attributes("io_uring", "vectored", "unsupported"));
+        metrics.record_transfer_partial_write_total(2, &[]);
+        metrics.record_linux_sendfile_bytes_total(512, &[]);
         record_delay_message_latency(30);
     }
 
@@ -356,5 +541,15 @@ mod helper_tests {
     #[test]
     fn delay_message_latency_from_timestamps_records_positive_latency() {
         record_delay_message_latency_from_timestamps(2_000, 1_000, Some("topic-a"));
+    }
+
+    #[test]
+    fn ha_transfer_recorders_are_safe_without_explicit_meter() {
+        record_transfer_batch(1);
+        record_transfer_bytes(1024);
+        record_transfer_engine("sendfile", 1);
+        record_transfer_fallback("io_uring", "vectored", "unsupported", 1);
+        record_transfer_partial_write(2);
+        record_linux_sendfile_bytes(512);
     }
 }
