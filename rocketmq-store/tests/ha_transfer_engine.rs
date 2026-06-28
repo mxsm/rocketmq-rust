@@ -23,7 +23,9 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use rocketmq_store::ha::transfer_engine::bytes::BytesTransferEngine;
 use rocketmq_store::ha::transfer_engine::select_transfer_engine;
+use rocketmq_store::ha::transfer_engine::select_transfer_engine_with_availability;
 use rocketmq_store::ha::transfer_engine::vectored::VectoredTransferEngine;
+use rocketmq_store::ha::transfer_engine::TransferEngineAvailability;
 use rocketmq_store::ha::transfer_engine::TransferEngineKind;
 use rocketmq_store::ha::transfer_engine::TransferEnginePreference;
 use rocketmq_store::transfer::batch::TransferBatch;
@@ -103,6 +105,51 @@ fn transfer_engine_selection_falls_back_to_bytes_when_vectored_is_unavailable() 
 
     assert_eq!(selection.engine, TransferEngineKind::Bytes);
     assert!(selection.fallback_reason.is_some());
+}
+
+#[test]
+fn io_uring_transfer_selection_uses_io_uring_when_available() {
+    let selection = select_transfer_engine_with_availability(
+        TransferEnginePreference::IoUring,
+        TransferEngineAvailability {
+            vectored_write_available: true,
+            io_uring_available: true,
+        },
+    );
+
+    assert_eq!(selection.engine, TransferEngineKind::IoUring);
+    assert_eq!(selection.fallback_reason, None);
+}
+
+#[test]
+fn io_uring_transfer_selection_falls_back_to_vectored_when_unavailable() {
+    let selection = select_transfer_engine_with_availability(
+        TransferEnginePreference::IoUring,
+        TransferEngineAvailability {
+            vectored_write_available: true,
+            io_uring_available: false,
+        },
+    );
+
+    assert_eq!(selection.engine, TransferEngineKind::Vectored);
+    assert_eq!(selection.fallback_reason, Some("io_uring unavailable"));
+}
+
+#[test]
+fn io_uring_transfer_selection_falls_back_to_bytes_when_vectored_is_unavailable() {
+    let selection = select_transfer_engine_with_availability(
+        TransferEnginePreference::IoUring,
+        TransferEngineAvailability {
+            vectored_write_available: false,
+            io_uring_available: false,
+        },
+    );
+
+    assert_eq!(selection.engine, TransferEngineKind::Bytes);
+    assert_eq!(
+        selection.fallback_reason,
+        Some("io_uring and vectored write unavailable")
+    );
 }
 
 fn transfer_header(offset: i64, body_size: usize) -> Bytes {

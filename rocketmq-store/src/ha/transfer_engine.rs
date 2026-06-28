@@ -30,12 +30,20 @@ pub enum TransferEngineKind {
     Bytes,
     Vectored,
     Sendfile,
+    IoUring,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferEnginePreference {
     Bytes,
     Vectored,
+    IoUring,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransferEngineAvailability {
+    pub vectored_write_available: bool,
+    pub io_uring_available: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,19 +69,51 @@ pub fn select_transfer_engine(
     preference: TransferEnginePreference,
     vectored_write_available: bool,
 ) -> TransferEngineSelection {
-    match (preference, vectored_write_available) {
-        (TransferEnginePreference::Bytes, _) => TransferEngineSelection {
+    select_transfer_engine_with_availability(
+        preference,
+        TransferEngineAvailability {
+            vectored_write_available,
+            io_uring_available: false,
+        },
+    )
+}
+
+pub fn select_transfer_engine_with_availability(
+    preference: TransferEnginePreference,
+    availability: TransferEngineAvailability,
+) -> TransferEngineSelection {
+    match preference {
+        TransferEnginePreference::Bytes => TransferEngineSelection {
             engine: TransferEngineKind::Bytes,
             fallback_reason: None,
         },
-        (TransferEnginePreference::Vectored, true) => TransferEngineSelection {
+        TransferEnginePreference::Vectored => select_vectored_transfer_engine(availability.vectored_write_available),
+        TransferEnginePreference::IoUring if availability.io_uring_available => TransferEngineSelection {
+            engine: TransferEngineKind::IoUring,
+            fallback_reason: None,
+        },
+        TransferEnginePreference::IoUring if availability.vectored_write_available => TransferEngineSelection {
+            engine: TransferEngineKind::Vectored,
+            fallback_reason: Some("io_uring unavailable"),
+        },
+        TransferEnginePreference::IoUring => TransferEngineSelection {
+            engine: TransferEngineKind::Bytes,
+            fallback_reason: Some("io_uring and vectored write unavailable"),
+        },
+    }
+}
+
+fn select_vectored_transfer_engine(vectored_write_available: bool) -> TransferEngineSelection {
+    if vectored_write_available {
+        TransferEngineSelection {
             engine: TransferEngineKind::Vectored,
             fallback_reason: None,
-        },
-        (TransferEnginePreference::Vectored, false) => TransferEngineSelection {
+        }
+    } else {
+        TransferEngineSelection {
             engine: TransferEngineKind::Bytes,
             fallback_reason: Some("vectored write unavailable"),
-        },
+        }
     }
 }
 
@@ -86,7 +126,7 @@ impl<W> HaTransferEngine<W> {
     pub fn from_selection(writer: W, engine: TransferEngineKind) -> Self {
         match engine {
             TransferEngineKind::Bytes => Self::Bytes(BytesTransferEngine::new(writer)),
-            TransferEngineKind::Vectored | TransferEngineKind::Sendfile => {
+            TransferEngineKind::Vectored | TransferEngineKind::Sendfile | TransferEngineKind::IoUring => {
                 Self::Vectored(VectoredTransferEngine::new(writer))
             }
         }
