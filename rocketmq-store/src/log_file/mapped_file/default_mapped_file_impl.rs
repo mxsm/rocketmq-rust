@@ -25,6 +25,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -863,6 +864,7 @@ impl MappedFile for DefaultMappedFile {
             return;
         }
 
+        let warmup_started = Instant::now();
         let flush_every_pages = pages.max(1);
         let mut last_flush_offset = 0usize;
         {
@@ -909,8 +911,11 @@ impl MappedFile for DefaultMappedFile {
                 self.file_name
             );
         }
+        let warmup_duration = warmup_started.elapsed();
+        let warmup_millis = u64::try_from(warmup_duration.as_millis()).unwrap_or(u64::MAX);
+        rocketmq_observability::metrics::store::record_linux_page_cache_warmup_millis(warmup_millis);
         if let Some(metrics) = &self.metrics {
-            metrics.record_warm(file_size);
+            metrics.record_warm_with_latency(file_size, warmup_duration);
         }
     }
 

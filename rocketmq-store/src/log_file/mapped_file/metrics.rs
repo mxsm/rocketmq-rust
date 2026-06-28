@@ -80,6 +80,12 @@ pub struct MappedFileMetrics {
     /// Total bytes touched by warm-up operations.
     warm_bytes: AtomicU64,
 
+    /// Cumulative mapped file warm-up time in milliseconds.
+    total_warm_time_ms: AtomicU64,
+
+    /// Duration of the most recent mapped file warm-up in milliseconds.
+    last_warm_time_ms: AtomicU64,
+
     /// Number of mapped file swap decisions.
     swap_operations: AtomicU64,
 
@@ -117,6 +123,8 @@ impl MappedFileMetrics {
             cache_misses: AtomicU64::new(0),
             warm_operations: AtomicU64::new(0),
             warm_bytes: AtomicU64::new(0),
+            total_warm_time_ms: AtomicU64::new(0),
+            last_warm_time_ms: AtomicU64::new(0),
             swap_operations: AtomicU64::new(0),
             clean_swap_operations: AtomicU64::new(0),
             start_time: Instant::now(),
@@ -185,6 +193,19 @@ impl MappedFileMetrics {
         self.warm_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
+    /// Records a mapped file warm-up operation with elapsed duration.
+    #[inline]
+    pub fn record_warm_with_latency(&self, bytes: usize, duration: Duration) {
+        self.record_warm(bytes);
+        let millis = duration_to_millis(duration);
+        let _ = self
+            .total_warm_time_ms
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_add(millis))
+            });
+        self.last_warm_time_ms.store(millis, Ordering::Relaxed);
+    }
+
     /// Records a mapped file swap decision.
     #[inline]
     pub fn record_swap(&self) {
@@ -249,6 +270,18 @@ impl MappedFileMetrics {
     #[inline]
     pub fn warm_bytes(&self) -> u64 {
         self.warm_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Returns total time spent in warm-up operations, in milliseconds.
+    #[inline]
+    pub fn total_warm_millis(&self) -> u64 {
+        self.total_warm_time_ms.load(Ordering::Relaxed)
+    }
+
+    /// Returns the most recent warm-up duration, in milliseconds.
+    #[inline]
+    pub fn last_warm_millis(&self) -> u64 {
+        self.last_warm_time_ms.load(Ordering::Relaxed)
     }
 
     /// Returns total swap decisions.
@@ -376,6 +409,8 @@ impl MappedFileMetrics {
         self.cache_misses.store(0, Ordering::Relaxed);
         self.warm_operations.store(0, Ordering::Relaxed);
         self.warm_bytes.store(0, Ordering::Relaxed);
+        self.total_warm_time_ms.store(0, Ordering::Relaxed);
+        self.last_warm_time_ms.store(0, Ordering::Relaxed);
         self.swap_operations.store(0, Ordering::Relaxed);
         self.clean_swap_operations.store(0, Ordering::Relaxed);
         self.start_time = Instant::now();
@@ -389,8 +424,8 @@ impl MappedFileMetrics {
     pub fn summary(&self) -> String {
         format!(
             "MappedFile Metrics:\nWrites: {} ({:.2} writes/sec, {:.2} MB/s)\nReads: {} ({:.1}% zero-copy)\nFlushes: \
-             {} (avg: {:?})\nCache Hit Rate: {:.1}%\nAvg Write Size: {:.1} bytes\nWarm: {} ops, {} bytes\nSwap: {} \
-             ops, clean: {} ops",
+             {} (avg: {:?})\nCache Hit Rate: {:.1}%\nAvg Write Size: {:.1} bytes\nWarm: {} ops, {} bytes, total {} \
+             ms, last {} ms\nSwap: {} ops, clean: {} ops",
             self.total_writes(),
             self.writes_per_sec(),
             self.write_throughput_mb_per_sec(),
@@ -402,10 +437,16 @@ impl MappedFileMetrics {
             self.avg_write_size(),
             self.warm_operations(),
             self.warm_bytes(),
+            self.total_warm_millis(),
+            self.last_warm_millis(),
             self.swap_operations(),
             self.clean_swap_operations()
         )
     }
+}
+
+fn duration_to_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -462,15 +503,19 @@ mod tests {
     fn test_warm_and_swap_metrics() {
         let metrics = MappedFileMetrics::new();
 
-        metrics.record_warm(4096);
+        metrics.record_warm_with_latency(4096, Duration::from_millis(7));
         metrics.record_swap();
         metrics.record_clean_swap();
 
         assert_eq!(metrics.warm_operations(), 1);
         assert_eq!(metrics.warm_bytes(), 4096);
+        assert_eq!(metrics.total_warm_millis(), 7);
+        assert_eq!(metrics.last_warm_millis(), 7);
         assert_eq!(metrics.swap_operations(), 1);
         assert_eq!(metrics.clean_swap_operations(), 1);
-        assert!(metrics.summary().contains("Warm: 1 ops, 4096 bytes"));
+        assert!(metrics
+            .summary()
+            .contains("Warm: 1 ops, 4096 bytes, total 7 ms, last 7 ms"));
     }
 
     #[test]
