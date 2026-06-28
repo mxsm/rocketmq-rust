@@ -47,6 +47,12 @@ pub mod utils;
 pub mod bench_support {
     use std::io;
     use std::io::IoSlice;
+    #[cfg(target_os = "linux")]
+    use std::io::Write;
+    #[cfg(target_os = "linux")]
+    use std::os::fd::AsRawFd;
+    #[cfg(target_os = "linux")]
+    use std::os::fd::RawFd;
     use std::pin::Pin;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -74,7 +80,13 @@ pub mod bench_support {
     use crate::base::store_stats_service::StoreStatsService;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::ha::transfer_engine::bytes::BytesTransferEngine;
+    #[cfg(target_os = "linux")]
+    use crate::ha::transfer_engine::sendfile::SendfileTransferEngine;
+    #[cfg(target_os = "linux")]
+    use crate::ha::transfer_engine::sendfile::SendfileWriteTarget;
     use crate::ha::transfer_engine::vectored::VectoredTransferEngine;
+    #[cfg(target_os = "linux")]
+    use crate::ha::transfer_engine::TransferEngineKind;
     use crate::ha::transfer_engine::TransferStats;
     use crate::kv::compaction_service::CompactionService;
     use crate::kv::compaction_store::CompactionStore;
@@ -170,6 +182,17 @@ pub mod bench_support {
     }
 
     #[derive(Debug, Clone, Serialize)]
+    pub struct HaSendfileBenchmarkReport {
+        pub batch_count: usize,
+        pub vectored_baseline: HaTransferEngineBenchmarkReport,
+        pub sendfile_optimized: HaTransferEngineBenchmarkReport,
+        pub write_syscall_reduction_percent: usize,
+        pub user_cpu_reduction_percent: usize,
+        pub frames_match: bool,
+        pub ack_offsets_match: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
     pub struct HaTransferEngineBenchmarkReport {
         pub engine: &'static str,
         pub batch_count: usize,
@@ -177,9 +200,11 @@ pub mod bench_support {
         pub body_bytes: usize,
         pub write_syscall_count: usize,
         pub sendfile_syscall_count: usize,
+        pub fallback_bytes: usize,
         pub partial_write_count: usize,
         pub ack_offset: i64,
         pub ack_latency_nanos: u128,
+        pub user_cpu_nanos: u128,
     }
 
     struct HaTransferEngineRun {
@@ -224,6 +249,56 @@ pub mod bench_support {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    struct HaBenchmarkFileWriter {
+        file: std::fs::File,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl HaBenchmarkFileWriter {
+        fn new(file: std::fs::File) -> Self {
+            Self { file }
+        }
+
+        fn into_std(self) -> std::fs::File {
+            self.file
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl SendfileWriteTarget for HaBenchmarkFileWriter {
+        fn sendfile_out_fd(&self) -> RawFd {
+            self.file.as_raw_fd()
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl AsyncWrite for HaBenchmarkFileWriter {
+        fn poll_write(mut self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+            Poll::Ready(self.file.write(buf))
+        }
+
+        fn poll_write_vectored(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            bufs: &[IoSlice<'_>],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(self.file.write_vectored(bufs))
+        }
+
+        fn is_write_vectored(&self) -> bool {
+            true
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(self.file.flush())
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(self.file.flush())
+        }
+    }
+
     pub async fn run_ha_bytes_vectored_benchmark_report(body_size: usize) -> HaTransferBenchmarkReport {
         let body = Bytes::from(vec![7; body_size]);
         let batch = ha_transfer_benchmark_batch(body);
@@ -248,18 +323,31 @@ pub mod bench_support {
     }
 
     async fn run_ha_bytes_benchmark(batch: &TransferBatch) -> HaTransferEngineRun {
+        let cpu_started = process_user_cpu_nanos();
         let started = Instant::now();
         let mut engine = BytesTransferEngine::new(HaBenchmarkWriter::default());
         let stats = engine.send_batch(batch).await.expect("bytes HA benchmark transfer");
+        let elapsed = started.elapsed();
+        let user_cpu_nanos = elapsed_user_cpu_nanos(cpu_started, elapsed);
         let writer = engine.into_inner();
         let ack_offset = decode_ha_ack_offset(&writer.written);
-        ha_transfer_engine_run("bytes", stats, writer.written, ack_offset, started.elapsed().as_nanos())
+        ha_transfer_engine_run(
+            "bytes",
+            stats,
+            writer.written,
+            ack_offset,
+            elapsed.as_nanos(),
+            user_cpu_nanos,
+        )
     }
 
     async fn run_ha_vectored_benchmark(batch: &TransferBatch) -> HaTransferEngineRun {
+        let cpu_started = process_user_cpu_nanos();
         let started = Instant::now();
         let mut engine = VectoredTransferEngine::new(HaBenchmarkWriter::default());
         let stats = engine.send_batch(batch).await.expect("vectored HA benchmark transfer");
+        let elapsed = started.elapsed();
+        let user_cpu_nanos = elapsed_user_cpu_nanos(cpu_started, elapsed);
         let writer = engine.into_inner();
         let ack_offset = decode_ha_ack_offset(&writer.written);
         ha_transfer_engine_run(
@@ -267,8 +355,105 @@ pub mod bench_support {
             stats,
             writer.written,
             ack_offset,
-            started.elapsed().as_nanos(),
+            elapsed.as_nanos(),
+            user_cpu_nanos,
         )
+    }
+
+    #[cfg(target_os = "linux")]
+    pub async fn run_ha_vectored_sendfile_benchmark_report(body_size: usize) -> io::Result<HaSendfileBenchmarkReport> {
+        const BATCH_COUNT: usize = 32;
+
+        let body = Bytes::from(vec![7; body_size]);
+        let (_input_guard, input_file) = ha_benchmark_input_file(&body)?;
+        let vectored_baseline = run_ha_vectored_file_benchmark(body.clone(), BATCH_COUNT).await?;
+        let sendfile_optimized = run_ha_sendfile_file_benchmark(input_file, body_size, BATCH_COUNT).await?;
+        let baseline_syscalls = vectored_baseline.report.write_syscall_count;
+        let optimized_syscalls =
+            sendfile_optimized.report.write_syscall_count + sendfile_optimized.report.sendfile_syscall_count;
+        let write_syscall_reduction_percent = percent_reduction(baseline_syscalls as u128, optimized_syscalls as u128);
+        let user_cpu_reduction_percent = percent_reduction(
+            vectored_baseline.report.user_cpu_nanos,
+            sendfile_optimized.report.user_cpu_nanos,
+        );
+
+        Ok(HaSendfileBenchmarkReport {
+            batch_count: BATCH_COUNT,
+            frames_match: vectored_baseline.frame == sendfile_optimized.frame,
+            ack_offsets_match: vectored_baseline.report.ack_offset == sendfile_optimized.report.ack_offset,
+            vectored_baseline: vectored_baseline.report,
+            sendfile_optimized: sendfile_optimized.report,
+            write_syscall_reduction_percent,
+            user_cpu_reduction_percent,
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub async fn run_ha_vectored_sendfile_benchmark_report(_body_size: usize) -> io::Result<HaSendfileBenchmarkReport> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "sendfile benchmark report is only available on Linux",
+        ))
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn run_ha_vectored_file_benchmark(body: Bytes, batch_count: usize) -> io::Result<HaTransferEngineRun> {
+        let batch = ha_transfer_benchmark_batch(body);
+        let mut engine = VectoredTransferEngine::new(HaBenchmarkWriter::default());
+        let cpu_started = process_user_cpu_nanos();
+        let started = Instant::now();
+        let mut stats = empty_repeated_ha_stats(TransferEngineKind::Vectored, batch_count);
+        for _ in 0..batch_count {
+            let batch_stats = engine.send_batch(&batch).await.map_err(transfer_error_to_io)?;
+            add_repeated_ha_stats(&mut stats, batch_stats);
+        }
+        let elapsed = started.elapsed();
+        let user_cpu_nanos = elapsed_user_cpu_nanos(cpu_started, elapsed);
+        let writer = engine.into_inner();
+        let ack_offset = decode_repeated_ha_ack_offset(&writer.written, batch_count);
+
+        Ok(ha_transfer_engine_run(
+            "vectored",
+            stats,
+            writer.written,
+            ack_offset,
+            elapsed.as_nanos(),
+            user_cpu_nanos,
+        ))
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn run_ha_sendfile_file_benchmark(
+        input_file: Arc<std::fs::File>,
+        body_size: usize,
+        batch_count: usize,
+    ) -> io::Result<HaTransferEngineRun> {
+        let batch = ha_transfer_file_benchmark_batch(input_file, body_size);
+        let output = tempfile::NamedTempFile::new()?;
+        let writer = HaBenchmarkFileWriter::new(output.reopen()?);
+        let mut engine = SendfileTransferEngine::new(writer);
+        let cpu_started = process_user_cpu_nanos();
+        let started = Instant::now();
+        let mut stats = empty_repeated_ha_stats(TransferEngineKind::Sendfile, batch_count);
+        for _ in 0..batch_count {
+            let batch_stats = engine.send_batch(&batch).await.map_err(transfer_error_to_io)?;
+            add_repeated_ha_stats(&mut stats, batch_stats);
+        }
+        let elapsed = started.elapsed();
+        let user_cpu_nanos = elapsed_user_cpu_nanos(cpu_started, elapsed);
+        let (writer, _) = engine.into_parts();
+        writer.into_std().sync_all()?;
+        let frame = std::fs::read(output.path())?;
+        let ack_offset = decode_repeated_ha_ack_offset(&frame, batch_count);
+
+        Ok(ha_transfer_engine_run(
+            "sendfile",
+            stats,
+            frame,
+            ack_offset,
+            elapsed.as_nanos(),
+            user_cpu_nanos,
+        ))
     }
 
     fn ha_transfer_engine_run(
@@ -277,6 +462,7 @@ pub mod bench_support {
         frame: Vec<u8>,
         ack_offset: i64,
         ack_latency_nanos: u128,
+        user_cpu_nanos: u128,
     ) -> HaTransferEngineRun {
         HaTransferEngineRun {
             report: HaTransferEngineBenchmarkReport {
@@ -286,12 +472,40 @@ pub mod bench_support {
                 body_bytes: stats.body_bytes,
                 write_syscall_count: stats.write_call_count,
                 sendfile_syscall_count: stats.sendfile_call_count,
+                fallback_bytes: stats.fallback_bytes,
                 partial_write_count: stats.partial_write_count,
                 ack_offset,
                 ack_latency_nanos,
+                user_cpu_nanos,
             },
             frame,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn empty_repeated_ha_stats(engine: TransferEngineKind, frame_count: usize) -> TransferStats {
+        TransferStats {
+            engine,
+            bytes_written: 0,
+            body_bytes: 0,
+            frame_count,
+            write_call_count: 0,
+            sendfile_call_count: 0,
+            sendfile_bytes: 0,
+            fallback_bytes: 0,
+            partial_write_count: 0,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn add_repeated_ha_stats(total: &mut TransferStats, next: TransferStats) {
+        total.bytes_written += next.bytes_written;
+        total.body_bytes += next.body_bytes;
+        total.write_call_count += next.write_call_count;
+        total.sendfile_call_count += next.sendfile_call_count;
+        total.sendfile_bytes += next.sendfile_bytes;
+        total.fallback_bytes += next.fallback_bytes;
+        total.partial_write_count += next.partial_write_count;
     }
 
     fn ha_transfer_benchmark_batch(body: Bytes) -> TransferBatch {
@@ -300,6 +514,26 @@ pub mod bench_support {
         TransferBatch {
             frame_header: ha_transfer_benchmark_header(start_offset, body_size),
             segments: vec![SegmentLease::from_bytes(start_offset, 0, body, TransferCacheState::Hot)],
+            total_body_len: body_size,
+            start_offset,
+            next_offset: start_offset + body_size as i64,
+            kind: TransferKind::Data,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn ha_transfer_file_benchmark_batch(file: Arc<std::fs::File>, body_size: usize) -> TransferBatch {
+        let start_offset = 16 * 1024;
+        TransferBatch {
+            frame_header: ha_transfer_benchmark_header(start_offset, body_size),
+            segments: vec![SegmentLease::from_file_range(
+                start_offset,
+                start_offset as u64,
+                0,
+                body_size,
+                file,
+                TransferCacheState::Hot,
+            )],
             total_body_len: body_size,
             start_offset,
             next_offset: start_offset + body_size as i64,
@@ -321,6 +555,96 @@ pub mod bench_support {
         assert!(body_len >= 0, "HA benchmark body size must be non-negative");
         assert_eq!(frame.len() - 12, body_len as usize);
         offset + body_len as i64
+    }
+
+    fn decode_repeated_ha_ack_offset(frame: &[u8], batch_count: usize) -> i64 {
+        let mut cursor = 0;
+        let mut ack_offset = 0;
+
+        for _ in 0..batch_count {
+            assert!(
+                frame.len() >= cursor + 12,
+                "HA benchmark frame must include repeated headers"
+            );
+            let offset = i64::from_be_bytes(
+                frame[cursor..cursor + 8]
+                    .try_into()
+                    .expect("HA benchmark repeated offset header"),
+            );
+            let body_len = i32::from_be_bytes(
+                frame[cursor + 8..cursor + 12]
+                    .try_into()
+                    .expect("HA benchmark repeated body size header"),
+            );
+            assert!(body_len >= 0, "HA benchmark body size must be non-negative");
+            cursor += 12 + body_len as usize;
+            assert!(
+                cursor <= frame.len(),
+                "HA benchmark repeated frame must include body bytes: cursor={cursor}, frame_len={}",
+                frame.len()
+            );
+            ack_offset = offset + body_len as i64;
+        }
+
+        assert_eq!(cursor, frame.len());
+        ack_offset
+    }
+
+    #[cfg(target_os = "linux")]
+    fn ha_benchmark_input_file(body: &[u8]) -> io::Result<(tempfile::NamedTempFile, Arc<std::fs::File>)> {
+        let mut input = tempfile::NamedTempFile::new()?;
+        input.write_all(body)?;
+        input.as_file_mut().sync_all()?;
+        let file = Arc::new(input.reopen()?);
+        Ok((input, file))
+    }
+
+    fn percent_reduction(baseline: u128, optimized: u128) -> usize {
+        baseline
+            .saturating_sub(optimized)
+            .checked_mul(100)
+            .and_then(|reduction| reduction.checked_div(baseline))
+            .and_then(|percent| usize::try_from(percent).ok())
+            .unwrap_or(0)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn transfer_error_to_io(error: crate::transfer::error::TransferError) -> io::Error {
+        match error {
+            crate::transfer::error::TransferError::Io(error) => error,
+            error => io::Error::other(format!("{error:?}")),
+        }
+    }
+
+    #[cfg(unix)]
+    fn process_user_cpu_nanos() -> Option<u128> {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+        let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+        if result != 0 {
+            return None;
+        }
+
+        let usage = unsafe { usage.assume_init() };
+        timeval_to_nanos(usage.ru_utime)
+    }
+
+    #[cfg(not(unix))]
+    fn process_user_cpu_nanos() -> Option<u128> {
+        None
+    }
+
+    #[cfg(unix)]
+    fn timeval_to_nanos(timeval: libc::timeval) -> Option<u128> {
+        let seconds = u128::try_from(timeval.tv_sec).ok()?;
+        let micros = u128::try_from(timeval.tv_usec).ok()?;
+        Some(seconds * 1_000_000_000 + micros * 1_000)
+    }
+
+    fn elapsed_user_cpu_nanos(started: Option<u128>, elapsed: Duration) -> u128 {
+        match (started, process_user_cpu_nanos()) {
+            (Some(started), Some(finished)) if finished >= started => finished - started,
+            _ => elapsed.as_nanos(),
+        }
     }
 
     pub const IO_URING_FLUSH_BENCHMARK_GROUP: &str = "io_uring/flush_semantics";
@@ -955,6 +1279,31 @@ mod bench_support_tests {
         assert_eq!(report.syscall_reduction_percent, 50);
         assert!(report.bytes_baseline.ack_latency_nanos < 1_000_000_000);
         assert!(report.vectored_optimized.ack_latency_nanos < 1_000_000_000);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn ha_sendfile_large_message_benchmark_report_contains_cpu_comparison_data() {
+        let report = super::bench_support::run_ha_vectored_sendfile_benchmark_report(1024 * 1024)
+            .await
+            .expect("sendfile benchmark report");
+
+        assert!(report.frames_match, "{report:?}");
+        assert!(report.ack_offsets_match, "{report:?}");
+        assert_eq!(report.batch_count, 32);
+        assert_eq!(report.vectored_baseline.engine, "vectored");
+        assert_eq!(report.sendfile_optimized.engine, "sendfile");
+        assert_eq!(report.vectored_baseline.body_bytes, 32 * 1024 * 1024);
+        assert_eq!(report.sendfile_optimized.body_bytes, 32 * 1024 * 1024);
+        assert_eq!(report.vectored_baseline.sendfile_syscall_count, 0);
+        assert_eq!(report.sendfile_optimized.sendfile_syscall_count, 32);
+        assert_eq!(report.sendfile_optimized.fallback_bytes, 0);
+        assert!(report.vectored_baseline.user_cpu_nanos > 0, "{report:?}");
+        assert!(
+            report.sendfile_optimized.user_cpu_nanos <= report.vectored_baseline.user_cpu_nanos,
+            "{report:?}"
+        );
+        assert!(report.user_cpu_reduction_percent > 0, "{report:?}");
     }
 
     #[cfg(feature = "rocksdb_store")]
