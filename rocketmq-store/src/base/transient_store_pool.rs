@@ -19,7 +19,7 @@ use parking_lot::Mutex;
 use rocketmq_error::RocketMQResult;
 use tracing::warn;
 
-use crate::utils::ffi::mlock;
+use crate::base::memory_lock_manager::MemoryLockManager;
 use crate::utils::ffi::munlock;
 
 #[derive(Clone)]
@@ -28,6 +28,7 @@ pub struct TransientStorePool {
     file_size: usize,
     available_buffers: Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>,
     is_real_commit: Arc<parking_lot::Mutex<bool>>,
+    memory_lock_manager: Arc<MemoryLockManager>,
 }
 
 impl TransientStorePool {
@@ -39,14 +40,24 @@ impl TransientStorePool {
             file_size,
             available_buffers,
             is_real_commit,
+            memory_lock_manager: Arc::new(MemoryLockManager::warn_only()),
         }
     }
 
     pub fn init(&self) -> RocketMQResult<()> {
+        let memory_lock_manager = self.memory_lock_manager.clone();
+        self.init_with_locker(|addr, len| memory_lock_manager.lock_buffer(addr, len))
+    }
+
+    pub(crate) fn init_with_locker<F>(&self, mut locker: F) -> RocketMQResult<()>
+    where
+        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
         let mut available_buffers = self.available_buffers.lock();
         for _ in 0..self.pool_size {
             let buffer = vec![0u8; self.file_size];
-            mlock(buffer.as_ptr(), self.file_size)?;
+            self.memory_lock_manager
+                .lock_buffer_with(buffer.as_ptr(), self.file_size, &mut locker)?;
             available_buffers.push_back(buffer);
         }
         Ok(())
@@ -79,6 +90,14 @@ impl TransientStorePool {
         available_buffers.len()
     }
 
+    pub fn locked_buffer_count(&self) -> usize {
+        self.memory_lock_manager.locked_buffer_count()
+    }
+
+    pub fn lock_failed_buffer_count(&self) -> usize {
+        self.memory_lock_manager.lock_failed_buffer_count()
+    }
+
     pub fn is_real_commit(&self) -> bool {
         let is_real_commit = self.is_real_commit.lock();
         *is_real_commit
@@ -87,5 +106,28 @@ impl TransientStorePool {
     pub fn set_real_commit(&self, real_commit: bool) {
         let mut is_real_commit = self.is_real_commit.lock();
         *is_real_commit = real_commit;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_error::RocketMQError;
+
+    use super::*;
+
+    #[test]
+    fn init_keeps_buffers_when_memory_lock_fails_warn_only() {
+        let pool = TransientStorePool::new(2, 4096);
+
+        let result = pool.init_with_locker(|_, _| {
+            Err(RocketMQError::StorageLockFailed {
+                path: "test mlock failure".to_string(),
+            })
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(pool.available_buffer_nums(), 2);
+        assert_eq!(pool.locked_buffer_count(), 0);
+        assert_eq!(pool.lock_failed_buffer_count(), 2);
     }
 }

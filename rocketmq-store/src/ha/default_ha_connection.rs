@@ -64,6 +64,7 @@ pub const TRANSFER_HEADER_SIZE: usize = 8 + 4;
 /// Controller transfer header extends the default header with confirm offset.
 /// Format: [physicOffset (8bytes)][bodySize (4bytes)][confirmOffset (8bytes)]
 pub(crate) const CONTROLLER_TRANSFER_HEADER_SIZE: usize = TRANSFER_HEADER_SIZE + 8;
+pub(crate) const DEFAULT_HA_TRANSFER_BATCH_SIZE: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TransferHeader {
@@ -94,6 +95,14 @@ pub(crate) fn encode_transfer_header(
         byte_buffer_header.put_i64(confirm_offset);
     }
     byte_buffer_header.split().freeze()
+}
+
+pub(crate) const fn effective_ha_transfer_batch_size(configured_batch_size: usize) -> usize {
+    if configured_batch_size == 0 {
+        DEFAULT_HA_TRANSFER_BATCH_SIZE
+    } else {
+        configured_batch_size
+    }
 }
 
 pub(crate) fn decode_transfer_header(
@@ -766,7 +775,7 @@ impl WriteSocketService {
             .get_commit_log_data(next_offset)
         {
             let mut size = select_result.size as usize;
-            let max_batch_size = self.message_store_config.ha_transfer_batch_size;
+            let max_batch_size = effective_ha_transfer_batch_size(self.message_store_config.ha_transfer_batch_size);
 
             if size > max_batch_size {
                 size = max_batch_size;
@@ -926,5 +935,18 @@ mod tests {
         assert_eq!(header.master_phy_offset, 128);
         assert_eq!(header.body_size, 64);
         assert_eq!(header.confirm_offset, Some(96));
+    }
+
+    #[test]
+    fn zero_configured_ha_transfer_batch_size_uses_safe_default() {
+        let effective = effective_ha_transfer_batch_size(0);
+
+        assert_eq!(effective, DEFAULT_HA_TRANSFER_BATCH_SIZE);
+        assert!(effective > 0);
+    }
+
+    #[test]
+    fn non_zero_configured_ha_transfer_batch_size_is_preserved() {
+        assert_eq!(effective_ha_transfer_batch_size(64 * 1024), 64 * 1024);
     }
 }

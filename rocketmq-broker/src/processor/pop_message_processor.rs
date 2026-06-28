@@ -62,7 +62,9 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::base::select_result::SelectMappedBufferCacheState;
 use rocketmq_store::base::select_result::SelectMappedBufferResult;
+use rocketmq_store::base::select_result::SelectMappedBufferSourceKind;
 use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
@@ -1182,6 +1184,9 @@ where
                                 bytes: Some(encode),
                                 mapped_file: None,
                                 is_in_cache: true,
+                                source_kind: SelectMappedBufferSourceKind::Bytes,
+                                file_offset: 0,
+                                cache_state: SelectMappedBufferCacheState::Unknown,
                             };
                             get_message_result.add_message_inner(tmp_result);
                         }

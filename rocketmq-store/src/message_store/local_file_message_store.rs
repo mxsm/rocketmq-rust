@@ -112,7 +112,11 @@ use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::message_store::MessageStore;
 use crate::base::query_message_result::QueryMessageResult;
+#[cfg(feature = "tieredstore")]
+use crate::base::select_result::SelectMappedBufferCacheState;
 use crate::base::select_result::SelectMappedBufferResult;
+#[cfg(feature = "tieredstore")]
+use crate::base::select_result::SelectMappedBufferSourceKind;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
@@ -638,6 +642,9 @@ impl LocalFileMessageStore {
             bytes: Some(message),
             mapped_file: None,
             is_in_cache: false,
+            source_kind: SelectMappedBufferSourceKind::Bytes,
+            file_offset: 0,
+            cache_state: SelectMappedBufferCacheState::Unknown,
         }
     }
 
@@ -3056,7 +3063,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn unlock_mapped_file<MF: MappedFile>(&self, unlock_mapped_file: &MF) {
-        warn!("unlock_mapped_file: not implemented");
+        unlock_mapped_file.munlock();
     }
 
     fn get_queue_store(&self) -> &dyn Any {
@@ -4567,6 +4574,7 @@ mod tests {
     use crate::hook::put_message_hook::PutMessageHook;
     use crate::hook::send_message_back_hook::SendMessageBackHook;
     use crate::kv::compaction_service::CompactionService;
+    use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
     use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
     use crate::queue::consume_queue::ConsumeQueueTrait;
     use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
@@ -4627,6 +4635,19 @@ mod tests {
         let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
 
         assert!(store.commit_log.has_allocate_mapped_file_service());
+    }
+
+    #[test]
+    fn unlock_mapped_file_is_safe_for_unlocked_and_repeated_calls() {
+        let store_dir = tempdir().unwrap();
+        let mapped_file_dir = tempdir().unwrap();
+        let store = new_configured_test_store(&store_dir, MessageStoreConfig::default());
+        let mapped_file_path = mapped_file_dir.path().join("00000000000000000000");
+        let mapped_file =
+            DefaultMappedFile::new(CheetahString::from(mapped_file_path.to_string_lossy().as_ref()), 4096);
+
+        store.unlock_mapped_file(&mapped_file);
+        store.unlock_mapped_file(&mapped_file);
     }
 
     fn new_unwired_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {

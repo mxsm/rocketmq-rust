@@ -22,7 +22,9 @@ use dashmap::DashMap;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
+use crate::base::select_result::SelectMappedBufferCacheState;
 use crate::base::select_result::SelectMappedBufferResult;
+use crate::base::select_result::SelectMappedBufferSourceKind;
 use crate::log_file::mapped_file::MappedFile;
 
 #[derive(Default)]
@@ -234,6 +236,9 @@ impl CompactionStore {
                     size: payload_size,
                     mapped_file: None,
                     is_in_cache: true,
+                    source_kind: SelectMappedBufferSourceKind::Bytes,
+                    file_offset: 0,
+                    cache_state: SelectMappedBufferCacheState::Unknown,
                 },
                 queue_offset as u64,
                 message.batch_num,
