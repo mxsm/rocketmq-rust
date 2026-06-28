@@ -2620,7 +2620,10 @@ impl MessageStore for LocalFileMessageStore {
         );
         result.insert(
             "linuxStorageTransferEngine".to_string(),
-            linux_profile_settings.transfer_engine.as_str().to_string(),
+            self.message_store_config
+                .effective_linux_transfer_engine()
+                .as_str()
+                .to_string(),
         );
         result.insert(
             "linuxStorageMappedFileWarmMode".to_string(),
@@ -2660,7 +2663,9 @@ impl MessageStore for LocalFileMessageStore {
         );
         result.insert(
             "linuxStorageHaSendfileEnable".to_string(),
-            linux_profile_settings.ha_sendfile_enable.to_string(),
+            self.message_store_config
+                .effective_linux_ha_sendfile_enable()
+                .to_string(),
         );
         result.insert(
             "linuxStorageIoUringEnable".to_string(),

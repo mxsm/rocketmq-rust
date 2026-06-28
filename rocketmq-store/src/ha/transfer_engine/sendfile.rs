@@ -23,6 +23,8 @@ use std::os::fd::RawFd;
 use tokio::io::AsyncWrite;
 #[cfg(unix)]
 use tokio::io::AsyncWriteExt;
+#[cfg(unix)]
+use tokio::net::tcp::OwnedWriteHalf;
 
 #[cfg(unix)]
 use crate::ha::transfer_engine::bytes::write_all_counted;
@@ -46,6 +48,28 @@ use crate::transfer::segment::FileRange;
 #[cfg(unix)]
 pub trait SendfileOperation {
     fn sendfile(&mut self, out_fd: RawFd, in_fd: RawFd, offset: u64, len: usize) -> io::Result<usize>;
+}
+
+#[cfg(unix)]
+pub trait SendfileWriteTarget {
+    fn sendfile_out_fd(&self) -> RawFd;
+}
+
+#[cfg(unix)]
+impl SendfileWriteTarget for OwnedWriteHalf {
+    fn sendfile_out_fd(&self) -> RawFd {
+        self.as_ref().as_raw_fd()
+    }
+}
+
+#[cfg(unix)]
+impl<T> SendfileWriteTarget for &mut T
+where
+    T: SendfileWriteTarget,
+{
+    fn sendfile_out_fd(&self) -> RawFd {
+        (**self).sendfile_out_fd()
+    }
 }
 
 #[cfg(unix)]
@@ -110,7 +134,7 @@ impl<W, O> SendfileTransferEngine<W, O> {
 #[cfg(unix)]
 impl<W, O> SendfileTransferEngine<W, O>
 where
-    W: AsyncWrite + AsRawFd + Unpin,
+    W: AsyncWrite + SendfileWriteTarget + Unpin,
     O: SendfileOperation,
 {
     pub async fn send_batch(&mut self, batch: &TransferBatch) -> TransferResult<TransferStats> {
@@ -127,7 +151,7 @@ where
         let mut sendfile_bytes = 0;
         let mut sendfile_call_count = 0;
         let mut partial_write_count = header_calls.saturating_sub(expected_header_calls);
-        let out_fd = self.writer.as_raw_fd();
+        let out_fd = self.writer.sendfile_out_fd();
 
         for range in file_ranges {
             let in_fd = range.file.as_raw_fd();

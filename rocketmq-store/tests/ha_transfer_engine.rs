@@ -108,11 +108,90 @@ fn transfer_engine_selection_falls_back_to_bytes_when_vectored_is_unavailable() 
 }
 
 #[test]
+fn sendfile_transfer_selection_uses_sendfile_when_available() {
+    let selection = select_transfer_engine_with_availability(
+        TransferEnginePreference::Sendfile,
+        TransferEngineAvailability {
+            vectored_write_available: true,
+            sendfile_available: true,
+            io_uring_available: false,
+        },
+    );
+
+    assert_eq!(selection.engine, TransferEngineKind::Sendfile);
+    assert_eq!(selection.fallback_reason, None);
+}
+
+#[test]
+fn sendfile_transfer_selection_falls_back_to_vectored_then_bytes() {
+    let vectored_selection = select_transfer_engine_with_availability(
+        TransferEnginePreference::Sendfile,
+        TransferEngineAvailability {
+            vectored_write_available: true,
+            sendfile_available: false,
+            io_uring_available: false,
+        },
+    );
+    let bytes_selection = select_transfer_engine_with_availability(
+        TransferEnginePreference::Sendfile,
+        TransferEngineAvailability {
+            vectored_write_available: false,
+            sendfile_available: false,
+            io_uring_available: false,
+        },
+    );
+
+    assert_eq!(vectored_selection.engine, TransferEngineKind::Vectored);
+    assert_eq!(vectored_selection.fallback_reason, Some("sendfile unavailable"));
+    assert_eq!(bytes_selection.engine, TransferEngineKind::Bytes);
+    assert_eq!(
+        bytes_selection.fallback_reason,
+        Some("sendfile and vectored write unavailable")
+    );
+}
+
+#[test]
+fn auto_transfer_selection_prefers_sendfile_then_vectored_then_bytes() {
+    let sendfile_selection = select_transfer_engine_with_availability(
+        TransferEnginePreference::Auto,
+        TransferEngineAvailability {
+            vectored_write_available: true,
+            sendfile_available: true,
+            io_uring_available: false,
+        },
+    );
+    let vectored_selection = select_transfer_engine_with_availability(
+        TransferEnginePreference::Auto,
+        TransferEngineAvailability {
+            vectored_write_available: true,
+            sendfile_available: false,
+            io_uring_available: false,
+        },
+    );
+    let bytes_selection = select_transfer_engine_with_availability(
+        TransferEnginePreference::Auto,
+        TransferEngineAvailability {
+            vectored_write_available: false,
+            sendfile_available: false,
+            io_uring_available: false,
+        },
+    );
+
+    assert_eq!(sendfile_selection.engine, TransferEngineKind::Sendfile);
+    assert_eq!(sendfile_selection.fallback_reason, None);
+    assert_eq!(vectored_selection.engine, TransferEngineKind::Vectored);
+    assert_eq!(vectored_selection.fallback_reason, None);
+    assert_eq!(bytes_selection.engine, TransferEngineKind::Bytes);
+    assert_eq!(bytes_selection.fallback_reason, Some("vectored write unavailable"));
+}
+
+#[test]
 fn io_uring_transfer_selection_uses_io_uring_when_available() {
     let selection = select_transfer_engine_with_availability(
         TransferEnginePreference::IoUring,
         TransferEngineAvailability {
             vectored_write_available: true,
+            sendfile_available: true,
             io_uring_available: true,
         },
     );
@@ -127,6 +206,7 @@ fn io_uring_transfer_selection_falls_back_to_vectored_when_unavailable() {
         TransferEnginePreference::IoUring,
         TransferEngineAvailability {
             vectored_write_available: true,
+            sendfile_available: true,
             io_uring_available: false,
         },
     );
@@ -141,6 +221,7 @@ fn io_uring_transfer_selection_falls_back_to_bytes_when_vectored_is_unavailable(
         TransferEnginePreference::IoUring,
         TransferEngineAvailability {
             vectored_write_available: false,
+            sendfile_available: false,
             io_uring_available: false,
         },
     );
