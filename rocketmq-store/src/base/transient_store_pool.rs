@@ -20,6 +20,7 @@ use rocketmq_error::RocketMQResult;
 use tracing::warn;
 
 use crate::base::memory_lock_manager::MemoryLockManager;
+use crate::utils::ffi::mlock;
 use crate::utils::ffi::munlock;
 
 #[derive(Clone)]
@@ -45,8 +46,7 @@ impl TransientStorePool {
     }
 
     pub fn init(&self) -> RocketMQResult<()> {
-        let memory_lock_manager = self.memory_lock_manager.clone();
-        self.init_with_locker(|addr, len| memory_lock_manager.lock_buffer(addr, len))
+        self.init_with_locker(mlock)
     }
 
     pub(crate) fn init_with_locker<F>(&self, mut locker: F) -> RocketMQResult<()>
@@ -149,5 +149,16 @@ mod tests {
         assert_eq!(pool.available_buffer_nums(), 2);
         assert_eq!(pool.locked_buffer_count(), 0);
         assert_eq!(pool.lock_failed_buffer_count(), 2);
+    }
+
+    #[test]
+    fn init_records_one_lock_attempt_per_buffer() {
+        let pool = TransientStorePool::new(1, 1);
+
+        let result = pool.init();
+
+        assert!(result.is_ok());
+        assert_eq!(pool.lock_attempt_count(), 1);
+        let _ = pool.destroy();
     }
 }

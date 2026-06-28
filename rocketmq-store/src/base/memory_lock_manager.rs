@@ -21,6 +21,13 @@ use tracing::warn;
 
 use crate::utils::ffi::mlock;
 
+#[cfg(any(test, feature = "observability"))]
+const TRANSIENT_STORE_POOL_CATEGORY: &str = "transient_store_pool";
+#[cfg(any(test, feature = "observability"))]
+const MEMORY_LOCK_BUDGET_EXHAUSTED_REASON: &str = "budget_exhausted";
+#[cfg(any(test, feature = "observability"))]
+const MEMORY_LOCK_UNKNOWN_ERRNO: i32 = 0;
+
 #[derive(Debug)]
 pub struct MemoryLockManager {
     warn_only: bool,
@@ -62,10 +69,13 @@ impl MemoryLockManager {
         F: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
         self.lock_attempts.fetch_add(1, Ordering::Relaxed);
+        emit_memory_lock_attempt_observability();
+
         let len_bytes = len as u64;
         if !self.reserve_lock_budget(len_bytes) {
             self.lock_skipped_buffers.fetch_add(1, Ordering::Relaxed);
             self.lock_skipped_bytes.fetch_add(len_bytes, Ordering::Relaxed);
+            emit_memory_lock_skip_observability(self.locked_bytes.load(Ordering::Relaxed));
             if self.warn_only {
                 warn!(
                     "Skipped memory lock of {} bytes because lock budget {} bytes is exhausted",
@@ -89,12 +99,14 @@ impl MemoryLockManager {
                 if self.budget_bytes.load(Ordering::Relaxed) == 0 {
                     self.locked_bytes.fetch_add(len_bytes, Ordering::Relaxed);
                 }
+                emit_memory_lock_success_observability(self.locked_bytes.load(Ordering::Relaxed));
                 Ok(())
             }
             Err(error) => {
                 self.release_reserved_budget(len_bytes);
                 self.lock_failed_buffers.fetch_add(1, Ordering::Relaxed);
                 self.lock_failed_bytes.fetch_add(len_bytes, Ordering::Relaxed);
+                emit_memory_lock_failure_observability(self.locked_bytes.load(Ordering::Relaxed));
                 if self.warn_only {
                     warn!(
                         "Failed to lock memory buffer of {} bytes, continuing without mlock: {}",
@@ -166,6 +178,120 @@ impl MemoryLockManager {
     }
 }
 
+#[cfg(any(test, feature = "observability"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MemoryLockAttemptObservabilityEvent {
+    category: &'static str,
+    count: u64,
+}
+
+#[cfg(any(test, feature = "observability"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MemoryLockSuccessObservabilityEvent {
+    category: &'static str,
+    count: u64,
+    locked_bytes: u64,
+}
+
+#[cfg(any(test, feature = "observability"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MemoryLockSkipObservabilityEvent {
+    category: &'static str,
+    reason: &'static str,
+    count: u64,
+    locked_bytes: u64,
+}
+
+#[cfg(any(test, feature = "observability"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MemoryLockFailureObservabilityEvent {
+    category: &'static str,
+    errno: i32,
+    count: u64,
+    locked_bytes: u64,
+}
+
+#[cfg(any(test, feature = "observability"))]
+fn memory_lock_attempt_observability_event() -> MemoryLockAttemptObservabilityEvent {
+    MemoryLockAttemptObservabilityEvent {
+        category: TRANSIENT_STORE_POOL_CATEGORY,
+        count: 1,
+    }
+}
+
+#[cfg(any(test, feature = "observability"))]
+fn memory_lock_success_observability_event(locked_bytes: u64) -> MemoryLockSuccessObservabilityEvent {
+    MemoryLockSuccessObservabilityEvent {
+        category: TRANSIENT_STORE_POOL_CATEGORY,
+        count: 1,
+        locked_bytes,
+    }
+}
+
+#[cfg(any(test, feature = "observability"))]
+fn memory_lock_skip_observability_event(locked_bytes: u64) -> MemoryLockSkipObservabilityEvent {
+    MemoryLockSkipObservabilityEvent {
+        category: TRANSIENT_STORE_POOL_CATEGORY,
+        reason: MEMORY_LOCK_BUDGET_EXHAUSTED_REASON,
+        count: 1,
+        locked_bytes,
+    }
+}
+
+#[cfg(any(test, feature = "observability"))]
+fn memory_lock_failure_observability_event(locked_bytes: u64) -> MemoryLockFailureObservabilityEvent {
+    MemoryLockFailureObservabilityEvent {
+        category: TRANSIENT_STORE_POOL_CATEGORY,
+        errno: MEMORY_LOCK_UNKNOWN_ERRNO,
+        count: 1,
+        locked_bytes,
+    }
+}
+
+fn emit_memory_lock_attempt_observability() {
+    #[cfg(feature = "observability")]
+    {
+        let event = memory_lock_attempt_observability_event();
+        rocketmq_observability::metrics::store::record_linux_mlock_attempt(event.category, event.count);
+    }
+}
+
+fn emit_memory_lock_success_observability(locked_bytes: u64) {
+    #[cfg(feature = "observability")]
+    {
+        let event = memory_lock_success_observability_event(locked_bytes);
+        rocketmq_observability::metrics::store::record_linux_mlock_success(event.category, event.count);
+        rocketmq_observability::metrics::store::record_linux_locked_bytes(event.category, event.locked_bytes);
+    }
+
+    #[cfg(not(feature = "observability"))]
+    let _ = locked_bytes;
+}
+
+fn emit_memory_lock_skip_observability(locked_bytes: u64) {
+    #[cfg(feature = "observability")]
+    {
+        let event = memory_lock_skip_observability_event(locked_bytes);
+        rocketmq_observability::metrics::store::record_linux_mlock_skipped(event.category, event.reason, event.count);
+        rocketmq_observability::metrics::store::record_linux_locked_bytes(event.category, event.locked_bytes);
+    }
+
+    #[cfg(not(feature = "observability"))]
+    let _ = locked_bytes;
+}
+
+fn emit_memory_lock_failure_observability(locked_bytes: u64) {
+    #[cfg(feature = "observability")]
+    {
+        let event = memory_lock_failure_observability_event(locked_bytes);
+        rocketmq_observability::metrics::store::record_linux_mlock_failure(event.category, event.errno, event.count);
+        rocketmq_observability::metrics::store::record_linux_locked_bytes(event.category, event.locked_bytes);
+    }
+
+    #[cfg(not(feature = "observability"))]
+    let _ = locked_bytes;
+}
+
 impl Default for MemoryLockManager {
     fn default() -> Self {
         Self::warn_only()
@@ -210,5 +336,34 @@ mod tests {
         assert_eq!(manager.lock_skipped_buffer_count(), 1);
         assert_eq!(manager.lock_skipped_bytes(), 8192);
         assert_eq!(manager.locked_bytes(), 0);
+    }
+
+    #[test]
+    fn memory_lock_success_observability_event_uses_transient_pool_category() {
+        let event = memory_lock_success_observability_event(4096);
+
+        assert_eq!(event.category, TRANSIENT_STORE_POOL_CATEGORY);
+        assert_eq!(event.count, 1);
+        assert_eq!(event.locked_bytes, 4096);
+    }
+
+    #[test]
+    fn memory_lock_skip_observability_event_uses_budget_reason() {
+        let event = memory_lock_skip_observability_event(2048);
+
+        assert_eq!(event.category, TRANSIENT_STORE_POOL_CATEGORY);
+        assert_eq!(event.reason, MEMORY_LOCK_BUDGET_EXHAUSTED_REASON);
+        assert_eq!(event.count, 1);
+        assert_eq!(event.locked_bytes, 2048);
+    }
+
+    #[test]
+    fn memory_lock_failure_observability_event_uses_unknown_errno_until_syscall_exposes_it() {
+        let event = memory_lock_failure_observability_event(1024);
+
+        assert_eq!(event.category, TRANSIENT_STORE_POOL_CATEGORY);
+        assert_eq!(event.errno, MEMORY_LOCK_UNKNOWN_ERRNO);
+        assert_eq!(event.count, 1);
+        assert_eq!(event.locked_bytes, 1024);
     }
 }
