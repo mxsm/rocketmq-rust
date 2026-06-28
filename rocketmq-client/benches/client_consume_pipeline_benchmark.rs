@@ -26,7 +26,8 @@ use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
-use rocketmq_client_rust::consumer::consumer_impl::process_queue::run_process_queue_max_span_probe;
+use rocketmq_client_rust::consumer::consumer_impl::process_queue::run_process_queue_has_temp_message_probe;
+use rocketmq_client_rust::consumer::consumer_impl::process_queue::run_process_queue_max_span_only_probe;
 use rocketmq_client_rust::consumer::consumer_impl::process_queue::run_process_queue_put_probe;
 use rocketmq_client_rust::consumer::consumer_impl::process_queue::run_process_queue_remove_probe;
 use rocketmq_client_rust::consumer::consumer_impl::process_queue::run_process_queue_take_probe;
@@ -128,7 +129,38 @@ fn bench_process_queue_max_span(c: &mut Criterion) {
                     for _ in 0..iters {
                         let fixture = ProcessQueueOperationFixture::seeded(message_count, 1024).await;
                         let started_at = Instant::now();
-                        black_box(run_process_queue_max_span_probe(fixture).await);
+                        black_box(run_process_queue_max_span_only_probe(&fixture).await);
+                        elapsed += started_at.elapsed();
+                    }
+                    elapsed
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_process_queue_has_temp_message(c: &mut Criterion) {
+    let runtime = tokio::runtime::Runtime::new().expect("benchmark runtime should start");
+    let mut group = c.benchmark_group("client_consume_pipeline/process_queue_has_temp_message");
+
+    for message_count in [0usize, 32, 256, 1024] {
+        group.throughput(Throughput::Elements(message_count.max(1) as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(message_count),
+            &message_count,
+            |b, &message_count| {
+                b.to_async(&runtime).iter_custom(|iters| async move {
+                    let mut elapsed = Duration::ZERO;
+                    for _ in 0..iters {
+                        let fixture = if message_count == 0 {
+                            ProcessQueueOperationFixture::new(0, 1024)
+                        } else {
+                            ProcessQueueOperationFixture::seeded(message_count, 1024).await
+                        };
+                        let started_at = Instant::now();
+                        black_box(run_process_queue_has_temp_message_probe(&fixture).await);
                         elapsed += started_at.elapsed();
                     }
                     elapsed
@@ -149,6 +181,7 @@ criterion_group! {
     targets = bench_process_queue_put,
         bench_process_queue_take,
         bench_process_queue_remove,
-        bench_process_queue_max_span
+        bench_process_queue_max_span,
+        bench_process_queue_has_temp_message
 }
 criterion_main!(benches);

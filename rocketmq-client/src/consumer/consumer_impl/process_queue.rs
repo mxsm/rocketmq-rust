@@ -73,6 +73,8 @@ pub struct ProcessQueue {
     msg_count: AtomicI64,
     msg_size: AtomicU64,
     msg_acc_cnt: AtomicI64,
+    min_offset_snapshot: AtomicI64,
+    max_offset_snapshot: AtomicI64,
     try_unlock_times: AtomicI64,
 
     dropped: AtomicBool,
@@ -140,6 +142,8 @@ impl ProcessQueue {
             msg_count: AtomicI64::new(0),
             msg_size: AtomicU64::new(0),
             msg_acc_cnt: AtomicI64::new(0),
+            min_offset_snapshot: AtomicI64::new(-1),
+            max_offset_snapshot: AtomicI64::new(-1),
             try_unlock_times: AtomicI64::new(0),
 
             dropped: AtomicBool::new(false),
@@ -251,10 +255,6 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn put_message(&self, messages: &[ArcMut<MessageExt>]) -> bool {
-        let mut dispatch_to_consume = false;
-        let mut store = self.store.write().await;
-        let mut valid_msg_cnt = 0i64;
-
         let acc_total = if let Some(last_msg) = messages.last() {
             if let Some(property) =
                 last_msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET))
@@ -267,25 +267,41 @@ impl ProcessQueue {
             0
         };
 
-        for message in messages {
-            if store
-                .msg_tree_map
-                .insert(message.queue_offset, message.clone())
-                .is_none()
-            {
-                valid_msg_cnt += 1;
-                if message.queue_offset > store.queue_offset_max {
-                    store.queue_offset_max = message.queue_offset;
+        let mut dispatch_to_consume = false;
+        let mut valid_msg_cnt = 0i64;
+        let mut inserted_body_size = 0u64;
+        let mut inserted_min_offset = i64::MAX;
+        let mut inserted_max_offset = i64::MIN;
+        {
+            let mut store = self.store.write().await;
+            for message in messages {
+                let queue_offset = message.queue_offset;
+                if store.msg_tree_map.insert(queue_offset, message.clone()).is_none() {
+                    valid_msg_cnt += 1;
+                    inserted_body_size += message.body().map_or(0, |body| body.len()) as u64;
+                    inserted_min_offset = inserted_min_offset.min(queue_offset);
+                    inserted_max_offset = inserted_max_offset.max(queue_offset);
+                    if queue_offset > store.queue_offset_max {
+                        store.queue_offset_max = queue_offset;
+                    }
                 }
-                let body_len = message.body().map_or(0, |b| b.len()) as u64;
-                self.msg_size.fetch_add(body_len, Ordering::AcqRel);
+            }
+
+            if !store.msg_tree_map.is_empty() && !self.consuming.load(Ordering::Acquire) {
+                dispatch_to_consume = true;
+                self.consuming.store(true, Ordering::Release);
+            }
+
+            if valid_msg_cnt > 0 {
+                self.update_min_offset_snapshot(inserted_min_offset);
+                self.update_max_offset_snapshot(inserted_max_offset);
+                self.msg_count.fetch_add(valid_msg_cnt, Ordering::AcqRel);
+                if inserted_body_size > 0 {
+                    self.msg_size.fetch_add(inserted_body_size, Ordering::AcqRel);
+                }
             }
         }
-        self.msg_count.fetch_add(valid_msg_cnt, Ordering::AcqRel);
-        if !store.msg_tree_map.is_empty() && !self.consuming.load(Ordering::Acquire) {
-            dispatch_to_consume = true;
-            self.consuming.store(true, Ordering::Release);
-        }
+
         if acc_total > 0 {
             self.msg_acc_cnt.store(acc_total, Ordering::Release);
         }
@@ -293,13 +309,12 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn get_max_span(&self) -> u64 {
-        let store = self.store.read().await;
-        match (
-            store.msg_tree_map.first_key_value(),
-            store.msg_tree_map.last_key_value(),
-        ) {
-            (Some((first, _)), Some((last, _))) => (last - first) as u64,
-            _ => 0,
+        let min_offset = self.min_offset_snapshot.load(Ordering::Acquire);
+        let max_offset = self.max_offset_snapshot.load(Ordering::Acquire);
+        if min_offset >= 0 && max_offset >= min_offset {
+            (max_offset - min_offset) as u64
+        } else {
+            0
         }
     }
 
@@ -315,21 +330,34 @@ impl ProcessQueue {
 
         let mut result = store.queue_offset_max + 1;
         let mut removed_cnt = 0i64;
+        let mut removed_body_size = 0u64;
+        let current_min_offset = self.min_offset_snapshot.load(Ordering::Acquire);
+        let current_max_offset = self.max_offset_snapshot.load(Ordering::Acquire);
+        let mut snapshot_touched = false;
 
         for message in messages {
-            if store.msg_tree_map.remove(&message.queue_offset).is_some() {
+            let queue_offset = message.queue_offset;
+            if store.msg_tree_map.remove(&queue_offset).is_some() {
                 removed_cnt += 1;
-                let body_len = message.body().map_or(0, |b| b.len()) as u64;
-                if body_len > 0 {
-                    self.msg_size.fetch_sub(body_len, Ordering::AcqRel);
+                removed_body_size += message.body().map_or(0, |body| body.len()) as u64;
+                if !snapshot_touched {
+                    snapshot_touched = queue_offset == current_min_offset || queue_offset == current_max_offset;
                 }
             }
         }
 
         if removed_cnt > 0 {
+            if removed_body_size > 0 {
+                self.msg_size.fetch_sub(removed_body_size, Ordering::AcqRel);
+            }
             let prev = self.msg_count.fetch_sub(removed_cnt, Ordering::AcqRel);
             if prev == removed_cnt {
                 self.msg_size.store(0, Ordering::Release);
+            }
+            if store.msg_tree_map.is_empty() {
+                self.reset_offset_snapshot();
+            } else if snapshot_touched {
+                self.refresh_offset_snapshot(&store);
             }
         }
 
@@ -344,6 +372,7 @@ impl ProcessQueue {
         let mut store = self.store.write().await;
         let mut consuming = std::mem::take(&mut store.consuming_msg_orderly_tree_map);
         store.msg_tree_map.append(&mut consuming);
+        self.refresh_offset_snapshot(&store);
     }
 
     pub(crate) async fn commit(&self) -> i64 {
@@ -376,6 +405,7 @@ impl ProcessQueue {
             store.consuming_msg_orderly_tree_map.remove(&message.queue_offset);
             store.msg_tree_map.insert(message.queue_offset, message.clone());
         }
+        self.refresh_offset_snapshot(&store);
     }
 
     pub(crate) async fn take_messages(&self, batch_size: u32) -> Vec<ArcMut<MessageExt>> {
@@ -396,6 +426,13 @@ impl ProcessQueue {
 
         if messages.is_empty() {
             self.consuming.store(false, Ordering::Release);
+            if store.msg_tree_map.is_empty() {
+                self.reset_offset_snapshot();
+            }
+        } else if let Some((min_offset, _)) = store.msg_tree_map.first_key_value() {
+            self.min_offset_snapshot.store(*min_offset, Ordering::Release);
+        } else {
+            self.reset_offset_snapshot();
         }
 
         messages
@@ -417,7 +454,40 @@ impl ProcessQueue {
         self.msg_count.store(0, Ordering::Release);
         self.msg_size.store(0, Ordering::Release);
         self.msg_acc_cnt.store(0, Ordering::Release);
+        self.reset_offset_snapshot();
         self.consuming.store(false, Ordering::Release);
+    }
+
+    fn update_min_offset_snapshot(&self, candidate: i64) {
+        let current = self.min_offset_snapshot.load(Ordering::Acquire);
+        if current < 0 || candidate < current {
+            self.min_offset_snapshot.store(candidate, Ordering::Release);
+        }
+    }
+
+    fn update_max_offset_snapshot(&self, candidate: i64) {
+        let current = self.max_offset_snapshot.load(Ordering::Acquire);
+        if current < 0 || candidate > current {
+            self.max_offset_snapshot.store(candidate, Ordering::Release);
+        }
+    }
+
+    fn refresh_offset_snapshot(&self, store: &ProcessQueueStore) {
+        match (
+            store.msg_tree_map.first_key_value(),
+            store.msg_tree_map.last_key_value(),
+        ) {
+            (Some((min_offset, _)), Some((max_offset, _))) => {
+                self.min_offset_snapshot.store(*min_offset, Ordering::Release);
+                self.max_offset_snapshot.store(*max_offset, Ordering::Release);
+            }
+            _ => self.reset_offset_snapshot(),
+        }
+    }
+
+    fn reset_offset_snapshot(&self) {
+        self.min_offset_snapshot.store(-1, Ordering::Release);
+        self.max_offset_snapshot.store(-1, Ordering::Release);
     }
 
     pub(crate) async fn fill_process_queue_info(&self, info: &mut ProcessQueueInfo) {
@@ -452,7 +522,6 @@ impl ProcessQueue {
         info.last_pull_timestamp = self.last_pull_timestamp.load(Ordering::Acquire);
         info.last_consume_timestamp = self.last_consume_timestamp.load(Ordering::Acquire);
     }
-
     /// Returns `Some((min_offset, max_offset))` of the pending message tree, or `None` if empty.
     pub(crate) async fn get_offset_span(&self) -> Option<(i64, i64)> {
         let store = self.store.read().await;
@@ -486,6 +555,9 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn has_temp_message(&self) -> bool {
+        if self.msg_count.load(Ordering::Acquire) <= 0 {
+            return false;
+        }
         !self.store.read().await.msg_tree_map.is_empty()
     }
 
@@ -628,6 +700,16 @@ pub async fn run_process_queue_max_span_probe(fixture: ProcessQueueOperationFixt
     }
 }
 
+#[doc(hidden)]
+pub async fn run_process_queue_max_span_only_probe(fixture: &ProcessQueueOperationFixture) -> u64 {
+    fixture.process_queue.get_max_span().await
+}
+
+#[doc(hidden)]
+pub async fn run_process_queue_has_temp_message_probe(fixture: &ProcessQueueOperationFixture) -> bool {
+    fixture.process_queue.has_temp_message().await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,6 +729,21 @@ mod tests {
             messages.push(ArcMut::new(msg));
         }
         messages
+    }
+
+    fn create_test_messages_with_offsets(offsets: &[i64]) -> Vec<ArcMut<MessageExt>> {
+        offsets
+            .iter()
+            .map(|offset| {
+                let mut msg = MessageExt {
+                    queue_offset: *offset,
+                    ..Default::default()
+                };
+                msg.set_body(Bytes::from(vec![0u8; 100]));
+                msg.set_topic(CheetahString::from_static_str("test_topic"));
+                ArcMut::new(msg)
+            })
+            .collect()
     }
 
     #[tokio::test]
@@ -671,6 +768,13 @@ mod tests {
         let max_span = run_process_queue_max_span_probe(ProcessQueueOperationFixture::seeded(4, 64).await).await;
         assert_eq!(max_span.max_span, 3);
         assert_eq!(max_span.final_msg_count, 4);
+
+        let read_only_fixture = ProcessQueueOperationFixture::seeded(4, 64).await;
+        assert_eq!(run_process_queue_max_span_only_probe(&read_only_fixture).await, 3);
+        assert!(run_process_queue_has_temp_message_probe(&read_only_fixture).await);
+
+        let empty_fixture = ProcessQueueOperationFixture::new(0, 64);
+        assert!(!run_process_queue_has_temp_message_probe(&empty_fixture).await);
     }
 
     #[tokio::test]
@@ -766,6 +870,20 @@ mod tests {
 
         assert_eq!(taken.len(), 0);
         assert!(!pq.consuming.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn test_take_zero_keeps_offset_snapshot() {
+        let pq = ProcessQueue::new();
+        let msgs = create_test_messages(4);
+
+        pq.put_message(&msgs).await;
+        assert_eq!(pq.get_max_span().await, 3);
+
+        let taken = pq.take_messages(0).await;
+
+        assert!(taken.is_empty());
+        assert_eq!(pq.get_max_span().await, 3);
     }
 
     #[tokio::test]
@@ -967,6 +1085,45 @@ mod tests {
 
         let span = pq.get_max_span().await;
         assert_eq!(span, 9);
+    }
+
+    #[tokio::test]
+    async fn test_get_max_span_tracks_out_of_order_offsets_after_removal() {
+        let pq = ProcessQueue::new();
+        let msgs = create_test_messages_with_offsets(&[10, 5, 7]);
+
+        pq.put_message(&msgs).await;
+        assert_eq!(pq.get_max_span().await, 5);
+
+        pq.remove_message(&[msgs[1].clone()]).await;
+        assert_eq!(pq.get_max_span().await, 3);
+
+        pq.remove_message(&[msgs[0].clone()]).await;
+        assert_eq!(pq.get_max_span().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_offset_keeps_single_count_and_span() {
+        let pq = ProcessQueue::new();
+        let msgs = create_test_messages_with_offsets(&[3, 3, 8]);
+
+        pq.put_message(&msgs).await;
+
+        assert_eq!(pq.msg_count(), 2);
+        assert_eq!(pq.get_max_span().await, 5);
+    }
+
+    #[tokio::test]
+    async fn test_put_message_keeps_snapshot_for_inner_offsets() {
+        let pq = ProcessQueue::new();
+        let outer_msgs = create_test_messages_with_offsets(&[10, 20]);
+        let inner_msgs = create_test_messages_with_offsets(&[12, 18]);
+
+        pq.put_message(&outer_msgs).await;
+        assert_eq!(pq.get_max_span().await, 10);
+
+        pq.put_message(&inner_msgs).await;
+        assert_eq!(pq.get_max_span().await, 10);
     }
 
     #[tokio::test]
