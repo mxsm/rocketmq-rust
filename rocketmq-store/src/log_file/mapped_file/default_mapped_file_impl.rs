@@ -35,6 +35,7 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
+use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::error;
@@ -45,6 +46,9 @@ use super::FlushStrategy;
 use super::MappedFileMetrics;
 use crate::base::append_message_callback::AppendMessageCallback;
 use crate::base::compaction_append_msg_callback::CompactionAppendMsgCallback;
+use crate::base::memory_lock_manager::MemoryLockCategory;
+use crate::base::memory_lock_manager::MemoryLockHandle;
+use crate::base::memory_lock_manager::MemoryLockManager;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::put_message_context::PutMessageContext;
@@ -1170,6 +1174,68 @@ impl DefaultMappedFile {
         self.mmapped_file.clone()
     }
 
+    pub fn lock_region(
+        &self,
+        memory_lock_manager: &MemoryLockManager,
+        category: MemoryLockCategory,
+        offset: u64,
+        len: usize,
+    ) -> RocketMQResult<Option<MemoryLockHandle>> {
+        self.lock_region_with(memory_lock_manager, category, offset, len, crate::utils::ffi::mlock)
+    }
+
+    pub(crate) fn lock_region_with<F>(
+        &self,
+        memory_lock_manager: &MemoryLockManager,
+        category: MemoryLockCategory,
+        offset: u64,
+        len: usize,
+        locker: F,
+    ) -> RocketMQResult<Option<MemoryLockHandle>>
+    where
+        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        let Some((addr, len)) = self.lock_region_address_and_len(offset, len) else {
+            return Ok(None);
+        };
+        memory_lock_manager.lock_region_with(category, addr, len, locker)
+    }
+
+    pub fn unlock_region(
+        &self,
+        memory_lock_manager: &MemoryLockManager,
+        handle: MemoryLockHandle,
+    ) -> RocketMQResult<()> {
+        self.unlock_region_with(memory_lock_manager, handle, crate::utils::ffi::munlock)
+    }
+
+    pub(crate) fn unlock_region_with<F>(
+        &self,
+        memory_lock_manager: &MemoryLockManager,
+        handle: MemoryLockHandle,
+        unlocker: F,
+    ) -> RocketMQResult<()>
+    where
+        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        memory_lock_manager.unlock_region_with(handle, unlocker)
+    }
+
+    fn lock_region_address_and_len(&self, offset: u64, requested_len: usize) -> Option<(*const u8, usize)> {
+        if requested_len == 0 || offset >= self.file_size {
+            return None;
+        }
+
+        let remaining = self.file_size.saturating_sub(offset);
+        let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        if len == 0 {
+            return None;
+        }
+
+        let offset = usize::try_from(offset).ok()?;
+        Some((self.mmapped_file.as_ptr().wrapping_add(offset), len))
+    }
+
     /// Gets the start timestamp of the mapped file.
     ///
     /// # Returns
@@ -1537,6 +1603,8 @@ mod tests {
 
     use super::*;
     use crate::base::compaction_append_msg_callback::CompactionAppendMsgCallback;
+    use crate::base::memory_lock_manager::MemoryLockCategory;
+    use crate::base::memory_lock_manager::MemoryLockManager;
 
     fn create_test_file() -> (TempDir, DefaultMappedFile) {
         let temp_dir = TempDir::new().unwrap();
@@ -1801,6 +1869,67 @@ mod tests {
         let metrics = mapped_file.get_metrics().unwrap();
         assert_eq!(metrics.warm_operations(), 2);
         assert_eq!(metrics.warm_bytes(), mapped_file.get_file_size() * 2);
+    }
+
+    #[test]
+    fn lock_region_clamps_requested_length_to_mapped_file_boundary() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        let manager = MemoryLockManager::warn_only_with_budget(4096);
+        let expected_addr = mapped_file.get_mapped_file().as_ptr().wrapping_add(3072);
+
+        let handle = mapped_file
+            .lock_region_with(
+                &manager,
+                MemoryLockCategory::CommitLogActiveWindow,
+                3072,
+                4096,
+                |addr, len| {
+                    assert_eq!(addr, expected_addr);
+                    assert_eq!(len, 1024);
+                    Ok(())
+                },
+            )
+            .expect("range lock should not fail")
+            .expect("clamped non-empty range should return handle");
+
+        assert_eq!(handle.category(), MemoryLockCategory::CommitLogActiveWindow);
+        assert_eq!(handle.len(), 1024);
+        assert_eq!(manager.locked_bytes(), 1024);
+
+        mapped_file
+            .unlock_region_with(&manager, handle, |addr, len| {
+                assert_eq!(addr, expected_addr);
+                assert_eq!(len, 1024);
+                Ok(())
+            })
+            .expect("range unlock should not fail");
+        assert_eq!(manager.locked_bytes(), 0);
+    }
+
+    #[test]
+    fn lock_region_skips_zero_length_and_out_of_range_requests() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        let manager = MemoryLockManager::warn_only_with_budget(4096);
+
+        let zero_len = mapped_file
+            .lock_region_with(&manager, MemoryLockCategory::CommitLogActiveWindow, 0, 0, |_, _| {
+                panic!("zero-length request must not call locker")
+            })
+            .expect("zero-length request should be accepted as a no-op");
+        let out_of_range = mapped_file
+            .lock_region_with(
+                &manager,
+                MemoryLockCategory::CommitLogActiveWindow,
+                mapped_file.get_file_size(),
+                1024,
+                |_, _| panic!("out-of-range request must not call locker"),
+            )
+            .expect("out-of-range request should be accepted as a no-op");
+
+        assert!(zero_len.is_none());
+        assert!(out_of_range.is_none());
+        assert_eq!(manager.lock_attempt_count(), 0);
+        assert_eq!(manager.locked_bytes(), 0);
     }
 
     #[test]
