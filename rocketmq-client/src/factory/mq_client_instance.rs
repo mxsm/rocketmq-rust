@@ -51,6 +51,7 @@ use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::producer_data::ProducerData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
@@ -271,6 +272,18 @@ pub struct RouteRefreshConcurrentProbe {
     pub stale_skipped: bool,
     pub final_order_topic_conf: Option<CheetahString>,
     pub route_version: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HeartbeatRouteIndexProbe {
+    pub topic_count: usize,
+    pub broker_count: usize,
+    pub lookup_count: usize,
+    pub scan_elapsed_us: u128,
+    pub index_elapsed_us: u128,
+    pub improvement_percent: f64,
+    pub scan_found_count: usize,
+    pub index_found_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -583,6 +596,7 @@ impl MQClientInstance {
 
         self.topic_route_table.clear();
         self.route_refresh_state.versions.clear();
+        self.route_refresh_state.broker_addr_route_index.clear();
         self.topic_end_points_table.clear();
         self.broker_addr_table.clear();
         self.broker_version_table.clear();
@@ -1055,6 +1069,7 @@ impl MQClientInstance {
             self.broker_addr_table
                 .insert(bd.broker_name().clone(), bd.broker_addrs().clone());
         }
+        self.update_broker_route_index(old.as_ref(), topic_route_data);
 
         if let Some(mq_end_points) =
             ClientMetadata::topic_route_data2endpoints_for_static_topic(topic, topic_route_data)
@@ -1087,6 +1102,73 @@ impl MQClientInstance {
         self.topic_route_table.insert(topic.clone(), clone_topic_route_data);
         self.bump_topic_route_version(topic, current_version);
         TopicRouteApplyOutcome::Applied
+    }
+
+    fn route_broker_addr_set(route: &TopicRouteData) -> HashSet<CheetahString> {
+        route
+            .broker_datas
+            .iter()
+            .flat_map(|broker_data| broker_data.broker_addrs().values().cloned())
+            .filter(|addr| !addr.is_empty())
+            .collect()
+    }
+
+    fn update_broker_route_index(&self, old_route: Option<&TopicRouteData>, new_route: &TopicRouteData) {
+        let old_addrs = old_route.map(Self::route_broker_addr_set).unwrap_or_default();
+        let new_addrs = Self::route_broker_addr_set(new_route);
+
+        for addr in old_addrs.difference(&new_addrs) {
+            self.decrement_broker_route_index(addr);
+        }
+        for addr in new_addrs.difference(&old_addrs) {
+            self.increment_broker_route_index(addr);
+        }
+    }
+
+    fn increment_broker_route_index(&self, addr: &CheetahString) {
+        self.route_refresh_state
+            .broker_addr_route_index
+            .entry(addr.clone())
+            .and_modify(|count| *count = count.saturating_add(1))
+            .or_insert(1);
+    }
+
+    fn decrement_broker_route_index(&self, addr: &CheetahString) {
+        let should_remove = if let Some(mut count) = self.route_refresh_state.broker_addr_route_index.get_mut(addr) {
+            if *count > 1 {
+                *count -= 1;
+                false
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+
+        if should_remove {
+            self.route_refresh_state.broker_addr_route_index.remove(addr);
+        }
+    }
+
+    fn remove_broker_route_index(&self, addr: &CheetahString) {
+        self.route_refresh_state.broker_addr_route_index.remove(addr);
+    }
+
+    fn is_broker_addr_in_route_index(&self, addr: &str) -> bool {
+        self.route_refresh_state.broker_addr_route_index.contains_key(addr)
+    }
+
+    fn scan_broker_addr_in_topic_route_table(&self, addr: &str) -> bool {
+        for entry in self.topic_route_table.iter() {
+            for bd in entry.value().broker_datas.iter() {
+                for value in bd.broker_addrs().values() {
+                    if value.as_str() == addr {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     pub fn route_refresh_metrics_snapshot(&self) -> TopicRouteRefreshMetricsSnapshot {
@@ -1128,7 +1210,8 @@ impl MQClientInstance {
                 let mut clone_addr_table = one_table.clone();
                 let mut remove_id_set = HashSet::new();
                 for (id, addr) in one_table.iter() {
-                    if !self.is_broker_addr_exist_in_topic_route_table(addr).await {
+                    if !self.is_broker_addr_in_route_index(addr) {
+                        self.remove_broker_route_index(addr);
                         remove_id_set.insert(*id);
                     }
                 }
@@ -1595,7 +1678,7 @@ impl MQClientInstance {
             let mq_client_api = mq_client_api.clone();
             let timeout = self.client_config.mq_client_api_timeout;
             let send_heartbeat_times_total = self.send_heartbeat_times_total.clone();
-            let topic_route_table_clone = self.topic_route_table.clone();
+            let broker_addr_route_index = self.route_refresh_state.broker_addr_route_index.clone();
 
             // Returns: (broker_name, addr, version, success)
             let task = async move {
@@ -1615,14 +1698,7 @@ impl MQClientInstance {
                         (broker_name, addr, Some(version), true)
                     }
                     Err(_) => {
-                        // Check if broker is in name server
-                        let is_in_ns = topic_route_table_clone.iter().any(|route_entry| {
-                            route_entry.value().broker_datas.iter().any(|bd| {
-                                bd.broker_addrs()
-                                    .iter()
-                                    .any(|(_, broker_addr)| broker_addr.as_str() == addr.as_str())
-                            })
-                        });
+                        let is_in_ns = broker_addr_route_index.contains_key(addr.as_str());
 
                         if is_in_ns {
                             warn!(
@@ -1862,7 +1938,7 @@ impl MQClientInstance {
                 (true, support_v2)
             }
             Err(_) => {
-                if self.is_broker_in_name_server(addr).await {
+                if self.is_broker_in_name_server(addr) {
                     warn!("send heart beat to broker[{} {} {}] failed", broker_name, id, addr);
                 } else {
                     warn!(
@@ -1875,17 +1951,8 @@ impl MQClientInstance {
         }
     }
 
-    async fn is_broker_in_name_server(&self, broker_name: &str) -> bool {
-        for entry in self.topic_route_table.iter() {
-            for bd in entry.value().broker_datas.iter() {
-                for value in bd.broker_addrs().values() {
-                    if value.as_str() == broker_name {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+    fn is_broker_in_name_server(&self, broker_name: &str) -> bool {
+        self.is_broker_addr_in_route_index(broker_name)
     }
 
     async fn prepare_heartbeat_data(&self, is_without_sub: bool) -> HeartbeatData {
@@ -2218,19 +2285,6 @@ impl MQClientInstance {
         }
     }
 
-    async fn is_broker_addr_exist_in_topic_route_table(&self, addr: &str) -> bool {
-        for entry in self.topic_route_table.iter() {
-            for bd in entry.value().broker_datas.iter() {
-                for value in bd.broker_addrs().values() {
-                    if value.as_str() == addr {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
-    }
-
     /// Queries the assignment for a given topic.
     ///
     /// This function attempts to find the broker address for the specified topic. If the broker
@@ -2514,6 +2568,93 @@ pub async fn run_route_refresh_concurrent_stale_guard_probe() -> RouteRefreshCon
     }
 }
 
+#[doc(hidden)]
+pub fn run_heartbeat_route_index_probe(
+    topic_count: usize,
+    broker_count: usize,
+    lookup_count: usize,
+) -> HeartbeatRouteIndexProbe {
+    let client_config = ClientConfig {
+        namesrv_addr: None,
+        ..Default::default()
+    };
+    let instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-route-index-probe", None);
+    let broker_count = broker_count.max(1);
+
+    for topic_index in 0..topic_count {
+        let topic = CheetahString::from_string(format!("heartbeat-route-topic-{topic_index:04}"));
+        let broker_index = topic_index % broker_count;
+        let broker_name = CheetahString::from_string(format!("broker-{broker_index:04}"));
+        let broker_addr = CheetahString::from_string(format!(
+            "127.{}.{}.{}:10911",
+            broker_index / 65_536,
+            (broker_index / 256) % 256,
+            broker_index % 256
+        ));
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(mix_all::MASTER_ID, broker_addr);
+        let route = TopicRouteData {
+            broker_datas: vec![BrokerData::new(
+                CheetahString::from_static_str("heartbeat-route-cluster"),
+                broker_name,
+                broker_addrs,
+                None,
+            )],
+            ..Default::default()
+        };
+
+        instance.topic_route_table.insert(topic, route.clone());
+        instance.update_broker_route_index(None, &route);
+    }
+
+    let lookup_addrs = (0..lookup_count)
+        .map(|index| {
+            if index % 2 == 0 {
+                CheetahString::from_string(format!("198.51.100.{}:10911", index % 256))
+            } else {
+                let broker_index = (broker_count - 1).saturating_sub(index % broker_count);
+                CheetahString::from_string(format!(
+                    "127.{}.{}.{}:10911",
+                    broker_index / 65_536,
+                    (broker_index / 256) % 256,
+                    broker_index % 256
+                ))
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let scan_started = Instant::now();
+    let scan_found_count = lookup_addrs
+        .iter()
+        .filter(|addr| instance.scan_broker_addr_in_topic_route_table(addr.as_str()))
+        .count();
+    let scan_elapsed_us = scan_started.elapsed().as_micros();
+
+    let index_started = Instant::now();
+    let index_found_count = lookup_addrs
+        .iter()
+        .filter(|addr| instance.is_broker_addr_in_route_index(addr.as_str()))
+        .count();
+    let index_elapsed_us = index_started.elapsed().as_micros();
+
+    let improvement_percent = if scan_elapsed_us == 0 {
+        0.0
+    } else {
+        ((scan_elapsed_us.saturating_sub(index_elapsed_us)) as f64 / scan_elapsed_us as f64) * 100.0
+    };
+
+    HeartbeatRouteIndexProbe {
+        topic_count,
+        broker_count,
+        lookup_count,
+        scan_elapsed_us,
+        index_elapsed_us,
+        improvement_percent,
+        scan_found_count,
+        index_found_count,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rocketmq_error::RocketMQError;
@@ -2784,6 +2925,110 @@ mod tests {
         assert!(!producer.is_publish_topic_need_update(&topic));
         assert!(!consumer.is_subscribe_topic_need_update(topic.as_str()).await);
         assert_eq!(instance.topic_route_version(&topic), 1);
+    }
+
+    fn heartbeat_route_with_addr(broker_name: &str, broker_addr: &str) -> TopicRouteData {
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(mix_all::MASTER_ID, CheetahString::from_string(broker_addr.to_string()));
+        TopicRouteData {
+            broker_datas: vec![BrokerData::new(
+                CheetahString::from_static_str("heartbeat-route-cluster"),
+                CheetahString::from_string(broker_name.to_string()),
+                broker_addrs,
+                None,
+            )],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn heartbeat_route_index_updates_on_route_refresh() {
+        let client_config = ClientConfig {
+            namesrv_addr: None,
+            ..Default::default()
+        };
+        let mut instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-route-index-test", None);
+        let topic = CheetahString::from_static_str("heartbeat-route-index-topic");
+        let mut first_route = heartbeat_route_with_addr("broker-a", "127.0.0.1:10911");
+        let mut second_route = heartbeat_route_with_addr("broker-b", "127.0.0.2:10911");
+
+        let first_outcome = instance
+            .apply_topic_route_data_if_fresh(&topic, &mut first_route, 0)
+            .await;
+        let second_outcome = instance
+            .apply_topic_route_data_if_fresh(&topic, &mut second_route, 1)
+            .await;
+
+        assert_eq!(first_outcome, TopicRouteApplyOutcome::Applied);
+        assert_eq!(second_outcome, TopicRouteApplyOutcome::Applied);
+        assert!(!instance.is_broker_addr_in_route_index("127.0.0.1:10911"));
+        assert!(instance.is_broker_addr_in_route_index("127.0.0.2:10911"));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_route_index_keeps_shared_broker_ref_counts() {
+        let client_config = ClientConfig {
+            namesrv_addr: None,
+            ..Default::default()
+        };
+        let mut instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-route-refcount-test", None);
+        let topic_a = CheetahString::from_static_str("heartbeat-route-refcount-a");
+        let topic_b = CheetahString::from_static_str("heartbeat-route-refcount-b");
+        let mut shared_a = heartbeat_route_with_addr("broker-shared", "127.0.0.9:10911");
+        let mut shared_b = heartbeat_route_with_addr("broker-shared", "127.0.0.9:10911");
+        let mut replacement_a = heartbeat_route_with_addr("broker-replacement-a", "127.0.0.10:10911");
+        let mut replacement_b = heartbeat_route_with_addr("broker-replacement-b", "127.0.0.11:10911");
+
+        instance
+            .apply_topic_route_data_if_fresh(&topic_a, &mut shared_a, 0)
+            .await;
+        instance
+            .apply_topic_route_data_if_fresh(&topic_b, &mut shared_b, 0)
+            .await;
+        instance
+            .apply_topic_route_data_if_fresh(&topic_a, &mut replacement_a, 1)
+            .await;
+        assert!(instance.is_broker_addr_in_route_index("127.0.0.9:10911"));
+
+        instance
+            .apply_topic_route_data_if_fresh(&topic_b, &mut replacement_b, 1)
+            .await;
+        assert!(!instance.is_broker_addr_in_route_index("127.0.0.9:10911"));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_clean_offline_broker_removes_addr_without_dirty_route_index() {
+        let client_config = ClientConfig {
+            namesrv_addr: None,
+            ..Default::default()
+        };
+        let mut instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-clean-index-test", None);
+        let broker_name = CheetahString::from_static_str("heartbeat-offline-broker");
+        let broker_addr = CheetahString::from_static_str("127.0.0.12:10911");
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(mix_all::MASTER_ID, broker_addr.clone());
+        instance.broker_addr_table.insert(broker_name.clone(), broker_addrs);
+        instance
+            .route_refresh_state
+            .broker_addr_route_index
+            .insert(broker_addr.clone(), 1);
+        instance
+            .route_refresh_state
+            .broker_addr_route_index
+            .remove(&broker_addr);
+
+        instance.clean_offline_broker().await;
+
+        assert!(!instance.broker_addr_table.contains_key(&broker_name));
+        assert!(!instance.is_broker_addr_in_route_index(broker_addr.as_str()));
+    }
+
+    #[test]
+    fn heartbeat_route_index_probe_matches_scan_baseline() {
+        let probe = run_heartbeat_route_index_probe(1_000, 256, 512);
+
+        assert_eq!(probe.scan_found_count, probe.index_found_count);
+        assert!(probe.index_elapsed_us <= probe.scan_elapsed_us, "{probe:?}");
     }
 
     #[tokio::test]

@@ -23,7 +23,9 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_client_rust::run_connection_event_listener_lifecycle_probe;
+use rocketmq_client_rust::run_heartbeat_route_index_probe;
 use rocketmq_client_rust::ConnectionEventListenerLifecycleProbe;
+use rocketmq_client_rust::HeartbeatRouteIndexProbe;
 
 fn run_lifecycle_probe() -> ConnectionEventListenerLifecycleProbe {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -35,6 +37,10 @@ fn run_lifecycle_probe() -> ConnectionEventListenerLifecycleProbe {
         .expect("connection event listener benchmark runtime should start");
 
     runtime.block_on(run_connection_event_listener_lifecycle_probe())
+}
+
+fn run_heartbeat_probe() -> HeartbeatRouteIndexProbe {
+    run_heartbeat_route_index_probe(1_000, 256, 512)
 }
 
 fn workspace_root() -> PathBuf {
@@ -51,6 +57,11 @@ fn benchmark_artifact_dir() -> PathBuf {
 fn write_connection_event_listener_report_artifact() {
     let output = run_lifecycle_probe();
     assert!(output.healthy, "{output:?}");
+    let heartbeat_route_index = run_heartbeat_probe();
+    assert_eq!(
+        heartbeat_route_index.scan_found_count,
+        heartbeat_route_index.index_found_count
+    );
     let output_dir = benchmark_artifact_dir();
     fs::create_dir_all(&output_dir).expect("runtime benchmark artifact directory should be created");
 
@@ -62,6 +73,7 @@ fn write_connection_event_listener_report_artifact() {
         "case": "client_connection_event_listener_lifecycle",
         "generated_at_unix_ms": generated_at_unix_ms,
         "probe": output,
+        "heartbeat_route_index": heartbeat_route_index,
     });
     let path = output_dir.join("client-connection-event-listener-lifecycle-report.json");
     fs::write(
@@ -86,6 +98,17 @@ fn bench_connection_event_listener_lifecycle(criterion: &mut Criterion) {
             });
         },
     );
+
+    criterion.bench_function("client_heartbeat_failure_route_index/1000_topics", |bencher| {
+        bencher.iter(|| {
+            let output = run_heartbeat_probe();
+            assert_eq!(output.scan_found_count, output.index_found_count);
+            assert!(output.index_elapsed_us <= output.scan_elapsed_us, "{output:?}");
+            black_box(output.scan_elapsed_us);
+            black_box(output.index_elapsed_us);
+            black_box(output.improvement_percent);
+        });
+    });
 }
 
 criterion_group! {
