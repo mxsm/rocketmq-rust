@@ -55,6 +55,7 @@ use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_connection_state_notification_service::HAConnectionStateNotificationService;
 use crate::ha::ha_service::HAService;
+use crate::ha::transfer_metrics::HaTransferMetrics;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAError;
@@ -81,6 +82,7 @@ pub struct DefaultHAService {
     ha_client: Option<GeneralHAClient>,
     ha_connection_state_notification_service: Option<HAConnectionStateNotificationService>,
     auto_switch_service: Option<WeakArcMut<AutoSwitchHAService>>,
+    ha_transfer_metrics: Arc<HaTransferMetrics>,
 }
 
 impl DefaultHAService {
@@ -96,11 +98,16 @@ impl DefaultHAService {
             ha_client: None,
             ha_connection_state_notification_service: None,
             auto_switch_service: None,
+            ha_transfer_metrics: Arc::new(HaTransferMetrics::default()),
         }
     }
 
     pub fn get_default_message_store(&self) -> &LocalFileMessageStore {
         self.default_message_store.as_ref()
+    }
+
+    pub fn ha_transfer_metrics(&self) -> Arc<HaTransferMetrics> {
+        self.ha_transfer_metrics.clone()
     }
 
     pub(crate) fn ensure_ha_client(&mut self) -> HAResult<bool> {
@@ -691,6 +698,23 @@ mod tests {
         let error = service.start().await.expect_err("start should fail before init");
 
         assert!(matches!(error, HAError::Service(message) if message.contains("AcceptSocketService")));
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn default_ha_service_exposes_shared_transfer_metrics() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-metrics-{}", current_millis()));
+        let store = new_test_message_store(&temp_root, false);
+        let service = DefaultHAService::new(store);
+        let metrics = service.ha_transfer_metrics();
+
+        metrics.record_fallback(
+            crate::ha::transfer_engine::TransferEngineKind::IoUring,
+            crate::ha::transfer_engine::TransferEngineKind::Vectored,
+            "io_uring unavailable",
+        );
+
+        assert_eq!(service.ha_transfer_metrics().snapshot().fallback_total, 1);
         let _ = std::fs::remove_dir_all(temp_root);
     }
 

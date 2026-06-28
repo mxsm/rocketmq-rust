@@ -28,6 +28,7 @@ pub mod ha_connection_state_notification_request;
 mod ha_connection_state_notification_service;
 pub mod ha_service;
 pub mod transfer_engine;
+pub mod transfer_metrics;
 pub(crate) mod wait_notify_object;
 
 /// Error types
