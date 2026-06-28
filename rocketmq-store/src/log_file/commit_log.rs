@@ -88,6 +88,9 @@ use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::store_error::StoreError;
+use crate::transfer::error::TransferError;
+use crate::transfer::error::TransferResult;
+use crate::transfer::segment::SegmentLease;
 use crate::utils::ffi::madvise;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::ffi::MADV_RANDOM;
@@ -1774,6 +1777,42 @@ impl CommitLog {
         Some(results)
     }
 
+    pub fn select_segments(
+        &self,
+        offset: i64,
+        max_bytes: usize,
+        allow_cross_file: bool,
+    ) -> TransferResult<Vec<SegmentLease>> {
+        if offset < 0 {
+            return Err(TransferError::InvalidInput(format!(
+                "offset must be non-negative: {offset}"
+            )));
+        }
+        if max_bytes == 0 {
+            return Ok(Vec::new());
+        }
+        let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
+        if mapped_file_size == 0 {
+            return Err(TransferError::InvalidInput(
+                "mapped_file_size_commit_log must be greater than zero".to_string(),
+            ));
+        }
+
+        let mut max_bytes = max_bytes.min(i32::MAX as usize);
+        if !allow_cross_file {
+            let position_in_file = offset.rem_euclid(mapped_file_size as i64) as usize;
+            max_bytes = max_bytes.min(mapped_file_size.saturating_sub(position_in_file));
+        }
+
+        let Some(results) = self.get_bulk_data(offset, max_bytes as i32) else {
+            return Ok(Vec::new());
+        };
+        Ok(results
+            .into_iter()
+            .filter_map(|result| SegmentLease::from_select_result(result.start_offset as i64, result))
+            .collect())
+    }
+
     pub fn get_data_with_option(
         &self,
         offset: i64,
@@ -2661,6 +2700,51 @@ mod tests {
             })
             .collect();
         assert_eq!(combined, b"CDEFghij");
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn select_segments_caps_single_file_selection_at_mapped_file_boundary() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-commitlog-select-segments-{}", current_millis()));
+        let mut store = new_test_message_store_with_config(
+            &temp_root,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 16,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::SyncMaster,
+            false,
+        );
+        store.init().await.expect("init message store");
+
+        let first = *b"0123456789ABCDEF";
+        let second = *b"ghijklmnopqrstuv";
+        assert!(store
+            .get_commit_log_mut()
+            .append_data(0, &first, 0, first.len() as i32)
+            .await
+            .expect("append first chunk"));
+        assert!(store
+            .get_commit_log_mut()
+            .append_data(first.len() as i64, &second, 0, second.len() as i32)
+            .await
+            .expect("append second chunk"));
+
+        let segments = store
+            .get_commit_log()
+            .select_segments(12, 8, false)
+            .expect("single-file transfer segments");
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].segment().global_offset, 12);
+        assert_eq!(segments[0].segment().position_in_file, 12);
+        assert_eq!(segments[0].len(), 4);
+        assert_eq!(
+            segments[0].as_bytes().expect("segment bytes"),
+            Bytes::from_static(b"CDEF")
+        );
 
         let _ = fs::remove_dir_all(temp_root);
     }

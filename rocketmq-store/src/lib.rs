@@ -40,6 +40,7 @@ pub mod store_path_config_helper;
 #[cfg(feature = "tieredstore")]
 pub mod tieredstore;
 pub mod timer;
+pub mod transfer;
 pub mod utils;
 
 #[doc(hidden)]

@@ -57,6 +57,9 @@ use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_service::HAService;
 use crate::ha::HAConnectionError;
+use crate::transfer::batch::TransferPlan;
+use crate::transfer::planner::TransferPlanInput;
+use crate::transfer::planner::TransferPlanner;
 
 /// Transfer Header buffer size. Schema: physic offset and body size.
 /// Format: [physicOffset (8bytes)][bodySize (4bytes)]
@@ -769,47 +772,80 @@ impl WriteSocketService {
         }
 
         let next_offset = self.next_transfer_from_where.load(Ordering::Relaxed);
-        if let Some(select_result) = self
+        let max_commit_log_offset = self
             .ha_service
             .get_default_message_store()
-            .get_commit_log_data(next_offset)
-        {
-            let mut size = select_result.size as usize;
-            let max_batch_size = effective_ha_transfer_batch_size(self.message_store_config.ha_transfer_batch_size);
-
-            if size > max_batch_size {
-                size = max_batch_size;
-            }
-
-            let can_transfer_max_bytes = self.flow_monitor.can_transfer_max_byte_num();
-            if size > can_transfer_max_bytes as usize {
-                let current_time = current_millis();
-                let last_print = self.last_print_timestamp.load(Ordering::Relaxed);
-
-                if current_time - last_print > 1000 {
-                    warn!(
-                        "Trigger HA flow control, max transfer speed {:.2}KB/s, current speed: {:.2}KB/s",
-                        self.flow_monitor.max_transfer_byte_in_second() as f64 / 1024.0,
-                        self.flow_monitor.get_transferred_byte_in_second() as f64 / 1024.0
-                    );
-                    self.last_print_timestamp.store(current_time, Ordering::Relaxed);
-                }
-                size = can_transfer_max_bytes as usize;
-            }
-
-            let this_offset = next_offset;
-            self.next_transfer_from_where
-                .store(next_offset + size as i64, Ordering::Relaxed);
-
-            self.send_data(this_offset, select_result.get_bytes(), size).await?;
-        } else {
+            .get_commit_log()
+            .get_max_offset();
+        if next_offset >= max_commit_log_offset {
             if let Some(connection) = self.connection.upgrade() {
                 self.ha_service.handle_connection_caught_up(connection.as_ref());
             }
-            //self.ha_service.wait_for_running(100).await;
+            return Ok(());
+        }
+
+        let configured_max_batch_size =
+            effective_ha_transfer_batch_size(self.message_store_config.ha_transfer_batch_size);
+        let can_transfer_max_bytes = self.flow_monitor.can_transfer_max_byte_num() as usize;
+        self.maybe_log_flow_control(
+            next_offset,
+            max_commit_log_offset,
+            configured_max_batch_size,
+            can_transfer_max_bytes,
+        );
+
+        let plan = TransferPlanner::plan(
+            TransferPlanInput {
+                requested_offset: slave_request_offset,
+                next_transfer_offset: next_offset,
+                max_commit_log_offset,
+                configured_max_batch_bytes: self.message_store_config.ha_transfer_batch_size,
+                flow_control_available_bytes: can_transfer_max_bytes,
+                mapped_file_size: self.message_store_config.mapped_file_size_commit_log,
+                allow_cross_file_batch: false,
+                heartbeat_due: false,
+            },
+            |offset, max_bytes, allow_cross_file| {
+                self.ha_service
+                    .get_default_message_store()
+                    .get_commit_log()
+                    .select_segments(offset, max_bytes, allow_cross_file)
+            },
+        )?;
+
+        if let TransferPlan::Data(batch) = plan {
+            self.next_transfer_from_where
+                .store(batch.next_offset, Ordering::Relaxed);
+            self.send_data(batch.start_offset, batch.body_bytes(), batch.total_body_len)
+                .await?;
         }
 
         Ok(())
+    }
+
+    fn maybe_log_flow_control(
+        &self,
+        next_offset: i64,
+        max_commit_log_offset: i64,
+        configured_max_batch_size: usize,
+        can_transfer_max_bytes: usize,
+    ) {
+        let available = (max_commit_log_offset - next_offset).max(0) as usize;
+        let planned_without_flow = configured_max_batch_size.min(available);
+        if planned_without_flow <= can_transfer_max_bytes {
+            return;
+        }
+
+        let current_time = current_millis();
+        let last_print = self.last_print_timestamp.load(Ordering::Relaxed);
+        if current_time - last_print > 1000 {
+            warn!(
+                "Trigger HA flow control, max transfer speed {:.2}KB/s, current speed: {:.2}KB/s",
+                self.flow_monitor.max_transfer_byte_in_second() as f64 / 1024.0,
+                self.flow_monitor.get_transferred_byte_in_second() as f64 / 1024.0
+            );
+            self.last_print_timestamp.store(current_time, Ordering::Relaxed);
+        }
     }
 
     async fn send_heartbeat(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
