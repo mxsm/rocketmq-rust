@@ -50,7 +50,12 @@ pub mod metrics {
     pub const STORE_FLUSH_LATENCY: &str = "rocketmq_store_flush_latency";
     pub const STORE_DISPATCH_LATENCY: &str = "rocketmq_store_dispatch_latency";
     pub const STORE_DISK_USAGE: &str = "rocketmq_store_disk_usage";
+    pub const STORE_COMMITLOG_SEGMENT_LEASE_ACTIVE: &str = "rocketmq_store_commitlog_segment_lease_active";
+    pub const STORE_HA_ACK_LATENCY_MILLIS: &str = "rocketmq_store_ha_ack_latency_millis";
+    pub const STORE_HA_REPLICATION_LAG_BYTES: &str = "rocketmq_store_ha_replication_lag_bytes";
     pub const STORE_LINUX_SENDFILE_BYTES_TOTAL: &str = "rocketmq_store_linux_sendfile_bytes_total";
+    pub const STORE_LINUX_MLOCK_BYTES: &str = "rocketmq_store_linux_mlock_bytes";
+    pub const STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS: &str = "rocketmq_store_linux_page_cache_warmup_millis";
     pub const STORE_TRANSFER_BATCH_TOTAL: &str = "rocketmq_store_transfer_batch_total";
     pub const STORE_TRANSFER_BYTES_TOTAL: &str = "rocketmq_store_transfer_bytes_total";
     pub const STORE_TRANSFER_ENGINE_TOTAL: &str = "rocketmq_store_transfer_engine_total";
