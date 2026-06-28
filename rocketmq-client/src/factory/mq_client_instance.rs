@@ -94,6 +94,7 @@ use crate::stat::consumer_stats_manager::ConsumerStatsManager;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const ROUTE_REFRESH_MAX_TOPICS_PER_ROUND: usize = 64;
 
 fn get_topic_config_request_header(topic: CheetahString) -> GetTopicConfigRequestHeader {
     let mut request_header = GetTopicConfigRequestHeader {
@@ -238,6 +239,7 @@ pub struct MQClientInstance {
     broker_heartbeat_fingerprint_table: BrokerHeartbeatFingerprintTable,
     /// HeartbeatV2: Set of brokers that support V2 protocol
     broker_support_v2_heartbeat_set: BrokerSupportV2HeartbeatSet,
+    route_refresh_state: TopicRouteRefreshState,
     consumer_stats_manager: ConsumerStatsManager,
     connection_event_shutdown: CancellationToken,
     connection_event_task_handle: Option<ClientTrackedTaskHandle>,
@@ -251,6 +253,37 @@ pub struct ConnectionEventListenerLifecycleProbe {
     pub task_count_before_shutdown: usize,
     pub task_count_after_shutdown: usize,
     pub shutdown_elapsed_us: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RouteRefreshShardProbe {
+    pub topic_count: usize,
+    pub batch_size: usize,
+    pub selected_topics: usize,
+    pub skipped_topics: usize,
+    pub peak_topic_reduction_percent: f64,
+    pub elapsed_us: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RouteRefreshConcurrentProbe {
+    pub healthy: bool,
+    pub stale_skipped: bool,
+    pub final_order_topic_conf: Option<CheetahString>,
+    pub route_version: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TopicRouteRefreshKind {
+    Periodic,
+    RouteMiss,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TopicRouteApplyOutcome {
+    Applied,
+    Unchanged,
+    Stale,
 }
 
 impl MQClientInstance {
@@ -302,6 +335,7 @@ impl MQClientInstance {
             scheduled_task_manager: ScheduledTaskManager::new_legacy_compatibility(),
             broker_heartbeat_fingerprint_table,
             broker_support_v2_heartbeat_set,
+            route_refresh_state: TopicRouteRefreshState::default(),
             consumer_stats_manager: ConsumerStatsManager::new(),
             connection_event_shutdown: CancellationToken::new(),
             connection_event_task_handle: None,
@@ -548,6 +582,7 @@ impl MQClientInstance {
         self.admin_ext_table.clear();
 
         self.topic_route_table.clear();
+        self.route_refresh_state.versions.clear();
         self.topic_end_points_table.clear();
         self.broker_addr_table.clear();
         self.broker_version_table.clear();
@@ -733,21 +768,27 @@ impl MQClientInstance {
     }
 
     pub async fn update_topic_route_info_from_name_server(&mut self) {
-        let mut topic_list = HashSet::new();
+        let topic_list = self.collect_registered_route_topics();
+        let total_topics = topic_list.len();
+        let (refresh_topics, skipped_topics) = self.select_periodic_route_refresh_batch(&topic_list);
+        let started = Instant::now();
 
-        for entry in self.producer_table.iter() {
-            topic_list.extend(entry.value().get_publish_topic_list());
+        for topic in refresh_topics.iter() {
+            self.update_topic_route_info_from_name_server_default_with_kind(
+                topic,
+                false,
+                None,
+                TopicRouteRefreshKind::Periodic,
+            )
+            .await;
         }
 
-        for entry in self.consumer_table.iter() {
-            entry.value().subscriptions().iter().for_each(|sub| {
-                topic_list.insert(sub.topic.clone());
-            });
-        }
-
-        for topic in topic_list.iter() {
-            self.update_topic_route_info_from_name_server_topic(topic).await;
-        }
+        self.route_refresh_state.metrics.record_periodic_batch(
+            total_topics as u64,
+            refresh_topics.len() as u64,
+            skipped_topics as u64,
+            started.elapsed().as_micros() as u64,
+        );
     }
 
     #[inline]
@@ -826,15 +867,36 @@ impl MQClientInstance {
         is_default: bool,
         producer_config: Option<&Arc<ProducerConfig>>,
     ) -> bool {
-        let lock = self.lock_namesrv.lock().await;
-        let Some(mq_client_api_impl) = self.mq_client_api_impl.as_mut() else {
+        self.update_topic_route_info_from_name_server_default_with_kind(
+            topic,
+            is_default,
+            producer_config,
+            TopicRouteRefreshKind::RouteMiss,
+        )
+        .await
+    }
+
+    async fn update_topic_route_info_from_name_server_default_with_kind(
+        &mut self,
+        topic: &CheetahString,
+        is_default: bool,
+        producer_config: Option<&Arc<ProducerConfig>>,
+        refresh_kind: TopicRouteRefreshKind,
+    ) -> bool {
+        self.route_refresh_state.metrics.record_attempt();
+        let started = Instant::now();
+        let request_version = self.topic_route_version(topic);
+
+        let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() else {
             error!(
                 "updateTopicRouteInfoFromNameServer skipped because mq_client_api_impl is None, Topic: {}. [{}]",
                 topic, self.client_id
             );
-            drop(lock);
+            self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyOutcome::Unchanged);
+            self.route_refresh_state.metrics.record_failure();
             return false;
         };
+
         let topic_route_data = if let (true, Some(producer_config)) = (is_default, producer_config) {
             let mut result = match mq_client_api_impl
                 .get_default_topic_route_info_from_name_server(self.client_config.mq_client_api_timeout)
@@ -854,75 +916,181 @@ impl MQClientInstance {
             }
             result
         } else {
-            mq_client_api_impl
+            match mq_client_api_impl
                 .get_topic_route_info_from_name_server(topic, self.client_config.mq_client_api_timeout)
                 .await
-                .unwrap_or(None)
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    warn!(
+                        "getTopicRouteInfoFromNameServer failed, topic: {}, error: {}",
+                        topic, error
+                    );
+                    None
+                }
+            }
         };
         if let Some(mut topic_route_data) = topic_route_data {
-            let old = self.topic_route_table.get(topic).map(|entry| entry.value().clone());
-            let mut changed = topic_route_data.topic_route_data_changed(old.as_ref());
-            if !changed {
-                changed = self.is_need_update_topic_route_info(topic).await;
-            } else {
-                info!(
-                    "the topic[{}] route info changed, old[{:?}] ,new[{:?}]",
-                    topic, old, topic_route_data
-                )
-            }
-            if changed {
-                for bd in topic_route_data.broker_datas.iter() {
-                    self.broker_addr_table
-                        .insert(bd.broker_name().clone(), bd.broker_addrs().clone());
+            let outcome = self
+                .apply_topic_route_data_if_fresh(topic, &mut topic_route_data, request_version)
+                .await;
+            self.record_topic_route_refresh_finish(refresh_kind, started, outcome);
+            match outcome {
+                TopicRouteApplyOutcome::Applied => {
+                    self.route_refresh_state.metrics.record_success();
+                    return true;
                 }
-
-                // Update endpoint map
-                {
-                    let mq_end_points =
-                        ClientMetadata::topic_route_data2endpoints_for_static_topic(topic, &topic_route_data);
-                    if let Some(mq_end_points) = mq_end_points {
-                        if !mq_end_points.is_empty() {
-                            self.topic_end_points_table.insert(topic.into(), mq_end_points);
-                        }
-                    }
+                TopicRouteApplyOutcome::Unchanged | TopicRouteApplyOutcome::Stale => {
+                    self.route_refresh_state.metrics.record_skip();
+                    return false;
                 }
-
-                // Update Pub info
-                {
-                    let mut publish_info = topic_route_data2topic_publish_info(topic, &mut topic_route_data);
-                    publish_info.have_topic_router_info = true;
-                    for mut entry in self.producer_table.iter_mut() {
-                        entry
-                            .value_mut()
-                            .update_topic_publish_info(topic.to_string(), Some(publish_info.clone()));
-                    }
-                }
-
-                // Update sub info
-                if !self.consumer_table.is_empty() {
-                    let subscribe_info = topic_route_data2topic_subscribe_info(topic, &topic_route_data);
-
-                    let consumers: Vec<_> = self.consumer_table.iter().map(|entry| entry.value().clone()).collect();
-
-                    for consumer in consumers {
-                        consumer
-                            .update_topic_subscribe_info(topic.clone(), &subscribe_info)
-                            .await;
-                    }
-                }
-                let clone_topic_route_data = TopicRouteData::from_existing(&topic_route_data);
-                self.topic_route_table.insert(topic.clone(), clone_topic_route_data);
-                return true;
             }
         } else {
             warn!(
                 "updateTopicRouteInfoFromNameServer, getTopicRouteInfoFromNameServer return null, Topic: {}. [{}]",
                 topic, self.client_id
             );
+            self.route_refresh_state.metrics.record_failure();
         }
 
-        drop(lock);
+        self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyOutcome::Unchanged);
         false
+    }
+
+    fn collect_registered_route_topics(&self) -> Vec<CheetahString> {
+        let mut topic_list = HashSet::new();
+
+        for entry in self.producer_table.iter() {
+            topic_list.extend(entry.value().get_publish_topic_list());
+        }
+
+        for entry in self.consumer_table.iter() {
+            entry.value().subscriptions().iter().for_each(|sub| {
+                topic_list.insert(sub.topic.clone());
+            });
+        }
+
+        let mut topics = topic_list.into_iter().collect::<Vec<_>>();
+        topics.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
+        topics
+    }
+
+    fn select_periodic_route_refresh_batch(&self, topics: &[CheetahString]) -> (Vec<CheetahString>, usize) {
+        let total_topics = topics.len();
+        if total_topics <= ROUTE_REFRESH_MAX_TOPICS_PER_ROUND {
+            return (topics.to_vec(), 0);
+        }
+
+        let start = self
+            .route_refresh_state
+            .periodic_cursor
+            .fetch_add(ROUTE_REFRESH_MAX_TOPICS_PER_ROUND, std::sync::atomic::Ordering::Relaxed)
+            % total_topics;
+        let selected = (0..ROUTE_REFRESH_MAX_TOPICS_PER_ROUND)
+            .map(|offset| topics[(start + offset) % total_topics].clone())
+            .collect::<Vec<_>>();
+        let skipped = total_topics.saturating_sub(selected.len());
+        (selected, skipped)
+    }
+
+    fn topic_route_version(&self, topic: &CheetahString) -> u64 {
+        self.route_refresh_state
+            .versions
+            .get(topic)
+            .map(|entry| *entry.value())
+            .unwrap_or_default()
+    }
+
+    fn bump_topic_route_version(&self, topic: &CheetahString, current_version: u64) {
+        self.route_refresh_state
+            .versions
+            .insert(topic.clone(), current_version.saturating_add(1));
+    }
+
+    fn record_topic_route_refresh_finish(
+        &self,
+        refresh_kind: TopicRouteRefreshKind,
+        started: Instant,
+        _outcome: TopicRouteApplyOutcome,
+    ) {
+        if matches!(refresh_kind, TopicRouteRefreshKind::RouteMiss) {
+            self.route_refresh_state
+                .metrics
+                .record_route_miss_elapsed(started.elapsed().as_micros() as u64);
+        }
+    }
+
+    async fn apply_topic_route_data_if_fresh(
+        &mut self,
+        topic: &CheetahString,
+        topic_route_data: &mut TopicRouteData,
+        request_version: u64,
+    ) -> TopicRouteApplyOutcome {
+        let _lock = self.lock_namesrv.lock().await;
+        let current_version = self.topic_route_version(topic);
+        if current_version != request_version {
+            warn!(
+                "updateTopicRouteInfoFromNameServer skipped stale route snapshot, Topic: {}, requestVersion: {}, \
+                 currentVersion: {}",
+                topic, request_version, current_version
+            );
+            return TopicRouteApplyOutcome::Stale;
+        }
+
+        let old = self.topic_route_table.get(topic).map(|entry| entry.value().clone());
+        let mut changed = topic_route_data.topic_route_data_changed(old.as_ref());
+        if !changed {
+            changed = self.is_need_update_topic_route_info(topic).await;
+        } else {
+            info!(
+                "the topic[{}] route info changed, old[{:?}] ,new[{:?}]",
+                topic, old, topic_route_data
+            )
+        }
+        if !changed {
+            return TopicRouteApplyOutcome::Unchanged;
+        }
+
+        for bd in topic_route_data.broker_datas.iter() {
+            self.broker_addr_table
+                .insert(bd.broker_name().clone(), bd.broker_addrs().clone());
+        }
+
+        if let Some(mq_end_points) =
+            ClientMetadata::topic_route_data2endpoints_for_static_topic(topic, topic_route_data)
+        {
+            if !mq_end_points.is_empty() {
+                self.topic_end_points_table.insert(topic.into(), mq_end_points);
+            }
+        }
+
+        let mut publish_info = topic_route_data2topic_publish_info(topic, topic_route_data);
+        publish_info.have_topic_router_info = true;
+        for mut entry in self.producer_table.iter_mut() {
+            entry
+                .value_mut()
+                .update_topic_publish_info(topic.to_string(), Some(publish_info.clone()));
+        }
+
+        if !self.consumer_table.is_empty() {
+            let subscribe_info = topic_route_data2topic_subscribe_info(topic, topic_route_data);
+            let consumers: Vec<_> = self.consumer_table.iter().map(|entry| entry.value().clone()).collect();
+
+            for consumer in consumers {
+                consumer
+                    .update_topic_subscribe_info(topic.clone(), &subscribe_info)
+                    .await;
+            }
+        }
+
+        let clone_topic_route_data = TopicRouteData::from_existing(topic_route_data);
+        self.topic_route_table.insert(topic.clone(), clone_topic_route_data);
+        self.bump_topic_route_version(topic, current_version);
+        TopicRouteApplyOutcome::Applied
+    }
+
+    pub fn route_refresh_metrics_snapshot(&self) -> TopicRouteRefreshMetricsSnapshot {
+        self.route_refresh_state.metrics.snapshot()
     }
 
     async fn is_need_update_topic_route_info(&self, topic: &CheetahString) -> bool {
@@ -2272,11 +2440,93 @@ pub async fn run_connection_event_listener_lifecycle_probe() -> ConnectionEventL
     }
 }
 
+fn route_refresh_probe_topics(topic_count: usize) -> Vec<CheetahString> {
+    (0..topic_count)
+        .map(|index| CheetahString::from_string(format!("route-refresh-topic-{index:04}")))
+        .collect()
+}
+
+#[doc(hidden)]
+pub fn run_route_refresh_shard_probe(topic_count: usize) -> RouteRefreshShardProbe {
+    let client_config = ClientConfig {
+        namesrv_addr: None,
+        ..Default::default()
+    };
+    let instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-shard-probe", None);
+    let topics = route_refresh_probe_topics(topic_count);
+    let started = Instant::now();
+    let (selected, skipped_topics) = instance.select_periodic_route_refresh_batch(&topics);
+    let elapsed_us = started.elapsed().as_micros();
+    let peak_topic_reduction_percent = if topic_count == 0 {
+        0.0
+    } else {
+        ((topic_count - selected.len()) as f64 / topic_count as f64) * 100.0
+    };
+
+    RouteRefreshShardProbe {
+        topic_count,
+        batch_size: ROUTE_REFRESH_MAX_TOPICS_PER_ROUND,
+        selected_topics: selected.len(),
+        skipped_topics,
+        peak_topic_reduction_percent,
+        elapsed_us,
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_route_refresh_concurrent_stale_guard_probe() -> RouteRefreshConcurrentProbe {
+    let client_config = ClientConfig {
+        namesrv_addr: None,
+        ..Default::default()
+    };
+    let mut instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-concurrent-probe", None);
+    let topic = CheetahString::from_static_str("route-refresh-concurrent-topic");
+    let current_route = TopicRouteData {
+        order_topic_conf: Some(CheetahString::from_static_str("broker-new:1")),
+        ..Default::default()
+    };
+    instance.topic_route_table.insert(topic.clone(), current_route);
+    instance.route_refresh_state.versions.insert(topic.clone(), 1);
+
+    let mut stale_route = TopicRouteData {
+        order_topic_conf: Some(CheetahString::from_static_str("broker-stale:1")),
+        ..Default::default()
+    };
+    let outcome = instance
+        .apply_topic_route_data_if_fresh(&topic, &mut stale_route, 0)
+        .await;
+
+    let final_order_topic_conf = instance
+        .topic_route_table
+        .get(&topic)
+        .and_then(|entry| entry.value().order_topic_conf.clone());
+    let route_version = instance.topic_route_version(&topic);
+    let stale_skipped = matches!(outcome, TopicRouteApplyOutcome::Stale);
+    let kept_current_route = final_order_topic_conf
+        .as_ref()
+        .is_some_and(|value| value.as_str() == "broker-new:1");
+
+    RouteRefreshConcurrentProbe {
+        healthy: stale_skipped && kept_current_route && route_version == 1,
+        stale_skipped,
+        final_order_topic_conf,
+        route_version,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rocketmq_error::RocketMQError;
+    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
+    use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 
     use super::*;
+    use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
+    use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+    use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
+    use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
+    use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 
     #[tokio::test]
     async fn get_mq_client_api_impl_returns_client_not_started_instead_of_panicking() {
@@ -2418,6 +2668,122 @@ mod tests {
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_before_shutdown, 1);
         assert_eq!(probe.task_count_after_shutdown, 0);
+    }
+
+    #[test]
+    fn periodic_route_refresh_batches_large_topic_sets() {
+        let client_config = ClientConfig {
+            namesrv_addr: None,
+            ..Default::default()
+        };
+        let instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-batch-test", None);
+        let topics = route_refresh_probe_topics(1_000);
+
+        let (first_batch, first_skipped) = instance.select_periodic_route_refresh_batch(&topics);
+        let (second_batch, second_skipped) = instance.select_periodic_route_refresh_batch(&topics);
+
+        assert_eq!(first_batch.len(), ROUTE_REFRESH_MAX_TOPICS_PER_ROUND);
+        assert_eq!(second_batch.len(), ROUTE_REFRESH_MAX_TOPICS_PER_ROUND);
+        assert_eq!(first_skipped, 1_000 - ROUTE_REFRESH_MAX_TOPICS_PER_ROUND);
+        assert_eq!(second_skipped, 1_000 - ROUTE_REFRESH_MAX_TOPICS_PER_ROUND);
+        assert_ne!(first_batch[0], second_batch[0]);
+
+        let small_topics = route_refresh_probe_topics(10);
+        let (small_batch, small_skipped) = instance.select_periodic_route_refresh_batch(&small_topics);
+        assert_eq!(small_batch.len(), 10);
+        assert_eq!(small_skipped, 0);
+    }
+
+    #[test]
+    fn route_refresh_shard_probe_reports_peak_topic_reduction() {
+        let probe = run_route_refresh_shard_probe(1_000);
+
+        assert_eq!(probe.batch_size, ROUTE_REFRESH_MAX_TOPICS_PER_ROUND);
+        assert_eq!(probe.selected_topics, ROUTE_REFRESH_MAX_TOPICS_PER_ROUND);
+        assert!(probe.peak_topic_reduction_percent > 90.0, "{probe:?}");
+    }
+
+    #[tokio::test]
+    async fn stale_route_snapshot_does_not_overwrite_current_route() {
+        let probe = run_route_refresh_concurrent_stale_guard_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert!(probe.stale_skipped);
+        assert_eq!(probe.route_version, 1);
+    }
+
+    #[tokio::test]
+    async fn apply_route_refresh_updates_producer_and_consumer_views() {
+        let client_config = ClientConfig {
+            namesrv_addr: None,
+            ..Default::default()
+        };
+        let mut instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-apply-test", None);
+        let topic = CheetahString::from_static_str("route-refresh-topic");
+
+        let producer = ArcMut::new(DefaultMQProducerImpl::new(
+            ClientConfig::default(),
+            ProducerConfig::default(),
+            None,
+        ));
+        let producer_inner = MQProducerInnerImpl {
+            default_mqproducer_impl_inner: Some(producer.clone()),
+        };
+        assert!(producer.is_publish_topic_need_update(&topic));
+        assert!(
+            instance
+                .register_producer("route-refresh-producer", producer_inner)
+                .await
+        );
+
+        let consumer_group = CheetahString::from_static_str("route-refresh-consumer");
+        let mut consumer = ArcMut::new(DefaultMQPushConsumerImpl::new(
+            ClientConfig::default(),
+            ArcMut::new(ConsumerConfig {
+                consumer_group: consumer_group.clone(),
+                ..Default::default()
+            }),
+            None,
+        ));
+        consumer.rebalance_impl.put_subscription_data(
+            topic.clone(),
+            SubscriptionData {
+                topic: topic.clone(),
+                ..Default::default()
+            },
+        );
+        assert!(consumer.is_subscribe_topic_need_update(topic.as_str()).await);
+        assert!(
+            instance
+                .register_consumer(&consumer_group, MQConsumerInnerImpl::from_push(consumer.clone()))
+                .await
+        );
+
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(mix_all::MASTER_ID, CheetahString::from_static_str("127.0.0.1:10911"));
+        let mut route = TopicRouteData {
+            queue_datas: vec![QueueData {
+                broker_name: CheetahString::from_static_str("broker-a"),
+                read_queue_nums: 1,
+                write_queue_nums: 1,
+                perm: PermName::PERM_READ | PermName::PERM_WRITE,
+                ..Default::default()
+            }],
+            broker_datas: vec![BrokerData::new(
+                CheetahString::from_static_str("cluster-a"),
+                CheetahString::from_static_str("broker-a"),
+                broker_addrs,
+                None,
+            )],
+            ..Default::default()
+        };
+
+        let outcome = instance.apply_topic_route_data_if_fresh(&topic, &mut route, 0).await;
+
+        assert_eq!(outcome, TopicRouteApplyOutcome::Applied);
+        assert!(!producer.is_publish_topic_need_update(&topic));
+        assert!(!consumer.is_subscribe_topic_need_update(topic.as_str()).await);
+        assert_eq!(instance.topic_route_version(&topic), 1);
     }
 
     #[tokio::test]

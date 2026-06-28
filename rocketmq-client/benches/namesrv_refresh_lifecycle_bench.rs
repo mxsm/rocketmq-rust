@@ -23,7 +23,9 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_client_rust::run_namesrv_refresh_lifecycle_probe;
+use rocketmq_client_rust::run_route_refresh_shard_probe;
 use rocketmq_client_rust::NamesrvRefreshLifecycleProbe;
+use rocketmq_client_rust::RouteRefreshShardProbe;
 
 fn run_lifecycle_probe() -> NamesrvRefreshLifecycleProbe {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -35,6 +37,10 @@ fn run_lifecycle_probe() -> NamesrvRefreshLifecycleProbe {
         .expect("namesrv refresh benchmark runtime should start");
 
     runtime.block_on(run_namesrv_refresh_lifecycle_probe())
+}
+
+fn run_route_refresh_probe(topic_count: usize) -> RouteRefreshShardProbe {
+    run_route_refresh_shard_probe(topic_count)
 }
 
 fn workspace_root() -> PathBuf {
@@ -51,6 +57,10 @@ fn benchmark_artifact_dir() -> PathBuf {
 fn write_namesrv_refresh_report_artifact() {
     let output = run_lifecycle_probe();
     assert!(output.healthy, "{output:?}");
+    let route_refresh_profiles = [10, 100, 1_000]
+        .into_iter()
+        .map(run_route_refresh_probe)
+        .collect::<Vec<_>>();
     let output_dir = benchmark_artifact_dir();
     fs::create_dir_all(&output_dir).expect("runtime benchmark artifact directory should be created");
 
@@ -62,6 +72,7 @@ fn write_namesrv_refresh_report_artifact() {
         "case": "client_namesrv_refresh_lifecycle",
         "generated_at_unix_ms": generated_at_unix_ms,
         "probe": output,
+        "route_refresh_profiles": route_refresh_profiles,
     });
     let path = output_dir.join("client-namesrv-refresh-lifecycle-report.json");
     fs::write(
@@ -83,6 +94,20 @@ fn bench_namesrv_refresh_lifecycle(criterion: &mut Criterion) {
             black_box(output.shutdown_elapsed_us);
         });
     });
+
+    for topic_count in [10, 100, 1_000] {
+        let bench_name = format!("client_route_refresh_shard/{topic_count}_topics");
+        criterion.bench_function(&bench_name, |bencher| {
+            bencher.iter(|| {
+                let output = run_route_refresh_probe(topic_count);
+                assert_eq!(output.topic_count, topic_count);
+                assert!(output.selected_topics <= output.batch_size);
+                black_box(output.selected_topics);
+                black_box(output.skipped_topics);
+                black_box(output.peak_topic_reduction_percent);
+            });
+        });
+    }
 }
 
 criterion_group! {

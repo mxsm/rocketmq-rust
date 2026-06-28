@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_client_rust::run_route_refresh_concurrent_stale_guard_probe;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use tokio::sync::RwLock;
@@ -504,6 +505,15 @@ async fn test_high_concurrency_stress() {
     println!("Error rate: {:.2}%", error_rate);
 
     assert!(error_rate < 1.0, "Error rate too high: {:.2}%", error_rate);
+}
+
+#[tokio::test]
+async fn test_route_refresh_stale_snapshot_does_not_overwrite_current_route() {
+    let probe = run_route_refresh_concurrent_stale_guard_probe().await;
+
+    assert!(probe.healthy, "{probe:?}");
+    assert!(probe.stale_skipped);
+    assert_eq!(probe.route_version, 1);
 }
 
 #[tokio::test]

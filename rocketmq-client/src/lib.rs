@@ -193,7 +193,15 @@ pub use crate::exception::RequestTimeoutException;
 #[doc(hidden)]
 pub use crate::factory::mq_client_instance::run_connection_event_listener_lifecycle_probe;
 #[doc(hidden)]
+pub use crate::factory::mq_client_instance::run_route_refresh_concurrent_stale_guard_probe;
+#[doc(hidden)]
+pub use crate::factory::mq_client_instance::run_route_refresh_shard_probe;
+#[doc(hidden)]
 pub use crate::factory::mq_client_instance::ConnectionEventListenerLifecycleProbe;
+#[doc(hidden)]
+pub use crate::factory::mq_client_instance::RouteRefreshConcurrentProbe;
+#[doc(hidden)]
+pub use crate::factory::mq_client_instance::RouteRefreshShardProbe;
 pub use crate::hook::consume_message_context::ConsumeMessageContext;
 pub use crate::hook::consume_message_hook::ConsumeMessageHook;
 pub use crate::hook::consume_message_hook::ConsumeMessageHookArc;
