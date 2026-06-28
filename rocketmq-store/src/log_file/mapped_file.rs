@@ -33,6 +33,7 @@ mod reference_resource_counter;
 
 // New modules for storage optimization
 mod builder;
+mod direct_io;
 mod flush_strategy;
 mod mapped_buffer;
 mod mapped_file_error;
@@ -48,6 +49,9 @@ pub mod factory;
 
 // Re-export commonly used types
 pub use builder::MappedFileBuilder;
+pub use direct_io::DirectIoBuffer;
+pub use direct_io::DirectIoRequest;
+pub use direct_io::DirectIoValidationError;
 /*pub use factory::MappedFileConfig;
 pub use factory::MappedFileFactory;
 pub use factory::MappedFileType;*/
