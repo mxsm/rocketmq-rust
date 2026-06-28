@@ -470,9 +470,7 @@ impl LocalFileMessageStore {
             dispatcher_vec: vec![build_consume_queue, build_index],
         });
 
-        let memory_lock_budget_bytes = message_store_config.effective_linux_memory_lock_budget_bytes(
-            crate::platform::current_store_platform_capability().memory_lock_limit_bytes,
-        );
+        let memory_lock_budget_bytes = Self::effective_linux_memory_lock_budget_bytes(message_store_config.as_ref());
         let transient_store_pool = TransientStorePool::new_with_memory_lock_budget(
             message_store_config.transient_store_pool_size,
             message_store_config.mapped_file_size_commit_log,
@@ -591,6 +589,12 @@ impl LocalFileMessageStore {
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
         })
+    }
+
+    fn effective_linux_memory_lock_budget_bytes(message_store_config: &MessageStoreConfig) -> u64 {
+        message_store_config.effective_linux_memory_lock_budget_bytes(
+            crate::platform::current_store_platform_capability().memory_lock_limit_bytes,
+        )
     }
 
     #[cfg(feature = "tieredstore")]
@@ -1873,13 +1877,14 @@ impl MessageStore for LocalFileMessageStore {
         let storage_capability = crate::platform::current_store_platform_capability();
         info!(
             "Linux storage capability snapshot: os={} page_size={} memory_lock_limit_bytes={} \
-             file_preallocate_supported={}",
+             effective_memory_lock_budget_bytes={} file_preallocate_supported={}",
             storage_capability.os_name,
             storage_capability.page_size,
             storage_capability
                 .memory_lock_limit_bytes
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "unknown".to_string()),
+            Self::effective_linux_memory_lock_budget_bytes(self.message_store_config.as_ref()),
             storage_capability.file_preallocate_supported
         );
 
@@ -2581,6 +2586,12 @@ impl MessageStore for LocalFileMessageStore {
                 .memory_lock_limit_bytes
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "unknown".to_string()),
+        );
+        result.insert(
+            "linuxStorageEffectiveMemoryLockBudgetBytes".to_string(),
+            self.message_store_config
+                .effective_linux_memory_lock_budget_bytes(storage_capability.memory_lock_limit_bytes)
+                .to_string(),
         );
         result.insert(
             "linuxStorageFilePreallocateSupported".to_string(),
@@ -5452,6 +5463,22 @@ mod tests {
         assert_eq!(runtime_info["linuxStorageMemoryLockMode"], "off");
         assert_eq!(runtime_info["linuxStorageHaSendfileEnable"], "false");
         assert_eq!(runtime_info["linuxStorageIoUringEnable"], "false");
+    }
+
+    #[test]
+    fn runtime_info_reports_effective_linux_memory_lock_budget() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                linux_memory_lock_budget_bytes: 4096,
+                ..Default::default()
+            },
+        );
+
+        let runtime_info = store.get_runtime_info();
+
+        assert_eq!(runtime_info["linuxStorageEffectiveMemoryLockBudgetBytes"], "4096");
     }
 
     #[tokio::test]
