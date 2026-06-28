@@ -337,7 +337,7 @@ impl CommitLog {
             return None;
         }
 
-        match message_store_config.linux_memory_lock_mode {
+        match message_store_config.effective_linux_memory_lock_mode() {
             LinuxMemoryLockMode::Off => None,
             LinuxMemoryLockMode::ActiveWindow => {
                 if wrote_position >= file_size {
@@ -2589,6 +2589,7 @@ mod tests {
     use crate::base::memory_lock_manager::MemoryLockCategory;
     use crate::base::message_store::MessageStore;
     use crate::config::message_store_config::LinuxMemoryLockMode;
+    use crate::config::message_store_config::LinuxStorageProfile;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
@@ -2834,6 +2835,24 @@ mod tests {
         assert_eq!(target.offset, 64);
         assert_eq!(target.len, 128 * 1024 * 1024);
         assert_ne!(target.len as u64, file_size);
+    }
+
+    #[test]
+    fn active_memory_lock_target_uses_low_latency_profile_effective_mode() {
+        let config = MessageStoreConfig {
+            linux_storage_optimization_enable: true,
+            linux_storage_profile: LinuxStorageProfile::LowLatency,
+            linux_memory_lock_mode: LinuxMemoryLockMode::Off,
+            linux_memory_lock_active_window_bytes: 1024,
+            ..MessageStoreConfig::default()
+        };
+
+        let target = CommitLog::active_memory_lock_target_for_config(&config, 0, 4096)
+            .expect("low latency profile should enable active window locking");
+
+        assert_eq!(target.category, MemoryLockCategory::CommitLogActiveWindow);
+        assert_eq!(target.offset, 0);
+        assert_eq!(target.len, 1024);
     }
 
     #[test]
