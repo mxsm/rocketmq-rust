@@ -152,6 +152,10 @@ name    = "pull_message_service_lifecycle_bench"
 harness = false
 
 [[bench]]
+name    = "client_pull_scheduler_benchmark"
+harness = false
+
+[[bench]]
 name    = "rebalance_service_lifecycle_bench"
 harness = false
 
