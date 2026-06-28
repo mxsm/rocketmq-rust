@@ -19,10 +19,12 @@ use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 
 use crate::ha::transfer_engine::batch_body_chunks;
+use crate::ha::transfer_engine::bytes::BytesTransferEngine;
 use crate::ha::transfer_engine::write_zero_error;
 use crate::ha::transfer_engine::TransferEngineKind;
 use crate::ha::transfer_engine::TransferStats;
 use crate::transfer::batch::TransferBatch;
+use crate::transfer::error::TransferError;
 use crate::transfer::error::TransferResult;
 
 pub struct VectoredTransferEngine<W> {
@@ -55,10 +57,14 @@ where
         while chunk_index < chunks.len() {
             let remaining_before_write = total_len - bytes_written;
             let slices = io_slices(&chunks, chunk_index, chunk_offset);
-            let written = self.writer.write_vectored(&slices).await?;
-            if written == 0 {
-                return Err(write_zero_error());
-            }
+            let written = match self.writer.write_vectored(&slices).await {
+                Ok(0) => return Err(write_zero_error()),
+                Ok(written) => written,
+                Err(_) if bytes_written == 0 && batch.body_bytes().is_some() => {
+                    return self.send_with_bytes_fallback(batch).await;
+                }
+                Err(error) => return Err(TransferError::Io(error)),
+            };
             write_call_count += 1;
             bytes_written += written;
             if written < remaining_before_write {
@@ -80,6 +86,13 @@ where
             fallback_bytes: 0,
             partial_write_count,
         })
+    }
+
+    async fn send_with_bytes_fallback(&mut self, batch: &TransferBatch) -> TransferResult<TransferStats> {
+        let mut fallback = BytesTransferEngine::new(&mut self.writer);
+        let mut stats = fallback.send_batch(batch).await?;
+        stats.fallback_bytes = stats.body_bytes;
+        Ok(stats)
     }
 }
 
