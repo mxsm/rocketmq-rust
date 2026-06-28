@@ -33,6 +33,7 @@ pub use crate::semantic::metrics::STORE_LINUX_MLOCK_SUCCESS_TOTAL;
 pub use crate::semantic::metrics::STORE_LINUX_MUNLOCK_FAILURE_TOTAL;
 pub use crate::semantic::metrics::STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS;
 pub use crate::semantic::metrics::STORE_LINUX_SENDFILE_BYTES_TOTAL;
+pub use crate::semantic::metrics::STORE_LINUX_STORAGE_DEGRADATION_TOTAL;
 pub use crate::semantic::metrics::STORE_TRANSFER_BATCH_TOTAL;
 pub use crate::semantic::metrics::STORE_TRANSFER_BYTES_TOTAL;
 pub use crate::semantic::metrics::STORE_TRANSFER_ENGINE_TOTAL;
@@ -295,6 +296,19 @@ pub fn record_linux_page_cache_warmup_millis(latency_ms: u64) {
     let _ = latency_ms;
 }
 
+pub fn record_linux_storage_degradation(operation: &str, reason: &str, errno: i32, count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_linux_storage_degradation_total(
+            count,
+            &linux_storage_degradation_attributes(operation, reason, errno),
+        );
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = (operation, reason, errno, count);
+}
+
 pub fn record_commitlog_segment_lease_active(count: u64) {
     #[cfg(feature = "otel-metrics")]
     if let Some(metrics) = STORE_METRICS.get() {
@@ -379,6 +393,9 @@ impl StoreMetrics {
     pub fn record_linux_page_cache_warmup_millis(&self, _latency_ms: u64) {}
 
     #[inline]
+    pub fn record_linux_storage_degradation_total(&self, _count: u64) {}
+
+    #[inline]
     pub fn record_commitlog_segment_lease_active(&self, _count: u64) {}
 }
 
@@ -406,6 +423,7 @@ pub struct StoreMetrics {
     linux_locked_bytes: opentelemetry::metrics::Gauge<u64>,
     linux_munlock_failure_total: opentelemetry::metrics::Counter<u64>,
     linux_page_cache_warmup_millis: opentelemetry::metrics::Histogram<u64>,
+    linux_storage_degradation_total: opentelemetry::metrics::Counter<u64>,
     commitlog_segment_lease_active: opentelemetry::metrics::Gauge<u64>,
 }
 
@@ -538,6 +556,12 @@ impl StoreMetrics {
             .with_unit("ms")
             .build();
 
+        let linux_storage_degradation_total = meter
+            .u64_counter(STORE_LINUX_STORAGE_DEGRADATION_TOTAL)
+            .with_description("Total Linux storage lifecycle degradation events")
+            .with_unit("{operation}")
+            .build();
+
         let commitlog_segment_lease_active = meter
             .u64_gauge(STORE_COMMITLOG_SEGMENT_LEASE_ACTIVE)
             .with_description("Active commitlog segment leases")
@@ -566,6 +590,7 @@ impl StoreMetrics {
             linux_locked_bytes,
             linux_munlock_failure_total,
             linux_page_cache_warmup_millis,
+            linux_storage_degradation_total,
             commitlog_segment_lease_active,
         }
     }
@@ -733,6 +758,11 @@ impl StoreMetrics {
     }
 
     #[inline]
+    pub fn record_linux_storage_degradation_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.linux_storage_degradation_total.add(count, attributes);
+    }
+
+    #[inline]
     pub fn record_commitlog_segment_lease_active(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
         self.commitlog_segment_lease_active.record(count, attributes);
     }
@@ -797,6 +827,15 @@ fn memory_lock_skip_attributes(category: &str, reason: &str) -> [opentelemetry::
     ]
 }
 
+#[cfg(feature = "otel-metrics")]
+fn linux_storage_degradation_attributes(operation: &str, reason: &str, errno: i32) -> [opentelemetry::KeyValue; 3] {
+    [
+        opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, operation.to_owned()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason.to_owned()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::ERRNO, errno as i64),
+    ]
+}
+
 #[cfg(all(test, feature = "otel-metrics"))]
 mod tests {
     use opentelemetry::metrics::MeterProvider;
@@ -836,6 +875,10 @@ mod tests {
         );
         metrics.record_linux_locked_bytes(8192, &memory_lock_category_attributes("transient_store_pool"));
         metrics.record_linux_munlock_failure_total(1, &memory_lock_errno_attributes("transient_store_pool", 22));
+        metrics.record_linux_storage_degradation_total(
+            1,
+            &linux_storage_degradation_attributes("fallocate", "unsupported", 95),
+        );
         record_delay_message_latency(30);
     }
 
@@ -897,5 +940,6 @@ mod helper_tests {
         record_linux_mlock_skipped("commitlog_active_window", "budget_exhausted", 1);
         record_linux_locked_bytes("transient_store_pool", 8192);
         record_linux_munlock_failure("transient_store_pool", 22, 1);
+        record_linux_storage_degradation("fallocate", "unsupported", 95, 1);
     }
 }
