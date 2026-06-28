@@ -24,7 +24,13 @@ pub use crate::semantic::metrics::STORE_DISPATCH_LATENCY;
 pub use crate::semantic::metrics::STORE_FLUSH_LATENCY;
 pub use crate::semantic::metrics::STORE_HA_ACK_LATENCY_MILLIS;
 pub use crate::semantic::metrics::STORE_HA_REPLICATION_LAG_BYTES;
+pub use crate::semantic::metrics::STORE_LINUX_LOCKED_BYTES;
+pub use crate::semantic::metrics::STORE_LINUX_MLOCK_ATTEMPT_TOTAL;
 pub use crate::semantic::metrics::STORE_LINUX_MLOCK_BYTES;
+pub use crate::semantic::metrics::STORE_LINUX_MLOCK_FAILURE_TOTAL;
+pub use crate::semantic::metrics::STORE_LINUX_MLOCK_SKIPPED_TOTAL;
+pub use crate::semantic::metrics::STORE_LINUX_MLOCK_SUCCESS_TOTAL;
+pub use crate::semantic::metrics::STORE_LINUX_MUNLOCK_FAILURE_TOTAL;
 pub use crate::semantic::metrics::STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS;
 pub use crate::semantic::metrics::STORE_LINUX_SENDFILE_BYTES_TOTAL;
 pub use crate::semantic::metrics::STORE_TRANSFER_BATCH_TOTAL;
@@ -219,6 +225,66 @@ pub fn record_linux_mlock_bytes(bytes: u64) {
     let _ = bytes;
 }
 
+pub fn record_linux_mlock_attempt(category: &str, count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_linux_mlock_attempt_total(count, &memory_lock_category_attributes(category));
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = (category, count);
+}
+
+pub fn record_linux_mlock_success(category: &str, count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_linux_mlock_success_total(count, &memory_lock_category_attributes(category));
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = (category, count);
+}
+
+pub fn record_linux_mlock_failure(category: &str, errno: i32, count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_linux_mlock_failure_total(count, &memory_lock_errno_attributes(category, errno));
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = (category, errno, count);
+}
+
+pub fn record_linux_mlock_skipped(category: &str, reason: &str, count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_linux_mlock_skipped_total(count, &memory_lock_skip_attributes(category, reason));
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = (category, reason, count);
+}
+
+pub fn record_linux_locked_bytes(category: &str, bytes: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_linux_locked_bytes(bytes, &memory_lock_category_attributes(category));
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = (category, bytes);
+}
+
+pub fn record_linux_munlock_failure(category: &str, errno: i32, count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = STORE_METRICS.get() {
+        metrics.record_linux_munlock_failure_total(count, &memory_lock_errno_attributes(category, errno));
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = (category, errno, count);
+}
+
 pub fn record_linux_page_cache_warmup_millis(latency_ms: u64) {
     #[cfg(feature = "otel-metrics")]
     if let Some(metrics) = STORE_METRICS.get() {
@@ -292,6 +358,24 @@ impl StoreMetrics {
     pub fn record_linux_mlock_bytes(&self, _bytes: u64) {}
 
     #[inline]
+    pub fn record_linux_mlock_attempt_total(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_linux_mlock_success_total(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_linux_mlock_failure_total(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_linux_mlock_skipped_total(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_linux_locked_bytes(&self, _bytes: u64) {}
+
+    #[inline]
+    pub fn record_linux_munlock_failure_total(&self, _count: u64) {}
+
+    #[inline]
     pub fn record_linux_page_cache_warmup_millis(&self, _latency_ms: u64) {}
 
     #[inline]
@@ -315,6 +399,12 @@ pub struct StoreMetrics {
     ha_replication_lag_bytes: opentelemetry::metrics::Gauge<u64>,
     ha_ack_latency_millis: opentelemetry::metrics::Histogram<u64>,
     linux_mlock_bytes: opentelemetry::metrics::Gauge<u64>,
+    linux_mlock_attempt_total: opentelemetry::metrics::Counter<u64>,
+    linux_mlock_success_total: opentelemetry::metrics::Counter<u64>,
+    linux_mlock_failure_total: opentelemetry::metrics::Counter<u64>,
+    linux_mlock_skipped_total: opentelemetry::metrics::Counter<u64>,
+    linux_locked_bytes: opentelemetry::metrics::Gauge<u64>,
+    linux_munlock_failure_total: opentelemetry::metrics::Counter<u64>,
     linux_page_cache_warmup_millis: opentelemetry::metrics::Histogram<u64>,
     commitlog_segment_lease_active: opentelemetry::metrics::Gauge<u64>,
 }
@@ -406,6 +496,42 @@ impl StoreMetrics {
             .with_unit("By")
             .build();
 
+        let linux_mlock_attempt_total = meter
+            .u64_counter(STORE_LINUX_MLOCK_ATTEMPT_TOTAL)
+            .with_description("Total Linux mlock attempts by store category")
+            .with_unit("{operation}")
+            .build();
+
+        let linux_mlock_success_total = meter
+            .u64_counter(STORE_LINUX_MLOCK_SUCCESS_TOTAL)
+            .with_description("Total successful Linux mlock operations by store category")
+            .with_unit("{operation}")
+            .build();
+
+        let linux_mlock_failure_total = meter
+            .u64_counter(STORE_LINUX_MLOCK_FAILURE_TOTAL)
+            .with_description("Total failed Linux mlock operations by store category and errno")
+            .with_unit("{operation}")
+            .build();
+
+        let linux_mlock_skipped_total = meter
+            .u64_counter(STORE_LINUX_MLOCK_SKIPPED_TOTAL)
+            .with_description("Total skipped Linux mlock operations by store category and reason")
+            .with_unit("{operation}")
+            .build();
+
+        let linux_locked_bytes = meter
+            .u64_gauge(STORE_LINUX_LOCKED_BYTES)
+            .with_description("Current Linux locked bytes by store category")
+            .with_unit("By")
+            .build();
+
+        let linux_munlock_failure_total = meter
+            .u64_counter(STORE_LINUX_MUNLOCK_FAILURE_TOTAL)
+            .with_description("Total failed Linux munlock operations by store category and errno")
+            .with_unit("{operation}")
+            .build();
+
         let linux_page_cache_warmup_millis = meter
             .u64_histogram(STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS)
             .with_description("Linux page cache warmup latency")
@@ -433,6 +559,12 @@ impl StoreMetrics {
             ha_replication_lag_bytes,
             ha_ack_latency_millis,
             linux_mlock_bytes,
+            linux_mlock_attempt_total,
+            linux_mlock_success_total,
+            linux_mlock_failure_total,
+            linux_mlock_skipped_total,
+            linux_locked_bytes,
+            linux_munlock_failure_total,
             linux_page_cache_warmup_millis,
             commitlog_segment_lease_active,
         }
@@ -566,6 +698,36 @@ impl StoreMetrics {
     }
 
     #[inline]
+    pub fn record_linux_mlock_attempt_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.linux_mlock_attempt_total.add(count, attributes);
+    }
+
+    #[inline]
+    pub fn record_linux_mlock_success_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.linux_mlock_success_total.add(count, attributes);
+    }
+
+    #[inline]
+    pub fn record_linux_mlock_failure_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.linux_mlock_failure_total.add(count, attributes);
+    }
+
+    #[inline]
+    pub fn record_linux_mlock_skipped_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.linux_mlock_skipped_total.add(count, attributes);
+    }
+
+    #[inline]
+    pub fn record_linux_locked_bytes(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.linux_locked_bytes.record(bytes, attributes);
+    }
+
+    #[inline]
+    pub fn record_linux_munlock_failure_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.linux_munlock_failure_total.add(count, attributes);
+    }
+
+    #[inline]
     pub fn record_linux_page_cache_warmup_millis(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
         self.linux_page_cache_warmup_millis.record(latency_ms, attributes);
     }
@@ -611,6 +773,30 @@ fn transfer_fallback_attributes(from: &str, to: &str, reason: &str) -> [opentele
     ]
 }
 
+#[cfg(feature = "otel-metrics")]
+fn memory_lock_category_attributes(category: &str) -> [opentelemetry::KeyValue; 1] {
+    [opentelemetry::KeyValue::new(
+        crate::semantic::labels::CATEGORY,
+        category.to_owned(),
+    )]
+}
+
+#[cfg(feature = "otel-metrics")]
+fn memory_lock_errno_attributes(category: &str, errno: i32) -> [opentelemetry::KeyValue; 2] {
+    [
+        opentelemetry::KeyValue::new(crate::semantic::labels::CATEGORY, category.to_owned()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::ERRNO, errno as i64),
+    ]
+}
+
+#[cfg(feature = "otel-metrics")]
+fn memory_lock_skip_attributes(category: &str, reason: &str) -> [opentelemetry::KeyValue; 2] {
+    [
+        opentelemetry::KeyValue::new(crate::semantic::labels::CATEGORY, category.to_owned()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason.to_owned()),
+    ]
+}
+
 #[cfg(all(test, feature = "otel-metrics"))]
 mod tests {
     use opentelemetry::metrics::MeterProvider;
@@ -641,6 +827,15 @@ mod tests {
         metrics.record_linux_mlock_bytes(8192, &[]);
         metrics.record_linux_page_cache_warmup_millis(20, &[]);
         metrics.record_commitlog_segment_lease_active(3, &[]);
+        metrics.record_linux_mlock_attempt_total(1, &memory_lock_category_attributes("transient_store_pool"));
+        metrics.record_linux_mlock_success_total(1, &memory_lock_category_attributes("transient_store_pool"));
+        metrics.record_linux_mlock_failure_total(1, &memory_lock_errno_attributes("commitlog_active_file", 12));
+        metrics.record_linux_mlock_skipped_total(
+            1,
+            &memory_lock_skip_attributes("commitlog_active_window", "budget_exhausted"),
+        );
+        metrics.record_linux_locked_bytes(8192, &memory_lock_category_attributes("transient_store_pool"));
+        metrics.record_linux_munlock_failure_total(1, &memory_lock_errno_attributes("transient_store_pool", 22));
         record_delay_message_latency(30);
     }
 
@@ -696,5 +891,11 @@ mod helper_tests {
         record_linux_mlock_bytes(8192);
         record_linux_page_cache_warmup_millis(20);
         record_commitlog_segment_lease_active(3);
+        record_linux_mlock_attempt("transient_store_pool", 1);
+        record_linux_mlock_success("transient_store_pool", 1);
+        record_linux_mlock_failure("commitlog_active_file", 12, 1);
+        record_linux_mlock_skipped("commitlog_active_window", "budget_exhausted", 1);
+        record_linux_locked_bytes("transient_store_pool", 8192);
+        record_linux_munlock_failure("transient_store_pool", 22, 1);
     }
 }
