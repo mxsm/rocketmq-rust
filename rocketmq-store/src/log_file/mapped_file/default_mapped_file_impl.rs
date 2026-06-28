@@ -55,6 +55,8 @@ use crate::config::flush_disk_type::FlushDiskType;
 use crate::log_file::mapped_file::reference_resource::ReferenceResource;
 use crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceCounter;
 use crate::log_file::mapped_file::MappedFile;
+use crate::platform::preallocate_file;
+use crate::platform::FilePreallocateOutcome;
 use crate::utils::ffi::get_page_size;
 use crate::utils::ffi::madvise;
 #[cfg(target_os = "linux")]
@@ -146,6 +148,7 @@ impl DefaultMappedFile {
         ensure_dir_ok(dir);
 
         let file_from_offset = Self::try_parse_file_from_offset(&path_buf)?;
+        let existing_len = fs::metadata(&path_buf).map(|metadata| metadata.len()).unwrap_or(0);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -153,6 +156,19 @@ impl DefaultMappedFile {
             .truncate(false)
             .open(&path_buf)?;
         file.set_len(file_size)?;
+        if existing_len < file_size {
+            match preallocate_file(&file, file_size) {
+                FilePreallocateOutcome::Allocated => {}
+                FilePreallocateOutcome::Unsupported { errno } => debug!(
+                    "File preallocation is unsupported for mapped file {} and will be skipped, errno={}",
+                    file_name, errno
+                ),
+                FilePreallocateOutcome::Failed { errno } => warn!(
+                    "File preallocation failed for mapped file {} and will continue with set_len, errno={}",
+                    file_name, errno
+                ),
+            }
+        }
 
         let mmap = unsafe { MmapMut::map_mut(&file)? };
         Ok(Self {

@@ -94,8 +94,28 @@ impl TransientStorePool {
         self.memory_lock_manager.locked_buffer_count()
     }
 
+    pub fn lock_attempt_count(&self) -> usize {
+        self.memory_lock_manager.lock_attempt_count()
+    }
+
     pub fn lock_failed_buffer_count(&self) -> usize {
         self.memory_lock_manager.lock_failed_buffer_count()
+    }
+
+    pub fn lock_skipped_buffer_count(&self) -> usize {
+        self.memory_lock_manager.lock_skipped_buffer_count()
+    }
+
+    pub fn locked_bytes(&self) -> u64 {
+        self.memory_lock_manager.locked_bytes()
+    }
+
+    pub fn lock_failed_bytes(&self) -> u64 {
+        self.memory_lock_manager.lock_failed_bytes()
+    }
+
+    pub fn lock_skipped_bytes(&self) -> u64 {
+        self.memory_lock_manager.lock_skipped_bytes()
     }
 
     pub fn is_real_commit(&self) -> bool {
