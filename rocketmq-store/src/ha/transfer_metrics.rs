@@ -101,6 +101,8 @@ impl HaTransferMetrics {
             TransferEngineKind::IoUring => &self.io_uring_engine_total,
         }
         .fetch_add(1, Ordering::Relaxed);
+
+        emit_transfer_observability(stats);
     }
 
     pub fn record_fallback(&self, from: TransferEngineKind, to: TransferEngineKind, reason: &'static str) {
@@ -109,6 +111,8 @@ impl HaTransferMetrics {
         let key = TransferFallbackKey { from, to, reason };
         let mut fallbacks = self.fallbacks.lock().expect("lock HA transfer fallback metrics");
         *fallbacks.entry(key).or_insert(0) += 1;
+
+        emit_fallback_observability(from, to, reason);
     }
 
     pub fn snapshot(&self) -> HaTransferMetricsSnapshot {
@@ -143,5 +147,130 @@ impl HaTransferMetrics {
             fallback_total: self.fallback_total.load(Ordering::Relaxed),
             fallbacks,
         }
+    }
+}
+
+#[cfg(any(test, feature = "observability"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TransferObservabilityEvent {
+    batch_count: u64,
+    bytes: u64,
+    engine: &'static str,
+    sendfile_bytes: u64,
+    partial_write_count: u64,
+}
+
+#[cfg(any(test, feature = "observability"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TransferFallbackObservabilityEvent {
+    from: &'static str,
+    to: &'static str,
+    reason: &'static str,
+    count: u64,
+}
+
+#[cfg(any(test, feature = "observability"))]
+fn transfer_observability_event(stats: &TransferStats) -> TransferObservabilityEvent {
+    TransferObservabilityEvent {
+        batch_count: stats.frame_count as u64,
+        bytes: stats.bytes_written as u64,
+        engine: transfer_engine_label(stats.engine),
+        sendfile_bytes: stats.sendfile_bytes as u64,
+        partial_write_count: stats.partial_write_count as u64,
+    }
+}
+
+#[cfg(any(test, feature = "observability"))]
+fn fallback_observability_event(
+    from: TransferEngineKind,
+    to: TransferEngineKind,
+    reason: &'static str,
+) -> TransferFallbackObservabilityEvent {
+    TransferFallbackObservabilityEvent {
+        from: transfer_engine_label(from),
+        to: transfer_engine_label(to),
+        reason,
+        count: 1,
+    }
+}
+
+#[cfg(any(test, feature = "observability"))]
+fn transfer_engine_label(engine: TransferEngineKind) -> &'static str {
+    match engine {
+        TransferEngineKind::Bytes => "bytes",
+        TransferEngineKind::Vectored => "vectored",
+        TransferEngineKind::Sendfile => "sendfile",
+        TransferEngineKind::IoUring => "io_uring",
+    }
+}
+
+fn emit_transfer_observability(stats: &TransferStats) {
+    #[cfg(feature = "observability")]
+    {
+        let event = transfer_observability_event(stats);
+        rocketmq_observability::metrics::store::record_transfer_batch(event.batch_count);
+        rocketmq_observability::metrics::store::record_transfer_bytes(event.bytes);
+        rocketmq_observability::metrics::store::record_transfer_engine(event.engine, 1);
+        rocketmq_observability::metrics::store::record_linux_sendfile_bytes(event.sendfile_bytes);
+        rocketmq_observability::metrics::store::record_transfer_partial_write(event.partial_write_count);
+    }
+
+    #[cfg(not(feature = "observability"))]
+    let _ = stats;
+}
+
+fn emit_fallback_observability(from: TransferEngineKind, to: TransferEngineKind, reason: &'static str) {
+    #[cfg(feature = "observability")]
+    {
+        let event = fallback_observability_event(from, to, reason);
+        rocketmq_observability::metrics::store::record_transfer_fallback(
+            event.from,
+            event.to,
+            event.reason,
+            event.count,
+        );
+    }
+
+    #[cfg(not(feature = "observability"))]
+    let _ = (from, to, reason);
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+
+    #[test]
+    fn transfer_observability_event_preserves_transfer_counter_fields() {
+        let event = transfer_observability_event(&TransferStats {
+            engine: TransferEngineKind::Sendfile,
+            bytes_written: 512,
+            body_bytes: 500,
+            frame_count: 2,
+            write_call_count: 3,
+            sendfile_call_count: 4,
+            sendfile_bytes: 480,
+            fallback_bytes: 0,
+            partial_write_count: 1,
+        });
+
+        assert_eq!(event.batch_count, 2);
+        assert_eq!(event.bytes, 512);
+        assert_eq!(event.engine, "sendfile");
+        assert_eq!(event.sendfile_bytes, 480);
+        assert_eq!(event.partial_write_count, 1);
+    }
+
+    #[test]
+    fn fallback_observability_event_preserves_engine_labels_and_reason() {
+        let event = fallback_observability_event(
+            TransferEngineKind::IoUring,
+            TransferEngineKind::Vectored,
+            "io_uring unavailable",
+        );
+
+        assert_eq!(event.from, "io_uring");
+        assert_eq!(event.to, "vectored");
+        assert_eq!(event.reason, "io_uring unavailable");
+        assert_eq!(event.count, 1);
     }
 }
