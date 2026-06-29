@@ -854,6 +854,78 @@ mod tests {
     }
 
     #[test]
+    fn build_effective_config_blacklist_includes_fixed_keys() {
+        let effective =
+            build_effective_config_blacklist(&rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig {
+                config_black_list: "customConfig".to_string(),
+                ..Default::default()
+            });
+
+        for required in ["configBlackList", "configStorePath", "kvConfigPath", "rocketmqHome"] {
+            assert!(
+                effective.iter().any(|entry| entry.as_str() == required),
+                "missing required blacklist entry: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_effective_config_blacklist_appends_unique_custom_entries() {
+        let effective =
+            build_effective_config_blacklist(&rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig {
+                config_black_list: "customConfig; rocketmqHome ; customConfig ; anotherConfig".to_string(),
+                ..Default::default()
+            });
+        let effective_keys: Vec<&str> = effective.iter().map(|entry| entry.as_str()).collect();
+
+        assert_eq!(
+            effective
+                .iter()
+                .filter(|entry| entry.as_str() == "customConfig")
+                .count(),
+            1
+        );
+        assert_eq!(
+            effective
+                .iter()
+                .filter(|entry| entry.as_str() == "rocketmqHome")
+                .count(),
+            1
+        );
+        assert_eq!(
+            effective_keys,
+            vec![
+                "configBlackList",
+                "configStorePath",
+                "kvConfigPath",
+                "rocketmqHome",
+                "customConfig",
+                "anotherConfig",
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_blacklist_config_exist_distinguishes_blocked_from_allowed_properties() {
+        let blacklist = vec![
+            CheetahString::from_static_str("rocketmqHome"),
+            CheetahString::from_static_str("customConfig"),
+        ];
+
+        let blocked_properties = HashMap::from([(
+            CheetahString::from_static_str("customConfig"),
+            CheetahString::from_static_str("value"),
+        )]);
+        assert!(validate_blacklist_config_exist(&blocked_properties, &blacklist));
+
+        let allowed_properties = HashMap::from([(
+            CheetahString::from_static_str("listenPort"),
+            CheetahString::from_static_str("9876"),
+        )]);
+        assert!(!validate_blacklist_config_exist(&allowed_properties, &blacklist));
+    }
+
+    #[test]
     fn get_namesrv_config_defaults_to_full_response_without_probe_header() {
         let request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
         assert!(!is_probe_only_namesrv_config_request(&request));
