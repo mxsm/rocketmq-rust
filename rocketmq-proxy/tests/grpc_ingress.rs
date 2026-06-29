@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 use std::collections::HashMap;
 use std::fs;
 use std::net::SocketAddr;
