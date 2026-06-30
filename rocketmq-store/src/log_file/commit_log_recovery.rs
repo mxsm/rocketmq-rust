@@ -113,9 +113,18 @@ impl AbnormalRecoveryWindow {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct AbnormalRecoveryFileRange {
-    start_offset: i64,
-    file_size: u64,
+pub struct AbnormalRecoveryFileRange {
+    pub start_offset: i64,
+    pub file_size: u64,
+}
+
+impl AbnormalRecoveryFileRange {
+    pub const fn new(start_offset: i64, file_size: u64) -> Self {
+        Self {
+            start_offset,
+            file_size,
+        }
+    }
 }
 
 /// Optimized message iterator that reads in batches
@@ -291,9 +300,8 @@ pub fn plan_abnormal_recovery_window(
 ) -> AbnormalRecoveryWindow {
     let file_ranges: Vec<_> = mapped_files
         .iter()
-        .map(|mapped_file| AbnormalRecoveryFileRange {
-            start_offset: mapped_file.get_file_from_offset() as i64,
-            file_size: mapped_file.get_file_size(),
+        .map(|mapped_file| {
+            AbnormalRecoveryFileRange::new(mapped_file.get_file_from_offset() as i64, mapped_file.get_file_size())
         })
         .collect();
     let checkpoint_index = find_checkpoint_recovery_start_index(mapped_files, message_store_config, store_checkpoint);
@@ -328,7 +336,7 @@ fn find_checkpoint_recovery_start_index(
     }
 }
 
-fn plan_abnormal_recovery_window_from_ranges(
+pub fn plan_abnormal_recovery_window_from_ranges(
     file_ranges: &[AbnormalRecoveryFileRange],
     checkpoint_index: Option<usize>,
     max_recovery_commit_log_files: usize,
@@ -585,10 +593,7 @@ mod tests {
 
     fn file_ranges(count: usize) -> Vec<AbnormalRecoveryFileRange> {
         (0..count)
-            .map(|index| AbnormalRecoveryFileRange {
-                start_offset: (index as i64) * 100,
-                file_size: 100,
-            })
+            .map(|index| AbnormalRecoveryFileRange::new((index as i64) * 100, 100))
             .collect()
     }
 
