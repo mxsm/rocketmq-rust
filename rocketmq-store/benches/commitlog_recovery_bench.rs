@@ -15,8 +15,7 @@
 //! Performance benchmarks for CommitLog recovery operations
 //!
 //! Benchmarks the overhead of recovery structures
-//! and writes the Phase 1 recovery baseline manifest to
-//! `target/recovery-baseline/phase1/commitlog-recovery-phase1-baseline.json`.
+//! and writes recovery manifests under `target/recovery-baseline/`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -33,11 +32,14 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::log_file::commit_log_recovery::plan_abnormal_recovery_window_from_ranges;
+use rocketmq_store::log_file::commit_log_recovery::AbnormalRecoveryFileRange;
 use rocketmq_store::log_file::commit_log_recovery::RecoveryContext;
 use rocketmq_store::log_file::commit_log_recovery::RecoveryStatistics;
 
 const BASELINE_SAMPLE_SIZE: usize = 10;
 const MESSAGE_SIZE_BYTES: u64 = 256;
+const PHASE2_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
 struct RecoveryBaselineScenario {
@@ -110,6 +112,78 @@ const PHASE1_BASELINE_SCENARIOS: &[RecoveryBaselineScenario] = &[
     },
 ];
 
+#[derive(Clone, Copy)]
+struct RecoveryWindowComparisonScenario {
+    id: &'static str,
+    commitlog_files: usize,
+    checkpoint_index: Option<usize>,
+    max_recovery_commit_log_files: usize,
+    dispatch_progress_file_index: usize,
+    confirm_offset_file_index: usize,
+}
+
+impl RecoveryWindowComparisonScenario {
+    const fn commit_log_max_offset(self) -> i64 {
+        (self.commitlog_files as i64) * (PHASE2_FILE_SIZE_BYTES as i64)
+    }
+
+    const fn strict_scanned_files(self) -> usize {
+        self.commitlog_files
+    }
+
+    const fn strict_scanned_bytes(self) -> u64 {
+        (self.commitlog_files as u64) * PHASE2_FILE_SIZE_BYTES
+    }
+
+    fn file_ranges(self) -> Vec<AbnormalRecoveryFileRange> {
+        (0..self.commitlog_files)
+            .map(|index| {
+                AbnormalRecoveryFileRange::new((index as i64) * (PHASE2_FILE_SIZE_BYTES as i64), PHASE2_FILE_SIZE_BYTES)
+            })
+            .collect()
+    }
+
+    fn offset_for_file(self, index: usize) -> i64 {
+        let bounded_index = index.min(self.commitlog_files.saturating_sub(1));
+        (bounded_index as i64) * (PHASE2_FILE_SIZE_BYTES as i64)
+    }
+}
+
+const PHASE2_WINDOW_SCENARIOS: &[RecoveryWindowComparisonScenario] = &[
+    RecoveryWindowComparisonScenario {
+        id: "checkpoint_aligned_bounded_window",
+        commitlog_files: 64,
+        checkpoint_index: Some(60),
+        max_recovery_commit_log_files: 3,
+        dispatch_progress_file_index: 60,
+        confirm_offset_file_index: 61,
+    },
+    RecoveryWindowComparisonScenario {
+        id: "dispatch_progress_lagging_expansion",
+        commitlog_files: 64,
+        checkpoint_index: Some(60),
+        max_recovery_commit_log_files: 3,
+        dispatch_progress_file_index: 20,
+        confirm_offset_file_index: 61,
+    },
+    RecoveryWindowComparisonScenario {
+        id: "confirm_offset_lagging_expansion",
+        commitlog_files: 64,
+        checkpoint_index: Some(60),
+        max_recovery_commit_log_files: 3,
+        dispatch_progress_file_index: 62,
+        confirm_offset_file_index: 10,
+    },
+    RecoveryWindowComparisonScenario {
+        id: "checkpoint_missing_strict_fallback",
+        commitlog_files: 64,
+        checkpoint_index: None,
+        max_recovery_commit_log_files: 3,
+        dispatch_progress_file_index: 60,
+        confirm_offset_file_index: 61,
+    },
+];
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -119,6 +193,10 @@ fn workspace_root() -> PathBuf {
 
 fn benchmark_artifact_dir() -> PathBuf {
     workspace_root().join("target/recovery-baseline/phase1")
+}
+
+fn phase2_benchmark_artifact_dir() -> PathBuf {
+    workspace_root().join("target/recovery-baseline/phase2")
 }
 
 fn active_features() -> Vec<&'static str> {
@@ -207,6 +285,93 @@ fn write_phase1_baseline_manifest() {
     .expect("recovery baseline manifest should be written");
 }
 
+fn phase2_window_for_scenario(
+    scenario: RecoveryWindowComparisonScenario,
+) -> rocketmq_store::log_file::commit_log_recovery::AbnormalRecoveryWindow {
+    let file_ranges = scenario.file_ranges();
+    plan_abnormal_recovery_window_from_ranges(
+        &file_ranges,
+        scenario.checkpoint_index,
+        scenario.max_recovery_commit_log_files,
+        scenario.offset_for_file(scenario.dispatch_progress_file_index),
+        scenario.offset_for_file(scenario.confirm_offset_file_index),
+        0,
+        scenario.commit_log_max_offset(),
+    )
+}
+
+fn write_phase2_window_comparison_manifest() {
+    let output_dir = phase2_benchmark_artifact_dir();
+    fs::create_dir_all(&output_dir).expect("phase2 recovery benchmark artifact directory should be created");
+
+    let generated_at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_millis();
+    let scenarios: Vec<_> = PHASE2_WINDOW_SCENARIOS
+        .iter()
+        .map(|scenario| {
+            let window = phase2_window_for_scenario(*scenario);
+            let strict_scanned_bytes = scenario.strict_scanned_bytes();
+            let bytes_reduction_ratio = if strict_scanned_bytes == 0 {
+                0.0
+            } else {
+                1.0 - (window.scanned_bytes as f64 / strict_scanned_bytes as f64)
+            };
+
+            serde_json::json!({
+                "id": scenario.id,
+                "commitlog_files": scenario.commitlog_files,
+                "file_size_bytes": PHASE2_FILE_SIZE_BYTES,
+                "checkpoint_index": scenario.checkpoint_index,
+                "max_recovery_commit_log_files": scenario.max_recovery_commit_log_files,
+                "dispatch_progress_file_index": scenario.dispatch_progress_file_index,
+                "confirm_offset_file_index": scenario.confirm_offset_file_index,
+                "strict_scanned_files": scenario.strict_scanned_files(),
+                "strict_scanned_bytes": strict_scanned_bytes,
+                "window_start_index": window.start_index,
+                "window_checkpoint_index": window.checkpoint_index,
+                "window_dispatch_progress_index": window.dispatch_progress_index,
+                "window_confirm_offset_index": window.confirm_offset_index,
+                "window_scanned_files": window.scanned_file_count,
+                "window_scanned_bytes": window.scanned_bytes,
+                "window_expanded_files": window.expanded_files,
+                "window_end_offset": window.end_offset,
+                "fallback_reason": window.fallback_reason,
+                "bytes_reduction_ratio": bytes_reduction_ratio,
+            })
+        })
+        .collect();
+    let payload = serde_json::json!({
+        "case": "commitlog_recovery_phase2_window_comparison",
+        "generated_at_unix_ms": generated_at_unix_ms,
+        "commit": std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local".to_string()),
+        "pr": std::env::var("GITHUB_REF_NAME").unwrap_or_else(|_| "local".to_string()),
+        "environment": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "profile": std::env::var("PROFILE").unwrap_or_else(|_| "bench".to_string()),
+            "features": active_features(),
+        },
+        "baseline": "target/recovery-baseline/phase1/commitlog-recovery-phase1-baseline.json",
+        "target_metrics": [
+            "strict_scanned_bytes",
+            "window_scanned_bytes",
+            "bytes_reduction_ratio",
+            "window_scanned_files",
+            "fallback_reason"
+        ],
+        "scenarios": scenarios,
+    });
+
+    let path = output_dir.join("commitlog-recovery-phase2-window-comparison.json");
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&payload).expect("phase2 recovery benchmark manifest should serialize"),
+    )
+    .expect("phase2 recovery benchmark manifest should be written");
+}
+
 /// Benchmark recovery statistics operations
 fn bench_recovery_statistics(c: &mut Criterion) {
     c.bench_function("recovery_statistics_clone", |b| {
@@ -284,6 +449,39 @@ fn bench_phase1_baseline_scenarios(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_phase2_window_comparison(c: &mut Criterion) {
+    write_phase2_window_comparison_manifest();
+
+    let mut group = c.benchmark_group("commitlog_recovery/phase2_window_comparison");
+    for scenario in PHASE2_WINDOW_SCENARIOS {
+        let window = phase2_window_for_scenario(*scenario);
+        group.throughput(Throughput::Bytes(window.scanned_bytes));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(scenario.id),
+            scenario,
+            |bencher, scenario| {
+                bencher.iter(|| {
+                    let window = phase2_window_for_scenario(*scenario);
+                    let mut stats = RecoveryStatistics {
+                        files_processed: window.scanned_file_count,
+                        bytes_processed: window.scanned_bytes,
+                        invalid_messages: u64::from(window.fallback_reason.is_some()),
+                        ..Default::default()
+                    };
+
+                    let work_units = window.scanned_file_count.max(1) * 64;
+                    for index in 0..work_units {
+                        stats.messages_recovered = stats.messages_recovered.saturating_add(1);
+                        black_box(index);
+                    }
+                    black_box(stats);
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 /// Benchmark recovery context creation
 fn bench_recovery_context(c: &mut Criterion) {
     c.bench_function("recovery_context_creation", |b| {
@@ -333,6 +531,7 @@ criterion_group!(
     targets =
         bench_recovery_statistics,
         bench_phase1_baseline_scenarios,
+        bench_phase2_window_comparison,
         bench_recovery_context,
         bench_message_processing_overhead
 );
