@@ -142,6 +142,7 @@ use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
 use crate::message_store::recovery::RecoveryCrcPolicy;
+use crate::message_store::recovery::RecoveryExecutor;
 use crate::message_store::recovery::RecoveryExit;
 use crate::message_store::recovery::RecoveryIndexRepairPolicy;
 use crate::message_store::recovery::RecoveryPhase;
@@ -1226,60 +1227,62 @@ impl LocalFileMessageStore {
             self.get_max_phy_offset(),
             self.get_confirm_offset(),
         );
-        let mut recovery_report = RecoveryReport::new(recovery_plan);
+        let mut recovery_executor = RecoveryExecutor::new(recovery_plan);
         info!(
             "message store recover mode: {}, recoveryMode: {}, lastExit: {}, maxRecoveryCommitLogFiles: {}, \
              crcPolicy: message={}, property={}, indexRepairPolicy: {}",
             if recover_concurrently { "concurrent" } else { "normal" },
             self.message_store_config.recovery_mode.as_str(),
-            recovery_report.plan.exit.as_str(),
-            recovery_report.plan.max_recovery_commit_log_files,
-            recovery_report.plan.crc_policy.check_message_crc,
-            recovery_report.plan.crc_policy.check_property_crc,
-            recovery_report.plan.index_repair_policy.as_str()
+            recovery_executor.plan().exit.as_str(),
+            recovery_executor.plan().max_recovery_commit_log_files,
+            recovery_executor.plan().crc_policy.check_message_crc,
+            recovery_executor.plan().crc_policy.check_property_crc,
+            recovery_executor.plan().index_repair_policy.as_str()
         );
-        let recover_consume_queue_start = Instant::now();
         self.set_lifecycle_state(StoreLifecycleState::RecoveringConsumeQueue);
-        self.recover_consume_queue().await;
+        let recover_consume_queue = recovery_executor
+            .run_phase(RecoveryPhase::ConsumeQueue, self.recover_consume_queue())
+            .await;
         let dispatch_recovery_offset = self.get_dispatch_recovery_offset();
-        recovery_report
-            .plan
+        recovery_executor
+            .plan_mut()
             .set_dispatch_recovery_offset(dispatch_recovery_offset);
-        recovery_report
-            .plan
+        recovery_executor
+            .plan_mut()
             .set_max_consume_queue_physical_offset(dispatch_recovery_offset);
-        let recover_consume_queue = Instant::now()
-            .saturating_duration_since(recover_consume_queue_start)
-            .as_millis();
-        recovery_report.record_phase(RecoveryPhase::ConsumeQueue, recover_consume_queue);
 
-        let recover_commit_log_start = Instant::now();
         self.set_lifecycle_state(StoreLifecycleState::RecoveringCommitLog);
-        if last_exit_ok {
-            self.recover_normally(dispatch_recovery_offset).await;
+        let recover_commit_log = if last_exit_ok {
+            recovery_executor
+                .run_phase(
+                    RecoveryPhase::CommitLog,
+                    self.recover_normally(dispatch_recovery_offset),
+                )
+                .await
         } else {
-            self.recover_abnormally(dispatch_recovery_offset).await;
-        }
-        let recover_commit_log = Instant::now()
-            .saturating_duration_since(recover_commit_log_start)
-            .as_millis();
-        recovery_report.record_phase(RecoveryPhase::CommitLog, recover_commit_log);
+            recovery_executor
+                .run_phase(
+                    RecoveryPhase::CommitLog,
+                    self.recover_abnormally(dispatch_recovery_offset),
+                )
+                .await
+        };
 
-        let recover_topic_queue_table_start = Instant::now();
         self.set_lifecycle_state(StoreLifecycleState::RecoveringTopicQueueTable);
-        self.recover_topic_queue_table();
-        let recover_topic_queue_table = Instant::now()
-            .saturating_duration_since(recover_topic_queue_table_start)
-            .as_millis();
-        recovery_report.record_phase(RecoveryPhase::TopicQueueTable, recover_topic_queue_table);
+        let recover_topic_queue_table = recovery_executor
+            .run_phase(RecoveryPhase::TopicQueueTable, async {
+                self.recover_topic_queue_table();
+            })
+            .await;
         if self.lifecycle_state() != StoreLifecycleState::Shutdown {
             self.set_lifecycle_state(previous_state);
         }
-        recovery_report.plan.set_commit_log_offsets(
+        recovery_executor.plan_mut().set_commit_log_offsets(
             self.get_min_phy_offset(),
             self.get_max_phy_offset(),
             self.get_confirm_offset(),
         );
+        let recovery_report = recovery_executor.finish();
         info!(
             "message store recover total cost: {} ms, recoverConsumeQueue: {} ms, recoverCommitLog: {} ms, \
              recoverOffsetTable: {} ms, recoveryMode: {}, lastExit: {}, dispatchRecoveryOffset: {:?}, commitLogRange: \
