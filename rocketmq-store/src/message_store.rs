@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod local_file_message_store;
+pub mod recovery;
 
 #[cfg(feature = "rocksdb_store")]
 pub mod rocksdb_message_store;

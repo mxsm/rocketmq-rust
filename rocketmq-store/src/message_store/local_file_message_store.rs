@@ -141,6 +141,10 @@ use crate::log_file::commit_log;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
+use crate::message_store::recovery::RecoveryExit;
+use crate::message_store::recovery::RecoveryPhase;
+use crate::message_store::recovery::RecoveryPlan;
+use crate::message_store::recovery::RecoveryReport;
 use crate::queue::build_consume_queue::CommitLogDispatcherBuildConsumeQueue;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
@@ -352,6 +356,7 @@ pub struct LocalFileMessageStore {
     ha_update_master_group: Arc<StdMutex<Option<rocketmq_runtime::TaskGroup>>>,
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,
+    last_recovery_report: Option<RecoveryReport>,
 }
 
 fn notify_message_arrive_for_multi_dispatch(
@@ -589,6 +594,7 @@ impl LocalFileMessageStore {
             ha_update_master_group: Arc::new(StdMutex::new(None)),
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
+            last_recovery_report: None,
         })
     }
 
@@ -1198,17 +1204,30 @@ impl LocalFileMessageStore {
     async fn recover(&mut self, last_exit_ok: bool) {
         let previous_state = self.lifecycle_state();
         let recover_concurrently = self.is_recover_concurrently();
+        let mut recovery_report = RecoveryReport::new(RecoveryPlan::new(
+            self.message_store_config.recovery_mode,
+            RecoveryExit::from_last_exit_ok(last_exit_ok),
+            recover_concurrently,
+            self.message_store_config.max_recovery_commit_log_files,
+        ));
         info!(
-            "message store recover mode: {}",
+            "message store recover mode: {}, recoveryMode: {}, lastExit: {}, maxRecoveryCommitLogFiles: {}",
             if recover_concurrently { "concurrent" } else { "normal" },
+            self.message_store_config.recovery_mode.as_str(),
+            recovery_report.plan.exit.as_str(),
+            recovery_report.plan.max_recovery_commit_log_files
         );
         let recover_consume_queue_start = Instant::now();
         self.set_lifecycle_state(StoreLifecycleState::RecoveringConsumeQueue);
         self.recover_consume_queue().await;
         let dispatch_recovery_offset = self.get_dispatch_recovery_offset();
+        recovery_report
+            .plan
+            .set_dispatch_recovery_offset(dispatch_recovery_offset);
         let recover_consume_queue = Instant::now()
             .saturating_duration_since(recover_consume_queue_start)
             .as_millis();
+        recovery_report.record_phase(RecoveryPhase::ConsumeQueue, recover_consume_queue);
 
         let recover_commit_log_start = Instant::now();
         self.set_lifecycle_state(StoreLifecycleState::RecoveringCommitLog);
@@ -1220,6 +1239,7 @@ impl LocalFileMessageStore {
         let recover_commit_log = Instant::now()
             .saturating_duration_since(recover_commit_log_start)
             .as_millis();
+        recovery_report.record_phase(RecoveryPhase::CommitLog, recover_commit_log);
 
         let recover_topic_queue_table_start = Instant::now();
         self.set_lifecycle_state(StoreLifecycleState::RecoveringTopicQueueTable);
@@ -1227,17 +1247,22 @@ impl LocalFileMessageStore {
         let recover_topic_queue_table = Instant::now()
             .saturating_duration_since(recover_topic_queue_table_start)
             .as_millis();
+        recovery_report.record_phase(RecoveryPhase::TopicQueueTable, recover_topic_queue_table);
         if self.lifecycle_state() != StoreLifecycleState::Shutdown {
             self.set_lifecycle_state(previous_state);
         }
         info!(
             "message store recover total cost: {} ms, recoverConsumeQueue: {} ms, recoverCommitLog: {} ms, \
-             recoverOffsetTable: {} ms",
-            recover_consume_queue + recover_commit_log + recover_topic_queue_table,
+             recoverOffsetTable: {} ms, recoveryMode: {}, lastExit: {}, dispatchRecoveryOffset: {:?}",
+            recovery_report.total_duration_ms,
             recover_consume_queue,
             recover_commit_log,
-            recover_topic_queue_table
+            recover_topic_queue_table,
+            recovery_report.plan.mode.as_str(),
+            recovery_report.plan.exit.as_str(),
+            recovery_report.plan.dispatch_recovery_offset
         );
+        self.last_recovery_report = Some(recovery_report);
     }
 
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
@@ -1613,6 +1638,10 @@ impl LocalFileMessageStore {
 
     pub fn get_message_store_config(&self) -> Arc<MessageStoreConfig> {
         self.message_store_config.clone()
+    }
+
+    pub fn last_recovery_report(&self) -> Option<&RecoveryReport> {
+        self.last_recovery_report.as_ref()
     }
 
     pub async fn reput_once(&mut self) {
@@ -4728,12 +4757,15 @@ mod tests {
     use crate::config::flush_disk_type::FlushDiskType;
     use crate::config::message_store_config::LinuxMemoryLockMode;
     use crate::config::message_store_config::MessageStoreConfig;
+    use crate::config::message_store_config::RecoveryMode;
     use crate::filter::MessageFilter;
     use crate::hook::put_message_hook::PutMessageHook;
     use crate::hook::send_message_back_hook::SendMessageBackHook;
     use crate::kv::compaction_service::CompactionService;
     use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
     use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
+    use crate::message_store::recovery::RecoveryExit;
+    use crate::message_store::recovery::RecoveryPhase;
     use crate::queue::consume_queue::ConsumeQueueTrait;
     use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
     use crate::store_error::StoreError;
@@ -5852,6 +5884,36 @@ mod tests {
         store.init().await.expect("init store");
         store.recover(false).await;
         assert_eq!(store.lifecycle_state(), StoreLifecycleState::Initialized);
+    }
+
+    #[tokio::test]
+    async fn recover_records_structured_recovery_report() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                max_recovery_commit_log_files: 7,
+                recovery_mode: RecoveryMode::Strict,
+                ..Default::default()
+            },
+        );
+
+        store.recover(false).await;
+
+        let report = store.last_recovery_report().expect("recovery report");
+        assert_eq!(report.plan.mode, RecoveryMode::Strict);
+        assert_eq!(report.plan.exit, RecoveryExit::Abnormal);
+        assert!(!report.plan.recover_concurrently);
+        assert_eq!(report.plan.max_recovery_commit_log_files, 7);
+        assert!(report.plan.dispatch_recovery_offset.is_some());
+        assert_eq!(report.phases.len(), 3);
+        assert!(report.phase_duration_ms(RecoveryPhase::ConsumeQueue).is_some());
+        assert!(report.phase_duration_ms(RecoveryPhase::CommitLog).is_some());
+        assert!(report.phase_duration_ms(RecoveryPhase::TopicQueueTable).is_some());
+        assert_eq!(
+            report.total_duration_ms,
+            report.phases.iter().map(|phase| phase.duration_ms).sum()
+        );
     }
 
     #[tokio::test]
