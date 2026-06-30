@@ -5985,7 +5985,7 @@ mod tests {
         assert_eq!(report.plan.crc_policy, RecoveryCrcPolicy::new(true, true));
         assert_eq!(report.plan.index_repair_policy, RecoveryIndexRepairPolicy::Synchronous);
         assert!(report.plan.consume_queue_recovery_concurrency.local_file_enabled);
-        assert!(report.plan.consume_queue_recovery_concurrency.local_file_parallelism >= 1);
+        assert_eq!(report.plan.consume_queue_recovery_concurrency.local_file_parallelism, 4);
         assert_eq!(report.phases.len(), 3);
         assert!(report.phase_duration_ms(RecoveryPhase::ConsumeQueue).is_some());
         assert!(report.phase_duration_ms(RecoveryPhase::CommitLog).is_some());
