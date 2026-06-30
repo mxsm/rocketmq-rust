@@ -14,7 +14,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::mem;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
@@ -45,11 +44,8 @@ use rocketmq_common::CRC32Utils::crc32_bytes;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::cheetah_from_utf8_lossy;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
-use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_POSITION;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_V2;
-use rocketmq_common::MessageDecoder::SYSFLAG_POSITION;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::UtilAll::time_millis_to_human_string;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
 use tokio::time::Instant;
@@ -124,6 +120,28 @@ fn normal_recovery_file_count_limit(max_recovery_commit_log_files: usize) -> usi
 
 fn normal_recovery_start_index(mapped_file_count: usize, max_recovery_commit_log_files: usize) -> usize {
     mapped_file_count.saturating_sub(normal_recovery_file_count_limit(max_recovery_commit_log_files))
+}
+
+fn log_abnormal_recovery_window(
+    window: &crate::log_file::commit_log_recovery::AbnormalRecoveryWindow,
+    recovery_path: &str,
+) {
+    info!(
+        "Starting abnormal recovery from file index {} ({}), checkpointIndex: {:?}, dispatchProgressIndex: {:?}, \
+         confirmOffsetIndex: {:?}, fileCountLimit: {:?}, expandedFiles: {}, scannedFiles: {}, scannedBytes: {}, \
+         endOffset: {:?}, fallbackReason: {:?}",
+        window.start_index,
+        recovery_path,
+        window.checkpoint_index,
+        window.dispatch_progress_index,
+        window.confirm_offset_index,
+        window.file_count_limit,
+        window.expanded_files,
+        window.scanned_file_count,
+        window.scanned_bytes,
+        window.end_offset,
+        window.fallback_reason
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1646,7 +1664,7 @@ impl CommitLog {
         max_phy_offset_of_consume_queue: i64,
         mut message_store: ArcMut<LocalFileMessageStore>,
     ) {
-        use crate::log_file::commit_log_recovery::find_recovery_start_index;
+        use crate::log_file::commit_log_recovery::plan_abnormal_recovery_window;
         use crate::log_file::commit_log_recovery::BatchMessageIterator;
         use crate::log_file::commit_log_recovery::RecoveryContext;
 
@@ -1667,12 +1685,18 @@ impl CommitLog {
             return;
         }
 
-        // Find starting point using checkpoint (optimized)
-        let index = find_recovery_start_index(&mapped_files_inner, &self.message_store_config, &self.store_checkpoint);
+        let recovery_window = plan_abnormal_recovery_window(
+            &mapped_files_inner,
+            &self.message_store_config,
+            &self.store_checkpoint,
+            max_phy_offset_of_consume_queue,
+            self.get_confirm_offset(),
+            self.get_min_offset(),
+            self.get_max_offset(),
+        );
+        log_abnormal_recovery_window(&recovery_window, "optimized");
 
-        info!("Starting abnormal recovery from file index {} (optimized)", index);
-
-        let mut index = index;
+        let mut index = recovery_window.start_index;
         let mut last_valid_msg_phy_offset = 0u64;
         let mut last_confirm_valid_msg_phy_offset = 0u64;
         let do_dispatch = true;
@@ -1783,6 +1807,8 @@ impl CommitLog {
         max_phy_offset_of_consume_queue: i64,
         mut message_store: ArcMut<LocalFileMessageStore>,
     ) {
+        use crate::log_file::commit_log_recovery::plan_abnormal_recovery_window;
+
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
         let broker_config = self.broker_config.clone();
@@ -1790,19 +1816,18 @@ impl CommitLog {
         let binding = self.mapped_file_queue.get_mapped_files();
         let mapped_files_inner = binding.load();
         if !mapped_files_inner.is_empty() {
-            // Began to recover from the last third file
-            let mut index = (mapped_files_inner.len() as i32) - 1;
-            while index >= 0 {
-                let mapped_file = mapped_files_inner.get(index as usize).unwrap();
-                if is_mapped_file_matched_recover(&self.message_store_config, mapped_file, &self.store_checkpoint) {
-                    break;
-                }
-                index -= 1;
-            }
-            if index <= 0 {
-                index = 0;
-            }
-            let mut index = index as usize;
+            let recovery_window = plan_abnormal_recovery_window(
+                &mapped_files_inner,
+                &self.message_store_config,
+                &self.store_checkpoint,
+                max_phy_offset_of_consume_queue,
+                self.get_confirm_offset(),
+                self.get_min_offset(),
+                self.get_max_offset(),
+            );
+            log_abnormal_recovery_window(&recovery_window, "standard");
+
+            let mut index = recovery_window.start_index;
             //let mut mapped_file = mapped_files_inner.get(index).unwrap().lock().await;
             let mut mapped_file = mapped_files_inner.get(index).unwrap();
             let mut process_offset = mapped_file.get_file_from_offset();
@@ -2534,57 +2559,6 @@ fn set_batch_size_if_needed(
     dispatch_request.msg_base_offset = msg_base_offset;
     dispatch_request.batch_size = batch_size;
     true
-}
-
-fn is_mapped_file_matched_recover(
-    message_store_config: &Arc<MessageStoreConfig>,
-    mapped_file: &DefaultMappedFile,
-    store_checkpoint: &StoreCheckpoint,
-) -> bool {
-    let magic_code = mapped_file
-        .get_bytes(MESSAGE_MAGIC_CODE_POSITION, mem::size_of::<i32>())
-        .unwrap_or(Bytes::from([0u8; mem::size_of::<i32>()].as_ref()))
-        .get_i32();
-
-    //check magic code
-    if magic_code != MESSAGE_MAGIC_CODE && magic_code != MESSAGE_MAGIC_CODE_V2 {
-        return false;
-    }
-    let sys_flag = mapped_file
-        .get_bytes(SYSFLAG_POSITION, mem::size_of::<i32>())
-        .unwrap_or(Bytes::from([0u8; mem::size_of::<i32>()].as_ref()))
-        .get_i32();
-    let born_host_length = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
-        8
-    } else {
-        20
-    };
-    let msg_store_time_pos = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + born_host_length;
-    let store_timestamp = mapped_file
-        .get_bytes(msg_store_time_pos, mem::size_of::<i64>())
-        .unwrap_or(Bytes::from([0u8; mem::size_of::<i64>()].as_ref()))
-        .get_i64();
-    if store_timestamp == 0 {
-        return false;
-    }
-    if message_store_config.message_index_enable && message_store_config.message_index_safe {
-        if store_timestamp <= store_checkpoint.get_min_timestamp_index() as i64 {
-            info!(
-                "find check timestamp, {} {}",
-                store_timestamp,
-                time_millis_to_human_string(store_timestamp)
-            );
-            return true;
-        }
-    } else if store_timestamp <= store_checkpoint.get_min_timestamp() as i64 {
-        info!(
-            "find check timestamp, {} {}",
-            store_timestamp,
-            time_millis_to_human_string(store_timestamp)
-        );
-        return true;
-    }
-    false
 }
 
 impl Swappable for CommitLog {
