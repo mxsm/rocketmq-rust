@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
+use std::time::Instant;
+
 use crate::config::message_store_config::RecoveryMode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -301,6 +304,65 @@ impl RecoveryReport {
     }
 }
 
+#[derive(Debug)]
+pub struct RecoveryExecutor {
+    report: RecoveryReport,
+}
+
+impl RecoveryExecutor {
+    pub fn new(plan: RecoveryPlan) -> Self {
+        Self {
+            report: RecoveryReport::new(plan),
+        }
+    }
+
+    pub fn plan(&self) -> &RecoveryPlan {
+        &self.report.plan
+    }
+
+    pub fn plan_mut(&mut self) -> &mut RecoveryPlan {
+        &mut self.report.plan
+    }
+
+    pub fn report(&self) -> &RecoveryReport {
+        &self.report
+    }
+
+    pub async fn run_phase<F>(&mut self, phase: RecoveryPhase, future: F) -> u128
+    where
+        F: Future<Output = ()>,
+    {
+        self.run_phase_with_status(
+            phase,
+            RecoveryPhaseStatus::Success,
+            RecoveryReportStats::default(),
+            future,
+        )
+        .await
+    }
+
+    pub async fn run_phase_with_status<F>(
+        &mut self,
+        phase: RecoveryPhase,
+        status: RecoveryPhaseStatus,
+        stats: RecoveryReportStats,
+        future: F,
+    ) -> u128
+    where
+        F: Future<Output = ()>,
+    {
+        let start = Instant::now();
+        future.await;
+        let duration_ms = Instant::now().saturating_duration_since(start).as_millis();
+        self.report.record_phase_with_status(phase, duration_ms, status, stats);
+        duration_ms
+    }
+
+    pub fn finish(self) -> RecoveryReport {
+        self.report
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,5 +476,59 @@ mod tests {
         assert_eq!(report.phases[1].status, RecoveryPhaseStatus::Fallback);
         assert_eq!(report.phases[1].status.as_str(), "fallback");
         assert_eq!(report.fallback_reason.as_deref(), Some("index repair deferred"));
+    }
+
+    #[tokio::test]
+    async fn recovery_executor_wraps_phase_execution() {
+        let plan = RecoveryPlan::new(RecoveryMode::Strict, RecoveryExit::Normal, false, 3);
+        let mut executor = RecoveryExecutor::new(plan);
+        let mut ran = false;
+
+        let duration_ms = executor
+            .run_phase(RecoveryPhase::ConsumeQueue, async {
+                ran = true;
+            })
+            .await;
+        executor.plan_mut().set_dispatch_recovery_offset(256);
+
+        assert!(ran);
+        assert_eq!(duration_ms, executor.report().phases[0].duration_ms);
+        assert_eq!(
+            executor.report().phase_duration_ms(RecoveryPhase::ConsumeQueue),
+            Some(duration_ms)
+        );
+        assert_eq!(executor.plan().dispatch_recovery_offset, Some(256));
+
+        let report = executor.finish();
+        assert_eq!(report.phases.len(), 1);
+        assert_eq!(report.phases[0].phase, RecoveryPhase::ConsumeQueue);
+        assert_eq!(report.phases[0].status, RecoveryPhaseStatus::Success);
+    }
+
+    #[tokio::test]
+    async fn recovery_executor_records_phase_status_and_stats() {
+        let plan = RecoveryPlan::new(RecoveryMode::Balanced, RecoveryExit::Abnormal, true, 2);
+        let mut executor = RecoveryExecutor::new(plan);
+
+        executor
+            .run_phase_with_status(
+                RecoveryPhase::CommitLog,
+                RecoveryPhaseStatus::Fallback,
+                RecoveryReportStats {
+                    scanned_bytes: 64,
+                    recovered_messages: 1,
+                    invalid_messages: 0,
+                    truncated_files: 0,
+                    index_files_removed: 0,
+                    index_files_rebuilt: 0,
+                },
+                async {},
+            )
+            .await;
+
+        let report = executor.finish();
+        assert_eq!(report.phases[0].status, RecoveryPhaseStatus::Fallback);
+        assert_eq!(report.stats.scanned_bytes, 64);
+        assert_eq!(report.stats.recovered_messages, 1);
     }
 }
