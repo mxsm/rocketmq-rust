@@ -68,6 +68,56 @@ impl RecoveryStatistics {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbnormalRecoveryWindow {
+    pub start_index: usize,
+    pub checkpoint_index: Option<usize>,
+    pub dispatch_progress_index: Option<usize>,
+    pub confirm_offset_index: Option<usize>,
+    pub file_count_limit: Option<usize>,
+    pub expanded_files: usize,
+    pub scanned_file_count: usize,
+    pub scanned_bytes: u64,
+    pub end_offset: Option<i64>,
+    pub fallback_reason: Option<&'static str>,
+}
+
+impl AbnormalRecoveryWindow {
+    fn new(
+        file_ranges: &[AbnormalRecoveryFileRange],
+        start_index: usize,
+        checkpoint_index: Option<usize>,
+        file_count_limit: Option<usize>,
+        end_offset: Option<i64>,
+        fallback_reason: Option<&'static str>,
+    ) -> Self {
+        let expanded_files = checkpoint_index
+            .map(|checkpoint_index| checkpoint_index.saturating_sub(start_index))
+            .unwrap_or_default();
+        let scanned_file_count = file_ranges.len().saturating_sub(start_index);
+        let scanned_bytes = planned_scanned_bytes(file_ranges, start_index, end_offset);
+
+        Self {
+            start_index,
+            checkpoint_index,
+            dispatch_progress_index: None,
+            confirm_offset_index: None,
+            file_count_limit,
+            expanded_files,
+            scanned_file_count,
+            scanned_bytes,
+            end_offset,
+            fallback_reason,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AbnormalRecoveryFileRange {
+    start_offset: i64,
+    file_size: u64,
+}
+
 /// Optimized message iterator that reads in batches
 pub struct BatchMessageIterator<'a> {
     mapped_file: &'a Arc<DefaultMappedFile>,
@@ -227,21 +277,210 @@ pub fn find_recovery_start_index(
     message_store_config: &Arc<MessageStoreConfig>,
     store_checkpoint: &StoreCheckpoint,
 ) -> usize {
-    let mut index = (mapped_files.len() as i32) - 1;
+    find_checkpoint_recovery_start_index(mapped_files, message_store_config, store_checkpoint).unwrap_or(0)
+}
 
-    while index >= 0 {
-        let mapped_file = &mapped_files[index as usize];
+pub fn plan_abnormal_recovery_window(
+    mapped_files: &[Arc<DefaultMappedFile>],
+    message_store_config: &Arc<MessageStoreConfig>,
+    store_checkpoint: &StoreCheckpoint,
+    dispatch_progress_offset: i64,
+    confirm_offset: i64,
+    commit_log_min_offset: i64,
+    commit_log_max_offset: i64,
+) -> AbnormalRecoveryWindow {
+    let file_ranges: Vec<_> = mapped_files
+        .iter()
+        .map(|mapped_file| AbnormalRecoveryFileRange {
+            start_offset: mapped_file.get_file_from_offset() as i64,
+            file_size: mapped_file.get_file_size(),
+        })
+        .collect();
+    let checkpoint_index = find_checkpoint_recovery_start_index(mapped_files, message_store_config, store_checkpoint);
+
+    plan_abnormal_recovery_window_from_ranges(
+        &file_ranges,
+        checkpoint_index,
+        message_store_config.max_recovery_commit_log_files,
+        dispatch_progress_offset,
+        confirm_offset,
+        commit_log_min_offset,
+        commit_log_max_offset,
+    )
+}
+
+fn find_checkpoint_recovery_start_index(
+    mapped_files: &[Arc<DefaultMappedFile>],
+    message_store_config: &Arc<MessageStoreConfig>,
+    store_checkpoint: &StoreCheckpoint,
+) -> Option<usize> {
+    let mut index = mapped_files.len().checked_sub(1)?;
+
+    loop {
+        let mapped_file = &mapped_files[index];
         if is_mapped_file_matched_recover(message_store_config, mapped_file, store_checkpoint) {
-            break;
+            return Some(index);
+        }
+        if index == 0 {
+            return None;
         }
         index -= 1;
     }
+}
 
-    if index <= 0 {
-        0
-    } else {
-        index as usize
+fn plan_abnormal_recovery_window_from_ranges(
+    file_ranges: &[AbnormalRecoveryFileRange],
+    checkpoint_index: Option<usize>,
+    max_recovery_commit_log_files: usize,
+    dispatch_progress_offset: i64,
+    confirm_offset: i64,
+    commit_log_min_offset: i64,
+    commit_log_max_offset: i64,
+) -> AbnormalRecoveryWindow {
+    if file_ranges.is_empty() {
+        return AbnormalRecoveryWindow::new(
+            file_ranges,
+            0,
+            checkpoint_index,
+            configured_file_count_limit(max_recovery_commit_log_files),
+            None,
+            Some("empty_commitlog"),
+        );
     }
+
+    let end_offset =
+        valid_commit_log_range(commit_log_min_offset, commit_log_max_offset).then_some(commit_log_max_offset);
+
+    if max_recovery_commit_log_files == 0 {
+        return AbnormalRecoveryWindow::new(
+            file_ranges,
+            checkpoint_index.unwrap_or_default(),
+            checkpoint_index,
+            None,
+            end_offset,
+            checkpoint_index.is_none().then_some("checkpoint_not_matched"),
+        );
+    }
+
+    let file_count_limit = configured_file_count_limit(max_recovery_commit_log_files);
+    let Some(checkpoint_index) = checkpoint_index else {
+        return AbnormalRecoveryWindow::new(
+            file_ranges,
+            0,
+            None,
+            file_count_limit,
+            end_offset,
+            Some("checkpoint_not_matched"),
+        );
+    };
+
+    if !valid_commit_log_range(commit_log_min_offset, commit_log_max_offset) {
+        return AbnormalRecoveryWindow::new(
+            file_ranges,
+            0,
+            Some(checkpoint_index),
+            file_count_limit,
+            None,
+            Some("invalid_commitlog_range"),
+        );
+    }
+
+    let Some(dispatch_progress_index) = file_index_for_offset(
+        file_ranges,
+        dispatch_progress_offset,
+        commit_log_min_offset,
+        commit_log_max_offset,
+    ) else {
+        return AbnormalRecoveryWindow::new(
+            file_ranges,
+            0,
+            Some(checkpoint_index),
+            file_count_limit,
+            end_offset,
+            Some("dispatch_progress_out_of_range"),
+        );
+    };
+
+    let Some(confirm_offset_index) = file_index_for_offset(
+        file_ranges,
+        confirm_offset,
+        commit_log_min_offset,
+        commit_log_max_offset,
+    ) else {
+        return AbnormalRecoveryWindow::new(
+            file_ranges,
+            0,
+            Some(checkpoint_index),
+            file_count_limit,
+            end_offset,
+            Some("confirm_offset_out_of_range"),
+        );
+    };
+
+    let checkpoint_window_start = checkpoint_index.saturating_sub(max_recovery_commit_log_files);
+    let start_index = checkpoint_window_start
+        .min(dispatch_progress_index)
+        .min(confirm_offset_index);
+    let mut window = AbnormalRecoveryWindow::new(
+        file_ranges,
+        start_index,
+        Some(checkpoint_index),
+        file_count_limit,
+        end_offset,
+        None,
+    );
+    window.dispatch_progress_index = Some(dispatch_progress_index);
+    window.confirm_offset_index = Some(confirm_offset_index);
+    window
+}
+
+fn configured_file_count_limit(max_recovery_commit_log_files: usize) -> Option<usize> {
+    (max_recovery_commit_log_files != 0).then_some(max_recovery_commit_log_files)
+}
+
+fn valid_commit_log_range(commit_log_min_offset: i64, commit_log_max_offset: i64) -> bool {
+    commit_log_min_offset >= 0 && commit_log_max_offset >= commit_log_min_offset
+}
+
+fn file_index_for_offset(
+    file_ranges: &[AbnormalRecoveryFileRange],
+    offset: i64,
+    commit_log_min_offset: i64,
+    commit_log_max_offset: i64,
+) -> Option<usize> {
+    if offset < commit_log_min_offset || offset > commit_log_max_offset {
+        return None;
+    }
+
+    let mut selected_index = None;
+    for (index, file_range) in file_ranges.iter().enumerate() {
+        if offset >= file_range.start_offset {
+            selected_index = Some(index);
+        } else {
+            break;
+        }
+    }
+    selected_index
+}
+
+fn planned_scanned_bytes(
+    file_ranges: &[AbnormalRecoveryFileRange],
+    start_index: usize,
+    end_offset: Option<i64>,
+) -> u64 {
+    let Some(start_file) = file_ranges.get(start_index) else {
+        return 0;
+    };
+    if let Some(end_offset) = end_offset {
+        if end_offset >= start_file.start_offset {
+            return (end_offset - start_file.start_offset) as u64;
+        }
+    }
+
+    file_ranges[start_index..]
+        .iter()
+        .map(|file_range| file_range.file_size)
+        .sum()
 }
 
 /// Optimized check for mapped file recovery (with cached reads)
@@ -342,5 +581,96 @@ mod tests {
         };
         assert_eq!(stats.messages_recovered, 1000);
         assert_eq!(stats.bytes_processed, 1024 * 1024);
+    }
+
+    fn file_ranges(count: usize) -> Vec<AbnormalRecoveryFileRange> {
+        (0..count)
+            .map(|index| AbnormalRecoveryFileRange {
+                start_offset: (index as i64) * 100,
+                file_size: 100,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn abnormal_recovery_window_preserves_checkpoint_start_when_limit_disabled() {
+        let ranges = file_ranges(6);
+
+        let window = plan_abnormal_recovery_window_from_ranges(&ranges, Some(4), 0, 100, 200, 0, 600);
+
+        assert_eq!(window.start_index, 4);
+        assert_eq!(window.checkpoint_index, Some(4));
+        assert_eq!(window.file_count_limit, None);
+        assert_eq!(window.expanded_files, 0);
+        assert_eq!(window.fallback_reason, None);
+    }
+
+    #[test]
+    fn abnormal_recovery_window_expands_by_configured_file_limit() {
+        let ranges = file_ranges(6);
+
+        let window = plan_abnormal_recovery_window_from_ranges(&ranges, Some(5), 2, 400, 500, 0, 600);
+
+        assert_eq!(window.start_index, 3);
+        assert_eq!(window.file_count_limit, Some(2));
+        assert_eq!(window.expanded_files, 2);
+        assert_eq!(window.scanned_file_count, 3);
+        assert_eq!(window.scanned_bytes, 300);
+        assert_eq!(window.fallback_reason, None);
+    }
+
+    #[test]
+    fn abnormal_recovery_window_expands_to_dispatch_progress() {
+        let ranges = file_ranges(6);
+
+        let window = plan_abnormal_recovery_window_from_ranges(&ranges, Some(5), 1, 200, 500, 0, 600);
+
+        assert_eq!(window.start_index, 2);
+        assert_eq!(window.dispatch_progress_index, Some(2));
+        assert_eq!(window.confirm_offset_index, Some(5));
+        assert_eq!(window.expanded_files, 3);
+    }
+
+    #[test]
+    fn abnormal_recovery_window_expands_to_confirm_offset() {
+        let ranges = file_ranges(6);
+
+        let window = plan_abnormal_recovery_window_from_ranges(&ranges, Some(5), 1, 500, 100, 0, 600);
+
+        assert_eq!(window.start_index, 1);
+        assert_eq!(window.dispatch_progress_index, Some(5));
+        assert_eq!(window.confirm_offset_index, Some(1));
+        assert_eq!(window.expanded_files, 4);
+    }
+
+    #[test]
+    fn abnormal_recovery_window_falls_back_when_checkpoint_missing() {
+        let ranges = file_ranges(6);
+
+        let window = plan_abnormal_recovery_window_from_ranges(&ranges, None, 2, 200, 300, 0, 600);
+
+        assert_eq!(window.start_index, 0);
+        assert_eq!(window.checkpoint_index, None);
+        assert_eq!(window.fallback_reason, Some("checkpoint_not_matched"));
+    }
+
+    #[test]
+    fn abnormal_recovery_window_falls_back_when_dispatch_progress_is_untrusted() {
+        let ranges = file_ranges(6);
+
+        let window = plan_abnormal_recovery_window_from_ranges(&ranges, Some(4), 2, 700, 300, 0, 600);
+
+        assert_eq!(window.start_index, 0);
+        assert_eq!(window.fallback_reason, Some("dispatch_progress_out_of_range"));
+    }
+
+    #[test]
+    fn abnormal_recovery_window_falls_back_when_confirm_offset_is_untrusted() {
+        let ranges = file_ranges(6);
+
+        let window = plan_abnormal_recovery_window_from_ranges(&ranges, Some(4), 2, 300, -1, 0, 600);
+
+        assert_eq!(window.start_index, 0);
+        assert_eq!(window.fallback_reason, Some("confirm_offset_out_of_range"));
     }
 }
