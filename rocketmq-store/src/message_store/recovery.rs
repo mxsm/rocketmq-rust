@@ -147,6 +147,21 @@ pub struct RecoveryOffsets {
     pub max_consume_queue_physical_offset: Option<i64>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConsumeQueueRecoveryConcurrency {
+    pub local_file_enabled: bool,
+    pub local_file_parallelism: usize,
+}
+
+impl ConsumeQueueRecoveryConcurrency {
+    pub const fn new(local_file_enabled: bool, local_file_parallelism: usize) -> Self {
+        Self {
+            local_file_enabled,
+            local_file_parallelism,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecoveryPlan {
     pub mode: RecoveryMode,
@@ -159,6 +174,7 @@ pub struct RecoveryPlan {
     pub index_repair_policy: RecoveryIndexRepairPolicy,
     pub fallback_policy: RecoveryFallbackPolicy,
     pub offsets: RecoveryOffsets,
+    pub consume_queue_recovery_concurrency: ConsumeQueueRecoveryConcurrency,
 }
 
 impl RecoveryPlan {
@@ -179,6 +195,7 @@ impl RecoveryPlan {
             index_repair_policy: RecoveryIndexRepairPolicy::default(),
             fallback_policy: RecoveryFallbackPolicy::default(),
             offsets: RecoveryOffsets::default(),
+            consume_queue_recovery_concurrency: ConsumeQueueRecoveryConcurrency::default(),
         }
     }
 
@@ -197,6 +214,10 @@ impl RecoveryPlan {
 
     pub fn set_max_consume_queue_physical_offset(&mut self, max_offset: i64) {
         self.offsets.max_consume_queue_physical_offset = Some(max_offset);
+    }
+
+    pub fn set_consume_queue_recovery_concurrency(&mut self, concurrency: ConsumeQueueRecoveryConcurrency) {
+        self.consume_queue_recovery_concurrency = concurrency;
     }
 }
 
@@ -407,6 +428,10 @@ mod tests {
         assert_eq!(plan.crc_policy, RecoveryCrcPolicy::default());
         assert_eq!(plan.index_repair_policy, RecoveryIndexRepairPolicy::Synchronous);
         assert_eq!(plan.fallback_policy, RecoveryFallbackPolicy::Fail);
+        assert_eq!(
+            plan.consume_queue_recovery_concurrency,
+            ConsumeQueueRecoveryConcurrency::default()
+        );
     }
 
     #[test]
@@ -432,6 +457,18 @@ mod tests {
         assert_eq!(plan.crc_policy, RecoveryCrcPolicy::new(true, true));
         assert_eq!(plan.index_repair_policy.as_str(), "background");
         assert_eq!(plan.fallback_policy.as_str(), "strict");
+    }
+
+    #[test]
+    fn recovery_plan_tracks_consume_queue_recovery_concurrency() {
+        let mut plan = RecoveryPlan::new(RecoveryMode::Balanced, RecoveryExit::Abnormal, false, 0);
+
+        plan.set_consume_queue_recovery_concurrency(ConsumeQueueRecoveryConcurrency::new(true, 4));
+
+        assert_eq!(
+            plan.consume_queue_recovery_concurrency,
+            ConsumeQueueRecoveryConcurrency::new(true, 4)
+        );
     }
 
     #[test]

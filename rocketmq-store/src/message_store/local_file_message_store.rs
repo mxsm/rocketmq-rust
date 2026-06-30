@@ -141,6 +141,7 @@ use crate::log_file::commit_log;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
+use crate::message_store::recovery::ConsumeQueueRecoveryConcurrency;
 use crate::message_store::recovery::RecoveryCrcPolicy;
 use crate::message_store::recovery::RecoveryExecutor;
 use crate::message_store::recovery::RecoveryExit;
@@ -1227,17 +1228,32 @@ impl LocalFileMessageStore {
             self.get_max_phy_offset(),
             self.get_confirm_offset(),
         );
+        recovery_plan.set_consume_queue_recovery_concurrency(ConsumeQueueRecoveryConcurrency::new(
+            self.message_store_config
+                .enable_local_file_consume_queue_recovery_concurrently,
+            self.message_store_config
+                .effective_local_file_consume_queue_recovery_parallelism(),
+        ));
         let mut recovery_executor = RecoveryExecutor::new(recovery_plan);
         info!(
             "message store recover mode: {}, recoveryMode: {}, lastExit: {}, maxRecoveryCommitLogFiles: {}, \
-             crcPolicy: message={}, property={}, indexRepairPolicy: {}",
+             crcPolicy: message={}, property={}, indexRepairPolicy: {}, localFileCqRecoveryConcurrent: {}, \
+             localFileCqRecoveryParallelism: {}",
             if recover_concurrently { "concurrent" } else { "normal" },
             self.message_store_config.recovery_mode.as_str(),
             recovery_executor.plan().exit.as_str(),
             recovery_executor.plan().max_recovery_commit_log_files,
             recovery_executor.plan().crc_policy.check_message_crc,
             recovery_executor.plan().crc_policy.check_property_crc,
-            recovery_executor.plan().index_repair_policy.as_str()
+            recovery_executor.plan().index_repair_policy.as_str(),
+            recovery_executor
+                .plan()
+                .consume_queue_recovery_concurrency
+                .local_file_enabled,
+            recovery_executor
+                .plan()
+                .consume_queue_recovery_concurrency
+                .local_file_parallelism
         );
         self.set_lifecycle_state(StoreLifecycleState::RecoveringConsumeQueue);
         let recover_consume_queue = recovery_executor
@@ -5936,6 +5952,8 @@ mod tests {
                 recovery_mode: RecoveryMode::Strict,
                 check_crc_on_recover: true,
                 force_verify_prop_crc: true,
+                enable_local_file_consume_queue_recovery_concurrently: true,
+                local_file_consume_queue_recovery_parallelism: 4,
                 ..Default::default()
             },
         );
@@ -5966,6 +5984,8 @@ mod tests {
         );
         assert_eq!(report.plan.crc_policy, RecoveryCrcPolicy::new(true, true));
         assert_eq!(report.plan.index_repair_policy, RecoveryIndexRepairPolicy::Synchronous);
+        assert!(report.plan.consume_queue_recovery_concurrency.local_file_enabled);
+        assert!(report.plan.consume_queue_recovery_concurrency.local_file_parallelism >= 1);
         assert_eq!(report.phases.len(), 3);
         assert!(report.phase_duration_ms(RecoveryPhase::ConsumeQueue).is_some());
         assert!(report.phase_duration_ms(RecoveryPhase::CommitLog).is_some());
