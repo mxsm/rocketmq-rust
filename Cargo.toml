@@ -102,7 +102,7 @@ parking_lot   = "0.12"
 dirs          = "6.0"
 trait-variant = "0.1.2"
 
-mockall = "0.14.0"
+mockall = "0.15.0"
 cfg-if  = "1.0.4"
 
 sysinfo = "0.39.3"
