@@ -141,7 +141,9 @@ use crate::log_file::commit_log;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
+use crate::message_store::recovery::RecoveryCrcPolicy;
 use crate::message_store::recovery::RecoveryExit;
+use crate::message_store::recovery::RecoveryIndexRepairPolicy;
 use crate::message_store::recovery::RecoveryPhase;
 use crate::message_store::recovery::RecoveryPlan;
 use crate::message_store::recovery::RecoveryReport;
@@ -1204,18 +1206,37 @@ impl LocalFileMessageStore {
     async fn recover(&mut self, last_exit_ok: bool) {
         let previous_state = self.lifecycle_state();
         let recover_concurrently = self.is_recover_concurrently();
-        let mut recovery_report = RecoveryReport::new(RecoveryPlan::new(
+        let mut recovery_plan = RecoveryPlan::new(
             self.message_store_config.recovery_mode,
             RecoveryExit::from_last_exit_ok(last_exit_ok),
             recover_concurrently,
             self.message_store_config.max_recovery_commit_log_files,
-        ));
+        );
+        recovery_plan.crc_policy = RecoveryCrcPolicy::new(
+            self.message_store_config.check_crc_on_recover,
+            self.message_store_config.force_verify_prop_crc,
+        );
+        recovery_plan.index_repair_policy = if self.message_store_config.message_index_enable {
+            RecoveryIndexRepairPolicy::Synchronous
+        } else {
+            RecoveryIndexRepairPolicy::Disabled
+        };
+        recovery_plan.set_commit_log_offsets(
+            self.get_min_phy_offset(),
+            self.get_max_phy_offset(),
+            self.get_confirm_offset(),
+        );
+        let mut recovery_report = RecoveryReport::new(recovery_plan);
         info!(
-            "message store recover mode: {}, recoveryMode: {}, lastExit: {}, maxRecoveryCommitLogFiles: {}",
+            "message store recover mode: {}, recoveryMode: {}, lastExit: {}, maxRecoveryCommitLogFiles: {}, \
+             crcPolicy: message={}, property={}, indexRepairPolicy: {}",
             if recover_concurrently { "concurrent" } else { "normal" },
             self.message_store_config.recovery_mode.as_str(),
             recovery_report.plan.exit.as_str(),
-            recovery_report.plan.max_recovery_commit_log_files
+            recovery_report.plan.max_recovery_commit_log_files,
+            recovery_report.plan.crc_policy.check_message_crc,
+            recovery_report.plan.crc_policy.check_property_crc,
+            recovery_report.plan.index_repair_policy.as_str()
         );
         let recover_consume_queue_start = Instant::now();
         self.set_lifecycle_state(StoreLifecycleState::RecoveringConsumeQueue);
@@ -1224,6 +1245,9 @@ impl LocalFileMessageStore {
         recovery_report
             .plan
             .set_dispatch_recovery_offset(dispatch_recovery_offset);
+        recovery_report
+            .plan
+            .set_max_consume_queue_physical_offset(dispatch_recovery_offset);
         let recover_consume_queue = Instant::now()
             .saturating_duration_since(recover_consume_queue_start)
             .as_millis();
@@ -1251,16 +1275,25 @@ impl LocalFileMessageStore {
         if self.lifecycle_state() != StoreLifecycleState::Shutdown {
             self.set_lifecycle_state(previous_state);
         }
+        recovery_report.plan.set_commit_log_offsets(
+            self.get_min_phy_offset(),
+            self.get_max_phy_offset(),
+            self.get_confirm_offset(),
+        );
         info!(
             "message store recover total cost: {} ms, recoverConsumeQueue: {} ms, recoverCommitLog: {} ms, \
-             recoverOffsetTable: {} ms, recoveryMode: {}, lastExit: {}, dispatchRecoveryOffset: {:?}",
+             recoverOffsetTable: {} ms, recoveryMode: {}, lastExit: {}, dispatchRecoveryOffset: {:?}, commitLogRange: \
+             {:?}-{:?}, confirmOffset: {:?}",
             recovery_report.total_duration_ms,
             recover_consume_queue,
             recover_commit_log,
             recover_topic_queue_table,
             recovery_report.plan.mode.as_str(),
             recovery_report.plan.exit.as_str(),
-            recovery_report.plan.dispatch_recovery_offset
+            recovery_report.plan.dispatch_recovery_offset,
+            recovery_report.plan.offsets.commit_log_min_offset,
+            recovery_report.plan.offsets.commit_log_max_offset,
+            recovery_report.plan.offsets.confirm_offset
         );
         self.last_recovery_report = Some(recovery_report);
     }
@@ -4764,8 +4797,12 @@ mod tests {
     use crate::kv::compaction_service::CompactionService;
     use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
     use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
+    use crate::message_store::recovery::RecoveryCrcPolicy;
     use crate::message_store::recovery::RecoveryExit;
+    use crate::message_store::recovery::RecoveryIndexRepairPolicy;
     use crate::message_store::recovery::RecoveryPhase;
+    use crate::message_store::recovery::RecoveryPhaseStatus;
+    use crate::message_store::recovery::RecoveryReportStats;
     use crate::queue::consume_queue::ConsumeQueueTrait;
     use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
     use crate::store_error::StoreError;
@@ -5894,6 +5931,8 @@ mod tests {
             MessageStoreConfig {
                 max_recovery_commit_log_files: 7,
                 recovery_mode: RecoveryMode::Strict,
+                check_crc_on_recover: true,
+                force_verify_prop_crc: true,
                 ..Default::default()
             },
         );
@@ -5905,11 +5944,34 @@ mod tests {
         assert_eq!(report.plan.exit, RecoveryExit::Abnormal);
         assert!(!report.plan.recover_concurrently);
         assert_eq!(report.plan.max_recovery_commit_log_files, 7);
+        assert_eq!(report.plan.scan_range.file_count_limit, Some(7));
         assert!(report.plan.dispatch_recovery_offset.is_some());
+        assert_eq!(
+            report.plan.offsets.dispatch_recovery_offset,
+            report.plan.dispatch_recovery_offset
+        );
+        assert_eq!(
+            report.plan.scan_range.start_offset,
+            report.plan.dispatch_recovery_offset
+        );
+        assert!(report.plan.offsets.commit_log_min_offset.is_some());
+        assert!(report.plan.offsets.commit_log_max_offset.is_some());
+        assert!(report.plan.offsets.confirm_offset.is_some());
+        assert_eq!(
+            report.plan.scan_range.end_offset,
+            report.plan.offsets.commit_log_max_offset
+        );
+        assert_eq!(report.plan.crc_policy, RecoveryCrcPolicy::new(true, true));
+        assert_eq!(report.plan.index_repair_policy, RecoveryIndexRepairPolicy::Synchronous);
         assert_eq!(report.phases.len(), 3);
         assert!(report.phase_duration_ms(RecoveryPhase::ConsumeQueue).is_some());
         assert!(report.phase_duration_ms(RecoveryPhase::CommitLog).is_some());
         assert!(report.phase_duration_ms(RecoveryPhase::TopicQueueTable).is_some());
+        assert!(report
+            .phases
+            .iter()
+            .all(|phase| phase.status == RecoveryPhaseStatus::Success));
+        assert_eq!(report.stats, RecoveryReportStats::default());
         assert_eq!(
             report.total_duration_ms,
             report.phases.iter().map(|phase| phase.duration_ms).sum()
