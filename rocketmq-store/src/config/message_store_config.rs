@@ -170,6 +170,10 @@ mod defaults {
         200
     }
 
+    pub fn recovery_mode() -> RecoveryMode {
+        RecoveryMode::default()
+    }
+
     pub fn disk_space_warning_level_ratio() -> usize {
         90
     }
@@ -413,6 +417,25 @@ impl LinuxStorageProfile {
                 ha_sendfile_enable: false,
                 io_uring_enable: false,
             },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryMode {
+    #[default]
+    Strict,
+    Balanced,
+    Fast,
+}
+
+impl RecoveryMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Balanced => "balanced",
+            Self::Fast => "fast",
         }
     }
 }
@@ -676,6 +699,9 @@ pub struct MessageStoreConfig {
 
     #[serde(default)]
     pub max_recovery_commit_log_files: usize,
+
+    #[serde(default = "defaults::recovery_mode")]
+    pub recovery_mode: RecoveryMode,
 
     #[serde(default = "defaults::disk_space_warning_level_ratio")]
     pub disk_space_warning_level_ratio: usize,
@@ -1205,6 +1231,7 @@ impl Default for MessageStoreConfig {
             flush_interval_commit_log: 500,
             commit_interval_commit_log: 200,
             max_recovery_commit_log_files: 0,
+            recovery_mode: RecoveryMode::default(),
             disk_space_warning_level_ratio: 90,
             disk_space_clean_forcibly_ratio: 85,
             use_reentrant_lock_when_put_message: false,
@@ -1632,6 +1659,7 @@ impl MessageStoreConfig {
             "maxRecoveryCommitLogFiles".to_string(),
             self.max_recovery_commit_log_files.to_string(),
         );
+        properties.insert("recoveryMode".to_string(), self.recovery_mode.as_str().to_string());
         properties.insert(
             "diskSpaceWarningLevelRatio".to_string(),
             self.disk_space_warning_level_ratio.to_string(),
@@ -2064,6 +2092,7 @@ mod tests {
     use super::LinuxStorageProfile;
     use super::LinuxTransferEngine;
     use super::MessageStoreConfig;
+    use super::RecoveryMode;
 
     #[test]
     fn default_max_checksum_range_matches_java_default() {
@@ -2083,6 +2112,26 @@ mod tests {
     fn serde_defaults_keep_file_reserved_time_java_default() -> Result<(), serde_json::Error> {
         let config: MessageStoreConfig = serde_json::from_str("{}")?;
         assert_eq!(config.file_reserved_time, 72);
+        Ok(())
+    }
+
+    #[test]
+    fn default_recovery_mode_is_strict_for_behavior_compatibility() {
+        let config = MessageStoreConfig::default();
+
+        assert_eq!(config.recovery_mode, RecoveryMode::Strict);
+        assert_eq!(config.get_properties()["recoveryMode"], "strict");
+    }
+
+    #[test]
+    fn serde_loads_snake_case_recovery_mode() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str(
+            r#"{
+                "recoveryMode": "balanced"
+            }"#,
+        )?;
+
+        assert_eq!(config.recovery_mode, RecoveryMode::Balanced);
         Ok(())
     }
 
