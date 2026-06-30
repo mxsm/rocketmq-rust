@@ -142,6 +142,10 @@ name    = "commitlog_load_bench"
 harness = false
 
 [[bench]]
+name    = "commitlog_recovery_bench"
+harness = false
+
+[[bench]]
 name    = "commit_log_performance"
 harness = false
 
