@@ -112,6 +112,19 @@ pub const BLANK_MAGIC_CODE: i32 = -875286124;
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 const DEFAULT_COMMITLOG_ACTIVE_WINDOW_LOCK_BYTES: usize = 128 * 1024 * 1024;
+const DEFAULT_NORMAL_RECOVERY_COMMIT_LOG_FILES: usize = 3;
+
+fn normal_recovery_file_count_limit(max_recovery_commit_log_files: usize) -> usize {
+    if max_recovery_commit_log_files == 0 {
+        DEFAULT_NORMAL_RECOVERY_COMMIT_LOG_FILES
+    } else {
+        max_recovery_commit_log_files
+    }
+}
+
+fn normal_recovery_start_index(mapped_file_count: usize, max_recovery_commit_log_files: usize) -> usize {
+    mapped_file_count.saturating_sub(normal_recovery_file_count_limit(max_recovery_commit_log_files))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CommitLogActiveMemoryLockTarget {
@@ -1355,12 +1368,16 @@ impl CommitLog {
             return;
         }
 
-        // Start from the last third file
-        let mut index = (mapped_files_inner.len() as i32) - 3;
-        if index <= 0 {
-            index = 0;
-        }
-        let mut index = index as usize;
+        let recovery_file_limit =
+            normal_recovery_file_count_limit(self.message_store_config.max_recovery_commit_log_files);
+        let mut index = normal_recovery_start_index(
+            mapped_files_inner.len(),
+            self.message_store_config.max_recovery_commit_log_files,
+        );
+        info!(
+            "Starting normal recovery from file index {} using up to {} commitlog files (optimized)",
+            index, recovery_file_limit
+        );
 
         let mut last_valid_msg_phy_offset = self.get_confirm_offset().max(0) as u64;
         let do_dispatch = false;
@@ -1462,12 +1479,16 @@ impl CommitLog {
         let mapped_files = self.mapped_file_queue.get_mapped_files();
         let mapped_files_inner = mapped_files.load();
         if !mapped_files_inner.is_empty() {
-            // Began to recover from the last third file
-            let mut index = (mapped_files_inner.len() as i32) - 3;
-            if index <= 0 {
-                index = 0;
-            }
-            let mut index = index as usize;
+            let recovery_file_limit =
+                normal_recovery_file_count_limit(self.message_store_config.max_recovery_commit_log_files);
+            let mut index = normal_recovery_start_index(
+                mapped_files_inner.len(),
+                self.message_store_config.max_recovery_commit_log_files,
+            );
+            info!(
+                "Starting normal recovery from file index {} using up to {} commitlog files",
+                index, recovery_file_limit
+            );
             //let mut mapped_file = mapped_files_inner.get(index).unwrap().lock().await;
             let mut mapped_file = mapped_files_inner.get(index).unwrap();
             let mut process_offset = mapped_file.get_file_from_offset();
@@ -1506,8 +1527,9 @@ impl CommitLog {
                     index += 1;
                     if index >= mapped_files_inner.len() {
                         info!(
-                            "recover last 3 physics file over, last mapped file:{} ",
-                            mapped_file.get_file_name()
+                            "recover last {} physics file over, last mapped file:{} ",
+                            recovery_file_limit,
+                            mapped_file.get_file_name(),
                         );
                         break;
                     } else {
@@ -2604,6 +2626,23 @@ mod tests {
     use rocketmq_common::CRC32Utils::crc32;
     use rocketmq_common::MessageDecoder::create_crc32;
     use rocketmq_common::TimeUtils::current_millis;
+
+    #[test]
+    fn normal_recovery_file_limit_defaults_to_three_files() {
+        assert_eq!(normal_recovery_file_count_limit(0), 3);
+        assert_eq!(normal_recovery_start_index(0, 0), 0);
+        assert_eq!(normal_recovery_start_index(1, 0), 0);
+        assert_eq!(normal_recovery_start_index(3, 0), 0);
+        assert_eq!(normal_recovery_start_index(5, 0), 2);
+    }
+
+    #[test]
+    fn normal_recovery_file_limit_uses_explicit_value() {
+        assert_eq!(normal_recovery_file_count_limit(1), 1);
+        assert_eq!(normal_recovery_start_index(5, 1), 4);
+        assert_eq!(normal_recovery_start_index(5, 2), 3);
+        assert_eq!(normal_recovery_start_index(5, 10), 0);
+    }
 
     fn new_test_message_store(
         root: &Path,
