@@ -26,6 +26,8 @@ use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
 static USER_HOME: LazyLock<PathBuf> = LazyLock::new(|| dirs::home_dir().unwrap());
 
+pub const LOCAL_FILE_CONSUME_QUEUE_RECOVERY_PARALLELISM_SAFETY_CAP: usize = 8;
+
 /// Default value functions for Serde deserialization
 mod defaults {
     use super::*;
@@ -530,6 +532,20 @@ pub struct LinuxStorageProfileSettings {
     pub recovery_fadvise: LinuxRecoveryFadviseMode,
     pub ha_sendfile_enable: bool,
     pub io_uring_enable: bool,
+}
+
+pub fn bounded_local_file_consume_queue_recovery_parallelism(
+    configured_parallelism: usize,
+    available_parallelism: usize,
+) -> usize {
+    let available_parallelism = available_parallelism.max(1);
+    let upper_bound = available_parallelism.min(LOCAL_FILE_CONSUME_QUEUE_RECOVERY_PARALLELISM_SAFETY_CAP);
+    let requested_parallelism = if configured_parallelism == 0 {
+        upper_bound
+    } else {
+        configured_parallelism
+    };
+    requested_parallelism.clamp(1, upper_bound)
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -1112,6 +1128,12 @@ pub struct MessageStoreConfig {
     pub enable_build_consume_queue_concurrently: bool,
 
     #[serde(default)]
+    pub enable_local_file_consume_queue_recovery_concurrently: bool,
+
+    #[serde(default)]
+    pub local_file_consume_queue_recovery_parallelism: usize,
+
+    #[serde(default)]
     pub batch_dispatch_request_thread_pool_nums: usize,
 
     #[serde(default)]
@@ -1366,6 +1388,8 @@ impl Default for MessageStoreConfig {
             sample_steps: 0,
             access_message_in_memory_hot_ratio: 0,
             enable_build_consume_queue_concurrently: false,
+            enable_local_file_consume_queue_recovery_concurrently: false,
+            local_file_consume_queue_recovery_parallelism: 0,
             batch_dispatch_request_thread_pool_nums: 0,
             clean_rocksdb_dirty_cq_interval_min: 0,
             stat_rocksdb_cq_interval_sec: 0,
@@ -1389,6 +1413,16 @@ impl Default for MessageStoreConfig {
 }
 
 impl MessageStoreConfig {
+    pub fn effective_local_file_consume_queue_recovery_parallelism(&self) -> usize {
+        let available_parallelism = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1);
+        bounded_local_file_consume_queue_recovery_parallelism(
+            self.local_file_consume_queue_recovery_parallelism,
+            available_parallelism,
+        )
+    }
+
     pub fn effective_linux_storage_profile_settings(&self) -> LinuxStorageProfileSettings {
         self.linux_storage_profile.settings()
     }
@@ -2038,6 +2072,19 @@ impl MessageStoreConfig {
             self.enable_build_consume_queue_concurrently.to_string(),
         );
         properties.insert(
+            "enableLocalFileConsumeQueueRecoveryConcurrently".to_string(),
+            self.enable_local_file_consume_queue_recovery_concurrently.to_string(),
+        );
+        properties.insert(
+            "localFileConsumeQueueRecoveryParallelism".to_string(),
+            self.local_file_consume_queue_recovery_parallelism.to_string(),
+        );
+        properties.insert(
+            "effectiveLocalFileConsumeQueueRecoveryParallelism".to_string(),
+            self.effective_local_file_consume_queue_recovery_parallelism()
+                .to_string(),
+        );
+        properties.insert(
             "batchDispatchRequestThreadPoolNums".to_string(),
             self.batch_dispatch_request_thread_pool_nums.to_string(),
         );
@@ -2087,12 +2134,14 @@ impl MessageStoreConfig {
 
 #[cfg(test)]
 mod tests {
+    use super::bounded_local_file_consume_queue_recovery_parallelism;
     use super::LinuxMappedFileWarmMode;
     use super::LinuxMemoryLockMode;
     use super::LinuxStorageProfile;
     use super::LinuxTransferEngine;
     use super::MessageStoreConfig;
     use super::RecoveryMode;
+    use super::LOCAL_FILE_CONSUME_QUEUE_RECOVERY_PARALLELISM_SAFETY_CAP;
 
     #[test]
     fn default_max_checksum_range_matches_java_default() {
@@ -2121,6 +2170,53 @@ mod tests {
 
         assert_eq!(config.recovery_mode, RecoveryMode::Strict);
         assert_eq!(config.get_properties()["recoveryMode"], "strict");
+    }
+
+    #[test]
+    fn local_file_consume_queue_recovery_concurrency_is_disabled_by_default() {
+        let config = MessageStoreConfig::default();
+
+        assert!(!config.enable_local_file_consume_queue_recovery_concurrently);
+        assert_eq!(config.local_file_consume_queue_recovery_parallelism, 0);
+        assert_eq!(
+            config.get_properties()["enableLocalFileConsumeQueueRecoveryConcurrently"],
+            "false"
+        );
+        assert_eq!(config.get_properties()["localFileConsumeQueueRecoveryParallelism"], "0");
+    }
+
+    #[test]
+    fn serde_loads_local_file_consume_queue_recovery_concurrency() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str(
+            r#"{
+                "enableLocalFileConsumeQueueRecoveryConcurrently": true,
+                "localFileConsumeQueueRecoveryParallelism": 4
+            }"#,
+        )?;
+
+        assert!(config.enable_local_file_consume_queue_recovery_concurrently);
+        assert_eq!(config.local_file_consume_queue_recovery_parallelism, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn local_file_consume_queue_recovery_parallelism_defaults_to_bounded_cpu_count() {
+        assert_eq!(bounded_local_file_consume_queue_recovery_parallelism(0, 1), 1);
+        assert_eq!(bounded_local_file_consume_queue_recovery_parallelism(0, 4), 4);
+        assert_eq!(
+            bounded_local_file_consume_queue_recovery_parallelism(0, 64),
+            LOCAL_FILE_CONSUME_QUEUE_RECOVERY_PARALLELISM_SAFETY_CAP
+        );
+    }
+
+    #[test]
+    fn local_file_consume_queue_recovery_parallelism_clamps_explicit_values() {
+        assert_eq!(bounded_local_file_consume_queue_recovery_parallelism(1, 4), 1);
+        assert_eq!(bounded_local_file_consume_queue_recovery_parallelism(6, 4), 4);
+        assert_eq!(
+            bounded_local_file_consume_queue_recovery_parallelism(64, 64),
+            LOCAL_FILE_CONSUME_QUEUE_RECOVERY_PARALLELISM_SAFETY_CAP
+        );
     }
 
     #[test]
