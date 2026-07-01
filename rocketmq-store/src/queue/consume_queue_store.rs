@@ -53,6 +53,12 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     /// `true` if recovered successfully
     async fn recover_concurrently(&self) -> bool;
 
+    /// Recover from file with an explicit parallelism bound.
+    ///
+    /// # Returns
+    /// `true` if recovered successfully
+    async fn recover_concurrently_with_parallelism(&self, parallelism: usize) -> bool;
+
     /// Shutdown the consume queue store
     ///
     /// # Returns

@@ -170,6 +170,12 @@ pub trait ConsumeQueueTrait: FileQueueLifeCycle {
     /// The total size in bytes
     fn get_total_size(&self) -> i64;
 
+    /// Get the number of mapped files backing this consume queue.
+    ///
+    /// # Returns
+    /// The mapped file count.
+    fn get_mapped_file_count(&self) -> usize;
+
     /// Get the size of each unit in this consume queue
     ///
     /// # Returns

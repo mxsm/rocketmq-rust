@@ -663,6 +663,11 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
     }
 
     #[inline]
+    fn get_mapped_file_count(&self) -> usize {
+        self.mapped_file_queue.get_mapped_files_size()
+    }
+
+    #[inline]
     fn get_unit_size(&self) -> i32 {
         CQ_STORE_UNIT_SIZE
     }

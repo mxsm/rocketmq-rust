@@ -1368,12 +1368,36 @@ impl LocalFileMessageStore {
     }
 
     fn is_recover_concurrently(&self) -> bool {
-        self.broker_config.recover_concurrently & self.message_store_config.is_enable_rocksdb_store()
+        self.broker_config.recover_concurrently
+            && (self.message_store_config.is_enable_rocksdb_store()
+                || self.is_local_file_consume_queue_recover_concurrently())
+    }
+
+    fn is_local_file_consume_queue_recover_concurrently(&self) -> bool {
+        !self.message_store_config.is_enable_rocksdb_store()
+            && self
+                .message_store_config
+                .enable_local_file_consume_queue_recovery_concurrently
     }
 
     async fn recover_consume_queue(&mut self) {
-        if self.is_recover_concurrently() {
+        if self.broker_config.recover_concurrently && self.message_store_config.is_enable_rocksdb_store() {
             self.consume_queue_store.recover_concurrently().await;
+        } else if self.broker_config.recover_concurrently && self.is_local_file_consume_queue_recover_concurrently() {
+            let parallelism = self
+                .message_store_config
+                .effective_local_file_consume_queue_recovery_parallelism();
+            if !self
+                .consume_queue_store
+                .recover_concurrently_with_parallelism(parallelism)
+                .await
+            {
+                warn!(
+                    "local file consume queue concurrent recovery failed, fallback to serial recovery, parallelism={}",
+                    parallelism
+                );
+                self.consume_queue_store.recover().await;
+            }
         } else {
             self.consume_queue_store.recover().await;
         }
@@ -4860,12 +4884,20 @@ mod tests {
 
     fn new_configured_test_store(
         temp_dir: &tempfile::TempDir,
+        message_store_config: MessageStoreConfig,
+    ) -> ArcMut<LocalFileMessageStore> {
+        new_configured_test_store_with_broker(temp_dir, message_store_config, BrokerConfig::default())
+    }
+
+    fn new_configured_test_store_with_broker(
+        temp_dir: &tempfile::TempDir,
         mut message_store_config: MessageStoreConfig,
+        broker_config: BrokerConfig,
     ) -> ArcMut<LocalFileMessageStore> {
         message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
         let mut store = ArcMut::new(LocalFileMessageStore::new(
             Arc::new(message_store_config),
-            Arc::new(BrokerConfig::default()),
+            Arc::new(broker_config),
             Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
             None,
             false,
@@ -5999,6 +6031,30 @@ mod tests {
             report.total_duration_ms,
             report.phases.iter().map(|phase| phase.duration_ms).sum()
         );
+    }
+
+    #[tokio::test]
+    async fn recover_enables_local_file_consume_queue_concurrency_when_configured() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store_with_broker(
+            &temp_dir,
+            MessageStoreConfig {
+                enable_local_file_consume_queue_recovery_concurrently: true,
+                local_file_consume_queue_recovery_parallelism: 2,
+                ..Default::default()
+            },
+            BrokerConfig {
+                recover_concurrently: true,
+                ..Default::default()
+            },
+        );
+
+        store.recover(false).await;
+
+        let report = store.last_recovery_report().expect("recovery report");
+        assert!(report.plan.recover_concurrently);
+        assert!(report.plan.consume_queue_recovery_concurrency.local_file_enabled);
+        assert_eq!(report.plan.consume_queue_recovery_concurrency.local_file_parallelism, 2);
     }
 
     #[tokio::test]
