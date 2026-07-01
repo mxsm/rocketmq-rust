@@ -2845,6 +2845,31 @@ impl MessageStore for LocalFileMessageStore {
             "linuxStorageMappedFileWarmLastMillis".to_string(),
             mapped_file_warmup_stats.last_millis.to_string(),
         );
+        let lazy_mmap_stats = self.commit_log.lazy_mmap_stats();
+        result.insert(
+            "storeLazyMmapEligibleFiles".to_string(),
+            lazy_mmap_stats.eligible_files.to_string(),
+        );
+        result.insert(
+            "storeLazyMmapMappedFiles".to_string(),
+            lazy_mmap_stats.mapped_files.to_string(),
+        );
+        result.insert(
+            "storeLazyMmapOperations".to_string(),
+            lazy_mmap_stats.map_operations.to_string(),
+        );
+        result.insert(
+            "storeLazyMmapFailures".to_string(),
+            lazy_mmap_stats.map_failures.to_string(),
+        );
+        result.insert(
+            "storeLazyMmapTotalMillis".to_string(),
+            lazy_mmap_stats.total_millis.to_string(),
+        );
+        result.insert(
+            "storeLazyMmapLastMillis".to_string(),
+            lazy_mmap_stats.last_millis.to_string(),
+        );
         result.insert(
             "linuxStorageMemoryLockMode".to_string(),
             self.message_store_config
@@ -6427,6 +6452,12 @@ mod tests {
         assert_eq!(runtime_info["linuxStorageMappedFileWarmBytes"], "4096");
         assert_eq!(runtime_info["linuxStorageMappedFileWarmTotalMillis"], "12");
         assert_eq!(runtime_info["linuxStorageMappedFileWarmLastMillis"], "12");
+        assert_eq!(runtime_info["storeLazyMmapEligibleFiles"], "0");
+        assert_eq!(runtime_info["storeLazyMmapMappedFiles"], "0");
+        assert_eq!(runtime_info["storeLazyMmapOperations"], "0");
+        assert_eq!(runtime_info["storeLazyMmapFailures"], "0");
+        assert_eq!(runtime_info["storeLazyMmapTotalMillis"], "0");
+        assert_eq!(runtime_info["storeLazyMmapLastMillis"], "0");
         assert_eq!(runtime_info["linuxStorageMemoryLockMode"], "off");
         assert_eq!(runtime_info["linuxStorageRecoveryFadvise"], "sequential");
         assert_eq!(runtime_info["linuxStorageRecoveryMmapAdvice"], "disabled");

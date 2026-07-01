@@ -171,6 +171,7 @@ pub struct CommitLogLoader {
     enable_parallel: bool,
     recovery_mmap_advice: RecoveryMmapAdvice,
     recovery_file_prefetch: RecoveryFilePrefetch,
+    lazy_mmap_enable: bool,
 }
 
 impl CommitLogLoader {
@@ -212,7 +213,13 @@ impl CommitLogLoader {
             enable_parallel,
             recovery_mmap_advice,
             recovery_file_prefetch,
+            lazy_mmap_enable: false,
         }
+    }
+
+    pub fn with_lazy_mmap(mut self, lazy_mmap_enable: bool) -> Self {
+        self.lazy_mmap_enable = lazy_mmap_enable;
+        self
     }
 
     /// Load files with optimizations enabled
@@ -395,13 +402,12 @@ impl CommitLogLoader {
         metadata: &[FileMetadata],
     ) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
         // Parallel creation with ordered collection
+        let file_count = metadata.len();
         let results: Result<Vec<_>, io::Error> = metadata
             .par_iter()
-            .map(|meta| {
-                let mapped_file = DefaultMappedFile::try_new(
-                    CheetahString::from_string(meta.path.to_string_lossy().to_string()),
-                    self.mapped_file_size,
-                )?;
+            .enumerate()
+            .map(|(idx, meta)| {
+                let mapped_file = self.create_mapped_file(meta, idx, file_count)?;
 
                 // Apply memory hints for sequential access
                 let (mmap_advice_result, file_prefetch_result) = self.apply_memory_hints(&mapped_file);
@@ -443,11 +449,9 @@ impl CommitLogLoader {
             ..LoadStatistics::default()
         };
 
-        for meta in metadata {
-            let mapped_file = DefaultMappedFile::try_new(
-                CheetahString::from_string(meta.path.to_string_lossy().to_string()),
-                self.mapped_file_size,
-            )?;
+        let file_count = metadata.len();
+        for (idx, meta) in metadata.iter().enumerate() {
+            let mapped_file = self.create_mapped_file(meta, idx, file_count)?;
 
             let (mmap_advice_result, file_prefetch_result) = self.apply_memory_hints(&mapped_file);
             mmap_advice_stats.record_mmap_advice(mmap_advice_result);
@@ -463,6 +467,15 @@ impl CommitLogLoader {
         Ok((mapped_files, mmap_advice_stats))
     }
 
+    fn create_mapped_file(&self, meta: &FileMetadata, idx: usize, file_count: usize) -> io::Result<DefaultMappedFile> {
+        let file_name = CheetahString::from_string(meta.path.to_string_lossy().to_string());
+        if self.lazy_mmap_enable && idx + 1 < file_count {
+            DefaultMappedFile::try_new_lazy_read_only(file_name, self.mapped_file_size)
+        } else {
+            DefaultMappedFile::try_new(file_name, self.mapped_file_size)
+        }
+    }
+
     /// Apply platform-specific memory access hints
     ///
     /// # Platform-specific behavior
@@ -473,6 +486,10 @@ impl CommitLogLoader {
     /// Uses `memmap2::Mmap::advise()` to provide sequential access hints to the kernel,
     /// which can improve performance by optimizing readahead and page cache behavior.
     fn apply_memory_hints(&self, mapped_file: &DefaultMappedFile) -> (HintResult, HintResult) {
+        if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped() {
+            return (HintResult::default(), HintResult::default());
+        }
+
         let mmap_advice_result = self.apply_mmap_advice(mapped_file);
         let file_prefetch_result = self.apply_file_prefetch(mapped_file);
         (mmap_advice_result, file_prefetch_result)
@@ -696,6 +713,62 @@ mod tests {
                 .file_prefetch_successes
                 .saturating_add(stats.file_prefetch_failures)
         );
+    }
+
+    #[test]
+    fn lazy_mmap_marks_only_historical_commitlog_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_size = 1024 * 1024u64;
+        for i in 0..3 {
+            let file_path = temp_dir.path().join(format!("{:020}", i * file_size));
+            std::fs::write(&file_path, vec![0u8; file_size as usize]).unwrap();
+        }
+
+        let loader = CommitLogLoader::new_with_recovery_hints(
+            temp_dir.path().to_string_lossy().to_string(),
+            file_size,
+            false,
+            RecoveryMmapAdvice::Disabled,
+            RecoveryFilePrefetch::Disabled,
+        )
+        .with_lazy_mmap(true);
+
+        let (files, stats) = loader.load_optimized().unwrap();
+
+        assert_eq!(files.len(), 3);
+        assert!(files[0].is_lazy_mmap_enabled());
+        assert!(files[1].is_lazy_mmap_enabled());
+        assert!(!files[2].is_lazy_mmap_enabled());
+        assert!(!files[0].is_mapped());
+        assert!(!files[1].is_mapped());
+        assert!(files[2].is_mapped());
+        assert_eq!(stats.mmap_advice_attempts, 0);
+        assert_eq!(stats.file_prefetch_attempts, 0);
+    }
+
+    #[test]
+    fn disabled_lazy_mmap_keeps_recovery_load_eager() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_size = 1024 * 1024u64;
+        for i in 0..3 {
+            let file_path = temp_dir.path().join(format!("{:020}", i * file_size));
+            std::fs::write(&file_path, vec![0u8; file_size as usize]).unwrap();
+        }
+
+        let loader = CommitLogLoader::new_with_recovery_hints(
+            temp_dir.path().to_string_lossy().to_string(),
+            file_size,
+            false,
+            RecoveryMmapAdvice::Disabled,
+            RecoveryFilePrefetch::Disabled,
+        )
+        .with_lazy_mmap(false);
+
+        let (files, _) = loader.load_optimized().unwrap();
+
+        assert_eq!(files.len(), 3);
+        assert!(files.iter().all(|file| !file.is_lazy_mmap_enabled()));
+        assert!(files.iter().all(|file| file.is_mapped()));
     }
 
     #[test]
