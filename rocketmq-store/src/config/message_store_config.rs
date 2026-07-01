@@ -188,6 +188,10 @@ mod defaults {
         true
     }
 
+    pub fn store_io_hint_enable() -> bool {
+        true
+    }
+
     pub fn flush_interval_consume_queue() -> usize {
         1000
     }
@@ -875,6 +879,12 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub warm_mapped_file_enable: bool,
 
+    #[serde(default = "defaults::store_io_hint_enable", alias = "store_io_hint_enable")]
+    pub store_io_hint_enable: bool,
+
+    #[serde(default, alias = "store_lazy_mmap_enable")]
+    pub store_lazy_mmap_enable: bool,
+
     #[serde(default, alias = "linux_storage_optimization_enable")]
     pub linux_storage_optimization_enable: bool,
 
@@ -1324,6 +1334,8 @@ impl Default for MessageStoreConfig {
             flush_delay_offset_interval: 10_000,
             clean_file_forcibly_enable: true,
             warm_mapped_file_enable: false,
+            store_io_hint_enable: true,
+            store_lazy_mmap_enable: false,
             linux_storage_optimization_enable: false,
             linux_storage_profile: LinuxStorageProfile::default(),
             linux_transfer_engine: LinuxTransferEngine::default(),
@@ -1888,6 +1900,11 @@ impl MessageStoreConfig {
         properties.insert(
             "warmMappedFileEnable".to_string(),
             self.warm_mapped_file_enable.to_string(),
+        );
+        properties.insert("storeIoHintEnable".to_string(), self.store_io_hint_enable.to_string());
+        properties.insert(
+            "storeLazyMmapEnable".to_string(),
+            self.store_lazy_mmap_enable.to_string(),
         );
         properties.insert("offsetCheckInSlave".to_string(), self.offset_check_in_slave.to_string());
         properties.insert("debugLockEnable".to_string(), self.debug_lock_enable.to_string());
@@ -2493,6 +2510,32 @@ mod tests {
         assert_eq!(safe_compat.transfer_engine, LinuxTransferEngine::Bytes);
         assert!(!safe_compat.file_preallocate_enable);
         assert_eq!(safe_compat.mapped_file_warm_mode, LinuxMappedFileWarmMode::Disabled);
+    }
+
+    #[test]
+    fn platform_optimization_switches_keep_compatible_defaults() {
+        let config = MessageStoreConfig::default();
+
+        assert!(config.store_io_hint_enable);
+        assert!(!config.store_lazy_mmap_enable);
+
+        let properties = config.get_properties();
+        assert_eq!(properties["storeIoHintEnable"], "true");
+        assert_eq!(properties["storeLazyMmapEnable"], "false");
+    }
+
+    #[test]
+    fn serde_loads_platform_optimization_switches() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str(
+            r#"{
+                "storeIoHintEnable": false,
+                "storeLazyMmapEnable": true
+            }"#,
+        )?;
+
+        assert!(!config.store_io_hint_enable);
+        assert!(config.store_lazy_mmap_enable);
+        Ok(())
     }
 
     #[test]
