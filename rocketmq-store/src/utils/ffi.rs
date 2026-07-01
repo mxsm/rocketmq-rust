@@ -91,6 +91,40 @@ pub fn madvise(addr: *const u8, len: usize, advice: i32) -> i32 {
     }
 }
 
+pub fn prefetch_virtual_memory(addr: *const u8, len: usize) -> RocketMQResult<bool> {
+    if len == 0 {
+        return Ok(false);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::ffi::c_void;
+
+        use windows::Win32::System::Memory::PrefetchVirtualMemory;
+        use windows::Win32::System::Memory::WIN32_MEMORY_RANGE_ENTRY;
+        use windows::Win32::System::Threading::GetCurrentProcess;
+
+        let range = WIN32_MEMORY_RANGE_ENTRY {
+            VirtualAddress: addr as *mut c_void,
+            NumberOfBytes: len,
+        };
+        unsafe { PrefetchVirtualMemory(GetCurrentProcess(), &[range], 0) }.map_err(|error| {
+            RocketMQError::StorageReadFailed {
+                path: "PrefetchVirtualMemory".to_string(),
+                reason: error.to_string(),
+            }
+        })?;
+        Ok(true)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = addr;
+        let _ = len;
+        Ok(false)
+    }
+}
+
 pub fn mincore(addr: *const u8, len: usize, vec: *const u8) -> i32 {
     #[cfg(target_os = "linux")]
     {
