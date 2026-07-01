@@ -26,6 +26,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::base::query_message_result::QueryMessageResult;
 use tracing::info;
 use tracing::warn;
 
@@ -46,6 +47,16 @@ fn query_index_type(request_header: &QueryMessageRequestHeader, is_unique_key: b
             )
         })
         .or_else(|| is_unique_key.then_some(MessageConst::INDEX_UNIQUE_TYPE))
+}
+
+fn unsafe_index_query_remark(query_message_result: &QueryMessageResult) -> Option<String> {
+    (!query_message_result.index_query_safe).then(|| {
+        format!(
+            "index query is unsafe because index safe offset {} is behind confirm offset {}; background Index rebuild \
+             may still be in progress",
+            query_message_result.index_safe_phyoffset, query_message_result.index_confirm_phyoffset
+        )
+    })
 }
 
 impl<MS> RequestProcessor for QueryMessageProcessor<MS>
@@ -174,6 +185,9 @@ where
             }
             return Ok(Some(response));
         }
+        if let Some(remark) = unsafe_index_query_remark(&query_message_result) {
+            return Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(remark)));
+        }
         Ok(Some(
             response
                 .set_code(ResponseCode::QueryNotFound)
@@ -219,6 +233,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_store::base::query_message_result::QueryMessageResult;
 
     fn header(index_type: Option<&'static str>) -> QueryMessageRequestHeader {
         QueryMessageRequestHeader {
@@ -259,5 +274,24 @@ mod tests {
             query_index_type(&header(Some(MessageConst::INDEX_KEY_TYPE)), false),
             None
         );
+    }
+
+    #[test]
+    fn unsafe_index_query_remark_is_absent_for_safe_result() {
+        let result = QueryMessageResult::default();
+
+        assert!(unsafe_index_query_remark(&result).is_none());
+    }
+
+    #[test]
+    fn unsafe_index_query_remark_includes_safe_and_confirm_offsets() {
+        let mut result = QueryMessageResult::default();
+        result.set_index_query_safety(false, 128, 256);
+
+        let remark = unsafe_index_query_remark(&result).expect("unsafe remark");
+
+        assert!(remark.contains("index safe offset 128"));
+        assert!(remark.contains("confirm offset 256"));
+        assert!(remark.contains("background Index rebuild"));
     }
 }
