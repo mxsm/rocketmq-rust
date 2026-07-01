@@ -334,6 +334,7 @@ pub struct LocalFileMessageStore {
     lifecycle_state: Arc<AtomicU8>,
     controller_epoch_start_offset: Arc<AtomicI64>,
     shutdown: Arc<AtomicBool>,
+    background_index_query_degradation_total: Arc<AtomicU64>,
     store_lock_guard: Option<StoreLockGuard>,
     running_flags: Arc<RunningFlags>,
     reput_message_service: ReputMessageService,
@@ -552,6 +553,7 @@ impl LocalFileMessageStore {
             lifecycle_state: Arc::new(AtomicU8::new(StoreLifecycleState::Created.as_u8())),
             controller_epoch_start_offset: Arc::new(AtomicI64::new(-1)),
             shutdown: Arc::new(AtomicBool::new(false)),
+            background_index_query_degradation_total: Arc::new(AtomicU64::new(0)),
             store_lock_guard: None,
             running_flags: running_flags.clone(),
             reput_message_service: ReputMessageService {
@@ -2865,6 +2867,28 @@ impl MessageStore for LocalFileMessageStore {
             background_index_rebuild.state.as_str().to_string(),
         );
         result.insert(
+            "backgroundIndexRebuildEffectiveEnable".to_string(),
+            self.message_store_config
+                .effective_background_index_rebuild_enable()
+                .to_string(),
+        );
+        result.insert(
+            "backgroundIndexRebuildGrayMode".to_string(),
+            self.message_store_config
+                .background_index_rebuild_gray_mode()
+                .to_string(),
+        );
+        result.insert(
+            "backgroundIndexRebuildRollbackHint".to_string(),
+            MessageStoreConfig::background_index_rebuild_rollback_hint().to_string(),
+        );
+        result.insert(
+            "backgroundIndexRebuildQueryDegradationTotal".to_string(),
+            self.background_index_query_degradation_total
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        result.insert(
             "backgroundIndexRebuildCurrentSafeOffset".to_string(),
             background_index_rebuild.current_safe_offset.to_string(),
         );
@@ -3130,6 +3154,11 @@ impl MessageStore for LocalFileMessageStore {
             {
                 return Some(tiered_result);
             }
+        }
+
+        if query_message_result.buffer_total_size == 0 && !query_message_result.index_query_safe {
+            self.background_index_query_degradation_total
+                .fetch_add(1, Ordering::Relaxed);
         }
 
         Some(query_message_result)
@@ -3982,7 +4011,7 @@ impl BackgroundIndexRebuildService {
         delay_level_table: BTreeMap<i32, i64>,
         max_delay_level: i32,
     ) {
-        if self.task_group.is_some() || !message_store_config.enable_background_index_rebuild {
+        if self.task_group.is_some() || !message_store_config.effective_background_index_rebuild_enable() {
             return;
         }
         if !message_store_config.message_index_enable {
@@ -6681,6 +6710,49 @@ mod tests {
 
         let runtime_info = store.get_runtime_info();
         assert_eq!(runtime_info["backgroundIndexRebuildState"], "idle");
+        assert_eq!(runtime_info["backgroundIndexRebuildEffectiveEnable"], "false");
+        assert_eq!(runtime_info["backgroundIndexRebuildGrayMode"], "disabled");
+        assert_eq!(
+            runtime_info["backgroundIndexRebuildRollbackHint"],
+            MessageStoreConfig::background_index_rebuild_rollback_hint()
+        );
+        assert_eq!(runtime_info["backgroundIndexRebuildQueryDegradationTotal"], "0");
+        assert_eq!(runtime_info["backgroundIndexRebuildBacklogBytes"], "0");
+    }
+
+    #[test]
+    fn background_index_rebuild_strict_mode_blocks_gray_start() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                enable_background_index_rebuild: true,
+                recovery_mode: RecoveryMode::Strict,
+                ..MessageStoreConfig::default()
+            },
+        );
+        store.set_confirm_offset(128);
+
+        let commit_log = store.commit_log.clone();
+        let message_store_config = store.message_store_config.clone();
+        let index_service = store.index_service.clone();
+        let delay_level_table = store.delay_level_table_ref().clone();
+        let max_delay_level = store.max_delay_level;
+        store.background_index_rebuild_service.start(
+            commit_log,
+            message_store_config,
+            index_service,
+            delay_level_table,
+            max_delay_level,
+        );
+
+        let snapshot = store.background_index_rebuild_snapshot();
+        assert_eq!(snapshot.state, BackgroundIndexRebuildState::Idle);
+        assert!(!store.background_index_rebuild_service.has_task_group());
+
+        let runtime_info = store.get_runtime_info();
+        assert_eq!(runtime_info["backgroundIndexRebuildEffectiveEnable"], "false");
+        assert_eq!(runtime_info["backgroundIndexRebuildGrayMode"], "strict_blocked");
         assert_eq!(runtime_info["backgroundIndexRebuildBacklogBytes"], "0");
     }
 
@@ -6692,6 +6764,7 @@ mod tests {
             MessageStoreConfig {
                 flush_disk_type: FlushDiskType::AsyncFlush,
                 enable_background_index_rebuild: true,
+                recovery_mode: RecoveryMode::Balanced,
                 background_index_rebuild_batch_size: 1,
                 background_index_rebuild_bytes_per_second: 0,
                 background_index_rebuild_max_retries: 1,
@@ -6724,6 +6797,10 @@ mod tests {
         assert!(!before_rebuild.index_query_safe);
         assert_eq!(before_rebuild.index_safe_phyoffset, 0);
         assert_eq!(before_rebuild.index_confirm_phyoffset, target_offset);
+        assert_eq!(
+            store.get_runtime_info()["backgroundIndexRebuildQueryDegradationTotal"],
+            "1"
+        );
 
         let commit_log = store.commit_log.clone();
         let message_store_config = store.message_store_config.clone();
@@ -6777,12 +6854,15 @@ mod tests {
 
         let runtime_info = store.get_runtime_info();
         assert_eq!(runtime_info["backgroundIndexRebuildState"], "completed");
+        assert_eq!(runtime_info["backgroundIndexRebuildEffectiveEnable"], "true");
+        assert_eq!(runtime_info["backgroundIndexRebuildGrayMode"], "balanced_gray");
         assert_eq!(
             runtime_info["backgroundIndexRebuildCurrentSafeOffset"],
             snapshot.current_safe_offset.to_string()
         );
         assert_eq!(runtime_info["backgroundIndexRebuildBacklogBytes"], "0");
         assert_eq!(runtime_info["backgroundIndexRebuildFailureCount"], "0");
+        assert_eq!(runtime_info["backgroundIndexRebuildQueryDegradationTotal"], "1");
 
         store.background_index_rebuild_service.shutdown().await;
     }
@@ -6818,6 +6898,10 @@ mod tests {
         assert!(!result.index_query_safe);
         assert_eq!(result.index_safe_phyoffset, 0);
         assert_eq!(result.index_confirm_phyoffset, i64::from(msg_size));
+        assert_eq!(
+            store.get_runtime_info()["backgroundIndexRebuildQueryDegradationTotal"],
+            "1"
+        );
     }
 
     #[tokio::test]
@@ -6827,6 +6911,7 @@ mod tests {
             &temp_dir,
             MessageStoreConfig {
                 enable_background_index_rebuild: true,
+                recovery_mode: RecoveryMode::Balanced,
                 background_index_rebuild_bytes_per_second: 0,
                 background_index_rebuild_max_retries: 1,
                 ..MessageStoreConfig::default()
@@ -6879,6 +6964,8 @@ mod tests {
 
         let runtime_info = store.get_runtime_info();
         assert_eq!(runtime_info["backgroundIndexRebuildState"], "failed");
+        assert_eq!(runtime_info["backgroundIndexRebuildEffectiveEnable"], "true");
+        assert_eq!(runtime_info["backgroundIndexRebuildGrayMode"], "balanced_gray");
         assert_eq!(
             runtime_info["backgroundIndexRebuildFailureCount"],
             snapshot.failure_count.to_string()

@@ -1438,6 +1438,31 @@ impl Default for MessageStoreConfig {
 }
 
 impl MessageStoreConfig {
+    pub fn effective_background_index_rebuild_enable(&self) -> bool {
+        self.enable_background_index_rebuild
+            && self.message_index_enable
+            && matches!(self.recovery_mode, RecoveryMode::Balanced | RecoveryMode::Fast)
+    }
+
+    pub fn background_index_rebuild_gray_mode(&self) -> &'static str {
+        if !self.message_index_enable {
+            return "index_disabled";
+        }
+        if !self.enable_background_index_rebuild {
+            return "disabled";
+        }
+
+        match self.recovery_mode {
+            RecoveryMode::Strict => "strict_blocked",
+            RecoveryMode::Balanced => "balanced_gray",
+            RecoveryMode::Fast => "fast_gray",
+        }
+    }
+
+    pub const fn background_index_rebuild_rollback_hint() -> &'static str {
+        "set enableBackgroundIndexRebuild=false or recoveryMode=strict and restart broker"
+    }
+
     pub fn effective_local_file_consume_queue_recovery_parallelism(&self) -> usize {
         let available_parallelism = std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
@@ -2114,6 +2139,14 @@ impl MessageStoreConfig {
             self.enable_background_index_rebuild.to_string(),
         );
         properties.insert(
+            "effectiveBackgroundIndexRebuildEnable".to_string(),
+            self.effective_background_index_rebuild_enable().to_string(),
+        );
+        properties.insert(
+            "backgroundIndexRebuildGrayMode".to_string(),
+            self.background_index_rebuild_gray_mode().to_string(),
+        );
+        properties.insert(
             "backgroundIndexRebuildBatchSize".to_string(),
             self.background_index_rebuild_batch_size.to_string(),
         );
@@ -2249,13 +2282,39 @@ mod tests {
         assert_eq!(config.background_index_rebuild_bytes_per_second, 32 * 1024 * 1024);
         assert_eq!(config.background_index_rebuild_max_retries, 3);
         assert_eq!(config.get_properties()["enableBackgroundIndexRebuild"], "false");
+        assert_eq!(
+            config.get_properties()["effectiveBackgroundIndexRebuildEnable"],
+            "false"
+        );
+        assert_eq!(config.get_properties()["backgroundIndexRebuildGrayMode"], "disabled");
         assert_eq!(config.get_properties()["backgroundIndexRebuildBatchSize"], "64");
+    }
+
+    #[test]
+    fn strict_mode_blocks_background_index_rebuild_gray_enablement() {
+        let config = MessageStoreConfig {
+            enable_background_index_rebuild: true,
+            recovery_mode: RecoveryMode::Strict,
+            ..MessageStoreConfig::default()
+        };
+
+        assert!(!config.effective_background_index_rebuild_enable());
+        assert_eq!(config.background_index_rebuild_gray_mode(), "strict_blocked");
+        assert_eq!(
+            config.get_properties()["effectiveBackgroundIndexRebuildEnable"],
+            "false"
+        );
+        assert_eq!(
+            config.get_properties()["backgroundIndexRebuildGrayMode"],
+            "strict_blocked"
+        );
     }
 
     #[test]
     fn serde_loads_background_index_rebuild_config() -> Result<(), serde_json::Error> {
         let config: MessageStoreConfig = serde_json::from_str(
             r#"{
+                "recoveryMode": "balanced",
                 "enableBackgroundIndexRebuild": true,
                 "backgroundIndexRebuildBatchSize": 16,
                 "backgroundIndexRebuildBytesPerSecond": 1048576,
@@ -2264,6 +2323,8 @@ mod tests {
         )?;
 
         assert!(config.enable_background_index_rebuild);
+        assert!(config.effective_background_index_rebuild_enable());
+        assert_eq!(config.background_index_rebuild_gray_mode(), "balanced_gray");
         assert_eq!(config.background_index_rebuild_batch_size, 16);
         assert_eq!(config.background_index_rebuild_bytes_per_second, 1_048_576);
         assert_eq!(config.background_index_rebuild_max_retries, 5);
