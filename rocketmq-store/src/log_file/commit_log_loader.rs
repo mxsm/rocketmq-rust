@@ -26,6 +26,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rayon::prelude::*;
@@ -44,26 +45,79 @@ struct FileMetadata {
 }
 
 /// Statistics for load operation
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct LoadStatistics {
     pub total_files: usize,
     pub total_size_bytes: u64,
     pub files_removed: usize,
     pub parallel_load_time_ms: u128,
     pub total_load_time_ms: u128,
+    pub recovery_mmap_advice: RecoveryMmapAdvice,
+    pub mmap_advice_attempts: u64,
+    pub mmap_advice_successes: u64,
+    pub mmap_advice_failures: u64,
+    pub mmap_advice_elapsed_ms: u64,
 }
 
 impl LoadStatistics {
     pub fn log_summary(&self) {
         info!(
-            "CommitLog load completed: {} files ({:.2} GB), {} removed, parallel: {}ms, total: {}ms",
+            "CommitLog load completed: {} files ({:.2} GB), {} removed, parallel: {}ms, total: {}ms, mmapAdvice={}, \
+             mmapAdviceAttempts={}, mmapAdviceSuccesses={}, mmapAdviceFailures={}, mmapAdviceElapsedMs={}",
             self.total_files,
             self.total_size_bytes as f64 / 1024.0 / 1024.0 / 1024.0,
             self.files_removed,
             self.parallel_load_time_ms,
-            self.total_load_time_ms
+            self.total_load_time_ms,
+            self.recovery_mmap_advice.as_str(),
+            self.mmap_advice_attempts,
+            self.mmap_advice_successes,
+            self.mmap_advice_failures,
+            self.mmap_advice_elapsed_ms
         );
     }
+
+    fn record_mmap_advice(&mut self, result: MmapAdviceResult) {
+        if !result.attempted {
+            return;
+        }
+        self.mmap_advice_attempts = self.mmap_advice_attempts.saturating_add(1);
+        if result.succeeded {
+            self.mmap_advice_successes = self.mmap_advice_successes.saturating_add(1);
+        } else {
+            self.mmap_advice_failures = self.mmap_advice_failures.saturating_add(1);
+        }
+        self.mmap_advice_elapsed_ms = self
+            .mmap_advice_elapsed_ms
+            .saturating_add(duration_to_millis(result.elapsed));
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RecoveryMmapAdvice {
+    #[default]
+    Disabled,
+    Sequential,
+}
+
+impl RecoveryMmapAdvice {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Sequential => "sequential",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct MmapAdviceResult {
+    attempted: bool,
+    succeeded: bool,
+    elapsed: Duration,
+}
+
+fn duration_to_millis(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 /// Optimized loader for CommitLog files
@@ -71,15 +125,31 @@ pub struct CommitLogLoader {
     store_path: String,
     mapped_file_size: u64,
     enable_parallel: bool,
+    recovery_mmap_advice: RecoveryMmapAdvice,
 }
 
 impl CommitLogLoader {
     /// Create a new loader
     pub fn new(store_path: String, mapped_file_size: u64, enable_parallel: bool) -> Self {
+        Self::new_with_recovery_mmap_advice(
+            store_path,
+            mapped_file_size,
+            enable_parallel,
+            RecoveryMmapAdvice::Sequential,
+        )
+    }
+
+    pub fn new_with_recovery_mmap_advice(
+        store_path: String,
+        mapped_file_size: u64,
+        enable_parallel: bool,
+        recovery_mmap_advice: RecoveryMmapAdvice,
+    ) -> Self {
         Self {
             store_path,
             mapped_file_size,
             enable_parallel,
+            recovery_mmap_advice,
         }
     }
 
@@ -94,7 +164,10 @@ impl CommitLogLoader {
     /// `Ok((files, stats))` on success, `Err(io::Error)` on failure
     pub fn load_optimized(&self) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
         let start = std::time::Instant::now();
-        let mut stats = LoadStatistics::default();
+        let mut stats = LoadStatistics {
+            recovery_mmap_advice: self.recovery_mmap_advice,
+            ..LoadStatistics::default()
+        };
 
         let dir = Path::new(&self.store_path);
         if !dir.exists() {
@@ -132,11 +205,15 @@ impl CommitLogLoader {
         stats.total_files = file_metadata.len();
         stats.total_size_bytes = file_metadata.iter().map(|m| m.size).sum();
 
-        let mapped_files = if self.enable_parallel && file_metadata.len() > 4 {
+        let (mapped_files, mmap_advice_stats) = if self.enable_parallel && file_metadata.len() > 4 {
             self.create_mapped_files_parallel(&file_metadata)?
         } else {
             self.create_mapped_files_sequential(&file_metadata)?
         };
+        stats.mmap_advice_attempts = mmap_advice_stats.mmap_advice_attempts;
+        stats.mmap_advice_successes = mmap_advice_stats.mmap_advice_successes;
+        stats.mmap_advice_failures = mmap_advice_stats.mmap_advice_failures;
+        stats.mmap_advice_elapsed_ms = mmap_advice_stats.mmap_advice_elapsed_ms;
 
         stats.total_load_time_ms = start.elapsed().as_millis();
         stats.log_summary();
@@ -246,7 +323,10 @@ impl CommitLogLoader {
     }
 
     /// Create mapped files in parallel (with synchronization for Vec::push)
-    fn create_mapped_files_parallel(&self, metadata: &[FileMetadata]) -> io::Result<Vec<Arc<DefaultMappedFile>>> {
+    fn create_mapped_files_parallel(
+        &self,
+        metadata: &[FileMetadata],
+    ) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
         // Parallel creation with ordered collection
         let results: Result<Vec<_>, io::Error> = metadata
             .par_iter()
@@ -257,24 +337,41 @@ impl CommitLogLoader {
                 )?;
 
                 // Apply memory hints for sequential access
-                self.apply_memory_hints(&mapped_file);
+                let mmap_advice_result = self.apply_memory_hints(&mapped_file);
 
                 // Set positions (all full since we're loading existing files)
                 mapped_file.set_wrote_position(self.mapped_file_size as i32);
                 mapped_file.set_flushed_position(self.mapped_file_size as i32);
                 mapped_file.set_committed_position(self.mapped_file_size as i32);
 
-                Ok(Arc::new(mapped_file))
+                Ok((Arc::new(mapped_file), mmap_advice_result))
             })
             .collect();
 
         // Convert to sequential Vec (maintains order from par_iter)
-        results
+        let results = results?;
+        let mut mmap_advice_stats = LoadStatistics {
+            recovery_mmap_advice: self.recovery_mmap_advice,
+            ..LoadStatistics::default()
+        };
+        let mut mapped_files = Vec::with_capacity(results.len());
+        for (mapped_file, mmap_advice_result) in results {
+            mmap_advice_stats.record_mmap_advice(mmap_advice_result);
+            mapped_files.push(mapped_file);
+        }
+        Ok((mapped_files, mmap_advice_stats))
     }
 
     /// Fallback: sequential mapped file creation
-    fn create_mapped_files_sequential(&self, metadata: &[FileMetadata]) -> io::Result<Vec<Arc<DefaultMappedFile>>> {
+    fn create_mapped_files_sequential(
+        &self,
+        metadata: &[FileMetadata],
+    ) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
         let mut mapped_files = Vec::with_capacity(metadata.len());
+        let mut mmap_advice_stats = LoadStatistics {
+            recovery_mmap_advice: self.recovery_mmap_advice,
+            ..LoadStatistics::default()
+        };
 
         for meta in metadata {
             let mapped_file = DefaultMappedFile::try_new(
@@ -282,7 +379,8 @@ impl CommitLogLoader {
                 self.mapped_file_size,
             )?;
 
-            self.apply_memory_hints(&mapped_file);
+            let mmap_advice_result = self.apply_memory_hints(&mapped_file);
+            mmap_advice_stats.record_mmap_advice(mmap_advice_result);
 
             mapped_file.set_wrote_position(self.mapped_file_size as i32);
             mapped_file.set_flushed_position(self.mapped_file_size as i32);
@@ -291,7 +389,7 @@ impl CommitLogLoader {
             mapped_files.push(Arc::new(mapped_file));
         }
 
-        Ok(mapped_files)
+        Ok((mapped_files, mmap_advice_stats))
     }
 
     /// Apply platform-specific memory access hints
@@ -303,24 +401,43 @@ impl CommitLogLoader {
     /// # Implementation
     /// Uses `memmap2::Mmap::advise()` to provide sequential access hints to the kernel,
     /// which can improve performance by optimizing readahead and page cache behavior.
-    fn apply_memory_hints(&self, mapped_file: &DefaultMappedFile) {
+    fn apply_memory_hints(&self, mapped_file: &DefaultMappedFile) -> MmapAdviceResult {
+        if self.recovery_mmap_advice == RecoveryMmapAdvice::Disabled {
+            return MmapAdviceResult::default();
+        }
+
         #[cfg(unix)]
         {
             use memmap2::Advice;
 
             // Access the underlying mmap through the public API
+            let start = std::time::Instant::now();
             let mmap = mapped_file.get_mapped_file();
-            if let Err(e) = mmap.advise(Advice::Sequential) {
-                // Non-fatal: madvise failure doesn't affect correctness
-                warn!(
-                    "Failed to apply sequential memory hint for {}: {}",
-                    mapped_file.get_file_name(),
-                    e
-                );
-            } else {
-                // Optional debug logging (can be removed for production)
-                #[cfg(debug_assertions)]
-                tracing::debug!("Applied MADV_SEQUENTIAL hint to {}", mapped_file.get_file_name());
+            match self.recovery_mmap_advice {
+                RecoveryMmapAdvice::Disabled => MmapAdviceResult::default(),
+                RecoveryMmapAdvice::Sequential => {
+                    if let Err(e) = mmap.advise(Advice::Sequential) {
+                        // Non-fatal: madvise failure doesn't affect correctness
+                        warn!(
+                            "Failed to apply sequential memory hint for {}: {}",
+                            mapped_file.get_file_name(),
+                            e
+                        );
+                        MmapAdviceResult {
+                            attempted: true,
+                            succeeded: false,
+                            elapsed: start.elapsed(),
+                        }
+                    } else {
+                        #[cfg(debug_assertions)]
+                        tracing::debug!("Applied MADV_SEQUENTIAL hint to {}", mapped_file.get_file_name());
+                        MmapAdviceResult {
+                            attempted: true,
+                            succeeded: true,
+                            elapsed: start.elapsed(),
+                        }
+                    }
+                }
             }
         }
 
@@ -335,6 +452,11 @@ impl CommitLogLoader {
                 "Memory hints not implemented for Windows, relying on OS defaults for {}",
                 mapped_file.get_file_name()
             );
+        }
+
+        #[cfg(not(unix))]
+        {
+            MmapAdviceResult::default()
         }
     }
 }
@@ -374,6 +496,51 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(stats.total_files, 1);
         assert_eq!(stats.total_size_bytes, file_size);
+    }
+
+    #[test]
+    fn disabled_recovery_mmap_advice_records_no_attempts() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let file_size = 1024 * 1024u64;
+        std::fs::write(&file_path, vec![0u8; file_size as usize]).unwrap();
+
+        let loader = CommitLogLoader::new_with_recovery_mmap_advice(
+            temp_dir.path().to_string_lossy().to_string(),
+            file_size,
+            false,
+            RecoveryMmapAdvice::Disabled,
+        );
+
+        let (_, stats) = loader.load_optimized().unwrap();
+        assert_eq!(stats.recovery_mmap_advice, RecoveryMmapAdvice::Disabled);
+        assert_eq!(stats.mmap_advice_attempts, 0);
+        assert_eq!(stats.mmap_advice_successes, 0);
+        assert_eq!(stats.mmap_advice_failures, 0);
+    }
+
+    #[test]
+    fn sequential_recovery_mmap_advice_records_supported_attempts() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let file_size = 1024 * 1024u64;
+        std::fs::write(&file_path, vec![0u8; file_size as usize]).unwrap();
+
+        let loader = CommitLogLoader::new_with_recovery_mmap_advice(
+            temp_dir.path().to_string_lossy().to_string(),
+            file_size,
+            false,
+            RecoveryMmapAdvice::Sequential,
+        );
+
+        let (_, stats) = loader.load_optimized().unwrap();
+        let expected_attempts = if cfg!(unix) { 1 } else { 0 };
+        assert_eq!(stats.recovery_mmap_advice, RecoveryMmapAdvice::Sequential);
+        assert_eq!(stats.mmap_advice_attempts, expected_attempts);
+        assert_eq!(
+            stats.mmap_advice_attempts,
+            stats.mmap_advice_successes.saturating_add(stats.mmap_advice_failures)
+        );
     }
 
     #[test]

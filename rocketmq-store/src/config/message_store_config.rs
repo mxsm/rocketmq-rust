@@ -1527,6 +1527,18 @@ impl MessageStoreConfig {
         LinuxMemoryLockMode::Off
     }
 
+    pub fn effective_linux_recovery_fadvise(&self) -> LinuxRecoveryFadviseMode {
+        if !self.store_io_hint_enable {
+            return LinuxRecoveryFadviseMode::Disabled;
+        }
+
+        if self.linux_storage_optimization_enable {
+            return self.effective_linux_storage_profile_settings().recovery_fadvise;
+        }
+
+        self.linux_recovery_fadvise
+    }
+
     pub fn effective_linux_memory_lock_budget_bytes(&self, memory_lock_limit_bytes: Option<u64>) -> u64 {
         if self.linux_memory_lock_budget_bytes > 0 {
             return self.linux_memory_lock_budget_bytes as u64;
@@ -2228,6 +2240,7 @@ mod tests {
     use super::bounded_local_file_consume_queue_recovery_parallelism;
     use super::LinuxMappedFileWarmMode;
     use super::LinuxMemoryLockMode;
+    use super::LinuxRecoveryFadviseMode;
     use super::LinuxStorageProfile;
     use super::LinuxTransferEngine;
     use super::MessageStoreConfig;
@@ -2639,6 +2652,34 @@ mod tests {
         assert_eq!(
             config.effective_linux_memory_lock_mode(),
             LinuxMemoryLockMode::ActiveWindow
+        );
+    }
+
+    #[test]
+    fn effective_linux_recovery_fadvise_respects_io_hint_switch_and_profile() {
+        let disabled = MessageStoreConfig {
+            store_io_hint_enable: false,
+            linux_recovery_fadvise: LinuxRecoveryFadviseMode::Sequential,
+            ..Default::default()
+        };
+        let safe_profile = MessageStoreConfig {
+            linux_storage_optimization_enable: true,
+            linux_storage_profile: LinuxStorageProfile::SafeCompat,
+            linux_recovery_fadvise: LinuxRecoveryFadviseMode::Sequential,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            disabled.effective_linux_recovery_fadvise(),
+            LinuxRecoveryFadviseMode::Disabled
+        );
+        assert_eq!(
+            safe_profile.effective_linux_recovery_fadvise(),
+            LinuxRecoveryFadviseMode::Disabled
+        );
+        assert_eq!(
+            MessageStoreConfig::default().effective_linux_recovery_fadvise(),
+            LinuxRecoveryFadviseMode::Sequential
         );
     }
 

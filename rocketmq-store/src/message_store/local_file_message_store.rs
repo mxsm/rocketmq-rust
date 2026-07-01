@@ -2808,6 +2808,7 @@ impl MessageStore for LocalFileMessageStore {
             storage_capability.file_preallocate_supported.to_string(),
         );
         let linux_profile_settings = self.message_store_config.effective_linux_storage_profile_settings();
+        let commit_log_load_stats = self.commit_log.load_statistics();
         result.insert(
             "linuxStorageOptimizationEnable".to_string(),
             self.message_store_config.linux_storage_optimization_enable.to_string(),
@@ -2857,7 +2858,30 @@ impl MessageStore for LocalFileMessageStore {
         );
         result.insert(
             "linuxStorageRecoveryFadvise".to_string(),
-            linux_profile_settings.recovery_fadvise.as_str().to_string(),
+            self.message_store_config
+                .effective_linux_recovery_fadvise()
+                .as_str()
+                .to_string(),
+        );
+        result.insert(
+            "linuxStorageRecoveryMmapAdvice".to_string(),
+            commit_log_load_stats.recovery_mmap_advice.as_str().to_string(),
+        );
+        result.insert(
+            "linuxStorageRecoveryMmapAdviceAttempts".to_string(),
+            commit_log_load_stats.mmap_advice_attempts.to_string(),
+        );
+        result.insert(
+            "linuxStorageRecoveryMmapAdviceSuccesses".to_string(),
+            commit_log_load_stats.mmap_advice_successes.to_string(),
+        );
+        result.insert(
+            "linuxStorageRecoveryMmapAdviceFailures".to_string(),
+            commit_log_load_stats.mmap_advice_failures.to_string(),
+        );
+        result.insert(
+            "linuxStorageRecoveryMmapAdviceElapsedMs".to_string(),
+            commit_log_load_stats.mmap_advice_elapsed_ms.to_string(),
         );
         result.insert(
             "linuxStorageHaSendfileEnable".to_string(),
@@ -6384,6 +6408,12 @@ mod tests {
         assert_eq!(runtime_info["linuxStorageMappedFileWarmTotalMillis"], "12");
         assert_eq!(runtime_info["linuxStorageMappedFileWarmLastMillis"], "12");
         assert_eq!(runtime_info["linuxStorageMemoryLockMode"], "off");
+        assert_eq!(runtime_info["linuxStorageRecoveryFadvise"], "sequential");
+        assert_eq!(runtime_info["linuxStorageRecoveryMmapAdvice"], "disabled");
+        assert_eq!(runtime_info["linuxStorageRecoveryMmapAdviceAttempts"], "0");
+        assert_eq!(runtime_info["linuxStorageRecoveryMmapAdviceSuccesses"], "0");
+        assert_eq!(runtime_info["linuxStorageRecoveryMmapAdviceFailures"], "0");
+        assert_eq!(runtime_info["linuxStorageRecoveryMmapAdviceElapsedMs"], "0");
         assert_eq!(runtime_info["linuxStorageHaSendfileEnable"], "false");
         assert_eq!(runtime_info["linuxStorageIoUringEnable"], "false");
     }
