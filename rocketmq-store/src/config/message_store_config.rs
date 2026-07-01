@@ -339,6 +339,15 @@ mod defaults {
     pub fn max_filter_message_size() -> i32 {
         16000
     }
+    pub fn background_index_rebuild_batch_size() -> usize {
+        64
+    }
+    pub fn background_index_rebuild_bytes_per_second() -> usize {
+        32 * 1024 * 1024
+    }
+    pub fn background_index_rebuild_max_retries() -> usize {
+        3
+    }
     pub fn ha_housekeeping_interval() -> u64 {
         1000 * 20
     }
@@ -1134,6 +1143,18 @@ pub struct MessageStoreConfig {
     pub local_file_consume_queue_recovery_parallelism: usize,
 
     #[serde(default)]
+    pub enable_background_index_rebuild: bool,
+
+    #[serde(default = "defaults::background_index_rebuild_batch_size")]
+    pub background_index_rebuild_batch_size: usize,
+
+    #[serde(default = "defaults::background_index_rebuild_bytes_per_second")]
+    pub background_index_rebuild_bytes_per_second: usize,
+
+    #[serde(default = "defaults::background_index_rebuild_max_retries")]
+    pub background_index_rebuild_max_retries: usize,
+
+    #[serde(default)]
     pub batch_dispatch_request_thread_pool_nums: usize,
 
     #[serde(default)]
@@ -1390,6 +1411,10 @@ impl Default for MessageStoreConfig {
             enable_build_consume_queue_concurrently: false,
             enable_local_file_consume_queue_recovery_concurrently: false,
             local_file_consume_queue_recovery_parallelism: 0,
+            enable_background_index_rebuild: false,
+            background_index_rebuild_batch_size: defaults::background_index_rebuild_batch_size(),
+            background_index_rebuild_bytes_per_second: defaults::background_index_rebuild_bytes_per_second(),
+            background_index_rebuild_max_retries: defaults::background_index_rebuild_max_retries(),
             batch_dispatch_request_thread_pool_nums: 0,
             clean_rocksdb_dirty_cq_interval_min: 0,
             stat_rocksdb_cq_interval_sec: 0,
@@ -2085,6 +2110,22 @@ impl MessageStoreConfig {
                 .to_string(),
         );
         properties.insert(
+            "enableBackgroundIndexRebuild".to_string(),
+            self.enable_background_index_rebuild.to_string(),
+        );
+        properties.insert(
+            "backgroundIndexRebuildBatchSize".to_string(),
+            self.background_index_rebuild_batch_size.to_string(),
+        );
+        properties.insert(
+            "backgroundIndexRebuildBytesPerSecond".to_string(),
+            self.background_index_rebuild_bytes_per_second.to_string(),
+        );
+        properties.insert(
+            "backgroundIndexRebuildMaxRetries".to_string(),
+            self.background_index_rebuild_max_retries.to_string(),
+        );
+        properties.insert(
             "batchDispatchRequestThreadPoolNums".to_string(),
             self.batch_dispatch_request_thread_pool_nums.to_string(),
         );
@@ -2196,6 +2237,36 @@ mod tests {
 
         assert!(config.enable_local_file_consume_queue_recovery_concurrently);
         assert_eq!(config.local_file_consume_queue_recovery_parallelism, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn background_index_rebuild_is_disabled_by_default() {
+        let config = MessageStoreConfig::default();
+
+        assert!(!config.enable_background_index_rebuild);
+        assert_eq!(config.background_index_rebuild_batch_size, 64);
+        assert_eq!(config.background_index_rebuild_bytes_per_second, 32 * 1024 * 1024);
+        assert_eq!(config.background_index_rebuild_max_retries, 3);
+        assert_eq!(config.get_properties()["enableBackgroundIndexRebuild"], "false");
+        assert_eq!(config.get_properties()["backgroundIndexRebuildBatchSize"], "64");
+    }
+
+    #[test]
+    fn serde_loads_background_index_rebuild_config() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str(
+            r#"{
+                "enableBackgroundIndexRebuild": true,
+                "backgroundIndexRebuildBatchSize": 16,
+                "backgroundIndexRebuildBytesPerSecond": 1048576,
+                "backgroundIndexRebuildMaxRetries": 5
+            }"#,
+        )?;
+
+        assert!(config.enable_background_index_rebuild);
+        assert_eq!(config.background_index_rebuild_batch_size, 16);
+        assert_eq!(config.background_index_rebuild_bytes_per_second, 1_048_576);
+        assert_eq!(config.background_index_rebuild_max_retries, 5);
         Ok(())
     }
 

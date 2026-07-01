@@ -168,6 +168,20 @@ impl IndexService {
         self.store_checkpoint.index_safe_phy_offset()
     }
 
+    #[inline]
+    pub fn advance_index_safe_offset_to(&self, index_safe_offset: i64) {
+        if index_safe_offset <= 0 {
+            return;
+        }
+        self.store_checkpoint
+            .advance_index_safe_phy_offset(index_safe_offset as u64);
+    }
+
+    #[inline]
+    pub fn flush_index_safe_offset(&self) -> std::io::Result<()> {
+        self.store_checkpoint.flush()
+    }
+
     pub fn delete_expired_file(&self, offset: u64) {
         let files = {
             let index_file_list = self.index_file_list.read();
@@ -307,7 +321,7 @@ impl IndexService {
             | MessageSysFlag::TRANSACTION_PREPARED_TYPE
             | MessageSysFlag::TRANSACTION_COMMIT_TYPE => {}
             MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
-                self.advance_index_safe_phy_offset(dispatch_request);
+                self.advance_index_safe_offset_for_request(dispatch_request);
                 return;
             }
             _ => {}
@@ -323,7 +337,7 @@ impl IndexService {
 
         let has_normal_key = keys.split(MessageConst::KEY_SEPARATOR).any(|key| !key.is_empty());
         if dispatch_request.uniq_key.is_none() && !has_normal_key && tags.is_none() {
-            self.advance_index_safe_phy_offset(dispatch_request);
+            self.advance_index_safe_offset_for_request(dispatch_request);
             return;
         }
 
@@ -428,7 +442,7 @@ impl IndexService {
                         );
                     }
                 }
-                self.advance_index_safe_phy_offset(dispatch_request);
+                self.advance_index_safe_offset_for_request(dispatch_request);
             }
             None => {
                 error!("build index error, stop building index");
@@ -436,15 +450,14 @@ impl IndexService {
         }
     }
 
-    fn advance_index_safe_phy_offset(&self, dispatch_request: &DispatchRequest) {
+    fn advance_index_safe_offset_for_request(&self, dispatch_request: &DispatchRequest) {
         if dispatch_request.commit_log_offset < 0 || dispatch_request.msg_size <= 0 {
             return;
         }
         let safe_offset = dispatch_request
             .commit_log_offset
             .saturating_add(i64::from(dispatch_request.msg_size));
-        self.store_checkpoint
-            .advance_index_safe_phy_offset(safe_offset.max(0) as u64);
+        self.advance_index_safe_offset_to(safe_offset);
     }
 
     #[inline]
