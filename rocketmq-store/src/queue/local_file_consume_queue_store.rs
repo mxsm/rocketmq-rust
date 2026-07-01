@@ -76,6 +76,75 @@ struct ConsumeQueueRecoveryResult {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConsumeQueueRecoveryFailure {
+    pub topic: CheetahString,
+    pub queue_id: i32,
+    pub cq_type: CQType,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConsumeQueueRecoverySummary {
+    pub queue_count: usize,
+    pub success_count: usize,
+    pub failure_count: usize,
+    pub total_elapsed_ms: u128,
+    pub failures: Vec<ConsumeQueueRecoveryFailure>,
+}
+
+impl ConsumeQueueRecoverySummary {
+    fn from_results(queue_count: usize, total_elapsed_ms: u128, results: &[ConsumeQueueRecoveryResult]) -> Self {
+        let failures = results
+            .iter()
+            .filter(|result| !result.success)
+            .map(|result| ConsumeQueueRecoveryFailure {
+                topic: result.topic.clone(),
+                queue_id: result.queue_id,
+                cq_type: result.cq_type,
+                error: result.error.clone().unwrap_or_else(|| "unknown".to_string()),
+            })
+            .collect::<Vec<_>>();
+        Self {
+            queue_count,
+            success_count: results.len().saturating_sub(failures.len()),
+            failure_count: failures.len(),
+            total_elapsed_ms,
+            failures,
+        }
+    }
+
+    pub fn success(queue_count: usize, total_elapsed_ms: u128) -> Self {
+        Self {
+            queue_count,
+            success_count: queue_count,
+            failure_count: 0,
+            total_elapsed_ms,
+            failures: Vec::new(),
+        }
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.failure_count == 0
+    }
+
+    pub fn failure_description(&self) -> String {
+        if self.failures.is_empty() {
+            return "none".to_string();
+        }
+        self.failures
+            .iter()
+            .map(|failure| {
+                format!(
+                    "{}:{}:{:?}:{}",
+                    failure.topic, failure.queue_id, failure.cq_type, failure.error
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}
+
 struct Inner {
     pub(crate) message_store: Option<ArcMut<LocalFileMessageStore>>,
     pub(crate) message_store_config: Arc<MessageStoreConfig>,
@@ -173,6 +242,114 @@ impl ConsumeQueueStore {
             message.clone()
         } else {
             "panic while recovering consume queue".to_string()
+        }
+    }
+
+    pub async fn recover_concurrently_with_summary(&self, parallelism: usize) -> ConsumeQueueRecoverySummary {
+        let total_started = Instant::now();
+        let queues = self.snapshot_consume_queues();
+        if queues.is_empty() {
+            info!("recover local file consume queue concurrently skipped, no consume queues loaded");
+            return ConsumeQueueRecoverySummary::success(0, total_started.elapsed().as_millis());
+        }
+
+        let queue_count = queues.len();
+        let parallelism = parallelism.max(1).min(queue_count);
+        info!(
+            "recover local file consume queue concurrently start, queues={}, parallelism={}",
+            queue_count, parallelism
+        );
+        let semaphore = Arc::new(Semaphore::new(parallelism));
+        let futures = queues.into_iter().map(|consume_queue| {
+            let semaphore = semaphore.clone();
+            async move {
+                let topic = consume_queue.get_topic().clone();
+                let queue_id = consume_queue.get_queue_id();
+                let cq_type = consume_queue.get_cq_type();
+                match semaphore.acquire_owned().await {
+                    Ok(_permit) => Self::recover_one_consume_queue(consume_queue).await,
+                    Err(error) => ConsumeQueueRecoveryResult {
+                        topic,
+                        queue_id,
+                        cq_type,
+                        elapsed_ms: 0,
+                        mapped_file_count_before: 0,
+                        mapped_file_count_after: 0,
+                        min_logic_offset_before: 0,
+                        min_logic_offset_after: 0,
+                        max_logic_offset_before: 0,
+                        max_logic_offset_after: 0,
+                        max_physic_offset_before: 0,
+                        max_physic_offset_after: 0,
+                        success: false,
+                        error: Some(format!("failed to acquire recovery permit: {error}")),
+                    },
+                }
+            }
+        });
+
+        let results = join_all(futures).await;
+        Self::log_recovery_results(&results);
+        let summary =
+            ConsumeQueueRecoverySummary::from_results(queue_count, total_started.elapsed().as_millis(), &results);
+        if summary.is_success() {
+            info!(
+                "recover local file consume queue concurrently summary OK, queues={}, success={}, cost={}ms",
+                summary.queue_count, summary.success_count, summary.total_elapsed_ms
+            );
+        } else {
+            error!(
+                "recover local file consume queue concurrently summary failed, queues={}, success={}, failed={}, \
+                 cost={}ms, failures={}",
+                summary.queue_count,
+                summary.success_count,
+                summary.failure_count,
+                summary.total_elapsed_ms,
+                summary.failure_description()
+            );
+        }
+        summary
+    }
+
+    fn log_recovery_results(results: &[ConsumeQueueRecoveryResult]) {
+        for result in results {
+            if result.success {
+                info!(
+                    "recover local file consume queue concurrently OK, topic={}, queueId={}, cqType={:?}, cost={}ms, \
+                     mappedFiles={} -> {}, minLogicOffset={} -> {}, maxLogicOffset={} -> {}, maxPhysicOffset={} -> {}",
+                    result.topic,
+                    result.queue_id,
+                    result.cq_type,
+                    result.elapsed_ms,
+                    result.mapped_file_count_before,
+                    result.mapped_file_count_after,
+                    result.min_logic_offset_before,
+                    result.min_logic_offset_after,
+                    result.max_logic_offset_before,
+                    result.max_logic_offset_after,
+                    result.max_physic_offset_before,
+                    result.max_physic_offset_after
+                );
+            } else {
+                error!(
+                    "recover local file consume queue concurrently failed, topic={}, queueId={}, cqType={:?}, \
+                     cost={}ms, mappedFiles={} -> {}, minLogicOffset={} -> {}, maxLogicOffset={} -> {}, \
+                     maxPhysicOffset={} -> {}, error={}",
+                    result.topic,
+                    result.queue_id,
+                    result.cq_type,
+                    result.elapsed_ms,
+                    result.mapped_file_count_before,
+                    result.mapped_file_count_after,
+                    result.min_logic_offset_before,
+                    result.min_logic_offset_after,
+                    result.max_logic_offset_before,
+                    result.max_logic_offset_after,
+                    result.max_physic_offset_before,
+                    result.max_physic_offset_after,
+                    result.error.as_deref().unwrap_or("unknown")
+                );
+            }
         }
     }
 
@@ -339,91 +516,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     async fn recover_concurrently_with_parallelism(&self, parallelism: usize) -> bool {
-        let queues = self.snapshot_consume_queues();
-        if queues.is_empty() {
-            info!("recover local file consume queue concurrently skipped, no consume queues loaded");
-            return true;
-        }
-
-        let parallelism = parallelism.max(1).min(queues.len());
-        info!(
-            "recover local file consume queue concurrently start, queues={}, parallelism={}",
-            queues.len(),
-            parallelism
-        );
-        let semaphore = Arc::new(Semaphore::new(parallelism));
-        let futures = queues.into_iter().map(|consume_queue| {
-            let semaphore = semaphore.clone();
-            async move {
-                let topic = consume_queue.get_topic().clone();
-                let queue_id = consume_queue.get_queue_id();
-                let cq_type = consume_queue.get_cq_type();
-                match semaphore.acquire_owned().await {
-                    Ok(_permit) => Self::recover_one_consume_queue(consume_queue).await,
-                    Err(error) => ConsumeQueueRecoveryResult {
-                        topic,
-                        queue_id,
-                        cq_type,
-                        elapsed_ms: 0,
-                        mapped_file_count_before: 0,
-                        mapped_file_count_after: 0,
-                        min_logic_offset_before: 0,
-                        min_logic_offset_after: 0,
-                        max_logic_offset_before: 0,
-                        max_logic_offset_after: 0,
-                        max_physic_offset_before: 0,
-                        max_physic_offset_after: 0,
-                        success: false,
-                        error: Some(format!("failed to acquire recovery permit: {error}")),
-                    },
-                }
-            }
-        });
-
-        let results = join_all(futures).await;
-        let mut success = true;
-        for result in results {
-            if result.success {
-                info!(
-                    "recover local file consume queue concurrently OK, topic={}, queueId={}, cqType={:?}, cost={}ms, \
-                     mappedFiles={} -> {}, minLogicOffset={} -> {}, maxLogicOffset={} -> {}, maxPhysicOffset={} -> {}",
-                    result.topic,
-                    result.queue_id,
-                    result.cq_type,
-                    result.elapsed_ms,
-                    result.mapped_file_count_before,
-                    result.mapped_file_count_after,
-                    result.min_logic_offset_before,
-                    result.min_logic_offset_after,
-                    result.max_logic_offset_before,
-                    result.max_logic_offset_after,
-                    result.max_physic_offset_before,
-                    result.max_physic_offset_after
-                );
-            } else {
-                success = false;
-                error!(
-                    "recover local file consume queue concurrently failed, topic={}, queueId={}, cqType={:?}, \
-                     cost={}ms, mappedFiles={} -> {}, minLogicOffset={} -> {}, maxLogicOffset={} -> {}, \
-                     maxPhysicOffset={} -> {}, error={}",
-                    result.topic,
-                    result.queue_id,
-                    result.cq_type,
-                    result.elapsed_ms,
-                    result.mapped_file_count_before,
-                    result.mapped_file_count_after,
-                    result.min_logic_offset_before,
-                    result.min_logic_offset_after,
-                    result.max_logic_offset_before,
-                    result.max_logic_offset_after,
-                    result.max_physic_offset_before,
-                    result.max_physic_offset_after,
-                    result.error.as_deref().unwrap_or("unknown")
-                );
-            }
-        }
-
-        success
+        self.recover_concurrently_with_summary(parallelism).await.is_success()
     }
 
     fn shutdown(&self) -> bool {
@@ -1292,6 +1385,39 @@ mod tests {
             "max active recoveries should be bounded by parallelism"
         );
         assert!(max_active > 1, "recovery should run more than one queue concurrently");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recover_concurrently_with_summary_reports_successes() {
+        let (store, _) = tracking_store(3, Duration::ZERO, None);
+
+        let summary = store.recover_concurrently_with_summary(2).await;
+
+        assert!(summary.is_success());
+        assert_eq!(summary.queue_count, 3);
+        assert_eq!(summary.success_count, 3);
+        assert_eq!(summary.failure_count, 0);
+        assert!(summary.failures.is_empty());
+        assert_eq!(summary.failure_description(), "none");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recover_concurrently_with_summary_reports_failed_queue_identity() {
+        let (store, states) = tracking_store(3, Duration::ZERO, Some(1));
+
+        let summary = store.recover_concurrently_with_summary(2).await;
+
+        assert!(!summary.is_success());
+        assert_eq!(summary.queue_count, 3);
+        assert_eq!(summary.success_count, 2);
+        assert_eq!(summary.failure_count, 1);
+        assert_eq!(states[1].recover_count.load(Ordering::SeqCst), 1);
+        let failure = summary.failures.first().expect("failed queue");
+        assert_eq!(failure.topic, CheetahString::from_static_str("TrackingTopic1"));
+        assert_eq!(failure.queue_id, 1);
+        assert_eq!(failure.cq_type, CQType::SimpleCQ);
+        assert!(failure.error.contains("tracking queue recovery failed"));
+        assert!(summary.failure_description().contains("TrackingTopic1:1"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

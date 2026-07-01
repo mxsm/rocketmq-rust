@@ -1387,14 +1387,19 @@ impl LocalFileMessageStore {
             let parallelism = self
                 .message_store_config
                 .effective_local_file_consume_queue_recovery_parallelism();
-            if !self
+            let summary = self
                 .consume_queue_store
-                .recover_concurrently_with_parallelism(parallelism)
-                .await
-            {
+                .recover_concurrently_with_summary(parallelism)
+                .await;
+            if !summary.is_success() {
                 warn!(
-                    "local file consume queue concurrent recovery failed, fallback to serial recovery, parallelism={}",
-                    parallelism
+                    "local file consume queue concurrent recovery failed, fallback to serial recovery, \
+                     parallelism={}, queues={}, success={}, failed={}, failures={}",
+                    parallelism,
+                    summary.queue_count,
+                    summary.success_count,
+                    summary.failure_count,
+                    summary.failure_description()
                 );
                 self.consume_queue_store.recover().await;
             }
