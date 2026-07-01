@@ -83,6 +83,7 @@ use crate::log_file::cold_data_check_service::ColdDataCheckService;
 // Import the optimized loader module
 use crate::log_file::commit_log_loader::CommitLogLoader;
 use crate::log_file::commit_log_loader::LoadStatistics;
+use crate::log_file::commit_log_loader::RecoveryFilePrefetch;
 use crate::log_file::commit_log_loader::RecoveryMmapAdvice;
 use crate::log_file::flush_manager_impl::default_flush_manager::DefaultFlushManager;
 use crate::log_file::group_commit_request::GroupCommitRequest;
@@ -538,11 +539,13 @@ impl CommitLog {
         let enable_parallel = cfg!(feature = "fast-load") || !cfg!(feature = "safe-load");
 
         let recovery_mmap_advice = self.recovery_mmap_advice();
-        let loader = CommitLogLoader::new_with_recovery_mmap_advice(
+        let recovery_file_prefetch = self.recovery_file_prefetch();
+        let loader = CommitLogLoader::new_with_recovery_hints(
             store_path,
             mapped_file_size,
             enable_parallel,
             recovery_mmap_advice,
+            recovery_file_prefetch,
         );
 
         match loader.load_optimized() {
@@ -1976,6 +1979,16 @@ impl CommitLog {
             LinuxRecoveryFadviseMode::Disabled => RecoveryMmapAdvice::Disabled,
             LinuxRecoveryFadviseMode::Sequential => RecoveryMmapAdvice::Sequential,
         }
+    }
+
+    fn recovery_file_prefetch(&self) -> RecoveryFilePrefetch {
+        let platform_capability = crate::platform::current_store_platform_capability();
+        if !self.message_store_config.store_io_hint_enable || !platform_capability.optimization.file_prefetch_supported
+        {
+            return RecoveryFilePrefetch::Disabled;
+        }
+
+        RecoveryFilePrefetch::Sequential
     }
 
     #[cfg(test)]

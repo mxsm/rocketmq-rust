@@ -2884,6 +2884,26 @@ impl MessageStore for LocalFileMessageStore {
             commit_log_load_stats.mmap_advice_elapsed_ms.to_string(),
         );
         result.insert(
+            "windowsStorageRecoveryFilePrefetch".to_string(),
+            commit_log_load_stats.recovery_file_prefetch.as_str().to_string(),
+        );
+        result.insert(
+            "windowsStorageRecoveryFilePrefetchAttempts".to_string(),
+            commit_log_load_stats.file_prefetch_attempts.to_string(),
+        );
+        result.insert(
+            "windowsStorageRecoveryFilePrefetchSuccesses".to_string(),
+            commit_log_load_stats.file_prefetch_successes.to_string(),
+        );
+        result.insert(
+            "windowsStorageRecoveryFilePrefetchFailures".to_string(),
+            commit_log_load_stats.file_prefetch_failures.to_string(),
+        );
+        result.insert(
+            "windowsStorageRecoveryFilePrefetchElapsedMs".to_string(),
+            commit_log_load_stats.file_prefetch_elapsed_ms.to_string(),
+        );
+        result.insert(
             "linuxStorageHaSendfileEnable".to_string(),
             self.message_store_config
                 .effective_linux_ha_sendfile_enable()
@@ -6414,6 +6434,11 @@ mod tests {
         assert_eq!(runtime_info["linuxStorageRecoveryMmapAdviceSuccesses"], "0");
         assert_eq!(runtime_info["linuxStorageRecoveryMmapAdviceFailures"], "0");
         assert_eq!(runtime_info["linuxStorageRecoveryMmapAdviceElapsedMs"], "0");
+        assert_eq!(runtime_info["windowsStorageRecoveryFilePrefetch"], "disabled");
+        assert_eq!(runtime_info["windowsStorageRecoveryFilePrefetchAttempts"], "0");
+        assert_eq!(runtime_info["windowsStorageRecoveryFilePrefetchSuccesses"], "0");
+        assert_eq!(runtime_info["windowsStorageRecoveryFilePrefetchFailures"], "0");
+        assert_eq!(runtime_info["windowsStorageRecoveryFilePrefetchElapsedMs"], "0");
         assert_eq!(runtime_info["linuxStorageHaSendfileEnable"], "false");
         assert_eq!(runtime_info["linuxStorageIoUringEnable"], "false");
     }
