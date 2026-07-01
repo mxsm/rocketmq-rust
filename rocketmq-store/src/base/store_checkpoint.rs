@@ -33,6 +33,7 @@ pub struct StoreCheckpoint {
     index_msg_timestamp: AtomicU64,
     master_flushed_offset: AtomicU64,
     confirm_phy_offset: AtomicU64,
+    index_safe_phy_offset: AtomicU64,
 }
 
 impl StoreCheckpoint {
@@ -61,6 +62,7 @@ impl StoreCheckpoint {
             let index_msg_timestamp = read_checkpoint_u64(&mmap, 16, "indexMsgTimestamp")?;
             let master_flushed_offset = read_checkpoint_u64(&mmap, 24, "masterFlushedOffset")?;
             let confirm_phy_offset = read_checkpoint_u64(&mmap, 32, "confirmPhyOffset")?;
+            let index_safe_phy_offset = read_checkpoint_u64(&mmap, 40, "indexSafePhyOffset")?;
 
             info!("store checkpoint file exists, {}", checkpoint_path.display());
             info!("physicMsgTimestamp: {}", physic_msg_timestamp);
@@ -68,6 +70,7 @@ impl StoreCheckpoint {
             info!("indexMsgTimestamp: {}", index_msg_timestamp);
             info!("masterFlushedOffset: {}", master_flushed_offset);
             info!("confirmPhyOffset: {}", confirm_phy_offset);
+            info!("indexSafePhyOffset: {}", index_safe_phy_offset);
 
             Ok(Self {
                 file,
@@ -77,6 +80,7 @@ impl StoreCheckpoint {
                 index_msg_timestamp: AtomicU64::new(index_msg_timestamp),
                 master_flushed_offset: AtomicU64::new(master_flushed_offset),
                 confirm_phy_offset: AtomicU64::new(confirm_phy_offset),
+                index_safe_phy_offset: AtomicU64::new(index_safe_phy_offset),
             })
         } else {
             //info!("store checkpoint file not exists, {}", path.as_ref());
@@ -88,6 +92,7 @@ impl StoreCheckpoint {
                 index_msg_timestamp: AtomicU64::new(0),
                 master_flushed_offset: AtomicU64::new(0),
                 confirm_phy_offset: AtomicU64::new(0),
+                index_safe_phy_offset: AtomicU64::new(0),
             })
         }
     }
@@ -100,6 +105,7 @@ impl StoreCheckpoint {
         mmap[16..24].copy_from_slice(&self.index_msg_timestamp.load(Ordering::Relaxed).to_be_bytes());
         mmap[24..32].copy_from_slice(&self.master_flushed_offset.load(Ordering::Relaxed).to_be_bytes());
         mmap[32..40].copy_from_slice(&self.confirm_phy_offset.load(Ordering::Relaxed).to_be_bytes());
+        mmap[40..48].copy_from_slice(&self.index_safe_phy_offset.load(Ordering::Relaxed).to_be_bytes());
         mmap.flush()?;
         Ok(())
     }
@@ -136,6 +142,28 @@ impl StoreCheckpoint {
     }
 
     #[inline]
+    pub fn set_index_safe_phy_offset(&self, index_safe_phy_offset: u64) {
+        self.index_safe_phy_offset
+            .store(index_safe_phy_offset, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn advance_index_safe_phy_offset(&self, index_safe_phy_offset: u64) {
+        let mut current = self.index_safe_phy_offset.load(Ordering::Relaxed);
+        while index_safe_phy_offset > current {
+            match self.index_safe_phy_offset.compare_exchange_weak(
+                current,
+                index_safe_phy_offset,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    #[inline]
     pub fn physic_msg_timestamp(&self) -> u64 {
         self.physic_msg_timestamp.load(Ordering::Relaxed)
     }
@@ -158,6 +186,11 @@ impl StoreCheckpoint {
     #[inline]
     pub fn confirm_phy_offset(&self) -> u64 {
         self.confirm_phy_offset.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn index_safe_phy_offset(&self) -> u64 {
+        self.index_safe_phy_offset.load(Ordering::Relaxed)
     }
 
     #[inline]
@@ -190,4 +223,26 @@ fn read_checkpoint_u64(mmap: &[u8], offset: usize, field_name: &str) -> io::Resu
 
 fn invalid_checkpoint_error(message: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn store_checkpoint_persists_index_safe_phy_offset() {
+        let temp_dir = tempdir().unwrap();
+        let checkpoint_path = temp_dir.path().join("checkpoint");
+        let checkpoint = StoreCheckpoint::new(&checkpoint_path).unwrap();
+
+        checkpoint.set_index_safe_phy_offset(1024);
+        checkpoint.advance_index_safe_phy_offset(2048);
+        checkpoint.advance_index_safe_phy_offset(1536);
+        checkpoint.flush().unwrap();
+
+        let reloaded = StoreCheckpoint::new(&checkpoint_path).unwrap();
+        assert_eq!(reloaded.index_safe_phy_offset(), 2048);
+    }
 }

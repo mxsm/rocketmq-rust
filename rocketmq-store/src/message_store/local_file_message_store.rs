@@ -1228,6 +1228,7 @@ impl LocalFileMessageStore {
             self.get_max_phy_offset(),
             self.get_confirm_offset(),
         );
+        recovery_plan.set_index_safe_offset(self.current_index_safe_offset());
         recovery_plan.set_consume_queue_recovery_concurrency(ConsumeQueueRecoveryConcurrency::new(
             self.message_store_config
                 .enable_local_file_consume_queue_recovery_concurrently,
@@ -1298,11 +1299,14 @@ impl LocalFileMessageStore {
             self.get_max_phy_offset(),
             self.get_confirm_offset(),
         );
+        recovery_executor
+            .plan_mut()
+            .set_index_safe_offset(self.current_index_safe_offset());
         let recovery_report = recovery_executor.finish();
         info!(
             "message store recover total cost: {} ms, recoverConsumeQueue: {} ms, recoverCommitLog: {} ms, \
              recoverOffsetTable: {} ms, recoveryMode: {}, lastExit: {}, dispatchRecoveryOffset: {:?}, commitLogRange: \
-             {:?}-{:?}, confirmOffset: {:?}",
+             {:?}-{:?}, confirmOffset: {:?}, indexSafeOffset: {:?}",
             recovery_report.total_duration_ms,
             recover_consume_queue,
             recover_commit_log,
@@ -1312,9 +1316,19 @@ impl LocalFileMessageStore {
             recovery_report.plan.dispatch_recovery_offset,
             recovery_report.plan.offsets.commit_log_min_offset,
             recovery_report.plan.offsets.commit_log_max_offset,
-            recovery_report.plan.offsets.confirm_offset
+            recovery_report.plan.offsets.confirm_offset,
+            recovery_report.plan.offsets.index_safe_offset
         );
         self.last_recovery_report = Some(recovery_report);
+    }
+
+    fn current_index_safe_offset(&self) -> i64 {
+        let Some(store_checkpoint) = self.store_checkpoint.as_ref() else {
+            return 0;
+        };
+        let checkpoint_safe_offset = store_checkpoint.index_safe_phy_offset();
+        let confirm_offset = self.get_confirm_offset().max(0) as u64;
+        checkpoint_safe_offset.min(confirm_offset) as i64
     }
 
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
@@ -6015,6 +6029,7 @@ mod tests {
         assert!(report.plan.offsets.commit_log_min_offset.is_some());
         assert!(report.plan.offsets.commit_log_max_offset.is_some());
         assert!(report.plan.offsets.confirm_offset.is_some());
+        assert_eq!(report.plan.offsets.index_safe_offset, Some(0));
         assert_eq!(
             report.plan.scan_range.end_offset,
             report.plan.offsets.commit_log_max_offset
@@ -6036,6 +6051,25 @@ mod tests {
             report.total_duration_ms,
             report.phases.iter().map(|phase| phase.duration_ms).sum()
         );
+    }
+
+    #[test]
+    fn current_index_safe_offset_is_bounded_by_confirm_offset() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store_with_broker(
+            &temp_dir,
+            MessageStoreConfig::default(),
+            BrokerConfig {
+                duplication_enable: true,
+                ..BrokerConfig::default()
+            },
+        );
+        let checkpoint = store.store_checkpoint.as_ref().expect("checkpoint");
+
+        checkpoint.set_index_safe_phy_offset(512);
+        store.set_confirm_offset(128);
+
+        assert_eq!(store.current_index_safe_offset(), 128);
     }
 
     #[tokio::test]

@@ -93,6 +93,7 @@ impl IndexService {
         let checkpoint_timestamp = self.store_checkpoint.index_msg_timestamp() as i64;
         let mut write_list = self.index_file_list.write();
 
+        let mut removed_unsafe_index_file = false;
         for file in files {
             let Some(file_path) = file.to_str() else {
                 warn!("Invalid file path: {:?}", file);
@@ -111,12 +112,35 @@ impl IndexService {
 
             if !last_exit_ok && index_file.get_end_timestamp() > checkpoint_timestamp {
                 index_file.destroy(0);
+                removed_unsafe_index_file = true;
                 continue;
             }
 
             info!("load index file OK, {}", file_path);
             write_list.push(Arc::new(index_file));
         }
+
+        let loaded_index_safe_offset = write_list
+            .iter()
+            .rev()
+            .find(|index_file| index_file.has_entries())
+            .map(|index_file| index_file.get_end_phy_offset().max(0) as u64)
+            .unwrap_or(0);
+        let restored_index_safe_offset = self.store_checkpoint.index_safe_phy_offset();
+        let effective_index_safe_offset = if removed_unsafe_index_file || loaded_index_safe_offset == 0 {
+            loaded_index_safe_offset
+        } else {
+            restored_index_safe_offset.max(loaded_index_safe_offset)
+        };
+        self.store_checkpoint
+            .set_index_safe_phy_offset(effective_index_safe_offset);
+        info!(
+            "index safe offset restored, persisted: {}, loaded: {}, effective: {}, removedUnsafeIndexFile: {}",
+            restored_index_safe_offset,
+            loaded_index_safe_offset,
+            effective_index_safe_offset,
+            removed_unsafe_index_file
+        );
 
         true
     }
@@ -137,6 +161,11 @@ impl IndexService {
             .rev()
             .find(|index_file| index_file.has_entries())
             .map(|index_file| index_file.get_end_phy_offset())
+    }
+
+    #[inline]
+    pub fn index_safe_phy_offset(&self) -> u64 {
+        self.store_checkpoint.index_safe_phy_offset()
     }
 
     pub fn delete_expired_file(&self, offset: u64) {
@@ -277,7 +306,10 @@ impl IndexService {
             MessageSysFlag::TRANSACTION_NOT_TYPE
             | MessageSysFlag::TRANSACTION_PREPARED_TYPE
             | MessageSysFlag::TRANSACTION_COMMIT_TYPE => {}
-            MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => return,
+            MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
+                self.advance_index_safe_phy_offset(dispatch_request);
+                return;
+            }
             _ => {}
         }
 
@@ -291,6 +323,7 @@ impl IndexService {
 
         let has_normal_key = keys.split(MessageConst::KEY_SEPARATOR).any(|key| !key.is_empty());
         if dispatch_request.uniq_key.is_none() && !has_normal_key && tags.is_none() {
+            self.advance_index_safe_phy_offset(dispatch_request);
             return;
         }
 
@@ -395,11 +428,23 @@ impl IndexService {
                         );
                     }
                 }
+                self.advance_index_safe_phy_offset(dispatch_request);
             }
             None => {
                 error!("build index error, stop building index");
             }
         }
+    }
+
+    fn advance_index_safe_phy_offset(&self, dispatch_request: &DispatchRequest) {
+        if dispatch_request.commit_log_offset < 0 || dispatch_request.msg_size <= 0 {
+            return;
+        }
+        let safe_offset = dispatch_request
+            .commit_log_offset
+            .saturating_add(i64::from(dispatch_request.msg_size));
+        self.store_checkpoint
+            .advance_index_safe_phy_offset(safe_offset.max(0) as u64);
     }
 
     #[inline]
@@ -711,11 +756,13 @@ mod tests {
         index_service.build_index(&DispatchRequest {
             topic: CheetahString::from_slice("TestTopic"),
             commit_log_offset: 1000,
+            msg_size: 100,
             store_timestamp: 1000000000000,
             ..DispatchRequest::default()
         });
 
         assert_eq!(index_service.get_total_size(), 0);
+        assert_eq!(index_service.index_safe_phy_offset(), 1100);
     }
 
     #[test]
@@ -726,6 +773,7 @@ mod tests {
         index_service.build_index(&DispatchRequest {
             topic: CheetahString::from_slice("TestTopic"),
             commit_log_offset: 1000,
+            msg_size: 100,
             store_timestamp: 1000000000000,
             keys: CheetahString::from_slice("key1"),
             uniq_key: Some(CheetahString::from_slice("uniq123")),
@@ -734,6 +782,75 @@ mod tests {
         });
 
         assert_eq!(index_service.get_total_size(), 0);
+        assert_eq!(index_service.index_safe_phy_offset(), 1100);
+    }
+
+    #[test]
+    fn build_index_advances_index_safe_offset_after_indexed_message() {
+        let temp_dir = tempdir().unwrap();
+        let index_service = new_index_service_for_test(&temp_dir, "store_checkpoint_test_index_safe_advance");
+
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1000,
+            msg_size: 100,
+            store_timestamp: 1000000000000,
+            keys: CheetahString::from_slice("key1"),
+            ..DispatchRequest::default()
+        });
+
+        assert_eq!(index_service.index_safe_phy_offset(), 1100);
+    }
+
+    #[test]
+    fn load_restores_index_safe_offset_from_loaded_index_files_for_legacy_checkpoint() {
+        let temp_dir = tempdir().unwrap();
+        let checkpoint_name = "store_checkpoint_test_index_safe_legacy_load";
+        let index_service = new_index_service_for_test(&temp_dir, checkpoint_name);
+
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1000,
+            msg_size: 100,
+            store_timestamp: 1000000000000,
+            keys: CheetahString::from_slice("key1"),
+            ..DispatchRequest::default()
+        });
+        let index_file = index_service.index_file_list.read().last().cloned();
+        index_service.flush(index_file);
+        index_service.store_checkpoint.set_index_safe_phy_offset(0);
+        index_service.store_checkpoint.flush().unwrap();
+
+        let mut reloaded = new_index_service_for_test(&temp_dir, checkpoint_name);
+        assert!(reloaded.load(true));
+
+        assert_eq!(reloaded.index_safe_phy_offset(), 1000);
+    }
+
+    #[test]
+    fn load_clamps_index_safe_offset_when_unsafe_index_file_removed() {
+        let temp_dir = tempdir().unwrap();
+        let checkpoint_name = "store_checkpoint_test_index_safe_clamp_removed";
+        let index_service = new_index_service_for_test(&temp_dir, checkpoint_name);
+
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1000,
+            msg_size: 100,
+            store_timestamp: 1000000000000,
+            keys: CheetahString::from_slice("key1"),
+            ..DispatchRequest::default()
+        });
+        let index_file = index_service.index_file_list.read().last().cloned();
+        index_service.flush(index_file);
+        index_service.store_checkpoint.set_index_safe_phy_offset(1100);
+        index_service.store_checkpoint.set_index_msg_timestamp(0);
+        index_service.store_checkpoint.flush().unwrap();
+
+        let mut reloaded = new_index_service_for_test(&temp_dir, checkpoint_name);
+        assert!(reloaded.load(false));
+
+        assert_eq!(reloaded.index_safe_phy_offset(), 0);
     }
 
     #[test]
