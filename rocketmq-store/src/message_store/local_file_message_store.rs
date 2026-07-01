@@ -2039,8 +2039,10 @@ impl MessageStore for LocalFileMessageStore {
 
         let storage_capability = crate::platform::current_store_platform_capability();
         info!(
-            "Linux storage capability snapshot: os={} page_size={} memory_lock_limit_bytes={} \
-             effective_memory_lock_budget_bytes={} file_preallocate_supported={}",
+            "Store platform capability snapshot: os={} page_size={} memory_lock_limit_bytes={} \
+             effective_memory_lock_budget_bytes={} file_preallocate_supported={} io_hint_branch={} \
+             mmap_advice_supported={} file_prefetch_supported={} lazy_mmap_supported={} \
+             hint_failure_affects_correctness={}",
             storage_capability.os_name,
             storage_capability.page_size,
             storage_capability
@@ -2048,7 +2050,12 @@ impl MessageStore for LocalFileMessageStore {
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "unknown".to_string()),
             Self::effective_linux_memory_lock_budget_bytes(self.message_store_config.as_ref()),
-            storage_capability.file_preallocate_supported
+            storage_capability.file_preallocate_supported,
+            storage_capability.optimization.io_hint_branch.as_str(),
+            storage_capability.optimization.mmap_advice_supported,
+            storage_capability.optimization.file_prefetch_supported,
+            storage_capability.optimization.lazy_mmap_supported,
+            storage_capability.optimization.hint_failure_affects_correctness
         );
 
         if self.is_transient_store_pool_enable() {
@@ -2739,7 +2746,46 @@ impl MessageStore for LocalFileMessageStore {
                 .to_string(),
         );
         let storage_capability = crate::platform::current_store_platform_capability();
+        let platform_optimization = storage_capability.optimization;
         result.insert("linuxStorageOs".to_string(), storage_capability.os_name.to_string());
+        result.insert(
+            "storePlatformIoHintBranch".to_string(),
+            platform_optimization.io_hint_branch.as_str().to_string(),
+        );
+        result.insert(
+            "storePlatformMmapAdviceSupported".to_string(),
+            platform_optimization.mmap_advice_supported.to_string(),
+        );
+        result.insert(
+            "storePlatformFilePrefetchSupported".to_string(),
+            platform_optimization.file_prefetch_supported.to_string(),
+        );
+        result.insert(
+            "storePlatformLazyMmapSupported".to_string(),
+            platform_optimization.lazy_mmap_supported.to_string(),
+        );
+        result.insert(
+            "storePlatformIoHintFailureAffectsCorrectness".to_string(),
+            platform_optimization.hint_failure_affects_correctness.to_string(),
+        );
+        result.insert(
+            "storeIoHintEnable".to_string(),
+            self.message_store_config.store_io_hint_enable.to_string(),
+        );
+        result.insert(
+            "storeLazyMmapEnable".to_string(),
+            self.message_store_config.store_lazy_mmap_enable.to_string(),
+        );
+        result.insert(
+            "storeEffectiveIoHintEnable".to_string(),
+            (self.message_store_config.store_io_hint_enable
+                && (platform_optimization.mmap_advice_supported || platform_optimization.file_prefetch_supported))
+                .to_string(),
+        );
+        result.insert(
+            "storeEffectiveLazyMmapEnable".to_string(),
+            (self.message_store_config.store_lazy_mmap_enable && platform_optimization.lazy_mmap_supported).to_string(),
+        );
         result.insert(
             "linuxStoragePageSize".to_string(),
             storage_capability.page_size.to_string(),
@@ -6297,6 +6343,33 @@ mod tests {
         assert!(runtime_info.contains_key("linuxStorageOs"));
         assert!(runtime_info.contains_key("linuxStoragePageSize"));
         assert!(runtime_info.contains_key("linuxStorageMemoryLockLimitBytes"));
+        let platform_capability = crate::platform::current_store_platform_capability();
+        assert_eq!(
+            runtime_info["storePlatformIoHintBranch"],
+            platform_capability.optimization.io_hint_branch.as_str()
+        );
+        assert_eq!(
+            runtime_info["storePlatformMmapAdviceSupported"],
+            platform_capability.optimization.mmap_advice_supported.to_string()
+        );
+        assert_eq!(
+            runtime_info["storePlatformFilePrefetchSupported"],
+            platform_capability.optimization.file_prefetch_supported.to_string()
+        );
+        assert_eq!(
+            runtime_info["storePlatformLazyMmapSupported"],
+            platform_capability.optimization.lazy_mmap_supported.to_string()
+        );
+        assert_eq!(runtime_info["storePlatformIoHintFailureAffectsCorrectness"], "false");
+        assert_eq!(runtime_info["storeIoHintEnable"], "true");
+        assert_eq!(runtime_info["storeLazyMmapEnable"], "false");
+        assert_eq!(
+            runtime_info["storeEffectiveIoHintEnable"],
+            (platform_capability.optimization.mmap_advice_supported
+                || platform_capability.optimization.file_prefetch_supported)
+                .to_string()
+        );
+        assert_eq!(runtime_info["storeEffectiveLazyMmapEnable"], "false");
         assert_eq!(runtime_info["transientStorePoolLockAttempts"], "0");
         assert_eq!(runtime_info["transientStorePoolLockedBuffers"], "0");
         assert_eq!(runtime_info["transientStorePoolLockFailedBuffers"], "0");
