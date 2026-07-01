@@ -34,6 +34,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -336,6 +337,7 @@ pub struct LocalFileMessageStore {
     store_lock_guard: Option<StoreLockGuard>,
     running_flags: Arc<RunningFlags>,
     reput_message_service: ReputMessageService,
+    background_index_rebuild_service: BackgroundIndexRebuildService,
     clean_commit_log_service: Arc<CleanCommitLogService>,
     correct_logic_offset_service: Arc<CorrectLogicOffsetService>,
     clean_consume_queue_service: Arc<CleanConsumeQueueService>,
@@ -562,6 +564,7 @@ impl LocalFileMessageStore {
                 inner: None,
                 task_group: None,
             },
+            background_index_rebuild_service: BackgroundIndexRebuildService::new(),
             clean_commit_log_service: Arc::new(CleanCommitLogService::new(
                 message_store_config.clone(),
                 commit_log.clone(),
@@ -1739,6 +1742,18 @@ impl LocalFileMessageStore {
         self.last_recovery_report.as_ref()
     }
 
+    pub fn background_index_rebuild_snapshot(&self) -> BackgroundIndexRebuildSnapshot {
+        self.background_index_rebuild_service.snapshot()
+    }
+
+    pub fn pause_background_index_rebuild(&self) {
+        self.background_index_rebuild_service.pause();
+    }
+
+    pub fn resume_background_index_rebuild(&self) {
+        self.background_index_rebuild_service.resume();
+    }
+
     pub async fn reput_once(&mut self) {
         if self.reput_message_service.reput_from_offset.is_none() {
             let start_offset = self.get_dispatch_recovery_offset().max(0);
@@ -1930,6 +1945,13 @@ impl MessageStore for LocalFileMessageStore {
             self.do_recheck_reput_offset_from_dispatchers();
             self.flush_consume_queue_service.start();
             self.commit_log.start();
+            self.background_index_rebuild_service.start(
+                self.commit_log.clone(),
+                self.message_store_config.clone(),
+                self.index_service.clone(),
+                self.delay_level_table_ref().clone(),
+                self.max_delay_level,
+            );
             self.consume_queue_store.start();
             self.store_stats_service.start();
             if let Some(compaction_service) = self.compaction_service.as_mut() {
@@ -1960,6 +1982,9 @@ impl MessageStore for LocalFileMessageStore {
                 Ok(())
             }
             Err(error) => {
+                if self.background_index_rebuild_service.has_task_group() {
+                    self.background_index_rebuild_service.shutdown().await;
+                }
                 #[cfg(feature = "tieredstore")]
                 if let Some(tiered_store) = self.tiered_store.as_ref() {
                     if let Err(shutdown_error) = tiered_store.shutdown().await {
@@ -2057,6 +2082,7 @@ impl MessageStore for LocalFileMessageStore {
 
             self.shutdown_schedule_tasks().await;
             self.store_stats_service.shutdown_gracefully().await;
+            self.background_index_rebuild_service.shutdown().await;
             self.commit_log.shutdown_gracefully().await;
 
             self.reput_message_service.shutdown().await;
@@ -2832,6 +2858,43 @@ impl MessageStore for LocalFileMessageStore {
             self.message_store_config
                 .flush_least_pages_when_warm_mapped_file
                 .to_string(),
+        );
+        let background_index_rebuild = self.background_index_rebuild_snapshot();
+        result.insert(
+            "backgroundIndexRebuildState".to_string(),
+            background_index_rebuild.state.as_str().to_string(),
+        );
+        result.insert(
+            "backgroundIndexRebuildCurrentSafeOffset".to_string(),
+            background_index_rebuild.current_safe_offset.to_string(),
+        );
+        result.insert(
+            "backgroundIndexRebuildTargetOffset".to_string(),
+            background_index_rebuild.target_offset.to_string(),
+        );
+        result.insert(
+            "backgroundIndexRebuildBacklogBytes".to_string(),
+            background_index_rebuild.backlog_bytes.to_string(),
+        );
+        result.insert(
+            "backgroundIndexRebuildRebuiltBytes".to_string(),
+            background_index_rebuild.rebuilt_bytes.to_string(),
+        );
+        result.insert(
+            "backgroundIndexRebuildRebuiltMessages".to_string(),
+            background_index_rebuild.rebuilt_messages.to_string(),
+        );
+        result.insert(
+            "backgroundIndexRebuildFailureCount".to_string(),
+            background_index_rebuild.failure_count.to_string(),
+        );
+        result.insert(
+            "backgroundIndexRebuildBytesPerSecond".to_string(),
+            background_index_rebuild.bytes_per_second.to_string(),
+        );
+        result.insert(
+            "backgroundIndexRebuildLastError".to_string(),
+            background_index_rebuild.last_error.unwrap_or_default(),
         );
 
         if let Some(timer_message_store) = self.timer_message_store.as_ref() {
@@ -3719,6 +3782,489 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
     fn dispatch_batch(&self, dispatch_requests: &mut [DispatchRequest]) {
         for dispatcher in self.dispatcher_vec.iter() {
             dispatcher.dispatch_batch(dispatch_requests);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BackgroundIndexRebuildState {
+    #[default]
+    Idle,
+    Running,
+    Paused,
+    Completed,
+    Retrying,
+    Failed,
+    Shutdown,
+}
+
+impl BackgroundIndexRebuildState {
+    const fn as_u8(self) -> u8 {
+        match self {
+            Self::Idle => 0,
+            Self::Running => 1,
+            Self::Paused => 2,
+            Self::Completed => 3,
+            Self::Retrying => 4,
+            Self::Failed => 5,
+            Self::Shutdown => 6,
+        }
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Running,
+            2 => Self::Paused,
+            3 => Self::Completed,
+            4 => Self::Retrying,
+            5 => Self::Failed,
+            6 => Self::Shutdown,
+            _ => Self::Idle,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+            Self::Retrying => "retrying",
+            Self::Failed => "failed",
+            Self::Shutdown => "shutdown",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BackgroundIndexRebuildSnapshot {
+    pub state: BackgroundIndexRebuildState,
+    pub current_safe_offset: i64,
+    pub target_offset: i64,
+    pub backlog_bytes: i64,
+    pub rebuilt_bytes: u64,
+    pub rebuilt_messages: u64,
+    pub failure_count: u64,
+    pub last_error: Option<String>,
+    pub bytes_per_second: u64,
+}
+
+struct BackgroundIndexRebuildProgress {
+    state: AtomicU8,
+    paused: AtomicBool,
+    current_safe_offset: AtomicI64,
+    target_offset: AtomicI64,
+    rebuilt_bytes: AtomicU64,
+    rebuilt_messages: AtomicU64,
+    failure_count: AtomicU64,
+    bytes_per_second: AtomicU64,
+    last_error: StdMutex<Option<String>>,
+    resume_notify: Notify,
+}
+
+impl BackgroundIndexRebuildProgress {
+    fn new() -> Self {
+        Self {
+            state: AtomicU8::new(BackgroundIndexRebuildState::Idle.as_u8()),
+            paused: AtomicBool::new(false),
+            current_safe_offset: AtomicI64::new(0),
+            target_offset: AtomicI64::new(0),
+            rebuilt_bytes: AtomicU64::new(0),
+            rebuilt_messages: AtomicU64::new(0),
+            failure_count: AtomicU64::new(0),
+            bytes_per_second: AtomicU64::new(0),
+            last_error: StdMutex::new(None),
+            resume_notify: Notify::new(),
+        }
+    }
+
+    fn reset(&self, current_safe_offset: i64, target_offset: i64, bytes_per_second: u64) {
+        self.paused.store(false, Ordering::Release);
+        self.current_safe_offset
+            .store(current_safe_offset.max(0), Ordering::Release);
+        self.target_offset.store(target_offset.max(0), Ordering::Release);
+        self.rebuilt_bytes.store(0, Ordering::Release);
+        self.rebuilt_messages.store(0, Ordering::Release);
+        self.failure_count.store(0, Ordering::Release);
+        self.bytes_per_second.store(bytes_per_second, Ordering::Release);
+        if let Ok(mut last_error) = self.last_error.lock() {
+            *last_error = None;
+        }
+        self.set_state(BackgroundIndexRebuildState::Idle);
+    }
+
+    fn set_state(&self, state: BackgroundIndexRebuildState) {
+        self.state.store(state.as_u8(), Ordering::Release);
+    }
+
+    fn state(&self) -> BackgroundIndexRebuildState {
+        BackgroundIndexRebuildState::from_u8(self.state.load(Ordering::Acquire))
+    }
+
+    fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Release);
+        if paused {
+            self.set_state(BackgroundIndexRebuildState::Paused);
+        } else {
+            if self.state() == BackgroundIndexRebuildState::Paused {
+                self.set_state(BackgroundIndexRebuildState::Idle);
+            }
+            self.resume_notify.notify_waiters();
+        }
+    }
+
+    fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Acquire)
+    }
+
+    fn update_current_safe_offset(&self, current_safe_offset: i64) {
+        self.current_safe_offset
+            .store(current_safe_offset.max(0), Ordering::Release);
+    }
+
+    fn record_rebuild(&self, bytes: u64, messages: u64) {
+        self.rebuilt_bytes.fetch_add(bytes, Ordering::AcqRel);
+        self.rebuilt_messages.fetch_add(messages, Ordering::AcqRel);
+    }
+
+    fn record_error(&self, error: impl Into<String>) {
+        self.failure_count.fetch_add(1, Ordering::AcqRel);
+        if let Ok(mut last_error) = self.last_error.lock() {
+            *last_error = Some(error.into());
+        }
+    }
+
+    fn snapshot(&self) -> BackgroundIndexRebuildSnapshot {
+        let current_safe_offset = self.current_safe_offset.load(Ordering::Acquire);
+        let target_offset = self.target_offset.load(Ordering::Acquire);
+        let last_error = self.last_error.lock().ok().and_then(|error| error.clone());
+        BackgroundIndexRebuildSnapshot {
+            state: self.state(),
+            current_safe_offset,
+            target_offset,
+            backlog_bytes: target_offset.saturating_sub(current_safe_offset).max(0),
+            rebuilt_bytes: self.rebuilt_bytes.load(Ordering::Acquire),
+            rebuilt_messages: self.rebuilt_messages.load(Ordering::Acquire),
+            failure_count: self.failure_count.load(Ordering::Acquire),
+            last_error,
+            bytes_per_second: self.bytes_per_second.load(Ordering::Acquire),
+        }
+    }
+}
+
+struct BackgroundIndexRebuildService {
+    shutdown_token: CancellationToken,
+    progress: Arc<BackgroundIndexRebuildProgress>,
+    task_group: Option<rocketmq_runtime::TaskGroup>,
+}
+
+impl BackgroundIndexRebuildService {
+    fn new() -> Self {
+        Self {
+            shutdown_token: CancellationToken::new(),
+            progress: Arc::new(BackgroundIndexRebuildProgress::new()),
+            task_group: None,
+        }
+    }
+
+    fn start(
+        &mut self,
+        commit_log: ArcMut<CommitLog>,
+        message_store_config: Arc<MessageStoreConfig>,
+        index_service: IndexService,
+        delay_level_table: BTreeMap<i32, i64>,
+        max_delay_level: i32,
+    ) {
+        if self.task_group.is_some() || !message_store_config.enable_background_index_rebuild {
+            return;
+        }
+        if !message_store_config.message_index_enable {
+            return;
+        }
+
+        let current_safe_offset = index_service.index_safe_phy_offset().min(i64::MAX as u64) as i64;
+        let target_offset = commit_log.get_confirm_offset().max(0);
+        let bytes_per_second = message_store_config.background_index_rebuild_bytes_per_second as u64;
+        self.progress
+            .reset(current_safe_offset, target_offset, bytes_per_second);
+
+        if current_safe_offset >= target_offset {
+            self.progress.set_state(BackgroundIndexRebuildState::Completed);
+            return;
+        }
+
+        let task_group = match crate::runtime::task_group("rocketmq-store.local-file.background-index-rebuild") {
+            Ok(task_group) => task_group,
+            Err(error) => {
+                self.progress.record_error(error.to_string());
+                self.progress.set_state(BackgroundIndexRebuildState::Failed);
+                error!("BackgroundIndexRebuildService not started: {error}");
+                return;
+            }
+        };
+
+        self.shutdown_token = CancellationToken::new();
+        let batch_size = message_store_config.background_index_rebuild_batch_size.max(1);
+        let max_retries = message_store_config.background_index_rebuild_max_retries;
+        let worker = BackgroundIndexRebuildWorker {
+            commit_log,
+            message_store_config,
+            index_service,
+            delay_level_table,
+            max_delay_level,
+            progress: self.progress.clone(),
+            shutdown_token: self.shutdown_token.clone(),
+            batch_size,
+            bytes_per_second,
+            max_retries,
+        };
+
+        if let Err(error) = task_group.spawn_service("background-index-rebuild", async move {
+            worker.run().await;
+        }) {
+            self.shutdown_token.cancel();
+            self.progress.record_error(error.to_string());
+            self.progress.set_state(BackgroundIndexRebuildState::Failed);
+            error!("failed to spawn BackgroundIndexRebuildService: {error}");
+            return;
+        }
+
+        self.task_group = Some(task_group);
+    }
+
+    fn pause(&self) {
+        self.progress.set_paused(true);
+    }
+
+    fn resume(&self) {
+        self.progress.set_paused(false);
+    }
+
+    fn snapshot(&self) -> BackgroundIndexRebuildSnapshot {
+        self.progress.snapshot()
+    }
+
+    async fn shutdown(&mut self) {
+        self.shutdown_token.cancel();
+        self.progress.resume_notify.notify_waiters();
+        if let Some(task_group) = self.task_group.take() {
+            let report = task_group.shutdown(Duration::from_secs(3)).await;
+            match crate::runtime::shutdown_report_result("BackgroundIndexRebuildService", report) {
+                Ok(()) => info!("BackgroundIndexRebuildService tasks shut down successfully"),
+                Err(error) => warn!("BackgroundIndexRebuildService task shutdown reported an error: {error}"),
+            }
+        }
+        self.progress.set_state(BackgroundIndexRebuildState::Shutdown);
+    }
+
+    fn has_task_group(&self) -> bool {
+        self.task_group.is_some()
+    }
+}
+
+struct BackgroundIndexRebuildWorker {
+    commit_log: ArcMut<CommitLog>,
+    message_store_config: Arc<MessageStoreConfig>,
+    index_service: IndexService,
+    delay_level_table: BTreeMap<i32, i64>,
+    max_delay_level: i32,
+    progress: Arc<BackgroundIndexRebuildProgress>,
+    shutdown_token: CancellationToken,
+    batch_size: usize,
+    bytes_per_second: u64,
+    max_retries: usize,
+}
+
+struct BackgroundIndexRebuildBatch {
+    bytes: u64,
+    messages: u64,
+    completed: bool,
+}
+
+impl BackgroundIndexRebuildWorker {
+    async fn run(self) {
+        let mut retry_count = 0usize;
+        loop {
+            if !self.wait_if_paused().await {
+                return;
+            }
+            self.progress.set_state(BackgroundIndexRebuildState::Running);
+            let started = Instant::now();
+            match self.rebuild_batch() {
+                Ok(batch) => {
+                    retry_count = 0;
+                    if batch.bytes > 0 || batch.messages > 0 {
+                        self.progress.record_rebuild(batch.bytes, batch.messages);
+                    }
+                    if batch.completed {
+                        if let Err(error) = self.index_service.flush_index_safe_offset() {
+                            self.progress.record_error(error.to_string());
+                            self.progress.set_state(BackgroundIndexRebuildState::Failed);
+                            return;
+                        }
+                        self.progress.set_state(BackgroundIndexRebuildState::Completed);
+                        return;
+                    }
+                    self.throttle(batch.bytes, started).await;
+                }
+                Err(error) => {
+                    self.progress.record_error(error);
+                    if retry_count >= self.max_retries {
+                        self.progress.set_state(BackgroundIndexRebuildState::Failed);
+                        return;
+                    }
+                    retry_count += 1;
+                    self.progress.set_state(BackgroundIndexRebuildState::Retrying);
+                    tokio::select! {
+                        _ = self.shutdown_token.cancelled() => {
+                            self.progress.set_state(BackgroundIndexRebuildState::Shutdown);
+                            return;
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                    }
+                }
+            }
+        }
+    }
+
+    async fn wait_if_paused(&self) -> bool {
+        while self.progress.is_paused() {
+            self.progress.set_state(BackgroundIndexRebuildState::Paused);
+            tokio::select! {
+                _ = self.shutdown_token.cancelled() => {
+                    self.progress.set_state(BackgroundIndexRebuildState::Shutdown);
+                    return false;
+                }
+                _ = self.progress.resume_notify.notified() => {}
+            }
+        }
+        if self.shutdown_token.is_cancelled() {
+            self.progress.set_state(BackgroundIndexRebuildState::Shutdown);
+            return false;
+        }
+        true
+    }
+
+    fn rebuild_batch(&self) -> Result<BackgroundIndexRebuildBatch, String> {
+        let target_offset = self.progress.target_offset.load(Ordering::Acquire);
+        let mut current_offset = self.progress.current_safe_offset.load(Ordering::Acquire);
+        if current_offset >= target_offset {
+            return Ok(BackgroundIndexRebuildBatch {
+                bytes: 0,
+                messages: 0,
+                completed: true,
+            });
+        }
+
+        let min_offset = self.commit_log.get_min_offset();
+        if current_offset < min_offset {
+            info!(
+                "background index rebuild offset {current_offset} is smaller than commitlog min offset {min_offset}, \
+                 advancing to retained range"
+            );
+            current_offset = min_offset;
+            self.index_service.advance_index_safe_offset_to(current_offset);
+            self.progress.update_current_safe_offset(current_offset);
+            if current_offset >= target_offset {
+                return Ok(BackgroundIndexRebuildBatch {
+                    bytes: 0,
+                    messages: 0,
+                    completed: true,
+                });
+            }
+        }
+
+        let mut result = self
+            .commit_log
+            .get_data(current_offset)
+            .ok_or_else(|| format!("commitlog data unavailable at offset {current_offset}"))?;
+        current_offset = result.start_offset as i64;
+        self.progress.update_current_safe_offset(current_offset);
+
+        let mut read_size = 0i32;
+        let mut rebuilt_bytes = 0u64;
+        let mut rebuilt_messages = 0u64;
+        while read_size < result.size
+            && current_offset < target_offset
+            && rebuilt_messages < self.batch_size as u64
+            && !self.shutdown_token.is_cancelled()
+        {
+            let Some(bytes) = result.bytes.as_mut() else {
+                return Err("commitlog data buffer is missing during background index rebuild".to_string());
+            };
+            let mut dispatch_request = commit_log::check_message_and_return_size(
+                bytes,
+                false,
+                false,
+                false,
+                &self.message_store_config,
+                self.max_delay_level,
+                &self.delay_level_table,
+            );
+            let size = if dispatch_request.buffer_size == -1 {
+                dispatch_request.msg_size
+            } else {
+                dispatch_request.buffer_size
+            };
+
+            if dispatch_request.success && dispatch_request.msg_size == 0 {
+                current_offset = self.commit_log.roll_next_file(current_offset);
+                self.index_service.advance_index_safe_offset_to(current_offset);
+                self.progress.update_current_safe_offset(current_offset);
+                read_size = result.size;
+                continue;
+            }
+            if size <= 0 {
+                return Err(format!("invalid message size {size} at offset {current_offset}"));
+            }
+            if current_offset.saturating_add(i64::from(size)) > target_offset {
+                break;
+            }
+
+            if dispatch_request.success {
+                match dispatch_request.msg_size.cmp(&0) {
+                    std::cmp::Ordering::Greater => {
+                        dispatch_request.commit_log_offset = current_offset;
+                        self.index_service.build_index(&dispatch_request);
+                        current_offset = current_offset.saturating_add(i64::from(size));
+                        self.progress.update_current_safe_offset(current_offset);
+                        rebuilt_bytes = rebuilt_bytes.saturating_add(size as u64);
+                        rebuilt_messages = rebuilt_messages.saturating_add(1);
+                        read_size += size;
+                    }
+                    std::cmp::Ordering::Equal => {}
+                    std::cmp::Ordering::Less => {
+                        return Err(format!(
+                            "negative message size {} at offset {current_offset}",
+                            dispatch_request.msg_size
+                        ));
+                    }
+                }
+            } else {
+                return Err(format!("invalid message at offset {current_offset}"));
+            }
+        }
+
+        Ok(BackgroundIndexRebuildBatch {
+            bytes: rebuilt_bytes,
+            messages: rebuilt_messages,
+            completed: current_offset >= target_offset,
+        })
+    }
+
+    async fn throttle(&self, bytes: u64, started: Instant) {
+        if self.bytes_per_second == 0 || bytes == 0 {
+            return;
+        }
+        let expected = Duration::from_secs_f64(bytes as f64 / self.bytes_per_second as f64);
+        let elapsed = started.elapsed();
+        if expected > elapsed {
+            tokio::select! {
+                _ = self.shutdown_token.cancelled() => {
+                    self.progress.set_state(BackgroundIndexRebuildState::Shutdown);
+                }
+                _ = tokio::time::sleep(expected - elapsed) => {}
+            }
         }
     }
 }
@@ -4835,6 +5381,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::run_blocking_scheduled_task;
+    use super::BackgroundIndexRebuildService;
+    use super::BackgroundIndexRebuildState;
     use super::CleanCommitLogService;
     use super::DiskCleanDecision;
     use super::LocalFileMessageStore;
@@ -5160,9 +5708,23 @@ mod tests {
         store_timestamp: i64,
         body: Bytes,
     ) -> i32 {
+        append_encoded_test_message_with_key(store, topic, commit_log_offset, store_timestamp, body, None).await
+    }
+
+    async fn append_encoded_test_message_with_key(
+        store: &mut ArcMut<LocalFileMessageStore>,
+        topic: &CheetahString,
+        commit_log_offset: i64,
+        store_timestamp: i64,
+        body: Bytes,
+        key: Option<CheetahString>,
+    ) -> i32 {
         let mut msg = build_test_message(topic, body);
         msg.with_version(MessageVersion::V1);
         msg.message_ext_inner.set_store_timestamp(store_timestamp);
+        if let Some(key) = key {
+            msg.set_keys(key);
+        }
 
         let mut encoder = MessageExtEncoder::new(store.message_store_config());
         assert!(encoder.encode(&msg).is_none());
@@ -6070,6 +6632,214 @@ mod tests {
         store.set_confirm_offset(128);
 
         assert_eq!(store.current_index_safe_offset(), 128);
+    }
+
+    #[tokio::test]
+    async fn background_index_rebuild_pause_resume_and_shutdown_update_state() {
+        let mut service = BackgroundIndexRebuildService::new();
+
+        assert_eq!(service.snapshot().state, BackgroundIndexRebuildState::Idle);
+
+        service.pause();
+        assert_eq!(service.snapshot().state, BackgroundIndexRebuildState::Paused);
+
+        service.resume();
+        assert_eq!(service.snapshot().state, BackgroundIndexRebuildState::Idle);
+
+        service.shutdown().await;
+        assert_eq!(service.snapshot().state, BackgroundIndexRebuildState::Shutdown);
+    }
+
+    #[test]
+    fn background_index_rebuild_is_disabled_by_default_for_store() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_test_store(&temp_dir);
+        let commit_log = store.commit_log.clone();
+        let message_store_config = store.message_store_config.clone();
+        let index_service = store.index_service.clone();
+        let delay_level_table = store.delay_level_table_ref().clone();
+        let max_delay_level = store.max_delay_level;
+
+        store.background_index_rebuild_service.start(
+            commit_log,
+            message_store_config,
+            index_service,
+            delay_level_table,
+            max_delay_level,
+        );
+
+        let snapshot = store.background_index_rebuild_snapshot();
+        assert_eq!(snapshot.state, BackgroundIndexRebuildState::Idle);
+        assert!(!store.background_index_rebuild_service.has_task_group());
+
+        let runtime_info = store.get_runtime_info();
+        assert_eq!(runtime_info["backgroundIndexRebuildState"], "idle");
+        assert_eq!(runtime_info["backgroundIndexRebuildBacklogBytes"], "0");
+    }
+
+    #[tokio::test]
+    async fn background_index_rebuild_completes_and_indexes_commitlog_messages() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                enable_background_index_rebuild: true,
+                background_index_rebuild_batch_size: 1,
+                background_index_rebuild_bytes_per_second: 0,
+                background_index_rebuild_max_retries: 1,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let topic = CheetahString::from_static_str("background-index-rebuild-topic");
+        let key = CheetahString::from_static_str("background-index-rebuild-key");
+        let msg_size = append_encoded_test_message_with_key(
+            &mut store,
+            &topic,
+            0,
+            1_000,
+            Bytes::from_static(b"background-index-rebuild-body"),
+            Some(key.clone()),
+        )
+        .await;
+        let target_offset = i64::from(msg_size);
+        let checkpoint = store.store_checkpoint.as_ref().expect("store checkpoint");
+        checkpoint.set_index_safe_phy_offset(0);
+
+        let before_rebuild = store
+            .query_message(&topic, &key, 10, 0, i64::MAX)
+            .await
+            .expect("query result before background rebuild");
+        assert!(
+            before_rebuild.message_maped_list.is_empty(),
+            "raw commitlog append should not populate the index before background rebuild"
+        );
+
+        let commit_log = store.commit_log.clone();
+        let message_store_config = store.message_store_config.clone();
+        let index_service = store.index_service.clone();
+        let delay_level_table = store.delay_level_table_ref().clone();
+        let max_delay_level = store.max_delay_level;
+        store.background_index_rebuild_service.start(
+            commit_log,
+            message_store_config,
+            index_service,
+            delay_level_table,
+            max_delay_level,
+        );
+
+        let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = store.background_index_rebuild_snapshot();
+                if snapshot.state == BackgroundIndexRebuildState::Completed {
+                    break snapshot;
+                }
+                assert_ne!(
+                    snapshot.state,
+                    BackgroundIndexRebuildState::Failed,
+                    "background index rebuild failed: {:?}",
+                    snapshot.last_error
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("background index rebuild should complete");
+
+        assert!(snapshot.current_safe_offset >= target_offset);
+        assert_eq!(snapshot.target_offset, target_offset);
+        assert_eq!(snapshot.backlog_bytes, 0);
+        assert_eq!(snapshot.rebuilt_messages, 1);
+        assert!(snapshot.rebuilt_bytes > 0);
+        assert_eq!(
+            store.index_service.index_safe_phy_offset(),
+            snapshot.current_safe_offset as u64
+        );
+
+        let query_result = store
+            .query_message(&topic, &key, 10, 0, i64::MAX)
+            .await
+            .expect("query result after background rebuild");
+        assert_eq!(query_result.message_maped_list.len(), 1);
+
+        let runtime_info = store.get_runtime_info();
+        assert_eq!(runtime_info["backgroundIndexRebuildState"], "completed");
+        assert_eq!(
+            runtime_info["backgroundIndexRebuildCurrentSafeOffset"],
+            snapshot.current_safe_offset.to_string()
+        );
+        assert_eq!(runtime_info["backgroundIndexRebuildBacklogBytes"], "0");
+        assert_eq!(runtime_info["backgroundIndexRebuildFailureCount"], "0");
+
+        store.background_index_rebuild_service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn background_index_rebuild_retries_then_fails_when_commitlog_data_missing() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store_with_broker(
+            &temp_dir,
+            MessageStoreConfig {
+                enable_background_index_rebuild: true,
+                background_index_rebuild_bytes_per_second: 0,
+                background_index_rebuild_max_retries: 1,
+                ..MessageStoreConfig::default()
+            },
+            BrokerConfig {
+                duplication_enable: true,
+                ..BrokerConfig::default()
+            },
+        );
+        store.set_confirm_offset(128);
+
+        let commit_log = store.commit_log.clone();
+        let message_store_config = store.message_store_config.clone();
+        let index_service = store.index_service.clone();
+        let delay_level_table = store.delay_level_table_ref().clone();
+        let max_delay_level = store.max_delay_level;
+        store.background_index_rebuild_service.start(
+            commit_log,
+            message_store_config,
+            index_service,
+            delay_level_table,
+            max_delay_level,
+        );
+
+        let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = store.background_index_rebuild_snapshot();
+                if snapshot.state == BackgroundIndexRebuildState::Failed {
+                    break snapshot;
+                }
+                assert_ne!(
+                    snapshot.state,
+                    BackgroundIndexRebuildState::Completed,
+                    "background index rebuild should not complete without commitlog data"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("background index rebuild should fail after retry budget");
+
+        assert!(snapshot.failure_count >= 2);
+        assert_eq!(snapshot.target_offset, 128);
+        assert_eq!(snapshot.current_safe_offset, 0);
+        assert_eq!(snapshot.backlog_bytes, 128);
+        assert!(snapshot
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("commitlog data unavailable")));
+
+        let runtime_info = store.get_runtime_info();
+        assert_eq!(runtime_info["backgroundIndexRebuildState"], "failed");
+        assert_eq!(
+            runtime_info["backgroundIndexRebuildFailureCount"],
+            snapshot.failure_count.to_string()
+        );
+        assert!(runtime_info["backgroundIndexRebuildLastError"].contains("commitlog data unavailable"));
+
+        store.background_index_rebuild_service.shutdown().await;
     }
 
     #[tokio::test]
