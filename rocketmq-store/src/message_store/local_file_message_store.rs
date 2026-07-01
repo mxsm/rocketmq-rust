@@ -3080,6 +3080,13 @@ impl MessageStore for LocalFileMessageStore {
         end_timestamp: i64,
     ) -> Option<QueryMessageResult> {
         let mut query_message_result = QueryMessageResult::default();
+        let index_safe_phyoffset = self.current_index_safe_offset();
+        let index_confirm_phyoffset = self.get_confirm_offset().max(0);
+        query_message_result.set_index_query_safety(
+            !self.message_store_config.message_index_enable || index_safe_phyoffset >= index_confirm_phyoffset,
+            index_safe_phyoffset,
+            index_confirm_phyoffset,
+        );
         let mut last_query_msg_time = end_timestamp;
         for i in 1..3 {
             let mut query_offset_result =
@@ -6714,6 +6721,9 @@ mod tests {
             before_rebuild.message_maped_list.is_empty(),
             "raw commitlog append should not populate the index before background rebuild"
         );
+        assert!(!before_rebuild.index_query_safe);
+        assert_eq!(before_rebuild.index_safe_phyoffset, 0);
+        assert_eq!(before_rebuild.index_confirm_phyoffset, target_offset);
 
         let commit_log = store.commit_log.clone();
         let message_store_config = store.message_store_config.clone();
@@ -6761,6 +6771,9 @@ mod tests {
             .await
             .expect("query result after background rebuild");
         assert_eq!(query_result.message_maped_list.len(), 1);
+        assert!(query_result.index_query_safe);
+        assert_eq!(query_result.index_safe_phyoffset, target_offset);
+        assert_eq!(query_result.index_confirm_phyoffset, target_offset);
 
         let runtime_info = store.get_runtime_info();
         assert_eq!(runtime_info["backgroundIndexRebuildState"], "completed");
@@ -6772,6 +6785,39 @@ mod tests {
         assert_eq!(runtime_info["backgroundIndexRebuildFailureCount"], "0");
 
         store.background_index_rebuild_service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn query_message_marks_empty_result_unsafe_when_index_safe_offset_lags_confirm() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let topic = CheetahString::from_static_str("index-query-safe-range-topic");
+        let key = CheetahString::from_static_str("index-query-safe-range-key");
+        let msg_size = append_encoded_test_message_with_key(
+            &mut store,
+            &topic,
+            0,
+            1_000,
+            Bytes::from_static(b"index-query-safe-range-body"),
+            Some(key.clone()),
+        )
+        .await;
+
+        let result = store
+            .query_message(&topic, &key, 10, 0, i64::MAX)
+            .await
+            .expect("query result");
+
+        assert!(result.message_maped_list.is_empty());
+        assert!(!result.index_query_safe);
+        assert_eq!(result.index_safe_phyoffset, 0);
+        assert_eq!(result.index_confirm_phyoffset, i64::from(msg_size));
     }
 
     #[tokio::test]
