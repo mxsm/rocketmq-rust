@@ -20,6 +20,7 @@ use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::BufMut;
 use bytes::Bytes;
@@ -33,6 +34,7 @@ use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBroker
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_rust::ArcMut;
+use tokio::sync::Semaphore;
 use tracing::error;
 use tracing::info;
 
@@ -57,6 +59,23 @@ pub struct ConsumeQueueStore {
     inner: ArcMut<Inner>,
 }
 
+struct ConsumeQueueRecoveryResult {
+    topic: CheetahString,
+    queue_id: i32,
+    cq_type: CQType,
+    elapsed_ms: u128,
+    mapped_file_count_before: usize,
+    mapped_file_count_after: usize,
+    min_logic_offset_before: i64,
+    min_logic_offset_after: i64,
+    max_logic_offset_before: i64,
+    max_logic_offset_after: i64,
+    max_physic_offset_before: i64,
+    max_physic_offset_after: i64,
+    success: bool,
+    error: Option<String>,
+}
+
 struct Inner {
     pub(crate) message_store: Option<ArcMut<LocalFileMessageStore>>,
     pub(crate) message_store_config: Arc<MessageStoreConfig>,
@@ -72,6 +91,91 @@ impl Inner {
 }
 
 impl ConsumeQueueStore {
+    fn snapshot_consume_queues(&self) -> Vec<ArcConsumeQueue> {
+        self.inner
+            .consume_queue_table
+            .lock()
+            .values()
+            .flat_map(|queues| queues.values().cloned())
+            .collect()
+    }
+
+    async fn recover_one_consume_queue(consume_queue: ArcConsumeQueue) -> ConsumeQueueRecoveryResult {
+        let topic = consume_queue.get_topic().clone();
+        let queue_id = consume_queue.get_queue_id();
+        let cq_type = consume_queue.get_cq_type();
+        match crate::runtime::spawn_io("local-file-cq-recover", move || {
+            Self::recover_one_consume_queue_blocking(consume_queue)
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => ConsumeQueueRecoveryResult {
+                topic,
+                queue_id,
+                cq_type,
+                elapsed_ms: 0,
+                mapped_file_count_before: 0,
+                mapped_file_count_after: 0,
+                min_logic_offset_before: 0,
+                min_logic_offset_after: 0,
+                max_logic_offset_before: 0,
+                max_logic_offset_after: 0,
+                max_physic_offset_before: 0,
+                max_physic_offset_after: 0,
+                success: false,
+                error: Some(error.to_string()),
+            },
+        }
+    }
+
+    fn recover_one_consume_queue_blocking(mut consume_queue: ArcConsumeQueue) -> ConsumeQueueRecoveryResult {
+        let topic = consume_queue.get_topic().clone();
+        let queue_id = consume_queue.get_queue_id();
+        let cq_type = consume_queue.get_cq_type();
+        let mapped_file_count_before = consume_queue.get_mapped_file_count();
+        let min_logic_offset_before = consume_queue.get_min_logic_offset();
+        let max_logic_offset_before = consume_queue.get_max_offset_in_queue();
+        let max_physic_offset_before = consume_queue.get_max_physic_offset();
+
+        let started = Instant::now();
+        let recover_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume_queue.recover()));
+        let elapsed_ms = started.elapsed().as_millis();
+
+        let mapped_file_count_after = consume_queue.get_mapped_file_count();
+        let min_logic_offset_after = consume_queue.get_min_logic_offset();
+        let max_logic_offset_after = consume_queue.get_max_offset_in_queue();
+        let max_physic_offset_after = consume_queue.get_max_physic_offset();
+        let error = recover_result.err().map(Self::panic_payload_to_string);
+
+        ConsumeQueueRecoveryResult {
+            topic,
+            queue_id,
+            cq_type,
+            elapsed_ms,
+            mapped_file_count_before,
+            mapped_file_count_after,
+            min_logic_offset_before,
+            min_logic_offset_after,
+            max_logic_offset_before,
+            max_logic_offset_after,
+            max_physic_offset_before,
+            max_physic_offset_after,
+            success: error.is_none(),
+            error,
+        }
+    }
+
+    fn panic_payload_to_string(payload: Box<dyn Any + Send>) -> String {
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            (*message).to_string()
+        } else if let Some(message) = payload.downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "panic while recovering consume queue".to_string()
+        }
+    }
+
     pub fn clean_expired_sync(&self, min_commit_log_offset: i64) {
         // Collect queues to remove
         let mut queues_to_destroy = Vec::new();
@@ -226,49 +330,100 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     async fn recover_concurrently(&self) -> bool {
-        // Count the total number of consume queues
-        let mut count = 0;
-        for maps in self.inner.consume_queue_table.lock().values() {
-            count += maps.values().len();
+        self.recover_concurrently_with_parallelism(
+            self.inner
+                .message_store_config
+                .effective_local_file_consume_queue_recovery_parallelism(),
+        )
+        .await
+    }
+
+    async fn recover_concurrently_with_parallelism(&self, parallelism: usize) -> bool {
+        let queues = self.snapshot_consume_queues();
+        if queues.is_empty() {
+            info!("recover local file consume queue concurrently skipped, no consume queues loaded");
+            return true;
         }
 
-        // Create a vector to hold all futures
-        let mut futures = Vec::with_capacity(count);
-
-        // For each consume queue, create a future to recover it
-        for maps in self.inner.consume_queue_table.lock().values() {
-            for logic in maps.values() {
-                let mut logic_clone = logic.clone();
-                let future = async move {
-                    let mut ret = true;
-                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| logic_clone.recover())) {
-                        Ok(_) => {}
-                        Err(_) => {
-                            ret = false;
-                            error!(
-                                "Exception occurs while recover consume queue concurrently, topic={}, queueId={}",
-                                logic_clone.get_topic(),
-                                logic_clone.get_queue_id()
-                            );
-                        }
-                    }
-                    ret
-                };
-                futures.push(future);
+        let parallelism = parallelism.max(1).min(queues.len());
+        info!(
+            "recover local file consume queue concurrently start, queues={}, parallelism={}",
+            queues.len(),
+            parallelism
+        );
+        let semaphore = Arc::new(Semaphore::new(parallelism));
+        let futures = queues.into_iter().map(|consume_queue| {
+            let semaphore = semaphore.clone();
+            async move {
+                let topic = consume_queue.get_topic().clone();
+                let queue_id = consume_queue.get_queue_id();
+                let cq_type = consume_queue.get_cq_type();
+                match semaphore.acquire_owned().await {
+                    Ok(_permit) => Self::recover_one_consume_queue(consume_queue).await,
+                    Err(error) => ConsumeQueueRecoveryResult {
+                        topic,
+                        queue_id,
+                        cq_type,
+                        elapsed_ms: 0,
+                        mapped_file_count_before: 0,
+                        mapped_file_count_after: 0,
+                        min_logic_offset_before: 0,
+                        min_logic_offset_after: 0,
+                        max_logic_offset_before: 0,
+                        max_logic_offset_after: 0,
+                        max_physic_offset_before: 0,
+                        max_physic_offset_after: 0,
+                        success: false,
+                        error: Some(format!("failed to acquire recovery permit: {error}")),
+                    },
+                }
             }
-        }
+        });
 
-        // Wait for all futures to complete
         let results = join_all(futures).await;
-
-        // Check if any recovery failed
+        let mut success = true;
         for result in results {
-            if !result {
-                return false;
+            if result.success {
+                info!(
+                    "recover local file consume queue concurrently OK, topic={}, queueId={}, cqType={:?}, cost={}ms, \
+                     mappedFiles={} -> {}, minLogicOffset={} -> {}, maxLogicOffset={} -> {}, maxPhysicOffset={} -> {}",
+                    result.topic,
+                    result.queue_id,
+                    result.cq_type,
+                    result.elapsed_ms,
+                    result.mapped_file_count_before,
+                    result.mapped_file_count_after,
+                    result.min_logic_offset_before,
+                    result.min_logic_offset_after,
+                    result.max_logic_offset_before,
+                    result.max_logic_offset_after,
+                    result.max_physic_offset_before,
+                    result.max_physic_offset_after
+                );
+            } else {
+                success = false;
+                error!(
+                    "recover local file consume queue concurrently failed, topic={}, queueId={}, cqType={:?}, \
+                     cost={}ms, mappedFiles={} -> {}, minLogicOffset={} -> {}, maxLogicOffset={} -> {}, \
+                     maxPhysicOffset={} -> {}, error={}",
+                    result.topic,
+                    result.queue_id,
+                    result.cq_type,
+                    result.elapsed_ms,
+                    result.mapped_file_count_before,
+                    result.mapped_file_count_after,
+                    result.min_logic_offset_before,
+                    result.min_logic_offset_after,
+                    result.max_logic_offset_before,
+                    result.max_logic_offset_after,
+                    result.max_physic_offset_before,
+                    result.max_physic_offset_after,
+                    result.error.as_deref().unwrap_or("unknown")
+                );
             }
         }
 
-        true
+        success
     }
 
     fn shutdown(&self) -> bool {
@@ -809,7 +964,10 @@ impl ConsumeQueueStore {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use bytes::Buf;
     use cheetah_string::CheetahString;
@@ -823,7 +981,337 @@ mod tests {
 
     use super::*;
     use crate::base::store_enum::StoreType;
+    use crate::base::swappable::Swappable;
+    use crate::filter::MessageFilter;
     use crate::queue::batch_consume_queue;
+    use crate::queue::FileQueueLifeCycle;
+
+    struct TrackingQueueState {
+        recover_count: AtomicUsize,
+        active_recoveries: Arc<AtomicUsize>,
+        max_active_recoveries: Arc<AtomicUsize>,
+        delay: Duration,
+        panic_on_recover: bool,
+        recovered_max_physic_offset: i64,
+        recovered_max_offset_in_queue: i64,
+        recovered_min_logic_offset: i64,
+    }
+
+    impl TrackingQueueState {
+        fn new(
+            queue_id: i32,
+            delay: Duration,
+            panic_on_recover: bool,
+            active_recoveries: Arc<AtomicUsize>,
+            max_active_recoveries: Arc<AtomicUsize>,
+        ) -> Self {
+            Self {
+                recover_count: AtomicUsize::new(0),
+                active_recoveries,
+                max_active_recoveries,
+                delay,
+                panic_on_recover,
+                recovered_max_physic_offset: 1_000 + i64::from(queue_id),
+                recovered_max_offset_in_queue: 100 + i64::from(queue_id),
+                recovered_min_logic_offset: i64::from(queue_id),
+            }
+        }
+    }
+
+    struct ActiveRecoveryGuard {
+        state: Arc<TrackingQueueState>,
+    }
+
+    impl ActiveRecoveryGuard {
+        fn enter(state: Arc<TrackingQueueState>) -> Self {
+            let active = state.active_recoveries.fetch_add(1, Ordering::SeqCst) + 1;
+            state.max_active_recoveries.fetch_max(active, Ordering::SeqCst);
+            Self { state }
+        }
+    }
+
+    impl Drop for ActiveRecoveryGuard {
+        fn drop(&mut self) {
+            self.state.active_recoveries.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    struct TrackingConsumeQueue {
+        topic: CheetahString,
+        queue_id: i32,
+        mapped_file_count: usize,
+        max_physic_offset: i64,
+        max_offset_in_queue: i64,
+        min_logic_offset: i64,
+        state: Arc<TrackingQueueState>,
+    }
+
+    impl TrackingConsumeQueue {
+        fn new(topic: CheetahString, queue_id: i32, state: Arc<TrackingQueueState>) -> Self {
+            Self {
+                topic,
+                queue_id,
+                mapped_file_count: (queue_id as usize) + 1,
+                max_physic_offset: -1,
+                max_offset_in_queue: 0,
+                min_logic_offset: 0,
+                state,
+            }
+        }
+    }
+
+    impl Swappable for TrackingConsumeQueue {
+        fn swap_map(&self, _reserve_num: i32, _force_swap_interval_ms: i64, _normal_swap_interval_ms: i64) {}
+
+        fn clean_swapped_map(&self, _force_clean_swap_interval_ms: i64) {}
+    }
+
+    impl FileQueueLifeCycle for TrackingConsumeQueue {
+        fn load(&mut self) -> bool {
+            true
+        }
+
+        fn recover(&mut self) {
+            let _guard = ActiveRecoveryGuard::enter(self.state.clone());
+            if !self.state.delay.is_zero() {
+                std::thread::sleep(self.state.delay);
+            }
+            self.state.recover_count.fetch_add(1, Ordering::SeqCst);
+            if self.state.panic_on_recover {
+                panic!("tracking queue recovery failed");
+            }
+            self.max_physic_offset = self.state.recovered_max_physic_offset;
+            self.max_offset_in_queue = self.state.recovered_max_offset_in_queue;
+            self.min_logic_offset = self.state.recovered_min_logic_offset;
+        }
+
+        fn check_self(&self) {}
+
+        fn flush(&self, _flush_least_pages: i32) -> bool {
+            true
+        }
+
+        fn destroy(&mut self) {}
+
+        fn truncate_dirty_logic_files(&mut self, _max_commit_log_pos: i64) {}
+
+        fn delete_expired_file(&self, _min_commit_log_pos: i64) -> i32 {
+            0
+        }
+
+        fn roll_next_file(&self, next_begin_offset: i64) -> i64 {
+            next_begin_offset
+        }
+
+        fn is_first_file_available(&self) -> bool {
+            true
+        }
+
+        fn is_first_file_exist(&self) -> bool {
+            true
+        }
+    }
+
+    impl ConsumeQueueTrait for TrackingConsumeQueue {
+        fn get_topic(&self) -> &CheetahString {
+            &self.topic
+        }
+
+        fn get_queue_id(&self) -> i32 {
+            self.queue_id
+        }
+
+        fn iterate_from(&self, _start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
+            None
+        }
+
+        fn iterate_from_with_count(
+            &self,
+            _start_index: i64,
+            _count: i32,
+        ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
+            None
+        }
+
+        fn get(&self, _index: i64) -> Option<CqUnit> {
+            None
+        }
+
+        fn get_cq_unit_and_store_time(&self, _index: i64) -> Option<(CqUnit, i64)> {
+            None
+        }
+
+        fn get_earliest_unit_and_store_time(&self) -> Option<(CqUnit, i64)> {
+            None
+        }
+
+        fn get_earliest_unit(&self) -> Option<CqUnit> {
+            None
+        }
+
+        fn get_latest_unit(&self) -> Option<CqUnit> {
+            None
+        }
+
+        fn get_last_offset(&self) -> i64 {
+            self.max_physic_offset
+        }
+
+        fn get_min_offset_in_queue(&self) -> i64 {
+            self.min_logic_offset
+        }
+
+        fn get_max_offset_in_queue(&self) -> i64 {
+            self.max_offset_in_queue
+        }
+
+        fn get_message_total_in_queue(&self) -> i64 {
+            self.max_offset_in_queue.saturating_sub(self.min_logic_offset)
+        }
+
+        fn get_offset_in_queue_by_time(&self, _timestamp: i64) -> i64 {
+            0
+        }
+
+        fn get_offset_in_queue_by_time_with_boundary(&self, _timestamp: i64, _boundary_type: BoundaryType) -> i64 {
+            0
+        }
+
+        fn get_max_physic_offset(&self) -> i64 {
+            self.max_physic_offset
+        }
+
+        fn get_min_logic_offset(&self) -> i64 {
+            self.min_logic_offset
+        }
+
+        fn get_cq_type(&self) -> CQType {
+            CQType::SimpleCQ
+        }
+
+        fn get_total_size(&self) -> i64 {
+            (self.mapped_file_count * 1024) as i64
+        }
+
+        fn get_mapped_file_count(&self) -> usize {
+            self.mapped_file_count
+        }
+
+        fn get_unit_size(&self) -> i32 {
+            CQ_STORE_UNIT_SIZE
+        }
+
+        fn correct_min_offset(&self, _min_commit_log_offset: i64) {}
+
+        fn put_message_position_info_wrapper(&mut self, _request: &DispatchRequest) {}
+
+        fn assign_queue_offset(&self, _queue_offset_assigner: &QueueOffsetOperator, _msg: &mut MessageExtBrokerInner) {}
+
+        fn increase_queue_offset(
+            &self,
+            _queue_offset_assigner: &QueueOffsetOperator,
+            _msg: &MessageExtBrokerInner,
+            _message_num: i16,
+        ) {
+        }
+
+        fn estimate_message_count(&self, _from: i64, _to: i64, _filter: &dyn MessageFilter) -> i64 {
+            0
+        }
+    }
+
+    fn tracking_store(
+        queue_count: i32,
+        delay: Duration,
+        panic_queue_id: Option<i32>,
+    ) -> (ConsumeQueueStore, Vec<Arc<TrackingQueueState>>) {
+        let store = ConsumeQueueStore::new(
+            Arc::new(MessageStoreConfig::default()),
+            Arc::new(BrokerConfig::default()),
+        );
+        let mut states = Vec::new();
+        let active_recoveries = Arc::new(AtomicUsize::new(0));
+        let max_active_recoveries = Arc::new(AtomicUsize::new(0));
+        for queue_id in 0..queue_count {
+            let topic = CheetahString::from_string(format!("TrackingTopic{}", queue_id % 2));
+            let state = Arc::new(TrackingQueueState::new(
+                queue_id,
+                delay,
+                panic_queue_id == Some(queue_id),
+                active_recoveries.clone(),
+                max_active_recoveries.clone(),
+            ));
+            let queue: Box<dyn ConsumeQueueTrait> =
+                Box::new(TrackingConsumeQueue::new(topic.clone(), queue_id, state.clone()));
+            store.put_consume_queue(topic, queue_id, ArcMut::new(queue));
+            states.push(state);
+        }
+        (store, states)
+    }
+
+    fn recovery_offsets(store: &ConsumeQueueStore) -> Vec<(String, i32, i64, i64, i64)> {
+        let mut offsets = store
+            .inner
+            .consume_queue_table
+            .lock()
+            .iter()
+            .flat_map(|(topic, queues)| {
+                queues.values().map(|queue| {
+                    (
+                        topic.to_string(),
+                        queue.get_queue_id(),
+                        queue.get_min_logic_offset(),
+                        queue.get_max_offset_in_queue(),
+                        queue.get_max_physic_offset(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        offsets.sort();
+        offsets
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recover_concurrently_with_parallelism_bounds_topic_queue_recovery() {
+        let (store, states) = tracking_store(4, Duration::from_millis(30), None);
+
+        assert!(store.recover_concurrently_with_parallelism(2).await);
+
+        let recovered = states
+            .iter()
+            .map(|state| state.recover_count.load(Ordering::SeqCst))
+            .sum::<usize>();
+        let max_active = states
+            .iter()
+            .map(|state| state.max_active_recoveries.load(Ordering::SeqCst))
+            .max()
+            .unwrap_or_default();
+        assert_eq!(recovered, 4);
+        assert!(
+            max_active <= 2,
+            "max active recoveries should be bounded by parallelism"
+        );
+        assert!(max_active > 1, "recovery should run more than one queue concurrently");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recover_concurrently_matches_serial_queue_offsets() {
+        let (serial_store, _) = tracking_store(3, Duration::ZERO, None);
+        let (concurrent_store, _) = tracking_store(3, Duration::ZERO, None);
+
+        serial_store.recover().await;
+        assert!(concurrent_store.recover_concurrently_with_parallelism(2).await);
+
+        assert_eq!(recovery_offsets(&serial_store), recovery_offsets(&concurrent_store));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recover_concurrently_returns_false_when_queue_recovery_panics() {
+        let (store, states) = tracking_store(3, Duration::ZERO, Some(1));
+
+        assert!(!store.recover_concurrently_with_parallelism(2).await);
+        assert_eq!(states[1].recover_count.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn load_consume_queues_returns_false_when_topic_queue_type_mismatches_directory() {
