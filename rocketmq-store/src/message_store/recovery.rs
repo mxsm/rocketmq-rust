@@ -145,6 +145,7 @@ pub struct RecoveryOffsets {
     pub commit_log_max_offset: Option<i64>,
     pub confirm_offset: Option<i64>,
     pub max_consume_queue_physical_offset: Option<i64>,
+    pub index_safe_offset: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -214,6 +215,10 @@ impl RecoveryPlan {
 
     pub fn set_max_consume_queue_physical_offset(&mut self, max_offset: i64) {
         self.offsets.max_consume_queue_physical_offset = Some(max_offset);
+    }
+
+    pub fn set_index_safe_offset(&mut self, index_safe_offset: i64) {
+        self.offsets.index_safe_offset = Some(index_safe_offset);
     }
 
     pub fn set_consume_queue_recovery_concurrency(&mut self, concurrency: ConsumeQueueRecoveryConcurrency) {
@@ -444,6 +449,7 @@ mod tests {
         plan.set_dispatch_recovery_offset(1024);
         plan.set_commit_log_offsets(512, 4096, 3072);
         plan.set_max_consume_queue_physical_offset(2048);
+        plan.set_index_safe_offset(1536);
 
         assert_eq!(plan.dispatch_recovery_offset, Some(1024));
         assert_eq!(plan.offsets.dispatch_recovery_offset, Some(1024));
@@ -451,6 +457,7 @@ mod tests {
         assert_eq!(plan.offsets.commit_log_max_offset, Some(4096));
         assert_eq!(plan.offsets.confirm_offset, Some(3072));
         assert_eq!(plan.offsets.max_consume_queue_physical_offset, Some(2048));
+        assert_eq!(plan.offsets.index_safe_offset, Some(1536));
         assert_eq!(plan.scan_range.start_offset, Some(1024));
         assert_eq!(plan.scan_range.end_offset, Some(4096));
         assert_eq!(plan.scan_range.file_count_limit, None);
