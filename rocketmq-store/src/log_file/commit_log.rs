@@ -88,6 +88,7 @@ use crate::log_file::commit_log_loader::RecoveryMmapAdvice;
 use crate::log_file::flush_manager_impl::default_flush_manager::DefaultFlushManager;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
 use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
 use crate::message_store::local_file_message_store::CommitLogDispatcherDefault;
@@ -546,7 +547,8 @@ impl CommitLog {
             enable_parallel,
             recovery_mmap_advice,
             recovery_file_prefetch,
-        );
+        )
+        .with_lazy_mmap(self.effective_lazy_mmap_enable());
 
         match loader.load_optimized() {
             Ok((mapped_files, stats)) => {
@@ -1965,6 +1967,11 @@ impl CommitLog {
     }
 
     #[inline]
+    pub fn lazy_mmap_stats(&self) -> LazyMmapStats {
+        self.mapped_file_queue.lazy_mmap_stats()
+    }
+
+    #[inline]
     pub fn load_statistics(&self) -> LoadStatistics {
         self.last_load_statistics.lock().clone()
     }
@@ -1989,6 +1996,11 @@ impl CommitLog {
         }
 
         RecoveryFilePrefetch::Sequential
+    }
+
+    fn effective_lazy_mmap_enable(&self) -> bool {
+        let platform_capability = crate::platform::current_store_platform_capability();
+        self.message_store_config.store_lazy_mmap_enable && platform_capability.optimization.lazy_mmap_supported
     }
 
     #[cfg(test)]

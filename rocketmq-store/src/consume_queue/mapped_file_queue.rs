@@ -32,6 +32,7 @@ use tracing::warn;
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
@@ -377,6 +378,15 @@ impl MappedFileQueue {
             stats.bytes = stats.bytes.saturating_add(metrics.warm_bytes());
             stats.total_millis = stats.total_millis.saturating_add(metrics.total_warm_millis());
             stats.last_millis = metrics.last_warm_millis();
+        }
+        stats
+    }
+
+    pub fn lazy_mmap_stats(&self) -> LazyMmapStats {
+        let mapped_files = self.mapped_files.load();
+        let mut stats = LazyMmapStats::default();
+        for mapped_file in mapped_files.iter() {
+            stats.saturating_add_assign(mapped_file.lazy_mmap_stats());
         }
         stats
     }

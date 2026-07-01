@@ -25,12 +25,14 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use memmap2::MmapMut;
+use parking_lot::Mutex;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::current_millis;
@@ -95,6 +97,29 @@ struct LinuxStorageDegradationEvent {
     count: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LazyMmapStats {
+    pub eligible_files: u64,
+    pub mapped_files: u64,
+    pub map_operations: u64,
+    pub map_failures: u64,
+    pub total_millis: u64,
+    pub last_millis: u64,
+}
+
+impl LazyMmapStats {
+    pub fn saturating_add_assign(&mut self, other: Self) {
+        self.eligible_files = self.eligible_files.saturating_add(other.eligible_files);
+        self.mapped_files = self.mapped_files.saturating_add(other.mapped_files);
+        self.map_operations = self.map_operations.saturating_add(other.map_operations);
+        self.map_failures = self.map_failures.saturating_add(other.map_failures);
+        self.total_millis = self.total_millis.saturating_add(other.total_millis);
+        if other.last_millis != 0 {
+            self.last_millis = other.last_millis;
+        }
+    }
+}
+
 impl LinuxStorageDegradationEvent {
     fn new(operation: &'static str, reason: &'static str, errno: i32) -> Self {
         Self {
@@ -142,7 +167,13 @@ fn emit_linux_storage_degradation_observability(event: LinuxStorageDegradationEv
 pub struct DefaultMappedFile {
     reference_resource: ReferenceResourceCounter,
     file: File,
-    mmapped_file: ArcMut<MmapMut>,
+    mmapped_file: OnceLock<ArcMut<MmapMut>>,
+    mmap_init_lock: Mutex<()>,
+    lazy_mmap_enabled: bool,
+    lazy_mmap_operations: AtomicU64,
+    lazy_mmap_failures: AtomicU64,
+    lazy_mmap_total_millis: AtomicU64,
+    lazy_mmap_last_millis: AtomicU64,
     transient_store_pool: Option<TransientStorePool>,
     file_name: CheetahString,
     file_from_offset: u64,
@@ -197,13 +228,18 @@ impl DefaultMappedFile {
     }
 
     pub fn try_new(file_name: CheetahString, file_size: u64) -> io::Result<Self> {
-        Self::try_new_inner(file_name, file_size, None)
+        Self::try_new_inner(file_name, file_size, None, false)
+    }
+
+    pub fn try_new_lazy_read_only(file_name: CheetahString, file_size: u64) -> io::Result<Self> {
+        Self::try_new_inner(file_name, file_size, None, true)
     }
 
     fn try_new_inner(
         file_name: CheetahString,
         file_size: u64,
         transient_store_pool: Option<TransientStorePool>,
+        lazy_mmap_enabled: bool,
     ) -> io::Result<Self> {
         let path_buf = PathBuf::from(file_name.as_str());
         let dir = path_buf
@@ -239,11 +275,22 @@ impl DefaultMappedFile {
             }
         }
 
-        let mmap = unsafe { MmapMut::map_mut(&file)? };
+        let mmapped_file = OnceLock::new();
+        if !lazy_mmap_enabled {
+            let mmap = unsafe { MmapMut::map_mut(&file)? };
+            let _ = mmapped_file.set(ArcMut::new(mmap));
+        }
+
         Ok(Self {
             reference_resource: ReferenceResourceCounter::new(),
             file,
-            mmapped_file: ArcMut::new(mmap),
+            mmapped_file,
+            mmap_init_lock: Mutex::new(()),
+            lazy_mmap_enabled,
+            lazy_mmap_operations: AtomicU64::new(0),
+            lazy_mmap_failures: AtomicU64::new(0),
+            lazy_mmap_total_millis: AtomicU64::new(0),
+            lazy_mmap_last_millis: AtomicU64::new(0),
             file_name,
             file_from_offset,
             mapped_byte_buffer: None,
@@ -262,6 +309,62 @@ impl DefaultMappedFile {
             metrics: Some(MappedFileMetrics::new()),
             flush_strategy: FlushStrategy::Async,
         })
+    }
+
+    #[inline]
+    pub fn is_lazy_mmap_enabled(&self) -> bool {
+        self.lazy_mmap_enabled
+    }
+
+    #[inline]
+    pub fn is_mapped(&self) -> bool {
+        self.mmapped_file.get().is_some()
+    }
+
+    pub fn lazy_mmap_stats(&self) -> LazyMmapStats {
+        LazyMmapStats {
+            eligible_files: u64::from(self.lazy_mmap_enabled),
+            mapped_files: u64::from(self.lazy_mmap_enabled && self.is_mapped()),
+            map_operations: self.lazy_mmap_operations.load(Ordering::Acquire),
+            map_failures: self.lazy_mmap_failures.load(Ordering::Acquire),
+            total_millis: self.lazy_mmap_total_millis.load(Ordering::Acquire),
+            last_millis: self.lazy_mmap_last_millis.load(Ordering::Acquire),
+        }
+    }
+
+    fn try_get_mapped_file_ref(&self) -> io::Result<&ArcMut<MmapMut>> {
+        if let Some(mapped_file) = self.mmapped_file.get() {
+            return Ok(mapped_file);
+        }
+
+        let _guard = self.mmap_init_lock.lock();
+        if let Some(mapped_file) = self.mmapped_file.get() {
+            return Ok(mapped_file);
+        }
+
+        let start = Instant::now();
+        match unsafe { MmapMut::map_mut(&self.file) } {
+            Ok(mmap) => {
+                let elapsed_millis = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+                if self.lazy_mmap_enabled {
+                    self.lazy_mmap_operations.fetch_add(1, Ordering::AcqRel);
+                    self.lazy_mmap_total_millis.fetch_add(elapsed_millis, Ordering::AcqRel);
+                    self.lazy_mmap_last_millis.store(elapsed_millis, Ordering::Release);
+                }
+                let _ = self.mmapped_file.set(ArcMut::new(mmap));
+                Ok(self.mmapped_file.get().expect("mapped file must be initialized"))
+            }
+            Err(error) => {
+                if self.lazy_mmap_enabled {
+                    self.lazy_mmap_failures.fetch_add(1, Ordering::AcqRel);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn try_get_mapped_file_arcmut(&self) -> io::Result<ArcMut<MmapMut>> {
+        self.try_get_mapped_file_ref().cloned()
     }
 
     /// Extracts the file offset from the given file name.
@@ -343,7 +446,7 @@ impl DefaultMappedFile {
         file_size: u64,
         transient_store_pool: TransientStorePool,
     ) -> io::Result<Self> {
-        Self::try_new_inner(file_name, file_size, Some(transient_store_pool))
+        Self::try_new_inner(file_name, file_size, Some(transient_store_pool), false)
     }
 
     #[inline]
@@ -666,7 +769,7 @@ impl MappedFile for DefaultMappedFile {
                     let flush_result = if flush_size > 0 && flush_size < (self.file_size as i32) / 2 {
                         self.flush_range(flushed_pos as usize, value as usize)
                     } else {
-                        if let Err(e) = self.mmapped_file.flush() {
+                        if let Err(e) = self.get_mapped_file().flush() {
                             error!("Error occurred when force data to disk: {:?}", e);
                             0
                         } else {
@@ -720,7 +823,7 @@ impl MappedFile for DefaultMappedFile {
                         .unwrap_or_else(|| {
                             // Fallback to standard method
                             Bytes::from_owner(MmapRegionSlice::new(
-                                self.mmapped_file.clone(),
+                                self.get_mapped_file_arcmut(),
                                 pos as usize,
                                 size as usize,
                             ))
@@ -728,7 +831,7 @@ impl MappedFile for DefaultMappedFile {
                 } else {
                     // Small reads: use standard method
                     Bytes::from_owner(MmapRegionSlice::new(
-                        self.mmapped_file.clone(),
+                        self.get_mapped_file_arcmut(),
                         pos as usize,
                         size as usize,
                     ))
@@ -769,7 +872,7 @@ impl MappedFile for DefaultMappedFile {
             metrics.record_read(self.file_size as usize, false);
         }
 
-        self.mmapped_file.as_ref()
+        self.get_mapped_file()
     }
 
     #[inline]
@@ -781,7 +884,7 @@ impl MappedFile for DefaultMappedFile {
             metrics.record_read(self.file_size as usize, false);
         }
 
-        self.mmapped_file.as_ref()
+        self.get_mapped_file()
     }
 
     #[inline]
@@ -806,7 +909,7 @@ impl MappedFile for DefaultMappedFile {
         let read_end_position = pos + size;
         if read_end_position <= read_position as usize {
             if MappedFile::hold(self) {
-                let buffer = BytesMut::from(&self.mmapped_file.as_ref()[pos..read_end_position]);
+                let buffer = BytesMut::from(&self.get_mapped_file()[pos..read_end_position]);
                 MappedFile::release(self);
                 Some(buffer.freeze())
             } else {
@@ -912,14 +1015,14 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn mlock(&self) {
-        if let Err(error) = lock_memory(self.mmapped_file.as_ptr(), self.file_size as usize) {
+        if let Err(error) = lock_memory(self.get_mapped_file().as_ptr(), self.file_size as usize) {
             warn!("Failed to mlock mapped file {}: {}", self.file_name, error);
         }
     }
 
     #[inline]
     fn munlock(&self) {
-        if let Err(error) = unlock_memory(self.mmapped_file.as_ptr(), self.file_size as usize) {
+        if let Err(error) = unlock_memory(self.get_mapped_file().as_ptr(), self.file_size as usize) {
             warn!("Failed to munlock mapped file {}: {}", self.file_name, error);
         }
     }
@@ -1004,7 +1107,7 @@ impl MappedFile for DefaultMappedFile {
 
         let position = position as usize;
         let page_size = get_page_size().max(1);
-        let base_addr = self.mmapped_file.as_ptr() as usize;
+        let base_addr = self.get_mapped_file().as_ptr() as usize;
         let start_addr = base_addr.saturating_add(position);
         let aligned_start = start_addr / page_size * page_size;
         let page_offset = start_addr - aligned_start;
@@ -1097,14 +1200,14 @@ impl MappedFile for DefaultMappedFile {
                 self.get_bytes_zero_copy(pos as usize, size as usize)
                     .unwrap_or_else(|| {
                         Bytes::from_owner(MmapRegionSlice::new(
-                            self.mmapped_file.clone(),
+                            self.get_mapped_file_arcmut(),
                             pos as usize,
                             size as usize,
                         ))
                     })
             } else {
                 Bytes::from_owner(MmapRegionSlice::new(
-                    self.mmapped_file.clone(),
+                    self.get_mapped_file_arcmut(),
                     pos as usize,
                     size as usize,
                 ))
@@ -1174,17 +1277,22 @@ impl DefaultMappedFile {
     #[inline]
     #[allow(clippy::mut_from_ref)]
     pub fn get_mapped_file_mut(&self) -> &mut MmapMut {
-        self.mmapped_file.mut_from_ref()
+        self.try_get_mapped_file_ref()
+            .expect("mapped file initialization failed")
+            .mut_from_ref()
     }
 
     #[inline]
     pub fn get_mapped_file(&self) -> &MmapMut {
-        self.mmapped_file.as_ref()
+        self.try_get_mapped_file_ref()
+            .expect("mapped file initialization failed")
+            .as_ref()
     }
 
     #[inline]
     pub fn get_mapped_file_arcmut(&self) -> ArcMut<MmapMut> {
-        self.mmapped_file.clone()
+        self.try_get_mapped_file_arcmut()
+            .expect("mapped file initialization failed")
     }
 
     fn touch_mapped_page(mapped_ptr: *mut u8, offset: usize) -> io::Result<()> {
@@ -1285,7 +1393,7 @@ impl DefaultMappedFile {
             }
         }
 
-        if let Err(error) = advise(self.mmapped_file.as_ptr(), file_size, MADV_WILLNEED) {
+        if let Err(error) = advise(self.get_mapped_file().as_ptr(), file_size, MADV_WILLNEED) {
             record_degradation(LinuxStorageDegradationEvent::new(
                 LINUX_STORAGE_OP_MADVISE,
                 LINUX_STORAGE_REASON_FAILED,
@@ -1363,7 +1471,7 @@ impl DefaultMappedFile {
         }
 
         let offset = usize::try_from(offset).ok()?;
-        Some((self.mmapped_file.as_ptr().wrapping_add(offset), len))
+        Some((self.get_mapped_file().as_ptr().wrapping_add(offset), len))
     }
 
     /// Gets the start timestamp of the mapped file.
@@ -1575,7 +1683,7 @@ impl DefaultMappedFile {
         // This uses MmapRegionSlice which implements Deref<Target=[u8]> and keeps
         // a reference to the mmap, allowing Bytes to share ownership
         Some(Bytes::from_owner(MmapRegionSlice::new(
-            self.mmapped_file.clone(),
+            self.get_mapped_file_arcmut(),
             pos,
             size,
         )))
@@ -1687,14 +1795,11 @@ impl DefaultMappedFile {
             self.committed_position.store(end as i32, Ordering::Release);
         }
 
-        let result = {
-            let mmap = self.mmapped_file.deref();
-            match mmap.flush_range(start, end - start) {
-                Ok(_) => (end - start) as i32,
-                Err(e) => {
-                    error!("Flush range failed: {:?}", e);
-                    0
-                }
+        let result = match self.get_mapped_file().flush_range(start, end - start) {
+            Ok(_) => (end - start) as i32,
+            Err(e) => {
+                error!("Flush range failed: {:?}", e);
+                0
             }
         };
 
@@ -1743,6 +1848,15 @@ mod tests {
         let file_name = CheetahString::from(file_path.to_str().unwrap());
 
         let mapped_file = DefaultMappedFile::new(file_name, 4096);
+        (temp_dir, mapped_file)
+    }
+
+    fn create_lazy_test_file() -> (TempDir, DefaultMappedFile) {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let file_name = CheetahString::from(file_path.to_str().unwrap());
+
+        let mapped_file = DefaultMappedFile::try_new_lazy_read_only(file_name, 4096).unwrap();
         (temp_dir, mapped_file)
     }
 
@@ -1812,6 +1926,45 @@ mod tests {
 
         let data = data.unwrap();
         assert_eq!(data.len(), 100);
+    }
+
+    #[test]
+    fn lazy_mmap_defers_mapping_until_first_access() {
+        let (_temp_dir, mapped_file) = create_lazy_test_file();
+
+        assert!(mapped_file.is_lazy_mmap_enabled());
+        assert!(!mapped_file.is_mapped());
+        assert_eq!(
+            mapped_file.lazy_mmap_stats(),
+            LazyMmapStats {
+                eligible_files: 1,
+                mapped_files: 0,
+                map_operations: 0,
+                map_failures: 0,
+                total_millis: 0,
+                last_millis: 0,
+            }
+        );
+
+        assert_eq!(mapped_file.get_mapped_file().len(), 4096);
+
+        let stats = mapped_file.lazy_mmap_stats();
+        assert!(mapped_file.is_mapped());
+        assert_eq!(stats.eligible_files, 1);
+        assert_eq!(stats.mapped_files, 1);
+        assert_eq!(stats.map_operations, 1);
+        assert_eq!(stats.map_failures, 0);
+    }
+
+    #[test]
+    fn lazy_mmap_destroy_before_first_access_does_not_force_mapping() {
+        let (temp_dir, mapped_file) = create_lazy_test_file();
+        let file_path = temp_dir.path().join("00000000000000000000");
+
+        assert!(!mapped_file.is_mapped());
+        assert!(mapped_file.destroy(0));
+        assert!(!file_path.exists());
+        assert_eq!(mapped_file.lazy_mmap_stats().map_operations, 0);
     }
 
     #[test]
