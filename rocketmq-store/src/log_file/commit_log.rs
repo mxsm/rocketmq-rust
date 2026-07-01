@@ -74,6 +74,7 @@ use crate::base::swappable::Swappable;
 use crate::base::topic_queue_lock::TopicQueueLock;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::LinuxMemoryLockMode;
+use crate::config::message_store_config::LinuxRecoveryFadviseMode;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::consume_queue::mapped_file_queue::MappedFileWarmupStats;
@@ -81,6 +82,8 @@ use crate::ha::ha_service::HAService;
 use crate::log_file::cold_data_check_service::ColdDataCheckService;
 // Import the optimized loader module
 use crate::log_file::commit_log_loader::CommitLogLoader;
+use crate::log_file::commit_log_loader::LoadStatistics;
+use crate::log_file::commit_log_loader::RecoveryMmapAdvice;
 use crate::log_file::flush_manager_impl::default_flush_manager::DefaultFlushManager;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
@@ -292,6 +295,7 @@ pub struct CommitLog {
     begin_time_in_lock: Arc<AtomicU64>,
     cold_data_check_service: Arc<ColdDataCheckService>,
     active_memory_lock: ParkingMutex<CommitLogActiveMemoryLock>,
+    last_load_statistics: ParkingMutex<LoadStatistics>,
 }
 
 impl CommitLog {
@@ -343,6 +347,7 @@ impl CommitLog {
                 message_store_config.linux_memory_lock_warn_only,
                 memory_lock_budget_bytes,
             )),
+            last_load_statistics: ParkingMutex::new(LoadStatistics::default()),
         }
     }
 
@@ -532,10 +537,17 @@ impl CommitLog {
         // Use parallel mode if we expect more than 4 files (empirically optimal threshold)
         let enable_parallel = cfg!(feature = "fast-load") || !cfg!(feature = "safe-load");
 
-        let loader = CommitLogLoader::new(store_path, mapped_file_size, enable_parallel);
+        let recovery_mmap_advice = self.recovery_mmap_advice();
+        let loader = CommitLogLoader::new_with_recovery_mmap_advice(
+            store_path,
+            mapped_file_size,
+            enable_parallel,
+            recovery_mmap_advice,
+        );
 
         match loader.load_optimized() {
             Ok((mapped_files, stats)) => {
+                *self.last_load_statistics.lock() = stats.clone();
                 // Replace the mapped_files vec in mapped_file_queue
                 // This is safe because we're in &mut self
                 {
@@ -1949,6 +1961,23 @@ impl CommitLog {
         self.mapped_file_queue.warmup_stats()
     }
 
+    #[inline]
+    pub fn load_statistics(&self) -> LoadStatistics {
+        self.last_load_statistics.lock().clone()
+    }
+
+    fn recovery_mmap_advice(&self) -> RecoveryMmapAdvice {
+        let platform_capability = crate::platform::current_store_platform_capability();
+        if !platform_capability.optimization.mmap_advice_supported {
+            return RecoveryMmapAdvice::Disabled;
+        }
+
+        match self.message_store_config.effective_linux_recovery_fadvise() {
+            LinuxRecoveryFadviseMode::Disabled => RecoveryMmapAdvice::Disabled,
+            LinuxRecoveryFadviseMode::Sequential => RecoveryMmapAdvice::Sequential,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn last_mapped_file_for_testing(&self) -> Option<Arc<DefaultMappedFile>> {
         self.mapped_file_queue.get_last_mapped_file()
@@ -2224,6 +2253,10 @@ impl CommitLog {
     }
 
     pub fn scan_file_and_set_read_mode(&self, read_ahead_mode: i32) -> usize {
+        if !self.message_store_config.store_io_hint_enable {
+            return 0;
+        }
+
         if read_ahead_mode != MADV_NORMAL && read_ahead_mode != MADV_RANDOM {
             return 0;
         }
