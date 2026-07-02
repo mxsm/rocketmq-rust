@@ -201,9 +201,16 @@ cargo clippy -p rocketmq-store --all-targets --all-features -- -D warnings
 
 ```bash
 cargo bench -p rocketmq-store --bench commit_log_performance
+cargo bench -p rocketmq-store --bench commitlog_recovery_bench -- commitlog_recovery/phase5_platform_acceptance
 cargo bench -p rocketmq-store --bench mapped_buffer_bench
 cargo bench -p rocketmq-store --features rocksdb_store --bench rocksdb_store
 ```
+
+Phase 5 platform optimization acceptance writes
+`target/recovery-baseline/phase5/commitlog-recovery-phase5-platform-acceptance.json`.
+The artifact records platform-specific I/O hint and lazy mmap conclusions, keeps
+unmeasured or low-benefit paths disabled by default, and lists the recovery
+correctness commands required before enabling platform-specific optimizations.
 
 当 store API、恢复行为、feature-gated 存储路径或 broker-facing 语义发生变化时，应运行更大范围的工作区验证。
 

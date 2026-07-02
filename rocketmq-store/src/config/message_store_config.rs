@@ -189,7 +189,7 @@ mod defaults {
     }
 
     pub fn store_io_hint_enable() -> bool {
-        true
+        false
     }
 
     pub fn flush_interval_consume_queue() -> usize {
@@ -1334,7 +1334,7 @@ impl Default for MessageStoreConfig {
             flush_delay_offset_interval: 10_000,
             clean_file_forcibly_enable: true,
             warm_mapped_file_enable: false,
-            store_io_hint_enable: true,
+            store_io_hint_enable: false,
             store_lazy_mmap_enable: false,
             linux_storage_optimization_enable: false,
             linux_storage_profile: LinuxStorageProfile::default(),
@@ -2529,11 +2529,11 @@ mod tests {
     fn platform_optimization_switches_keep_compatible_defaults() {
         let config = MessageStoreConfig::default();
 
-        assert!(config.store_io_hint_enable);
+        assert!(!config.store_io_hint_enable);
         assert!(!config.store_lazy_mmap_enable);
 
         let properties = config.get_properties();
-        assert_eq!(properties["storeIoHintEnable"], "true");
+        assert_eq!(properties["storeIoHintEnable"], "false");
         assert_eq!(properties["storeLazyMmapEnable"], "false");
     }
 
@@ -2679,7 +2679,7 @@ mod tests {
         );
         assert_eq!(
             MessageStoreConfig::default().effective_linux_recovery_fadvise(),
-            LinuxRecoveryFadviseMode::Sequential
+            LinuxRecoveryFadviseMode::Disabled
         );
     }
 

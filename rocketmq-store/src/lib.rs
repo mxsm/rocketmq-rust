@@ -708,6 +708,196 @@ pub mod bench_support {
         ]
     }
 
+    pub const PHASE5_PLATFORM_ACCEPTANCE_MIN_BENEFIT_PERCENT: f64 = 5.0;
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct Phase5PlatformDefaultPolicy {
+        pub min_benefit_percent: f64,
+        pub require_low_variance: bool,
+        pub keep_unmeasured_disabled: bool,
+        pub store_io_hint_enable_default: bool,
+        pub store_lazy_mmap_enable_default: bool,
+        pub rollout_rule: &'static str,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct Phase5CurrentPlatform {
+        pub os: &'static str,
+        pub arch: &'static str,
+        pub io_hint_branch: &'static str,
+        pub mmap_advice_supported: bool,
+        pub file_prefetch_supported: bool,
+        pub lazy_mmap_supported: bool,
+        pub store_io_hint_enable_default: bool,
+        pub store_lazy_mmap_enable_default: bool,
+        pub effective_linux_recovery_fadvise_default: &'static str,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct Phase5PlatformAcceptanceScenario {
+        pub id: &'static str,
+        pub platform: &'static str,
+        pub storage_medium: &'static str,
+        pub page_cache_state: &'static str,
+        pub optimization_paths: Vec<&'static str>,
+        pub benchmark_scope: &'static str,
+        pub measured_benefit_percent: Option<f64>,
+        pub high_variance: bool,
+        pub default_enabled: bool,
+        pub conclusion: &'static str,
+        pub not_applicable_reason: Option<&'static str>,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct Phase5PlatformOptimizationAcceptanceReport {
+        pub default_policy: Phase5PlatformDefaultPolicy,
+        pub current_platform: Phase5CurrentPlatform,
+        pub recovery_correctness_commands: Vec<&'static str>,
+        pub scenarios: Vec<Phase5PlatformAcceptanceScenario>,
+    }
+
+    pub fn phase5_platform_optimization_default_enabled(
+        measured_benefit_percent: Option<f64>,
+        high_variance: bool,
+    ) -> bool {
+        measured_benefit_percent
+            .map(|benefit| benefit >= PHASE5_PLATFORM_ACCEPTANCE_MIN_BENEFIT_PERCENT && !high_variance)
+            .unwrap_or(false)
+    }
+
+    pub fn phase5_platform_optimization_acceptance_report() -> Phase5PlatformOptimizationAcceptanceReport {
+        let config = MessageStoreConfig::default();
+        let capability = crate::platform::current_store_platform_capability();
+        let default_policy = Phase5PlatformDefaultPolicy {
+            min_benefit_percent: PHASE5_PLATFORM_ACCEPTANCE_MIN_BENEFIT_PERCENT,
+            require_low_variance: true,
+            keep_unmeasured_disabled: true,
+            store_io_hint_enable_default: config.store_io_hint_enable,
+            store_lazy_mmap_enable_default: config.store_lazy_mmap_enable,
+            rollout_rule: "Enable per platform only after reproducible P50/P95/P99 recovery benchmarks show at least \
+                           5% stable benefit and recovery correctness stays unchanged.",
+        };
+        let current_platform = Phase5CurrentPlatform {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            io_hint_branch: capability.optimization.io_hint_branch.as_str(),
+            mmap_advice_supported: capability.optimization.mmap_advice_supported,
+            file_prefetch_supported: capability.optimization.file_prefetch_supported,
+            lazy_mmap_supported: capability.optimization.lazy_mmap_supported,
+            store_io_hint_enable_default: config.store_io_hint_enable,
+            store_lazy_mmap_enable_default: config.store_lazy_mmap_enable,
+            effective_linux_recovery_fadvise_default: config.effective_linux_recovery_fadvise().as_str(),
+        };
+
+        let scenario_specs = [
+            (
+                "linux_cold_boot_nvme",
+                "linux",
+                "nvme",
+                "cold_boot",
+                vec!["mmap_advice", "lazy_mmap"],
+                "Run on Linux with cold page cache and NVMe-backed CommitLog files.",
+                None,
+                false,
+                "No global benefit claim until target hardware benchmark artifact is attached.",
+                None,
+            ),
+            (
+                "linux_hot_page_cache",
+                "linux",
+                "nvme_or_ssd",
+                "hot_page_cache",
+                vec!["mmap_advice", "lazy_mmap"],
+                "Run after priming page cache to detect low-benefit hot-cache behavior.",
+                Some(0.0),
+                false,
+                "Hot page cache is expected to stay below the 5% gate; keep defaults disabled.",
+                None,
+            ),
+            (
+                "linux_general_ssd_cold_boot",
+                "linux",
+                "general_ssd",
+                "cold_boot",
+                vec!["mmap_advice", "lazy_mmap"],
+                "Run on non-NVMe SSD to avoid projecting NVMe results to common SSD deployments.",
+                None,
+                false,
+                "Requires separate SSD artifact; do not reuse NVMe conclusion.",
+                None,
+            ),
+            (
+                "windows_local_disk",
+                "windows",
+                "local_disk",
+                "cold_or_warm_cache",
+                vec!["prefetch_virtual_memory", "lazy_mmap"],
+                "Run on Windows local disk because PrefetchVirtualMemory behavior is platform-specific.",
+                None,
+                false,
+                "Windows benefit must be reported independently from Linux mmap advice.",
+                None,
+            ),
+            (
+                "unsupported_platform",
+                "other",
+                "not_applicable",
+                "not_applicable",
+                Vec::new(),
+                "Unsupported platforms must record N/A instead of inheriting Linux or Windows results.",
+                None,
+                false,
+                "No platform optimization path is enabled by default.",
+                Some("No mmap advice, PrefetchVirtualMemory, or lazy mmap capability is advertised."),
+            ),
+        ];
+        let scenarios = scenario_specs
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    platform,
+                    storage_medium,
+                    page_cache_state,
+                    optimization_paths,
+                    benchmark_scope,
+                    measured_benefit_percent,
+                    high_variance,
+                    conclusion,
+                    not_applicable_reason,
+                )| Phase5PlatformAcceptanceScenario {
+                    id,
+                    platform,
+                    storage_medium,
+                    page_cache_state,
+                    optimization_paths,
+                    benchmark_scope,
+                    measured_benefit_percent,
+                    high_variance,
+                    default_enabled: phase5_platform_optimization_default_enabled(
+                        measured_benefit_percent,
+                        high_variance,
+                    ),
+                    conclusion,
+                    not_applicable_reason,
+                },
+            )
+            .collect();
+
+        Phase5PlatformOptimizationAcceptanceReport {
+            default_policy,
+            current_platform,
+            recovery_correctness_commands: vec![
+                "cargo test -p rocketmq-store lazy_mmap --lib",
+                "cargo test -p rocketmq-store recovery_mmap --lib",
+                "cargo test -p rocketmq-store recovery_file_prefetch --lib",
+                "cargo test -p rocketmq-store --test commitlog_recovery_tests",
+                "cargo clippy -p rocketmq-store --all-targets --all-features -- -D warnings",
+            ],
+            scenarios,
+        }
+    }
+
     #[cfg(feature = "rocksdb_store")]
     #[derive(Debug, Clone, Serialize)]
     pub struct StoreRocksDbMaintenanceLifecycleProbe {
@@ -1259,6 +1449,73 @@ mod bench_support_tests {
         );
         assert!(baseline.name.contains("default"));
         assert!(experimental.name.contains("io_uring"));
+    }
+
+    #[test]
+    fn phase5_platform_acceptance_default_gate_requires_stable_benefit() {
+        assert!(!super::bench_support::phase5_platform_optimization_default_enabled(
+            None, false
+        ));
+        assert!(!super::bench_support::phase5_platform_optimization_default_enabled(
+            Some(4.99),
+            false
+        ));
+        assert!(!super::bench_support::phase5_platform_optimization_default_enabled(
+            Some(8.0),
+            true
+        ));
+        assert!(super::bench_support::phase5_platform_optimization_default_enabled(
+            Some(5.0),
+            false
+        ));
+    }
+
+    #[test]
+    fn phase5_platform_acceptance_report_covers_required_scenarios() {
+        let report = super::bench_support::phase5_platform_optimization_acceptance_report();
+        let scenario_ids = report
+            .scenarios
+            .iter()
+            .map(|scenario| scenario.id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(scenario_ids.contains("linux_cold_boot_nvme"));
+        assert!(scenario_ids.contains("linux_hot_page_cache"));
+        assert!(scenario_ids.contains("linux_general_ssd_cold_boot"));
+        assert!(scenario_ids.contains("windows_local_disk"));
+        assert!(scenario_ids.contains("unsupported_platform"));
+        assert!(report
+            .scenarios
+            .iter()
+            .any(|scenario| scenario.page_cache_state == "hot_page_cache"));
+        assert!(report
+            .scenarios
+            .iter()
+            .any(|scenario| scenario.storage_medium == "nvme"));
+        assert!(report
+            .scenarios
+            .iter()
+            .any(|scenario| scenario.storage_medium == "general_ssd"));
+    }
+
+    #[test]
+    fn phase5_platform_acceptance_report_keeps_unmeasured_defaults_disabled() {
+        let report = super::bench_support::phase5_platform_optimization_acceptance_report();
+
+        assert!(!report.default_policy.store_io_hint_enable_default);
+        assert!(!report.default_policy.store_lazy_mmap_enable_default);
+        assert!(report.default_policy.keep_unmeasured_disabled);
+        assert_eq!(
+            report.default_policy.min_benefit_percent,
+            super::bench_support::PHASE5_PLATFORM_ACCEPTANCE_MIN_BENEFIT_PERCENT
+        );
+        assert!(report.scenarios.iter().all(|scenario| !scenario.default_enabled));
+        assert!(report
+            .recovery_correctness_commands
+            .iter()
+            .any(|command| command.contains("commitlog_recovery_tests")));
+        assert!(!report.current_platform.store_io_hint_enable_default);
+        assert!(!report.current_platform.store_lazy_mmap_enable_default);
     }
 
     #[tokio::test]

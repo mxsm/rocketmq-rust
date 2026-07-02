@@ -6430,14 +6430,9 @@ mod tests {
             platform_capability.optimization.lazy_mmap_supported.to_string()
         );
         assert_eq!(runtime_info["storePlatformIoHintFailureAffectsCorrectness"], "false");
-        assert_eq!(runtime_info["storeIoHintEnable"], "true");
+        assert_eq!(runtime_info["storeIoHintEnable"], "false");
         assert_eq!(runtime_info["storeLazyMmapEnable"], "false");
-        assert_eq!(
-            runtime_info["storeEffectiveIoHintEnable"],
-            (platform_capability.optimization.mmap_advice_supported
-                || platform_capability.optimization.file_prefetch_supported)
-                .to_string()
-        );
+        assert_eq!(runtime_info["storeEffectiveIoHintEnable"], "false");
         assert_eq!(runtime_info["storeEffectiveLazyMmapEnable"], "false");
         assert_eq!(runtime_info["transientStorePoolLockAttempts"], "0");
         assert_eq!(runtime_info["transientStorePoolLockedBuffers"], "0");
@@ -6459,7 +6454,7 @@ mod tests {
         assert_eq!(runtime_info["storeLazyMmapTotalMillis"], "0");
         assert_eq!(runtime_info["storeLazyMmapLastMillis"], "0");
         assert_eq!(runtime_info["linuxStorageMemoryLockMode"], "off");
-        assert_eq!(runtime_info["linuxStorageRecoveryFadvise"], "sequential");
+        assert_eq!(runtime_info["linuxStorageRecoveryFadvise"], "disabled");
         assert_eq!(runtime_info["linuxStorageRecoveryMmapAdvice"], "disabled");
         assert_eq!(runtime_info["linuxStorageRecoveryMmapAdviceAttempts"], "0");
         assert_eq!(runtime_info["linuxStorageRecoveryMmapAdviceSuccesses"], "0");
