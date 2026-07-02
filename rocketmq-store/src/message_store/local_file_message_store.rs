@@ -4626,25 +4626,22 @@ impl ReputMessageService {
             loop {
                 tokio::select! {
                     Some(mut batch) = dispatch_rx.recv() => {
-                        // Dispatch the batch
-                        dispatcher.dispatch_batch(&mut batch);
-
-                        // Notify message arrival if needed
-                        if !notify_message_arrive_in_batch {
-                            for req in batch.iter_mut() {
-                                message_store.notify_message_arrive_if_necessary(req);
-                            }
-                        }
+                        dispatch_reput_batch(
+                            &dispatcher,
+                            &message_store,
+                            notify_message_arrive_in_batch,
+                            &mut batch,
+                        );
                     }
                     _ = shutdown_dispatcher.cancelled() => {
                         // Process remaining messages in channel before shutdown
                         while let Ok(mut batch) = dispatch_rx.try_recv() {
-                            dispatcher.dispatch_batch(&mut batch);
-                            if !notify_message_arrive_in_batch {
-                                for req in batch.iter_mut() {
-                                    message_store.notify_message_arrive_if_necessary(req);
-                                }
-                            }
+                            dispatch_reput_batch(
+                                &dispatcher,
+                                &message_store,
+                                notify_message_arrive_in_batch,
+                                &mut batch,
+                            );
                         }
                         break;
                     }
@@ -4764,6 +4761,26 @@ struct ReputMessageServiceInner {
     message_store: ArcMut<LocalFileMessageStore>,
 }
 
+fn dispatch_reput_batch(
+    dispatcher: &ArcMut<CommitLogDispatcherDefault>,
+    message_store: &ArcMut<LocalFileMessageStore>,
+    notify_message_arrive_in_batch: bool,
+    dispatch_batch: &mut [DispatchRequest],
+) {
+    let batch_size = dispatch_batch.len();
+    let started = Instant::now();
+    dispatcher.dispatch_batch(dispatch_batch);
+    message_store
+        .store_stats_service
+        .record_reput_dispatch_batch(batch_size, started.elapsed());
+
+    if !notify_message_arrive_in_batch {
+        for req in dispatch_batch.iter_mut() {
+            message_store.notify_message_arrive_if_necessary(req);
+        }
+    }
+}
+
 impl ReputMessageServiceInner {
     fn notify_message_arrive4multi_queue(&self, dispatch_request: &mut DispatchRequest) {
         if let Some(message_arriving_listener) = self.message_store.message_arriving_listener.as_ref() {
@@ -4849,12 +4866,12 @@ impl ReputMessageServiceInner {
 
                             // Dispatch batch when reaching threshold or at end
                             if dispatch_batch.len() >= 32 {
-                                self.dispatcher.dispatch_batch(&mut dispatch_batch);
-                                if !self.notify_message_arrive_in_batch {
-                                    for req in dispatch_batch.iter_mut() {
-                                        self.message_store.notify_message_arrive_if_necessary(req);
-                                    }
-                                }
+                                dispatch_reput_batch(
+                                    &self.dispatcher,
+                                    &self.message_store,
+                                    self.notify_message_arrive_in_batch,
+                                    &mut dispatch_batch,
+                                );
                                 dispatch_batch.clear();
                             }
 
@@ -4888,12 +4905,12 @@ impl ReputMessageServiceInner {
 
         // Dispatch remaining messages in batch
         if !dispatch_batch.is_empty() {
-            self.dispatcher.dispatch_batch(&mut dispatch_batch);
-            if !self.notify_message_arrive_in_batch {
-                for req in dispatch_batch.iter_mut() {
-                    self.message_store.notify_message_arrive_if_necessary(req);
-                }
-            }
+            dispatch_reput_batch(
+                &self.dispatcher,
+                &self.message_store,
+                self.notify_message_arrive_in_batch,
+                &mut dispatch_batch,
+            );
         }
         self.record_dispatch_behind_bytes();
     }
@@ -4921,7 +4938,7 @@ impl ReputMessageServiceInner {
             .saturating_sub(self.reput_from_offset.load(Ordering::Relaxed));
         self.message_store
             .store_stats_service
-            .set_dispatch_max_buffer(behind.max(0) as u64);
+            .set_reput_dispatch_behind_bytes(behind.max(0) as u64);
     }
 
     pub fn reput_from_offset(&self) -> i64 {
@@ -7910,6 +7927,12 @@ mod tests {
         assert_eq!(runtime_info["syncFlushOldestWaitMillis"], "0");
         assert_eq!(runtime_info["syncFlushMaxWaitMillis"], "0");
         assert_eq!(runtime_info["syncFlushWaitTotalMillis"], "0");
+        assert_eq!(runtime_info["reputDispatchBehindBytes"], "0");
+        assert_eq!(runtime_info["reputDispatchBatchCountTotal"], "0");
+        assert_eq!(runtime_info["reputDispatchRequestTotal"], "0");
+        assert_eq!(runtime_info["reputDispatchBatchSizeMax"], "0");
+        assert_eq!(runtime_info["reputDispatchDurationTotalMillis"], "0");
+        assert_eq!(runtime_info["reputDispatchDurationMaxMillis"], "0");
     }
 
     #[tokio::test]
@@ -7965,6 +7988,29 @@ mod tests {
         assert!(result.buffer_total_size > 0);
         assert!(result.index_last_update_timestamp > 0);
         assert!(result.get_message_data().is_some());
+    }
+
+    #[tokio::test]
+    async fn reput_once_records_dispatch_batch_runtime_info() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_async_flush_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("reput-dispatch-runtime-topic");
+
+        for index in 0..33 {
+            let body = Bytes::from(format!("reput-dispatch-body-{index}"));
+            let put_result = store.put_message(build_test_message(&topic, body)).await;
+            assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+        }
+
+        store.reput_once().await;
+
+        let runtime_info = store.get_runtime_info();
+        assert_eq!(runtime_info["reputDispatchBehindBytes"], "0");
+        assert_eq!(runtime_info["reputDispatchBatchCountTotal"], "2");
+        assert_eq!(runtime_info["reputDispatchRequestTotal"], "33");
+        assert_eq!(runtime_info["reputDispatchBatchSizeMax"], "32");
+        assert!(runtime_info.contains_key("reputDispatchDurationTotalMillis"));
+        assert!(runtime_info.contains_key("reputDispatchDurationMaxMillis"));
     }
 
     #[test]
