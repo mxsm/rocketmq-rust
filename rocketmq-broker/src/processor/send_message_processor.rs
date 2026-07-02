@@ -175,7 +175,7 @@ where
     TS: TransactionalMessageService,
 {
     pub fn has_send_message_hook(&self) -> bool {
-        self.inner.send_message_hook_vec.is_empty()
+        has_registered_send_message_hooks(&self.inner.send_message_hook_vec)
     }
 
     fn clear_reserved_properties(request_header: &mut SendMessageRequestHeader) {
@@ -1117,6 +1117,11 @@ where
     }
 }
 
+#[inline]
+fn has_registered_send_message_hooks(hooks: &[Box<dyn SendMessageHook>]) -> bool {
+    !hooks.is_empty()
+}
+
 pub(crate) struct Inner<MS, TS>
 where
     MS: MessageStore,
@@ -1135,7 +1140,7 @@ where
 {
     #[inline]
     pub fn has_send_message_hook(&self) -> bool {
-        self.send_message_hook_vec.is_empty()
+        has_registered_send_message_hooks(&self.send_message_hook_vec)
     }
 
     #[inline]
@@ -1708,6 +1713,18 @@ fn rewrite_response_for_static_topic(
 mod tests {
     use super::*;
 
+    struct NoopSendMessageHook;
+
+    impl SendMessageHook for NoopSendMessageHook {
+        fn hook_name(&self) -> &'static str {
+            "noop"
+        }
+
+        fn send_message_before(&self, _context: &SendMessageContext) {}
+
+        fn send_message_after(&self, _context: &SendMessageContext) {}
+    }
+
     fn message_with_topic(topic: &str) -> MessageExtBrokerInner {
         let mut message = MessageExtBrokerInner::default();
         message
@@ -1715,6 +1732,15 @@ mod tests {
             .message
             .set_topic(CheetahString::from_string(topic.to_string()));
         message
+    }
+
+    #[test]
+    fn has_registered_send_message_hooks_matches_vector_presence() {
+        let empty_hooks: Vec<Box<dyn SendMessageHook>> = Vec::new();
+        assert!(!has_registered_send_message_hooks(&empty_hooks));
+
+        let hooks: Vec<Box<dyn SendMessageHook>> = vec![Box::new(NoopSendMessageHook)];
+        assert!(has_registered_send_message_hooks(&hooks));
     }
 
     #[test]
