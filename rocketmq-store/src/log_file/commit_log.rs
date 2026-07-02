@@ -15,6 +15,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use bytes::Buf;
@@ -280,6 +281,54 @@ pub fn get_message_num(
     message_num
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CommitLogPutMessageLockRuntimeInfo {
+    pub acquire_total: u64,
+    pub wait_total_millis: u64,
+    pub wait_max_millis: u64,
+    pub hold_total_millis: u64,
+    pub hold_max_millis: u64,
+}
+
+#[derive(Debug, Default)]
+struct CommitLogPutMessageLockStats {
+    acquire_total: AtomicU64,
+    wait_total_millis: AtomicU64,
+    wait_max_millis: AtomicU64,
+    hold_total_millis: AtomicU64,
+    hold_max_millis: AtomicU64,
+}
+
+impl CommitLogPutMessageLockStats {
+    fn record(&self, wait_millis: u64, hold_millis: u64) {
+        self.acquire_total.fetch_add(1, Ordering::Relaxed);
+        self.wait_total_millis.fetch_add(wait_millis, Ordering::Relaxed);
+        self.hold_total_millis.fetch_add(hold_millis, Ordering::Relaxed);
+        Self::update_max(&self.wait_max_millis, wait_millis);
+        Self::update_max(&self.hold_max_millis, hold_millis);
+    }
+
+    fn snapshot(&self) -> CommitLogPutMessageLockRuntimeInfo {
+        CommitLogPutMessageLockRuntimeInfo {
+            acquire_total: self.acquire_total.load(Ordering::Relaxed),
+            wait_total_millis: self.wait_total_millis.load(Ordering::Relaxed),
+            wait_max_millis: self.wait_max_millis.load(Ordering::Relaxed),
+            hold_total_millis: self.hold_total_millis.load(Ordering::Relaxed),
+            hold_max_millis: self.hold_max_millis.load(Ordering::Relaxed),
+        }
+    }
+
+    fn update_max(target: &AtomicU64, value: u64) {
+        let mut current = target.load(Ordering::Relaxed);
+        while value > current {
+            match target.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+}
+
 pub struct CommitLog {
     mapped_file_queue: ArcMut<MappedFileQueue>,
     message_store_config: Arc<MessageStoreConfig>,
@@ -291,6 +340,7 @@ pub struct CommitLog {
     store_checkpoint: Arc<StoreCheckpoint>,
     append_message_callback: Arc<DefaultAppendMessageCallback>,
     put_message_lock: Arc<tokio::sync::Mutex<()>>,
+    put_message_lock_stats: Arc<CommitLogPutMessageLockStats>,
     topic_queue_lock: Arc<TopicQueueLock>,
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     consume_queue_store: ConsumeQueueStore,
@@ -336,6 +386,7 @@ impl CommitLog {
                 topic_config_table.clone(),
             )),
             put_message_lock: Arc::new(Default::default()),
+            put_message_lock_stats: Arc::new(Default::default()),
             topic_queue_lock: Arc::new(TopicQueueLock::with_size(message_store_config.topic_queue_lock_num)),
             topic_config_table,
             consume_queue_store,
@@ -612,6 +663,24 @@ impl CommitLog {
         self.flush_manager.sync_flush_runtime_info()
     }
 
+    pub fn put_message_lock_runtime_info(&self) -> CommitLogPutMessageLockRuntimeInfo {
+        self.put_message_lock_stats.snapshot()
+    }
+
+    fn release_put_message_lock(
+        &self,
+        put_message_lock: tokio::sync::MutexGuard<'_, ()>,
+        lock_wait_millis: u64,
+        lock_hold_start: Instant,
+    ) -> u64 {
+        let elapsed_time_in_lock = lock_hold_start.elapsed().as_millis() as u64;
+        self.put_message_lock_stats
+            .record(lock_wait_millis, elapsed_time_in_lock);
+        drop(put_message_lock);
+        self.begin_time_in_lock.store(0, Ordering::Release);
+        elapsed_time_in_lock
+    }
+
     pub async fn shutdown_gracefully(&mut self) {
         self.flush();
         let mut flush_manager = self.flush_manager.clone();
@@ -804,7 +873,9 @@ impl CommitLog {
         let _topic_queue_guard = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
         self.assign_offset(&mut msg_batch.message_ext_broker_inner);
 
+        let lock_wait_start = Instant::now();
         let _put_message_lock = self.put_message_lock.lock().await;
+        let lock_wait_millis = lock_wait_start.elapsed().as_millis() as u64;
         self.begin_time_in_lock
             .store(time_utils::current_millis(), std::sync::atomic::Ordering::Release);
         let start_time = Instant::now();
@@ -816,19 +887,18 @@ impl CommitLog {
         }
 
         if mapped_file.is_none() {
-            drop(_put_message_lock);
+            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
             drop(_topic_queue_guard); // Explicitly release topic_queue_lock on error
             error!(
                 "create mapped file error, topic: {}  clientAddr: {}",
                 msg_batch.message_ext_broker_inner.topic(),
                 msg_batch.message_ext_broker_inner.born_host()
             );
-            self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
             return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
         }
 
         if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-            drop(_put_message_lock);
+            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
             drop(_topic_queue_guard);
             error!(
                 "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
@@ -836,7 +906,6 @@ impl CommitLog {
                 msg_batch.message_ext_broker_inner.born_host(),
                 error
             );
-            self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
             return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
         }
 
@@ -856,9 +925,8 @@ impl CommitLog {
                 unlock_mapped_file = mapped_file;
                 mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
                 if mapped_file.is_none() {
-                    drop(_put_message_lock);
+                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                     drop(_topic_queue_guard);
-                    self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
                     error!(
                         "create mapped file error, topic: {}  clientAddr: {}",
                         msg_batch.message_ext_broker_inner.topic(),
@@ -867,9 +935,8 @@ impl CommitLog {
                     return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
                 }
                 if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-                    drop(_put_message_lock);
+                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                     drop(_topic_queue_guard);
-                    self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
                     error!(
                         "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
                         msg_batch.message_ext_broker_inner.topic(),
@@ -891,23 +958,19 @@ impl CommitLog {
                 }
             }
             AppendMessageStatus::MessageSizeExceeded | AppendMessageStatus::PropertiesSizeExceeded => {
-                drop(_put_message_lock);
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
-                self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
                 return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
             }
             AppendMessageStatus::UnknownError => {
-                drop(_put_message_lock);
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
-                self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
                 return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
             }
         };
-        let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
+        let elapsed_time_in_lock = self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
         #[cfg(feature = "observability")]
         rocketmq_observability::metrics::store::record_append_latency(elapsed_time_in_lock);
-        drop(_put_message_lock);
-        self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
             warn!(
                 "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}",
@@ -1027,7 +1090,9 @@ impl CommitLog {
             None
         };
 
+        let lock_wait_start = Instant::now();
         let _put_message_lock = self.put_message_lock.lock().await;
+        let lock_wait_millis = lock_wait_start.elapsed().as_millis() as u64;
         let begin_lock_timestamp = time_utils::current_millis();
         self.begin_time_in_lock
             .store(begin_lock_timestamp, std::sync::atomic::Ordering::Release);
@@ -1042,19 +1107,18 @@ impl CommitLog {
         }
 
         if mapped_file.is_none() {
-            drop(_put_message_lock);
+            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
             drop(_topic_queue_guard); // Explicitly release topic_queue_lock on error
             error!(
                 "create mapped file error, topic: {}  clientAddr: {}",
                 msg.topic(),
                 msg.born_host()
             );
-            self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
             return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
         }
 
         if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-            drop(_put_message_lock);
+            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
             drop(_topic_queue_guard);
             error!(
                 "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
@@ -1062,7 +1126,6 @@ impl CommitLog {
                 msg.born_host(),
                 error
             );
-            self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
             return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
         }
 
@@ -1081,9 +1144,8 @@ impl CommitLog {
                 unlock_mapped_file = mapped_file;
                 mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
                 if mapped_file.is_none() {
-                    drop(_put_message_lock);
+                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                     drop(_topic_queue_guard); // CRITICAL FIX: Release topic_queue_lock on error
-                    self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
                     error!(
                         "create mapped file error, topic: {}  clientAddr: {}",
                         msg.topic(),
@@ -1092,9 +1154,8 @@ impl CommitLog {
                     return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
                 }
                 if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-                    drop(_put_message_lock);
+                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                     drop(_topic_queue_guard);
-                    self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
                     error!(
                         "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
                         msg.topic(),
@@ -1115,23 +1176,19 @@ impl CommitLog {
                 }
             }
             AppendMessageStatus::MessageSizeExceeded | AppendMessageStatus::PropertiesSizeExceeded => {
-                drop(_put_message_lock);
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
-                self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
                 return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
             }
             AppendMessageStatus::UnknownError => {
-                drop(_put_message_lock);
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
-                self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
                 return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
             }
         };
-        let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
+        let elapsed_time_in_lock = self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
         #[cfg(feature = "observability")]
         rocketmq_observability::metrics::store::record_append_latency(elapsed_time_in_lock);
-        drop(_put_message_lock);
-        self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
             warn!(
                 "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}",
@@ -2679,6 +2736,21 @@ mod tests {
         assert_eq!(normal_recovery_start_index(5, 1), 4);
         assert_eq!(normal_recovery_start_index(5, 2), 3);
         assert_eq!(normal_recovery_start_index(5, 10), 0);
+    }
+
+    #[test]
+    fn put_message_lock_stats_records_totals_and_maxes() {
+        let stats = CommitLogPutMessageLockStats::default();
+
+        stats.record(3, 7);
+        stats.record(5, 2);
+
+        let snapshot = stats.snapshot();
+        assert_eq!(snapshot.acquire_total, 2);
+        assert_eq!(snapshot.wait_total_millis, 8);
+        assert_eq!(snapshot.wait_max_millis, 5);
+        assert_eq!(snapshot.hold_total_millis, 9);
+        assert_eq!(snapshot.hold_max_millis, 7);
     }
 
     fn new_test_message_store(
