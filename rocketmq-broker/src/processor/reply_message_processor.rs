@@ -551,7 +551,7 @@ fn parse_request_header(request: &RemotingCommand) -> rocketmq_error::RocketMQRe
     let mut request_header_v2 = None;
     if RequestCode::SendReplyMessageV2 == request_code || RequestCode::SendReplyMessage == request_code {
         request_header_v2 = request
-            .decode_command_custom_header::<SendMessageRequestHeaderV2>()
+            .decode_command_custom_header_fast::<SendMessageRequestHeaderV2>()
             .ok();
     }
 
@@ -559,7 +559,7 @@ fn parse_request_header(request: &RemotingCommand) -> rocketmq_error::RocketMQRe
         Some(header) => Ok(SendMessageRequestHeaderV2::create_send_message_request_header_v1(
             &header,
         )),
-        None => request.decode_command_custom_header::<SendMessageRequestHeader>(),
+        None => request.decode_command_custom_header_fast::<SendMessageRequestHeader>(),
     }
 }
 

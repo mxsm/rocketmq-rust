@@ -190,7 +190,7 @@ pub fn parse_request_header(
     if RequestCode::SendMessageV2 == request_code || RequestCode::SendBatchMessage == request_code {
         // Attempt to decode the command custom header as SendMessageRequestHeaderV2
         request_header_v2 = request
-            .decode_command_custom_header::<SendMessageRequestHeaderV2>()
+            .decode_command_custom_header_fast::<SendMessageRequestHeaderV2>()
             .ok();
     }
     // Match on the result of the V2 header decoding
@@ -198,7 +198,7 @@ pub fn parse_request_header(
         Some(header) => Ok(SendMessageRequestHeaderV2::create_send_message_request_header_v1(
             &header,
         )),
-        None => request.decode_command_custom_header::<SendMessageRequestHeader>(),
+        None => request.decode_command_custom_header_fast::<SendMessageRequestHeader>(),
     }
 }
 
@@ -231,6 +231,74 @@ mod tests {
             max_reconsume_times: None,
             topic_request_header: None,
         }
+    }
+
+    fn assert_same_send_message_header(left: &SendMessageRequestHeader, right: &SendMessageRequestHeader) {
+        assert_eq!(left.producer_group, right.producer_group);
+        assert_eq!(left.topic, right.topic);
+        assert_eq!(left.default_topic, right.default_topic);
+        assert_eq!(left.default_topic_queue_nums, right.default_topic_queue_nums);
+        assert_eq!(left.queue_id, right.queue_id);
+        assert_eq!(left.sys_flag, right.sys_flag);
+        assert_eq!(left.born_timestamp, right.born_timestamp);
+        assert_eq!(left.flag, right.flag);
+        assert_eq!(left.properties, right.properties);
+        assert_eq!(left.reconsume_times, right.reconsume_times);
+        assert_eq!(left.unit_mode, right.unit_mode);
+        assert_eq!(left.batch, right.batch);
+        assert_eq!(left.max_reconsume_times, right.max_reconsume_times);
+    }
+
+    #[test]
+    fn send_message_request_header_fast_decode_matches_normal_decode() {
+        let mut header = minimal_header();
+        header.properties = Some(CheetahString::from_static_str("KEYS=abc"));
+        header.reconsume_times = Some(2);
+        header.unit_mode = Some(true);
+        header.batch = Some(false);
+        header.max_reconsume_times = Some(16);
+        let request =
+            RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_ext_fields(header.to_map().unwrap());
+
+        let normal = request
+            .decode_command_custom_header::<SendMessageRequestHeader>()
+            .expect("normal decode should succeed");
+        let fast = request
+            .decode_command_custom_header_fast::<SendMessageRequestHeader>()
+            .expect("fast decode should succeed");
+        let parsed = parse_request_header(&request, RequestCode::SendMessage).expect("parse should use fast decode");
+
+        assert_same_send_message_header(&normal, &fast);
+        assert_same_send_message_header(&normal, &parsed);
+    }
+
+    #[test]
+    fn send_message_v2_fast_decode_matches_normal_v1_conversion() {
+        let mut header = minimal_header();
+        header.properties = Some(CheetahString::from_static_str("TAGS=TagA"));
+        header.reconsume_times = Some(1);
+        header.unit_mode = Some(false);
+        header.batch = Some(true);
+        header.max_reconsume_times = Some(8);
+        header.set_broker_name(CheetahString::from_static_str("broker-a"));
+        let v2 = SendMessageRequestHeaderV2::create_send_message_request_header_v2(&header);
+        let request =
+            RemotingCommand::create_remoting_command(RequestCode::SendMessageV2).set_ext_fields(v2.to_map().unwrap());
+
+        let normal_v2 = request
+            .decode_command_custom_header::<SendMessageRequestHeaderV2>()
+            .expect("normal V2 decode should succeed");
+        let fast_v2 = request
+            .decode_command_custom_header_fast::<SendMessageRequestHeaderV2>()
+            .expect("fast V2 decode should succeed");
+        let normal_v1 = SendMessageRequestHeaderV2::create_send_message_request_header_v1(&normal_v2);
+        let fast_v1 = SendMessageRequestHeaderV2::create_send_message_request_header_v1(&fast_v2);
+        let parsed =
+            parse_request_header(&request, RequestCode::SendMessageV2).expect("parse should use V2 fast decode");
+
+        assert_same_send_message_header(&normal_v1, &fast_v1);
+        assert_same_send_message_header(&normal_v1, &parsed);
+        assert_eq!(parsed.broker_name().map(CheetahString::as_str), Some("broker-a"));
     }
 
     #[test]

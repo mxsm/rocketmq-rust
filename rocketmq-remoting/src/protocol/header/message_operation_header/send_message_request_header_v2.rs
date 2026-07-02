@@ -63,7 +63,7 @@ const KEY_L: CheetahString = CheetahString::from_static_str(FIELD_L);
 const KEY_M: CheetahString = CheetahString::from_static_str(FIELD_M);
 const KEY_N: CheetahString = CheetahString::from_static_str(FIELD_N);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageRequestHeaderV2 {
     pub a: CheetahString,         // producerGroup

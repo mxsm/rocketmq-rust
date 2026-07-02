@@ -24,7 +24,12 @@ use criterion::criterion_main;
 use criterion::BatchSize;
 use criterion::Criterion;
 use criterion::Throughput;
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::protocol::command_custom_header::CommandCustomHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::LanguageCode;
 use rocketmq_remoting::protocol::SerializeType;
@@ -80,6 +85,36 @@ fn create_very_complex_command() -> RemotingCommand {
         .set_ext_fields(ext_fields)
         .set_body(Bytes::from(body))
         .set_command_custom_header(GetRouteInfoRequestHeader::new("TestTopic_Complex", Some(true)))
+}
+
+fn create_send_message_header() -> SendMessageRequestHeader {
+    SendMessageRequestHeader {
+        producer_group: CheetahString::from_static_str("bench_producer_group"),
+        topic: CheetahString::from_static_str("bench_topic"),
+        default_topic: CheetahString::from_static_str("TBW102"),
+        default_topic_queue_nums: 8,
+        queue_id: 1,
+        sys_flag: 0,
+        born_timestamp: 1_700_000_000_000,
+        flag: 0,
+        properties: Some(CheetahString::from_static_str("KEYS=bench-key;TAGS=TagA")),
+        reconsume_times: Some(0),
+        unit_mode: Some(false),
+        batch: Some(false),
+        max_reconsume_times: Some(16),
+        topic_request_header: None,
+    }
+}
+
+fn create_send_message_v1_command() -> RemotingCommand {
+    let header = create_send_message_header();
+    RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_ext_fields(header.to_map().unwrap())
+}
+
+fn create_send_message_v2_command() -> RemotingCommand {
+    let header = create_send_message_header();
+    let header_v2 = SendMessageRequestHeaderV2::create_send_message_request_header_v2(&header);
+    RemotingCommand::create_remoting_command(RequestCode::SendMessageV2).set_ext_fields(header_v2.to_map().unwrap())
 }
 
 /// Benchmark: Encode simple command (JSON)
@@ -268,6 +303,43 @@ fn bench_decode_rocketmq_very_complex(c: &mut Criterion) {
     });
 }
 
+fn bench_decode_send_message_header(c: &mut Criterion) {
+    let mut group = c.benchmark_group("send_message_header_decode");
+    group.throughput(Throughput::Elements(1));
+
+    group.bench_function("v1_normal", |b| {
+        b.iter_batched(
+            create_send_message_v1_command,
+            |cmd| {
+                cmd.decode_command_custom_header::<SendMessageRequestHeader>()
+                    .expect("decode V1 SendMessage header")
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    group.bench_function("v1_fast", |b| {
+        b.iter_batched(
+            create_send_message_v1_command,
+            |cmd| {
+                cmd.decode_command_custom_header_fast::<SendMessageRequestHeader>()
+                    .expect("fast decode V1 SendMessage header")
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    group.bench_function("v2_fast_to_v1", |b| {
+        b.iter_batched(
+            create_send_message_v2_command,
+            |cmd| parse_request_header(&cmd, RequestCode::SendMessageV2).expect("parse V2 SendMessage header"),
+            BatchSize::SmallInput,
+        )
+    });
+
+    group.finish();
+}
+
 /// Benchmark: Full roundtrip (encode + decode) JSON
 fn bench_roundtrip_json(c: &mut Criterion) {
     c.bench_function("roundtrip_json_complex", |b| {
@@ -375,7 +447,8 @@ criterion_group!(
     bench_decode_json_very_complex,
     bench_decode_rocketmq_simple,
     bench_decode_rocketmq_complex,
-    bench_decode_rocketmq_very_complex
+    bench_decode_rocketmq_very_complex,
+    bench_decode_send_message_header
 );
 
 criterion_group!(roundtrip_benches, bench_roundtrip_json, bench_roundtrip_rocketmq);
