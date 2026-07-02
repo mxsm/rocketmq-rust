@@ -188,6 +188,10 @@ mod defaults {
         true
     }
 
+    pub fn async_topic_create_persist_enable() -> bool {
+        false
+    }
+
     pub fn enable_single_topic_register() -> bool {
         true
     }
@@ -936,6 +940,9 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::auto_create_topic_enable")]
     pub auto_create_topic_enable: bool,
 
+    #[serde(default = "defaults::async_topic_create_persist_enable")]
+    pub async_topic_create_persist_enable: bool,
+
     #[serde(default = "defaults::enable_single_topic_register")]
     pub enable_single_topic_register: bool,
 
@@ -1437,6 +1444,7 @@ impl Default for BrokerConfig {
             duplication_enable: false,
             start_accept_send_request_time_stamp: 0,
             auto_create_topic_enable: true,
+            async_topic_create_persist_enable: defaults::async_topic_create_persist_enable(),
             enable_single_topic_register: true,
             broker_topic_enable: true,
             cluster_topic_enable: true,
@@ -1781,6 +1789,10 @@ impl BrokerConfig {
         properties.insert(
             "autoCreateTopicEnable".into(),
             self.auto_create_topic_enable.to_string().into(),
+        );
+        properties.insert(
+            "asyncTopicCreatePersistEnable".into(),
+            self.async_topic_create_persist_enable.to_string().into(),
         );
         properties.insert(
             "enableSingleTopicRegister".into(),
@@ -2299,6 +2311,7 @@ mod tests {
         let config = BrokerConfig::default();
 
         assert!(config.broker_fast_failure_enable);
+        assert!(!config.async_topic_create_persist_enable);
         assert!(!config.send_request_executor_detached_enable);
         assert_eq!(config.wait_time_mills_in_send_queue, 200);
         assert_eq!(config.sync_flush_backlog_reject_depth, 0);
@@ -2540,6 +2553,7 @@ mod tests {
         let config: BrokerConfig = serde_json::from_str(
             r#"{
                 "brokerFastFailureEnable": false,
+                "asyncTopicCreatePersistEnable": true,
                 "sendRequestExecutorDetachedEnable": true,
                 "waitTimeMillsInSendQueue": 201,
                 "syncFlushBacklogRejectDepth": 32,
@@ -2558,6 +2572,7 @@ mod tests {
         .expect("broker config should deserialize Java fast failure keys");
 
         assert!(!config.broker_fast_failure_enable);
+        assert!(config.async_topic_create_persist_enable);
         assert!(config.send_request_executor_detached_enable);
         assert_eq!(config.wait_time_mills_in_send_queue, 201);
         assert_eq!(config.sync_flush_backlog_reject_depth, 32);
