@@ -30,6 +30,7 @@ use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequ
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::LanguageCode;
 use rocketmq_remoting::protocol::SerializeType;
@@ -115,6 +116,52 @@ fn create_send_message_v2_command() -> RemotingCommand {
     let header = create_send_message_header();
     let header_v2 = SendMessageRequestHeaderV2::create_send_message_request_header_v2(&header);
     RemotingCommand::create_remoting_command(RequestCode::SendMessageV2).set_ext_fields(header_v2.to_map().unwrap())
+}
+
+fn create_send_message_response_header() -> SendMessageResponseHeader {
+    SendMessageResponseHeader::new(
+        CheetahString::from_static_str("C0A8010100002A9F000000000001"),
+        3,
+        1_024_768,
+        Some(CheetahString::from_static_str("TX-123456789")),
+        None,
+        Some(CheetahString::from_static_str("handle-v1-topic-broker-1700000000000")),
+    )
+}
+
+fn create_send_message_response_command_fast() -> RemotingCommand {
+    RemotingCommand::create_response_command_with_header(create_send_message_response_header())
+        .set_opaque(12345)
+        .set_serialize_type(SerializeType::ROCKETMQ)
+}
+
+fn create_send_message_response_command_ext_fields() -> RemotingCommand {
+    let mut ext_fields = HashMap::new();
+    ext_fields.insert(
+        CheetahString::from_static_str("msgId"),
+        CheetahString::from_static_str("C0A8010100002A9F000000000001"),
+    );
+    ext_fields.insert(
+        CheetahString::from_static_str("queueId"),
+        CheetahString::from_static_str("3"),
+    );
+    ext_fields.insert(
+        CheetahString::from_static_str("queueOffset"),
+        CheetahString::from_static_str("1024768"),
+    );
+    ext_fields.insert(
+        CheetahString::from_static_str("transactionId"),
+        CheetahString::from_static_str("TX-123456789"),
+    );
+    ext_fields.insert(
+        CheetahString::from_static_str("recallHandle"),
+        CheetahString::from_static_str("handle-v1-topic-broker-1700000000000"),
+    );
+
+    RemotingCommand::create_response_command()
+        .set_opaque(12345)
+        .set_serialize_type(SerializeType::ROCKETMQ)
+        .set_ext_fields(ext_fields)
 }
 
 /// Benchmark: Encode simple command (JSON)
@@ -340,6 +387,37 @@ fn bench_decode_send_message_header(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_encode_send_message_response(c: &mut Criterion) {
+    let mut group = c.benchmark_group("send_message_response_encode");
+    group.throughput(Throughput::Elements(1));
+
+    group.bench_function("typed_fast_header", |b| {
+        b.iter_batched(
+            create_send_message_response_command_fast,
+            |mut cmd| {
+                let mut dst = BytesMut::new();
+                cmd.fast_header_encode(&mut dst);
+                dst
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    group.bench_function("ext_fields_map", |b| {
+        b.iter_batched(
+            create_send_message_response_command_ext_fields,
+            |mut cmd| {
+                let mut dst = BytesMut::new();
+                cmd.fast_header_encode(&mut dst);
+                dst
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    group.finish();
+}
+
 /// Benchmark: Full roundtrip (encode + decode) JSON
 fn bench_roundtrip_json(c: &mut Criterion) {
     c.bench_function("roundtrip_json_complex", |b| {
@@ -437,7 +515,8 @@ criterion_group!(
     bench_encode_json_very_complex,
     bench_encode_rocketmq_simple,
     bench_encode_rocketmq_complex,
-    bench_encode_rocketmq_very_complex
+    bench_encode_rocketmq_very_complex,
+    bench_encode_send_message_response
 );
 
 criterion_group!(
