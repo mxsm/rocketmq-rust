@@ -35,6 +35,7 @@ use tracing::warn;
 
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
+#[cfg(windows)]
 use crate::utils::ffi::prefetch_virtual_memory;
 
 /// Metadata for a single commit log file, collected during parallel scan
