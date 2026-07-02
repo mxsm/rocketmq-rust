@@ -140,6 +140,10 @@ impl DefaultHAService {
     }
 
     pub async fn notify_transfer_some(&self, offset: i64) {
+        if offset < 0 {
+            return;
+        }
+
         let mut value = self.push2_slave_max_offset.load(Ordering::Relaxed);
 
         while (offset as u64) > value {
@@ -150,10 +154,6 @@ impl DefaultHAService {
                 Ordering::Relaxed,
             ) {
                 Ok(_) => {
-                    // Successfully updated the value
-                    if let Some(service) = &self.group_transfer_service {
-                        service.notify_transfer_some();
-                    }
                     break;
                 }
                 Err(current_value) => {
@@ -161,6 +161,10 @@ impl DefaultHAService {
                     value = current_value;
                 }
             }
+        }
+
+        if let Some(service) = &self.group_transfer_service {
+            service.notify_transfer_some();
         }
     }
 
@@ -449,6 +453,9 @@ impl HAService for DefaultHAService {
             master: self.default_message_store.message_store_config_ref().broker_role != BrokerRole::Slave,
             master_commit_log_max_offset: master_put_where.max(0) as u64,
             in_sync_slave_nums: (self.in_sync_replicas_nums(master_put_where) - 1).max(0),
+            pending_group_transfer_request_count: 0,
+            pending_group_transfer_oldest_wait_millis: 0,
+            group_transfer_ack_notify_count: 0,
             ha_connection_info: Vec::new(),
             ha_client_runtime_info: HAClientRuntimeInfo::default(),
         };
@@ -476,6 +483,14 @@ impl HAService for DefaultHAService {
                 master_flush_offset: self.default_message_store.get_master_flushed_offset().max(0) as u64,
                 is_activated: ha_client.get_current_state().is_active(),
             };
+        }
+
+        if let Some(group_transfer_service) = &self.group_transfer_service {
+            let group_transfer_runtime_info = group_transfer_service.runtime_info();
+            runtime_info.pending_group_transfer_request_count = group_transfer_runtime_info.pending_request_count;
+            runtime_info.pending_group_transfer_oldest_wait_millis =
+                group_transfer_runtime_info.pending_request_oldest_wait_millis;
+            runtime_info.group_transfer_ack_notify_count = group_transfer_runtime_info.ack_notify_count;
         }
 
         runtime_info
@@ -715,6 +730,24 @@ mod tests {
         );
 
         assert_eq!(service.ha_transfer_metrics().snapshot().fallback_total, 1);
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn notify_transfer_some_counts_repeated_same_offset_acks() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-default-ha-repeated-ack-{}", current_millis()));
+        let store = new_test_message_store(&temp_root, false);
+        let mut service = ArcMut::new(DefaultHAService::new(store));
+        let general_service = GeneralHAService::new_with_default_ha_service(service.clone());
+        DefaultHAService::init(&mut service, general_service).expect("init default ha service");
+
+        service.notify_transfer_some(128).await;
+        service.notify_transfer_some(128).await;
+
+        let runtime_info = service.get_runtime_info(128);
+        assert_eq!(service.get_push_to_slave_max_offset(), 128);
+        assert_eq!(runtime_info.group_transfer_ack_notify_count, 2);
         let _ = std::fs::remove_dir_all(temp_root);
     }
 

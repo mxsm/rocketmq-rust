@@ -611,6 +611,9 @@ mod tests {
             master: true,
             master_commit_log_max_offset: 0,
             in_sync_slave_nums,
+            pending_group_transfer_request_count: 0,
+            pending_group_transfer_oldest_wait_millis: 0,
+            group_transfer_ack_notify_count: 0,
             ha_connection_info: connections
                 .iter()
                 .enumerate()
