@@ -22,6 +22,7 @@ pub mod metrics;
 pub mod noop;
 pub mod propagation;
 pub mod resource;
+pub mod sampling;
 pub mod semantic;
 pub mod trace;
 

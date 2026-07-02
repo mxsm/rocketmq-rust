@@ -119,6 +119,10 @@ mod defaults {
         10_000
     }
 
+    pub fn metrics_sample_ratio() -> f64 {
+        1.0
+    }
+
     pub fn metrics_label_enabled() -> bool {
         true
     }
@@ -860,6 +864,9 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::metrics_cardinality_limit")]
     pub metrics_cardinality_limit: usize,
 
+    #[serde(default = "defaults::metrics_sample_ratio")]
+    pub metrics_sample_ratio: f64,
+
     #[serde(default = "defaults::metrics_label_enabled")]
     pub metrics_topic_label_enabled: bool,
 
@@ -1423,6 +1430,7 @@ impl Default for BrokerConfig {
             metrics_exporter_type: MetricsExporterType::Disable,
             metrics_export_interval_millis: defaults::metrics_export_interval_millis(),
             metrics_cardinality_limit: defaults::metrics_cardinality_limit(),
+            metrics_sample_ratio: defaults::metrics_sample_ratio(),
             metrics_topic_label_enabled: true,
             metrics_consumer_group_label_enabled: true,
             otlp_exporter_endpoint: defaults::otlp_exporter_endpoint(),
@@ -1684,6 +1692,10 @@ impl BrokerConfig {
         properties.insert(
             "metricsCardinalityLimit".into(),
             self.metrics_cardinality_limit.to_string().into(),
+        );
+        properties.insert(
+            "metricsSampleRatio".into(),
+            self.metrics_sample_ratio.to_string().into(),
         );
         properties.insert(
             "metricsTopicLabelEnabled".into(),
@@ -2220,6 +2232,7 @@ mod tests {
         assert_eq!(config.metrics_exporter_type, MetricsExporterType::Disable);
         assert_eq!(config.metrics_export_interval_millis, 30_000);
         assert_eq!(config.metrics_cardinality_limit, 10_000);
+        assert!((config.metrics_sample_ratio - 1.0).abs() < f64::EPSILON);
         assert!(config.metrics_topic_label_enabled);
         assert!(config.metrics_consumer_group_label_enabled);
         assert_eq!(config.otlp_exporter_endpoint, "http://127.0.0.1:4317");
@@ -2251,6 +2264,10 @@ mod tests {
         assert_eq!(
             properties.get("metricsCardinalityLimit").map(CheetahString::as_str),
             Some("10000")
+        );
+        assert_eq!(
+            properties.get("metricsSampleRatio").map(CheetahString::as_str),
+            Some("1")
         );
         assert_eq!(
             properties.get("metricsTopicLabelEnabled").map(CheetahString::as_str),
@@ -2572,6 +2589,18 @@ mod tests {
         assert_eq!(config.acl_file_watch_interval_millis, 250);
         assert_eq!(config.signature_algorithm.as_str(), "HmacSHA256");
         assert_eq!(config.request_timestamp_expired_millis, 300_000);
+    }
+
+    #[test]
+    fn serde_accepts_metrics_sample_ratio_camel_case_key() {
+        let config: BrokerConfig = serde_json::from_str(
+            r#"{
+                "metricsSampleRatio": 0.125
+            }"#,
+        )
+        .expect("broker config should deserialize metrics sampling keys");
+
+        assert!((config.metrics_sample_ratio - 0.125).abs() < f64::EPSILON);
     }
 
     #[test]

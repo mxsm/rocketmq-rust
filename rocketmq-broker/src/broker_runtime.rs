@@ -228,6 +228,7 @@ fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_o
     config.metrics.export_interval_millis = broker_config.metrics_export_interval_millis;
     config.metrics.export_timeout_millis = broker_config.otlp_exporter_timeout_millis;
     config.metrics.cardinality_limit = broker_config.metrics_cardinality_limit;
+    config.metrics.sample_ratio = broker_config.metrics_sample_ratio;
     config.metrics.topic_label_enabled = broker_config.metrics_topic_label_enabled;
     config.metrics.consumer_group_label_enabled = broker_config.metrics_consumer_group_label_enabled;
     config.otlp.endpoint = broker_config.otlp_exporter_endpoint.to_string();
@@ -1557,6 +1558,9 @@ impl BrokerRuntime {
                         config.metrics.topic_label_enabled,
                         config.metrics.consumer_group_label_enabled,
                     );
+                    let sampling_config = crate::metrics::broker_metrics_manager::BrokerMetricsSamplingConfig::new(
+                        config.metrics.sample_ratio,
+                    );
                     let attributes_supplier =
                         Arc::new(crate::metrics::broker_metrics_manager::BrokerAttributesSupplier::new(
                             self.inner.broker_config.broker_identity.broker_cluster_name.to_string(),
@@ -1567,10 +1571,11 @@ impl BrokerRuntime {
                     let consumer_group_num_inner = self.inner.clone();
                     let producer_connections_inner = self.inner.clone();
                     let consumer_connections_inner = self.inner.clone();
-                    crate::metrics::broker_metrics_manager::BrokerMetricsManager::init_global_with_observables_and_label_config(
+                    crate::metrics::broker_metrics_manager::BrokerMetricsManager::init_global_with_observables_and_configs(
                         provider,
                         attributes_supplier,
                         label_config,
+                        sampling_config,
                         None::<fn() -> Vec<(String, i64)>>,
                         move || broker_permission,
                         move || {
@@ -4855,6 +4860,7 @@ mod tests {
             otlp_exporter_headers: "authorization:Bearer token,tenant:rocketmq".into(),
             otlp_exporter_timeout_millis: 1_500,
             metrics_cardinality_limit: 64,
+            metrics_sample_ratio: 0.25,
             metrics_topic_label_enabled: false,
             metrics_consumer_group_label_enabled: true,
             trace_record_message_id: true,
@@ -4880,6 +4886,7 @@ mod tests {
         assert_eq!(config.otlp.timeout_millis, 1_500);
         assert_eq!(config.metrics.export_timeout_millis, 1_500);
         assert_eq!(config.metrics.cardinality_limit, 64);
+        assert!((config.metrics.sample_ratio - 0.25).abs() < f64::EPSILON);
         assert!(!config.metrics.topic_label_enabled);
         assert!(config.metrics.consumer_group_label_enabled);
         assert!(config.traces.record_message_id);

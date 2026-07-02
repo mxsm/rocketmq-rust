@@ -56,6 +56,7 @@ use super::broker_constants::BrokerMetricsConstant;
 use super::labels::LabelGuard;
 use super::noop_instruments::NopLongCounter;
 use super::noop_instruments::NopLongHistogram;
+use crate::sampling::SamplingGate;
 
 // ============================================================================
 // Constants
@@ -289,6 +290,23 @@ impl Default for BrokerMetricsLabelConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BrokerMetricsSamplingConfig {
+    pub sample_ratio: f64,
+}
+
+impl BrokerMetricsSamplingConfig {
+    pub fn new(sample_ratio: f64) -> Self {
+        Self { sample_ratio }
+    }
+}
+
+impl Default for BrokerMetricsSamplingConfig {
+    fn default() -> Self {
+        Self::new(1.0)
+    }
+}
+
 /// Broker metrics manager for comprehensive broker-level metrics
 ///
 /// This struct manages all broker-related metrics including:
@@ -326,6 +344,8 @@ pub struct BrokerMetricsManager {
     // Attributes supplier
     attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
 
+    sampled_metric_gate: SamplingGate,
+
     #[cfg(feature = "otel-metrics")]
     label_guard: RwLock<LabelGuard>,
 }
@@ -340,6 +360,20 @@ impl BrokerMetricsManager {
         meter: Meter,
         attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
         label_config: BrokerMetricsLabelConfig,
+    ) -> Self {
+        Self::new_with_label_and_sampling_config(
+            meter,
+            attributes_supplier,
+            label_config,
+            BrokerMetricsSamplingConfig::default(),
+        )
+    }
+
+    pub fn new_with_label_and_sampling_config(
+        meter: Meter,
+        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+        label_config: BrokerMetricsLabelConfig,
+        sampling_config: BrokerMetricsSamplingConfig,
     ) -> Self {
         #[cfg(not(feature = "otel-metrics"))]
         let _ = label_config;
@@ -433,6 +467,7 @@ impl BrokerMetricsManager {
             transaction_finish_latency,
             meter,
             attributes_supplier,
+            sampled_metric_gate: SamplingGate::new(sampling_config.sample_ratio),
             #[cfg(feature = "otel-metrics")]
             label_guard: RwLock::new(LabelGuard::new(
                 label_config.cardinality_limit,
@@ -499,8 +534,50 @@ impl BrokerMetricsManager {
         F5: Fn() -> Vec<(ProducerConnectionAttributes, i64)> + Send + Sync + 'static,
         F6: Fn() -> Vec<(ConsumerConnectionAttributes, i64)> + Send + Sync + 'static,
     {
+        Self::init_with_observables_and_configs(
+            meter_provider,
+            attributes_supplier,
+            label_config,
+            BrokerMetricsSamplingConfig::default(),
+            processor_watermark_fn,
+            broker_permission_fn,
+            topic_num_fn,
+            consumer_group_num_fn,
+            producer_connections_fn,
+            consumer_connections_fn,
+        )
+    }
+
+    /// Initialize with observable gauges, label guard configuration, and sampling configuration.
+    pub fn init_with_observables_and_configs<F1, F2, F3, F4, F5, F6>(
+        meter_provider: &SdkMeterProvider,
+        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+        label_config: BrokerMetricsLabelConfig,
+        sampling_config: BrokerMetricsSamplingConfig,
+        // Stats callbacks
+        processor_watermark_fn: Option<F1>,
+        broker_permission_fn: F2,
+        topic_num_fn: F3,
+        consumer_group_num_fn: F4,
+        // Connection callbacks
+        producer_connections_fn: F5,
+        consumer_connections_fn: F6,
+    ) -> Self
+    where
+        F1: Fn() -> Vec<(String, i64)> + Send + Sync + 'static, // (processor_name, count)
+        F2: Fn() -> i64 + Send + Sync + 'static,
+        F3: Fn() -> i64 + Send + Sync + 'static,
+        F4: Fn() -> i64 + Send + Sync + 'static,
+        F5: Fn() -> Vec<(ProducerConnectionAttributes, i64)> + Send + Sync + 'static,
+        F6: Fn() -> Vec<(ConsumerConnectionAttributes, i64)> + Send + Sync + 'static,
+    {
         let meter = meter_provider.meter(BrokerMetricsConstant::OPEN_TELEMETRY_METER_NAME);
-        let manager = Self::new_with_label_config(meter.clone(), attributes_supplier.clone(), label_config);
+        let manager = Self::new_with_label_and_sampling_config(
+            meter.clone(),
+            attributes_supplier.clone(),
+            label_config,
+            sampling_config,
+        );
 
         // Register stats observable gauges
         if let Some(processor_watermark_fn) = processor_watermark_fn {
@@ -646,12 +723,46 @@ impl BrokerMetricsManager {
         F5: Fn() -> Vec<(ProducerConnectionAttributes, i64)> + Send + Sync + 'static,
         F6: Fn() -> Vec<(ConsumerConnectionAttributes, i64)> + Send + Sync + 'static,
     {
-        let _ = ATTRIBUTES_BUILDER_SUPPLIER.set(attributes_supplier.clone());
-        let _ = LABEL_MAP.set(RwLock::new(HashMap::new()));
-        let _ = BROKER_METRICS_MANAGER.set(Self::init_with_observables_and_label_config(
+        Self::init_global_with_observables_and_configs(
             meter_provider,
             attributes_supplier,
             label_config,
+            BrokerMetricsSamplingConfig::default(),
+            processor_watermark_fn,
+            broker_permission_fn,
+            topic_num_fn,
+            consumer_group_num_fn,
+            producer_connections_fn,
+            consumer_connections_fn,
+        );
+    }
+
+    pub fn init_global_with_observables_and_configs<F1, F2, F3, F4, F5, F6>(
+        meter_provider: &SdkMeterProvider,
+        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+        label_config: BrokerMetricsLabelConfig,
+        sampling_config: BrokerMetricsSamplingConfig,
+        processor_watermark_fn: Option<F1>,
+        broker_permission_fn: F2,
+        topic_num_fn: F3,
+        consumer_group_num_fn: F4,
+        producer_connections_fn: F5,
+        consumer_connections_fn: F6,
+    ) where
+        F1: Fn() -> Vec<(String, i64)> + Send + Sync + 'static,
+        F2: Fn() -> i64 + Send + Sync + 'static,
+        F3: Fn() -> i64 + Send + Sync + 'static,
+        F4: Fn() -> i64 + Send + Sync + 'static,
+        F5: Fn() -> Vec<(ProducerConnectionAttributes, i64)> + Send + Sync + 'static,
+        F6: Fn() -> Vec<(ConsumerConnectionAttributes, i64)> + Send + Sync + 'static,
+    {
+        let _ = ATTRIBUTES_BUILDER_SUPPLIER.set(attributes_supplier.clone());
+        let _ = LABEL_MAP.set(RwLock::new(HashMap::new()));
+        let _ = BROKER_METRICS_MANAGER.set(Self::init_with_observables_and_configs(
+            meter_provider,
+            attributes_supplier,
+            label_config,
+            sampling_config,
             processor_watermark_fn,
             broker_permission_fn,
             topic_num_fn,
@@ -885,6 +996,10 @@ impl BrokerMetricsManager {
 
     /// Record broker send message processing latency.
     pub fn record_send_message_latency(&self, topic: &str, latency_ms: u64) {
+        if !self.sampled_metric_gate.should_sample() {
+            return;
+        }
+
         #[cfg(feature = "otel-metrics")]
         {
             let mut attrs = self.base_attributes();
@@ -1220,6 +1335,27 @@ mod tests {
         assert_eq!(manager.topic_label("topic-a").value.to_string(), "other");
         assert_eq!(manager.consumer_group_label("group-a").value.to_string(), "group-a");
         assert_eq!(manager.dropped_metric_labels(), 1);
+    }
+
+    #[test]
+    fn broker_metrics_sampling_config_defaults_to_full_recording() {
+        let config = BrokerMetricsSamplingConfig::default();
+
+        assert!((config.sample_ratio - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn broker_metrics_manager_applies_sampling_config() {
+        let meter_provider = SdkMeterProvider::builder().build();
+        let meter = meter_provider.meter("broker-sampling-config-test");
+        let manager = BrokerMetricsManager::new_with_label_and_sampling_config(
+            meter,
+            Arc::new(NoopAttributesSupplier),
+            BrokerMetricsLabelConfig::default(),
+            BrokerMetricsSamplingConfig::new(0.0),
+        );
+
+        assert!(!manager.sampled_metric_gate.should_sample());
     }
 
     #[test]

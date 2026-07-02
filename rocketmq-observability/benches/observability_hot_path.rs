@@ -31,6 +31,7 @@ use criterion::Criterion;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_observability::config::TracesConfig;
 use rocketmq_observability::metrics::labels::LabelGuard;
+use rocketmq_observability::sampling::SamplingGate;
 
 fn bench_label_guard(c: &mut Criterion) {
     let mut group = c.benchmark_group("observability_label_guard");
@@ -92,6 +93,21 @@ fn bench_broker_metrics_record(c: &mut Criterion) {
     {
         group.bench_function("otel_metrics_feature_disabled", |b| b.iter(|| black_box(())));
     }
+
+    group.finish();
+}
+
+fn bench_sampling_gate(c: &mut Criterion) {
+    let mut group = c.benchmark_group("observability_sampling_gate");
+
+    let full = SamplingGate::new(1.0);
+    group.bench_function("full", |b| b.iter(|| black_box(full.should_sample())));
+
+    let ten_percent = SamplingGate::new(0.1);
+    group.bench_function("ten_percent", |b| b.iter(|| black_box(ten_percent.should_sample())));
+
+    let disabled = SamplingGate::new(0.0);
+    group.bench_function("disabled", |b| b.iter(|| black_box(disabled.should_sample())));
 
     group.finish();
 }
@@ -188,6 +204,7 @@ criterion_group!(
     benches,
     bench_label_guard,
     bench_broker_metrics_record,
+    bench_sampling_gate,
     bench_trace_property_carrier,
     bench_trace_message_attributes
 );
