@@ -3458,6 +3458,10 @@ impl MessageStore for LocalFileMessageStore {
         diff < 10000000 && diff > self.message_store_config.os_page_cache_busy_timeout_mills
     }
 
+    fn sync_flush_runtime_info(&self) -> crate::base::flush_manager::SyncFlushRuntimeInfo {
+        self.commit_log.sync_flush_runtime_info()
+    }
+
     fn lock_time_millis(&self) -> i64 {
         self.commit_log.lock_time_mills()
     }

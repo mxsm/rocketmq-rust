@@ -969,6 +969,10 @@ impl MessageStore for RocksDBMessageStore {
         self.local_file_store.is_os_page_cache_busy()
     }
 
+    fn sync_flush_runtime_info(&self) -> crate::base::flush_manager::SyncFlushRuntimeInfo {
+        self.local_file_store.sync_flush_runtime_info()
+    }
+
     fn lock_time_millis(&self) -> i64 {
         self.local_file_store.lock_time_millis()
     }

@@ -81,12 +81,12 @@ use crate::consume_queue::mapped_file_queue::MappedFileWarmupStats;
 use crate::ha::ha_service::HAService;
 use crate::log_file::cold_data_check_service::ColdDataCheckService;
 // Import the optimized loader module
+use crate::base::flush_manager::SyncFlushRuntimeInfo;
 use crate::log_file::commit_log_loader::CommitLogLoader;
 use crate::log_file::commit_log_loader::LoadStatistics;
 use crate::log_file::commit_log_loader::RecoveryFilePrefetch;
 use crate::log_file::commit_log_loader::RecoveryMmapAdvice;
 use crate::log_file::flush_manager_impl::default_flush_manager::DefaultFlushManager;
-use crate::log_file::flush_manager_impl::default_flush_manager::SyncFlushRuntimeInfo;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;

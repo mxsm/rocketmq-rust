@@ -20,6 +20,7 @@ use cheetah_string::CheetahString;
 use rand::RngExt;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::key_builder::KeyBuilder;
@@ -67,6 +68,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
+use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -160,6 +162,18 @@ where
                 Some(RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::SystemBusy,
                     "The broker message store is busy, please try again later",
+                )),
+            );
+        }
+        if let Some(remark) = sync_flush_backlog_reject_remark(
+            self.inner.broker_runtime_inner.broker_config(),
+            message_store.sync_flush_runtime_info(),
+        ) {
+            return (
+                true,
+                Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemBusy,
+                    remark,
                 )),
             );
         }
@@ -1122,6 +1136,24 @@ fn has_registered_send_message_hooks(hooks: &[Box<dyn SendMessageHook>]) -> bool
     !hooks.is_empty()
 }
 
+fn sync_flush_backlog_reject_remark(
+    broker_config: &BrokerConfig,
+    runtime_info: SyncFlushRuntimeInfo,
+) -> Option<String> {
+    let reject_depth = broker_config.sync_flush_backlog_reject_depth;
+    let reject_wait_millis = broker_config.sync_flush_backlog_reject_wait_millis;
+    let depth_exceeded = reject_depth > 0 && runtime_info.queue_depth >= reject_depth;
+    let wait_exceeded = reject_wait_millis > 0 && runtime_info.oldest_wait_millis >= reject_wait_millis;
+
+    (depth_exceeded || wait_exceeded).then(|| {
+        format!(
+            "The broker sync flush backlog is busy, queueDepth={}, oldestWaitMillis={}, rejectDepth={}, \
+             rejectWaitMillis={}",
+            runtime_info.queue_depth, runtime_info.oldest_wait_millis, reject_depth, reject_wait_millis
+        )
+    })
+}
+
 pub(crate) struct Inner<MS, TS>
 where
     MS: MessageStore,
@@ -1741,6 +1773,49 @@ mod tests {
 
         let hooks: Vec<Box<dyn SendMessageHook>> = vec![Box::new(NoopSendMessageHook)];
         assert!(has_registered_send_message_hooks(&hooks));
+    }
+
+    #[test]
+    fn sync_flush_backlog_reject_remark_is_disabled_by_default() {
+        let runtime_info = SyncFlushRuntimeInfo {
+            queue_depth: 64,
+            oldest_wait_millis: 10_000,
+            ..SyncFlushRuntimeInfo::default()
+        };
+
+        assert!(sync_flush_backlog_reject_remark(&BrokerConfig::default(), runtime_info).is_none());
+    }
+
+    #[test]
+    fn sync_flush_backlog_reject_remark_matches_depth_threshold() {
+        let broker_config = BrokerConfig {
+            sync_flush_backlog_reject_depth: 8,
+            ..BrokerConfig::default()
+        };
+        let runtime_info = SyncFlushRuntimeInfo {
+            queue_depth: 8,
+            ..SyncFlushRuntimeInfo::default()
+        };
+
+        let remark = sync_flush_backlog_reject_remark(&broker_config, runtime_info).expect("depth should reject");
+        assert!(remark.contains("queueDepth=8"));
+        assert!(remark.contains("rejectDepth=8"));
+    }
+
+    #[test]
+    fn sync_flush_backlog_reject_remark_matches_oldest_wait_threshold() {
+        let broker_config = BrokerConfig {
+            sync_flush_backlog_reject_wait_millis: 250,
+            ..BrokerConfig::default()
+        };
+        let runtime_info = SyncFlushRuntimeInfo {
+            oldest_wait_millis: 250,
+            ..SyncFlushRuntimeInfo::default()
+        };
+
+        let remark = sync_flush_backlog_reject_remark(&broker_config, runtime_info).expect("wait should reject");
+        assert!(remark.contains("oldestWaitMillis=250"));
+        assert!(remark.contains("rejectWaitMillis=250"));
     }
 
     #[test]
