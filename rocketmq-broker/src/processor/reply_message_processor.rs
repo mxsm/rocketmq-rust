@@ -155,7 +155,8 @@ where
         let mut request_header = parse_request_header(request)?;
         let mut mqtrace_context = self
             .inner
-            .build_msg_context(&channel, &ctx, &mut request_header, request);
+            .build_msg_context(&channel, &ctx, &mut request_header, request)
+            .0;
         self.inner.execute_send_message_hook_before(&mqtrace_context);
 
         let mut response = self

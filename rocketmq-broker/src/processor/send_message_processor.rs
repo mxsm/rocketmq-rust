@@ -41,7 +41,6 @@ use rocketmq_common::common::FAQUrl;
 use rocketmq_common::common::TopicFilterType;
 use rocketmq_common::common::TopicSysFlag;
 use rocketmq_common::common::TopicSysFlag::build_sys_flag;
-use rocketmq_common::utils::message_utils;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::util_all;
 use rocketmq_common::CleanupPolicyUtils;
@@ -192,14 +191,6 @@ where
         has_registered_send_message_hooks(&self.inner.send_message_hook_vec)
     }
 
-    fn clear_reserved_properties(request_header: &mut SendMessageRequestHeader) {
-        let properties = request_header.properties.take();
-        if let Some(value) = properties {
-            let delete_properties = message_utils::delete_property(value.as_str(), MessageConst::PROPERTY_POP_CK);
-            request_header.properties = Some(CheetahString::from_string(delete_properties));
-        }
-    }
-
     pub async fn process_request_inner(
         &mut self,
         channel: Channel,
@@ -231,11 +222,11 @@ where
                     return Ok(rewrite_result);
                 }
 
-                let send_message_context = self
-                    .inner
-                    .build_msg_context(&channel, &ctx, &mut request_header, request);
+                let (send_message_context, mut request_properties) =
+                    self.inner
+                        .build_msg_context(&channel, &ctx, &mut request_header, request);
                 self.inner.execute_send_message_hook_before(&send_message_context);
-                SendMessageProcessor::<MS, TS>::clear_reserved_properties(&mut request_header);
+                clear_reserved_properties(&mut request_header, &mut request_properties);
 
                 let execute_send_message_hook_after = {
                     let inner = self.inner.clone();
@@ -252,6 +243,7 @@ where
                         request,
                         send_message_context,
                         request_header,
+                        request_properties,
                         mapping_context,
                         execute_send_message_hook_after,
                     )
@@ -264,6 +256,7 @@ where
                         request,
                         send_message_context,
                         request_header,
+                        request_properties,
                         mapping_context,
                         execute_send_message_hook_after,
                     )
@@ -303,6 +296,7 @@ where
         request: &mut RemotingCommand,
         mut send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
+        request_properties: HashMap<CheetahString, CheetahString>,
         mut mapping_context: TopicQueueMappingContext,
         send_message_callback: F,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>
@@ -349,10 +343,7 @@ where
         }
         message_ext.message_ext_inner.sys_flag = sys_flag;
         message_ext.message_ext_inner.message.set_flag(request_header.flag);
-        message_ext
-            .message_ext_inner
-            .message
-            .set_properties(string_to_message_properties(request_header.properties.as_ref()));
+        message_ext.message_ext_inner.message.set_properties(request_properties);
         message_ext.message_ext_inner.message.set_body(request.body().cloned());
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
         message_ext.message_ext_inner.born_host = channel.remote_address();
@@ -464,6 +455,7 @@ where
         request: &mut RemotingCommand,
         mut send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
+        request_properties: HashMap<CheetahString, CheetahString>,
         mut mapping_context: TopicQueueMappingContext,
         send_message_callback: F,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>
@@ -494,7 +486,7 @@ where
             .message
             .set_topic(request_header.topic().clone());
         message_ext.message_ext_inner.queue_id = queue_id;
-        let mut ori_props = MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
+        let mut ori_props = request_properties;
         if !self
             .handle_retry_and_dlq(
                 &request_header,
@@ -1493,7 +1485,7 @@ where
         _ctx: &ConnectionHandlerContext,
         request_header: &mut SendMessageRequestHeader,
         request: &RemotingCommand,
-    ) -> SendMessageContext {
+    ) -> (SendMessageContext, HashMap<CheetahString, CheetahString>) {
         let namespace = NamespaceUtil::get_namespace_from_resource(request_header.topic.as_str());
         let broker_config = self.broker_runtime_inner.broker_config();
         let region_id = broker_config.region_id().to_string();
@@ -1518,16 +1510,8 @@ where
                 send_message_context.commercial_owner(value.clone());
             }
         }
-        let mut properties = MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
-        properties.insert(
-            CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION),
-            CheetahString::from_string(region_id),
-        );
-        properties.insert(
-            CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH),
-            CheetahString::from_string(self.broker_runtime_inner.broker_config().trace_on.to_string()),
-        );
-        request_header.properties = Some(MessageDecoder::message_properties_to_string(&properties));
+        let properties =
+            enrich_send_message_request_properties(request_header, region_id.as_str(), broker_config.trace_on);
 
         if let Some(unique_key) = properties.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX) {
             send_message_context.msg_unique_key = CheetahString::from_slice(unique_key);
@@ -1540,7 +1524,7 @@ where
         } else {
             send_message_context.msg_type = MessageType::NormalMsg;
         }
-        send_message_context
+        (send_message_context, properties)
     }
 
     pub(crate) async fn msg_check(
@@ -1712,6 +1696,33 @@ fn should_create_uniq_key(properties: &HashMap<CheetahString, CheetahString>) ->
         .get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
         .map(|uniq_key| uniq_key.is_empty())
         .unwrap_or(true)
+}
+
+fn enrich_send_message_request_properties(
+    request_header: &mut SendMessageRequestHeader,
+    region_id: &str,
+    trace_on: bool,
+) -> HashMap<CheetahString, CheetahString> {
+    let mut properties = string_to_message_properties(request_header.properties.as_ref());
+    properties.insert(
+        CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION),
+        CheetahString::from_slice(region_id),
+    );
+    properties.insert(
+        CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH),
+        CheetahString::from_string(trace_on.to_string()),
+    );
+    request_header.properties = Some(message_properties_to_string(&properties));
+    properties
+}
+
+fn clear_reserved_properties(
+    request_header: &mut SendMessageRequestHeader,
+    request_properties: &mut HashMap<CheetahString, CheetahString>,
+) {
+    if request_properties.remove(MessageConst::PROPERTY_POP_CK).is_some() {
+        request_header.properties = Some(message_properties_to_string(request_properties));
+    }
 }
 
 fn rewrite_response_for_static_topic(
@@ -1912,5 +1923,66 @@ mod tests {
             CheetahString::from_static_str("java-uniq-id"),
         );
         assert!(!should_create_uniq_key(&properties));
+    }
+
+    #[test]
+    fn enrich_send_message_request_properties_returns_map_and_updates_header() {
+        let mut initial_properties = HashMap::new();
+        initial_properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_KEYS),
+            CheetahString::from_static_str("order-1"),
+        );
+        initial_properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from_static_str("uniq-1"),
+        );
+        let mut request_header = SendMessageRequestHeader {
+            properties: Some(message_properties_to_string(&initial_properties)),
+            ..SendMessageRequestHeader::default()
+        };
+
+        let properties = enrich_send_message_request_properties(&mut request_header, "region-a", true);
+
+        assert_eq!(
+            properties.get(MessageConst::PROPERTY_KEYS),
+            Some(&CheetahString::from_static_str("order-1"))
+        );
+        assert_eq!(
+            properties.get(MessageConst::PROPERTY_MSG_REGION),
+            Some(&CheetahString::from_static_str("region-a"))
+        );
+        assert_eq!(
+            properties.get(MessageConst::PROPERTY_TRACE_SWITCH),
+            Some(&CheetahString::from_static_str("true"))
+        );
+        let header_properties = string_to_message_properties(request_header.properties.as_ref());
+        assert_eq!(header_properties, properties);
+    }
+
+    #[test]
+    fn clear_reserved_properties_removes_pop_ck_from_header_and_reused_map() {
+        let mut request_properties = HashMap::new();
+        request_properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_KEYS),
+            CheetahString::from_static_str("order-1"),
+        );
+        request_properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
+            CheetahString::from_static_str("broker-only"),
+        );
+        let mut request_header = SendMessageRequestHeader {
+            properties: Some(message_properties_to_string(&request_properties)),
+            ..SendMessageRequestHeader::default()
+        };
+
+        clear_reserved_properties(&mut request_header, &mut request_properties);
+
+        assert!(!request_properties.contains_key(MessageConst::PROPERTY_POP_CK));
+        let header_properties = string_to_message_properties(request_header.properties.as_ref());
+        assert_eq!(header_properties, request_properties);
+        assert_eq!(
+            header_properties.get(MessageConst::PROPERTY_KEYS),
+            Some(&CheetahString::from_static_str("order-1"))
+        );
     }
 }
