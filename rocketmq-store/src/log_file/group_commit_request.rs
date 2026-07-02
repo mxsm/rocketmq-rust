@@ -74,6 +74,7 @@ pub struct GroupCommitRequest {
     next_offset: i64,
     flush_ok_sender: Option<oneshot::Sender<PutMessageStatus>>,
     ack_nums: i32,
+    created_at: Instant,
     deadline: Instant,
 }
 
@@ -101,12 +102,14 @@ impl GroupCommitRequest {
     #[inline]
     fn create_request(next_offset: i64, timeout_millis: u64, ack_nums: i32) -> (Self, GroupCommitResponse) {
         let (sender, receiver) = oneshot::channel();
-        let instant = Instant::now() + Duration::from_millis(timeout_millis);
+        let created_at = Instant::now();
+        let instant = created_at + Duration::from_millis(timeout_millis);
         (
             Self {
                 next_offset,
                 flush_ok_sender: Some(sender),
                 ack_nums,
+                created_at,
                 deadline: instant,
             },
             GroupCommitResponse {
@@ -126,6 +129,11 @@ impl GroupCommitRequest {
         self.ack_nums
     }
 
+    /// Get when this request was created.
+    pub fn created_at(&self) -> Instant {
+        self.created_at
+    }
+
     /// Wake up the customer/caller with the result
     pub fn wakeup_customer(&mut self, status: PutMessageStatus) {
         if let Some(sender) = self.flush_ok_sender.take() {
@@ -143,6 +151,7 @@ impl std::fmt::Debug for GroupCommitRequest {
         f.debug_struct("GroupCommitRequest")
             .field("next_offset", &self.next_offset)
             .field("ack_nums", &self.ack_nums)
+            .field("created_at", &self.created_at)
             .field("has_sender", &self.flush_ok_sender.is_some())
             .finish()
     }

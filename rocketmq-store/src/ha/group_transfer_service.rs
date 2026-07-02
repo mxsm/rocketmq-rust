@@ -14,6 +14,7 @@
 
 use std::collections::LinkedList;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -42,6 +43,13 @@ pub struct GroupTransferService {
     service_manager: ServiceManager<GroupTransferServiceInner>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct GroupTransferRuntimeInfo {
+    pub pending_request_count: u64,
+    pub pending_request_oldest_wait_millis: u64,
+    pub ack_notify_count: u64,
+}
+
 impl GroupTransferService {
     pub fn new(ha_service: GeneralHAService) -> Self {
         let inner = Arc::new(GroupTransferServiceInner::new(ha_service));
@@ -68,6 +76,7 @@ impl GroupTransferService {
     }
 
     pub fn notify_transfer_some(&self) {
+        self.inner.record_ack_notify();
         if self
             .inner
             .notified
@@ -83,11 +92,16 @@ impl GroupTransferService {
             self.inner.notified.0.notify_one();
         }
     }
+
+    pub(crate) fn runtime_info(&self) -> GroupTransferRuntimeInfo {
+        self.inner.runtime_info()
+    }
 }
 
 struct GroupTransferServiceInner {
     ha_service: GeneralHAService,
     notified: (Arc<Notify>, AtomicBool),
+    ack_notify_count: AtomicU64,
     requests_write: Arc<Mutex<LinkedList<GroupCommitRequest>>>,
     requests_read: Arc<Mutex<LinkedList<GroupCommitRequest>>>,
 }
@@ -97,8 +111,26 @@ impl GroupTransferServiceInner {
         GroupTransferServiceInner {
             ha_service,
             notified: (Arc::new(Notify::new()), AtomicBool::new(false)),
+            ack_notify_count: AtomicU64::new(0),
             requests_write: Arc::new(Mutex::new(LinkedList::new())),
             requests_read: Arc::new(Mutex::new(LinkedList::new())),
+        }
+    }
+
+    #[inline]
+    fn record_ack_notify(&self) {
+        self.ack_notify_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn runtime_info(&self) -> GroupTransferRuntimeInfo {
+        let now = Instant::now();
+        let (write_count, write_oldest_wait_millis) = pending_request_snapshot(&self.requests_write, now);
+        let (read_count, read_oldest_wait_millis) = pending_request_snapshot(&self.requests_read, now);
+
+        GroupTransferRuntimeInfo {
+            pending_request_count: write_count.saturating_add(read_count),
+            pending_request_oldest_wait_millis: write_oldest_wait_millis.max(read_oldest_wait_millis),
+            ack_notify_count: self.ack_notify_count.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -201,6 +233,20 @@ impl GroupTransferServiceInner {
     }
 }
 
+fn pending_request_snapshot(requests: &Arc<Mutex<LinkedList<GroupCommitRequest>>>, now: Instant) -> (u64, u64) {
+    let Ok(requests) = requests.try_lock() else {
+        return (0, 0);
+    };
+    let count = requests.len() as u64;
+    let oldest_wait_millis = requests
+        .iter()
+        .map(|request| now.saturating_duration_since(request.created_at()).as_millis())
+        .max()
+        .and_then(|millis| u64::try_from(millis).ok())
+        .unwrap_or(0);
+    (count, oldest_wait_millis)
+}
+
 impl ServiceTask for GroupTransferServiceInner {
     fn get_service_name(&self) -> String {
         "GroupTransferService".to_string()
@@ -266,8 +312,35 @@ fn has_required_acks(required_acks: i32, acked_replicas: &[HAAckedReplicaSnapsho
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_rust::ArcMut;
 
     use super::*;
+    use crate::config::message_store_config::MessageStoreConfig;
+    use crate::ha::default_ha_service::DefaultHAService;
+    use crate::message_store::local_file_message_store::LocalFileMessageStore;
+
+    fn new_test_ha_service() -> GeneralHAService {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_root.path().to_string_lossy().into_owned().into(),
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig::default()),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        GeneralHAService::new_with_default_ha_service(ArcMut::new(DefaultHAService::new(store)))
+    }
 
     #[test]
     fn sync_state_set_ack_requires_all_members() {
@@ -308,6 +381,21 @@ mod tests {
         acked_replicas[1].slave_ack_offset = 128;
 
         assert!(has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 128));
+    }
+
+    #[tokio::test]
+    async fn runtime_info_reports_pending_requests_and_ack_notifications() {
+        let service = GroupTransferService::new(new_test_ha_service());
+        let (request, _response) = GroupCommitRequest::with_ack_nums(128, 5_000, 2);
+
+        service.put_request(request).await;
+        service.notify_transfer_some();
+        service.notify_transfer_some();
+
+        let runtime_info = service.runtime_info();
+        assert_eq!(runtime_info.pending_request_count, 1);
+        assert!(runtime_info.pending_request_oldest_wait_millis < 5_000);
+        assert_eq!(runtime_info.ack_notify_count, 2);
     }
 
     #[test]

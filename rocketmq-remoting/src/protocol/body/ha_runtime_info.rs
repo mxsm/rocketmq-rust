@@ -24,6 +24,12 @@ pub struct HARuntimeInfo {
     pub master: bool,
     pub master_commit_log_max_offset: u64,
     pub in_sync_slave_nums: i32,
+    #[serde(default)]
+    pub pending_group_transfer_request_count: u64,
+    #[serde(default)]
+    pub pending_group_transfer_oldest_wait_millis: u64,
+    #[serde(default)]
+    pub group_transfer_ack_notify_count: u64,
     pub ha_connection_info: Vec<HAConnectionRuntimeInfo>,
     pub ha_client_runtime_info: HAClientRuntimeInfo,
 }
@@ -38,6 +44,9 @@ mod tests {
             master: true,
             master_commit_log_max_offset: 1000,
             in_sync_slave_nums: 3,
+            pending_group_transfer_request_count: 0,
+            pending_group_transfer_oldest_wait_millis: 0,
+            group_transfer_ack_notify_count: 0,
             ha_connection_info: vec![HAConnectionRuntimeInfo {
                 addr: "127.0.0.1:10912".to_string(),
                 slave_ack_offset: 500,
@@ -59,6 +68,9 @@ mod tests {
         assert!(info.master);
         assert_eq!(info.master_commit_log_max_offset, 1000);
         assert_eq!(info.in_sync_slave_nums, 3);
+        assert_eq!(info.pending_group_transfer_request_count, 0);
+        assert_eq!(info.pending_group_transfer_oldest_wait_millis, 0);
+        assert_eq!(info.group_transfer_ack_notify_count, 0);
         assert_eq!(info.ha_connection_info.len(), 1);
         assert_eq!(info.ha_connection_info[0].addr, "127.0.0.1:10912");
         assert_eq!(info.ha_client_runtime_info.master_addr, "127.0.0.1:10911");
@@ -70,6 +82,9 @@ mod tests {
         assert!(!info.master);
         assert_eq!(info.master_commit_log_max_offset, 0);
         assert_eq!(info.in_sync_slave_nums, 0);
+        assert_eq!(info.pending_group_transfer_request_count, 0);
+        assert_eq!(info.pending_group_transfer_oldest_wait_millis, 0);
+        assert_eq!(info.group_transfer_ack_notify_count, 0);
         assert!(info.ha_connection_info.is_empty());
         assert_eq!(info.ha_client_runtime_info.master_addr, "");
     }
@@ -80,6 +95,9 @@ mod tests {
             master: true,
             master_commit_log_max_offset: 1000,
             in_sync_slave_nums: 3,
+            pending_group_transfer_request_count: 2,
+            pending_group_transfer_oldest_wait_millis: 10,
+            group_transfer_ack_notify_count: 4,
             ha_connection_info: vec![HAConnectionRuntimeInfo {
                 addr: "127.0.0.1:10912".to_string(),
                 slave_ack_offset: 500,
@@ -103,6 +121,8 @@ mod tests {
         assert!(display.contains("master: true"));
         assert!(display.contains("master_commit_log_max_offset: 1000"));
         assert!(display.contains("in_sync_slave_nums: 3"));
+        assert!(display.contains("pending_group_transfer_request_count: 2"));
+        assert!(display.contains("group_transfer_ack_notify_count: 4"));
         assert!(display.contains("ha_connection_info"));
         assert!(display.contains("ha_client_runtime_info"));
     }
