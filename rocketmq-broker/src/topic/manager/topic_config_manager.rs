@@ -19,6 +19,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::attribute::attribute_util::AttributeUtil;
@@ -53,6 +54,7 @@ use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
 
 pub(crate) struct TopicConfigManager<MS: MessageStore> {
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+    topic_config_snapshot: ArcSwap<HashMap<CheetahString, ArcMut<TopicConfig>>>,
     data_version: ArcMut<DataVersion>,
     persist_lock: Arc<parking_lot::Mutex<()>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
@@ -73,6 +75,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>, init: bool) -> Self {
         let mut manager = Self {
             topic_config_table: Arc::new(DashMap::with_capacity(1024)),
+            topic_config_snapshot: ArcSwap::from_pointee(HashMap::new()),
             data_version: ArcMut::new(DataVersion::default()),
             persist_lock: Arc::new(parking_lot::Mutex::new(())),
             broker_runtime_inner,
@@ -279,7 +282,16 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
     #[inline]
     pub fn select_topic_config(&self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
-        self.topic_config_table.get(topic).as_deref().cloned()
+        self.topic_config_snapshot.load().get(topic).cloned()
+    }
+
+    pub(crate) fn rebuild_topic_config_snapshot(&self) {
+        let snapshot = self
+            .topic_config_table
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect::<HashMap<CheetahString, ArcMut<TopicConfig>>>();
+        self.topic_config_snapshot.store(Arc::new(snapshot));
     }
 
     pub fn build_serialize_wrapper(
@@ -320,8 +332,11 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
     }
 
     pub(crate) fn put_topic_config(&self, topic_config: ArcMut<TopicConfig>) -> Option<ArcMut<TopicConfig>> {
-        self.topic_config_table
-            .insert(topic_config.topic_name.as_ref().unwrap().clone(), topic_config)
+        let old = self
+            .topic_config_table
+            .insert(topic_config.topic_name.as_ref().unwrap().clone(), topic_config);
+        self.rebuild_topic_config_snapshot();
+        old
     }
 
     pub async fn create_topic_in_send_message_method(
@@ -400,6 +415,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
         // Persist operation only needs lock to prevent concurrent file writes
         if create_new {
+            self.rebuild_topic_config_snapshot();
             let config_for_register = topic_config.clone().unwrap();
 
             let _lock = self.persist_lock.lock();
@@ -459,6 +475,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
         // Persist operation only needs lock
         if create_new {
+            self.rebuild_topic_config_snapshot();
             let config_for_register = topic_config.clone().unwrap();
 
             let _lock = self.persist_lock.lock();
@@ -501,7 +518,10 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
     pub fn remove_topic_config(&self, topic: &str) -> Option<ArcMut<TopicConfig>> {
         match self.topic_config_table.remove(topic) {
             None => None,
-            Some(value) => Some(value.1),
+            Some(value) => {
+                self.rebuild_topic_config_snapshot();
+                Some(value.1)
+            }
         }
     }
 
@@ -606,6 +626,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
     pub fn set_topic_config_table(&mut self, topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>) {
         self.topic_config_table = topic_config_table;
+        self.rebuild_topic_config_snapshot();
     }
 
     pub async fn create_topic_of_tran_check_max_time(
@@ -643,6 +664,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
         // Persist operation only needs lock
         if create_new {
+            self.rebuild_topic_config_snapshot();
             let config_for_register = topic_config.clone().unwrap();
 
             let _lock = self.persist_lock.lock();
@@ -747,6 +769,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
         // Persist operation only needs lock
         if create_new {
+            self.rebuild_topic_config_snapshot();
             let config_for_register = if register { result.clone() } else { None };
 
             let _lock = self.persist_lock.lock();
@@ -909,6 +932,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 return false;
             }
         }
+        self.rebuild_topic_config_snapshot();
         true
     }
 
@@ -1106,7 +1130,99 @@ impl<MS: MessageStore> ConfigManager for TopicConfigManager<MS> {
             for (key, value) in map {
                 self.topic_config_table.insert(key, ArcMut::new(value));
             }
+            self.rebuild_topic_config_snapshot();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::config_manager::ConfigManager;
+    use rocketmq_rust::ArcMut;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::message_store::GenericMessageStore;
+    use tempfile::TempDir;
+
+    use crate::broker_runtime::BrokerRuntime;
+    use crate::topic::manager::topic_config_manager::TopicConfigManager;
+
+    fn test_topic_config_manager() -> (TempDir, TopicConfigManager<GenericMessageStore>) {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
+        let mut runtime = BrokerRuntime::new(
+            Arc::new(BrokerConfig {
+                store_path_root_dir: root.clone(),
+                ..BrokerConfig::default()
+            }),
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: root,
+                ..MessageStoreConfig::default()
+            }),
+        );
+        let manager = TopicConfigManager::new(runtime.inner_for_test().clone(), false);
+        (temp_dir, manager)
+    }
+
+    #[test]
+    fn select_topic_config_reads_snapshot_after_put_and_delete() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+        let topic = CheetahString::from_static_str("SnapshotTopic");
+
+        assert!(manager.select_topic_config(&topic).is_none());
+
+        manager.put_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 2, 3)));
+        let config = manager
+            .select_topic_config(&topic)
+            .expect("topic should be visible through snapshot");
+        assert_eq!(config.read_queue_nums, 2);
+        assert_eq!(config.write_queue_nums, 3);
+
+        manager.delete_topic_config(&topic);
+        assert!(manager.select_topic_config(&topic).is_none());
+    }
+
+    #[test]
+    fn select_topic_config_reads_snapshot_after_table_replacement() {
+        let (_temp_dir, mut manager) = test_topic_config_manager();
+        let topic = CheetahString::from_static_str("ReplacementTopic");
+        let replacement = Arc::new(DashMap::new());
+        replacement.insert(
+            topic.clone(),
+            ArcMut::new(TopicConfig::with_queues(topic.clone(), 4, 5)),
+        );
+
+        manager.set_topic_config_table(replacement);
+        let config = manager
+            .select_topic_config(&topic)
+            .expect("replacement table should rebuild snapshot");
+        assert_eq!(config.read_queue_nums, 4);
+        assert_eq!(config.write_queue_nums, 5);
+
+        manager.set_topic_config_table(Arc::new(DashMap::new()));
+        assert!(manager.select_topic_config(&topic).is_none());
+    }
+
+    #[test]
+    fn decode_rebuilds_topic_config_snapshot() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+        let topic = CheetahString::from_static_str("LoadedTopic");
+        manager.put_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 6, 7)));
+        let encoded = manager.encode_pretty(false);
+
+        let (_restart_temp_dir, restarted_manager) = test_topic_config_manager();
+        restarted_manager.decode(&encoded);
+
+        let config = restarted_manager
+            .select_topic_config(&topic)
+            .expect("decoded topic should be visible through snapshot");
+        assert_eq!(config.read_queue_nums, 6);
+        assert_eq!(config.write_queue_nums, 7);
     }
 }
 

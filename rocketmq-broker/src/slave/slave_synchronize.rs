@@ -178,7 +178,9 @@ where
             }
 
             drop(topic_config_table);
-            self.broker_runtime_inner.topic_config_manager().persist();
+            let topic_config_manager = self.broker_runtime_inner.topic_config_manager();
+            topic_config_manager.rebuild_topic_config_snapshot();
+            topic_config_manager.persist();
         }
 
         // Sync topic queue mapping if present and data version differs
@@ -200,6 +202,9 @@ where
                 topic_config_table.insert(key, ArcMut::new(value));
             }
             drop(topic_config_table);
+            self.broker_runtime_inner
+                .topic_config_manager()
+                .rebuild_topic_config_snapshot();
             self.broker_runtime_inner.topic_queue_mapping_manager().persist();
         }
         Ok(())
