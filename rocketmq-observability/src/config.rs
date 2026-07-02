@@ -48,6 +48,7 @@ pub struct MetricsConfig {
     pub export_interval_millis: u64,
     pub export_timeout_millis: u64,
     pub cardinality_limit: usize,
+    pub sample_ratio: f64,
     pub topic_label_enabled: bool,
     pub consumer_group_label_enabled: bool,
 }
@@ -151,6 +152,7 @@ impl Default for MetricsConfig {
             export_interval_millis: 30_000,
             export_timeout_millis: 3_000,
             cardinality_limit: 10_000,
+            sample_ratio: 1.0,
             topic_label_enabled: true,
             consumer_group_label_enabled: true,
         }
@@ -243,6 +245,7 @@ mod tests {
         assert!(!config.enabled);
         assert!(!config.metrics.enabled);
         assert!(!config.traces.enabled);
+        assert!((config.metrics.sample_ratio - 1.0).abs() < f64::EPSILON);
         assert_eq!(config.prometheus.host, "127.0.0.1");
         assert!(!config.traces.record_message_id);
         assert!(!config.traces.record_message_keys);
