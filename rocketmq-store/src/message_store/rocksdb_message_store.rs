@@ -46,6 +46,7 @@ use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_store::MessageStore;
+use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -971,6 +972,10 @@ impl MessageStore for RocksDBMessageStore {
 
     fn sync_flush_runtime_info(&self) -> crate::base::flush_manager::SyncFlushRuntimeInfo {
         self.local_file_store.sync_flush_runtime_info()
+    }
+
+    fn health_snapshot(&self) -> StoreHealthSnapshot {
+        self.local_file_store.health_snapshot()
     }
 
     fn lock_time_millis(&self) -> i64 {

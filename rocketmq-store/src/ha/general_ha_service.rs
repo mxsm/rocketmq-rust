@@ -23,6 +23,7 @@ use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
+use crate::ha::group_transfer_service::GroupTransferRuntimeInfo;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
@@ -97,6 +98,13 @@ impl GeneralHAService {
         match self {
             GeneralHAService::DefaultHAService(service) => service.try_snapshot_acked_replicas(),
             GeneralHAService::AutoSwitchHAService(service) => service.try_snapshot_acked_replicas(),
+        }
+    }
+
+    pub(crate) fn group_transfer_runtime_info(&self) -> GroupTransferRuntimeInfo {
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.group_transfer_runtime_info(),
+            GeneralHAService::AutoSwitchHAService(service) => service.group_transfer_runtime_info(),
         }
     }
 }

@@ -48,6 +48,7 @@ use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::general_ha_service::HAAckedReplicaSnapshot;
+use crate::ha::group_transfer_service::GroupTransferRuntimeInfo;
 use crate::ha::group_transfer_service::GroupTransferService;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
@@ -108,6 +109,12 @@ impl DefaultHAService {
 
     pub fn ha_transfer_metrics(&self) -> Arc<HaTransferMetrics> {
         self.ha_transfer_metrics.clone()
+    }
+
+    pub(crate) fn group_transfer_runtime_info(&self) -> GroupTransferRuntimeInfo {
+        self.group_transfer_service
+            .as_ref()
+            .map_or_else(GroupTransferRuntimeInfo::default, GroupTransferService::runtime_info)
     }
 
     pub(crate) fn ensure_ha_client(&mut self) -> HAResult<bool> {
