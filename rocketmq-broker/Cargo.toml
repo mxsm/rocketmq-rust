@@ -146,3 +146,7 @@ harness = false
 [[bench]]
 name    = "broker_schedule_persistence_lifecycle_bench"
 harness = false
+
+[[bench]]
+name    = "send_message_properties_benchmark"
+harness = false
