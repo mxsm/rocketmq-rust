@@ -894,6 +894,7 @@ where
         let auth_type = ext_fields.get(BrokerStatsManager::ACCOUNT_AUTH_TYPE).cloned();
         let owner_parent = ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_PARENT).cloned();
         let owner_self = ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_SELF).cloned();
+        let has_send_message_hook = self.has_send_message_hook();
 
         if send_ok {
             self.update_broker_stats_on_success(
@@ -921,29 +922,25 @@ where
                 if rewrite_result.is_some() {
                     return (rewrite_result, false);
                 }
+
+                if has_send_message_hook {
+                    self.update_send_context_on_success(
+                        send_message_context,
+                        response_header,
+                        &put_message_result,
+                        owner,
+                        auth_type,
+                        owner_parent,
+                        owner_self,
+                    );
+                }
             }
 
             response.set_opaque_mut(request.opaque());
             ctx.write_response_ref(response).await;
-
-            if self.has_send_message_hook() {
-                let response_header = response
-                    .read_custom_header_mut::<SendMessageResponseHeader>()
-                    .expect("SendMessageResponseHeader must exist");
-
-                self.update_send_context_on_success(
-                    send_message_context,
-                    response_header,
-                    &put_message_result,
-                    owner,
-                    auth_type,
-                    owner_parent,
-                    owner_self,
-                );
-            }
             (None, true)
         } else {
-            if self.has_send_message_hook() {
+            if has_send_message_hook {
                 let request_body_len = request.body().as_ref().map_or(0, |body| body.len() as i32);
                 self.update_send_context_on_failure(
                     send_message_context,

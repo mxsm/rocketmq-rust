@@ -99,13 +99,36 @@ impl SendMessageResponseHeader {
     pub fn set_recall_handle(&mut self, recall_handle: Option<CheetahString>) {
         self.recall_handle = recall_handle;
     }
+
+    fn write_i64(out: &mut bytes::BytesMut, key: &str, value: i64) {
+        let mut buffer = [0_u8; 20];
+        let mut cursor = buffer.len();
+        let mut number = value.unsigned_abs();
+
+        loop {
+            cursor -= 1;
+            buffer[cursor] = b'0' + (number % 10) as u8;
+            number /= 10;
+            if number == 0 {
+                break;
+            }
+        }
+
+        if value.is_negative() {
+            cursor -= 1;
+            buffer[cursor] = b'-';
+        }
+
+        let value = std::str::from_utf8(&buffer[cursor..]).expect("decimal integer bytes are valid UTF-8");
+        Self::write_if_not_null(out, key, value);
+    }
 }
 
 impl FastCodesHeader for SendMessageResponseHeader {
     fn encode_fast(&mut self, out: &mut bytes::BytesMut) {
         Self::write_if_not_null(out, "msgId", self.msg_id.as_str());
-        Self::write_if_not_null(out, "queueId", self.queue_id.to_string().as_str());
-        Self::write_if_not_null(out, "queueOffset", self.queue_offset.to_string().as_str());
+        Self::write_i64(out, "queueId", i64::from(self.queue_id));
+        Self::write_i64(out, "queueOffset", self.queue_offset);
         if let Some(ref transaction_id) = self.transaction_id {
             Self::write_if_not_null(out, "transactionId", transaction_id.as_str());
         }
@@ -255,5 +278,19 @@ mod tests {
         assert_eq!(header.transaction_id(), Some("tx456"));
         assert_eq!(header.batch_uniq_id(), Some("batch789"));
         assert_eq!(header.recall_handle(), Some("recall-handle"));
+    }
+
+    #[test]
+    fn send_message_response_header_fast_encode_writes_signed_numeric_fields() {
+        let mut header = SendMessageResponseHeader::new(CheetahString::from("msg123"), -1, -42, None, None, None);
+        let mut out = bytes::BytesMut::new();
+
+        header.encode_fast(&mut out);
+
+        let encoded = String::from_utf8(out.to_vec()).unwrap();
+        assert!(encoded.contains("queueId"));
+        assert!(encoded.contains("-1"));
+        assert!(encoded.contains("queueOffset"));
+        assert!(encoded.contains("-42"));
     }
 }
