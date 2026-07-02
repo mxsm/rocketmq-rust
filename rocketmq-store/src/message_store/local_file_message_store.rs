@@ -2722,6 +2722,35 @@ impl MessageStore for LocalFileMessageStore {
             RunningStats::CommitLogMaxOffset.as_str().to_string(),
             self.get_max_phy_offset().to_string(),
         );
+        let sync_flush_runtime_info = self.commit_log.sync_flush_runtime_info();
+        result.insert(
+            "syncFlushQueueDepth".to_string(),
+            sync_flush_runtime_info.queue_depth.to_string(),
+        );
+        result.insert(
+            "syncFlushEnqueueTotal".to_string(),
+            sync_flush_runtime_info.enqueue_total.to_string(),
+        );
+        result.insert(
+            "syncFlushCompletedTotal".to_string(),
+            sync_flush_runtime_info.completed_total.to_string(),
+        );
+        result.insert(
+            "syncFlushTimeoutTotal".to_string(),
+            sync_flush_runtime_info.timeout_total.to_string(),
+        );
+        result.insert(
+            "syncFlushOldestWaitMillis".to_string(),
+            sync_flush_runtime_info.oldest_wait_millis.to_string(),
+        );
+        result.insert(
+            "syncFlushMaxWaitMillis".to_string(),
+            sync_flush_runtime_info.max_wait_millis.to_string(),
+        );
+        result.insert(
+            "syncFlushWaitTotalMillis".to_string(),
+            sync_flush_runtime_info.wait_total_millis.to_string(),
+        );
         result.insert(
             "storeType".to_string(),
             self.message_store_config.store_type.get_store_type().to_string(),
@@ -7844,6 +7873,13 @@ mod tests {
         assert_eq!(runtime_info["timerDequeueTps"], "0.0");
         assert_eq!(runtime_info["timerTopicBacklogDistribution"], "{}");
         assert_eq!(runtime_info["timerBacklogDistribution"], "{}");
+        assert_eq!(runtime_info["syncFlushQueueDepth"], "0");
+        assert_eq!(runtime_info["syncFlushEnqueueTotal"], "0");
+        assert_eq!(runtime_info["syncFlushCompletedTotal"], "0");
+        assert_eq!(runtime_info["syncFlushTimeoutTotal"], "0");
+        assert_eq!(runtime_info["syncFlushOldestWaitMillis"], "0");
+        assert_eq!(runtime_info["syncFlushMaxWaitMillis"], "0");
+        assert_eq!(runtime_info["syncFlushWaitTotalMillis"], "0");
     }
 
     #[tokio::test]

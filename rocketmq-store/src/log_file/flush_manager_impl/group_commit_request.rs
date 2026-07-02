@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::TimeUtils::current_nano;
 use tokio::sync::oneshot;
 
@@ -22,6 +23,7 @@ pub(crate) struct GroupCommitRequest {
     pub(crate) next_offset: i64,
     flush_ok_sender: Option<oneshot::Sender<PutMessageStatus>>,
     pub(crate) dead_line: u64,
+    pub(crate) enqueue_time_millis: u64,
 }
 
 impl GroupCommitRequest {
@@ -33,6 +35,7 @@ impl GroupCommitRequest {
                 next_offset,
                 flush_ok_sender: Some(flush_ok_sender),
                 dead_line,
+                enqueue_time_millis: current_millis(),
             },
             flush_ok_receiver,
         )
