@@ -43,6 +43,7 @@ use crate::base::message_arriving_listener::MessageArrivingListener;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_store::MessageStore;
+use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -468,6 +469,10 @@ impl MessageStore for GenericMessageStore {
 
     fn sync_flush_runtime_info(&self) -> crate::base::flush_manager::SyncFlushRuntimeInfo {
         delegate_store!(self, sync_flush_runtime_info())
+    }
+
+    fn health_snapshot(&self) -> StoreHealthSnapshot {
+        delegate_store!(self, health_snapshot())
     }
 
     fn lock_time_millis(&self) -> i64 {

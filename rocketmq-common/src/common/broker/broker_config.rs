@@ -651,6 +651,18 @@ mod defaults {
         0
     }
 
+    pub const fn ha_pending_reject_count() -> u64 {
+        0
+    }
+
+    pub const fn ha_pending_reject_wait_millis() -> u64 {
+        0
+    }
+
+    pub const fn reput_lag_reject_bytes() -> i64 {
+        0
+    }
+
     pub const fn wait_time_mills_in_pull_queue() -> u64 {
         5_000
     }
@@ -976,6 +988,15 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::sync_flush_backlog_reject_wait_millis")]
     pub sync_flush_backlog_reject_wait_millis: u64,
+
+    #[serde(default = "defaults::ha_pending_reject_count")]
+    pub ha_pending_reject_count: u64,
+
+    #[serde(default = "defaults::ha_pending_reject_wait_millis")]
+    pub ha_pending_reject_wait_millis: u64,
+
+    #[serde(default = "defaults::reput_lag_reject_bytes")]
+    pub reput_lag_reject_bytes: i64,
 
     #[serde(default = "defaults::wait_time_mills_in_pull_queue")]
     pub wait_time_mills_in_pull_queue: u64,
@@ -1433,6 +1454,9 @@ impl Default for BrokerConfig {
             wait_time_mills_in_send_queue: defaults::wait_time_mills_in_send_queue(),
             sync_flush_backlog_reject_depth: defaults::sync_flush_backlog_reject_depth(),
             sync_flush_backlog_reject_wait_millis: defaults::sync_flush_backlog_reject_wait_millis(),
+            ha_pending_reject_count: defaults::ha_pending_reject_count(),
+            ha_pending_reject_wait_millis: defaults::ha_pending_reject_wait_millis(),
+            reput_lag_reject_bytes: defaults::reput_lag_reject_bytes(),
             wait_time_mills_in_pull_queue: defaults::wait_time_mills_in_pull_queue(),
             wait_time_mills_in_lite_pull_queue: defaults::wait_time_mills_in_lite_pull_queue(),
             wait_time_mills_in_heartbeat_queue: defaults::wait_time_mills_in_heartbeat_queue(),
@@ -1809,6 +1833,18 @@ impl BrokerConfig {
         properties.insert(
             "syncFlushBacklogRejectWaitMillis".into(),
             self.sync_flush_backlog_reject_wait_millis.to_string().into(),
+        );
+        properties.insert(
+            "haPendingRejectCount".into(),
+            self.ha_pending_reject_count.to_string().into(),
+        );
+        properties.insert(
+            "haPendingRejectWaitMillis".into(),
+            self.ha_pending_reject_wait_millis.to_string().into(),
+        );
+        properties.insert(
+            "reputLagRejectBytes".into(),
+            self.reput_lag_reject_bytes.to_string().into(),
         );
         properties.insert(
             "waitTimeMillsInPullQueue".into(),
@@ -2267,6 +2303,9 @@ mod tests {
         assert_eq!(config.wait_time_mills_in_send_queue, 200);
         assert_eq!(config.sync_flush_backlog_reject_depth, 0);
         assert_eq!(config.sync_flush_backlog_reject_wait_millis, 0);
+        assert_eq!(config.ha_pending_reject_count, 0);
+        assert_eq!(config.ha_pending_reject_wait_millis, 0);
+        assert_eq!(config.reput_lag_reject_bytes, 0);
         assert_eq!(config.wait_time_mills_in_pull_queue, 5_000);
         assert_eq!(config.wait_time_mills_in_lite_pull_queue, 5_000);
         assert_eq!(config.wait_time_mills_in_heartbeat_queue, 31_000);
@@ -2505,6 +2544,9 @@ mod tests {
                 "waitTimeMillsInSendQueue": 201,
                 "syncFlushBacklogRejectDepth": 32,
                 "syncFlushBacklogRejectWaitMillis": 150,
+                "haPendingRejectCount": 16,
+                "haPendingRejectWaitMillis": 250,
+                "reputLagRejectBytes": 1048576,
                 "waitTimeMillsInPullQueue": 5001,
                 "waitTimeMillsInLitePullQueue": 5002,
                 "waitTimeMillsInHeartbeatQueue": 31001,
@@ -2520,6 +2562,9 @@ mod tests {
         assert_eq!(config.wait_time_mills_in_send_queue, 201);
         assert_eq!(config.sync_flush_backlog_reject_depth, 32);
         assert_eq!(config.sync_flush_backlog_reject_wait_millis, 150);
+        assert_eq!(config.ha_pending_reject_count, 16);
+        assert_eq!(config.ha_pending_reject_wait_millis, 250);
+        assert_eq!(config.reput_lag_reject_bytes, 1_048_576);
         assert_eq!(config.wait_time_mills_in_pull_queue, 5_001);
         assert_eq!(config.wait_time_mills_in_lite_pull_queue, 5_002);
         assert_eq!(config.wait_time_mills_in_heartbeat_queue, 31_001);

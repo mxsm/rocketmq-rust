@@ -35,6 +35,7 @@ use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::general_ha_service::HAAckedReplicaSnapshot;
+use crate::ha::group_transfer_service::GroupTransferRuntimeInfo;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
@@ -76,6 +77,10 @@ impl AutoSwitchHAService {
 
     pub(crate) fn try_snapshot_acked_replicas(&self) -> Option<Vec<HAAckedReplicaSnapshot>> {
         self.delegate.try_snapshot_acked_replicas()
+    }
+
+    pub(crate) fn group_transfer_runtime_info(&self) -> GroupTransferRuntimeInfo {
+        self.delegate.group_transfer_runtime_info()
     }
 
     pub(crate) fn init(this: &mut ArcMut<Self>, general_ha_service: GeneralHAService) -> HAResult<()> {

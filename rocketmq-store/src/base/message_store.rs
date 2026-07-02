@@ -60,6 +60,17 @@ use crate::timer::timer_message_store::TimerMessageStore;
 
 type AsyncResult<T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send>>;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StoreHealthSnapshot {
+    pub os_page_cache_busy: bool,
+    pub transient_store_pool_deficient: bool,
+    pub sync_flush: SyncFlushRuntimeInfo,
+    pub dispatch_behind_bytes: i64,
+    pub shutdown: bool,
+    pub ha_pending_request_count: u64,
+    pub ha_pending_oldest_wait_millis: u64,
+}
+
 #[trait_variant::make(MessageStore: Send)]
 pub trait MessageStoreInner: Sync + 'static {
     /// Load previously stored messages.
@@ -374,6 +385,24 @@ pub trait MessageStoreInner: Sync + 'static {
 
     /// Get current sync flush backlog runtime info without building the full runtime-info map.
     fn sync_flush_runtime_info(&self) -> SyncFlushRuntimeInfo;
+
+    /// Get a compact send-path health snapshot for broker backpressure decisions.
+    fn health_snapshot(&self) -> StoreHealthSnapshot {
+        let ha_runtime_info = self.get_ha_runtime_info();
+        StoreHealthSnapshot {
+            os_page_cache_busy: self.is_os_page_cache_busy(),
+            transient_store_pool_deficient: self.is_transient_store_pool_deficient(),
+            sync_flush: self.sync_flush_runtime_info(),
+            dispatch_behind_bytes: self.dispatch_behind_bytes(),
+            shutdown: self.is_shutdown(),
+            ha_pending_request_count: ha_runtime_info
+                .as_ref()
+                .map_or(0, |info| info.pending_group_transfer_request_count),
+            ha_pending_oldest_wait_millis: ha_runtime_info
+                .as_ref()
+                .map_or(0, |info| info.pending_group_transfer_oldest_wait_millis),
+        }
+    }
 
     /// Get lock time in milliseconds of the store.
     fn lock_time_millis(&self) -> i64;

@@ -112,6 +112,7 @@ use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::message_store::MessageStore;
+use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 #[cfg(feature = "tieredstore")]
 use crate::base::select_result::SelectMappedBufferCacheState;
@@ -3481,6 +3482,22 @@ impl MessageStore for LocalFileMessageStore {
 
     fn sync_flush_runtime_info(&self) -> crate::base::flush_manager::SyncFlushRuntimeInfo {
         self.commit_log.sync_flush_runtime_info()
+    }
+
+    fn health_snapshot(&self) -> StoreHealthSnapshot {
+        let ha_runtime_info = self
+            .ha_service
+            .as_ref()
+            .map_or_else(Default::default, GeneralHAService::group_transfer_runtime_info);
+        StoreHealthSnapshot {
+            os_page_cache_busy: self.is_os_page_cache_busy(),
+            transient_store_pool_deficient: self.is_transient_store_pool_deficient(),
+            sync_flush: self.sync_flush_runtime_info(),
+            dispatch_behind_bytes: self.dispatch_behind_bytes(),
+            shutdown: self.is_shutdown(),
+            ha_pending_request_count: ha_runtime_info.pending_request_count,
+            ha_pending_oldest_wait_millis: ha_runtime_info.pending_request_oldest_wait_millis,
+        }
     }
 
     fn lock_time_millis(&self) -> i64 {

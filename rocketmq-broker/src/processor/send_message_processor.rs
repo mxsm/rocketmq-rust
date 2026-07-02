@@ -72,6 +72,7 @@ use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::base::message_store::StoreHealthSnapshot;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
 use tracing::debug;
@@ -161,18 +162,9 @@ where
             );
         }
         let message_store = self.inner.broker_runtime_inner.message_store_unchecked();
-        if message_store.is_os_page_cache_busy() || message_store.is_transient_store_pool_deficient() {
-            return (
-                true,
-                Some(RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemBusy,
-                    "The broker message store is busy, please try again later",
-                )),
-            );
-        }
-        if let Some(remark) = sync_flush_backlog_reject_remark(
+        if let Some(remark) = store_health_reject_remark(
             self.inner.broker_runtime_inner.broker_config(),
-            message_store.sync_flush_runtime_info(),
+            message_store.health_snapshot(),
         ) {
             return (
                 true,
@@ -1152,6 +1144,46 @@ fn sync_flush_backlog_reject_remark(
     })
 }
 
+fn store_health_reject_remark(broker_config: &BrokerConfig, snapshot: StoreHealthSnapshot) -> Option<String> {
+    if snapshot.shutdown {
+        return Some("store_backpressure reason=store_shutdown".to_string());
+    }
+    if snapshot.os_page_cache_busy {
+        return Some("store_backpressure reason=page_cache_busy".to_string());
+    }
+    if snapshot.transient_store_pool_deficient {
+        return Some("store_backpressure reason=transient_store_pool_deficient".to_string());
+    }
+    if let Some(remark) = sync_flush_backlog_reject_remark(broker_config, snapshot.sync_flush) {
+        return Some(format!("store_backpressure reason=sync_flush_backlog, {remark}"));
+    }
+
+    let ha_count_threshold = broker_config.ha_pending_reject_count;
+    let ha_wait_threshold = broker_config.ha_pending_reject_wait_millis;
+    let ha_count_exceeded = ha_count_threshold > 0 && snapshot.ha_pending_request_count >= ha_count_threshold;
+    let ha_wait_exceeded = ha_wait_threshold > 0 && snapshot.ha_pending_oldest_wait_millis >= ha_wait_threshold;
+    if ha_count_exceeded || ha_wait_exceeded {
+        return Some(format!(
+            "store_backpressure reason=ha_pending, pendingCount={}, oldestWaitMillis={}, rejectCount={}, \
+             rejectWaitMillis={}",
+            snapshot.ha_pending_request_count,
+            snapshot.ha_pending_oldest_wait_millis,
+            ha_count_threshold,
+            ha_wait_threshold
+        ));
+    }
+
+    let reput_lag_threshold = broker_config.reput_lag_reject_bytes;
+    if reput_lag_threshold > 0 && snapshot.dispatch_behind_bytes >= reput_lag_threshold {
+        return Some(format!(
+            "store_backpressure reason=reput_lag, dispatchBehindBytes={}, rejectBytes={}",
+            snapshot.dispatch_behind_bytes, reput_lag_threshold
+        ));
+    }
+
+    None
+}
+
 pub(crate) struct Inner<MS, TS>
 where
     MS: MessageStore,
@@ -1742,5 +1774,109 @@ mod tests {
         let remark = sync_flush_backlog_reject_remark(&broker_config, runtime_info).expect("wait should reject");
         assert!(remark.contains("oldestWaitMillis=250"));
         assert!(remark.contains("rejectWaitMillis=250"));
+    }
+
+    #[test]
+    fn store_health_reject_remark_does_not_reject_optional_reasons_by_default() {
+        let snapshot = StoreHealthSnapshot {
+            sync_flush: SyncFlushRuntimeInfo {
+                queue_depth: 64,
+                oldest_wait_millis: 10_000,
+                ..SyncFlushRuntimeInfo::default()
+            },
+            dispatch_behind_bytes: 1024 * 1024,
+            ha_pending_request_count: 64,
+            ha_pending_oldest_wait_millis: 10_000,
+            ..StoreHealthSnapshot::default()
+        };
+
+        assert!(store_health_reject_remark(&BrokerConfig::default(), snapshot).is_none());
+    }
+
+    #[test]
+    fn store_health_reject_remark_reports_page_cache_busy() {
+        let snapshot = StoreHealthSnapshot {
+            os_page_cache_busy: true,
+            ..StoreHealthSnapshot::default()
+        };
+
+        let remark = store_health_reject_remark(&BrokerConfig::default(), snapshot).expect("page cache should reject");
+        assert!(remark.contains("reason=page_cache_busy"));
+    }
+
+    #[test]
+    fn store_health_reject_remark_reports_transient_pool_deficient() {
+        let snapshot = StoreHealthSnapshot {
+            transient_store_pool_deficient: true,
+            ..StoreHealthSnapshot::default()
+        };
+
+        let remark =
+            store_health_reject_remark(&BrokerConfig::default(), snapshot).expect("transient pool should reject");
+        assert!(remark.contains("reason=transient_store_pool_deficient"));
+    }
+
+    #[test]
+    fn store_health_reject_remark_reports_sync_flush_backlog() {
+        let broker_config = BrokerConfig {
+            sync_flush_backlog_reject_depth: 8,
+            ..BrokerConfig::default()
+        };
+        let snapshot = StoreHealthSnapshot {
+            sync_flush: SyncFlushRuntimeInfo {
+                queue_depth: 8,
+                ..SyncFlushRuntimeInfo::default()
+            },
+            ..StoreHealthSnapshot::default()
+        };
+
+        let remark = store_health_reject_remark(&broker_config, snapshot).expect("sync flush should reject");
+        assert!(remark.contains("reason=sync_flush_backlog"));
+        assert!(remark.contains("queueDepth=8"));
+    }
+
+    #[test]
+    fn store_health_reject_remark_reports_ha_pending() {
+        let broker_config = BrokerConfig {
+            ha_pending_reject_count: 4,
+            ..BrokerConfig::default()
+        };
+        let snapshot = StoreHealthSnapshot {
+            ha_pending_request_count: 4,
+            ha_pending_oldest_wait_millis: 250,
+            ..StoreHealthSnapshot::default()
+        };
+
+        let remark = store_health_reject_remark(&broker_config, snapshot).expect("HA pending should reject");
+        assert!(remark.contains("reason=ha_pending"));
+        assert!(remark.contains("pendingCount=4"));
+        assert!(remark.contains("oldestWaitMillis=250"));
+    }
+
+    #[test]
+    fn store_health_reject_remark_reports_reput_lag() {
+        let broker_config = BrokerConfig {
+            reput_lag_reject_bytes: 1024,
+            ..BrokerConfig::default()
+        };
+        let snapshot = StoreHealthSnapshot {
+            dispatch_behind_bytes: 1024,
+            ..StoreHealthSnapshot::default()
+        };
+
+        let remark = store_health_reject_remark(&broker_config, snapshot).expect("Reput lag should reject");
+        assert!(remark.contains("reason=reput_lag"));
+        assert!(remark.contains("dispatchBehindBytes=1024"));
+    }
+
+    #[test]
+    fn store_health_reject_remark_reports_store_shutdown() {
+        let snapshot = StoreHealthSnapshot {
+            shutdown: true,
+            ..StoreHealthSnapshot::default()
+        };
+
+        let remark = store_health_reject_remark(&BrokerConfig::default(), snapshot).expect("shutdown should reject");
+        assert!(remark.contains("reason=store_shutdown"));
     }
 }
