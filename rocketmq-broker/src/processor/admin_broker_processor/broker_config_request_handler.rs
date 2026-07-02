@@ -573,6 +573,17 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 .dispatch_behind_bytes()
                 .to_string(),
         );
+        let topic_config_manager = self.broker_runtime_inner.topic_config_manager();
+        runtime_info.insert(
+            "asyncTopicCreatePersistPendingCount".to_string(),
+            topic_config_manager.async_topic_create_pending_count().to_string(),
+        );
+        runtime_info.insert(
+            "asyncTopicCreatePersistSpawnFailureCount".to_string(),
+            topic_config_manager
+                .async_topic_create_spawn_failure_count()
+                .to_string(),
+        );
         runtime_info.insert(
             "pageCacheLockTimeMills".to_string(),
             self.broker_runtime_inner

@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 #[cfg(feature = "rocksdb_store")]
 use std::path::Path;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -40,6 +42,7 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQu
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::timer::timer_message_store;
@@ -57,6 +60,8 @@ pub(crate) struct TopicConfigManager<MS: MessageStore> {
     topic_config_snapshot: ArcSwap<HashMap<CheetahString, ArcMut<TopicConfig>>>,
     data_version: ArcMut<DataVersion>,
     persist_lock: Arc<parking_lot::Mutex<()>>,
+    async_topic_create_pending_count: Arc<AtomicU64>,
+    async_topic_create_spawn_failure_count: Arc<AtomicU64>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     #[cfg(feature = "rocksdb_store")]
     rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
@@ -78,6 +83,8 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             topic_config_snapshot: ArcSwap::from_pointee(HashMap::new()),
             data_version: ArcMut::new(DataVersion::default()),
             persist_lock: Arc::new(parking_lot::Mutex::new(())),
+            async_topic_create_pending_count: Arc::new(AtomicU64::new(0)),
+            async_topic_create_spawn_failure_count: Arc::new(AtomicU64::new(0)),
             broker_runtime_inner,
             #[cfg(feature = "rocksdb_store")]
             rocksdb_config_manager: None,
@@ -294,6 +301,14 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         self.topic_config_snapshot.store(Arc::new(snapshot));
     }
 
+    pub(crate) fn async_topic_create_pending_count(&self) -> u64 {
+        self.async_topic_create_pending_count.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn async_topic_create_spawn_failure_count(&self) -> u64 {
+        self.async_topic_create_spawn_failure_count.load(Ordering::Acquire)
+    }
+
     pub fn build_serialize_wrapper(
         &self,
         topic_config_table: HashMap<CheetahString, TopicConfig>,
@@ -418,17 +433,8 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             self.rebuild_topic_config_snapshot();
             let config_for_register = topic_config.clone().unwrap();
 
-            let _lock = self.persist_lock.lock();
-            self.data_version.mut_from_ref().next_version_with(
-                self.broker_runtime_inner
-                    .message_store()
-                    .unwrap()
-                    .get_state_machine_version(),
-            );
-            self.persist();
-            drop(_lock);
-
-            self.register_broker_data(config_for_register).await;
+            self.next_topic_config_data_version();
+            self.persist_and_register_created_topic(config_for_register, true).await;
             Self::record_topic_create_latency(start_time);
         }
         topic_config
@@ -478,17 +484,8 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             self.rebuild_topic_config_snapshot();
             let config_for_register = topic_config.clone().unwrap();
 
-            let _lock = self.persist_lock.lock();
-            self.data_version.mut_from_ref().next_version_with(
-                self.broker_runtime_inner
-                    .message_store()
-                    .unwrap()
-                    .get_state_machine_version(),
-            );
-            self.persist();
-            drop(_lock);
-
-            self.register_broker_data(config_for_register).await;
+            self.next_topic_config_data_version();
+            self.persist_and_register_created_topic(config_for_register, true).await;
             Self::record_topic_create_latency(start_time);
         }
         topic_config
@@ -504,6 +501,98 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         } else {
             BrokerRuntimeInner::register_increment_broker_data(broker_runtime_inner, vec![topic_config], data_version)
                 .await;
+        }
+    }
+
+    fn next_topic_config_data_version(&mut self) {
+        let state_machine_version = self
+            .broker_runtime_inner
+            .message_store()
+            .map(|message_store| message_store.get_state_machine_version())
+            .unwrap_or_default();
+        self.data_version
+            .mut_from_ref()
+            .next_version_with(state_machine_version);
+    }
+
+    async fn persist_and_register_created_topic(&mut self, topic_config: ArcMut<TopicConfig>, register: bool) {
+        if self
+            .broker_runtime_inner
+            .broker_config()
+            .async_topic_create_persist_enable
+            && self.enqueue_async_topic_create_persist(topic_config.clone(), register)
+        {
+            return;
+        }
+
+        self.persist_created_topic_sync(topic_config, register).await;
+    }
+
+    async fn persist_created_topic_sync(&mut self, topic_config: ArcMut<TopicConfig>, register: bool) {
+        let _lock = self.persist_lock.lock();
+        self.persist();
+        drop(_lock);
+
+        if register {
+            self.register_broker_data(topic_config).await;
+        }
+    }
+
+    fn enqueue_async_topic_create_persist(&self, topic_config: ArcMut<TopicConfig>, register: bool) -> bool {
+        self.async_topic_create_pending_count.fetch_add(1, Ordering::AcqRel);
+
+        let pending_count_for_task = self.async_topic_create_pending_count.clone();
+        let pending_count_for_spawn_failure = self.async_topic_create_pending_count.clone();
+        let spawn_failure_count = self.async_topic_create_spawn_failure_count.clone();
+        let broker_runtime_inner = self.broker_runtime_inner.clone();
+        let task = async move {
+            let topic_name = topic_config
+                .topic_name
+                .as_ref()
+                .map_or_else(|| "<unknown>".to_string(), ToString::to_string);
+            {
+                let topic_config_manager = broker_runtime_inner.topic_config_manager();
+                let _lock = topic_config_manager.persist_lock.lock();
+                topic_config_manager.persist();
+            }
+
+            if register {
+                let broker_config = broker_runtime_inner.broker_config().clone();
+                if broker_config.enable_single_topic_register {
+                    broker_runtime_inner.register_single_topic_all(topic_config).await;
+                } else {
+                    let data_version = broker_runtime_inner.topic_config_manager().data_version_ref().clone();
+                    BrokerRuntimeInner::register_increment_broker_data(
+                        broker_runtime_inner.clone(),
+                        vec![topic_config],
+                        data_version,
+                    )
+                    .await;
+                }
+            }
+
+            pending_count_for_task.fetch_sub(1, Ordering::AcqRel);
+            info!("async topic create persist/register completed, topic={}", topic_name);
+        };
+
+        if let Some(task_group) = self.broker_runtime_inner.broker_task_group_or_current(
+            "broker.topic-config.async-create",
+            "async topic create persist requested without an active broker runtime; falling back to synchronous \
+             persist",
+        ) {
+            match task_group.spawn("broker.topic-config.async-create.persist", TaskKind::Worker, task) {
+                Ok(_) => true,
+                Err(error) => {
+                    pending_count_for_spawn_failure.fetch_sub(1, Ordering::AcqRel);
+                    spawn_failure_count.fetch_add(1, Ordering::AcqRel);
+                    warn!(?error, "failed to spawn async topic create persist task");
+                    false
+                }
+            }
+        } else {
+            pending_count_for_spawn_failure.fetch_sub(1, Ordering::AcqRel);
+            spawn_failure_count.fetch_add(1, Ordering::AcqRel);
+            false
         }
     }
 
@@ -667,17 +756,8 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             self.rebuild_topic_config_snapshot();
             let config_for_register = topic_config.clone().unwrap();
 
-            let _lock = self.persist_lock.lock();
-            self.data_version.mut_from_ref().next_version_with(
-                self.broker_runtime_inner
-                    .message_store()
-                    .unwrap()
-                    .get_state_machine_version(),
-            );
-            self.persist();
-            drop(_lock);
-
-            self.register_broker_data(config_for_register).await;
+            self.next_topic_config_data_version();
+            self.persist_and_register_created_topic(config_for_register, true).await;
         }
         topic_config
     }
@@ -772,18 +852,11 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             self.rebuild_topic_config_snapshot();
             let config_for_register = if register { result.clone() } else { None };
 
-            let _lock = self.persist_lock.lock();
-            self.data_version.mut_from_ref().next_version_with(
-                self.broker_runtime_inner
-                    .message_store()
-                    .unwrap()
-                    .get_state_machine_version(),
-            );
-            self.persist();
-            drop(_lock);
-
+            self.next_topic_config_data_version();
             if let Some(config) = config_for_register {
-                self.register_broker_data(config).await;
+                self.persist_and_register_created_topic(config, true).await;
+            } else if let Some(config) = result.clone() {
+                self.persist_and_register_created_topic(config, false).await;
             }
             Self::record_topic_create_latency(start_time);
         }
@@ -1223,6 +1296,14 @@ mod tests {
             .expect("decoded topic should be visible through snapshot");
         assert_eq!(config.read_queue_nums, 6);
         assert_eq!(config.write_queue_nums, 7);
+    }
+
+    #[test]
+    fn async_topic_create_runtime_counters_start_empty() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+
+        assert_eq!(manager.async_topic_create_pending_count(), 0);
+        assert_eq!(manager.async_topic_create_spawn_failure_count(), 0);
     }
 }
 
