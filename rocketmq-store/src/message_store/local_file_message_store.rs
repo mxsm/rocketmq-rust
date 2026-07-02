@@ -2722,6 +2722,27 @@ impl MessageStore for LocalFileMessageStore {
             RunningStats::CommitLogMaxOffset.as_str().to_string(),
             self.get_max_phy_offset().to_string(),
         );
+        let put_message_lock_runtime_info = self.commit_log.put_message_lock_runtime_info();
+        result.insert(
+            "putMessageLockAcquireTotal".to_string(),
+            put_message_lock_runtime_info.acquire_total.to_string(),
+        );
+        result.insert(
+            "putMessageLockWaitTotalMillis".to_string(),
+            put_message_lock_runtime_info.wait_total_millis.to_string(),
+        );
+        result.insert(
+            "putMessageLockWaitMaxMillis".to_string(),
+            put_message_lock_runtime_info.wait_max_millis.to_string(),
+        );
+        result.insert(
+            "putMessageLockHoldTotalMillis".to_string(),
+            put_message_lock_runtime_info.hold_total_millis.to_string(),
+        );
+        result.insert(
+            "putMessageLockHoldMaxMillis".to_string(),
+            put_message_lock_runtime_info.hold_max_millis.to_string(),
+        );
         let sync_flush_runtime_info = self.commit_log.sync_flush_runtime_info();
         result.insert(
             "syncFlushQueueDepth".to_string(),
@@ -7877,6 +7898,11 @@ mod tests {
         assert_eq!(runtime_info["timerDequeueTps"], "0.0");
         assert_eq!(runtime_info["timerTopicBacklogDistribution"], "{}");
         assert_eq!(runtime_info["timerBacklogDistribution"], "{}");
+        assert_eq!(runtime_info["putMessageLockAcquireTotal"], "0");
+        assert_eq!(runtime_info["putMessageLockWaitTotalMillis"], "0");
+        assert_eq!(runtime_info["putMessageLockWaitMaxMillis"], "0");
+        assert_eq!(runtime_info["putMessageLockHoldTotalMillis"], "0");
+        assert_eq!(runtime_info["putMessageLockHoldMaxMillis"], "0");
         assert_eq!(runtime_info["syncFlushQueueDepth"], "0");
         assert_eq!(runtime_info["syncFlushEnqueueTotal"], "0");
         assert_eq!(runtime_info["syncFlushCompletedTotal"], "0");
