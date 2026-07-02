@@ -86,6 +86,7 @@ use crate::log_file::commit_log_loader::LoadStatistics;
 use crate::log_file::commit_log_loader::RecoveryFilePrefetch;
 use crate::log_file::commit_log_loader::RecoveryMmapAdvice;
 use crate::log_file::flush_manager_impl::default_flush_manager::DefaultFlushManager;
+use crate::log_file::flush_manager_impl::default_flush_manager::SyncFlushRuntimeInfo;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
@@ -605,6 +606,10 @@ impl CommitLog {
     pub fn shutdown(&mut self) {
         self.flush();
         self.flush_manager.shutdown();
+    }
+
+    pub fn sync_flush_runtime_info(&self) -> SyncFlushRuntimeInfo {
+        self.flush_manager.sync_flush_runtime_info()
     }
 
     pub async fn shutdown_gracefully(&mut self) {

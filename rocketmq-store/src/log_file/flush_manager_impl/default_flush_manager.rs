@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::VecDeque;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_runtime::TaskGroup;
@@ -35,12 +39,96 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SyncFlushRuntimeInfo {
+    pub queue_depth: u64,
+    pub enqueue_total: u64,
+    pub completed_total: u64,
+    pub timeout_total: u64,
+    pub oldest_wait_millis: u64,
+    pub max_wait_millis: u64,
+    pub wait_total_millis: u64,
+}
+
+#[derive(Clone, Default)]
+struct SyncFlushStats {
+    inner: Arc<SyncFlushStatsInner>,
+}
+
+#[derive(Default)]
+struct SyncFlushStatsInner {
+    queue_depth: AtomicU64,
+    enqueue_total: AtomicU64,
+    completed_total: AtomicU64,
+    timeout_total: AtomicU64,
+    max_wait_millis: AtomicU64,
+    wait_total_millis: AtomicU64,
+    pending_enqueue_times: Mutex<VecDeque<u64>>,
+}
+
+impl SyncFlushStats {
+    fn record_enqueue(&self, enqueue_time_millis: u64) {
+        self.inner.pending_enqueue_times.lock().push_back(enqueue_time_millis);
+        self.inner.queue_depth.fetch_add(1, Ordering::Relaxed);
+        self.inner.enqueue_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_completion(&self, request: &GroupCommitRequest, status: PutMessageStatus) {
+        let _ = self
+            .inner
+            .queue_depth
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+                Some(depth.saturating_sub(1))
+            });
+        self.inner.pending_enqueue_times.lock().pop_front();
+
+        let wait_millis = current_millis().saturating_sub(request.enqueue_time_millis);
+        self.inner.completed_total.fetch_add(1, Ordering::Relaxed);
+        self.inner.wait_total_millis.fetch_add(wait_millis, Ordering::Relaxed);
+        if status == PutMessageStatus::FlushDiskTimeout {
+            self.inner.timeout_total.fetch_add(1, Ordering::Relaxed);
+        }
+        update_atomic_max(&self.inner.max_wait_millis, wait_millis);
+    }
+
+    fn snapshot(&self) -> SyncFlushRuntimeInfo {
+        let oldest_wait_millis = self
+            .inner
+            .pending_enqueue_times
+            .lock()
+            .front()
+            .map(|enqueue_time| current_millis().saturating_sub(*enqueue_time))
+            .unwrap_or_default();
+
+        SyncFlushRuntimeInfo {
+            queue_depth: self.inner.queue_depth.load(Ordering::Relaxed),
+            enqueue_total: self.inner.enqueue_total.load(Ordering::Relaxed),
+            completed_total: self.inner.completed_total.load(Ordering::Relaxed),
+            timeout_total: self.inner.timeout_total.load(Ordering::Relaxed),
+            oldest_wait_millis,
+            max_wait_millis: self.inner.max_wait_millis.load(Ordering::Relaxed),
+            wait_total_millis: self.inner.wait_total_millis.load(Ordering::Relaxed),
+        }
+    }
+}
+
+fn update_atomic_max(target: &AtomicU64, value: u64) {
+    let mut current = target.load(Ordering::Relaxed);
+    while value > current {
+        match target.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
 pub struct DefaultFlushManager {
     group_commit_service: Option<GroupCommitService>,
     flush_real_time_service: Option<FlushRealTimeService>,
     commit_real_time_service: Option<CommitRealTimeService>,
     message_store_config: Arc<MessageStoreConfig>,
     mapped_file_queue: Option<ArcMut<MappedFileQueue>>,
+    sync_flush_stats: SyncFlushStats,
 }
 
 impl DefaultFlushManager {
@@ -49,6 +137,7 @@ impl DefaultFlushManager {
         mapped_file_queue: ArcMut<MappedFileQueue>,
         store_checkpoint: Arc<StoreCheckpoint>,
     ) -> Self {
+        let sync_flush_stats = SyncFlushStats::default();
         let (group_commit_service, flush_real_time_service) = match message_store_config.flush_disk_type {
             FlushDiskType::SyncFlush => (
                 Some(GroupCommitService {
@@ -57,6 +146,7 @@ impl DefaultFlushManager {
                     tx_in: None,
                     shutdown_token: CancellationToken::new(),
                     worker_group: None,
+                    sync_flush_stats: sync_flush_stats.clone(),
                 }),
                 None,
             ),
@@ -91,11 +181,16 @@ impl DefaultFlushManager {
             message_store_config,
             commit_real_time_service,
             mapped_file_queue: Some(mapped_file_queue),
+            sync_flush_stats,
         }
     }
 }
 
 impl DefaultFlushManager {
+    pub fn sync_flush_runtime_info(&self) -> SyncFlushRuntimeInfo {
+        self.sync_flush_stats.snapshot()
+    }
+
     pub(crate) fn commit_real_time_service(&self) -> Option<&CommitRealTimeService> {
         self.commit_real_time_service.as_ref()
     }
@@ -240,6 +335,7 @@ struct GroupCommitService {
     tx_in: Option<tokio::sync::mpsc::Sender<GroupCommitRequest>>,
     shutdown_token: CancellationToken,
     worker_group: Option<TaskGroup>,
+    sync_flush_stats: SyncFlushStats,
 }
 
 impl GroupCommitService {
@@ -251,8 +347,15 @@ impl GroupCommitService {
         let Some(tx_in) = self.tx_in.as_ref() else {
             return false;
         };
+        let enqueue_time_millis = request.enqueue_time_millis;
         tokio::select! {
-            result = tx_in.send(request) => result.is_ok(),
+            result = tx_in.send(request) => {
+                let sent = result.is_ok();
+                if sent {
+                    self.sync_flush_stats.record_enqueue(enqueue_time_millis);
+                }
+                sent
+            },
             _ = self.shutdown_token.cancelled() => false,
         }
     }
@@ -275,6 +378,7 @@ impl GroupCommitService {
         let shutdown_token = self.shutdown_token.clone();
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = Arc::clone(&self.notified);
+        let sync_flush_stats = self.sync_flush_stats.clone();
         if let Err(error) = worker_group.spawn_service("commit-log-group-commit", async move {
             loop {
                 tokio::select! {
@@ -287,7 +391,7 @@ impl GroupCommitService {
                             let flushed_where = flush_mapped_file_queue(mapped_file_queue.clone(), 0)
                                 .await
                                 .map_or_else(|| mapped_file_queue.get_flushed_where(), |result| result.flushed_where);
-                            complete_group_commit_batch(remaining, flushed_where);
+                            complete_group_commit_batch(remaining, flushed_where, &sync_flush_stats);
                         }
                         break;
                     }
@@ -328,7 +432,7 @@ impl GroupCommitService {
                         if store_timestamp > 0 {
                             store_checkpoint.set_physic_msg_timestamp(store_timestamp);
                         }
-                        complete_group_commit_batch(requests, flushed_where);
+                        complete_group_commit_batch(requests, flushed_where, &sync_flush_stats);
                     }
                     }
                 }
@@ -358,13 +462,18 @@ impl GroupCommitService {
     }
 }
 
-fn complete_group_commit_batch(requests: Vec<GroupCommitRequest>, flushed_where: i64) {
+fn complete_group_commit_batch(
+    requests: Vec<GroupCommitRequest>,
+    flushed_where: i64,
+    sync_flush_stats: &SyncFlushStats,
+) {
     for request in requests {
         let status = if flushed_where >= request.next_offset {
             PutMessageStatus::PutOk
         } else {
             PutMessageStatus::FlushDiskTimeout
         };
+        sync_flush_stats.record_completion(&request, status);
         request.complete(status);
     }
 }
@@ -652,14 +761,38 @@ mod tests {
 
     #[test]
     fn complete_group_commit_batch_marks_each_request_by_final_flushed_offset() {
+        let sync_flush_stats = SyncFlushStats::default();
         let (request_64, mut response_64) = GroupCommitRequest::new(64, 5_000);
         let (request_96, mut response_96) = GroupCommitRequest::new(96, 5_000);
+        sync_flush_stats.record_enqueue(request_64.enqueue_time_millis);
+        sync_flush_stats.record_enqueue(request_96.enqueue_time_millis);
         let requests = vec![request_64, request_96];
 
-        complete_group_commit_batch(requests, 80);
+        complete_group_commit_batch(requests, 80, &sync_flush_stats);
 
         assert_eq!(response_64.try_recv(), Ok(PutMessageStatus::PutOk));
         assert_eq!(response_96.try_recv(), Ok(PutMessageStatus::FlushDiskTimeout));
+
+        let runtime_info = sync_flush_stats.snapshot();
+        assert_eq!(runtime_info.queue_depth, 0);
+        assert_eq!(runtime_info.enqueue_total, 2);
+        assert_eq!(runtime_info.completed_total, 2);
+        assert_eq!(runtime_info.timeout_total, 1);
+    }
+
+    #[test]
+    fn sync_flush_runtime_info_reports_pending_oldest_wait() {
+        let sync_flush_stats = SyncFlushStats::default();
+        let (request, _response) = GroupCommitRequest::new(64, 5_000);
+
+        sync_flush_stats.record_enqueue(request.enqueue_time_millis);
+
+        let runtime_info = sync_flush_stats.snapshot();
+        assert_eq!(runtime_info.queue_depth, 1);
+        assert_eq!(runtime_info.enqueue_total, 1);
+        assert_eq!(runtime_info.completed_total, 0);
+        assert_eq!(runtime_info.timeout_total, 0);
+        assert!(runtime_info.oldest_wait_millis <= current_millis().saturating_sub(request.enqueue_time_millis));
     }
 
     #[tokio::test]
@@ -753,6 +886,7 @@ mod tests {
             tx_in: None,
             shutdown_token: CancellationToken::new(),
             worker_group: None,
+            sync_flush_stats: SyncFlushStats::default(),
         };
         service.start(mapped_file_queue);
 
