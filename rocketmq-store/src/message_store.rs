@@ -466,6 +466,10 @@ impl MessageStore for GenericMessageStore {
         delegate_store!(self, is_os_page_cache_busy())
     }
 
+    fn sync_flush_runtime_info(&self) -> crate::base::flush_manager::SyncFlushRuntimeInfo {
+        delegate_store!(self, sync_flush_runtime_info())
+    }
+
     fn lock_time_millis(&self) -> i64 {
         delegate_store!(self, lock_time_millis())
     }

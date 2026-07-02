@@ -31,6 +31,7 @@ use tracing::debug;
 use tracing::warn;
 
 use crate::base::flush_manager::FlushManager;
+use crate::base::flush_manager::SyncFlushRuntimeInfo;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -38,17 +39,6 @@ use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SyncFlushRuntimeInfo {
-    pub queue_depth: u64,
-    pub enqueue_total: u64,
-    pub completed_total: u64,
-    pub timeout_total: u64,
-    pub oldest_wait_millis: u64,
-    pub max_wait_millis: u64,
-    pub wait_total_millis: u64,
-}
 
 #[derive(Clone, Default)]
 struct SyncFlushStats {

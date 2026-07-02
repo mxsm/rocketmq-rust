@@ -34,6 +34,7 @@ use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
+use crate::base::flush_manager::SyncFlushRuntimeInfo;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
@@ -370,6 +371,9 @@ pub trait MessageStoreInner: Sync + 'static {
 
     /// Check if the operating system page cache is busy.
     fn is_os_page_cache_busy(&self) -> bool;
+
+    /// Get current sync flush backlog runtime info without building the full runtime-info map.
+    fn sync_flush_runtime_info(&self) -> SyncFlushRuntimeInfo;
 
     /// Get lock time in milliseconds of the store.
     fn lock_time_millis(&self) -> i64;

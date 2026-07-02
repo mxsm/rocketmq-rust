@@ -639,6 +639,14 @@ mod defaults {
         200
     }
 
+    pub const fn sync_flush_backlog_reject_depth() -> u64 {
+        0
+    }
+
+    pub const fn sync_flush_backlog_reject_wait_millis() -> u64 {
+        0
+    }
+
     pub const fn wait_time_mills_in_pull_queue() -> u64 {
         5_000
     }
@@ -955,6 +963,12 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::wait_time_mills_in_send_queue")]
     pub wait_time_mills_in_send_queue: u64,
+
+    #[serde(default = "defaults::sync_flush_backlog_reject_depth")]
+    pub sync_flush_backlog_reject_depth: u64,
+
+    #[serde(default = "defaults::sync_flush_backlog_reject_wait_millis")]
+    pub sync_flush_backlog_reject_wait_millis: u64,
 
     #[serde(default = "defaults::wait_time_mills_in_pull_queue")]
     pub wait_time_mills_in_pull_queue: u64,
@@ -1409,6 +1423,8 @@ impl Default for BrokerConfig {
             send_heartbeat_timeout_millis: 1000,
             broker_fast_failure_enable: defaults::broker_fast_failure_enable(),
             wait_time_mills_in_send_queue: defaults::wait_time_mills_in_send_queue(),
+            sync_flush_backlog_reject_depth: defaults::sync_flush_backlog_reject_depth(),
+            sync_flush_backlog_reject_wait_millis: defaults::sync_flush_backlog_reject_wait_millis(),
             wait_time_mills_in_pull_queue: defaults::wait_time_mills_in_pull_queue(),
             wait_time_mills_in_lite_pull_queue: defaults::wait_time_mills_in_lite_pull_queue(),
             wait_time_mills_in_heartbeat_queue: defaults::wait_time_mills_in_heartbeat_queue(),
@@ -1773,6 +1789,14 @@ impl BrokerConfig {
         properties.insert(
             "waitTimeMillsInSendQueue".into(),
             self.wait_time_mills_in_send_queue.to_string().into(),
+        );
+        properties.insert(
+            "syncFlushBacklogRejectDepth".into(),
+            self.sync_flush_backlog_reject_depth.to_string().into(),
+        );
+        properties.insert(
+            "syncFlushBacklogRejectWaitMillis".into(),
+            self.sync_flush_backlog_reject_wait_millis.to_string().into(),
         );
         properties.insert(
             "waitTimeMillsInPullQueue".into(),
@@ -2228,6 +2252,8 @@ mod tests {
 
         assert!(config.broker_fast_failure_enable);
         assert_eq!(config.wait_time_mills_in_send_queue, 200);
+        assert_eq!(config.sync_flush_backlog_reject_depth, 0);
+        assert_eq!(config.sync_flush_backlog_reject_wait_millis, 0);
         assert_eq!(config.wait_time_mills_in_pull_queue, 5_000);
         assert_eq!(config.wait_time_mills_in_lite_pull_queue, 5_000);
         assert_eq!(config.wait_time_mills_in_heartbeat_queue, 31_000);
@@ -2375,6 +2401,18 @@ mod tests {
             Some("200")
         );
         assert_eq!(
+            properties
+                .get("syncFlushBacklogRejectDepth")
+                .map(|value| value.as_str()),
+            Some("0")
+        );
+        assert_eq!(
+            properties
+                .get("syncFlushBacklogRejectWaitMillis")
+                .map(|value| value.as_str()),
+            Some("0")
+        );
+        assert_eq!(
             properties.get("waitTimeMillsInPullQueue").map(|value| value.as_str()),
             Some("5000")
         );
@@ -2445,6 +2483,8 @@ mod tests {
             r#"{
                 "brokerFastFailureEnable": false,
                 "waitTimeMillsInSendQueue": 201,
+                "syncFlushBacklogRejectDepth": 32,
+                "syncFlushBacklogRejectWaitMillis": 150,
                 "waitTimeMillsInPullQueue": 5001,
                 "waitTimeMillsInLitePullQueue": 5002,
                 "waitTimeMillsInHeartbeatQueue": 31001,
@@ -2457,6 +2497,8 @@ mod tests {
 
         assert!(!config.broker_fast_failure_enable);
         assert_eq!(config.wait_time_mills_in_send_queue, 201);
+        assert_eq!(config.sync_flush_backlog_reject_depth, 32);
+        assert_eq!(config.sync_flush_backlog_reject_wait_millis, 150);
         assert_eq!(config.wait_time_mills_in_pull_queue, 5_001);
         assert_eq!(config.wait_time_mills_in_lite_pull_queue, 5_002);
         assert_eq!(config.wait_time_mills_in_heartbeat_queue, 31_001);
