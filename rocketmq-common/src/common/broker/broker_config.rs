@@ -635,6 +635,10 @@ mod defaults {
         true
     }
 
+    pub const fn send_request_executor_detached_enable() -> bool {
+        false
+    }
+
     pub const fn wait_time_mills_in_send_queue() -> u64 {
         200
     }
@@ -960,6 +964,9 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::broker_fast_failure_enable")]
     pub broker_fast_failure_enable: bool,
+
+    #[serde(default = "defaults::send_request_executor_detached_enable")]
+    pub send_request_executor_detached_enable: bool,
 
     #[serde(default = "defaults::wait_time_mills_in_send_queue")]
     pub wait_time_mills_in_send_queue: u64,
@@ -1422,6 +1429,7 @@ impl Default for BrokerConfig {
             register_name_server_period: 1000 * 30,
             send_heartbeat_timeout_millis: 1000,
             broker_fast_failure_enable: defaults::broker_fast_failure_enable(),
+            send_request_executor_detached_enable: defaults::send_request_executor_detached_enable(),
             wait_time_mills_in_send_queue: defaults::wait_time_mills_in_send_queue(),
             sync_flush_backlog_reject_depth: defaults::sync_flush_backlog_reject_depth(),
             sync_flush_backlog_reject_wait_millis: defaults::sync_flush_backlog_reject_wait_millis(),
@@ -1785,6 +1793,10 @@ impl BrokerConfig {
         properties.insert(
             "brokerFastFailureEnable".into(),
             self.broker_fast_failure_enable.to_string().into(),
+        );
+        properties.insert(
+            "sendRequestExecutorDetachedEnable".into(),
+            self.send_request_executor_detached_enable.to_string().into(),
         );
         properties.insert(
             "waitTimeMillsInSendQueue".into(),
@@ -2251,6 +2263,7 @@ mod tests {
         let config = BrokerConfig::default();
 
         assert!(config.broker_fast_failure_enable);
+        assert!(!config.send_request_executor_detached_enable);
         assert_eq!(config.wait_time_mills_in_send_queue, 200);
         assert_eq!(config.sync_flush_backlog_reject_depth, 0);
         assert_eq!(config.sync_flush_backlog_reject_wait_millis, 0);
@@ -2397,6 +2410,12 @@ mod tests {
             Some("true")
         );
         assert_eq!(
+            properties
+                .get("sendRequestExecutorDetachedEnable")
+                .map(|value| value.as_str()),
+            Some("false")
+        );
+        assert_eq!(
             properties.get("waitTimeMillsInSendQueue").map(|value| value.as_str()),
             Some("200")
         );
@@ -2482,6 +2501,7 @@ mod tests {
         let config: BrokerConfig = serde_json::from_str(
             r#"{
                 "brokerFastFailureEnable": false,
+                "sendRequestExecutorDetachedEnable": true,
                 "waitTimeMillsInSendQueue": 201,
                 "syncFlushBacklogRejectDepth": 32,
                 "syncFlushBacklogRejectWaitMillis": 150,
@@ -2496,6 +2516,7 @@ mod tests {
         .expect("broker config should deserialize Java fast failure keys");
 
         assert!(!config.broker_fast_failure_enable);
+        assert!(config.send_request_executor_detached_enable);
         assert_eq!(config.wait_time_mills_in_send_queue, 201);
         assert_eq!(config.sync_flush_backlog_reject_depth, 32);
         assert_eq!(config.sync_flush_backlog_reject_wait_millis, 150);

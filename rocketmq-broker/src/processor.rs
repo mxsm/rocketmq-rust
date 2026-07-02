@@ -396,6 +396,46 @@ where
         let queued_request = request.clone();
         let (task, response_rx) = broker_fast_failure.enqueue(queue_kind, opaque);
         let broker_fast_failure = broker_fast_failure.clone();
+        let detach_response = should_detach_fast_failure_response(
+            queue_kind,
+            broker_fast_failure.send_request_executor_detached_enabled(),
+            self.request_task_group.is_some(),
+        );
+
+        if detach_response {
+            let Some(task_group) = &self.request_task_group else {
+                return Ok(Some(system_error_response(
+                    opaque,
+                    "detached send request executor has no task group",
+                )));
+            };
+            let detached_task = Self::run_detached_fast_failure_request(
+                queue_kind,
+                broker_fast_failure.clone(),
+                task.clone(),
+                processor,
+                channel,
+                ctx,
+                queued_request,
+                opaque,
+                response_rx,
+            );
+            if let Err(error) =
+                task_group.spawn("broker.request.fast-failure.detached", TaskKind::Worker, detached_task)
+            {
+                warn!(?error, "failed to spawn detached fast failure request task");
+                broker_fast_failure.cancel(
+                    queue_kind,
+                    &task,
+                    system_error_response(opaque, "detached fast failure request task spawn failed"),
+                );
+                return Ok(Some(system_error_response(
+                    opaque,
+                    "detached fast failure request task spawn failed",
+                )));
+            }
+            return Ok(None);
+        }
 
         let request_task = Self::run_fast_failure_request(
             queue_kind,
@@ -426,6 +466,55 @@ where
                 opaque,
                 "fast failure response channel closed before request completed",
             ))),
+        }
+    }
+
+    async fn run_detached_fast_failure_request(
+        queue_kind: FastFailureQueueKind,
+        broker_fast_failure: BrokerFastFailure,
+        task: Arc<FastFailureTask>,
+        processor: BrokerProcessorType<MS, TS>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        queued_request: RemotingCommand,
+        opaque: i32,
+        response_rx: tokio::sync::oneshot::Receiver<Option<RemotingCommand>>,
+    ) {
+        let request_task = Self::run_fast_failure_request(
+            queue_kind,
+            broker_fast_failure,
+            task,
+            processor,
+            channel,
+            ctx.clone(),
+            queued_request,
+            opaque,
+        );
+        tokio::pin!(request_task);
+        tokio::pin!(response_rx);
+
+        let response_result = tokio::select! {
+            _ = &mut request_task => (&mut response_rx).await,
+            response_result = &mut response_rx => response_result,
+        };
+        Self::write_detached_fast_failure_response(response_result, ctx, opaque).await;
+    }
+
+    async fn write_detached_fast_failure_response(
+        response_result: Result<Option<RemotingCommand>, tokio::sync::oneshot::error::RecvError>,
+        mut ctx: ConnectionHandlerContext,
+        opaque: i32,
+    ) {
+        match response_result {
+            Ok(Some(response)) => ctx.write_response(response.set_opaque(opaque)).await,
+            Ok(None) => {}
+            Err(_error) => {
+                ctx.write_response(system_error_response(
+                    opaque,
+                    "fast failure response channel closed before detached request completed",
+                ))
+                .await;
+            }
         }
     }
 
@@ -464,6 +553,14 @@ where
         };
         broker_fast_failure.complete(queue_kind, &task, response);
     }
+}
+
+fn should_detach_fast_failure_response(
+    queue_kind: FastFailureQueueKind,
+    send_request_executor_detached_enabled: bool,
+    has_request_task_group: bool,
+) -> bool {
+    queue_kind == FastFailureQueueKind::Send && send_request_executor_detached_enabled && has_request_task_group
 }
 
 fn fast_failure_queue_kind(request_code: i32, default_processor: bool) -> Option<FastFailureQueueKind> {
@@ -557,6 +654,30 @@ mod tests {
             fast_failure_queue_kind(RequestCode::UpdateBrokerConfig as i32, false),
             None
         );
+    }
+
+    #[test]
+    fn detach_fast_failure_response_only_applies_to_send_with_task_group() {
+        assert!(should_detach_fast_failure_response(
+            FastFailureQueueKind::Send,
+            true,
+            true
+        ));
+        assert!(!should_detach_fast_failure_response(
+            FastFailureQueueKind::Send,
+            false,
+            true
+        ));
+        assert!(!should_detach_fast_failure_response(
+            FastFailureQueueKind::Send,
+            true,
+            false
+        ));
+        assert!(!should_detach_fast_failure_response(
+            FastFailureQueueKind::Pull,
+            true,
+            true
+        ));
     }
 
     #[tokio::test]
