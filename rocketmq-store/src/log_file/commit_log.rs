@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -348,6 +349,7 @@ pub struct CommitLog {
     begin_time_in_lock: Arc<AtomicU64>,
     cold_data_check_service: Arc<ColdDataCheckService>,
     active_memory_lock: ParkingMutex<CommitLogActiveMemoryLock>,
+    active_memory_lock_present: AtomicBool,
     last_load_statistics: ParkingMutex<LoadStatistics>,
 }
 
@@ -401,6 +403,7 @@ impl CommitLog {
                 message_store_config.linux_memory_lock_warn_only,
                 memory_lock_budget_bytes,
             )),
+            active_memory_lock_present: AtomicBool::new(false),
             last_load_statistics: ParkingMutex::new(LoadStatistics::default()),
         }
     }
@@ -472,15 +475,17 @@ impl CommitLog {
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
         let Some(target) = self.active_memory_lock_target(mapped_file) else {
-            return self.release_active_memory_lock_with(&mut unlocker);
+            return self.release_active_memory_lock_if_present(&mut unlocker);
         };
         let file_from_offset = mapped_file.get_file_from_offset();
         let mut active_memory_lock = self.active_memory_lock.lock();
         if active_memory_lock.is_current(file_from_offset, target) {
+            self.active_memory_lock_present.store(true, Ordering::Release);
             return Ok(());
         }
 
         Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlocker)?;
+        self.active_memory_lock_present.store(false, Ordering::Release);
         if let Some(handle) = mapped_file.lock_region_with(
             &active_memory_lock.manager,
             target.category,
@@ -489,8 +494,22 @@ impl CommitLog {
             &mut locker,
         )? {
             active_memory_lock.set_current(file_from_offset, target, handle);
+            self.active_memory_lock_present.store(true, Ordering::Release);
+        } else {
+            self.active_memory_lock_present.store(false, Ordering::Release);
         }
         Ok(())
+    }
+
+    fn release_active_memory_lock_if_present<G>(&self, unlocker: G) -> RocketMQResult<()>
+    where
+        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        if !self.active_memory_lock_present.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
+        self.release_active_memory_lock_with(unlocker)
     }
 
     fn release_active_memory_lock_with<G>(&self, mut unlocker: G) -> RocketMQResult<()>
@@ -498,7 +517,9 @@ impl CommitLog {
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
         let mut active_memory_lock = self.active_memory_lock.lock();
-        Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlocker)
+        Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlocker)?;
+        self.active_memory_lock_present.store(false, Ordering::Release);
+        Ok(())
     }
 
     fn release_active_memory_lock_locked<G>(
@@ -3056,6 +3077,71 @@ mod tests {
             events.into_inner(),
             vec![("lock", 4096), ("unlock", 4096), ("lock", 4096)]
         );
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn active_memory_lock_present_tracks_release_fast_path() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-commitlog-active-lock-fast-path-{}",
+            current_millis()
+        ));
+        let mut store = new_test_message_store_with_config(
+            &temp_root,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 4096,
+                linux_memory_lock_mode: LinuxMemoryLockMode::ActiveFile,
+                linux_memory_lock_budget_bytes: 8192,
+                linux_memory_lock_warn_only: true,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::SyncMaster,
+            false,
+        );
+        let mapped_file = new_test_mapped_file(&temp_root, 0, 4096);
+        let events = RefCell::new(Vec::<(&'static str, usize)>::new());
+
+        store
+            .get_commit_log_mut()
+            .ensure_active_mapped_file_locked_with(
+                &mapped_file,
+                |_, len| {
+                    events.borrow_mut().push(("lock", len));
+                    Ok(())
+                },
+                |_, len| {
+                    events.borrow_mut().push(("unlock", len));
+                    Ok(())
+                },
+            )
+            .expect("active file lock should succeed");
+        assert!(store
+            .get_commit_log()
+            .active_memory_lock_present
+            .load(Ordering::Acquire));
+
+        store
+            .get_commit_log()
+            .release_active_memory_lock_if_present(|_, len| {
+                events.borrow_mut().push(("unlock", len));
+                Ok(())
+            })
+            .expect("active file lock release should succeed");
+        assert!(!store
+            .get_commit_log()
+            .active_memory_lock_present
+            .load(Ordering::Acquire));
+
+        store
+            .get_commit_log()
+            .release_active_memory_lock_if_present(|_, len| {
+                events.borrow_mut().push(("unexpected_unlock", len));
+                Ok(())
+            })
+            .expect("inactive release should be a fast no-op");
+
+        assert_eq!(events.into_inner(), vec![("lock", 4096), ("unlock", 4096)]);
 
         let _ = fs::remove_dir_all(temp_root);
     }
