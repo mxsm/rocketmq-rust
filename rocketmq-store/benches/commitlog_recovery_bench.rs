@@ -341,6 +341,10 @@ fn phase3_benchmark_artifact_dir() -> PathBuf {
     workspace_root().join("target/recovery-baseline/phase3")
 }
 
+fn phase5_benchmark_artifact_dir() -> PathBuf {
+    workspace_root().join("target/recovery-baseline/phase5")
+}
+
 fn active_features() -> Vec<&'static str> {
     let mut features = Vec::new();
     if cfg!(feature = "local_file_store") {
@@ -629,6 +633,42 @@ fn write_phase3_cq_concurrency_manifest() {
     .expect("phase3 recovery benchmark manifest should be written");
 }
 
+fn write_phase5_platform_acceptance_manifest() {
+    let output_dir = phase5_benchmark_artifact_dir();
+    fs::create_dir_all(&output_dir).expect("phase5 platform acceptance artifact directory should be created");
+
+    let generated_at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_millis();
+    let report = rocketmq_store::bench_support::phase5_platform_optimization_acceptance_report();
+    let payload = serde_json::json!({
+        "case": "commitlog_recovery_phase5_platform_acceptance",
+        "generated_at_unix_ms": generated_at_unix_ms,
+        "commit": std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local".to_string()),
+        "pr": std::env::var("GITHUB_REF_NAME").unwrap_or_else(|_| "local".to_string()),
+        "environment": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "profile": std::env::var("PROFILE").unwrap_or_else(|_| "bench".to_string()),
+            "features": active_features(),
+        },
+        "baseline": {
+            "phase1": "target/recovery-baseline/phase1/commitlog-recovery-phase1-baseline.json",
+            "phase2": "target/recovery-baseline/phase2/commitlog-recovery-phase2-window-comparison.json",
+            "phase3": "target/recovery-baseline/phase3/commitlog-recovery-phase3-cq-concurrency.json"
+        },
+        "report": report,
+    });
+
+    let path = output_dir.join("commitlog-recovery-phase5-platform-acceptance.json");
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&payload).expect("phase5 platform acceptance manifest should serialize"),
+    )
+    .expect("phase5 platform acceptance manifest should be written");
+}
+
 /// Benchmark recovery statistics operations
 fn bench_recovery_statistics(c: &mut Criterion) {
     c.bench_function("recovery_statistics_clone", |b| {
@@ -802,6 +842,30 @@ fn bench_phase3_cq_concurrency_comparison(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_phase5_platform_acceptance(c: &mut Criterion) {
+    write_phase5_platform_acceptance_manifest();
+
+    let report = rocketmq_store::bench_support::phase5_platform_optimization_acceptance_report();
+    let mut group = c.benchmark_group("commitlog_recovery/phase5_platform_acceptance");
+    for scenario in &report.scenarios {
+        group.bench_with_input(
+            BenchmarkId::from_parameter(scenario.id),
+            scenario,
+            |bencher, scenario| {
+                bencher.iter(|| {
+                    black_box((
+                        scenario.platform,
+                        scenario.storage_medium,
+                        scenario.page_cache_state,
+                        scenario.default_enabled,
+                    ));
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 /// Benchmark recovery context creation
 fn bench_recovery_context(c: &mut Criterion) {
     c.bench_function("recovery_context_creation", |b| {
@@ -853,6 +917,7 @@ criterion_group!(
         bench_phase1_baseline_scenarios,
         bench_phase2_window_comparison,
         bench_phase3_cq_concurrency_comparison,
+        bench_phase5_platform_acceptance,
         bench_recovery_context,
         bench_message_processing_overhead
 );
