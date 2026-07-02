@@ -429,7 +429,7 @@ fn bench_reput_once_after_batch(c: &mut Criterion) {
     let mut group = c.benchmark_group("phase5/reput_once_after_batch");
     group.sample_size(10);
 
-    for batch_size in [32_usize, 64, 128] {
+    for batch_size in [32_usize, 64, 128, 256] {
         group.throughput(Throughput::Elements(batch_size as u64));
         group.bench_with_input(
             BenchmarkId::from_parameter(format!("{batch_size}_messages")),

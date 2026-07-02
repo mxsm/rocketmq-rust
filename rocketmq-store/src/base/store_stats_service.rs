@@ -102,6 +102,12 @@ pub struct StoreStatsService {
     put_message_entire_time_max: AtomicU64,
     get_message_entire_time_max: AtomicU64,
     dispatch_max_buffer: AtomicU64,
+    reput_dispatch_behind_bytes: AtomicU64,
+    reput_dispatch_batches_total: AtomicU64,
+    reput_dispatch_requests_total: AtomicU64,
+    reput_dispatch_batch_size_max: AtomicU64,
+    reput_dispatch_duration_total_millis: AtomicU64,
+    reput_dispatch_duration_max_millis: AtomicU64,
     sampling_lock: Mutex<()>,
     last_print_timestamp: AtomicU64,
     stopped: AtomicBool,
@@ -134,6 +140,12 @@ impl StoreStatsService {
             put_message_entire_time_max: AtomicU64::new(0),
             get_message_entire_time_max: AtomicU64::new(0),
             dispatch_max_buffer: AtomicU64::new(0),
+            reput_dispatch_behind_bytes: AtomicU64::new(0),
+            reput_dispatch_batches_total: AtomicU64::new(0),
+            reput_dispatch_requests_total: AtomicU64::new(0),
+            reput_dispatch_batch_size_max: AtomicU64::new(0),
+            reput_dispatch_duration_total_millis: AtomicU64::new(0),
+            reput_dispatch_duration_max_millis: AtomicU64::new(0),
             sampling_lock: Mutex::new(()),
             last_print_timestamp: AtomicU64::new(current_millis()),
             stopped: AtomicBool::new(true),
@@ -284,6 +296,27 @@ impl StoreStatsService {
     }
 
     #[inline]
+    pub fn set_reput_dispatch_behind_bytes(&self, value: u64) {
+        self.reput_dispatch_behind_bytes.store(value, Ordering::Relaxed);
+        self.set_dispatch_max_buffer(value);
+    }
+
+    #[inline]
+    pub fn record_reput_dispatch_batch(&self, batch_size: usize, elapsed: Duration) {
+        let batch_size = u64::try_from(batch_size).unwrap_or(u64::MAX);
+        let elapsed_millis = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+        self.reput_dispatch_batches_total.fetch_add(1, Ordering::Relaxed);
+        self.reput_dispatch_requests_total
+            .fetch_add(batch_size, Ordering::Relaxed);
+        self.reput_dispatch_batch_size_max
+            .fetch_max(batch_size, Ordering::Relaxed);
+        self.reput_dispatch_duration_total_millis
+            .fetch_add(elapsed_millis, Ordering::Relaxed);
+        self.reput_dispatch_duration_max_millis
+            .fetch_max(elapsed_millis, Ordering::Relaxed);
+    }
+
+    #[inline]
     pub fn add_single_put_message_topic_times_total(&self, topic: &str, delta: usize) {
         self.add_topic_value(&self.put_message_topic_times_total, topic, delta as u64);
     }
@@ -326,6 +359,34 @@ impl StoreStatsService {
         result.insert(
             "dispatchMaxBuffer".to_string(),
             self.dispatch_max_buffer.load(Ordering::Relaxed).to_string(),
+        );
+        result.insert(
+            "reputDispatchBehindBytes".to_string(),
+            self.reput_dispatch_behind_bytes.load(Ordering::Relaxed).to_string(),
+        );
+        result.insert(
+            "reputDispatchBatchCountTotal".to_string(),
+            self.reput_dispatch_batches_total.load(Ordering::Relaxed).to_string(),
+        );
+        result.insert(
+            "reputDispatchRequestTotal".to_string(),
+            self.reput_dispatch_requests_total.load(Ordering::Relaxed).to_string(),
+        );
+        result.insert(
+            "reputDispatchBatchSizeMax".to_string(),
+            self.reput_dispatch_batch_size_max.load(Ordering::Relaxed).to_string(),
+        );
+        result.insert(
+            "reputDispatchDurationTotalMillis".to_string(),
+            self.reput_dispatch_duration_total_millis
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        result.insert(
+            "reputDispatchDurationMaxMillis".to_string(),
+            self.reput_dispatch_duration_max_millis
+                .load(Ordering::Relaxed)
+                .to_string(),
         );
         result.insert(
             "getMessageEntireTimeMax".to_string(),
