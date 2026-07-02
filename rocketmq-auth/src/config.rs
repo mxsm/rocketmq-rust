@@ -63,6 +63,7 @@ pub struct AuthConfig {
     pub stateful_authentication_cache_expired_second: u32,
     pub stateful_authorization_cache_max_num: u32,
     pub stateful_authorization_cache_expired_second: u32,
+    pub stateful_authorization_cache_negative_enable: bool,
 }
 
 impl fmt::Debug for AuthConfig {
@@ -123,6 +124,10 @@ impl fmt::Debug for AuthConfig {
                 "stateful_authorization_cache_expired_second",
                 &self.stateful_authorization_cache_expired_second,
             )
+            .field(
+                "stateful_authorization_cache_negative_enable",
+                &self.stateful_authorization_cache_negative_enable,
+            )
             .finish()
     }
 }
@@ -175,6 +180,7 @@ impl Default for AuthConfig {
             stateful_authentication_cache_expired_second: 60,
             stateful_authorization_cache_max_num: 10000,
             stateful_authorization_cache_expired_second: 60,
+            stateful_authorization_cache_negative_enable: false,
         }
     }
 }
@@ -227,6 +233,7 @@ mod tests {
         assert_eq!(config.stateful_authentication_cache_expired_second, 60);
         assert_eq!(config.stateful_authorization_cache_max_num, 10000);
         assert_eq!(config.stateful_authorization_cache_expired_second, 60);
+        assert!(!config.stateful_authorization_cache_negative_enable);
     }
 
     #[test]
@@ -238,6 +245,7 @@ aclFileWatchEnabled: true
 aclFileWatchIntervalMillis: 250
 signatureAlgorithm: HmacSHA256
 requestTimestampExpiredMillis: 300000
+statefulAuthorizationCacheNegativeEnable: true
 "#,
         )
         .unwrap();
@@ -247,6 +255,7 @@ requestTimestampExpiredMillis: 300000
         assert_eq!(config.acl_file_watch_interval_millis, 250);
         assert_eq!(config.signature_algorithm, SignatureAlgorithm::HmacSha256);
         assert_eq!(config.request_timestamp_expired_millis, 300_000);
+        assert!(config.stateful_authorization_cache_negative_enable);
     }
 
     #[test]

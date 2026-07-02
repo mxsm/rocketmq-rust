@@ -178,6 +178,7 @@ mod tests {
             stateful_authentication_cache_expired_second: 300,
             stateful_authorization_cache_max_num: 1000,
             stateful_authorization_cache_expired_second: 300,
+            stateful_authorization_cache_negative_enable: false,
         }
     }
 

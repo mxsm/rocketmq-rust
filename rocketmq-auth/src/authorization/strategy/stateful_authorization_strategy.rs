@@ -154,6 +154,7 @@ pub struct StatefulAuthorizationStrategy {
 
     /// Last generation observed by this strategy, used to drop old entries promptly.
     last_seen_acl_generation: AtomicU64,
+    cache_negative_result: bool,
     metrics: AuthMetrics,
 }
 
@@ -196,6 +197,7 @@ impl StatefulAuthorizationStrategy {
     ) -> StrategyResult<Self> {
         let cache_ttl = Duration::from_secs(auth_config.stateful_authorization_cache_expired_second as u64);
         let cache_max_size = auth_config.stateful_authorization_cache_max_num as usize;
+        let cache_negative_result = auth_config.stateful_authorization_cache_negative_enable;
 
         let base = AbstractAuthorizationStrategy::new(auth_config, metadata_service)?;
         let initial_generation = acl_generation.load(Ordering::Acquire);
@@ -213,6 +215,7 @@ impl StatefulAuthorizationStrategy {
             request_counter: AtomicUsize::new(0),
             acl_generation,
             last_seen_acl_generation: AtomicU64::new(initial_generation),
+            cache_negative_result,
             metrics,
         })
     }
@@ -402,8 +405,9 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
 
         let result = block_on_base_authorization(&self.base, context);
 
-        // Cache the result
-        {
+        // Cache granted results by default. Denied results are cached only when
+        // explicitly enabled because ACL updates must take effect conservatively.
+        if result.is_ok() || self.cache_negative_result {
             self.evict_if_full();
 
             let mut cache = self.write_cache_recovering();
@@ -428,8 +432,11 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+    use rocketmq_common::common::action::Action;
 
     use super::*;
+    use crate::authentication::enums::subject_type::SubjectType;
+    use crate::authorization::model::resource::Resource;
 
     fn create_test_config() -> AuthConfig {
         AuthConfig {
@@ -464,6 +471,7 @@ mod tests {
             stateful_authentication_cache_expired_second: 300,
             stateful_authorization_cache_max_num: 100,
             stateful_authorization_cache_expired_second: 60,
+            stateful_authorization_cache_negative_enable: false,
         }
     }
 
@@ -596,6 +604,47 @@ mod tests {
             assert!(strategy.evaluate(&context).is_ok());
         });
 
+        assert_eq!(strategy.cache_size(), 1);
+    }
+
+    #[test]
+    fn denied_authorization_is_not_cached_by_default() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+
+        let config = create_test_config();
+        let strategy = StatefulAuthorizationStrategy::new(config, None).unwrap();
+        let mut context = DefaultAuthorizationContext::of(
+            "alice",
+            SubjectType::User,
+            Resource::of_topic("TopicA"),
+            Action::Pub,
+            "127.0.0.1",
+        );
+        context.set_channel_id("ch-denied-default".to_string());
+
+        assert!(strategy.evaluate(&context).is_err());
+        assert_eq!(strategy.cache_size(), 0);
+    }
+
+    #[test]
+    fn denied_authorization_can_be_cached_when_enabled() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+
+        let mut config = create_test_config();
+        config.stateful_authorization_cache_negative_enable = true;
+        let strategy = StatefulAuthorizationStrategy::new(config, None).unwrap();
+        let mut context = DefaultAuthorizationContext::of(
+            "alice",
+            SubjectType::User,
+            Resource::of_topic("TopicA"),
+            Action::Pub,
+            "127.0.0.1",
+        );
+        context.set_channel_id("ch-denied-cached".to_string());
+
+        assert!(strategy.evaluate(&context).is_err());
         assert_eq!(strategy.cache_size(), 1);
     }
 }
