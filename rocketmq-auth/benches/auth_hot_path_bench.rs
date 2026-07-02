@@ -253,6 +253,55 @@ fn bench_stateful_authorization_cache(c: &mut Criterion) {
     });
 }
 
+fn bench_stateful_authorization_negative_cache(c: &mut Criterion) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("benchmark runtime should build");
+    let _guard = runtime.enter();
+    let mut disabled_config = AuthConfig {
+        config_name: CheetahString::from_static_str("negative-cache-disabled"),
+        authorization_enabled: true,
+        stateful_authorization_cache_max_num: 1024,
+        stateful_authorization_cache_expired_second: 60,
+        stateful_authorization_cache_negative_enable: false,
+        ..AuthConfig::default()
+    };
+    let disabled_strategy = StatefulAuthorizationStrategy::new_with_acl_generation(
+        disabled_config.clone(),
+        None,
+        Arc::new(AtomicU64::new(0)),
+    )
+    .expect("benchmark authorization strategy should build");
+    disabled_config.stateful_authorization_cache_negative_enable = true;
+    disabled_config.config_name = CheetahString::from_static_str("negative-cache-enabled");
+    let enabled_strategy =
+        StatefulAuthorizationStrategy::new_with_acl_generation(disabled_config, None, Arc::new(AtomicU64::new(0)))
+            .expect("benchmark authorization strategy should build");
+    let mut context = DefaultAuthorizationContext::of(
+        "alice",
+        rocketmq_auth::authentication::enums::subject_type::SubjectType::User,
+        Resource::of_topic("TopicDenied"),
+        Action::Pub,
+        "127.0.0.1",
+    );
+    context.set_channel_id("channel-denied".to_owned());
+
+    assert!(disabled_strategy.evaluate(&context).is_err());
+    assert_eq!(disabled_strategy.cache_size(), 0);
+    assert!(enabled_strategy.evaluate(&context).is_err());
+    assert_eq!(enabled_strategy.cache_size(), 1);
+
+    let mut group = c.benchmark_group("auth_stateful_authorization_negative_cache");
+    group.bench_function("deny_no_cache", |b| {
+        b.iter(|| black_box(disabled_strategy.evaluate(black_box(&context)).is_err()))
+    });
+    group.bench_function("deny_negative_cache_enabled", |b| {
+        b.iter(|| black_box(enabled_strategy.evaluate(black_box(&context)).is_err()))
+    });
+    group.finish();
+}
+
 struct AllowAuthenticationProvider;
 
 impl AuthenticationProvider for AllowAuthenticationProvider {
@@ -290,5 +339,6 @@ criterion_group!(
     bench_acl_authorization,
     bench_stateful_authentication_cache,
     bench_stateful_authorization_cache,
+    bench_stateful_authorization_negative_cache,
 );
 criterion_main!(benches);

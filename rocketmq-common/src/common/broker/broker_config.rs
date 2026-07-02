@@ -606,6 +606,10 @@ mod defaults {
         60
     }
 
+    pub fn stateful_authorization_cache_negative_enable() -> bool {
+        false
+    }
+
     pub fn transaction_check_interval() -> u64 {
         30_000
     }
@@ -1384,6 +1388,9 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::stateful_authorization_cache_expired_second")]
     pub stateful_authorization_cache_expired_second: u32,
+
+    #[serde(default = "defaults::stateful_authorization_cache_negative_enable")]
+    pub stateful_authorization_cache_negative_enable: bool,
 }
 
 impl Default for BrokerConfig {
@@ -1590,6 +1597,7 @@ impl Default for BrokerConfig {
             stateful_authentication_cache_expired_second: defaults::stateful_authentication_cache_expired_second(),
             stateful_authorization_cache_max_num: defaults::stateful_authorization_cache_max_num(),
             stateful_authorization_cache_expired_second: defaults::stateful_authorization_cache_expired_second(),
+            stateful_authorization_cache_negative_enable: defaults::stateful_authorization_cache_negative_enable(),
         }
     }
 }
@@ -2125,6 +2133,10 @@ impl BrokerConfig {
             "statefulAuthorizationCacheExpiredSecond".into(),
             self.stateful_authorization_cache_expired_second.to_string().into(),
         );
+        properties.insert(
+            "statefulAuthorizationCacheNegativeEnable".into(),
+            self.stateful_authorization_cache_negative_enable.to_string().into(),
+        );
         for (key, value) in self.broker_server_config.tls_config.java_property_entries() {
             properties.insert(key.into(), value.into());
         }
@@ -2185,6 +2197,20 @@ mod tests {
         assert!(!config.lite_lag_latency_metrics_enable);
         assert!(!config.lite_lag_count_metrics_enable);
         assert_eq!(config.lite_lag_latency_top_k, 50);
+    }
+
+    #[test]
+    fn default_broker_config_disables_authorization_negative_cache() {
+        let config = BrokerConfig::default();
+
+        assert!(!config.stateful_authorization_cache_negative_enable);
+        assert_eq!(
+            config
+                .get_properties()
+                .get("statefulAuthorizationCacheNegativeEnable")
+                .map(CheetahString::as_str),
+            Some("false")
+        );
     }
 
     #[test]

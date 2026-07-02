@@ -262,6 +262,7 @@ pub struct ProxyAuthConfig {
     pub stateful_authentication_cache_expired_second: u32,
     pub stateful_authorization_cache_max_num: u32,
     pub stateful_authorization_cache_expired_second: u32,
+    pub stateful_authorization_cache_negative_enable: bool,
 }
 
 impl fmt::Debug for ProxyAuthConfig {
@@ -322,6 +323,10 @@ impl fmt::Debug for ProxyAuthConfig {
                 "stateful_authorization_cache_expired_second",
                 &self.stateful_authorization_cache_expired_second,
             )
+            .field(
+                "stateful_authorization_cache_negative_enable",
+                &self.stateful_authorization_cache_negative_enable,
+            )
             .finish()
     }
 }
@@ -368,6 +373,7 @@ impl Default for ProxyAuthConfig {
             stateful_authentication_cache_expired_second: 60,
             stateful_authorization_cache_max_num: 10000,
             stateful_authorization_cache_expired_second: 60,
+            stateful_authorization_cache_negative_enable: false,
         }
     }
 }
@@ -412,6 +418,7 @@ impl ProxyAuthConfig {
             stateful_authentication_cache_expired_second: self.stateful_authentication_cache_expired_second,
             stateful_authorization_cache_max_num: self.stateful_authorization_cache_max_num,
             stateful_authorization_cache_expired_second: self.stateful_authorization_cache_expired_second,
+            stateful_authorization_cache_negative_enable: self.stateful_authorization_cache_negative_enable,
         }
     }
 }
@@ -485,6 +492,7 @@ mod tests {
             stateful_authentication_cache_expired_second: 32,
             stateful_authorization_cache_max_num: 41,
             stateful_authorization_cache_expired_second: 42,
+            stateful_authorization_cache_negative_enable: true,
             ..ProxyAuthConfig::default()
         };
 
@@ -530,6 +538,7 @@ mod tests {
         assert_eq!(auth_config.stateful_authentication_cache_expired_second, 32);
         assert_eq!(auth_config.stateful_authorization_cache_max_num, 41);
         assert_eq!(auth_config.stateful_authorization_cache_expired_second, 42);
+        assert!(auth_config.stateful_authorization_cache_negative_enable);
     }
 
     #[test]
@@ -553,6 +562,7 @@ statefulAuthenticationCacheMaxNum: 31
 statefulAuthenticationCacheExpiredSecond: 32
 statefulAuthorizationCacheMaxNum: 41
 statefulAuthorizationCacheExpiredSecond: 42
+statefulAuthorizationCacheNegativeEnable: true
 "#,
                 config::FileFormat::Yaml,
             ))
@@ -577,6 +587,7 @@ statefulAuthorizationCacheExpiredSecond: 42
         assert_eq!(config.stateful_authentication_cache_expired_second, 32);
         assert_eq!(config.stateful_authorization_cache_max_num, 41);
         assert_eq!(config.stateful_authorization_cache_expired_second, 42);
+        assert!(config.stateful_authorization_cache_negative_enable);
     }
 
     #[test]

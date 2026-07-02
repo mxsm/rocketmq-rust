@@ -201,6 +201,7 @@ fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
         stateful_authentication_cache_expired_second: broker_config.stateful_authentication_cache_expired_second,
         stateful_authorization_cache_max_num: broker_config.stateful_authorization_cache_max_num,
         stateful_authorization_cache_expired_second: broker_config.stateful_authorization_cache_expired_second,
+        stateful_authorization_cache_negative_enable: broker_config.stateful_authorization_cache_negative_enable,
     }
 }
 
@@ -4937,6 +4938,7 @@ mod tests {
             stateful_authentication_cache_expired_second: 32,
             stateful_authorization_cache_max_num: 41,
             stateful_authorization_cache_expired_second: 42,
+            stateful_authorization_cache_negative_enable: true,
             ..BrokerConfig::default()
         };
 
@@ -4971,6 +4973,7 @@ mod tests {
         assert_eq!(auth_config.stateful_authentication_cache_expired_second, 32);
         assert_eq!(auth_config.stateful_authorization_cache_max_num, 41);
         assert_eq!(auth_config.stateful_authorization_cache_expired_second, 42);
+        assert!(auth_config.stateful_authorization_cache_negative_enable);
     }
 
     #[tokio::test]
