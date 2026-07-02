@@ -150,3 +150,7 @@ harness = false
 [[bench]]
 name    = "send_message_properties_benchmark"
 harness = false
+
+[[bench]]
+name    = "topic_config_lookup_benchmark"
+harness = false
