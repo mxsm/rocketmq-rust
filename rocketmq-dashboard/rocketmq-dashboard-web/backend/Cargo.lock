@@ -2410,6 +2410,7 @@ dependencies = [
  "local-ip-address",
  "lz4_flex",
  "md-5 0.10.6",
+ "memchr",
  "num_cpus",
  "parking_lot",
  "regex",

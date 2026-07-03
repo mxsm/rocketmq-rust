@@ -4206,6 +4206,7 @@ dependencies = [
  "local-ip-address",
  "lz4_flex",
  "md-5 0.10.6",
+ "memchr",
  "mockall",
  "num_cpus",
  "parking_lot",
