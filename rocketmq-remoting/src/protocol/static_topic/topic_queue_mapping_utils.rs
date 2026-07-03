@@ -580,12 +580,9 @@ impl TopicQueueMappingUtils {
         )?;
         TopicQueueMappingUtils::check_if_reuse_physical_queue(&global_id_map.values().cloned().collect())?;
         TopicQueueMappingUtils::check_physical_queue_consistence(broker_config_map)?;
-        let map = broker_config_map
-            .iter()
-            .map(|(k, v)| (CheetahString::from_string(k.to_string()), v.clone()))
-            .collect();
+        let map = broker_config_map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         Ok(TopicRemappingDetailWrapper::new(
-            topic.to_string().into(),
+            CheetahString::from_slice(topic),
             topic_remapping_detail_wrapper::TYPE_CREATE_OR_UPDATE.to_string().into(),
             new_epoch,
             map,
@@ -877,13 +874,10 @@ impl TopicQueueMappingUtils {
             target_brokers,
         )?;
 
-        let map = broker_config_map
-            .iter()
-            .map(|(k, v)| (CheetahString::from_string(k.to_string()), v.clone()))
-            .collect();
+        let map = broker_config_map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
         Ok(TopicRemappingDetailWrapper::new(
-            topic.to_string().into(),
+            CheetahString::from_slice(topic),
             topic_remapping_detail_wrapper::TYPE_REMAPPING.to_string().into(),
             new_epoch as u64,
             map,
