@@ -320,7 +320,7 @@ impl HookUtils {
         }
 
         // Backup real topic, queueId
-        let topic_value = CheetahString::from_string(msg.topic().to_string());
+        let topic_value = CheetahString::from_slice(msg.topic());
         msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC), // real topic: %RETRY% + consumerGroup
             topic_value,
@@ -346,7 +346,7 @@ impl HookUtils {
         for msg in msg_list.iter_mut() {
             msg.message.properties_mut().as_map_mut().insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
-                CheetahString::from_string(false.to_string()),
+                CheetahString::from_static_str("false"),
             );
         }
         msg_list.clear();
