@@ -6178,7 +6178,7 @@ impl MQClientAPIImpl {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> RocketMQResult<RemotingCommand> {
-        let address = CheetahString::from_string(address.to_string());
+        let address = CheetahString::from_slice(address);
         self.remoting_client
             .invoke_request(Some(&address), request, timeout_millis)
             .await
@@ -6200,7 +6200,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request.ensure_ext_fields_initialized();
         request.add_ext_field(
             mix_all::UNIQUE_MSG_QUERY_FLAG,
-            CheetahString::from_string(unique_key_flag.to_string()),
+            CheetahString::from_static_str(if unique_key_flag { "true" } else { "false" }),
         );
 
         let mut response = self.invoke_admin_request(address, request, timeout_millis).await?;
