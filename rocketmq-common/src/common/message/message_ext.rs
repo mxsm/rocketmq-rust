@@ -425,7 +425,7 @@ impl From<crate::common::message::message_envelope::MessageEnvelope> for Message
     fn from(envelope: crate::common::message::message_envelope::MessageEnvelope) -> Self {
         Self {
             message: envelope.message().clone(),
-            broker_name: CheetahString::from_string(envelope.broker_name().to_string()),
+            broker_name: CheetahString::from_slice(envelope.broker_name()),
             queue_id: envelope.queue_id(),
             store_size: envelope.store_size(),
             queue_offset: envelope.queue_offset(),

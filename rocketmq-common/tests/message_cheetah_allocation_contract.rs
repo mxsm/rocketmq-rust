@@ -76,12 +76,12 @@ fn broker_message_property_lookup_allocation_baseline_is_bounded() {
     let existing_key_allocations = allocations_for(|| broker_message.property(black_box("KEYS")));
     let missing_key_allocations = allocations_for(|| broker_message.property(black_box("NOT_EXISTS")));
 
-    assert!(
-        existing_key_allocations <= 1,
+    assert_eq!(
+        existing_key_allocations, 0,
         "existing key lookup allocated {existing_key_allocations} times"
     );
-    assert!(
-        missing_key_allocations <= 1,
+    assert_eq!(
+        missing_key_allocations, 0,
         "missing key lookup allocated {missing_key_allocations} times"
     );
 }
