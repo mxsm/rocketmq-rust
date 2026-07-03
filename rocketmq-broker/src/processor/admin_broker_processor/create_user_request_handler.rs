@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use rocketmq_auth::authentication::enums::user_type::UserType;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -82,10 +81,7 @@ impl<MS: MessageStore> CreateUserRequestHandler<MS> {
     }
 
     async fn is_not_super_user_login(&self, request: &RemotingCommand) -> rocketmq_error::RocketMQResult<bool> {
-        let Some(access_key) = request
-            .ext_fields()
-            .and_then(|fields| fields.get(&CheetahString::from_static_str("AccessKey")))
-        else {
+        let Some(access_key) = request.ext_fields().and_then(|fields| fields.get("AccessKey")) else {
             return Ok(false);
         };
 
