@@ -1486,9 +1486,9 @@ dependencies = [
 
 [[package]]
 name = "memchr"
-version = "2.7.6"
+version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
+checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "mime"
@@ -2272,6 +2272,7 @@ dependencies = [
  "local-ip-address",
  "lz4_flex",
  "md-5 0.10.6",
+ "memchr",
  "num_cpus",
  "parking_lot",
  "regex",

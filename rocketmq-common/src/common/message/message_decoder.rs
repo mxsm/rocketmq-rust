@@ -32,6 +32,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahBuilder;
 use cheetah_string::CheetahString;
+use memchr::memchr;
 
 use crate::common::compression::compressor_factory::CompressorFactory;
 use crate::common::message::message_client_ext::MessageClientExt;
@@ -65,6 +66,29 @@ pub const BORN_TIMESTAMP_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
 
 const SMALL_PROPERTIES_PREALLOC_THRESHOLD: usize = 16;
 const SMALL_PROPERTY_PREALLOC_BYTES: usize = 34;
+
+macro_rules! decode_message_properties_into {
+    ($map:ident, $properties:expr) => {{
+        let properties = $properties;
+        let bytes = properties.as_bytes();
+        let mut index = 0;
+        let len = bytes.len();
+        while index < len {
+            let new_index = memchr(PROPERTY_SEPARATOR as u8, &bytes[index..]).map_or(len, |i| index + i);
+            if new_index - index >= 3 {
+                if let Some(kv_sep_index) = memchr(NAME_VALUE_SEPARATOR as u8, &bytes[index..new_index]) {
+                    let kv_sep_index = index + kv_sep_index;
+                    if kv_sep_index > index && kv_sep_index < new_index - 1 {
+                        let k = &properties[index..kv_sep_index];
+                        let v = &properties[kv_sep_index + 1..new_index];
+                        $map.insert(CheetahString::from_slice(k), CheetahString::from_slice(v));
+                    }
+                }
+            }
+            index = new_index + 1;
+        }
+    }};
+}
 
 fn get_i16_checked(buffer: &mut Bytes) -> Option<i16> {
     if buffer.remaining() < 2 {
@@ -134,47 +158,17 @@ fn get_topic_length_checked(version: MessageVersion, buffer: &mut Bytes) -> Opti
 }
 
 pub fn string_to_message_properties(properties: Option<&CheetahString>) -> HashMap<CheetahString, CheetahString> {
-    let mut map = HashMap::new();
     if let Some(properties) = properties {
-        let mut index = 0;
-        let len = properties.len();
-        while index < len {
-            let new_index = properties[index..].find(PROPERTY_SEPARATOR).map_or(len, |i| index + i);
-            if new_index - index >= 3 {
-                if let Some(kv_sep_index) = properties[index..new_index].find(NAME_VALUE_SEPARATOR) {
-                    let kv_sep_index = index + kv_sep_index;
-                    if kv_sep_index > index && kv_sep_index < new_index - 1 {
-                        let k = &properties[index..kv_sep_index];
-                        let v = &properties[kv_sep_index + 1..new_index];
-                        map.insert(CheetahString::from_slice(k), CheetahString::from_slice(v));
-                    }
-                }
-            }
-            index = new_index + 1;
-        }
+        str_to_message_properties(Some(properties.as_str()))
+    } else {
+        HashMap::new()
     }
-    map
 }
 
 pub fn str_to_message_properties(properties: Option<&str>) -> HashMap<CheetahString, CheetahString> {
     let mut map = HashMap::new();
     if let Some(properties) = properties {
-        let mut index = 0;
-        let len = properties.len();
-        while index < len {
-            let new_index = properties[index..].find(PROPERTY_SEPARATOR).map_or(len, |i| index + i);
-            if new_index - index >= 3 {
-                if let Some(kv_sep_index) = properties[index..new_index].find(NAME_VALUE_SEPARATOR) {
-                    let kv_sep_index = index + kv_sep_index;
-                    if kv_sep_index > index && kv_sep_index < new_index - 1 {
-                        let k = &properties[index..kv_sep_index];
-                        let v = &properties[kv_sep_index + 1..new_index];
-                        map.insert(CheetahString::from_slice(k), CheetahString::from_slice(v));
-                    }
-                }
-            }
-            index = new_index + 1;
-        }
+        decode_message_properties_into!(map, properties);
     }
     map
 }
@@ -1027,6 +1021,18 @@ mod tests {
         let decoded = string_to_message_properties(Some(&encoded));
 
         assert_eq!(decoded, properties);
+    }
+
+    #[test]
+    fn string_and_str_property_decoders_share_behavior() {
+        let encoded =
+            CheetahString::from_static_str("valid\u{0001}value\u{0002}empty\u{0001}\u{0002}next\u{0001}two\u{0002}");
+
+        let from_cheetah = string_to_message_properties(Some(&encoded));
+        let from_str = str_to_message_properties(Some(encoded.as_str()));
+
+        assert_eq!(from_cheetah, from_str);
+        assert_eq!(from_cheetah.len(), 2);
     }
 
     #[test]
