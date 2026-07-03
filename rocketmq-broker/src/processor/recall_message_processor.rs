@@ -223,8 +223,8 @@ where
             put_message_result,
             &mut response,
             begin_time_millis,
-            CheetahString::from_string(handle_topic.to_string()),
-            CheetahString::from_string(handle_message_id.to_string()),
+            CheetahString::from_slice(handle_topic),
+            CheetahString::from_slice(handle_message_id),
         )?;
 
         Ok(response)
@@ -252,11 +252,11 @@ where
         );
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from_string(handle_message_id.to_string()),
+            CheetahString::from_slice(handle_message_id),
         );
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS),
-            CheetahString::from_string(handle_timestamp_str.to_string()),
+            CheetahString::from_slice(handle_timestamp_str),
         );
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_BORN_TIMESTAMP),

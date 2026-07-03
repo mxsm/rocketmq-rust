@@ -1077,7 +1077,7 @@ where
             if reconsume_times > max_reconsume_times || send_retry_message_to_dead_letter_queue_directly {
                 properties.insert(
                     CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL),
-                    CheetahString::from_string("-1".to_string()),
+                    CheetahString::from_static_str("-1"),
                 );
                 let topic_ = CheetahString::from_string(mix_all::get_dlq_topic(group_name.as_str()));
                 new_topic = &topic_;
@@ -1094,8 +1094,7 @@ where
                         0,
                     )
                     .await;
-                // can optimize
-                msg.message.set_topic(CheetahString::from_string(new_topic.to_string()));
+                msg.message.set_topic(new_topic.clone());
                 msg.queue_id = queue_id_int;
                 msg.message.set_delay_time_level(0);
                 if new_topic_config.is_none() {
