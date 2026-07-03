@@ -512,7 +512,7 @@ fn lite_pull_topic_config(
     );
     config.attributes.insert(
         TopicAttributes::topic_message_type_attribute().name().clone(),
-        CheetahString::from_string(TopicMessageType::Lite.to_string()),
+        CheetahString::from_static_str(TopicMessageType::Lite.as_str()),
     );
     Ok(config)
 }
