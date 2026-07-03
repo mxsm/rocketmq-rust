@@ -1153,7 +1153,7 @@ fn build_message_system_properties(
     invisible_duration: Option<Duration>,
 ) -> v2::SystemProperties {
     let keys = message_ext
-        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_KEYS))
+        .property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_KEYS))
         .map(|value| {
             value
                 .split(MessageConst::KEY_SEPARATOR)
@@ -1176,17 +1176,17 @@ fn build_message_system_properties(
         store_host: message_ext.store_host().ip().to_string(),
         delivery_timestamp: None,
         receipt_handle: message_ext
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
+            .property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
             .map(|value| value.to_string()),
         queue_id: Some(message_ext.queue_id()),
         queue_offset: Some(message_ext.queue_offset()),
         invisible_duration: invisible_duration.and_then(duration_to_proto),
         delivery_attempt: Some(message_ext.reconsume_times().saturating_add(1)),
         message_group: message_ext
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_SHARDING_KEY))
+            .property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_SHARDING_KEY))
             .map(|value| value.to_string()),
         trace_context: message_ext
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_CONTEXT))
+            .property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_CONTEXT))
             .map(|value| value.to_string()),
         orphaned_transaction_recovery_duration: None,
         dead_letter_queue: dead_letter_queue(message_ext),
@@ -1212,8 +1212,8 @@ fn is_reserved_message_property(key: &str) -> bool {
 }
 
 fn dead_letter_queue(message: &MessageExt) -> Option<v2::DeadLetterQueue> {
-    let topic = message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_DLQ_ORIGIN_TOPIC))?;
-    let message_id = message.property(&CheetahString::from_static_str(
+    let topic = message.property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_DLQ_ORIGIN_TOPIC))?;
+    let message_id = message.property_ref(&CheetahString::from_static_str(
         MessageConst::PROPERTY_DLQ_ORIGIN_MESSAGE_ID,
     ))?;
     Some(v2::DeadLetterQueue {
@@ -1224,22 +1224,22 @@ fn dead_letter_queue(message: &MessageExt) -> Option<v2::DeadLetterQueue> {
 
 fn received_message_type(message: &MessageExt) -> v2::MessageType {
     if message
-        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_SHARDING_KEY))
+        .property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_SHARDING_KEY))
         .is_some()
     {
         return v2::MessageType::Fifo;
     }
     if message
-        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
+        .property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
         .is_some()
         || message
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS))
+            .property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS))
             .is_some()
     {
         return v2::MessageType::Delay;
     }
     if message
-        .property(&CheetahString::from_static_str(
+        .property_ref(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TRANSACTION_PREPARED,
         ))
         .is_some()
