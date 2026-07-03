@@ -2545,7 +2545,7 @@ impl DefaultMQProducerImpl {
         MessageAccessor::put_property(
             &mut msg,
             CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_PREPARED),
-            CheetahString::from_string("true".to_owned()),
+            CheetahString::from_static_str("true"),
         );
         MessageAccessor::put_property(
             &mut msg,
