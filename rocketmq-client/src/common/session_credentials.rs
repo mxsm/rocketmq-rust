@@ -98,13 +98,13 @@ impl SessionCredentials {
 
     pub fn update_content(&mut self, properties: &HashMap<String, String>) {
         if let Some(value) = properties.get(ACCESS_KEY) {
-            self.access_key = Some(CheetahString::from_string(value.trim().to_string()));
+            self.access_key = Some(CheetahString::from_slice(value.trim()));
         }
         if let Some(value) = properties.get(SECRET_KEY) {
-            self.secret_key = Some(CheetahString::from_string(value.trim().to_string()));
+            self.secret_key = Some(CheetahString::from_slice(value.trim()));
         }
         if let Some(value) = properties.get(SECURITY_TOKEN) {
-            self.security_token = Some(CheetahString::from_string(value.trim().to_string()));
+            self.security_token = Some(CheetahString::from_slice(value.trim()));
         }
     }
 
