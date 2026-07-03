@@ -133,8 +133,7 @@ where
         let is_unique_key = ext_fields
             .get(UNIQUE_MSG_QUERY_FLAG)
             .is_some_and(|value| value == "true");
-        let query_index_type = query_index_type(&request_header, is_unique_key)
-            .map(|idx_type| CheetahString::from_string(idx_type.to_string()));
+        let query_index_type = query_index_type(&request_header, is_unique_key).map(CheetahString::from_slice);
         if is_unique_key
             || query_index_type
                 .as_deref()
