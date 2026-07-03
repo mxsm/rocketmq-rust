@@ -45,7 +45,7 @@ impl AclConverter {
 
     pub fn convert_acl(acl: &Acl) -> AclInfo {
         AclInfo {
-            subject: Some(CheetahString::from_string(acl.subject_key().to_string())),
+            subject: Some(CheetahString::from_slice(acl.subject_key())),
             policies: Some(acl.policies().iter().map(Self::convert_policy).collect()),
         }
     }
