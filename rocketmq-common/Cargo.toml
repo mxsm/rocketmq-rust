@@ -120,6 +120,10 @@ name    = "message_property_read"
 harness = false
 
 [[bench]]
+name    = "message_property_transform_bench"
+harness = false
+
+[[bench]]
 name    = "string_storage_bench"
 harness = false
 
