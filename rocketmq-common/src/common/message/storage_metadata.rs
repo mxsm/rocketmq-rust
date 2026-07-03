@@ -17,6 +17,7 @@ use std::net::SocketAddr;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahStr;
 use cheetah_string::CheetahString;
 
 use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
@@ -26,7 +27,7 @@ use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
 /// Contains indexing and location information for messages in the Broker storage engine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StorageMetadata {
-    broker_name: CheetahString,
+    broker_name: CheetahStr,
     queue_id: i32,
     queue_offset: i64,
     commit_log_offset: i64,
@@ -48,7 +49,7 @@ impl StorageMetadata {
         store_size: i32,
     ) -> Self {
         Self {
-            broker_name,
+            broker_name: broker_name.into(),
             queue_id,
             queue_offset,
             commit_log_offset,
@@ -61,7 +62,7 @@ impl StorageMetadata {
     /// Gets the broker name
     #[inline]
     pub fn broker_name(&self) -> &str {
-        &self.broker_name
+        self.broker_name.as_str()
     }
 
     /// Gets the queue ID
@@ -131,7 +132,7 @@ impl StorageMetadata {
     /// Sets the broker name (internal use)
     #[inline]
     pub(crate) fn set_broker_name(&mut self, broker_name: CheetahString) {
-        self.broker_name = broker_name;
+        self.broker_name = broker_name.into();
     }
 
     /// Sets the queue offset (internal use)
@@ -174,7 +175,7 @@ impl StorageMetadata {
 impl Default for StorageMetadata {
     fn default() -> Self {
         Self {
-            broker_name: CheetahString::new(),
+            broker_name: CheetahStr::new(),
             queue_id: 0,
             queue_offset: 0,
             commit_log_offset: 0,
@@ -256,5 +257,24 @@ mod tests {
         assert_eq!(metadata.commit_log_offset(), 5000);
         assert_eq!(metadata.store_timestamp(), 999999);
         assert_eq!(metadata.store_size(), 2048);
+    }
+
+    #[test]
+    fn test_clone_and_eq_keep_broker_name_contract() {
+        let addr: SocketAddr = "192.168.1.100:10911".parse().unwrap();
+        let metadata = StorageMetadata::new(
+            CheetahString::from_string(format!("broker-{}", "x".repeat(64))),
+            1,
+            100,
+            5000,
+            999999,
+            addr,
+            2048,
+        );
+
+        let cloned = metadata.clone();
+
+        assert_eq!(cloned, metadata);
+        assert_eq!(cloned.broker_name(), metadata.broker_name());
     }
 }

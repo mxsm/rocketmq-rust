@@ -112,6 +112,10 @@ name    = "message_cheetah_string"
 harness = false
 
 [[bench]]
+name    = "storage_metadata_cheetah_str"
+harness = false
+
+[[bench]]
 name    = "common_executor_lifecycle_bench"
 harness = false
 
