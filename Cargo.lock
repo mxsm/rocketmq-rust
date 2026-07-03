@@ -2887,7 +2887,7 @@ dependencies = [
  "openraft-rt",
  "openraft-rt-tokio",
  "peel-off",
- "rand 0.10.1",
+ "rand 0.10.2",
  "serde",
  "smallvec",
  "thiserror 2.0.18",
@@ -2918,7 +2918,7 @@ dependencies = [
  "futures-util",
  "openraft-macros",
  "pin-project-lite",
- "rand 0.10.1",
+ "rand 0.10.2",
 ]
 
 [[package]]
@@ -2929,7 +2929,7 @@ checksum = "6d8c01f2a456a864282bc4eaf76f1f78ab040d80416fd30fd15b8ab88faa337a"
 dependencies = [
  "futures-util",
  "openraft-rt",
- "rand 0.10.1",
+ "rand 0.10.2",
  "tokio",
 ]
 
@@ -3664,9 +3664,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
+checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
  "chacha20",
  "getrandom 0.4.2",
@@ -4130,7 +4130,7 @@ dependencies = [
  "futures",
  "num_cpus",
  "parking_lot",
- "rand 0.10.1",
+ "rand 0.10.2",
  "rocketmq-auth",
  "rocketmq-client-rust",
  "rocketmq-common",
@@ -4165,7 +4165,7 @@ dependencies = [
  "futures",
  "num_cpus",
  "parking_lot",
- "rand 0.10.1",
+ "rand 0.10.2",
  "rocketmq-auth",
  "rocketmq-common",
  "rocketmq-error",
@@ -4423,7 +4423,7 @@ dependencies = [
  "futures-util",
  "num_cpus",
  "parking_lot",
- "rand 0.10.1",
+ "rand 0.10.2",
  "rcgen",
  "rocketmq-common",
  "rocketmq-error",
@@ -4500,7 +4500,7 @@ dependencies = [
  "memmap2",
  "page_size",
  "parking_lot",
- "rand 0.10.1",
+ "rand 0.10.2",
  "rayon",
  "rocketmq-common",
  "rocketmq-error",
@@ -5240,7 +5240,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -5932,7 +5932,7 @@ dependencies = [
  "atomic",
  "getrandom 0.4.2",
  "js-sys",
- "rand 0.10.1",
+ "rand 0.10.2",
  "wasm-bindgen",
 ]
 
