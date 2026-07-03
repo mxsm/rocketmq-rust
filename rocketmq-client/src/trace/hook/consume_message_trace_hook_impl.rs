@@ -122,7 +122,7 @@ impl ConsumeMessageTraceHookImpl {
     fn parse_context_code(&self, context: &ConsumeMessageContext) -> i32 {
         context
             .props
-            .get(&CheetahString::from_static_str(mix_all::CONSUME_CONTEXT_TYPE))
+            .get(mix_all::CONSUME_CONTEXT_TYPE)
             .and_then(|type_str| match type_str.as_str() {
                 "SUCCESS" => Some(ConsumeReturnType::Success),
                 "TIME_OUT" | "TIMEOUT" => Some(ConsumeReturnType::TimeOut),

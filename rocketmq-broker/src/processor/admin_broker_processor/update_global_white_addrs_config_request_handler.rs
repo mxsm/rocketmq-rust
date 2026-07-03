@@ -14,7 +14,6 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -81,10 +80,7 @@ impl<MS: MessageStore> UpdateGlobalWhiteAddrsConfigRequestHandler<MS> {
     }
 
     async fn is_not_super_user_login(&self, request: &RemotingCommand) -> rocketmq_error::RocketMQResult<bool> {
-        let Some(access_key) = request
-            .ext_fields()
-            .and_then(|fields| fields.get(&CheetahString::from_static_str("AccessKey")))
-        else {
+        let Some(access_key) = request.ext_fields().and_then(|fields| fields.get("AccessKey")) else {
             return Ok(false);
         };
 
@@ -111,6 +107,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
+    use cheetah_string::CheetahString;
     use rocketmq_auth::config::AuthConfig;
     use rocketmq_auth::ProviderRegistry;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;

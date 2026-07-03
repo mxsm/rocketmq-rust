@@ -438,7 +438,7 @@ impl TopicQueueMappingUtils {
                                 ));
                             }
                             if let Some(bname) = &item.bname {
-                                let topic_config = broker_config_map.get(&CheetahString::from(bname));
+                                let topic_config = broker_config_map.get(bname.as_str());
                                 if topic_config.is_none() {
                                     return Err(RocketMQError::Internal(
                                         "The broker of item does not exist".to_string(),

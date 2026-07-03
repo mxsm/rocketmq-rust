@@ -1825,7 +1825,7 @@ pub fn process_send_response(
         if let Some(region_id) = response
             .get_ext_fields()
             .unwrap()
-            .get(&CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION))
+            .get(MessageConst::PROPERTY_MSG_REGION)
         {
             send_result.set_region_id(region_id.to_string());
         } else {
@@ -1835,7 +1835,7 @@ pub fn process_send_response(
         if let Some(trace_on) = response
             .get_ext_fields()
             .unwrap()
-            .get(&CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH))
+            .get(MessageConst::PROPERTY_TRACE_SWITCH)
         {
             send_result.set_trace_on(trace_on == "true");
         } else {
