@@ -170,7 +170,7 @@ pub trait MessageTrait: Any + Display + Debug {
     fn set_wait_store_msg_ok(&mut self, wait_store_msg_ok: bool) {
         self.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
-            CheetahString::from_string(wait_store_msg_ok.to_string()),
+            CheetahString::from_static_str(if wait_store_msg_ok { "true" } else { "false" }),
         );
     }
 
