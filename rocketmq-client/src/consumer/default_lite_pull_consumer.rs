@@ -1642,7 +1642,7 @@ impl LitePullConsumer for DefaultLitePullConsumer {
     async fn update_name_server_address(&self, name_server_address: &str) {
         self.client_config
             .mut_from_ref()
-            .set_namesrv_addr(CheetahString::from_string(name_server_address.to_string()));
+            .set_namesrv_addr(CheetahString::from_slice(name_server_address));
 
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             let addresses: Vec<String> = name_server_address

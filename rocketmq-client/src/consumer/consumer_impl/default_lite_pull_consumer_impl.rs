@@ -196,7 +196,7 @@ impl MessageQueueListener for LitePullRebalanceListener {
             return;
         };
 
-        let topic = CheetahString::from_string(topic.to_string());
+        let topic = CheetahString::from_slice(topic);
         let mq_all = mq_all.clone();
         let mq_assigned = mq_assigned.clone();
         let user_listener = self.user_listener.clone();
