@@ -469,7 +469,7 @@ impl TraceDispatcher for AsyncTraceDispatcher {
 
         // Create client config with proper trace settings
         let mut client_config = ClientConfig::default();
-        client_config.set_namesrv_addr(CheetahString::from_string(name_srv_addr.to_string()));
+        client_config.set_namesrv_addr(CheetahString::from_slice(name_srv_addr));
         client_config.set_enable_trace(false); // Prevents recursive trace operations
         client_config.set_vip_channel_enabled(false); // Disable VIP channel (matches Java implementation)
         client_config.set_use_tls(self.use_tls.load(Ordering::Acquire));
