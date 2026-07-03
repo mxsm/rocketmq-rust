@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Weak;
 
-use cheetah_string::CheetahString;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_error::RocketMQError;
 use tracing::warn;
@@ -164,13 +163,13 @@ impl RocksDbTransBuildService {
             return Ok(None);
         };
         let Some(real_topic) = properties
-            .get(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+            .get(MessageConst::PROPERTY_REAL_TOPIC)
             .filter(|topic| !topic.is_empty())
         else {
             return Ok(None);
         };
         let Some(transaction_id) = properties
-            .get(&CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_ID))
+            .get(MessageConst::PROPERTY_TRANSACTION_ID)
             .filter(|transaction_id| !transaction_id.is_empty())
         else {
             return Ok(None);
@@ -189,7 +188,7 @@ impl RocksDbTransBuildService {
         }
 
         let trans_offset = properties
-            .get(&CheetahString::from_static_str(PROPERTY_TRANS_OFFSET))
+            .get(PROPERTY_TRANS_OFFSET)
             .and_then(|offset| offset.as_str().parse::<i64>().ok())
             .filter(|offset| *offset >= 0);
         Ok(trans_offset.map(|offset_py| TransRocksDbRecord {

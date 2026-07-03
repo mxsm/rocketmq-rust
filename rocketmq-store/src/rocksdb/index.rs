@@ -18,7 +18,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Weak;
 
-use cheetah_string::CheetahString;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_error::RocketMQError;
@@ -190,7 +189,7 @@ impl RocksDbIndexBuildService {
         if let Some(tag) = dispatch_request
             .properties_map
             .as_ref()
-            .and_then(|properties| properties.get(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS)))
+            .and_then(|properties| properties.get(MessageConst::PROPERTY_TAGS))
             .filter(|tag| !tag.is_empty())
         {
             records.push(IndexRocksDbRecord::tag_key(

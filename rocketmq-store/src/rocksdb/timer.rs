@@ -171,7 +171,7 @@ impl RocksDbTimerBuildService {
             return Ok(None);
         };
         let Some(delay_time) = properties
-            .get(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
+            .get(MessageConst::PROPERTY_TIMER_OUT_MS)
             .and_then(|delay_time| delay_time.as_str().parse::<i64>().ok())
             .filter(|delay_time| *delay_time > 0)
         else {
@@ -179,9 +179,7 @@ impl RocksDbTimerBuildService {
         };
 
         let (uniq_key, action) = if let Some(delete_key) = properties
-            .get(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_TIMER_DEL_UNIQKEY,
-            ))
+            .get(MessageConst::PROPERTY_TIMER_DEL_UNIQKEY)
             .filter(|delete_key| !delete_key.is_empty())
         {
             (
@@ -189,7 +187,7 @@ impl RocksDbTimerBuildService {
                 TimerRocksDbAction::Delete,
             )
         } else if properties
-            .get(&CheetahString::from_static_str(PROPERTY_TIMER_ROLL_LABEL))
+            .get(PROPERTY_TIMER_ROLL_LABEL)
             .is_some_and(|roll_label| !roll_label.is_empty())
         {
             let Some(uniq_key) = timer_uniq_key(dispatch_request, properties) else {
@@ -324,9 +322,7 @@ fn timer_uniq_key(
         .map(ToString::to_string)
         .or_else(|| {
             properties
-                .get(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                ))
+                .get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
                 .filter(|uniq_key| !uniq_key.is_empty())
                 .map(ToString::to_string)
         })
