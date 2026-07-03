@@ -76,18 +76,21 @@ pub enum TopicFilterType {
 
 impl Display for TopicFilterType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            TopicFilterType::SingleTag => write!(f, "SINGLE_TAG"),
-            TopicFilterType::MultiTag => write!(f, "MULTI_TAG"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
 impl Debug for TopicFilterType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl TopicFilterType {
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            TopicFilterType::SingleTag => write!(f, "SINGLE_TAG"),
-            TopicFilterType::MultiTag => write!(f, "MULTI_TAG"),
+            TopicFilterType::SingleTag => "SINGLE_TAG",
+            TopicFilterType::MultiTag => "MULTI_TAG",
         }
     }
 }
@@ -123,11 +126,7 @@ impl Serialize for TopicFilterType {
     where
         S: Serializer,
     {
-        let value = match self {
-            TopicFilterType::SingleTag => "SINGLE_TAG",
-            TopicFilterType::MultiTag => "MULTI_TAG",
-        };
-        serializer.serialize_str(value)
+        serializer.serialize_str(self.as_str())
     }
 }
 

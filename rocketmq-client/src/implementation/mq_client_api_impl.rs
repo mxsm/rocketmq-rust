@@ -1679,7 +1679,7 @@ impl MQClientAPIImpl {
             read_queue_nums,
             write_queue_nums,
             perm,
-            topic_filter_type: CheetahString::from_string(topic_config.topic_filter_type.to_string()),
+            topic_filter_type: CheetahString::from_static_str(topic_config.topic_filter_type.as_str()),
             topic_sys_flag: Some(topic_sys_flag),
             order: topic_config.order,
             attributes: None,
@@ -5961,7 +5961,7 @@ fn create_topic_request_header_like_java(
         read_queue_nums: topic_config_u32_to_java_i32("readQueueNums", topic_config.read_queue_nums)?,
         write_queue_nums: topic_config_u32_to_java_i32("writeQueueNums", topic_config.write_queue_nums)?,
         perm: topic_config_u32_to_java_i32("perm", topic_config.perm)?,
-        topic_filter_type: topic_config.topic_filter_type.to_string().into(),
+        topic_filter_type: CheetahString::from_static_str(topic_config.topic_filter_type.as_str()),
         topic_sys_flag: Some(topic_config_u32_to_java_i32(
             "topicSysFlag",
             topic_config.topic_sys_flag,

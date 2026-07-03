@@ -1043,7 +1043,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             read_queue_nums: config.read_queue_nums as i32,
             write_queue_nums: config.write_queue_nums as i32,
             perm: config.perm as i32,
-            topic_filter_type: config.topic_filter_type.to_string().into(),
+            topic_filter_type: CheetahString::from_static_str(config.topic_filter_type.as_str()),
             topic_sys_flag: Some(config.topic_sys_flag as i32),
             order: config.order,
             attributes,

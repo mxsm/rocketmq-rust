@@ -203,7 +203,7 @@ impl MQAdminImpl {
                     read_queue_nums: queue_num,
                     write_queue_nums: queue_num,
                     perm: (PermName::PERM_READ | PermName::PERM_WRITE) as i32,
-                    topic_filter_type: CheetahString::from_string(TopicFilterType::SingleTag.to_string()),
+                    topic_filter_type: CheetahString::from_static_str(TopicFilterType::SingleTag.as_str()),
                     topic_sys_flag: Some(topic_sys_flag),
                     order: false,
                     attributes: Self::encode_topic_attributes(attributes.clone()),
