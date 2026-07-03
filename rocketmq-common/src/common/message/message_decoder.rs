@@ -1030,6 +1030,47 @@ mod tests {
     }
 
     #[test]
+    fn str_to_message_properties_ignores_empty_and_malformed_segments() {
+        let encoded = concat!(
+            "valid\u{0001}value\u{0002}",
+            "\u{0002}",
+            "empty_value\u{0001}\u{0002}",
+            "missing_separator\u{0002}",
+            "second\u{0001}two\u{0002}"
+        );
+
+        let decoded = str_to_message_properties(Some(encoded));
+
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded.get("valid").map(CheetahString::as_str), Some("value"));
+        assert_eq!(decoded.get("second").map(CheetahString::as_str), Some("two"));
+    }
+
+    #[test]
+    fn decode_messages_rejects_invalid_utf8_properties() {
+        let mut bytes = BytesMut::new();
+        let store_size = 4 // TOTALSIZE
+            + 4 // MAGICCODE
+            + 4 // BODYCRC
+            + 4 // FLAG
+            + 4 // BODY LENGTH
+            + 2 // PROPERTIES LENGTH
+            + 1; // INVALID PROPERTY BYTE
+
+        bytes.put_i32(store_size);
+        bytes.put_i32(0);
+        bytes.put_i32(0);
+        bytes.put_i32(0);
+        bytes.put_i32(0);
+        bytes.put_i16(1);
+        bytes.put_u8(0xff);
+
+        let mut bytes = bytes.freeze();
+
+        assert!(decode_messages(&mut bytes).is_empty());
+    }
+
+    #[test]
     fn cheetah_from_utf8_lossy_borrows_valid_utf8() {
         let encoded = b"key\x01value\x02";
 
