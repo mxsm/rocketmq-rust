@@ -333,7 +333,7 @@ impl RouteInfoManagerWrapper {
         use cheetah_string::CheetahString;
         match self {
             RouteInfoManagerWrapper::V1(manager) => {
-                manager.wipe_write_perm_of_broker_by_lock(&CheetahString::from_string(broker_name.to_string()))
+                manager.wipe_write_perm_of_broker_by_lock(&CheetahString::from_slice(broker_name))
             }
             RouteInfoManagerWrapper::V2(manager) => manager
                 .wipe_write_perm_of_broker_by_lock(broker_name.to_string())
@@ -346,7 +346,7 @@ impl RouteInfoManagerWrapper {
         use cheetah_string::CheetahString;
         match self {
             RouteInfoManagerWrapper::V1(manager) => {
-                manager.add_write_perm_of_broker_by_lock(&CheetahString::from_string(broker_name.to_string()))
+                manager.add_write_perm_of_broker_by_lock(&CheetahString::from_slice(broker_name))
             }
             RouteInfoManagerWrapper::V2(manager) => manager
                 .add_write_perm_of_broker_by_lock(broker_name.to_string())

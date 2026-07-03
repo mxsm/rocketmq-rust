@@ -915,7 +915,7 @@ impl RouteInfoManager {
             }
             for (broker_id, ip) in broker_data.broker_addrs().iter() {
                 if &broker_addr_info.broker_addr == ip {
-                    un_register_request.broker_name = CheetahString::from_string(broker_data.broker_name().to_string());
+                    un_register_request.broker_name = broker_data.broker_name().clone();
                     un_register_request.broker_id = *broker_id;
                     return true;
                 }
