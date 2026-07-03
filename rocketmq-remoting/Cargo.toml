@@ -109,6 +109,10 @@ name    = "encode_buffer_bench"
 harness = false
 
 [[bench]]
+name    = "remoting_string_fields_bench"
+harness = false
+
+[[bench]]
 name    = "remoting_connection_lifecycle_bench"
 harness = false
 
