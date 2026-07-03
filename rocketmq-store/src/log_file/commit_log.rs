@@ -236,7 +236,7 @@ fn generate_key(msg: &MessageExtBrokerInner) -> String {
 }
 
 fn parse_property_crc(properties_map: &HashMap<CheetahString, CheetahString>) -> Result<Option<u32>, ()> {
-    let Some(crc_32) = properties_map.get(&CheetahString::from_static_str(MessageConst::PROPERTY_CRC32)) else {
+    let Some(crc_32) = properties_map.get(MessageConst::PROPERTY_CRC32) else {
         return Ok(None);
     };
 
@@ -2520,8 +2520,7 @@ pub fn check_message_and_return_size(
 
         {
             // Timing message processing
-            let delay_time_level =
-                properties_map.get(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL));
+            let delay_time_level = properties_map.get(MessageConst::PROPERTY_DELAY_TIME_LEVEL);
             if let (Some(delay_time_level_str), true) =
                 (delay_time_level, TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic)
             {
