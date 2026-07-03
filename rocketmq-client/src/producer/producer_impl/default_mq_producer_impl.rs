@@ -2678,8 +2678,8 @@ impl DefaultMQProducerImpl {
             .find_broker_address_in_publish(dest_broker_name.as_ref())
             .ok_or_else(|| mq_client_err!(format!("broker address not found for {}", dest_broker_name)))?;
         let request_header = EndTransactionRequestHeader {
-            topic: CheetahString::from_string(msg.topic().to_string()),
-            producer_group: CheetahString::from_string(self.producer_config.producer_group().to_string()),
+            topic: msg.topic().clone(),
+            producer_group: self.producer_config.producer_group().clone(),
             tran_state_table_offset: Self::u64_to_java_long_field(
                 "endTransaction",
                 "tranStateTableOffset",
@@ -3449,7 +3449,7 @@ impl DefaultMQProducerImpl {
 
         self.try_to_find_topic_publish_info(&topic).await;
 
-        let broker_name_cs = CheetahString::from_string(handle_entity.broker_name().to_string());
+        let broker_name_cs = CheetahString::from_slice(handle_entity.broker_name());
         let client_instance = self
             .client_instance
             .as_ref()
