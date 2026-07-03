@@ -303,7 +303,7 @@ mod tests {
 
     fn create_test_message(topic: &str) -> Message {
         let mut msg = Message::default();
-        msg.set_topic(CheetahString::from_string(topic.to_string()));
+        msg.set_topic(CheetahString::from_slice(topic));
         msg.set_body(Some(Bytes::from_static(b"test body")));
         msg
     }

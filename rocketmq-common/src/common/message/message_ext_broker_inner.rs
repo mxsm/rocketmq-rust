@@ -375,7 +375,7 @@ impl From<crate::common::message::broker_message::BrokerMessage> for MessageExtB
 
         Self {
             message_ext_inner,
-            properties_string: CheetahString::from_string(broker_msg.properties_string().to_string()),
+            properties_string: CheetahString::from_slice(broker_msg.properties_string()),
             tags_code: broker_msg.tags_code(),
             encoded_buff: broker_msg.encoded_buff().cloned(),
             encode_completed: broker_msg.is_encode_completed(),
