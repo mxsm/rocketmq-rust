@@ -211,10 +211,7 @@ impl BrokerMessage {
 
     /// Gets a property value
     pub fn property(&self, name: &str) -> Option<CheetahString> {
-        self.envelope
-            .properties()
-            .get(&CheetahString::from_string(name.to_string()))
-            .cloned()
+        self.envelope.properties().get(name).cloned()
     }
 }
 
