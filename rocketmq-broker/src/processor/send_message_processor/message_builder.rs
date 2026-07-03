@@ -77,7 +77,7 @@ pub(super) fn enrich_send_message_request_properties(
     );
     properties.insert(
         CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH),
-        CheetahString::from_string(trace_on.to_string()),
+        CheetahString::from_static_str(if trace_on { "true" } else { "false" }),
     );
     request_header.properties = Some(message_properties_to_string(&properties));
     properties
@@ -101,7 +101,7 @@ mod tests {
         message
             .message_ext_inner
             .message
-            .set_topic(CheetahString::from_string(topic.to_string()));
+            .set_topic(CheetahString::from_slice(topic));
         message
     }
 
