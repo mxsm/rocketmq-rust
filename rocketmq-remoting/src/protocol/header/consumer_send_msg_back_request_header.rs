@@ -213,7 +213,7 @@ impl CommandCustomHeader for ConsumerSendMsgBackRequestHeader {
         }
         map.insert(
             CheetahString::from_static_str(Self::UNIT_MODE),
-            CheetahString::from_string(self.unit_mode.to_string()),
+            CheetahString::from_static_str(if self.unit_mode { "true" } else { "false" }),
         );
         if let Some(value) = self.max_reconsume_times {
             map.insert(
