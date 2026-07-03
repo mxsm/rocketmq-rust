@@ -15,12 +15,14 @@
 use std::hint::black_box;
 use std::net::SocketAddr;
 
+use cheetah_string::CheetahString;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use rocketmq_common::MessageUtils::build_message_id;
 use rocketmq_common::MessageUtils::delete_property;
+use rocketmq_common::MessageUtils::delete_property_to_cheetah_string;
 use rocketmq_common::MessageUtils::delete_property_v2;
 
 fn bench_delete_property(c: &mut Criterion) {
@@ -81,6 +83,40 @@ fn bench_delete_property_v2(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_delete_property_to_cheetah_string(c: &mut Criterion) {
+    let mut group = c.benchmark_group("delete_property_to_cheetah_string");
+
+    let small =
+        CheetahString::from_static_str("key1\u{0001}value1\u{0002}key2\u{0001}value2\u{0002}key3\u{0001}value3");
+    group.bench_function("small_string", |b| {
+        b.iter(|| delete_property_to_cheetah_string(black_box(&small), black_box("key2")))
+    });
+
+    let medium = CheetahString::from_string(
+        (0..10)
+            .map(|i| format!("key{}\u{0001}value{}\u{0002}", i, i))
+            .collect::<String>(),
+    );
+    group.bench_function("medium_string", |b| {
+        b.iter(|| delete_property_to_cheetah_string(black_box(&medium), black_box("key5")))
+    });
+
+    let large = CheetahString::from_string(
+        (0..100)
+            .map(|i| format!("key{}\u{0001}value{}\u{0002}", i, i))
+            .collect::<String>(),
+    );
+    group.bench_function("large_string", |b| {
+        b.iter(|| delete_property_to_cheetah_string(black_box(&large), black_box("key50")))
+    });
+
+    group.bench_function("non_existent_key", |b| {
+        b.iter(|| delete_property_to_cheetah_string(black_box(&small), black_box("nonexistent")))
+    });
+
+    group.finish();
+}
+
 fn bench_delete_property_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("delete_property_comparison");
 
@@ -119,6 +155,7 @@ criterion_group!(
     benches,
     bench_delete_property,
     bench_delete_property_v2,
+    bench_delete_property_to_cheetah_string,
     bench_build_message_id,
     bench_delete_property_comparison
 );
