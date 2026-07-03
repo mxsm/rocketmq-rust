@@ -108,7 +108,7 @@ fn build_recall_trace_context(
 
     let trace_bean = TraceBean {
         topic: CheetahString::from_string(topic),
-        msg_id: CheetahString::from_string(recall_handle.message_id().to_string()),
+        msg_id: CheetahString::from_slice(recall_handle.message_id()),
         ..Default::default()
     };
 
