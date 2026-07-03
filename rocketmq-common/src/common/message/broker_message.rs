@@ -205,8 +205,7 @@ impl BrokerMessage {
     pub fn delete_property(&mut self, name: &str) {
         self.envelope.message_mut().clear_property(name);
 
-        self.properties_string =
-            CheetahString::from_string(MessageUtils::delete_property(&self.properties_string, name));
+        self.properties_string = MessageUtils::delete_property_to_cheetah_string(&self.properties_string, name);
     }
 
     /// Gets a property value

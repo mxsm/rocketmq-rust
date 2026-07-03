@@ -20,6 +20,7 @@ use std::net::SocketAddr;
 
 use bytes::BufMut;
 use cheetah_string::CheetahFinder;
+use cheetah_string::CheetahString;
 
 use crate::common::message::message_ext::MessageExt;
 use crate::common::message::MessageConst;
@@ -113,9 +114,9 @@ pub fn get_sharding_key_indexes(msgs: &[MessageExt], index_size: usize) -> HashS
     index_set
 }
 
-pub fn delete_property(properties_string: &str, name: &str) -> String {
+fn delete_property_if_present(properties_string: &str, name: &str) -> Option<String> {
     if properties_string.is_empty() || name.is_empty() {
-        return properties_string.to_string();
+        return None;
     }
 
     fn find_from(finder: &CheetahFinder<'_>, haystack: &str, start: usize) -> Option<usize> {
@@ -124,42 +125,42 @@ pub fn delete_property(properties_string: &str, name: &str) -> String {
             .and_then(|remaining| finder.find_in(remaining).map(|offset| start + offset))
     }
 
-    let finder = CheetahFinder::new(name);
-    let Some(_) = find_from(&finder, properties_string, 0) else {
-        return properties_string.to_string();
-    };
+    fn find_property_name_from(
+        finder: &CheetahFinder<'_>,
+        haystack: &str,
+        bytes: &[u8],
+        name_len: usize,
+        start: usize,
+    ) -> Option<usize> {
+        let property_separator = PROPERTY_SEPARATOR as u8;
+        let name_value_separator = NAME_VALUE_SEPARATOR as u8;
+        let mut start_idx = start;
 
+        loop {
+            let candidate_idx = find_from(finder, haystack, start_idx)?;
+            start_idx = candidate_idx + name_len;
+
+            let before_ok = candidate_idx == 0 || bytes.get(candidate_idx - 1) == Some(&property_separator);
+            let after_idx = candidate_idx + name_len;
+            let after_ok = bytes.get(after_idx) == Some(&name_value_separator);
+            if before_ok && after_ok {
+                return Some(candidate_idx);
+            }
+        }
+    }
+
+    let finder = CheetahFinder::new(name);
     let bytes = properties_string.as_bytes();
-    let property_separator = PROPERTY_SEPARATOR as u8;
-    let name_value_separator = NAME_VALUE_SEPARATOR as u8;
+    let mut next_property_idx = find_property_name_from(&finder, properties_string, bytes, name.len(), 0)?;
+
     let mut idx0 = 0;
     let mut string_builder = String::with_capacity(properties_string.len());
 
     loop {
-        let mut start_idx = idx0;
-        let idx1 = loop {
-            let Some(candidate_idx) = find_from(&finder, properties_string, start_idx) else {
-                break None;
-            };
-            start_idx = candidate_idx + name.len();
-            let before_ok = candidate_idx == 0 || bytes.get(candidate_idx - 1) == Some(&property_separator);
-            let after_idx = candidate_idx + name.len();
-            let after_ok = bytes.get(after_idx) == Some(&name_value_separator);
-            if before_ok && after_ok {
-                break Some(candidate_idx);
-            }
-        };
-
-        let Some(idx1) = idx1 else {
-            // there are no characters that need to be skipped. Append all remaining characters.
-            string_builder.push_str(&properties_string[idx0..]);
-            break;
-        };
-
         // there are characters that need to be cropped
-        string_builder.push_str(&properties_string[idx0..idx1]);
+        string_builder.push_str(&properties_string[idx0..next_property_idx]);
         // move idx2 to the end of the cropped character
-        let value_start = idx1 + name.len() + 1;
+        let value_start = next_property_idx + name.len() + 1;
         match properties_string
             .get(value_start..)
             .and_then(|rest| rest.find(PROPERTY_SEPARATOR))
@@ -167,6 +168,12 @@ pub fn delete_property(properties_string: &str, name: &str) -> String {
         {
             Some(idx2) => {
                 idx0 = idx2 + 1;
+                let Some(idx1) = find_property_name_from(&finder, properties_string, bytes, name.len(), idx0) else {
+                    // there are no characters that need to be skipped. Append all remaining characters.
+                    string_builder.push_str(&properties_string[idx0..]);
+                    break;
+                };
+                next_property_idx = idx1;
             }
             None => {
                 break;
@@ -174,11 +181,21 @@ pub fn delete_property(properties_string: &str, name: &str) -> String {
         }
     }
 
-    string_builder
+    Some(string_builder)
+}
+
+pub fn delete_property(properties_string: &str, name: &str) -> String {
+    delete_property_if_present(properties_string, name).unwrap_or_else(|| properties_string.to_string())
 }
 
 pub fn delete_property_v2(properties_str: &str, name: &str) -> String {
     delete_property(properties_str, name)
+}
+
+pub fn delete_property_to_cheetah_string(properties_string: &CheetahString, name: &str) -> CheetahString {
+    delete_property_if_present(properties_string.as_str(), name)
+        .map(CheetahString::from_string)
+        .unwrap_or_else(|| properties_string.clone())
 }
 
 pub fn build_message_id(socket_addr: SocketAddr, wrote_offset: i64) -> String {
@@ -551,6 +568,28 @@ mod tests {
         for (properties, name, expected) in cases {
             assert_eq!(delete_property(properties, name), expected);
             assert_eq!(delete_property_v2(properties, name), expected);
+        }
+    }
+
+    #[test]
+    fn delete_property_to_cheetah_string_matches_string_deletion() {
+        let cases = [
+            (
+                "key1\u{0001}value1\u{0002}key2\u{0001}value2\u{0002}key3\u{0001}value3",
+                "key2",
+            ),
+            ("key1\u{0001}value1\u{0002}key2\u{0001}value2", "key3"),
+            ("Order\u{0001}remove\u{0002}OrderId\u{0001}keep", "Order"),
+            ("key\u{0001}value", ""),
+        ];
+
+        for (properties, name) in cases {
+            let properties = CheetahString::from_static_str(properties);
+
+            assert_eq!(
+                delete_property_to_cheetah_string(&properties, name),
+                delete_property(properties.as_str(), name)
+            );
         }
     }
 

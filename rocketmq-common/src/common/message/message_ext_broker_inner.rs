@@ -50,10 +50,8 @@ impl MessageExtBrokerInner {
     pub fn delete_property(&mut self, name: impl Into<CheetahString>) {
         let name = name.into();
         self.message_ext_inner.message.clear_property(name.as_str());
-        self.properties_string = CheetahString::from_string(MessageUtils::delete_property(
-            self.properties_string.as_str(),
-            name.as_str(),
-        ));
+        self.properties_string =
+            MessageUtils::delete_property_to_cheetah_string(&self.properties_string, name.as_str());
     }
 
     #[inline]
