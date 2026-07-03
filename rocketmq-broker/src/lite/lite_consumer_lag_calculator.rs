@@ -130,7 +130,7 @@ impl LiteConsumerLagCalculator {
             let Some(consumer_offset) = queue_offsets.get(&0).copied() else {
                 continue;
             };
-            offsets.push((CheetahString::from_string(topic.to_string()), consumer_offset));
+            offsets.push((CheetahString::from_slice(topic), consumer_offset));
         }
 
         offsets
