@@ -72,7 +72,7 @@ impl RemoteBrokerOffsetStore {
         if let Some(find_broker_result) = find_broker_result {
             let request_header = QueryConsumerOffsetRequestHeader {
                 consumer_group: self.group_name.clone(),
-                topic: CheetahString::from_string(mq.topic_str().to_string()),
+                topic: mq.topic().clone(),
                 queue_id: mq.queue_id(),
                 set_zero_if_not_found: None,
                 topic_request_header: Some(TopicRequestHeader {
@@ -80,7 +80,7 @@ impl RemoteBrokerOffsetStore {
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(mq.broker_name().to_string())),
+                        broker_name: Some(mq.broker_name().clone()),
                         oneway: None,
                     }),
                 }),
@@ -287,7 +287,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(mq.broker_name().to_string())),
+                        broker_name: Some(mq.broker_name().clone()),
                         oneway: None,
                     }),
                 }),
