@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_error::RocketMQError;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -23,7 +24,7 @@ pub(crate) type TopicResult<T> = Result<T, TopicError>;
 pub(crate) enum TopicError {
     Configuration(String),
     Validation(String),
-    RocketMQ(String),
+    RocketMQ(RocketMQError),
 }
 
 impl fmt::Display for TopicError {

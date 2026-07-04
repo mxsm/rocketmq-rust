@@ -46,10 +46,7 @@ impl ManagedTopicAdmin {
             .client_config_mut()
             .set_vip_channel_enabled(snapshot.use_vip_channel);
         admin.client_config_mut().set_use_tls(snapshot.use_tls);
-        admin
-            .start()
-            .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+        admin.start().await.map_err(TopicError::RocketMQ)?;
 
         Ok(Self {
             admin,

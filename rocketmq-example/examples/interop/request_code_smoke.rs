@@ -91,10 +91,7 @@ async fn run_smoke(config: SmokeConfig) -> RocketMQResult<()> {
         .name_server_addr(config.namesrv_addr.as_str())
         .build();
 
-    producer
-        .start()
-        .await
-        .map_err(|err| RocketMQError::Internal(format!("producer start failed: {err}")))?;
+    producer.start().await?;
 
     let mut expected_bodies = Vec::with_capacity(config.message_count);
     for index in 0..config.message_count {
@@ -106,14 +103,12 @@ async fn run_smoke(config: SmokeConfig) -> RocketMQResult<()> {
             .body_slice(body.as_bytes())
             .build()?;
 
-        let result = producer
-            .send_with_timeout(message, config.send_timeout_ms)
-            .await
-            .map_err(|err| RocketMQError::Internal(format!("producer send failed: {err}")))?;
+        let result = producer.send_with_timeout(message, config.send_timeout_ms).await?;
         if result.is_none() {
             producer.shutdown().await;
-            return Err(RocketMQError::Internal(
-                "producer returned no send result for request-code smoke".to_string(),
+            return Err(RocketMQError::response_process_failed(
+                "request_code_smoke_send",
+                "producer returned no send result for request-code smoke",
             ));
         }
         expected_bodies.push(body);
@@ -136,20 +131,19 @@ async fn run_smoke(config: SmokeConfig) -> RocketMQResult<()> {
         .pull_batch_size(config.message_count as u32)
         .build();
 
-    consumer
-        .subscribe(config.topic.as_str(), "*")
-        .await
-        .map_err(|err| RocketMQError::Internal(format!("consumer subscribe failed: {err}")))?;
+    consumer.subscribe(config.topic.as_str(), "*").await?;
     consumer.register_message_listener_concurrently(listener);
-    consumer
-        .start()
-        .await
-        .map_err(|err| RocketMQError::Internal(format!("consumer start failed: {err}")))?;
+    consumer.start().await?;
 
     for _ in 0..config.poll_attempts {
         let received_count = received_bodies
             .lock()
-            .map_err(|err| RocketMQError::Internal(format!("received body lock poisoned: {err}")))?
+            .map_err(|err| {
+                RocketMQError::response_process_failed(
+                    "request_code_smoke_received_body_lock",
+                    format!("received body lock poisoned: {err}"),
+                )
+            })?
             .len();
 
         if received_count >= expected_bodies.len() {
@@ -161,7 +155,12 @@ async fn run_smoke(config: SmokeConfig) -> RocketMQResult<()> {
 
     let received_bodies = received_bodies
         .lock()
-        .map_err(|err| RocketMQError::Internal(format!("received body lock poisoned: {err}")))?
+        .map_err(|err| {
+            RocketMQError::response_process_failed(
+                "request_code_smoke_received_body_lock",
+                format!("received body lock poisoned: {err}"),
+            )
+        })?
         .clone();
 
     producer.shutdown().await;
@@ -173,9 +172,13 @@ async fn run_smoke(config: SmokeConfig) -> RocketMQResult<()> {
         .collect::<Vec<_>>();
 
     if !missing.is_empty() {
-        return Err(RocketMQError::Internal(format!(
-            "request-code smoke did not receive expected messages: missing={missing:?}, received={received_bodies:?}"
-        )));
+        return Err(RocketMQError::response_process_failed(
+            "request_code_smoke_receive",
+            format!(
+                "request-code smoke did not receive expected messages: missing={missing:?}, \
+                 received={received_bodies:?}"
+            ),
+        ));
     }
 
     println!(
@@ -200,10 +203,12 @@ impl MessageListenerConcurrently for SmokeListener {
         msgs: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
     ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
-        let mut received_bodies = self
-            .received_bodies
-            .lock()
-            .map_err(|err| RocketMQError::Internal(format!("received body lock poisoned: {err}")))?;
+        let mut received_bodies = self.received_bodies.lock().map_err(|err| {
+            RocketMQError::response_process_failed(
+                "request_code_smoke_received_body_lock",
+                format!("received body lock poisoned: {err}"),
+            )
+        })?;
 
         for message in msgs {
             if let Some(body) = message.get_body() {

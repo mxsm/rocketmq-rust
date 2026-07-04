@@ -74,10 +74,13 @@ pub async fn main() -> RocketMQResult<()> {
 
     match tokio::time::timeout(Duration::from_millis(REQUEST_TIMEOUT_MS.saturating_mul(3)), rx.recv()).await {
         Ok(Some(Ok(()))) => {}
-        Ok(Some(Err(error))) => return Err(RocketMQError::Internal(error)),
+        Ok(Some(Err(error))) => {
+            return Err(RocketMQError::response_process_failed("request_callback_reply", error));
+        }
         Ok(None) => {
-            return Err(RocketMQError::Internal(
-                "request callback channel closed before receiving a reply".to_string(),
+            return Err(RocketMQError::response_process_failed(
+                "request_callback_reply",
+                "request callback channel closed before receiving a reply",
             ));
         }
         Err(_) => {

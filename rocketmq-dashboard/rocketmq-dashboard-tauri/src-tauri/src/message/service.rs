@@ -61,6 +61,8 @@ use rocketmq_dashboard_common::MessageKeyQueryRequest;
 use rocketmq_dashboard_common::MessagePageQueryRequest;
 use rocketmq_dashboard_common::MessageTraceQueryRequest;
 use rocketmq_dashboard_common::ViewMessageRequest;
+use rocketmq_error::ErrorKind;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -508,7 +510,7 @@ impl MessageManager {
 
     fn should_reset_session<T>(result: &MessageResult<T>) -> bool {
         match result {
-            Err(MessageError::RocketMQ(message)) => is_reconnect_worthy_error(message),
+            Err(MessageError::RocketMQ(error)) => is_reconnect_worthy_error(error),
             _ => false,
         }
     }
@@ -688,7 +690,7 @@ impl MessageManager {
         let route = admin
             .examine_topic_route_info(CheetahString::from(query.topic.clone()))
             .await
-            .map_err(|error| MessageError::RocketMQ(error.to_string()))?
+            .map_err(MessageError::RocketMQ)?
             .unwrap_or_default();
 
         let mut broker_addr_map = HashMap::new();
@@ -717,7 +719,7 @@ impl MessageManager {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| MessageError::RocketMQ(error.to_string()))? as i64;
+                    .map_err(MessageError::RocketMQ)? as i64;
                 let end = admin
                     .search_offset(
                         CheetahString::from(broker_addr.clone()),
@@ -727,7 +729,7 @@ impl MessageManager {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| MessageError::RocketMQ(error.to_string()))? as i64;
+                    .map_err(MessageError::RocketMQ)? as i64;
 
                 queue_states.push(QueueScanState::new(
                     idx,
@@ -775,7 +777,7 @@ impl MessageManager {
                     PULL_TIMEOUT_MILLIS,
                 )
                 .await
-                .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+                .map_err(MessageError::RocketMQ)?;
 
             match result.pull_status() {
                 PullStatus::Found => {
@@ -855,7 +857,7 @@ impl MessageManager {
                     PULL_TIMEOUT_MILLIS,
                 )
                 .await
-                .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+                .map_err(MessageError::RocketMQ)?;
 
             match result.pull_status() {
                 PullStatus::Found => {
@@ -913,7 +915,7 @@ impl MessageManager {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+                    .map_err(MessageError::RocketMQ)?;
 
                 match result.pull_status() {
                     PullStatus::Found => {
@@ -973,7 +975,7 @@ impl MessageManager {
                 None,
             )
             .await
-            .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+            .map_err(MessageError::RocketMQ)?;
 
         let mut items: Vec<MessageSummaryView> =
             result.message_list().iter().cloned().map(map_message_summary).collect();
@@ -1101,7 +1103,7 @@ impl MessageManager {
                 CheetahString::from(request.message_id.clone()),
             )
             .await
-            .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+            .map_err(MessageError::RocketMQ)?;
 
         Ok(build_message_resend_result(
             request.consumer_group,
@@ -1160,7 +1162,7 @@ impl MessageManager {
                 CheetahString::from(message_id),
             )
             .await
-            .map_err(|error| MessageError::RocketMQ(error.to_string()))
+            .map_err(MessageError::RocketMQ)
     }
 
     async fn query_message_trace_by_id_with_admin(
@@ -1206,7 +1208,7 @@ impl MessageManager {
                 None,
             )
             .await
-            .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+            .map_err(MessageError::RocketMQ)?;
 
         let mut seeds = Vec::new();
 
@@ -1345,7 +1347,11 @@ fn sort_message_summaries_desc(items: &mut [MessageSummaryView]) {
     });
 }
 
-fn is_reconnect_worthy_error(message: &str) -> bool {
+fn is_reconnect_worthy_error(error: &RocketMQError) -> bool {
+    matches!(error.kind(), ErrorKind::Network | ErrorKind::Timeout) || is_reconnect_worthy_message(&error.to_string())
+}
+
+fn is_reconnect_worthy_message(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
     normalized.contains("connection refused")
         || normalized.contains("connection reset")
@@ -1471,10 +1477,7 @@ fn normalize_direct_consume_request(
 }
 
 async fn dlq_topic_exists_with_admin(admin: &mut DefaultMQAdminExt, topic: &str) -> MessageResult<bool> {
-    let topic_list = admin
-        .fetch_all_topic_list()
-        .await
-        .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+    let topic_list = admin.fetch_all_topic_list().await.map_err(MessageError::RocketMQ)?;
 
     Ok(topic_list.topic_list.iter().any(|item| item.as_str() == topic))
 }
