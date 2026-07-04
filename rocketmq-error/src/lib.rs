@@ -53,6 +53,7 @@ pub mod unified;
 
 // Stable error taxonomy
 pub mod kind;
+pub mod spec;
 
 // Auth error module
 pub mod auth_error;
@@ -77,6 +78,9 @@ pub use filter_error::FilterError;
 pub use kind::ErrorCode;
 pub use kind::ErrorKind;
 pub use kind::ErrorScope;
+pub use spec::error_spec;
+pub use spec::ErrorSpec;
+pub use spec::ALL_ERROR_SPECS;
 pub use unified::AuthError;
 pub use unified::NetworkError;
 pub use unified::ProtocolError;
