@@ -24,6 +24,7 @@ use rocketmq_common::common::lite::get_lite_topic;
 use rocketmq_common::common::lite::to_lmq_name;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
 use rocketmq_remoting::protocol::admin::topic_offset::TopicOffset;
@@ -78,10 +79,10 @@ impl<MS: MessageStore> RequestProcessor for LiteManagerProcessor<MS> {
             RequestCode::TriggerLiteDispatch => self.trigger_lite_dispatch(request),
             request_code => {
                 warn!("LiteManagerProcessor received unknown request code: {:?}", request_code);
-                Ok(Some(self.response_with_code(
-                    request,
-                    ResponseCode::RequestCodeNotSupported,
+                Ok(Some(error_response::request_code_not_supported_with_remark_and_opaque(
+                    request.code(),
                     format!("LiteManagerProcessor request code {} not supported", request.code()),
+                    request.opaque(),
                 )))
             }
         }

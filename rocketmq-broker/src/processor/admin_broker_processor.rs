@@ -45,6 +45,7 @@ use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -612,8 +613,8 @@ fn get_unknown_cmd_response(request_code: RequestCode) -> Option<RemotingCommand
         request_code,
         request_code.to_i32()
     );
-    Some(RemotingCommand::create_response_command_with_code_remark(
-        ResponseCode::RequestCodeNotSupported,
+    Some(error_response::request_code_not_supported_with_remark(
+        request_code.to_i32(),
         format!(" request type {} not supported", request_code.to_i32()),
     ))
 }
@@ -625,8 +626,8 @@ fn get_legacy_acl_cmd_response(request_code: RequestCode, remark: &str) -> Optio
         request_code.to_i32(),
         remark
     );
-    Some(RemotingCommand::create_response_command_with_code_remark(
-        ResponseCode::RequestCodeNotSupported,
+    Some(error_response::request_code_not_supported_with_remark(
+        request_code.to_i32(),
         remark,
     ))
 }

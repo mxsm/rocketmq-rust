@@ -22,6 +22,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
@@ -286,10 +287,12 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         let _ = config_types;
 
         Ok(Some(
-            response.set_code(ResponseCode::RequestCodeNotSupported).set_remark(
+            error_response::request_code_not_supported_with_remark(
+                request.code(),
                 "EXPORT_ROCKSDB_CONFIG_TO_JSON requires a real RocksDB config backend; current Rust broker uses \
                  file-backed config managers",
-            ),
+            )
+            .set_opaque(request.opaque()),
         ))
     }
 

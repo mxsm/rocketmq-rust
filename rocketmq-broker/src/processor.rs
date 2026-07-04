@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use rocketmq_auth::AuthRuntime;
 use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -307,11 +307,7 @@ where
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if let Some(auth_runtime) = &self.auth_runtime {
             if let Err(error) = auth_runtime.check_remoting(&ctx, request).await {
-                let response = RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    error.to_string(),
-                )
-                .set_opaque(request.opaque());
+                let response = error_response::command_from_error_with_opaque(&error, request.opaque());
                 return Ok(Some(response));
             }
         }
@@ -341,11 +337,9 @@ where
                     .await
                 }
                 None => {
-                    let response_command = RemotingCommand::create_response_command_with_code_remark(
-                        rocketmq_remoting::code::response_code::ResponseCode::RequestCodeNotSupported,
-                        format!("The request code {} is not supported.", request.code_ref()),
-                    );
-                    Ok(Some(response_command.set_opaque(request.opaque())))
+                    let response =
+                        error_response::request_code_not_supported_with_opaque(request.code(), request.opaque());
+                    Ok(Some(response))
                 }
             },
         }
@@ -358,11 +352,7 @@ where
                 if let Some(default_processor) = &self.default_request_processor {
                     default_processor.reject_request(code)
                 } else {
-                    let response_command = RemotingCommand::create_response_command_with_code_remark(
-                        rocketmq_remoting::code::response_code::ResponseCode::RequestCodeNotSupported,
-                        format!("The request code {code} is not supported."),
-                    );
-                    (true, Some(response_command))
+                    (true, Some(error_response::request_code_not_supported(code)))
                 }
             }
         }
@@ -583,8 +573,7 @@ fn fast_failure_queue_kind(request_code: i32, default_processor: bool) -> Option
 }
 
 fn system_error_response(opaque: i32, remark: impl Into<String>) -> RemotingCommand {
-    RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemError, remark.into())
-        .set_opaque(opaque)
+    error_response::internal_error_with_opaque(opaque, remark)
 }
 
 #[cfg(test)]
@@ -592,6 +581,7 @@ mod tests {
     use super::*;
     use rocketmq_auth::config::AuthConfig;
     use rocketmq_auth::AuthRuntimeBuilder;
+    use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::local::LocalRequestHarness;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 

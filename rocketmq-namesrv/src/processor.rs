@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -128,11 +128,9 @@ impl RequestProcessor for NameServerRequestProcessor {
         let response = match self.processor_table.get_mut(request.code_ref()) {
             None => match self.default_request_processor.as_mut() {
                 None => {
-                    let response_command = RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SystemError,
-                        format!("The request code {} is not supported.", request.code_ref()),
-                    );
-                    Ok(Some(response_command.set_opaque(request.opaque())))
+                    let response =
+                        error_response::request_code_not_supported_with_opaque(request.code(), request.opaque());
+                    Ok(Some(response))
                 }
                 Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
             },

@@ -21,6 +21,7 @@ pub mod clients;
 pub mod code;
 pub mod codec;
 pub mod connection;
+pub mod error_response;
 pub mod net;
 pub mod prelude;
 pub mod protocol;

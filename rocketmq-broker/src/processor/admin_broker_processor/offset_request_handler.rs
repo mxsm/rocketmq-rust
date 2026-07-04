@@ -15,6 +15,7 @@
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
 use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
@@ -344,11 +345,14 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let _request_header = request.decode_command_custom_header::<CheckRocksdbCqWriteProgressRequestHeader>()?;
-        Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-            ResponseCode::RequestCodeNotSupported,
-            "CHECK_ROCKSDB_CQ_WRITE_PROGRESS requires a real RocksDB consume queue backend; current Rust broker uses \
-             file-backed consume queues",
-        )))
+        Ok(Some(
+            error_response::request_code_not_supported_with_remark(
+                request.code(),
+                "CHECK_ROCKSDB_CQ_WRITE_PROGRESS requires a real RocksDB consume queue backend; current Rust broker \
+                 uses file-backed consume queues",
+            )
+            .set_opaque(request.opaque()),
+        ))
     }
 
     pub async fn get_all_subscription_group_config(

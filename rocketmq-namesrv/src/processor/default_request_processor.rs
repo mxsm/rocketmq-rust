@@ -23,6 +23,7 @@ use rocketmq_common::CRC32Utils;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
@@ -114,8 +115,8 @@ impl DefaultRequestProcessor {
             RequestCode::GetHasUnitSubUnunitTopicList => self.get_has_unit_sub_un_unit_topic_list(request),
             RequestCode::UpdateNamesrvConfig => self.update_config(request),
             RequestCode::GetNamesrvConfig => self.get_config(request),
-            _ => Ok(RemotingCommand::create_response_command_with_code_remark(
-                RemotingSysResponseCode::RequestCodeNotSupported,
+            _ => Ok(error_response::request_code_not_supported_with_remark(
+                request.code(),
                 format!(" request type {} not supported", request.code()),
             )),
         }?;

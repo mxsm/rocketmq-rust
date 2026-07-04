@@ -14,6 +14,7 @@
 
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
@@ -61,11 +62,12 @@ where
                     "ConsumerManageProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::RequestCodeNotSupported,
+                let response = error_response::request_code_not_supported_with_remark_and_opaque(
+                    request.code(),
                     format!("ConsumerManageProcessor request code {} not supported", request.code()),
+                    request.opaque(),
                 );
-                Ok(Some(response.set_opaque(request.opaque())))
+                Ok(Some(response))
             }
         }
     }
