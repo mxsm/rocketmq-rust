@@ -52,6 +52,7 @@
 pub mod unified;
 
 // Stable error taxonomy
+pub mod context;
 pub mod kind;
 pub mod spec;
 
@@ -71,6 +72,11 @@ pub mod client_error;
 // Re-export auth error types from unified module
 // Re-export controller error types
 pub use client_error::ClientError;
+pub use context::ErrorContext;
+pub use context::ErrorContextField;
+pub use context::RedactionKind;
+pub use context::Sensitive;
+pub use context::REDACTED;
 pub use controller_error::ControllerError;
 pub use controller_error::ControllerResult;
 // Re-export filter error types
