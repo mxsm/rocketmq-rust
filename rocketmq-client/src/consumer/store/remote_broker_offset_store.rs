@@ -38,6 +38,7 @@ pub struct RemoteBrokerOffsetStore {
     client_instance: ArcMut<MQClientInstance>,
     group_name: CheetahString,
     offset_table: Arc<Mutex<HashMap<MessageQueue, ControllableOffset>>>,
+    persisted_offset_table: Arc<Mutex<HashMap<MessageQueue, i64>>>,
 }
 
 impl RemoteBrokerOffsetStore {
@@ -46,7 +47,21 @@ impl RemoteBrokerOffsetStore {
             client_instance,
             group_name,
             offset_table: Arc::new(Mutex::new(HashMap::with_capacity(64))),
+            persisted_offset_table: Arc::new(Mutex::new(HashMap::with_capacity(64))),
         }
+    }
+
+    async fn offset_needs_persist(&self, mq: &MessageQueue, offset: i64) -> bool {
+        let persisted_offset_table = self.persisted_offset_table.lock().await;
+        match persisted_offset_table.get(mq) {
+            Some(&persisted_offset) => persisted_offset != offset,
+            None => true,
+        }
+    }
+
+    async fn mark_offset_persisted(&self, mq: &MessageQueue, offset: i64) {
+        let mut persisted_offset_table = self.persisted_offset_table.lock().await;
+        persisted_offset_table.insert(mq.clone(), offset);
     }
 
     async fn fetch_consume_offset_from_broker(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
@@ -193,15 +208,25 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                 unused_mq.insert(mq.clone());
             }
         }
-        for mq in unused_mq {
-            offset_table.remove(&mq);
+        for mq in &unused_mq {
+            offset_table.remove(mq);
             info!("remove unused mq, {}, {}", mq, self.group_name);
         }
         drop(offset_table);
+        if !unused_mq.is_empty() {
+            let mut persisted_offset_table = self.persisted_offset_table.lock().await;
+            for mq in &unused_mq {
+                persisted_offset_table.remove(mq);
+            }
+        }
 
         for (mq, offset) in used_mq {
+            if !self.offset_needs_persist(&mq, offset).await {
+                continue;
+            }
             match self.update_consume_offset_to_broker(&mq, offset, true).await {
                 Ok(_) => {
+                    self.mark_offset_persisted(&mq, offset).await;
                     info!(
                         "[persistAll] Group: {} ClientId: {} updateConsumeOffsetToBroker {} {}",
                         self.group_name, self.client_instance.client_id, mq, offset
@@ -220,8 +245,12 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
             return;
         };
         drop(offset_table);
+        if !self.offset_needs_persist(mq, offset).await {
+            return;
+        }
         match self.update_consume_offset_to_broker(mq, offset, true).await {
             Ok(_) => {
+                self.mark_offset_persisted(mq, offset).await;
                 info!(
                     "[persist] Group: {} ClientId: {} updateConsumeOffsetToBroker {} {}",
                     self.group_name, self.client_instance.client_id, mq, offset
@@ -234,13 +263,16 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
     }
 
     async fn remove_offset(&self, mq: &MessageQueue) {
-        let mut offset_table = self.offset_table.lock().await;
-        offset_table.remove(mq);
+        let offset_table_size = {
+            let mut offset_table = self.offset_table.lock().await;
+            offset_table.remove(mq);
+            offset_table.len()
+        };
+        let mut persisted_offset_table = self.persisted_offset_table.lock().await;
+        persisted_offset_table.remove(mq);
         info!(
             "remove unnecessary messageQueue offset. group={}, mq={}, offsetTableSize={}",
-            mq,
-            self.group_name,
-            offset_table.len()
+            mq, self.group_name, offset_table_size
         );
     }
 
@@ -308,5 +340,48 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
         } else {
             Err(mq_client_err!(format!("broker not found, {}", mq.broker_name())))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::base::client_config::ClientConfig;
+
+    fn new_store() -> RemoteBrokerOffsetStore {
+        let client_instance =
+            MQClientInstance::new_arc(ClientConfig::default(), 0, "remote-offset-coalescing-test", None);
+        RemoteBrokerOffsetStore::new(client_instance, CheetahString::from_static_str("group-a"))
+    }
+
+    fn message_queue() -> MessageQueue {
+        MessageQueue::from_parts("topic-a", "broker-a", 0)
+    }
+
+    #[tokio::test]
+    async fn persisted_offset_coalescing_skips_only_identical_offsets() {
+        let store = new_store();
+        let mq = message_queue();
+
+        assert!(store.offset_needs_persist(&mq, 10).await);
+
+        store.mark_offset_persisted(&mq, 10).await;
+
+        assert!(!store.offset_needs_persist(&mq, 10).await);
+        assert!(store.offset_needs_persist(&mq, 9).await);
+        assert!(store.offset_needs_persist(&mq, 11).await);
+    }
+
+    #[tokio::test]
+    async fn remove_offset_clears_persisted_coalescing_state() {
+        let store = new_store();
+        let mq = message_queue();
+
+        store.mark_offset_persisted(&mq, 10).await;
+        assert!(!store.offset_needs_persist(&mq, 10).await);
+
+        store.remove_offset(&mq).await;
+
+        assert!(store.offset_needs_persist(&mq, 10).await);
     }
 }

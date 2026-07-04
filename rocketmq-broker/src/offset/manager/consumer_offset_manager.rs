@@ -245,18 +245,25 @@ where
     ) {
         let key = build_topic_group_key(topic, group);
 
-        let mut write_guard = self.consumer_offset_wrapper.offset_table.write();
-        let map = write_guard.entry(key.clone()).or_default();
-        let store_offset = map.insert(queue_id, offset);
-        if let Some(store_offset) = store_offset {
-            if offset < store_offset {
-                warn!(
-                    "[NOTIFYME]update consumer offset less than store. clientHost={}, key={}, queueId={}, \
-                     requestOffset={}, storeOffset={}",
-                    client_host, key, queue_id, offset, store_offset
-                );
+        {
+            let mut write_guard = self.consumer_offset_wrapper.offset_table.write();
+            let map = write_guard.entry(key.clone()).or_default();
+            if let Some(&store_offset) = map.get(&queue_id) {
+                if offset < store_offset {
+                    warn!(
+                        "[NOTIFYME]update consumer offset less than store. clientHost={}, key={}, queueId={}, \
+                         requestOffset={}, storeOffset={}",
+                        client_host, key, queue_id, offset, store_offset
+                    );
+                    return;
+                }
+                if offset == store_offset {
+                    return;
+                }
             }
+            map.insert(queue_id, offset);
         }
+
         let _ = self
             .consumer_offset_wrapper
             .version_change_counter
@@ -804,6 +811,7 @@ impl<'de> Deserialize<'de> for ConsumerOffsetWrapper {
 mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
     use cheetah_string::CheetahString;
@@ -964,6 +972,42 @@ mod tests {
         manager.clone_offset(&src_group, &dest_group, &topic);
 
         assert_eq!(manager.query_offset(&dest_group, &topic, 0), 32);
+    }
+
+    #[test]
+    fn commit_offset_skips_duplicate_and_backward_updates() {
+        let manager = new_manager();
+        let topic = CheetahString::from_static_str("topic-a");
+        let group = CheetahString::from_static_str("group-a");
+
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 32);
+        let after_first = manager
+            .consumer_offset_wrapper
+            .version_change_counter
+            .load(Ordering::Acquire);
+
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 32);
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 31);
+
+        assert_eq!(manager.query_offset(&group, &topic, 0), 32);
+        assert_eq!(
+            manager
+                .consumer_offset_wrapper
+                .version_change_counter
+                .load(Ordering::Acquire),
+            after_first
+        );
+
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 33);
+
+        assert_eq!(manager.query_offset(&group, &topic, 0), 33);
+        assert_eq!(
+            manager
+                .consumer_offset_wrapper
+                .version_change_counter
+                .load(Ordering::Acquire),
+            after_first + 1
+        );
     }
 
     #[test]

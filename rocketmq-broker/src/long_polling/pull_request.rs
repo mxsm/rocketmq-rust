@@ -80,6 +80,11 @@ impl PullRequest {
     pub fn timeout_millis(&self) -> u64 {
         self.timeout_millis
     }
+
+    pub fn deadline_millis(&self) -> u64 {
+        self.suspend_timestamp.saturating_add(self.timeout_millis)
+    }
+
     pub fn suspend_timestamp(&self) -> u64 {
         self.suspend_timestamp
     }

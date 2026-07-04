@@ -50,6 +50,11 @@ impl ManyPullRequest {
         }
     }
 
+    pub fn min_deadline_millis(&self) -> Option<u64> {
+        let list = self.pull_request_list.lock();
+        list.iter().map(PullRequest::deadline_millis).min()
+    }
+
     pub fn is_empty(&self) -> bool {
         let list = self.pull_request_list.lock();
         list.is_empty()

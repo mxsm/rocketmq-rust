@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
+use std::hash::Hash;
+use std::hash::Hasher;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -66,6 +70,27 @@ use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
+const WAKEUP_WRITE_LOCK_SHARDS: usize = 64;
+
+fn new_wakeup_write_locks() -> Arc<Vec<Arc<Mutex<()>>>> {
+    Arc::new(
+        (0..WAKEUP_WRITE_LOCK_SHARDS)
+            .map(|_| Arc::new(Mutex::new(())))
+            .collect(),
+    )
+}
+
+fn wakeup_write_lock_index(remote_address: SocketAddr, shard_count: usize) -> usize {
+    let mut hasher = DefaultHasher::new();
+    remote_address.hash(&mut hasher);
+    (hasher.finish() as usize) % shard_count
+}
+
+fn wakeup_write_lock_for_channel(locks: &[Arc<Mutex<()>>], channel: &Channel) -> Arc<Mutex<()>> {
+    let index = wakeup_write_lock_index(channel.remote_address(), locks.len());
+    locks[index].clone()
+}
+
 /// Handles pull message requests from consumers.
 ///
 /// This processor handles both `PullMessage` and `LitePullMessage` request codes,
@@ -87,11 +112,9 @@ use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 /// - PULL consumers are either suspended or limited to 1 message
 pub struct PullMessageProcessor<MS: MessageStore> {
     pull_message_result_handler: ArcMut<DefaultPullMessageResultHandler<MS>>,
-    /// Lock to serialize writes to channels when waking up suspended requests.
-    ///
-    /// This is a global lock which may become a bottleneck under high concurrency.
-    /// Future optimization: consider per-channel locks for better parallelism.
-    write_message_lock: Arc<Mutex<()>>,
+    /// Sharded write guards used only for suspended-pull wakeup responses.
+    /// Same-channel responses map to the same guard; unrelated channels can write in parallel.
+    wakeup_write_locks: Arc<Vec<Arc<Mutex<()>>>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     wakeup_task_group: Option<TaskGroup>,
 }
@@ -155,7 +178,7 @@ where
     ) -> Self {
         Self {
             pull_message_result_handler,
-            write_message_lock: Arc::new(Default::default()),
+            wakeup_write_locks: new_wakeup_write_locks(),
             broker_runtime_inner,
             wakeup_task_group: None,
         }
@@ -994,11 +1017,12 @@ where
         mut ctx: ConnectionHandlerContext,
         mut request: RemotingCommand,
     ) {
-        let lock = Arc::clone(&self.write_message_lock);
+        let locks = Arc::clone(&self.wakeup_write_locks);
         let task = async move {
             let broker_allow_flow_ctr_suspend =
                 !(request.ext_fields().is_some() && request.ext_fields().unwrap().contains_key(NO_SUSPEND_KEY));
             let opaque = request.opaque();
+            let write_lock = wakeup_write_lock_for_channel(&locks, &channel);
             let response = pull_message_processor
                 .process_request_inner(
                     RequestCode::from(request.code()),
@@ -1013,7 +1037,7 @@ where
             if let Ok(Some(response)) = response {
                 let command = response.set_opaque(opaque).mark_response_type();
 
-                let guard = lock.lock().await;
+                let guard = write_lock.lock().await;
                 ctx.write_response(command).await;
                 drop(guard);
             }
@@ -1297,6 +1321,18 @@ mod tests {
         let (consume_type, message_model) = consumer_compensation_for_request_source(RequestSource::Unknown);
         assert_eq!(consume_type, ConsumeType::ConsumePassively);
         assert_eq!(message_model, MessageModel::Clustering);
+    }
+
+    #[test]
+    fn wakeup_write_lock_index_spreads_remote_addresses() {
+        let first = wakeup_write_lock_index(SocketAddr::from(([127, 0, 0, 1], 10_000)), WAKEUP_WRITE_LOCK_SHARDS);
+        let same = wakeup_write_lock_index(SocketAddr::from(([127, 0, 0, 1], 10_000)), WAKEUP_WRITE_LOCK_SHARDS);
+        let indexes = (10_000..10_100)
+            .map(|port| wakeup_write_lock_index(SocketAddr::from(([127, 0, 0, 1], port)), WAKEUP_WRITE_LOCK_SHARDS))
+            .collect::<HashSet<_>>();
+
+        assert_eq!(first, same);
+        assert!(indexes.len() > 1);
     }
 
     #[test]
