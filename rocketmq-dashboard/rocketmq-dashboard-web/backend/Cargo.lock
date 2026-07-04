@@ -2391,7 +2391,6 @@ dependencies = [
 name = "rocketmq-common"
 version = "1.0.0"
 dependencies = [
- "anyhow",
  "base64",
  "byteorder",
  "bytes",
@@ -2453,6 +2452,7 @@ dependencies = [
  "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-dashboard-common",
+ "rocketmq-error",
  "rocketmq-remoting",
  "rusqlite",
  "serde",

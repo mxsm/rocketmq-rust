@@ -27,6 +27,7 @@ rocketmq-dashboard-common = { path = "../../rocketmq-dashboard-common", features
 rocketmq-admin-core = { path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core" }
 rocketmq-client-rust = { path = "../../../rocketmq-client" }
 rocketmq-common = { path = "../../../rocketmq-common" }
+rocketmq-error = { path = "../../../rocketmq-error" }
 rocketmq-remoting = { path = "../../../rocketmq-remoting" }
 
 [dev-dependencies]

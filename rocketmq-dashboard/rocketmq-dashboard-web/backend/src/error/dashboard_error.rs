@@ -15,6 +15,7 @@ use crate::model::ApiResponse;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use rocketmq_error::RocketMQError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -23,8 +24,8 @@ pub enum DashboardError {
     Validation(String),
     #[error("{0}")]
     Config(String),
-    #[error("{0}")]
-    RocketMq(String),
+    #[error(transparent)]
+    RocketMq(#[from] RocketMQError),
     #[error("{0}")]
     NotFound(String),
     #[error("{0}")]
