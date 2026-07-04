@@ -2782,17 +2782,7 @@ impl MQClientAPIImpl {
     }
 
     fn should_retry_async_send_error(error: &rocketmq_error::RocketMQError) -> bool {
-        !matches!(
-            error,
-            rocketmq_error::RocketMQError::Timeout { .. }
-                | rocketmq_error::RocketMQError::ClientNotStarted
-                | rocketmq_error::RocketMQError::ClientShuttingDown
-                | rocketmq_error::RocketMQError::Network(
-                    rocketmq_error::NetworkError::ConnectionTimeout { .. }
-                        | rocketmq_error::NetworkError::RequestTimeout { .. }
-                        | rocketmq_error::NetworkError::TooManyRequests { .. },
-                )
-        )
+        crate::common::retry_decision::should_retry_async_send_error(error)
     }
 
     async fn select_async_retry_target(
