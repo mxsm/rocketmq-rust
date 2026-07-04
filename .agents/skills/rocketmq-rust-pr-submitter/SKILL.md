@@ -13,6 +13,7 @@ Prepare RocketMQ Rust PR titles, commit messages, and bodies from `.github/PULL_
 - PR title or commit message must follow `[ISSUE #issue_id]<emoji><summary>` format
 - PR body must follow the repository's real PR template (not a custom format)
 - Issue id is available from user request, branch name, or commit history
+- Public PR titles, commit messages, and body content must be English-only
 
 **When NOT to use:** Simple branch merges without a linked issue. PRs for repos that don't use the RocketMQ Rust PR template convention.
 
@@ -46,6 +47,8 @@ Priority order: user request → branch name (`issue-7544`, `fix-7544`) → comm
 ```
 Do not put spaces between `]`, the emoji, and the summary. No extra prefixes (conventional commit, branch name). Keep the summary short and action-oriented.
 
+Write the title and commit-message summary in English only. The required emoji is allowed; Chinese or other non-English prose is not allowed.
+
 If creating a commit as part of the PR workflow, use the exact same compact format for the commit message:
 
 ```
@@ -68,6 +71,8 @@ If creating a commit as part of the PR workflow, use the exact same compact form
 ```
 Preserve template headings exactly. Keep paths repository-relative. In the test section, list commands and results; say "validation not run" honestly if applicable.
 
+Write all public body prose in English. Repository-relative paths, code identifiers, commands, issue numbers, Markdown punctuation, and the required emoji are allowed.
+
 ### 5. Validate and Publish
 1. Confirm branch, target branch, and issue id.
 2. Validate title/body:
@@ -85,6 +90,7 @@ Preserve template headings exactly. Keep paths repository-relative. In the test 
 | Leaving `#issue_id` placeholder | Replace with numeric id in both title and body |
 | Creating draft PR by default | Normal ready-for-review PR unless user says "draft PR" |
 | Claiming unrun validation passed | State "validation not run" honestly in test section |
+| Writing PR prose in Chinese or mixed language | Rewrite the title/body in English and rerun validation |
 | Adding spaces or extra prefixes | Only `[ISSUE #id]<emoji><summary>` for PR titles and commit messages |
 | Wrong emoji for change type | Match to linked issue type; default to ✨ |
 
@@ -108,5 +114,6 @@ Body:
 - Title matches `[ISSUE #number]<emoji><summary>`
 - Commit message, when created, matches `[ISSUE #number]<emoji><summary>`
 - Body includes three PR template headings in order with `- Fixes #number`
+- Title/body are English-only.
 - Test section doesn't claim unrun commands passed
-- No local absolute paths or machine-specific roots
+- No local absolute paths, machine-specific roots, or non-English prose
