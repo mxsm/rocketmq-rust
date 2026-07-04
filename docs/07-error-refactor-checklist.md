@@ -438,22 +438,30 @@ py scripts\error_architecture_guard.py
 - 当前未在 `.github/workflows` 中看到调用。
 - guard 只覆盖部分范围：error/common public surface、processor unsupported-code、remoting/proxy adapter token、部分 redaction。
 
+**完成状态**：
+
+- root CI 已在 format check 后、clippy 前运行 `python3 scripts/error_architecture_guard.py`。
+- dashboard web backend CI 已运行同一个 guard，并将 `scripts/error_architecture_guard.py` 纳入 workflow 触发路径。
+- `docs/error-architecture-guard.md` 已说明本地运行方式、CI 入口、覆盖范围和 allowlist 规则。
+
+**追踪**：Issue [#7953](https://github.com/mxsm/rocketmq-rust/issues/7953)，PR [#7954](https://github.com/mxsm/rocketmq-rust/pull/7954)。
+
 **开发 checklist**：
 
-- [ ] 将 `py scripts\error_architecture_guard.py` 接入 root CI。
-- [ ] 如果 dashboard shared/backend 被纳入 guard，dashboard web CI 也调用对应检查。
-- [ ] 扩展 guard：library/shared public `anyhow` allowlist。
-- [ ] 扩展 guard：unmapped `ErrorKind`、missing `ErrorSpec`、missing protocol/recovery/observe/redaction。
-- [ ] 扩展 guard：processor 通用 `SystemError` / `InvalidParameter` 新增检查。
-- [ ] 扩展 guard：source stringification allowlist。
-- [ ] 扩展 guard：sensitive output allowlist。
-- [ ] 增加 guard 文档，说明如何新增 allowlist 以及何时不允许新增。
+- [x] 将 `py scripts\error_architecture_guard.py` 接入 root CI。
+- [x] 如果 dashboard shared/backend 被纳入 guard，dashboard web CI 也调用对应检查。
+- [x] 扩展 guard：library/shared public `anyhow` allowlist。
+- [x] 扩展 guard：unmapped `ErrorKind`、missing `ErrorSpec`、missing protocol/recovery/observe/redaction。
+- [x] 扩展 guard：processor 通用 `SystemError` / `InvalidParameter` 新增检查。
+- [x] 扩展 guard：source stringification allowlist。
+- [x] 扩展 guard：sensitive output allowlist。
+- [x] 增加 guard 文档，说明如何新增 allowlist 以及何时不允许新增。
 
 **验收 checklist**：
 
-- [ ] CI 中能看到 error architecture guard step。
-- [ ] guard 失败会输出 `path:line`。
-- [ ] guard 不依赖本机 `python` alias；Windows 上使用 `py` 或 CI 指定 Python。
+- [x] CI 中能看到 error architecture guard step。
+- [x] guard 失败会输出 `path:line`。
+- [x] guard 不依赖本机 `python` alias；Windows 上使用 `py` 或 CI 指定 Python。
 
 **建议验证**：
 
@@ -569,7 +577,7 @@ cargo build --all-targets --all-features
 - [x] client retry/fault 行为来自 `RetryClass` 和明确 broker response allowlist。
 - [x] store/controller/auth/broker 不再无登记地把 source `to_string()` 后塞入新错误。
 - [x] secret/token/signature/password 默认 redacted。
-- [ ] `scripts/error_architecture_guard.py` 进入 CI。
+- [x] `scripts/error_architecture_guard.py` 进入 CI。
 - [ ] root workspace 通过 fmt/clippy。
 - [ ] 受影响 standalone 项目分别通过各自 clippy/build。
 
