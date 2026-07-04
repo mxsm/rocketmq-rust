@@ -306,19 +306,29 @@ cargo test -p rocketmq-client-rust typed_error_client_flow_tests
 - `BrokerOperationFailed { code }` 仍用 `retry_response_codes` allowlist 判断，这是 RocketMQ broker response 兼容路径，需要明确边界。
 - producer/consumer 中仍有局部 retry 判断和状态处理。
 
+**完成状态**：
+
+- `ClientRetryDecision` 已补齐 `ClientRetryEffect`，将 retry、route refresh、switch broker、refresh leader、backoff 行为统一表达在 `retry_decision` 模块。
+- producer send 失败路径已改为先读取 `producer_send_retry_decision`，再由集中 `producer_send_fault_decision` 更新 fault strategy。
+- send 语境优先级已固定为：terminal send error 优先 `NoRetry`，`BrokerOperationFailed` 使用 Java 兼容 response code allowlist，其它错误回落到 `ErrorSpec.recovery.retry`。
+- `retry_decision` 单元测试覆盖 `RefreshRoute`、`SwitchBroker`、`RefreshLeader`、`AfterBackoff`、`Never`、broker response allowlist 和不读取 display text。
+- `scripts/error_architecture_guard.py` 已增加 client retry boundary 检查，防止 retry 决策回退到文本解析、runtime downcast 或绕开集中模块。
+
+**追踪**：Issue [#7947](https://github.com/mxsm/rocketmq-rust/issues/7947)，PR [#7948](https://github.com/mxsm/rocketmq-rust/pull/7948)。
+
 **开发 checklist**：
 
-- [ ] 明确 `RetryClass` 与 broker response code allowlist 的优先级。
-- [ ] 将 route refresh、switch broker、refresh leader、backoff 行为集中在 retry decision 模块。
-- [ ] 避免 producer/consumer 新增文本或局部 variant 猜测。
-- [ ] 对 `RetryClass::RefreshRoute/SwitchBroker/RefreshLeader/AfterBackoff/Never` 增加行为测试。
-- [ ] 对 broker response allowlist 写明 Java compatibility 理由。
+- [x] 明确 `RetryClass` 与 broker response code allowlist 的优先级。
+- [x] 将 route refresh、switch broker、refresh leader、backoff 行为集中在 retry decision 模块。
+- [x] 避免 producer/consumer 新增文本或局部 variant 猜测。
+- [x] 对 `RetryClass::RefreshRoute/SwitchBroker/RefreshLeader/AfterBackoff/Never` 增加行为测试。
+- [x] 对 broker response allowlist 写明 Java compatibility 理由。
 
 **验收 checklist**：
 
-- [ ] client retry 不读取 display string。
-- [ ] 新增 `ErrorKind` 的 retry 行为来自 `ErrorSpec.recovery`。
-- [ ] broker response allowlist 有测试覆盖。
+- [x] client retry 不读取 display string。
+- [x] 新增 `ErrorKind` 的 retry 行为来自 `ErrorSpec.recovery`。
+- [x] broker response allowlist 有测试覆盖。
 
 **建议验证**：
 
@@ -536,8 +546,8 @@ cargo build --all-targets --all-features
 - [x] `ErrorSpec` 包含 code、scope、category、public message、remoting、grpc、http、cli、recovery、observe、redaction。
 - [ ] remoting/gRPC/HTTP/CLI 外部出口读取中心 spec 或有明确 local-only allowlist。
 - [ ] broker/namesrv processor 通用错误不再手写 response code。
-- [ ] client callback 内部事实源不再是 `dyn Error` downcast。
-- [ ] client retry/fault 行为来自 `RetryClass` 和明确 broker response allowlist。
+- [x] client callback 内部事实源不再是 `dyn Error` downcast。
+- [x] client retry/fault 行为来自 `RetryClass` 和明确 broker response allowlist。
 - [ ] store/controller/auth/broker 不再无登记地把 source `to_string()` 后塞入新错误。
 - [ ] secret/token/signature/password 默认 redacted。
 - [ ] `scripts/error_architecture_guard.py` 进入 CI。
