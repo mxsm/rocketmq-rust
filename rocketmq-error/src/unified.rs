@@ -40,11 +40,7 @@ pub use tools::ToolsError;
 
 // Re-export auth error from the auth_error module
 pub use crate::auth_error::AuthError;
-// Re-export legacy error types for backward compatibility (will be deprecated)
-#[allow(deprecated)]
 pub use crate::client_error::*;
-#[allow(deprecated)]
-pub use crate::common_error::*;
 // Re-export controller error from the controller_error module
 pub use crate::controller_error::ControllerError;
 
@@ -390,14 +386,6 @@ pub enum RocketMQError {
     #[error("Invalid RocketMQ version ordinal: {0}")]
     InvalidVersionOrdinal(u32),
 
-    // ============================================================================
-    // Legacy Errors (Deprecated - for backward compatibility)
-    // ============================================================================
-    /// Legacy error - use specific error types instead
-    #[deprecated(since = "0.7.0", note = "Use specific error types instead")]
-    #[error("{0}")]
-    Legacy(String),
-
     #[error("Not initialized: {0}")]
     NotInitialized(String),
 
@@ -412,7 +400,6 @@ pub enum RocketMQError {
 impl RocketMQError {
     /// Return the stable logical error kind.
     #[inline]
-    #[allow(deprecated)]
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Network(_) => ErrorKind::Network,
@@ -474,7 +461,6 @@ impl RocketMQError {
             Self::Internal(_) => ErrorKind::Internal,
             Self::Service(_) => ErrorKind::Service,
             Self::InvalidVersionOrdinal(_) => ErrorKind::InvalidVersionOrdinal,
-            Self::Legacy(_) => ErrorKind::Legacy,
             Self::NotInitialized(_) => ErrorKind::NotInitialized,
             Self::MissingRequiredMessageProperty { .. } => ErrorKind::MissingRequiredMessageProperty,
         }

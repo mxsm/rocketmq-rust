@@ -126,7 +126,6 @@ pub const ALL_ERROR_SPECS: &[ErrorSpec] = &[
     spec!(Internal, "Internal error"),
     spec!(Service, "Service lifecycle operation failed"),
     spec!(InvalidVersionOrdinal, "Version ordinal is invalid"),
-    spec!(Legacy, "Legacy error"),
     spec!(NotInitialized, "Component is not initialized"),
     spec!(MissingRequiredMessageProperty, "Message is missing a required property"),
 ];
