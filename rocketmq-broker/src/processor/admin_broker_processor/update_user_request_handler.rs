@@ -63,7 +63,12 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
         };
         let mut user_info: UserInfo = match UserInfo::decode(body) {
             Ok(user_info) => user_info,
-            Err(error) => return Ok(Some(map_error_response(response, error))),
+            Err(error) => {
+                return Ok(Some(map_error_response(
+                    response,
+                    super::auth_admin_body_decode_error("decode user body", error),
+                )));
+            }
         };
 
         user_info.username = Option::from(request_header.username);

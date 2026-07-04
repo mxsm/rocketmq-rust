@@ -111,6 +111,7 @@ pub enum ErrorKind {
     BrokerPermissionDenied,
     NotMasterBroker,
     MessageLookupFailed,
+    QueryNotFound,
     TopicSendingForbidden,
     BrokerAsyncTaskFailed,
     RequestBodyInvalid,
@@ -177,6 +178,7 @@ impl ErrorKind {
         Self::BrokerPermissionDenied,
         Self::NotMasterBroker,
         Self::MessageLookupFailed,
+        Self::QueryNotFound,
         Self::TopicSendingForbidden,
         Self::BrokerAsyncTaskFailed,
         Self::RequestBodyInvalid,
@@ -244,6 +246,7 @@ impl ErrorKind {
             Self::BrokerPermissionDenied => "BROKER_PERMISSION_DENIED",
             Self::NotMasterBroker => "NOT_MASTER_BROKER",
             Self::MessageLookupFailed => "MESSAGE_LOOKUP_FAILED",
+            Self::QueryNotFound => "QUERY_NOT_FOUND",
             Self::TopicSendingForbidden => "TOPIC_SENDING_FORBIDDEN",
             Self::BrokerAsyncTaskFailed => "BROKER_ASYNC_TASK_FAILED",
             Self::RequestBodyInvalid => "REQUEST_BODY_INVALID",
@@ -316,6 +319,7 @@ impl ErrorKind {
             | Self::BrokerPermissionDenied
             | Self::NotMasterBroker
             | Self::MessageLookupFailed
+            | Self::QueryNotFound
             | Self::TopicSendingForbidden
             | Self::BrokerAsyncTaskFailed => ErrorScope::Broker,
             Self::RequestBodyInvalid | Self::RequestHeaderError | Self::ResponseProcessFailed => ErrorScope::Request,
@@ -387,6 +391,7 @@ impl ErrorKind {
             | Self::TransactionRejected
             | Self::NotMasterBroker
             | Self::MessageLookupFailed
+            | Self::QueryNotFound
             | Self::BrokerAsyncTaskFailed => ErrorCategory::Broker,
             Self::RouteNotFound
             | Self::RouteInconsistent

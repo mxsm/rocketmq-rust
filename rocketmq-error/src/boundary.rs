@@ -63,7 +63,9 @@ impl RemotingSpec {
             ErrorKind::TopicNotExist | ErrorKind::RouteNotFound => RemotingResponseCode::TopicNotExist,
             ErrorKind::SubscriptionGroupNotExist => RemotingResponseCode::SubscriptionGroupNotExist,
             ErrorKind::BrokerNotFound | ErrorKind::ClusterNotFound => RemotingResponseCode::BrokerNotExist,
-            ErrorKind::QueueNotExist | ErrorKind::MessageLookupFailed => RemotingResponseCode::QueryNotFound,
+            ErrorKind::QueueNotExist | ErrorKind::MessageLookupFailed | ErrorKind::QueryNotFound => {
+                RemotingResponseCode::QueryNotFound
+            }
             ErrorKind::MessageTooLarge | ErrorKind::MessageValidationFailed | ErrorKind::InvalidProperty => {
                 RemotingResponseCode::MessageIllegal
             }
@@ -153,7 +155,8 @@ impl GrpcSpec {
             ErrorKind::BrokerNotFound
             | ErrorKind::QueueNotExist
             | ErrorKind::ClusterNotFound
-            | ErrorKind::MessageLookupFailed => Self::new(GrpcPayloadCode::NotFound, GrpcStatusCode::NotFound),
+            | ErrorKind::MessageLookupFailed
+            | ErrorKind::QueryNotFound => Self::new(GrpcPayloadCode::NotFound, GrpcStatusCode::NotFound),
             ErrorKind::MessageTooLarge => {
                 Self::new(GrpcPayloadCode::MessageBodyTooLarge, GrpcStatusCode::ResourceExhausted)
             }
@@ -237,7 +240,8 @@ impl HttpSpec {
             | ErrorKind::BrokerNotFound
             | ErrorKind::QueueNotExist
             | ErrorKind::ClusterNotFound
-            | ErrorKind::MessageLookupFailed => HttpStatusCode::NOT_FOUND,
+            | ErrorKind::MessageLookupFailed
+            | ErrorKind::QueryNotFound => HttpStatusCode::NOT_FOUND,
             ErrorKind::RouteRegistrationConflict
             | ErrorKind::RouteVersionConflict
             | ErrorKind::ClientAlreadyStarted
@@ -313,7 +317,8 @@ impl CliSpec {
             | ErrorKind::BrokerNotFound
             | ErrorKind::QueueNotExist
             | ErrorKind::ClusterNotFound
-            | ErrorKind::MessageLookupFailed => CliExitCode::NOT_FOUND,
+            | ErrorKind::MessageLookupFailed
+            | ErrorKind::QueryNotFound => CliExitCode::NOT_FOUND,
             ErrorKind::IllegalArgument
             | ErrorKind::InvalidProperty
             | ErrorKind::MessageValidationFailed

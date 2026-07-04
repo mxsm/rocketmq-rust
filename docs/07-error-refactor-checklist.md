@@ -153,27 +153,30 @@ cargo build --all-targets --all-features
 
 **范围**：`rocketmq-remoting/src/error_response.rs`、`rocketmq-remoting/src/remoting.rs`、`rocketmq-broker/src/processor*`、`rocketmq-namesrv/src/processor*`。
 
-**当前缺口**：
+**完成状态**：
 
-- `rocketmq-remoting/src/error_response.rs` 已读取 `error.spec().remoting`。
-- broker/namesrv processor 仍大量直接构造 `ResponseCode::SystemError`、`InvalidParameter`、`TopicNotExist` 等。
-- `admin_broker_processor` 仍有本地 `RocketMQError -> ResponseCode` match，并使用 `error.to_string()`。
+- `rocketmq-remoting/src/error_response.rs` 已提供基于 `error.spec().remoting` 的统一 response helper，覆盖 typed error、unsupported request code、internal fallback 和 opaque 保留。
+- broker fast-failure fallback 与 auth-admin 通用失败映射已改为通过 remoting adapter 输出；仅保留 `UserNotExist` 这类 Java-compatible 本地业务 response code。
+- namesrv processor 中通用 `SystemError`、`InvalidParameter`、`NoPermission`、`QueryNotFound` 路径已迁移到 typed error 或统一 adapter。
+- `scripts/error_architecture_guard.py` 已增加 processor generic response allowlist，禁止新增未登记的通用 response code 构造。
+
+**追踪**：Issue [#7939](https://github.com/mxsm/rocketmq-rust/issues/7939)，PR [#7940](https://github.com/mxsm/rocketmq-rust/pull/7940)。
 
 **开发 checklist**：
 
-- [ ] 给 `rocketmq_remoting::error_response` 增加统一 helper：typed error、unsupported request code、internal/system fallback、opaque 保留。
-- [ ] 先迁移通用失败路径：unsupported request、decode/header validation、serialization、auth/config error。
-- [ ] broker processor 中业务特定成功/空结果 code 保留本地，异常失败走 adapter。
-- [ ] namesrv processor 中通用 `SystemError`、`NoPermission`、`QueryNotFound` 逐步改为 typed error + adapter。
-- [ ] 删除或缩小本地 `RocketMQError -> ResponseCode` match。
-- [ ] 给 broker/namesrv 添加 mapper tests，验证典型 `ErrorKind` 到 `ResponseCode`。
-- [ ] 扩展 `error_architecture_guard.py`，禁止 processor 新增未 allowlist 的通用错误构造。
+- [x] 给 `rocketmq_remoting::error_response` 增加统一 helper：typed error、unsupported request code、internal/system fallback、opaque 保留。
+- [x] 先迁移通用失败路径：unsupported request、decode/header validation、serialization、auth/config error。
+- [x] broker processor 中业务特定成功/空结果 code 保留本地，异常失败走 adapter。
+- [x] namesrv processor 中通用 `SystemError`、`NoPermission`、`QueryNotFound` 逐步改为 typed error + adapter。
+- [x] 删除或缩小本地 `RocketMQError -> ResponseCode` match。
+- [x] 给 broker/namesrv 添加 mapper tests，验证典型 `ErrorKind` 到 `ResponseCode`。
+- [x] 扩展 `error_architecture_guard.py`，禁止 processor 新增未 allowlist 的通用错误构造。
 
 **验收 checklist**：
 
-- [ ] processor 不再手写通用 `RequestCodeNotSupported`。
-- [ ] 通用 `SystemError` fallback 有明确 allowlist。
-- [ ] 每个对外 typed failure 都能由 `ErrorSpec.remoting` 得到 response code。
+- [x] processor 不再手写通用 `RequestCodeNotSupported`。
+- [x] 通用 `SystemError` fallback 有明确 allowlist。
+- [x] 每个对外 typed failure 都能由 `ErrorSpec.remoting` 得到 response code。
 
 **建议验证**：
 

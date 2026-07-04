@@ -197,6 +197,10 @@ pub enum RocketMQError {
     #[error("Message lookup failed at offset {offset}")]
     MessageLookupFailed { offset: i64 },
 
+    /// Query result was not found
+    #[error("Query result was not found: {resource}")]
+    QueryNotFound { resource: String },
+
     /// Topic sending forbidden
     #[error("Sending to topic '{topic}' is forbidden")]
     TopicSendingForbidden { topic: String },
@@ -425,6 +429,7 @@ impl RocketMQError {
             Self::BrokerPermissionDenied { .. } => ErrorKind::BrokerPermissionDenied,
             Self::NotMasterBroker { .. } => ErrorKind::NotMasterBroker,
             Self::MessageLookupFailed { .. } => ErrorKind::MessageLookupFailed,
+            Self::QueryNotFound { .. } => ErrorKind::QueryNotFound,
             Self::TopicSendingForbidden { .. } => ErrorKind::TopicSendingForbidden,
             Self::BrokerAsyncTaskFailed { .. } => ErrorKind::BrokerAsyncTaskFailed,
             Self::RequestBodyInvalid { .. } => ErrorKind::RequestBodyInvalid,
@@ -544,6 +549,7 @@ impl RocketMQError {
                 ErrorContext::new().with_sensitive("master_address", Sensitive::new(master_address.clone()))
             }
             Self::MessageLookupFailed { offset } => ErrorContext::new().with_field("offset", offset.to_string()),
+            Self::QueryNotFound { resource } => ErrorContext::new().with_field("resource", resource.as_str()),
             Self::TopicSendingForbidden { topic } => ErrorContext::new().with_field("topic", topic.as_str()),
             Self::BrokerAsyncTaskFailed { task, context, .. } => ErrorContext::new()
                 .with_field("task", *task)
@@ -688,6 +694,14 @@ impl RocketMQError {
     #[inline]
     pub fn route_not_found(topic: impl Into<String>) -> Self {
         Self::RouteNotFound { topic: topic.into() }
+    }
+
+    /// Create a generic query-not-found error.
+    #[inline]
+    pub fn query_not_found(resource: impl Into<String>) -> Self {
+        Self::QueryNotFound {
+            resource: resource.into(),
+        }
     }
 
     /// Create a route registration conflict error

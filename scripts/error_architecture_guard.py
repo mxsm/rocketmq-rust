@@ -65,6 +65,36 @@ ANYHOW_RESULT_ALLOWLIST: dict[str, str] = {
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/rocketmq_tui_app.rs": "TUI terminal runtime boundary",
 }
 
+PROCESSOR_GENERIC_RESPONSE_ALLOWLIST: dict[str, str] = {
+    "rocketmq-broker/src/processor/admin_broker_processor/": "admin remoting APIs retain Java-compatible local response codes pending typed handler migration",
+    "rocketmq-broker/src/processor/change_invisible_time_processor.rs": "pop invisible-time protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/client_manage_processor.rs": "client management protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/consumer_manage_processor.rs": "consumer management protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/end_transaction_processor.rs": "transaction end protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/lite_manager_processor.rs": "lite management protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/lite_subscription_ctl_processor.rs": "lite subscription protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/notification_processor.rs": "long-poll notification protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/peek_message_processor.rs": "peek message protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/polling_info_processor.rs": "polling info protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/pop_lite_message_processor.rs": "lite pop protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/pop_message_processor.rs": "pop message protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/pull_message_processor.rs": "pull message protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/query_assignment_processor.rs": "assignment query protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/query_message_processor.rs": "message query protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/recall_message_processor.rs": "recall message protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/reply_message_processor.rs": "reply message protocol keeps Java-compatible broker response codes",
+    "rocketmq-broker/src/processor/send_message_processor.rs": "send message protocol keeps Java-compatible broker response codes",
+}
+
+PROCESSOR_GENERIC_RESPONSE_TERMS = (
+    "ResponseCode::SystemError",
+    "ResponseCode::InvalidParameter",
+    "ResponseCode::NoPermission",
+    "ResponseCode::QueryNotFound",
+    "RemotingSysResponseCode::SystemError",
+    "RemotingSysResponseCode::NoPermission",
+)
+
 
 @dataclasses.dataclass(frozen=True)
 class Finding:
@@ -138,6 +168,11 @@ def is_anyhow_result_allowlisted(path: Path) -> bool:
     return rel in ANYHOW_RESULT_ALLOWLIST
 
 
+def is_processor_generic_response_allowlisted(path: Path) -> bool:
+    rel = rel_path(path)
+    return any(rel == prefix or rel.startswith(prefix) for prefix in PROCESSOR_GENERIC_RESPONSE_ALLOWLIST)
+
+
 def scan_forbidden_terms(paths: Iterable[Path], forbidden: dict[str, str]) -> list[Finding]:
     findings: list[Finding] = []
     for path in paths:
@@ -195,11 +230,47 @@ def check_processor_boundary_mappings() -> list[Finding]:
     return findings
 
 
+def check_processor_generic_response_allowlist() -> list[Finding]:
+    findings: list[Finding] = []
+    processor_roots = [
+        ROOT / "rocketmq-broker" / "src" / "processor.rs",
+        ROOT / "rocketmq-broker" / "src" / "processor",
+        ROOT / "rocketmq-namesrv" / "src" / "processor.rs",
+        ROOT / "rocketmq-namesrv" / "src" / "processor",
+    ]
+    paths: list[Path] = []
+    for root in processor_roots:
+        if root.is_file():
+            paths.append(root)
+        elif root.is_dir():
+            paths.extend(rust_files_under(*root.relative_to(ROOT).parts))
+
+    for path in sorted(set(paths)):
+        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith("//") or is_test_context(path, line_number):
+                continue
+            if not any(term in line for term in PROCESSOR_GENERIC_RESPONSE_TERMS):
+                continue
+            if not is_processor_generic_response_allowlisted(path):
+                findings.append(
+                    Finding(
+                        path,
+                        line_number,
+                        "generic processor response codes require typed error_response helpers or an allowlist entry",
+                    )
+                )
+    return findings
+
+
 def check_required_mapping_adapters() -> list[Finding]:
     checks = {
         ROOT / "rocketmq-remoting" / "src" / "error_response.rs": [
             "error.spec().remoting.code.as_i32()",
+            "apply_error_to_response",
+            "invalid_parameter_with_remark",
             "request_code_not_supported_with_remark",
+            "query_not_found_with_remark",
             "internal_error_with_opaque",
         ],
         ROOT / "rocketmq-proxy" / "src" / "status.rs": [
@@ -352,6 +423,7 @@ def run() -> int:
     checks = [
         ("core public surface", check_error_and_common_public_surface),
         ("processor boundary mappings", check_processor_boundary_mappings),
+        ("processor generic response allowlist", check_processor_generic_response_allowlist),
         ("required mapping adapters", check_required_mapping_adapters),
         ("error spec contract", check_error_spec_contract),
         ("internal error allowlist", check_internal_error_allowlist),

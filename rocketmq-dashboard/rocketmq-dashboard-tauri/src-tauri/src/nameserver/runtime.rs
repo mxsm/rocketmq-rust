@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::Result;
 use rocketmq_common::common::mix_all;
+use rocketmq_dashboard_common::DashboardCommonResult;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::NameServerRuntimeAdapter;
 use std::env;
@@ -81,7 +81,7 @@ impl NameServerRuntimeState {
 }
 
 impl NameServerRuntimeAdapter for NameServerRuntimeState {
-    fn apply_snapshot(&self, snapshot: &NameServerConfigSnapshot) -> Result<()> {
+    fn apply_snapshot(&self, snapshot: &NameServerConfigSnapshot) -> DashboardCommonResult<()> {
         {
             let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             state.snapshot = snapshot.clone();
