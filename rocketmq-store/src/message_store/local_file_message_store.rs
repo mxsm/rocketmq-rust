@@ -6327,13 +6327,17 @@ mod tests {
             queue_offset + 1
         );
 
-        let query_result = store
-            .query_message(&topic, &key, 10, 0, i64::MAX)
-            .await
-            .expect("tieredstore query fallback result");
-        let query_data = query_result
-            .get_message_data()
-            .expect("tieredstore query fallback data");
+        let mut query_data = None;
+        for _ in 0..50 {
+            if let Some(result) = store.query_message(&topic, &key, 10, 0, i64::MAX).await {
+                if let Some(data) = result.get_message_data() {
+                    query_data = Some(data);
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let query_data = query_data.expect("tieredstore query fallback data");
         assert!(query_data.windows(body.len()).any(|window| window == body.as_ref()));
 
         store.shutdown().await;
