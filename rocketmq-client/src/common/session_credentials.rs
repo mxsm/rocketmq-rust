@@ -24,6 +24,12 @@ pub const SECRET_KEY: &str = "SecretKey";
 pub const SIGNATURE: &str = "Signature";
 pub const SECURITY_TOKEN: &str = "SecurityToken";
 
+const REDACTED: &str = "<redacted>";
+
+fn redacted_value(value: Option<&CheetahString>) -> Option<&'static str> {
+    value.map(|_| REDACTED)
+}
+
 fn get_key_file_path() -> PathBuf {
     if let Ok(key_file) = std::env::var("rocketmq.client.keyFile") {
         PathBuf::from(key_file)
@@ -162,7 +168,10 @@ impl fmt::Display for SessionCredentials {
         write!(
             f,
             "SessionCredentials [accessKey={:?}, secretKey={:?}, signature={:?}, SecurityToken={:?}]",
-            self.access_key, self.secret_key, self.signature, self.security_token
+            self.access_key,
+            redacted_value(self.secret_key.as_ref()),
+            redacted_value(self.signature.as_ref()),
+            redacted_value(self.security_token.as_ref())
         )
     }
 }
@@ -263,10 +272,16 @@ mod tests {
 
     #[test]
     fn session_credentials_display() {
-        let credentials = SessionCredentials::with_token("ak", "sk", "tk");
+        let mut credentials = SessionCredentials::with_token("ak", "sk", "tk");
+        credentials.set_signature("sig");
+
         let display = format!("{}", credentials);
-        let expected = "SessionCredentials [accessKey=Some(\"ak\"), secretKey=Some(\"sk\"), signature=None, \
-                        SecurityToken=Some(\"tk\")]";
+        let expected = "SessionCredentials [accessKey=Some(\"ak\"), secretKey=Some(\"<redacted>\"), \
+                        signature=Some(\"<redacted>\"), SecurityToken=Some(\"<redacted>\")]";
+
         assert_eq!(display, expected);
+        assert!(!display.contains("\"sk\""));
+        assert!(!display.contains("\"tk\""));
+        assert!(!display.contains("\"sig\""));
     }
 }
