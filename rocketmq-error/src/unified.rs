@@ -29,6 +29,7 @@ use std::io;
 // Re-export filter error
 pub use crate::filter_error::FilterError;
 
+use crate::kind::ErrorKind;
 pub use network::NetworkError;
 pub use protocol::ProtocolError;
 pub use rpc::RpcClientError;
@@ -408,6 +409,76 @@ pub enum RocketMQError {
 // ============================================================================
 
 impl RocketMQError {
+    /// Return the stable logical error kind.
+    #[inline]
+    #[allow(deprecated)]
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Network(_) => ErrorKind::Network,
+            Self::Serialization(_) => ErrorKind::Serialization,
+            Self::Protocol(_) => ErrorKind::Protocol,
+            Self::Rpc(_) => ErrorKind::Rpc,
+            Self::Authentication(_) => ErrorKind::Authentication,
+            Self::Controller(_) => ErrorKind::Controller,
+            Self::InvalidProperty(_) => ErrorKind::InvalidProperty,
+            Self::BrokerNotFound { .. } => ErrorKind::BrokerNotFound,
+            Self::BrokerRegistrationFailed { .. } => ErrorKind::BrokerRegistrationFailed,
+            Self::BrokerOperationFailed { .. } => ErrorKind::BrokerOperationFailed,
+            Self::TopicNotExist { .. } => ErrorKind::TopicNotExist,
+            Self::QueueNotExist { .. } => ErrorKind::QueueNotExist,
+            Self::SubscriptionGroupNotExist { .. } => ErrorKind::SubscriptionGroupNotExist,
+            Self::QueueIdOutOfRange { .. } => ErrorKind::QueueIdOutOfRange,
+            Self::MessageTooLarge { .. } => ErrorKind::MessageTooLarge,
+            Self::MessageValidationFailed { .. } => ErrorKind::MessageValidationFailed,
+            Self::RetryLimitExceeded { .. } => ErrorKind::RetryLimitExceeded,
+            Self::TransactionRejected => ErrorKind::TransactionRejected,
+            Self::BrokerPermissionDenied { .. } => ErrorKind::BrokerPermissionDenied,
+            Self::NotMasterBroker { .. } => ErrorKind::NotMasterBroker,
+            Self::MessageLookupFailed { .. } => ErrorKind::MessageLookupFailed,
+            Self::TopicSendingForbidden { .. } => ErrorKind::TopicSendingForbidden,
+            Self::BrokerAsyncTaskFailed { .. } => ErrorKind::BrokerAsyncTaskFailed,
+            Self::RequestBodyInvalid { .. } => ErrorKind::RequestBodyInvalid,
+            Self::RequestHeaderError(_) => ErrorKind::RequestHeaderError,
+            Self::ResponseProcessFailed { .. } => ErrorKind::ResponseProcessFailed,
+            Self::RouteNotFound { .. } => ErrorKind::RouteNotFound,
+            Self::RouteInconsistent { .. } => ErrorKind::RouteInconsistent,
+            Self::RouteRegistrationConflict { .. } => ErrorKind::RouteRegistrationConflict,
+            Self::RouteVersionConflict { .. } => ErrorKind::RouteVersionConflict,
+            Self::ClusterNotFound { .. } => ErrorKind::ClusterNotFound,
+            Self::ClientNotStarted => ErrorKind::ClientNotStarted,
+            Self::ClientAlreadyStarted => ErrorKind::ClientAlreadyStarted,
+            Self::ClientShuttingDown => ErrorKind::ClientShuttingDown,
+            Self::ClientInvalidState { .. } => ErrorKind::ClientInvalidState,
+            Self::ProducerNotAvailable => ErrorKind::ProducerNotAvailable,
+            Self::ConsumerNotAvailable => ErrorKind::ConsumerNotAvailable,
+            Self::Tools(_) => ErrorKind::Tools,
+            Self::Filter(_) => ErrorKind::Filter,
+            Self::StorageReadFailed { .. } => ErrorKind::StorageReadFailed,
+            Self::StorageWriteFailed { .. } => ErrorKind::StorageWriteFailed,
+            Self::StorageCorrupted { .. } => ErrorKind::StorageCorrupted,
+            Self::StorageOutOfSpace { .. } => ErrorKind::StorageOutOfSpace,
+            Self::StorageLockFailed { .. } => ErrorKind::StorageLockFailed,
+            Self::ConfigParseFailed { .. } => ErrorKind::ConfigParseFailed,
+            Self::ConfigMissing { .. } => ErrorKind::ConfigMissing,
+            Self::ConfigInvalidValue { .. } => ErrorKind::ConfigInvalidValue,
+            Self::AuthConfigInvalid { .. } => ErrorKind::AuthConfigInvalid,
+            Self::AuthHotReloadFailed { .. } => ErrorKind::AuthHotReloadFailed,
+            Self::ControllerNotLeader { .. } => ErrorKind::ControllerNotLeader,
+            Self::ControllerRaftError { .. } => ErrorKind::ControllerRaftError,
+            Self::ControllerConsensusTimeout { .. } => ErrorKind::ControllerConsensusTimeout,
+            Self::ControllerSnapshotFailed { .. } => ErrorKind::ControllerSnapshotFailed,
+            Self::IO(_) => ErrorKind::Io,
+            Self::IllegalArgument(_) => ErrorKind::IllegalArgument,
+            Self::Timeout { .. } => ErrorKind::Timeout,
+            Self::Internal(_) => ErrorKind::Internal,
+            Self::Service(_) => ErrorKind::Service,
+            Self::InvalidVersionOrdinal(_) => ErrorKind::InvalidVersionOrdinal,
+            Self::Legacy(_) => ErrorKind::Legacy,
+            Self::NotInitialized(_) => ErrorKind::NotInitialized,
+            Self::MissingRequiredMessageProperty { .. } => ErrorKind::MissingRequiredMessageProperty,
+        }
+    }
+
     /// Create a network connection failed error
     #[inline]
     pub fn network_connection_failed(addr: impl Into<String>, reason: impl Into<String>) -> Self {

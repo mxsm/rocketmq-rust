@@ -51,6 +51,9 @@
 // New unified error system
 pub mod unified;
 
+// Stable error taxonomy
+pub mod kind;
+
 // Auth error module
 pub mod auth_error;
 
@@ -71,6 +74,9 @@ pub use controller_error::ControllerError;
 pub use controller_error::ControllerResult;
 // Re-export filter error types
 pub use filter_error::FilterError;
+pub use kind::ErrorCode;
+pub use kind::ErrorKind;
+pub use kind::ErrorScope;
 pub use unified::AuthError;
 pub use unified::NetworkError;
 pub use unified::ProtocolError;
