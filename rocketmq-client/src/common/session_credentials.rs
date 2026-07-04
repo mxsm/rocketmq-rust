@@ -40,7 +40,7 @@ fn get_key_file_path() -> PathBuf {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct SessionCredentials {
     access_key: Option<CheetahString>,
     secret_key: Option<CheetahString>,
@@ -154,6 +154,17 @@ impl PartialEq for SessionCredentials {
 }
 
 impl Eq for SessionCredentials {}
+
+impl fmt::Debug for SessionCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionCredentials")
+            .field("access_key", &self.access_key)
+            .field("secret_key", &redacted_value(self.secret_key.as_ref()))
+            .field("signature", &redacted_value(self.signature.as_ref()))
+            .field("security_token", &redacted_value(self.security_token.as_ref()))
+            .finish()
+    }
+}
 
 impl std::hash::Hash for SessionCredentials {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -283,5 +294,21 @@ mod tests {
         assert!(!display.contains("\"sk\""));
         assert!(!display.contains("\"tk\""));
         assert!(!display.contains("\"sig\""));
+    }
+
+    #[test]
+    fn session_credentials_debug_redacts_sensitive_fields() {
+        let mut credentials = SessionCredentials::with_token("ak", "sk", "tk");
+        credentials.set_signature("sig");
+
+        let debug = format!("{credentials:?}");
+
+        assert!(debug.contains("access_key: Some(\"ak\")"));
+        assert!(debug.contains("secret_key: Some(\"<redacted>\")"));
+        assert!(debug.contains("signature: Some(\"<redacted>\")"));
+        assert!(debug.contains("security_token: Some(\"<redacted>\")"));
+        assert!(!debug.contains("\"sk\""));
+        assert!(!debug.contains("\"tk\""));
+        assert!(!debug.contains("\"sig\""));
     }
 }
