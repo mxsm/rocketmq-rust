@@ -38,7 +38,7 @@ use rocketmq_common::common::FAQUrl;
 use rocketmq_common::utils::util_all;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::ClientErr;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_remoting::protocol::body::pop_process_queue_info::PopProcessQueueInfo;
@@ -699,11 +699,8 @@ impl DefaultMQPushConsumerImpl {
         let sub = self.consumer_config.subscription();
         if !sub.is_empty() {
             for (topic, sub_expression) in sub.as_ref() {
-                let subscription_data = FilterAPI::build_subscription_data(topic, sub_expression).map_err(|e| {
-                    rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
-                        "buildSubscriptionData exception, {e}",
-                    )))
-                })?;
+                let subscription_data = FilterAPI::build_subscription_data(topic, sub_expression)
+                    .map_err(|e| RocketMQError::illegal_argument(format!("buildSubscriptionData exception, {e}")))?;
                 self.rebalance_impl
                     .put_subscription_data(topic.clone(), subscription_data);
             }
@@ -721,11 +718,7 @@ impl DefaultMQPushConsumerImpl {
                     retry_topic.as_ref(),
                     &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
                 )
-                .map_err(|e| {
-                    rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
-                        "buildSubscriptionData exception, {e}",
-                    )))
-                })?;
+                .map_err(|e| RocketMQError::illegal_argument(format!("buildSubscriptionData exception, {e}")))?;
                 self.rebalance_impl
                     .put_subscription_data(retry_topic, subscription_data);
             }

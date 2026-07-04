@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error;
 use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
-use rocketmq_error::RocketmqError;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
@@ -31,6 +32,13 @@ use crate::consumer::pull_status::PullStatus;
 
 pub type PullCallbackFn =
     Arc<dyn FnOnce(Option<PullResultExt>, Option<Box<dyn std::error::Error + Send>>) + Send + Sync>;
+
+fn broker_response_code(error: &(dyn Error + Send + 'static)) -> Option<ResponseCode> {
+    error.downcast_ref::<RocketMQError>().and_then(|error| match error {
+        RocketMQError::BrokerOperationFailed { code, .. } => Some(ResponseCode::from(*code)),
+        _ => None,
+    })
+}
 
 #[trait_variant::make(PullCallback: Send)]
 pub trait PullCallbackLocal: Sync {
@@ -198,29 +206,13 @@ impl PullCallback for DefaultPullCallback {
             return;
         };
         let topic = message_queue_inner.topic_str();
+        let broker_code = broker_response_code(err.as_ref());
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
-            if let Some(er) = err.downcast_ref::<RocketmqError>() {
-                match er {
-                    RocketmqError::MQClientBrokerError(broker_error) => {
-                        if ResponseCode::from(broker_error.response_code()) == ResponseCode::SubscriptionNotLatest {
-                            warn!(
-                                "the subscription is not latest, group={}",
-                                self.push_consumer_impl.consumer_config.consumer_group,
-                            );
-                        } else {
-                            warn!(
-                                "execute the pull request exception, group={}",
-                                self.push_consumer_impl.consumer_config.consumer_group
-                            );
-                        }
-                    }
-                    _ => {
-                        warn!(
-                            "execute the pull request exception, group={}",
-                            self.push_consumer_impl.consumer_config.consumer_group
-                        );
-                    }
-                }
+            if broker_code == Some(ResponseCode::SubscriptionNotLatest) {
+                warn!(
+                    "the subscription is not latest, group={}",
+                    self.push_consumer_impl.consumer_config.consumer_group,
+                );
             } else {
                 warn!(
                     "execute the pull request exception, group={}",
@@ -228,17 +220,8 @@ impl PullCallback for DefaultPullCallback {
                 );
             }
         }
-        let time_delay = if let Some(er) = err.downcast_ref::<RocketmqError>() {
-            match er {
-                RocketmqError::MQClientBrokerError(broker_error) => {
-                    if ResponseCode::from(broker_error.response_code()) == ResponseCode::FlowControl {
-                        PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL
-                    } else {
-                        self.push_consumer_impl.pull_time_delay_mills_when_exception
-                    }
-                }
-                _ => self.push_consumer_impl.pull_time_delay_mills_when_exception,
-            }
+        let time_delay = if broker_code == Some(ResponseCode::FlowControl) {
+            PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL
         } else {
             self.push_consumer_impl.pull_time_delay_mills_when_exception
         };
@@ -272,6 +255,17 @@ mod tests {
             subscription_data: None,
             pull_request: None,
         }
+    }
+
+    #[test]
+    fn broker_response_code_reads_typed_broker_error() {
+        let error = rocketmq_error::RocketMQError::broker_operation_failed(
+            "PULL_MESSAGE",
+            ResponseCode::FlowControl.to_i32(),
+            "flow control",
+        );
+
+        assert_eq!(broker_response_code(&error), Some(ResponseCode::FlowControl));
     }
 
     #[tokio::test]
