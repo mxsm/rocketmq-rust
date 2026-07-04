@@ -22,9 +22,16 @@ fn client_callback_files_do_not_use_legacy_error_enum() {
     ];
 
     for source in files {
-        assert!(!source.contains("RocketmqError"));
-        assert!(!source.contains("RemotingTooMuchRequestError"));
-        assert!(!source.contains("MQClientErr(ClientErr"));
-        assert!(!source.contains("downcast_ref::<RocketmqError>"));
+        assert!(!source.contains(concat!("Rocket", "mqError")));
+        assert!(!source.contains(concat!("RemotingTooMuchRequest", "Error")));
+        assert!(!source.contains(concat!("MQ", "ClientErr(Client", "Err")));
+        assert!(!source.contains(concat!("downcast_ref::<Rocket", "mqError>")));
     }
+}
+
+#[test]
+fn client_public_api_does_not_export_dead_error_module() {
+    let lib = include_str!("../src/lib.rs");
+
+    assert!(!lib.contains(concat!("pub mod client", "_error;")));
 }
