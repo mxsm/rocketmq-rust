@@ -27,6 +27,8 @@ use serde::Serialize;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
+use crate::core::stable_error_code;
+use crate::core::stable_error_message;
 use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
@@ -190,7 +192,19 @@ pub struct CheckRocksdbCqWriteProgressEntry {
 pub struct QueueOperationFailure {
     pub broker_name: CheetahString,
     pub broker_addr: CheetahString,
+    pub error_code: String,
     pub error: String,
+}
+
+impl QueueOperationFailure {
+    pub fn from_error(broker_name: CheetahString, broker_addr: CheetahString, error: &RocketMQError) -> Self {
+        Self {
+            broker_name,
+            broker_addr,
+            error_code: stable_error_code(error),
+            error: stable_error_message(error),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,11 +325,7 @@ impl QueueService {
                     broker_addr,
                     result,
                 }),
-                Err(error) => failures.push(QueueOperationFailure {
-                    broker_name,
-                    broker_addr,
-                    error: error.to_string(),
-                }),
+                Err(error) => failures.push(QueueOperationFailure::from_error(broker_name, broker_addr, &error)),
             }
         }
 

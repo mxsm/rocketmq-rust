@@ -442,6 +442,36 @@ def check_required_mapping_adapters() -> list[Finding]:
             "internal_source",
             "response_message",
         ],
+        ROOT / "rocketmq-error" / "src" / "cli.rs": [
+            "spec.cli.exit_code",
+            "error.context()",
+            "render_stderr",
+        ],
+        ROOT / "rocketmq-tools" / "rocketmq-admin" / "rocketmq-admin-cli" / "src" / "rocketmq_cli.rs": [
+            "CliErrorView::from_error",
+            "view.exit_code().as_i32()",
+            "RocketMQError::validation_failed",
+        ],
+        ROOT
+        / "rocketmq-tools"
+        / "rocketmq-admin"
+        / "rocketmq-admin-core"
+        / "src"
+        / "core"
+        / "error_view.rs": [
+            "error.spec().code.as_str()",
+            "error.public_message()",
+            "error.context()",
+        ],
+        ROOT
+        / "rocketmq-tools"
+        / "rocketmq-store-inspect"
+        / "src"
+        / "bin"
+        / "rocketmq_cli.rs": [
+            "CliErrorView::from_error",
+            "view.exit_code().as_i32()",
+        ],
     }
     findings: list[Finding] = []
     for path, needles in checks.items():

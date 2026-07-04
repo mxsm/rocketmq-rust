@@ -20,6 +20,8 @@ use clap_complete::generate;
 use clap_complete::shells::Bash;
 use clap_complete::shells::Fish;
 use clap_complete::shells::Zsh;
+use rocketmq_error::CliErrorView;
+use rocketmq_error::RocketMQError;
 
 use crate::commands::CommandExecute;
 use crate::commands::Commands;
@@ -44,7 +46,7 @@ impl RocketMQCli {
         Self::parse_from(normalize_java_compatible_args(std::env::args_os()))
     }
 
-    pub async fn handle(&self) {
+    pub async fn handle(&self) -> i32 {
         if let Some(shell) = &self.completion {
             let mut cmd = RocketMQCli::command();
             let bin_name = "rocketmq-admin-cli";
@@ -60,22 +62,33 @@ impl RocketMQCli {
                     generate(Fish, &mut cmd, bin_name, &mut std::io::stdout());
                 }
                 _ => {
-                    eprintln!("Unsupported shell: {}", shell);
-                    eprintln!("Supported shells: bash, zsh, fish");
-                    std::process::exit(1);
+                    return render_cli_error(&RocketMQError::validation_failed(
+                        "generate-completion",
+                        format!("unsupported shell '{shell}', supported shells: bash, zsh, fish"),
+                    ));
                 }
             }
-            return;
+            return 0;
         }
 
         if let Some(ref commands) = self.commands {
             if let Err(e) = commands.execute(None).await {
-                eprintln!("Error: {e}");
+                return render_cli_error(&e);
             }
+            0
         } else {
-            eprintln!("No command specified. Use --help for usage information.");
+            render_cli_error(&RocketMQError::validation_failed(
+                "command",
+                "command must be specified; use --help for usage information",
+            ))
         }
     }
+}
+
+fn render_cli_error(error: &RocketMQError) -> i32 {
+    let view = CliErrorView::from_error(error);
+    eprintln!("{}", view.render_stderr());
+    view.exit_code().as_i32()
 }
 
 fn normalize_java_compatible_args<I>(args: I) -> Vec<OsString>
@@ -95,7 +108,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::RocketMQCli;
     use super::normalize_java_compatible_args;
+    use clap::Parser;
+    use rocketmq_error::CliExitCode;
     use std::ffi::OsString;
 
     #[test]
@@ -109,5 +125,19 @@ mod tests {
         ]);
 
         assert_eq!(args[3], OsString::from("--brokerName"));
+    }
+
+    #[tokio::test]
+    async fn handle_returns_usage_exit_for_missing_command() {
+        let cli = RocketMQCli::try_parse_from(["rocketmq-admin-cli"]).unwrap();
+
+        assert_eq!(cli.handle().await, CliExitCode::USAGE.as_i32());
+    }
+
+    #[tokio::test]
+    async fn handle_returns_usage_exit_for_unsupported_completion_shell() {
+        let cli = RocketMQCli::try_parse_from(["rocketmq-admin-cli", "--generate-completion", "powershell"]).unwrap();
+
+        assert_eq!(cli.handle().await, CliExitCode::USAGE.as_i32());
     }
 }

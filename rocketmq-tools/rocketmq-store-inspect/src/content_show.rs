@@ -19,53 +19,55 @@ use bytes::Buf;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::MessageConst;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use rocketmq_store::log_file::mapped_file::MappedFile;
 use tabled::Table;
 use tabled::Tabled;
 
-pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) {
-    if path.is_none() {
-        eprintln!("File path is none");
-        return;
+pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) -> RocketMQResult<()> {
+    let path =
+        path.ok_or_else(|| RocketMQError::validation_failed("config", "message log file path must be provided"))?;
+    let from = from.unwrap_or_default();
+    let to = to.unwrap_or(u32::MAX);
+    if from > to {
+        return Err(RocketMQError::validation_failed(
+            "range",
+            format!("from ({from}) must be less than or equal to to ({to})"),
+        ));
     }
-    let path_buf = path.unwrap().into_os_string();
-    let file_metadata = fs::metadata(path_buf.clone()).unwrap();
+
+    let path_display = path.to_string_lossy().to_string();
+    let file_metadata = fs::metadata(&path)
+        .map_err(|error| RocketMQError::storage_read_failed(path_display.clone(), error.to_string()))?;
     println!("file size: {}B", file_metadata.len());
-    let mapped_file = DefaultMappedFile::new(
-        CheetahString::from(path_buf.to_string_lossy().to_string()),
-        file_metadata.len(),
-    );
+    let mapped_file = DefaultMappedFile::new(CheetahString::from(path_display), file_metadata.len());
     // read message number
     let mut counter = 0;
-    let form = from.unwrap_or_default();
-    let to = to.unwrap_or(u32::MAX);
     let mut current_pos = 0usize;
     let mut table = vec![];
     loop {
         if counter >= to {
             break;
         }
-        let bytes = mapped_file.get_bytes(current_pos, 4);
-        if bytes.is_none() {
+        let Some(mut size_bytes) = mapped_file.get_bytes(current_pos, 4) else {
             break;
-        }
-        let mut size_bytes = bytes.unwrap();
+        };
         let size = size_bytes.get_i32();
         if size <= 0 {
             break;
         }
         counter += 1;
-        if counter < form {
+        if counter < from {
             current_pos += size as usize;
             continue;
         }
-        let mut msg_bytes = mapped_file.get_bytes(current_pos, size as usize);
-        current_pos += size as usize;
-        if msg_bytes.is_none() {
+        let Some(mut msg_bytes) = mapped_file.get_bytes(current_pos, size as usize) else {
             break;
-        }
-        let message = message_decoder::decode(msg_bytes.as_mut().unwrap(), true, false, false, false, true);
+        };
+        current_pos += size as usize;
+        let message = message_decoder::decode(&mut msg_bytes, true, false, false, false, true);
         //parse message bytes and print it
         match message {
             None => {}
@@ -84,10 +86,33 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
         }
     }
     println!("{}", Table::new(table));
+    Ok(())
 }
 
 #[derive(Tabled)]
 struct MessagePrint {
     message_id: CheetahString,
     client_message_id: CheetahString,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::print_content;
+    use rocketmq_error::CliExitCode;
+
+    #[test]
+    fn print_content_requires_path() {
+        let error = print_content(None, None, None).unwrap_err();
+
+        assert_eq!(error.spec().cli.exit_code, CliExitCode::USAGE);
+        assert_eq!(error.spec().code.as_str(), "ILLEGAL_ARGUMENT");
+    }
+
+    #[test]
+    fn print_content_rejects_invalid_range() {
+        let error = print_content(Some(2), Some(1), Some("missing.log".into())).unwrap_err();
+
+        assert_eq!(error.spec().cli.exit_code, CliExitCode::USAGE);
+        assert_eq!(error.spec().code.as_str(), "ILLEGAL_ARGUMENT");
+    }
 }

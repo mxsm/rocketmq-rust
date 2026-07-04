@@ -43,6 +43,9 @@ use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
 use crate::core::broker::BrokerTarget;
 use crate::core::resolver::BrokerAddressResolver;
+use crate::core::stable_error_code;
+use crate::core::stable_error_message;
+use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
 
@@ -89,7 +92,18 @@ fn target_from_options(broker_addr: Option<String>, cluster_name: Option<String>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsumerOperationFailure {
     pub broker_addr: CheetahString,
+    pub error_code: String,
     pub error: String,
+}
+
+impl ConsumerOperationFailure {
+    pub fn from_error(broker_addr: CheetahString, error: &RocketMQError) -> Self {
+        Self {
+            broker_addr,
+            error_code: stable_error_code(error),
+            error: stable_error_message(error),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -631,10 +645,9 @@ impl ConsumerService {
                 .await
             {
                 Ok(()) => result.broker_addrs.push(broker_addr),
-                Err(error) => result.failures.push(ConsumerOperationFailure {
-                    broker_addr,
-                    error: error.to_string(),
-                }),
+                Err(error) => result
+                    .failures
+                    .push(ConsumerOperationFailure::from_error(broker_addr, &error)),
             }
         }
 
@@ -644,7 +657,7 @@ impl ConsumerService {
                 get_dlq_topic(request.group_name().as_str()),
             ] {
                 if let Err(error) = admin.delete_topic(topic.into(), cluster_name.clone()).await {
-                    result.warnings.push(error.to_string());
+                    result.warnings.push(stable_error_message(&error));
                 }
             }
         }
@@ -727,10 +740,9 @@ impl ConsumerService {
                 .await
             {
                 Ok(()) => result.broker_addrs.push(broker_addr),
-                Err(error) => result.failures.push(ConsumerOperationFailure {
-                    broker_addr,
-                    error: error.to_string(),
-                }),
+                Err(error) => result
+                    .failures
+                    .push(ConsumerOperationFailure::from_error(broker_addr, &error)),
             }
         }
         Ok(result)
@@ -760,10 +772,9 @@ impl ConsumerService {
                 .await
             {
                 Ok(()) => result.broker_addrs.push(broker_addr),
-                Err(error) => result.failures.push(ConsumerOperationFailure {
-                    broker_addr,
-                    error: error.to_string(),
-                }),
+                Err(error) => result
+                    .failures
+                    .push(ConsumerOperationFailure::from_error(broker_addr, &error)),
             }
         }
         Ok(result)
@@ -796,10 +807,9 @@ impl ConsumerService {
                 .await
             {
                 Ok(()) => result.broker_addrs.push(broker_addr),
-                Err(error) => result.failures.push(ConsumerOperationFailure {
-                    broker_addr,
-                    error: error.to_string(),
-                }),
+                Err(error) => result
+                    .failures
+                    .push(ConsumerOperationFailure::from_error(broker_addr, &error)),
             }
         }
         Ok(result)

@@ -41,7 +41,7 @@ classes: wide
 | `rocketmq-namesrv` | 0 | 2 | 0 | 0 | 0 |
 | `rocketmq-proxy` | 0 | 0 | 0 | 3 | 2 |
 | `rocketmq-common` | 0 | 0 | 0 | 1 | 3 |
-| `rocketmq-tools` | 0 | 22 | 0 | 0 | 0 |
+| `rocketmq-tools` | 0 | 22 | 0 | 0 | 37 |
 | `rocketmq-dashboard-common` | 0 | 10 | 0 | 0 | 0 |
 | dashboard web backend | 0 | 7 | 1 | 0 | 0 |
 | Tauri backend | 0 | 5 | 0 | 0 | 6 |
@@ -476,24 +476,34 @@ rg -n "error_architecture_guard" .github scripts
 
 **当前缺口**：
 
-- `rocketmq-tools` 对中心 spec 的使用为 0。
-- TUI/CLI 大量使用 `anyhow::Result`，需要区分 app boundary 与 reusable command executor。
-- CLI exit 当前未从 `ErrorSpec.cli` 派生。
+- `rocketmq-tools` 已通过 `CliErrorView`、`CliExitCode`、admin-core `error_code` 字段接入中心 spec。
+- TUI 的 `anyhow::Result` 保留在 terminal runtime/app boundary；admin-core reusable command executor 继续返回 `RocketMQResult`。
+- CLI exit 已从 `ErrorSpec.cli` 派生；store-inspect one-shot binary 也通过同一 adapter 输出和退出。
+
+**完成状态**：
+
+- `rocketmq-error::CliErrorView` 已成为统一 `RocketMQError -> exit code/category/message/context` CLI adapter，读取 `spec().cli`、stable code、category 和 redacted context。
+- `rocketmq-admin-cli` outer boundary 已返回 `CliSpec` 派生 exit code；缺少命令、unsupported completion shell 和 command executor typed error 都走 `CliErrorView`。
+- `rocketmq-admin-core` 批量失败 view model 新增 `error_code`，错误消息使用 stable public message + redacted context，保留原 `error` 字段兼容现有展示。
+- `rocketmq-store-inspect` 已从 panic/`unwrap()` 文件读取边界改为 `RocketMQResult<()>`，binary 使用同一 `CliErrorView`。
+- `scripts/error_architecture_guard.py` 已把 CLI adapter、admin-core error view 和 store-inspect CLI boundary 加入 required mapping adapters 检查。
+
+**追踪**：Issue [#7955](https://github.com/mxsm/rocketmq-rust/issues/7955)，PR [#7956](https://github.com/mxsm/rocketmq-rust/pull/7956)。
 
 **开发 checklist**：
 
-- [ ] 在 CLI outer boundary 保留 `anyhow`，内部 command executor 返回 typed error 或 typed view model。
-- [ ] 新增 `RocketMQError -> exit code/category/message` adapter，读取 `spec().cli`。
-- [ ] command failure view model 使用 stable code，而不是只存 `error.to_string()`。
-- [ ] 对 admin-core 中可复用逻辑避免 `anyhow` 泄漏。
-- [ ] 对 `rocketmq-store-inspect` 这类 one-shot tool 明确 allowlist。
-- [ ] 增加 CLI exit code tests。
+- [x] 在 CLI outer boundary 保留 `anyhow`，内部 command executor 返回 typed error 或 typed view model。
+- [x] 新增 `RocketMQError -> exit code/category/message` adapter，读取 `spec().cli`。
+- [x] command failure view model 使用 stable code，而不是只存 `error.to_string()`。
+- [x] 对 admin-core 中可复用逻辑避免 `anyhow` 泄漏。
+- [x] 对 `rocketmq-store-inspect` 这类 one-shot tool 明确 allowlist 或 typed boundary。
+- [x] 增加 CLI exit code tests。
 
 **验收 checklist**：
 
-- [ ] CLI 对 typed error 输出稳定 exit category。
-- [ ] 可复用工具库不暴露未登记 `anyhow::Result`。
-- [ ] 错误展示不泄露 secret/token/signature。
+- [x] CLI 对 typed error 输出稳定 exit category。
+- [x] 可复用工具库不暴露未登记 `anyhow::Result`。
+- [x] 错误展示不泄露 secret/token/signature。
 
 **建议验证**：
 
@@ -501,6 +511,8 @@ rg -n "error_architecture_guard" .github scripts
 cargo test -p rocketmq-admin-cli
 cargo test -p rocketmq-admin-tui
 cargo test -p rocketmq-admin-core
+cargo test -p rocketmq-store-inspect
+py scripts\error_architecture_guard.py
 rg -n "anyhow::Result|spec\\(\\)\\.cli|CliExitCode" rocketmq-tools --glob "*.rs"
 ```
 
@@ -571,14 +583,14 @@ cargo build --all-targets --all-features
 - [x] library/shared API 无未登记 `anyhow::Result`。
 - [x] 每个 `ErrorKind` 有唯一 `ErrorSpec`。
 - [x] `ErrorSpec` 包含 code、scope、category、public message、remoting、grpc、http、cli、recovery、observe、redaction。
-- [ ] remoting/gRPC/HTTP/CLI 外部出口读取中心 spec 或有明确 local-only allowlist。
+- [x] remoting/gRPC/HTTP/CLI 外部出口读取中心 spec 或有明确 local-only allowlist。
 - [ ] broker/namesrv processor 通用错误不再手写 response code。
 - [x] client callback 内部事实源不再是 `dyn Error` downcast。
 - [x] client retry/fault 行为来自 `RetryClass` 和明确 broker response allowlist。
 - [x] store/controller/auth/broker 不再无登记地把 source `to_string()` 后塞入新错误。
 - [x] secret/token/signature/password 默认 redacted。
 - [x] `scripts/error_architecture_guard.py` 进入 CI。
-- [ ] root workspace 通过 fmt/clippy。
+- [x] root workspace 通过 fmt/clippy。
 - [ ] 受影响 standalone 项目分别通过各自 clippy/build。
 
 ## 最终验证矩阵

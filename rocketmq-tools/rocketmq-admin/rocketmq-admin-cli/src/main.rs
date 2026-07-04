@@ -28,7 +28,7 @@ fn main() {
         .spawn(|| {
             let owner =
                 RuntimeOwner::new(admin_cli_runtime_config()).expect("failed to build rocketmq-admin-cli runtime");
-            owner.block_on(async_main());
+            let exit_code = owner.block_on(async_main());
             let report = owner
                 .shutdown_runtime_blocking()
                 .expect("failed to shutdown rocketmq-admin-cli runtime");
@@ -38,11 +38,16 @@ fn main() {
                     "rocketmq-admin-cli runtime shutdown report is unhealthy"
                 );
             }
+            exit_code
         })
         .expect("failed to spawn rocketmq-admin-cli main thread");
 
-    if let Err(payload) = handle.join() {
-        std::panic::resume_unwind(payload);
+    let exit_code = match handle.join() {
+        Ok(exit_code) => exit_code,
+        Err(payload) => std::panic::resume_unwind(payload),
+    };
+    if exit_code != 0 {
+        std::process::exit(exit_code);
     }
 }
 
@@ -52,12 +57,12 @@ fn admin_cli_runtime_config() -> RuntimeConfig {
     config
 }
 
-async fn async_main() {
+async fn async_main() -> i32 {
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
         (CURRENT_VERSION as u32).to_string(),
     );
 
     let cli = RocketMQCli::parse_from_java_compatible_args();
-    cli.handle().await;
+    cli.handle().await
 }

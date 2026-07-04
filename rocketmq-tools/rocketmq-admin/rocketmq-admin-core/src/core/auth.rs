@@ -31,6 +31,9 @@ use serde::Serialize;
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
 use crate::core::resolver::BrokerAddressResolver;
+use crate::core::stable_error_code;
+use crate::core::stable_error_message;
+use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
 
@@ -706,7 +709,31 @@ pub struct AuthOperationResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthOperationFailure {
     pub broker_addr: CheetahString,
+    pub error_code: String,
     pub error: String,
+}
+
+impl AuthOperationFailure {
+    pub fn from_error(broker_addr: CheetahString, error: &RocketMQError) -> Self {
+        Self {
+            broker_addr,
+            error_code: stable_error_code(error),
+            error: stable_error_message(error),
+        }
+    }
+
+    pub fn from_operation_error(
+        broker_addr: CheetahString,
+        operation: impl Into<String>,
+        error: &RocketMQError,
+    ) -> Self {
+        let operation = operation.into();
+        Self {
+            broker_addr,
+            error_code: stable_error_code(error),
+            error: format!("{}: {}", operation, stable_error_message(error)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -967,10 +994,11 @@ impl AuthService {
                 match admin.get_user(request.from_broker().clone(), username.clone()).await {
                     Ok(Some(user_info)) => user_infos.push(user_info),
                     Ok(None) => skipped_usernames.push(username.clone()),
-                    Err(error) => failures.push(AuthOperationFailure {
-                        broker_addr: request.from_broker().clone(),
-                        error: format!("get user {username}: {error}"),
-                    }),
+                    Err(error) => failures.push(AuthOperationFailure::from_operation_error(
+                        request.from_broker().clone(),
+                        format!("get user {username}"),
+                        &error,
+                    )),
                 }
             }
             user_infos
@@ -1002,10 +1030,11 @@ impl AuthService {
 
             match copy_result {
                 Ok(()) => copied_usernames.push(username),
-                Err(error) => failures.push(AuthOperationFailure {
-                    broker_addr: request.to_broker().clone(),
-                    error: format!("copy user {username}: {error}"),
-                }),
+                Err(error) => failures.push(AuthOperationFailure::from_operation_error(
+                    request.to_broker().clone(),
+                    format!("copy user {username}"),
+                    &error,
+                )),
             }
         }
 
@@ -1233,10 +1262,11 @@ impl AuthService {
             for subject in subjects {
                 match admin.get_acl(request.from_broker().clone(), subject.clone()).await {
                     Ok(acl_info) => acl_infos.push(acl_info),
-                    Err(error) => failures.push(AuthOperationFailure {
-                        broker_addr: request.from_broker().clone(),
-                        error: format!("get ACL {subject}: {error}"),
-                    }),
+                    Err(error) => failures.push(AuthOperationFailure::from_operation_error(
+                        request.from_broker().clone(),
+                        format!("get ACL {subject}"),
+                        &error,
+                    )),
                 }
             }
             acl_infos
@@ -1272,10 +1302,11 @@ impl AuthService {
 
             match copy_result {
                 Ok(()) => copied_subjects.push(subject),
-                Err(error) => failures.push(AuthOperationFailure {
-                    broker_addr: request.to_broker().clone(),
-                    error: format!("copy ACL {subject}: {error}"),
-                }),
+                Err(error) => failures.push(AuthOperationFailure::from_operation_error(
+                    request.to_broker().clone(),
+                    format!("copy ACL {subject}"),
+                    &error,
+                )),
             }
         }
 

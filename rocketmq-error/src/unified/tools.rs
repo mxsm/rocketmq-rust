@@ -18,6 +18,10 @@
 
 use thiserror::Error;
 
+use crate::context::ErrorContext;
+use crate::context::Sensitive;
+use crate::kind::ErrorKind;
+
 /// Tools-specific errors for admin operations
 #[derive(Debug, Error)]
 pub enum ToolsError {
@@ -182,6 +186,77 @@ impl ToolsError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal {
             message: message.into(),
+        }
+    }
+
+    /// Return the closest stable logical error kind for this tools error.
+    #[inline]
+    pub const fn kind(&self) -> ErrorKind {
+        match self {
+            Self::TopicNotFound { .. } => ErrorKind::TopicNotExist,
+            Self::ClusterNotFound { .. } => ErrorKind::ClusterNotFound,
+            Self::BrokerNotFound { .. } => ErrorKind::BrokerNotFound,
+            Self::ConsumerGroupNotFound { .. } => ErrorKind::SubscriptionGroupNotExist,
+            Self::NameServerUnreachable { .. } => ErrorKind::Network,
+            Self::NameServerConfigInvalid { .. }
+            | Self::InvalidConfiguration { .. }
+            | Self::MissingRequiredField { .. } => ErrorKind::ConfigInvalidValue,
+            Self::ValidationError { .. } | Self::ValidationFailed { .. } | Self::InvalidPermission { .. } => {
+                ErrorKind::IllegalArgument
+            }
+            Self::PermissionDenied { .. } => ErrorKind::BrokerPermissionDenied,
+            Self::OperationTimeout { .. } => ErrorKind::Timeout,
+            Self::Internal { .. } => ErrorKind::Internal,
+            Self::TopicInvalid { .. } | Self::ClusterInvalid { .. } => ErrorKind::ConfigInvalidValue,
+            Self::TopicAlreadyExists { .. } | Self::BrokerOffline { .. } | Self::ConsumerOffline { .. } => {
+                ErrorKind::Tools
+            }
+        }
+    }
+
+    /// Return redaction-aware context for external tools surfaces.
+    pub fn context(&self) -> ErrorContext {
+        match self {
+            Self::TopicNotFound { topic } | Self::TopicAlreadyExists { topic } => {
+                ErrorContext::new().with_field("topic", topic.as_str())
+            }
+            Self::TopicInvalid { reason } | Self::ClusterInvalid { reason } => {
+                ErrorContext::new().with_sensitive("reason", Sensitive::new(reason.clone()))
+            }
+            Self::ClusterNotFound { cluster } => ErrorContext::new().with_field("cluster", cluster.as_str()),
+            Self::BrokerNotFound { broker } | Self::BrokerOffline { broker } => {
+                ErrorContext::new().with_sensitive("broker", Sensitive::new(broker.clone()))
+            }
+            Self::ConsumerGroupNotFound { group } => ErrorContext::new().with_field("group", group.as_str()),
+            Self::ConsumerOffline { consumer } => {
+                ErrorContext::new().with_sensitive("consumer", Sensitive::new(consumer.clone()))
+            }
+            Self::NameServerUnreachable { addr } => {
+                ErrorContext::new().with_sensitive("addr", Sensitive::new(addr.clone()))
+            }
+            Self::NameServerConfigInvalid { reason } => {
+                ErrorContext::new().with_sensitive("reason", Sensitive::new(reason.clone()))
+            }
+            Self::InvalidConfiguration { field, reason } | Self::ValidationError { field, reason } => {
+                ErrorContext::new()
+                    .with_field("field", field.as_str())
+                    .with_field("reason", reason.as_str())
+            }
+            Self::MissingRequiredField { field } => ErrorContext::new().with_field("field", field.as_str()),
+            Self::ValidationFailed { message } => ErrorContext::new().with_field("message", message.as_str()),
+            Self::PermissionDenied { operation } => ErrorContext::new().with_field("operation", operation.as_str()),
+            Self::InvalidPermission { value, allowed } => {
+                ErrorContext::new().with_field("value", value.to_string()).with_field(
+                    "allowed",
+                    allowed.iter().map(i32::to_string).collect::<Vec<_>>().join(","),
+                )
+            }
+            Self::OperationTimeout { operation, duration_ms } => ErrorContext::new()
+                .with_field("operation", operation.as_str())
+                .with_field("duration_ms", duration_ms.to_string()),
+            Self::Internal { message } => {
+                ErrorContext::new().with_sensitive("message", Sensitive::new(message.clone()))
+            }
         }
     }
 }

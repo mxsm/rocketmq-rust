@@ -446,7 +446,7 @@ impl RocketMQError {
             Self::ClientInvalidState { .. } => ErrorKind::ClientInvalidState,
             Self::ProducerNotAvailable => ErrorKind::ProducerNotAvailable,
             Self::ConsumerNotAvailable => ErrorKind::ConsumerNotAvailable,
-            Self::Tools(_) => ErrorKind::Tools,
+            Self::Tools(error) => error.kind(),
             Self::Filter(_) => ErrorKind::Filter,
             Self::StorageReadFailed { .. } => ErrorKind::StorageReadFailed,
             Self::StorageWriteFailed { .. } => ErrorKind::StorageWriteFailed,
@@ -580,7 +580,7 @@ impl RocketMQError {
             Self::ClientInvalidState { expected, actual } => ErrorContext::new()
                 .with_field("expected", *expected)
                 .with_field("actual", actual.as_str()),
-            Self::Tools(error) => redacted_context("tools_error", error.to_string()),
+            Self::Tools(error) => error.context(),
             Self::Filter(error) => ErrorContext::new().with_field("filter_error", error.to_string()),
             Self::StorageReadFailed { path, reason } | Self::StorageWriteFailed { path, reason } => ErrorContext::new()
                 .with_sensitive("path", Sensitive::new(path.clone()))

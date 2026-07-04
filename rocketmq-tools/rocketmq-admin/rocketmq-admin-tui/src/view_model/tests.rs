@@ -671,6 +671,7 @@ fn phase_two_queue_results_render_as_tables() {
             failures: vec![QueueOperationFailure {
                 broker_name: "broker-b".into(),
                 broker_addr: "127.0.0.1:10912".into(),
+                error_code: "TIMEOUT".to_string(),
                 error: "timeout".to_string(),
             }],
         },
@@ -877,6 +878,7 @@ fn phase_two_producer_info_and_stats_results_render_as_tables() {
             }],
             failures: vec![StatsAllTopicFailure {
                 topic: "TopicB".into(),
+                error_code: "ROUTE_NOT_FOUND".to_string(),
                 error: "route missing".to_string(),
             }],
         },
@@ -946,6 +948,7 @@ fn phase_three_operation_results_render_partial_failures_as_summary() {
             broker_addrs: vec!["127.0.0.1:10911".into()],
             failures: vec![BrokerOperationFailure {
                 broker_addr: "127.0.0.1:10912".into(),
+                error_code: "TIMEOUT".to_string(),
                 error: "timeout".to_string(),
             }],
         },
@@ -958,6 +961,7 @@ fn phase_three_operation_results_render_partial_failures_as_summary() {
             broker_addrs: vec!["127.0.0.1:10911".into()],
             failures: vec![ConsumerOperationFailure {
                 broker_addr: "127.0.0.1:10912".into(),
+                error_code: "BROKER_PERMISSION_DENIED".to_string(),
                 error: "rejected".to_string(),
             }],
             warnings: vec!["retry topic cleanup failed".to_string()],

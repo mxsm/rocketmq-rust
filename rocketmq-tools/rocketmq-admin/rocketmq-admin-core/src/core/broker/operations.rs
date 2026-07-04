@@ -169,10 +169,7 @@ impl BrokerService {
                 .await
             {
                 Ok(()) => successes.push(broker_addr),
-                Err(error) => failures.push(BrokerOperationFailure {
-                    broker_addr,
-                    error: error.to_string(),
-                }),
+                Err(error) => failures.push(BrokerOperationFailure::from_error(broker_addr, &error)),
             }
         }
 
@@ -210,10 +207,7 @@ impl BrokerService {
                 .await
             {
                 Ok(()) => successes.push(broker_addr),
-                Err(error) => failures.push(BrokerOperationFailure {
-                    broker_addr,
-                    error: error.to_string(),
-                }),
+                Err(error) => failures.push(BrokerOperationFailure::from_error(broker_addr, &error)),
             }
         }
 
@@ -249,10 +243,7 @@ impl BrokerService {
                 .await
             {
                 Ok(()) => successes.push(broker_addr),
-                Err(error) => failures.push(BrokerOperationFailure {
-                    broker_addr,
-                    error: error.to_string(),
-                }),
+                Err(error) => failures.push(BrokerOperationFailure::from_error(broker_addr, &error)),
             }
         }
 
@@ -428,10 +419,12 @@ impl BrokerService {
                         report.cleanup_false_results = 1;
                     }
                 }
-                Err(error) => report.failures.push(BrokerOperationFailure {
-                    broker_addr: CheetahString::from("global"),
-                    error: error.to_string(),
-                }),
+                Err(error) => {
+                    report.failures.push(BrokerOperationFailure::from_error(
+                        CheetahString::from("global"),
+                        &error,
+                    ));
+                }
             }
             return Ok(report);
         }
@@ -456,10 +449,7 @@ impl BrokerService {
                         report.cleanup_false_results += 1;
                     }
                 }
-                Err(error) => report.failures.push(BrokerOperationFailure {
-                    broker_addr: target,
-                    error: error.to_string(),
-                }),
+                Err(error) => report.failures.push(BrokerOperationFailure::from_error(target, &error)),
             }
         }
 
@@ -489,10 +479,7 @@ impl BrokerService {
         for (target, broker_addr) in targets {
             match Self::apply_commit_log_read_ahead_to_target(admin, request, target, broker_addr.clone()).await {
                 Ok(section) => sections.push(section),
-                Err(error) => failures.push(BrokerOperationFailure {
-                    broker_addr,
-                    error: error.to_string(),
-                }),
+                Err(error) => failures.push(BrokerOperationFailure::from_error(broker_addr, &error)),
             }
         }
 
@@ -598,10 +585,7 @@ impl BrokerService {
                 for broker_addr in broker_addrs {
                     match Self::get_broker_runtime_stats_entries(admin, &broker_addr).await {
                         Ok(entries) => sections.push(BrokerRuntimeStatsSection { broker_addr, entries }),
-                        Err(error) => failures.push(BrokerRuntimeStatsFailure {
-                            broker_addr,
-                            error: error.to_string(),
-                        }),
+                        Err(error) => failures.push(BrokerRuntimeStatsFailure::from_error(broker_addr, &error)),
                     }
                 }
 
