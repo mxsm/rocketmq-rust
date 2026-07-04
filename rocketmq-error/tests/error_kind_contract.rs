@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use rocketmq_error::ErrorCategory;
 use rocketmq_error::ErrorCode;
 use rocketmq_error::ErrorKind;
 use rocketmq_error::ErrorScope;
@@ -15,29 +16,43 @@ fn error_code_is_a_stable_machine_code() {
 }
 
 #[test]
-fn error_kind_exposes_code_and_scope() {
+fn error_kind_exposes_code_scope_and_category() {
     let cases = [
         (
             ErrorKind::BrokerOperationFailed,
             ErrorScope::Broker,
+            ErrorCategory::Broker,
             "BROKER_OPERATION_FAILED",
         ),
-        (ErrorKind::RouteNotFound, ErrorScope::Route, "ROUTE_NOT_FOUND"),
+        (
+            ErrorKind::RouteNotFound,
+            ErrorScope::Route,
+            ErrorCategory::Route,
+            "ROUTE_NOT_FOUND",
+        ),
         (
             ErrorKind::StorageWriteFailed,
             ErrorScope::Storage,
+            ErrorCategory::Storage,
             "STORAGE_WRITE_FAILED",
         ),
         (
             ErrorKind::AuthConfigInvalid,
             ErrorScope::Configuration,
+            ErrorCategory::Configuration,
             "AUTH_CONFIG_INVALID",
         ),
-        (ErrorKind::Internal, ErrorScope::System, "INTERNAL"),
+        (
+            ErrorKind::Internal,
+            ErrorScope::System,
+            ErrorCategory::System,
+            "INTERNAL",
+        ),
     ];
 
-    for (kind, scope, code) in cases {
+    for (kind, scope, category, code) in cases {
         assert_eq!(kind.scope(), scope);
+        assert_eq!(kind.category(), category);
         assert_eq!(kind.code().as_str(), code);
     }
 }

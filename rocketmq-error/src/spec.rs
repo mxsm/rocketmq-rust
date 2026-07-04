@@ -16,6 +16,8 @@ use crate::boundary::CliSpec;
 use crate::boundary::GrpcSpec;
 use crate::boundary::HttpSpec;
 use crate::boundary::RemotingSpec;
+use crate::context::RedactionPolicy;
+use crate::kind::ErrorCategory;
 use crate::kind::ErrorCode;
 use crate::kind::ErrorKind;
 use crate::kind::ErrorScope;
@@ -32,6 +34,7 @@ pub struct ErrorSpec {
     pub kind: ErrorKind,
     pub code: ErrorCode,
     pub scope: ErrorScope,
+    pub category: ErrorCategory,
     pub public_message: &'static str,
     pub remoting: RemotingSpec,
     pub grpc: GrpcSpec,
@@ -39,6 +42,7 @@ pub struct ErrorSpec {
     pub cli: CliSpec,
     pub recovery: RecoverySpec,
     pub observe: ObserveSpec,
+    pub redact: RedactionPolicy,
 }
 
 impl ErrorSpec {
@@ -48,6 +52,7 @@ impl ErrorSpec {
             kind,
             code: kind.code(),
             scope: kind.scope(),
+            category: kind.category(),
             public_message,
             remoting: RemotingSpec::for_kind(kind),
             grpc: GrpcSpec::for_kind(kind),
@@ -55,6 +60,7 @@ impl ErrorSpec {
             cli: CliSpec::for_kind(kind),
             recovery: RecoverySpec::for_kind(kind),
             observe: ObserveSpec::for_kind(kind),
+            redact: RedactionPolicy::for_kind(kind),
         }
     }
 }

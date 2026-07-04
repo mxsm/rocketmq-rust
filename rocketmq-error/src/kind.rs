@@ -63,6 +63,30 @@ pub enum ErrorScope {
     Version,
 }
 
+/// Low-cardinality domain category for metrics, logs, and external adapters.
+///
+/// `ErrorScope` points at the architectural boundary that produced the error.
+/// `ErrorCategory` is intentionally coarser and should remain stable enough for
+/// dashboards and alert grouping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ErrorCategory {
+    Network,
+    Serialization,
+    Protocol,
+    Rpc,
+    Authentication,
+    Controller,
+    Broker,
+    Route,
+    Client,
+    Tools,
+    Filter,
+    Storage,
+    Configuration,
+    System,
+    Version,
+}
+
 /// Stable logical error kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ErrorKind {
@@ -325,6 +349,73 @@ impl ErrorKind {
             | Self::NotInitialized => ErrorScope::System,
             Self::InvalidVersionOrdinal => ErrorScope::Version,
             Self::MissingRequiredMessageProperty => ErrorScope::Protocol,
+        }
+    }
+
+    /// Low-cardinality domain category for this kind.
+    #[inline]
+    pub const fn category(self) -> ErrorCategory {
+        match self {
+            Self::Network => ErrorCategory::Network,
+            Self::Serialization => ErrorCategory::Serialization,
+            Self::Protocol
+            | Self::RequestBodyInvalid
+            | Self::RequestHeaderError
+            | Self::ResponseProcessFailed
+            | Self::MissingRequiredMessageProperty => ErrorCategory::Protocol,
+            Self::Rpc => ErrorCategory::Rpc,
+            Self::Authentication
+            | Self::AuthHotReloadFailed
+            | Self::BrokerPermissionDenied
+            | Self::TopicSendingForbidden => ErrorCategory::Authentication,
+            Self::Controller
+            | Self::ControllerNotLeader
+            | Self::ControllerRaftError
+            | Self::ControllerConsensusTimeout
+            | Self::ControllerSnapshotFailed => ErrorCategory::Controller,
+            Self::InvalidProperty
+            | Self::BrokerNotFound
+            | Self::BrokerRegistrationFailed
+            | Self::BrokerOperationFailed
+            | Self::TopicNotExist
+            | Self::QueueNotExist
+            | Self::SubscriptionGroupNotExist
+            | Self::QueueIdOutOfRange
+            | Self::MessageTooLarge
+            | Self::MessageValidationFailed
+            | Self::RetryLimitExceeded
+            | Self::TransactionRejected
+            | Self::NotMasterBroker
+            | Self::MessageLookupFailed
+            | Self::BrokerAsyncTaskFailed => ErrorCategory::Broker,
+            Self::RouteNotFound
+            | Self::RouteInconsistent
+            | Self::RouteRegistrationConflict
+            | Self::RouteVersionConflict
+            | Self::ClusterNotFound => ErrorCategory::Route,
+            Self::ClientNotStarted
+            | Self::ClientAlreadyStarted
+            | Self::ClientShuttingDown
+            | Self::ClientInvalidState
+            | Self::ProducerNotAvailable
+            | Self::ConsumerNotAvailable => ErrorCategory::Client,
+            Self::Tools => ErrorCategory::Tools,
+            Self::Filter => ErrorCategory::Filter,
+            Self::StorageReadFailed
+            | Self::StorageWriteFailed
+            | Self::StorageCorrupted
+            | Self::StorageOutOfSpace
+            | Self::StorageLockFailed => ErrorCategory::Storage,
+            Self::ConfigParseFailed | Self::ConfigMissing | Self::ConfigInvalidValue | Self::AuthConfigInvalid => {
+                ErrorCategory::Configuration
+            }
+            Self::Io
+            | Self::IllegalArgument
+            | Self::Timeout
+            | Self::Internal
+            | Self::Service
+            | Self::NotInitialized => ErrorCategory::System,
+            Self::InvalidVersionOrdinal => ErrorCategory::Version,
         }
     }
 

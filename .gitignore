@@ -60,3 +60,4 @@ _site
 # Tauri
 **/src-tauri/target
 **/gen/schemas
+docs
