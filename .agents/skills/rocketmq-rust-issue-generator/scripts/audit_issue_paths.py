@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detect local filesystem paths in a GitHub issue draft."""
+"""Detect local filesystem paths and non-English text in a GitHub issue draft."""
 
 from __future__ import annotations
 
@@ -43,6 +43,8 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
 ]
 
+ALLOWED_NON_ASCII = frozenset("🐛📝✨🚀♻️🧪\ufe0f\ufeff")
+
 
 def read_input(path_arg: str) -> tuple[str, str]:
     if path_arg == "-":
@@ -61,9 +63,24 @@ def scan_text(text: str) -> list[tuple[int, str, str]]:
     return findings
 
 
+def find_non_english_text(text: str) -> list[tuple[int, str, str]]:
+    findings: list[tuple[int, str, str]] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        for char in line:
+            if ord(char) < 128 or char in ALLOWED_NON_ASCII:
+                continue
+            findings.append((line_no, "non-English character", f"U+{ord(char):04X} {char!r}"))
+    return findings
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Fail if a GitHub issue draft contains local filesystem paths.",
+        description="Fail if a GitHub issue draft contains local filesystem paths or non-English text.",
+    )
+    parser.add_argument(
+        "--title",
+        default="",
+        help="Optional issue title to include in the audit.",
     )
     parser.add_argument(
         "draft",
@@ -72,15 +89,22 @@ def main() -> int:
     args = parser.parse_args()
 
     source, text = read_input(args.draft)
-    findings = scan_text(text)
+    audited_text = f"{args.title}\n{text}" if args.title else text
+    findings = scan_text(audited_text)
+    english_findings = find_non_english_text(audited_text)
 
-    if not findings:
-        print(f"OK: no local paths detected in {source}")
+    if not findings and not english_findings:
+        print(f"OK: no local paths or non-English text detected in {source}")
         return 0
 
-    print(f"Local path findings in {source}:", file=sys.stderr)
-    for line_no, name, value in findings:
-        print(f"  line {line_no}: {name}: {value}", file=sys.stderr)
+    if findings:
+        print(f"Local path findings in {source}:", file=sys.stderr)
+        for line_no, name, value in findings:
+            print(f"  line {line_no}: {name}: {value}", file=sys.stderr)
+    if english_findings:
+        print(f"Non-English text findings in {source}:", file=sys.stderr)
+        for line_no, name, value in english_findings:
+            print(f"  line {line_no}: {name}: {value}", file=sys.stderr)
     return 1
 
 
