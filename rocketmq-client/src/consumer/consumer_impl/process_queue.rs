@@ -270,7 +270,8 @@ impl ProcessQueue {
 
         let mut dispatch_to_consume = false;
         let mut valid_msg_cnt = 0i64;
-        let mut inserted_body_size = 0u64;
+        let mut added_body_size = 0u64;
+        let mut removed_body_size = 0u64;
         let mut inserted_min_offset = i64::MAX;
         let mut inserted_max_offset = i64::MIN;
         {
@@ -278,13 +279,20 @@ impl ProcessQueue {
             store.messages.reserve(messages.len());
             for message in messages {
                 let queue_offset = message.queue_offset;
-                if store.messages.insert(queue_offset, message.clone()).is_none() {
-                    valid_msg_cnt += 1;
-                    inserted_body_size += message.body().map_or(0, |body| body.len()) as u64;
-                    inserted_min_offset = inserted_min_offset.min(queue_offset);
-                    inserted_max_offset = inserted_max_offset.max(queue_offset);
-                    if queue_offset > store.queue_offset_max {
-                        store.queue_offset_max = queue_offset;
+                let body_size = message.body().map_or(0, |body| body.len()) as u64;
+                match store.messages.insert(queue_offset, message.clone()) {
+                    None => {
+                        valid_msg_cnt += 1;
+                        added_body_size += body_size;
+                        inserted_min_offset = inserted_min_offset.min(queue_offset);
+                        inserted_max_offset = inserted_max_offset.max(queue_offset);
+                        if queue_offset > store.queue_offset_max {
+                            store.queue_offset_max = queue_offset;
+                        }
+                    }
+                    Some(previous) => {
+                        added_body_size += body_size;
+                        removed_body_size += previous.body().map_or(0, |body| body.len()) as u64;
                     }
                 }
             }
@@ -298,9 +306,12 @@ impl ProcessQueue {
                 self.update_min_offset_snapshot(inserted_min_offset);
                 self.update_max_offset_snapshot(inserted_max_offset);
                 self.msg_count.fetch_add(valid_msg_cnt, Ordering::AcqRel);
-                if inserted_body_size > 0 {
-                    self.msg_size.fetch_add(inserted_body_size, Ordering::AcqRel);
-                }
+            }
+            if added_body_size > 0 {
+                self.msg_size.fetch_add(added_body_size, Ordering::AcqRel);
+            }
+            if removed_body_size > 0 {
+                self.msg_size.fetch_sub(removed_body_size, Ordering::AcqRel);
             }
         }
 
@@ -339,9 +350,9 @@ impl ProcessQueue {
 
         for message in messages {
             let queue_offset = message.queue_offset;
-            if store.messages.remove(&queue_offset).is_some() {
+            if let Some(removed) = store.messages.remove(&queue_offset) {
                 removed_cnt += 1;
-                removed_body_size += message.body().map_or(0, |body| body.len()) as u64;
+                removed_body_size += removed.body().map_or(0, |body| body.len()) as u64;
                 if !snapshot_touched {
                     snapshot_touched = queue_offset == current_min_offset || queue_offset == current_max_offset;
                 }
@@ -733,6 +744,16 @@ mod tests {
             .collect()
     }
 
+    fn create_test_message_with_body_size(offset: i64, body_size: usize) -> ArcMut<MessageExt> {
+        let mut msg = MessageExt {
+            queue_offset: offset,
+            ..Default::default()
+        };
+        msg.set_body(Bytes::from(vec![0u8; body_size]));
+        msg.set_topic(CheetahString::from_static_str("test_topic"));
+        ArcMut::new(msg)
+    }
+
     #[tokio::test]
     async fn test_process_queue_operation_probes_report_expected_metrics() {
         let put = run_process_queue_put_probe(ProcessQueueOperationFixture::new(4, 64)).await;
@@ -1098,6 +1119,34 @@ mod tests {
 
         assert_eq!(pq.msg_count(), 2);
         assert_eq!(pq.get_max_span().await, 5);
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_offset_replacement_updates_msg_size() {
+        let pq = ProcessQueue::new();
+
+        assert!(pq.put_message(&[create_test_message_with_body_size(3, 100)]).await);
+        assert!(!pq.put_message(&[create_test_message_with_body_size(3, 40)]).await);
+
+        assert_eq!(pq.msg_count(), 1);
+        assert_eq!(pq.msg_size(), 40);
+        assert_eq!(pq.get_max_span().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_remove_message_uses_stored_body_size_for_stats() {
+        let pq = ProcessQueue::new();
+        let stored = vec![
+            create_test_message_with_body_size(0, 100),
+            create_test_message_with_body_size(1, 100),
+        ];
+
+        pq.put_message(&stored).await;
+        pq.remove_message(&[create_test_message_with_body_size(0, 1)]).await;
+
+        assert_eq!(pq.msg_count(), 1);
+        assert_eq!(pq.msg_size(), 100);
+        assert_eq!(pq.get_offset_span().await, Some((1, 1)));
     }
 
     #[tokio::test]

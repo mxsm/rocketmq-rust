@@ -20,6 +20,7 @@ use dashmap::DashMap;
 use rand::RngExt;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_decoder;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
@@ -45,6 +46,44 @@ use crate::hook::filter_message_context::FilterMessageContext;
 use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+
+fn is_inner_batch_message(message: &MessageExt) -> bool {
+    MessageSysFlag::check(message.sys_flag, MessageSysFlag::INNER_BATCH_FLAG)
+        && MessageSysFlag::check(message.sys_flag, MessageSysFlag::NEED_UNWRAP_FLAG)
+}
+
+fn should_filter_by_tag(subscription_data: &SubscriptionData) -> bool {
+    !subscription_data.tags_set.is_empty()
+        && !subscription_data.class_filter_mode
+        && ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str()))
+}
+
+fn matches_subscription_tag(message: &MessageExt, subscription_data: &SubscriptionData) -> bool {
+    message
+        .tags_ref()
+        .is_some_and(|tag| subscription_data.tags_set.contains(tag.as_str()))
+}
+
+fn should_decode_pull_message_body(metadata: &MessageExt, subscription_data: &SubscriptionData) -> bool {
+    !should_filter_by_tag(subscription_data)
+        || is_inner_batch_message(metadata)
+        || matches_subscription_tag(metadata, subscription_data)
+}
+
+fn decode_pull_messages(
+    message_binary: &mut bytes::Bytes,
+    read_body: bool,
+    decompress_body: bool,
+    subscription_data: &SubscriptionData,
+) -> Vec<MessageExt> {
+    if should_filter_by_tag(subscription_data) {
+        message_decoder::decodes_batch_with_metadata_filter(message_binary, read_body, decompress_body, |metadata| {
+            should_decode_pull_message_body(metadata, subscription_data)
+        })
+    } else {
+        message_decoder::decodes_batch(message_binary, read_body, decompress_body)
+    }
+}
 
 #[derive(Clone)]
 pub struct PullAPIWrapper {
@@ -106,17 +145,16 @@ impl PullAPIWrapper {
         self.update_pull_from_which_node(message_queue, pull_result_ext.suggest_which_broker_id);
         if PullStatus::Found == pull_result_ext.pull_result.pull_status {
             let mut message_binary = pull_result_ext.message_binary.take().unwrap_or_default();
-            let mut msg_vec = message_decoder::decodes_batch(
+            let mut msg_vec = decode_pull_messages(
                 &mut message_binary,
                 self.client_instance.client_config.decode_read_body,
                 self.client_instance.client_config.decode_decompress_body,
+                subscription_data,
             );
 
             let mut need_decode_inner_message = false;
             for msg in &msg_vec {
-                if MessageSysFlag::check(msg.sys_flag, MessageSysFlag::INNER_BATCH_FLAG)
-                    && MessageSysFlag::check(msg.sys_flag, MessageSysFlag::NEED_UNWRAP_FLAG)
-                {
+                if is_inner_batch_message(msg) {
                     need_decode_inner_message = true;
                     break;
                 }
@@ -124,9 +162,7 @@ impl PullAPIWrapper {
             if need_decode_inner_message {
                 let mut inner_msg_vec = Vec::with_capacity(msg_vec.len());
                 for msg in msg_vec {
-                    if MessageSysFlag::check(msg.sys_flag, MessageSysFlag::INNER_BATCH_FLAG)
-                        && MessageSysFlag::check(msg.sys_flag, MessageSysFlag::NEED_UNWRAP_FLAG)
-                    {
+                    if is_inner_batch_message(&msg) {
                         message_decoder::decode_messages_from(msg, &mut inner_msg_vec);
                     } else {
                         inner_msg_vec.push(msg);
@@ -135,20 +171,17 @@ impl PullAPIWrapper {
                 msg_vec = inner_msg_vec;
             }
             // Retain only messages whose tag appears in the subscription tag set.
-            let mut msg_list_filter_again =
-                if !subscription_data.tags_set.is_empty() && !subscription_data.class_filter_mode {
-                    let mut msg_vec_again = Vec::with_capacity(msg_vec.len());
-                    for msg in msg_vec {
-                        if let Some(ref tag) = msg.tags() {
-                            if subscription_data.tags_set.contains(tag.as_str()) {
-                                msg_vec_again.push(msg);
-                            }
-                        }
+            let mut msg_list_filter_again = if should_filter_by_tag(subscription_data) {
+                let mut msg_vec_again = Vec::with_capacity(msg_vec.len());
+                for msg in msg_vec {
+                    if matches_subscription_tag(&msg, subscription_data) {
+                        msg_vec_again.push(msg);
                     }
-                    msg_vec_again
-                } else {
-                    msg_vec
-                };
+                }
+                msg_vec_again
+            } else {
+                msg_vec
+            };
             if self.has_hook() {
                 let context = FilterMessageContext {
                     unit_mode: self.unit_mode,
@@ -525,4 +558,232 @@ pub fn random_num() -> i32 {
         }
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use bytes::BufMut;
+    use bytes::Bytes;
+    use bytes::BytesMut;
+    use rocketmq_common::common::filter::expression_type::ExpressionType;
+    use rocketmq_common::common::message::message_decoder;
+    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_common::common::message::message_single::Message;
+    use rocketmq_common::common::message::MessageConst;
+    use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+
+    use super::*;
+    use crate::base::client_config::ClientConfig;
+    use crate::consumer::pull_result::PullResult;
+
+    struct RecordingHook {
+        seen: Arc<AtomicUsize>,
+    }
+
+    impl FilterMessageHook for RecordingHook {
+        fn hook_name(&self) -> &'static str {
+            "RecordingHook"
+        }
+
+        fn filter_message(&self, context: &FilterMessageContext<'_>) {
+            self.seen.store(context.msg_list().len(), Ordering::Release);
+        }
+    }
+
+    fn wrapper() -> PullAPIWrapper {
+        let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "pull-wrapper-test", None);
+        PullAPIWrapper::new(client_instance, CheetahString::from_static_str("test-group"), false)
+    }
+
+    fn message_queue() -> MessageQueue {
+        MessageQueue::from_parts("TestTopic", "BrokerA", 2)
+    }
+
+    fn subscription(tags: &[&str]) -> SubscriptionData {
+        let mut subscription = SubscriptionData {
+            expression_type: CheetahString::from_static_str(ExpressionType::TAG),
+            ..Default::default()
+        };
+        for tag in tags {
+            subscription.tags_set.insert(CheetahString::from_slice(tag));
+        }
+        subscription
+    }
+
+    fn message(queue_offset: i64, tag: Option<&str>, body: impl Into<Vec<u8>>) -> MessageExt {
+        let mut builder = Message::builder().topic("TestTopic").body(body.into());
+        if let Some(tag) = tag {
+            builder = builder.tags(tag);
+        }
+        let message = builder.build().expect("test message should build");
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_queue_id(2);
+        message_ext.set_queue_offset(queue_offset);
+        message_ext.set_commit_log_offset(queue_offset * 1024);
+        message_ext
+    }
+
+    fn inner_message(tag: &str, body: impl Into<Vec<u8>>) -> Message {
+        Message::builder()
+            .topic("TestTopic")
+            .tags(tag)
+            .body(body.into())
+            .build()
+            .expect("inner test message should build")
+    }
+
+    fn inner_batch_message(queue_offset: i64, inner: &[Message]) -> MessageExt {
+        let mut message_ext = message(queue_offset, None, message_decoder::encode_messages(inner));
+        message_ext.set_sys_flag(MessageSysFlag::INNER_BATCH_FLAG | MessageSysFlag::NEED_UNWRAP_FLAG);
+        message_ext
+    }
+
+    fn encoded_payload(messages: &[MessageExt]) -> Bytes {
+        let mut payload = BytesMut::new();
+        for message in messages {
+            payload.put_slice(&message_decoder::encode(message, false).expect("test message should encode"));
+        }
+        payload.freeze()
+    }
+
+    fn pull_result_ext(message_binary: Bytes) -> PullResultExt {
+        PullResultExt {
+            pull_result: PullResult::new(PullStatus::Found, 0, 10, 20, None),
+            suggest_which_broker_id: 3,
+            message_binary: Some(message_binary),
+            offset_delta: None,
+        }
+    }
+
+    fn found_messages(pull_result_ext: &PullResultExt) -> &[ArcMut<MessageExt>] {
+        pull_result_ext
+            .pull_result
+            .msg_found_list
+            .as_deref()
+            .expect("found messages should be present")
+    }
+
+    #[test]
+    fn process_pull_result_filters_tags_before_hook() {
+        let mut wrapper = wrapper();
+        let hook_seen = Arc::new(AtomicUsize::new(usize::MAX));
+        wrapper.register_filter_message_hook(vec![Arc::new(RecordingHook {
+            seen: hook_seen.clone(),
+        })]);
+        let mut pull_result = pull_result_ext(encoded_payload(&[
+            message(0, Some("Skip"), b"skip".to_vec()),
+            message(1, Some("Keep"), b"keep".to_vec()),
+        ]));
+
+        wrapper.process_pull_result(&message_queue(), &mut pull_result, &subscription(&["Keep"]));
+
+        let messages = found_messages(&pull_result);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].queue_offset, 1);
+        assert_eq!(messages[0].tags().as_deref(), Some("Keep"));
+        assert_eq!(hook_seen.load(Ordering::Acquire), 1);
+        assert!(pull_result.message_binary.is_none());
+    }
+
+    #[test]
+    fn process_pull_result_keeps_sql_messages_without_tag_prefilter() {
+        let mut subscription = subscription(&["Keep"]);
+        subscription.expression_type = CheetahString::from_static_str(ExpressionType::SQL92);
+        let mut pull_result = pull_result_ext(encoded_payload(&[
+            message(0, Some("Skip"), b"skip".to_vec()),
+            message(1, Some("Keep"), b"keep".to_vec()),
+        ]));
+
+        wrapper().process_pull_result(&message_queue(), &mut pull_result, &subscription);
+
+        let messages = found_messages(&pull_result);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].tags().as_deref(), Some("Skip"));
+        assert_eq!(messages[1].tags().as_deref(), Some("Keep"));
+    }
+
+    #[test]
+    fn process_pull_result_keeps_class_filter_messages_without_tag_prefilter() {
+        let mut subscription = subscription(&["Keep"]);
+        subscription.class_filter_mode = true;
+        let mut pull_result = pull_result_ext(encoded_payload(&[message(0, Some("Skip"), b"skip".to_vec())]));
+
+        wrapper().process_pull_result(&message_queue(), &mut pull_result, &subscription);
+
+        let messages = found_messages(&pull_result);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tags().as_deref(), Some("Skip"));
+    }
+
+    #[test]
+    fn process_pull_result_unwraps_inner_batch_before_tag_filtering() {
+        let inner = vec![
+            inner_message("Skip", b"skip".to_vec()),
+            inner_message("Keep", b"keep".to_vec()),
+        ];
+        let mut pull_result = pull_result_ext(encoded_payload(&[inner_batch_message(7, &inner)]));
+
+        wrapper().process_pull_result(&message_queue(), &mut pull_result, &subscription(&["Keep"]));
+
+        let messages = found_messages(&pull_result);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].queue_offset, 7);
+        assert_eq!(messages[0].tags().as_deref(), Some("Keep"));
+    }
+
+    #[test]
+    fn process_pull_result_all_tag_misses_notifies_hook_with_empty_list() {
+        let mut wrapper = wrapper();
+        let hook_seen = Arc::new(AtomicUsize::new(usize::MAX));
+        wrapper.register_filter_message_hook(vec![Arc::new(RecordingHook {
+            seen: hook_seen.clone(),
+        })]);
+        let mut pull_result = pull_result_ext(encoded_payload(&[message(0, Some("Skip"), b"skip".to_vec())]));
+
+        wrapper.process_pull_result(&message_queue(), &mut pull_result, &subscription(&["Keep"]));
+
+        assert!(found_messages(&pull_result).is_empty());
+        assert_eq!(hook_seen.load(Ordering::Acquire), 0);
+        assert!(pull_result.message_binary.is_none());
+    }
+
+    #[test]
+    fn process_pull_result_preserves_retry_metadata_and_applies_offset_delta() {
+        let mut message = message(4, Some("Keep"), b"keep".to_vec());
+        message.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC),
+            CheetahString::from_static_str("RetryTopic"),
+        );
+        let mut pull_result = pull_result_ext(encoded_payload(&[message]));
+        pull_result.offset_delta = Some(3);
+
+        wrapper().process_pull_result(&message_queue(), &mut pull_result, &subscription(&["Keep"]));
+
+        let messages = found_messages(&pull_result);
+        assert_eq!(messages.len(), 1);
+        let message = &messages[0];
+        assert_eq!(message.queue_offset, 7);
+        assert_eq!(message.broker_name(), "BrokerA");
+        assert_eq!(message.queue_id(), 2);
+        assert_eq!(
+            message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_MIN_OFFSET)),
+            Some(CheetahString::from_static_str("10"))
+        );
+        assert_eq!(
+            message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET)),
+            Some(CheetahString::from_static_str("20"))
+        );
+        assert_eq!(
+            message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC)),
+            Some(CheetahString::from_static_str("RetryTopic"))
+        );
+    }
 }
