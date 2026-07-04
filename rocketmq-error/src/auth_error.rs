@@ -47,6 +47,10 @@ pub enum AuthError {
     #[error("Authentication failed: {0}")]
     AuthenticationFailed(String),
 
+    /// Authorization policy denied or failed to evaluate.
+    #[error("Authorization failed: {0}")]
+    AuthorizationFailed(String),
+
     /// User not found
     #[error("User not found: {0}")]
     UserNotFound(String),
@@ -95,6 +99,7 @@ mod tests {
     fn test_auth_error_variants() {
         let errors = vec![
             AuthError::AuthenticationFailed("could not authenticate".to_string()),
+            AuthError::AuthorizationFailed("could not authorize".to_string()),
             AuthError::ContextCreationError("could not create context".to_string()),
             AuthError::InvalidAuthorizationHeader("invalid authorization header".to_string()),
             AuthError::InvalidCredential("invalid credential".to_string()),

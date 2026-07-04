@@ -630,8 +630,11 @@ mod tests {
             }
         ));
 
-        let internal = map_authz_error(AuthorizationError::MetadataServiceError("storage failed".to_string()));
-        assert!(matches!(internal, RocketMQError::Internal(_)));
+        let storage = map_authz_error(AuthorizationError::StorageReadFailed {
+            path: "auth.authorization.acls".to_string(),
+            reason: "storage failed".to_string(),
+        });
+        assert!(matches!(storage, RocketMQError::StorageReadFailed { .. }));
     }
 
     #[tokio::test]

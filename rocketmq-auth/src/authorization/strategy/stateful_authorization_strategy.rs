@@ -379,12 +379,14 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
                             return if cached_result.granted {
                                 Ok(())
                             } else {
-                                Err(AuthorizationError::InternalError(
-                                    cached_result
+                                Err(AuthorizationError::PermissionDenied {
+                                    subject: context.subject_key().unwrap_or("unknown").to_string(),
+                                    resource: context.resource_key().unwrap_or_else(|| "unknown".to_string()),
+                                    reason: cached_result
                                         .error
                                         .clone()
                                         .unwrap_or_else(|| "Authorization denied (cached)".to_string()),
-                                ))
+                                })
                             };
                         } else {
                             debug!("Cache entry expired for key: {}", cache_key);

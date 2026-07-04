@@ -194,13 +194,17 @@ impl LocalAuthorizationMetadataProvider {
             return Ok(());
         };
         let path = path.clone();
+        let path_display = path.display().to_string();
         let snapshot = snapshot.clone();
         self.blocking
             .spawn_io("auth.authorization.write_acl_snapshot", move || {
                 write_acl_snapshot(&path, &snapshot)
             })
             .await
-            .map_err(|error| AuthorizationError::MetadataServiceError(format!("ACL snapshot task failed: {error}")))?
+            .map_err(|error| AuthorizationError::StorageWriteFailed {
+                path: path_display,
+                reason: format!("ACL snapshot task failed: {error}"),
+            })?
     }
 
     fn replace_storage(&self, snapshot: HashMap<String, Acl>) -> MetadataResult<()> {
@@ -303,37 +307,37 @@ impl LocalAuthorizationMetadataProvider {
     fn initialized_read(&self) -> MetadataResult<RwLockReadGuard<'_, bool>> {
         self.initialized
             .read()
-            .map_err(|_| AuthorizationError::MetadataServiceError("ACL initialized lock is poisoned".to_string()))
+            .map_err(|_| AuthorizationError::StorageLockFailed("auth.authorization.initialized".to_string()))
     }
 
     fn initialized_write(&self) -> MetadataResult<RwLockWriteGuard<'_, bool>> {
         self.initialized
             .write()
-            .map_err(|_| AuthorizationError::MetadataServiceError("ACL initialized lock is poisoned".to_string()))
+            .map_err(|_| AuthorizationError::StorageLockFailed("auth.authorization.initialized".to_string()))
     }
 
     fn storage_read(&self) -> MetadataResult<RwLockReadGuard<'_, HashMap<String, Acl>>> {
         self.storage
             .read()
-            .map_err(|_| AuthorizationError::MetadataServiceError("ACL storage lock is poisoned".to_string()))
+            .map_err(|_| AuthorizationError::StorageLockFailed("auth.authorization.storage".to_string()))
     }
 
     fn storage_write(&self) -> MetadataResult<RwLockWriteGuard<'_, HashMap<String, Acl>>> {
         self.storage
             .write()
-            .map_err(|_| AuthorizationError::MetadataServiceError("ACL storage lock is poisoned".to_string()))
+            .map_err(|_| AuthorizationError::StorageLockFailed("auth.authorization.storage".to_string()))
     }
 
     fn cache_write(&self) -> MetadataResult<RwLockWriteGuard<'_, HashMap<String, CachedAcl>>> {
         self.cache
             .write()
-            .map_err(|_| AuthorizationError::MetadataServiceError("ACL cache lock is poisoned".to_string()))
+            .map_err(|_| AuthorizationError::StorageLockFailed("auth.authorization.cache".to_string()))
     }
 
     fn cache_read(&self) -> MetadataResult<RwLockReadGuard<'_, HashMap<String, CachedAcl>>> {
         self.cache
             .read()
-            .map_err(|_| AuthorizationError::MetadataServiceError("ACL cache lock is poisoned".to_string()))
+            .map_err(|_| AuthorizationError::StorageLockFailed("auth.authorization.cache".to_string()))
     }
 
     /// Filter ACLs by subject and resource patterns.
@@ -421,13 +425,13 @@ fn read_acl_snapshot(path: &Path) -> MetadataResult<HashMap<String, Acl>> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(error) => return Err(storage_error(path, error)),
+        Err(error) => return Err(storage_read_error(path, error)),
     };
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok(HashMap::new());
     }
     let snapshot: StoredAclSnapshot = serde_json::from_slice(&bytes)
-        .map_err(|error| AuthorizationError::MetadataServiceError(format!("{}: {error}", path.display())))?;
+        .map_err(|error| snapshot_decode_error(format!("{}: {error}", path.display())))?;
     let mut acls = HashMap::new();
     for record in snapshot.acls {
         let acl = acl_from_record(record)?;
@@ -440,23 +444,20 @@ fn write_acl_snapshot(path: &Path, acls: &HashMap<String, Acl>) -> MetadataResul
     let mut records = acls.values().map(acl_to_record).collect::<Vec<_>>();
     records.sort_by(|left, right| left.subject.cmp(&right.subject));
     let snapshot = StoredAclSnapshot { acls: records };
-    let content = serde_json::to_vec_pretty(&snapshot)
-        .map_err(|error| AuthorizationError::MetadataServiceError(error.to_string()))?;
+    let content = serde_json::to_vec_pretty(&snapshot).map_err(|error| snapshot_encode_error(error.to_string()))?;
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| storage_error(parent, error))?;
+        std::fs::create_dir_all(parent).map_err(|error| storage_write_error(parent, error))?;
     }
 
     let temp_file = temp_snapshot_path(path);
-    std::fs::write(&temp_file, content).map_err(|error| storage_error(&temp_file, error))?;
+    std::fs::write(&temp_file, content).map_err(|error| storage_write_error(&temp_file, error))?;
     match std::fs::rename(&temp_file, path) {
         Ok(()) => Ok(()),
         Err(rename_error) => {
-            std::fs::copy(&temp_file, path).map_err(|error| {
-                AuthorizationError::MetadataServiceError(format!(
-                    "{}: {error}; rename failed first: {rename_error}",
-                    path.display()
-                ))
+            std::fs::copy(&temp_file, path).map_err(|error| AuthorizationError::StorageWriteFailed {
+                path: path.display().to_string(),
+                reason: format!("{error}; rename failed first: {rename_error}"),
             })?;
             let _ = std::fs::remove_file(&temp_file);
             Ok(())
@@ -501,9 +502,8 @@ fn acl_from_record(record: StoredAclRecord) -> MetadataResult<Acl> {
 }
 
 fn policy_from_record(record: StoredPolicyRecord) -> MetadataResult<Policy> {
-    let policy_type = PolicyType::get_by_name(&record.policy_type).ok_or_else(|| {
-        AuthorizationError::MetadataServiceError(format!("Invalid policy type '{}'", record.policy_type))
-    })?;
+    let policy_type = PolicyType::get_by_name(&record.policy_type)
+        .ok_or_else(|| snapshot_decode_error(format!("Invalid policy type '{}'", record.policy_type)))?;
     let entries = record
         .entries
         .into_iter()
@@ -514,17 +514,16 @@ fn policy_from_record(record: StoredPolicyRecord) -> MetadataResult<Policy> {
 
 fn policy_entry_from_record(record: StoredPolicyEntryRecord) -> MetadataResult<PolicyEntry> {
     let resource = Resource::of_str(&record.resource)
-        .ok_or_else(|| AuthorizationError::MetadataServiceError(format!("Invalid resource '{}'", record.resource)))?;
+        .ok_or_else(|| snapshot_decode_error(format!("Invalid resource '{}'", record.resource)))?;
     let actions = record
         .actions
         .iter()
         .map(|action| {
-            Action::get_by_name(action)
-                .ok_or_else(|| AuthorizationError::MetadataServiceError(format!("Invalid action '{action}'")))
+            Action::get_by_name(action).ok_or_else(|| snapshot_decode_error(format!("Invalid action '{action}'")))
         })
         .collect::<MetadataResult<Vec<_>>>()?;
     let decision = Decision::get_by_name(&record.decision)
-        .ok_or_else(|| AuthorizationError::MetadataServiceError(format!("Invalid decision '{}'", record.decision)))?;
+        .ok_or_else(|| snapshot_decode_error(format!("Invalid decision '{}'", record.decision)))?;
     let environment = Environment::of_list(record.source_ips);
     Ok(PolicyEntry::of(resource, actions, environment, decision))
 }
@@ -534,11 +533,37 @@ fn subject_type_from_key(subject_key: &str) -> MetadataResult<SubjectType> {
         return Ok(SubjectType::User);
     };
     SubjectType::get_by_name(subject_type)
-        .ok_or_else(|| AuthorizationError::MetadataServiceError(format!("Invalid subject type '{subject_type}'")))
+        .ok_or_else(|| snapshot_decode_error(format!("Invalid subject type '{subject_type}'")))
 }
 
-fn storage_error(path: &Path, error: std::io::Error) -> AuthorizationError {
-    AuthorizationError::MetadataServiceError(format!("{}: {error}", path.display()))
+fn storage_read_error(path: &Path, error: std::io::Error) -> AuthorizationError {
+    AuthorizationError::StorageReadFailed {
+        path: path.display().to_string(),
+        reason: error.to_string(),
+    }
+}
+
+fn storage_write_error(path: &Path, error: std::io::Error) -> AuthorizationError {
+    AuthorizationError::StorageWriteFailed {
+        path: path.display().to_string(),
+        reason: error.to_string(),
+    }
+}
+
+fn snapshot_encode_error(reason: impl Into<String>) -> AuthorizationError {
+    AuthorizationError::SerializationFailed {
+        operation: "encode",
+        format: "JSON",
+        reason: reason.into(),
+    }
+}
+
+fn snapshot_decode_error(reason: impl Into<String>) -> AuthorizationError {
+    AuthorizationError::SerializationFailed {
+        operation: "decode",
+        format: "JSON",
+        reason: reason.into(),
+    }
 }
 
 fn temp_snapshot_path(path: &Path) -> PathBuf {
@@ -623,7 +648,7 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
             storage.clone()
         };
         if snapshot.contains_key(&subject_key) {
-            return Err(AuthorizationError::InternalError(format!(
+            return Err(AuthorizationError::InvalidContext(format!(
                 "ACL already exists for subject: {}",
                 subject_key
             )));
@@ -1016,5 +1041,6 @@ mod tests {
         let error = provider.initialize(config, None).unwrap_err();
 
         assert!(error.to_string().contains("acls.json"));
+        assert!(matches!(error, AuthorizationError::SerializationFailed { .. }));
     }
 }

@@ -147,8 +147,9 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::InternalError` if ACL already exists
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::InvalidContext` if ACL already exists
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     /// - `AuthorizationError::InvalidContext` if ACL data is malformed
     ///
     /// # Examples
@@ -170,7 +171,8 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -192,7 +194,8 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     /// # Errors
     ///
     /// - `AuthorizationError::SubjectNotFound` if ACL doesn't exist
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     /// - `AuthorizationError::InvalidContext` if ACL data is malformed
     ///
     /// # Examples
@@ -220,7 +223,8 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -251,7 +255,8 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///

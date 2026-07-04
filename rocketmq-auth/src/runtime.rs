@@ -120,7 +120,9 @@ impl ProviderRegistry {
         let mut guard = self
             .acl_white_list_snapshot
             .write()
-            .map_err(|_| RocketMQError::Internal("ACL white list snapshot lock is poisoned".to_owned()))?;
+            .map_err(|_| RocketMQError::StorageLockFailed {
+                path: "auth.acl.white_list_snapshot".to_owned(),
+            })?;
         *guard = snapshot;
         Ok(())
     }
@@ -129,7 +131,9 @@ impl ProviderRegistry {
         let guard = self
             .acl_managed_access_keys
             .read()
-            .map_err(|_| RocketMQError::Internal("ACL managed access key lock is poisoned".to_owned()))?;
+            .map_err(|_| RocketMQError::StorageLockFailed {
+                path: "auth.acl.managed_access_keys".to_owned(),
+            })?;
         Ok(guard.clone())
     }
 
@@ -137,7 +141,9 @@ impl ProviderRegistry {
         let mut guard = self
             .acl_managed_access_keys
             .write()
-            .map_err(|_| RocketMQError::Internal("ACL managed access key lock is poisoned".to_owned()))?;
+            .map_err(|_| RocketMQError::StorageLockFailed {
+                path: "auth.acl.managed_access_keys".to_owned(),
+            })?;
         *guard = access_keys;
         Ok(())
     }
@@ -167,7 +173,9 @@ impl ProviderRegistry {
         let guard = self
             .acl_fingerprint
             .read()
-            .map_err(|_| RocketMQError::Internal("ACL fingerprint lock is poisoned".to_owned()))?;
+            .map_err(|_| RocketMQError::StorageLockFailed {
+                path: "auth.acl.fingerprint".to_owned(),
+            })?;
         Ok(*guard)
     }
 
@@ -175,7 +183,9 @@ impl ProviderRegistry {
         let mut guard = self
             .acl_fingerprint
             .write()
-            .map_err(|_| RocketMQError::Internal("ACL fingerprint lock is poisoned".to_owned()))?;
+            .map_err(|_| RocketMQError::StorageLockFailed {
+                path: "auth.acl.fingerprint".to_owned(),
+            })?;
         *guard = fingerprint;
         Ok(())
     }
@@ -188,7 +198,9 @@ impl ProviderRegistry {
         let guard = self
             .acl_white_list_snapshot
             .read()
-            .map_err(|_| RocketMQError::Internal("ACL white list snapshot lock is poisoned".to_owned()))?;
+            .map_err(|_| RocketMQError::StorageLockFailed {
+                path: "auth.acl.white_list_snapshot".to_owned(),
+            })?;
         let matched = guard.matches(access_key, source_ip);
         self.metrics.record_whitelist_check(matched);
         Ok(matched)
@@ -203,7 +215,9 @@ impl ProviderRegistry {
             let guard = self
                 .acl_white_list_snapshot
                 .read()
-                .map_err(|_| RocketMQError::Internal("ACL white list snapshot lock is poisoned".to_owned()))?;
+                .map_err(|_| RocketMQError::StorageLockFailed {
+                    path: "auth.acl.white_list_snapshot".to_owned(),
+                })?;
             guard.with_global_patterns(addresses)
         };
         self.set_acl_white_list_snapshot(updated_snapshot)?;
@@ -1397,6 +1411,7 @@ accounts:
         };
 
         assert!(error.to_string().contains("acls.json"));
+        assert!(matches!(error, RocketMQError::Serialization(_)));
     }
 
     #[tokio::test]
