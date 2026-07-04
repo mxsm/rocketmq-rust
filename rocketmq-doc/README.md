@@ -50,6 +50,8 @@ rocketmq-doc/
 
 #### Design Documents (07-*)
 - Broker Naming Conventions
+- Error Architecture Redesign ADR
+- Error Architecture Inventory
 - Protocol Design
 - Storage Design
 - Network Architecture
@@ -83,6 +85,8 @@ We welcome contributions to improve our documentation! Please:
 - [Quick Start Guide](en/02-quick-start-guide.md)
 - [Architecture Overview](en/01-architecture.md)
 - [Components](en/02-components.md)
+- [Error Architecture Redesign ADR](en/07-error-architecture-adr.md)
+- [Error Architecture Inventory](en/07-error-inventory.md)
 - [Running with Docker](en/01-run-rocketmq-rust-docker.md)
 - [Running on Kubernetes](en/01-run-rocketmq-rust-k8s.md)
 - [Contributing Guide](en/19-contribute-guide.md)
