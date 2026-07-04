@@ -67,9 +67,6 @@ macro_rules! client_broker_err {
     }};
 }
 
-// Define client_error module
-pub mod client_error;
-
 pub mod admin;
 pub mod base;
 pub mod common;
