@@ -58,6 +58,8 @@ rocketmq-doc/
 
 #### Contributing (19-*)
 - Contribution Guidelines
+- Error Architecture Contribution Guide
+- Error Architecture Runbooks
 - Code Review Process
 - Documentation Standards
 
@@ -87,6 +89,8 @@ We welcome contributions to improve our documentation! Please:
 - [Components](en/02-components.md)
 - [Error Architecture Redesign ADR](en/07-error-architecture-adr.md)
 - [Error Architecture Inventory](en/07-error-inventory.md)
+- [Error Architecture Contribution Guide](en/19-error-contribution-guide.md)
+- [Error Architecture Runbooks](en/19-error-runbooks.md)
 - [Running with Docker](en/01-run-rocketmq-rust-docker.md)
 - [Running on Kubernetes](en/01-run-rocketmq-rust-k8s.md)
 - [Contributing Guide](en/19-contribute-guide.md)
