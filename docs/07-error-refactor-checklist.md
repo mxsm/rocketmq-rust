@@ -23,7 +23,7 @@ classes: wide
 - `rocketmq-client` 已有 `retry_decision` 读取 `RetryClass`。
 - `SessionCredentials` 的 `Display` / `Debug` 已对 secret、signature、security token 脱敏。
 
-但按目标架构定义，整个项目还没有完全完成。剩余工作重点是：补厚 error kernel 合约、扩大边界 adapter 消费面、清理 public `anyhow`、减少字符串化 source、统一 redaction/observability，并把 guard 接入 CI。
+按本清单定义，当前 error 架构重构推进项已经完成。后续新增错误类型、协议出口或 standalone 项目变更，继续通过中心 spec、typed boundary adapter、redaction guard 和 CI guard 维持约束。
 
 ## 本次扫描信号
 
@@ -63,7 +63,7 @@ classes: wide
 | --- | --- | --- | --- |
 | M1 | 补全 error kernel 合约 | 已有骨架，缺 category/redaction policy 深度集成 | `ErrorSpec` 覆盖 category、redaction、recovery、observe、protocol |
 | M2 | 清理 public `anyhow` | core error/common 基本通过，其他共享边界仍有命中 | library/shared API 无未登记 `anyhow::Result` |
-| M3 | remoting/broker/namesrv 统一出口 | remoting 有 adapter，processor 仍大量本地 response code | processor 失败统一走 `rocketmq_remoting::error_response` |
+| M3 | remoting/broker/namesrv 统一出口 | remoting adapter 已接入，processor Java-compatible 本地 code 已登记 allowlist | processor 通用失败走 `rocketmq_remoting::error_response` 或明确 allowlist |
 | M4 | proxy gRPC 完整接入 | 部分使用 `spec().grpc`，仍有本地 override/table | `RocketMQError` 路径优先由中心 grpc spec 派生 |
 | M5 | dashboard HTTP 完整接入 | `DashboardError::RocketMq` typed，但 HTTP 映射本地硬编码 | RocketMQ 错误使用 `spec().http` 和 stable code |
 | M6 | client callback typed 化 | legacy downcast 已移除，仍有 `dyn Error` + typed downcast | callback 内部事实源改为 `RocketMQError` |
@@ -594,7 +594,7 @@ cargo build --all-targets --all-features
 - [x] 每个 `ErrorKind` 有唯一 `ErrorSpec`。
 - [x] `ErrorSpec` 包含 code、scope、category、public message、remoting、grpc、http、cli、recovery、observe、redaction。
 - [x] remoting/gRPC/HTTP/CLI 外部出口读取中心 spec 或有明确 local-only allowlist。
-- [ ] broker/namesrv processor 通用错误不再手写 response code。
+- [x] broker/namesrv processor 通用错误无未登记手写 response code；Java-compatible 本地 code 有 guard allowlist。
 - [x] client callback 内部事实源不再是 `dyn Error` downcast。
 - [x] client retry/fault 行为来自 `RetryClass` 和明确 broker response allowlist。
 - [x] store/controller/auth/broker 不再无登记地把 source `to_string()` 后塞入新错误。
@@ -602,6 +602,8 @@ cargo build --all-targets --all-features
 - [x] `scripts/error_architecture_guard.py` 进入 CI。
 - [x] root workspace 通过 fmt/clippy。
 - [x] 受影响 standalone 项目分别通过各自 clippy/build。
+
+**收口追踪**：Issue [#7959](https://github.com/mxsm/rocketmq-rust/issues/7959)，PR [#7960](https://github.com/mxsm/rocketmq-rust/pull/7960)。
 
 ## 最终验证矩阵
 
