@@ -30,6 +30,7 @@ use std::io;
 pub use crate::filter_error::FilterError;
 
 use crate::kind::ErrorKind;
+use crate::spec::ErrorSpec;
 pub use network::NetworkError;
 pub use protocol::ProtocolError;
 pub use rpc::RpcClientError;
@@ -477,6 +478,12 @@ impl RocketMQError {
             Self::NotInitialized(_) => ErrorKind::NotInitialized,
             Self::MissingRequiredMessageProperty { .. } => ErrorKind::MissingRequiredMessageProperty,
         }
+    }
+
+    /// Return the static metadata for this error.
+    #[inline]
+    pub fn spec(&self) -> &'static ErrorSpec {
+        self.kind().spec()
     }
 
     /// Create a network connection failed error
