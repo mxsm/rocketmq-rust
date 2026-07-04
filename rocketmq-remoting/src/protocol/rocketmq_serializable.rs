@@ -20,8 +20,8 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketmqError;
 
+use crate::error_helpers::decoding_error;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::LanguageCode;
 
@@ -56,12 +56,12 @@ impl RocketMQSerializable {
         // Read length prefix
         let len = if use_short_length {
             if buf.remaining() < 2 {
-                return Err(RocketmqError::DecodingError(2, buf.remaining()).into());
+                return Err(decoding_error(2, buf.remaining()));
             }
             buf.get_u16() as usize
         } else {
             if buf.remaining() < 4 {
-                return Err(RocketmqError::DecodingError(4, buf.remaining()).into());
+                return Err(decoding_error(4, buf.remaining()));
             }
             buf.get_u32() as usize
         };
@@ -73,12 +73,12 @@ impl RocketMQSerializable {
 
         // Boundary check
         if len > limit {
-            return Err(RocketmqError::DecodingError(len, limit).into());
+            return Err(decoding_error(len, limit));
         }
 
         // Ensure buffer has enough data
         if buf.remaining() < len {
-            return Err(RocketmqError::DecodingError(len, buf.remaining()).into());
+            return Err(decoding_error(len, buf.remaining()));
         }
 
         // Checked UTF-8 decode with CheetahString storage optimization
@@ -278,7 +278,7 @@ impl RocketMQSerializable {
         const LENGTH_FIELD_LEN: usize = 4;
 
         if header_buffer.remaining() < FIXED_HEADER_LEN {
-            return Err(RocketmqError::DecodingError(FIXED_HEADER_LEN, header_buffer.remaining()).into());
+            return Err(decoding_error(FIXED_HEADER_LEN, header_buffer.remaining()));
         }
 
         let cmd = RemotingCommand::default()
@@ -292,17 +292,17 @@ impl RocketMQSerializable {
 
         // HashMap<String, String> extFields
         if header_buffer.remaining() < LENGTH_FIELD_LEN {
-            return Err(RocketmqError::DecodingError(LENGTH_FIELD_LEN, header_buffer.remaining()).into());
+            return Err(decoding_error(LENGTH_FIELD_LEN, header_buffer.remaining()));
         }
 
         let ext_fields_length = header_buffer.get_i32();
         let ext = if ext_fields_length > 0 {
             let ext_fields_length = ext_fields_length as usize;
             if ext_fields_length > header_len {
-                return Err(RocketmqError::DecodingError(ext_fields_length, header_len).into());
+                return Err(decoding_error(ext_fields_length, header_len));
             }
             if ext_fields_length > header_buffer.remaining() {
-                return Err(RocketmqError::DecodingError(ext_fields_length, header_buffer.remaining()).into());
+                return Err(decoding_error(ext_fields_length, header_buffer.remaining()));
             }
             Self::map_deserialize(header_buffer, ext_fields_length)?
         } else {
@@ -322,7 +322,7 @@ impl RocketMQSerializable {
             return Ok(HashMap::new());
         }
         if len > buffer.remaining() {
-            return Err(RocketmqError::DecodingError(len, buffer.remaining()).into());
+            return Err(decoding_error(len, buffer.remaining()));
         }
 
         // Pre-allocate HashMap with estimated capacity (assume ~50 bytes per entry)
@@ -333,10 +333,10 @@ impl RocketMQSerializable {
 
         while buffer.remaining() > target_remaining {
             // Read key (short length prefix)
-            let key = Self::read_str(buffer, true, len)?.ok_or_else(|| RocketmqError::DecodingError(0, 0))?;
+            let key = Self::read_str(buffer, true, len)?.ok_or_else(|| decoding_error(0, 0))?;
 
             // Read value (long length prefix)
-            let value = Self::read_str(buffer, false, len)?.ok_or_else(|| RocketmqError::DecodingError(0, 0))?;
+            let value = Self::read_str(buffer, false, len)?.ok_or_else(|| decoding_error(0, 0))?;
 
             map.insert(key, value);
         }
