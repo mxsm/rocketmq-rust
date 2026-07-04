@@ -155,6 +155,7 @@ pub use crate::consumer::ConsumeConcurrentlyContext;
 pub use crate::consumer::ConsumeConcurrentlyStatus;
 pub use crate::consumer::ConsumeOrderlyContext;
 pub use crate::consumer::ConsumeOrderlyStatus;
+pub use crate::consumer::ConsumerTuningProfile;
 pub use crate::consumer::ControllableOffset;
 pub use crate::consumer::DefaultLitePullConsumer;
 pub use crate::consumer::DefaultLitePullConsumerBuilder;

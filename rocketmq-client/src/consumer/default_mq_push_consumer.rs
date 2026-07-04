@@ -49,6 +49,14 @@ use crate::trace::hook::consume_message_trace_hook_impl::ConsumeMessageTraceHook
 use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 use crate::trace::trace_dispatcher::Type;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConsumerTuningProfile {
+    LowLatency,
+    Throughput,
+    LargeMessage,
+    SlowListener,
+}
+
 #[derive(Clone)]
 pub struct ConsumerConfig {
     pub(crate) consumer_group: CheetahString,
@@ -220,6 +228,43 @@ impl ConsumerConfig {
 
     pub fn rpc_hook(&self) -> &Option<Arc<dyn RPCHook>> {
         &self.rpc_hook
+    }
+
+    pub fn apply_tuning_profile(&mut self, profile: ConsumerTuningProfile) {
+        match profile {
+            ConsumerTuningProfile::LowLatency => {
+                self.consume_message_batch_max_size = 1;
+                self.pull_batch_size = 16;
+                self.pull_batch_size_in_bytes = 256 * 1024;
+                self.pull_threshold_for_queue = 256;
+                self.pull_threshold_size_for_queue = 32;
+                self.pull_interval = 0;
+            }
+            ConsumerTuningProfile::Throughput => {
+                self.consume_message_batch_max_size = 16;
+                self.pull_batch_size = 128;
+                self.pull_batch_size_in_bytes = 1024 * 1024;
+                self.pull_threshold_for_queue = 4096;
+                self.pull_threshold_size_for_queue = 256;
+                self.pull_interval = 0;
+            }
+            ConsumerTuningProfile::LargeMessage => {
+                self.consume_message_batch_max_size = 1;
+                self.pull_batch_size = 8;
+                self.pull_batch_size_in_bytes = 512 * 1024;
+                self.pull_threshold_for_queue = 128;
+                self.pull_threshold_size_for_queue = 64;
+                self.pull_interval = 0;
+            }
+            ConsumerTuningProfile::SlowListener => {
+                self.consume_message_batch_max_size = 1;
+                self.pull_batch_size = 16;
+                self.pull_batch_size_in_bytes = 256 * 1024;
+                self.pull_threshold_for_queue = 100;
+                self.pull_threshold_size_for_queue = 16;
+                self.pull_interval = 50;
+            }
+        }
     }
 
     pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
@@ -1297,6 +1342,10 @@ impl DefaultMQPushConsumer {
         self.consumer_config.set_message_queue_listener(message_queue_listener);
     }
 
+    pub fn apply_tuning_profile(&mut self, profile: ConsumerTuningProfile) {
+        self.consumer_config.mut_from_ref().apply_tuning_profile(profile);
+    }
+
     pub fn new(client_config: ClientConfig, consumer_config: ConsumerConfig) -> DefaultMQPushConsumer {
         let consumer_config = ArcMut::new(consumer_config);
         let mut default_mqpush_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
@@ -1826,6 +1875,80 @@ mod tests {
 
         consumer.clear_consume_timestamp();
         assert!(consumer.consume_timestamp().is_none());
+    }
+
+    #[test]
+    fn consumer_tuning_profile_keeps_defaults_until_applied() {
+        let config = ConsumerConfig::default();
+
+        assert_eq!(config.consume_message_batch_max_size(), 1);
+        assert_eq!(config.pull_batch_size(), 32);
+        assert_eq!(config.pull_batch_size_in_bytes(), 256 * 1024);
+        assert_eq!(config.pull_threshold_for_queue(), 1000);
+        assert_eq!(config.pull_threshold_size_for_queue(), 100);
+        assert_eq!(config.pull_interval(), 0);
+    }
+
+    #[test]
+    fn consumer_tuning_profiles_apply_expected_values() {
+        let mut config = ConsumerConfig::default();
+
+        config.apply_tuning_profile(ConsumerTuningProfile::Throughput);
+        assert_eq!(config.consume_message_batch_max_size(), 16);
+        assert_eq!(config.pull_batch_size(), 128);
+        assert_eq!(config.pull_batch_size_in_bytes(), 1024 * 1024);
+        assert_eq!(config.pull_threshold_for_queue(), 4096);
+        assert_eq!(config.pull_threshold_size_for_queue(), 256);
+        assert_eq!(config.pull_interval(), 0);
+
+        config.apply_tuning_profile(ConsumerTuningProfile::LargeMessage);
+        assert_eq!(config.consume_message_batch_max_size(), 1);
+        assert_eq!(config.pull_batch_size(), 8);
+        assert_eq!(config.pull_batch_size_in_bytes(), 512 * 1024);
+        assert_eq!(config.pull_threshold_for_queue(), 128);
+        assert_eq!(config.pull_threshold_size_for_queue(), 64);
+
+        config.apply_tuning_profile(ConsumerTuningProfile::SlowListener);
+        assert_eq!(config.consume_message_batch_max_size(), 1);
+        assert_eq!(config.pull_batch_size(), 16);
+        assert_eq!(config.pull_threshold_for_queue(), 100);
+        assert_eq!(config.pull_threshold_size_for_queue(), 16);
+        assert_eq!(config.pull_interval(), 50);
+
+        config.apply_tuning_profile(ConsumerTuningProfile::LowLatency);
+        assert_eq!(config.consume_message_batch_max_size(), 1);
+        assert_eq!(config.pull_batch_size(), 16);
+        assert_eq!(config.pull_batch_size_in_bytes(), 256 * 1024);
+        assert_eq!(config.pull_threshold_for_queue(), 256);
+        assert_eq!(config.pull_threshold_size_for_queue(), 32);
+        assert_eq!(config.pull_interval(), 0);
+    }
+
+    #[test]
+    fn push_consumer_apply_tuning_profile_updates_shared_impl_config() {
+        let mut consumer = DefaultMQPushConsumer::builder()
+            .consumer_group("push_profile_runtime_group")
+            .build();
+
+        consumer.apply_tuning_profile(ConsumerTuningProfile::Throughput);
+
+        assert_eq!(consumer.consume_message_batch_max_size(), 16);
+        assert_eq!(consumer.pull_batch_size(), 128);
+        assert_eq!(consumer.pull_batch_size_in_bytes(), 1024 * 1024);
+        assert_eq!(consumer.pull_threshold_for_queue(), 4096);
+        assert_eq!(consumer.pull_threshold_size_for_queue(), 256);
+
+        let impl_config = &consumer
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .expect("push consumer impl should exist")
+            .consumer_config;
+
+        assert_eq!(impl_config.consume_message_batch_max_size, 16);
+        assert_eq!(impl_config.pull_batch_size, 128);
+        assert_eq!(impl_config.pull_batch_size_in_bytes, 1024 * 1024);
+        assert_eq!(impl_config.pull_threshold_for_queue, 4096);
+        assert_eq!(impl_config.pull_threshold_size_for_queue, 256);
     }
 
     #[tokio::test]

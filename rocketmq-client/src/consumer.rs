@@ -50,6 +50,7 @@ pub use allocate_message_queue_strategy::AbstractAllocateMessageQueueStrategy;
 pub use allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 pub use default_lite_pull_consumer::DefaultLitePullConsumer;
 pub use default_lite_pull_consumer_builder::DefaultLitePullConsumerBuilder;
+pub use default_mq_push_consumer::ConsumerTuningProfile;
 pub use default_mq_push_consumer::DefaultMQPushConsumer;
 pub use default_mq_push_consumer_builder::DefaultMQPushConsumerBuilder;
 pub use listener::ConsumeConcurrentlyContext;
