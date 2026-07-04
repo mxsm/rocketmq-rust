@@ -1053,7 +1053,10 @@ mod tests {
 
         let internal =
             map_authorization_error(AuthorizationError::PolicyEvaluationFailed("invalid policy".to_string()));
-        assert!(matches!(internal, ProxyError::RocketMQ(RocketMQError::Internal(_))));
+        assert!(matches!(
+            internal,
+            ProxyError::RocketMQ(RocketMQError::Authentication(AuthError::AuthorizationFailed(_)))
+        ));
     }
 
     #[tokio::test]
