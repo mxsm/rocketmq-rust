@@ -84,6 +84,8 @@ classes: wide
 - `RocketMQError` 已提供 `public_message()` 和 redaction-aware `context()`，边界输出可避免继续读取 `Display` 作为机器契约。
 - `RocketMQError::Internal(String)` 已在 guard 中建立基线路径 allowlist；跨 crate 替换为 typed variant 的收敛继续归 T08。
 
+**追踪**：Issue [#7961](https://github.com/mxsm/rocketmq-rust/issues/7961)，PR [#7962](https://github.com/mxsm/rocketmq-rust/pull/7962)。
+
 **开发 checklist**：
 
 - [x] 新增或确认 `ErrorCategory`，区分 network、storage、protocol、auth、config、system 等低基数分类。
