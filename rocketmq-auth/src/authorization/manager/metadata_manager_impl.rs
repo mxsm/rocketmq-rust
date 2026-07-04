@@ -44,7 +44,8 @@
 //!
 //! - Validation errors return `AuthorizationError::InvalidContext`
 //! - Missing subjects return `AuthorizationError::SubjectNotFound`
-//! - Storage failures return `AuthorizationError::MetadataServiceError`
+//! - Storage failures return `AuthorizationError::StorageReadFailed` or
+//!   `AuthorizationError::StorageWriteFailed`
 //! - All errors are propagated without panic, enabling graceful degradation
 //!
 //! # Thread Safety
@@ -227,7 +228,8 @@ impl AuthorizationMetadataManagerImpl {
     ///
     /// - `AuthorizationError::InvalidContext` if ACL validation fails
     /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -288,7 +290,8 @@ impl AuthorizationMetadataManagerImpl {
     ///
     /// - `AuthorizationError::InvalidContext` if ACL validation fails
     /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -345,8 +348,9 @@ impl AuthorizationMetadataManagerImpl {
     /// # Errors
     ///
     /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::InternalError` if ACL doesn't exist
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::InvalidContext` if ACL doesn't exist
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -374,8 +378,9 @@ impl AuthorizationMetadataManagerImpl {
     /// # Errors
     ///
     /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::InternalError` if ACL doesn't exist
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::InvalidContext` if ACL doesn't exist
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -404,7 +409,7 @@ impl AuthorizationMetadataManagerImpl {
 
         // Step 3: Get existing ACL
         let mut acl = self.authorization_provider.get_acl(subject).await?.ok_or_else(|| {
-            AuthorizationError::InternalError(format!(
+            AuthorizationError::InvalidContext(format!(
                 "The ACL for subject '{}' does not exist",
                 subject.subject_key()
             ))
@@ -450,7 +455,8 @@ impl AuthorizationMetadataManagerImpl {
     /// # Errors
     ///
     /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -481,7 +487,8 @@ impl AuthorizationMetadataManagerImpl {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -710,7 +717,10 @@ impl AuthorizationMetadataManagerImpl {
             Err(RocketMQError::Authentication(AuthError::UserNotFound(_))) => Err(AuthorizationError::SubjectNotFound(
                 format!("The subject of {subject_key} is not exist."),
             )),
-            Err(error) => Err(AuthorizationError::MetadataServiceError(error.to_string())),
+            Err(error) => Err(AuthorizationError::StorageReadFailed {
+                path: "auth.authentication.users".to_string(),
+                reason: error.to_string(),
+            }),
         }
     }
 

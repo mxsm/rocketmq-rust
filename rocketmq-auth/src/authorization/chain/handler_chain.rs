@@ -69,7 +69,8 @@ impl AuthorizationHandlerChain {
     /// - `Err(RocketMQError)` if all handlers deny access
     pub async fn handle(&self, context: &DefaultAuthorizationContext) -> Result<(), RocketMQError> {
         if self.handlers.is_empty() {
-            return Err(RocketMQError::authentication_failed(
+            return Err(RocketMQError::auth_config_invalid(
+                "auth.authorization.handlers",
                 "No authorization handlers configured",
             ));
         }
@@ -87,8 +88,9 @@ impl AuthorizationHandlerChain {
         }
 
         // All handlers failed
-        Err(last_error
-            .unwrap_or_else(|| RocketMQError::authentication_failed("All authorization handlers denied access")))
+        Err(last_error.unwrap_or_else(|| RocketMQError::BrokerPermissionDenied {
+            operation: "All authorization handlers denied access".to_string(),
+        }))
     }
 
     /// Get the number of handlers in the chain.
@@ -149,7 +151,11 @@ mod tests {
             _context: &'a DefaultAuthorizationContext,
         ) -> Pin<Box<dyn Future<Output = Result<(), RocketMQError>> + Send + 'a>> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move { Err(RocketMQError::authentication_failed("Access denied")) })
+            Box::pin(async move {
+                Err(RocketMQError::BrokerPermissionDenied {
+                    operation: "Access denied".to_string(),
+                })
+            })
         }
     }
 

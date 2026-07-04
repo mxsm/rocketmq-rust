@@ -244,10 +244,12 @@ impl<P: AuthorizationMetadataProvider> AclAuthorizationHandler<P> {
         let source_ip_binding = context.source_ip();
         let source_ip = source_ip_binding.unwrap_or("unknown");
 
-        RocketMQError::authentication_failed(format!(
-            "{} has no permission to access {} from {}, {}",
-            subject_key, resource_key, source_ip, detail
-        ))
+        RocketMQError::BrokerPermissionDenied {
+            operation: format!(
+                "{} has no permission to access {} from {}, {}",
+                subject_key, resource_key, source_ip, detail
+            ),
+        }
     }
 }
 
@@ -276,7 +278,7 @@ impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAut
             let subject_binding = context.subject();
             let subject_wrapper = subject_binding
                 .as_ref()
-                .ok_or_else(|| RocketMQError::authentication_failed("Subject not found in authorization context"))?;
+                .ok_or_else(|| RocketMQError::illegal_argument("Subject not found in authorization context"))?;
 
             // Create a User subject for ACL lookup (required by metadata provider trait)
             let subject = SubjectLookup {
@@ -289,7 +291,7 @@ impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAut
                 .metadata_provider
                 .get_acl(&subject)
                 .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to fetch ACL: {}", e)))?
+                .map_err(RocketMQError::from)?
                 .ok_or_else(|| self.create_error(context, "no matched policies"))?;
 
             // Step 3: Match policy entries

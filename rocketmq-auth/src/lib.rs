@@ -123,7 +123,9 @@ pub mod bench_support {
     pub async fn run_auth_acl_watcher_lifecycle_probe() -> RocketMQResult<AuthAclWatcherLifecycleProbe> {
         let root = unique_acl_watcher_probe_root();
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).map_err(|error| rocketmq_error::RocketMQError::Internal(error.to_string()))?;
+        fs::create_dir_all(&root).map_err(|error| {
+            rocketmq_error::RocketMQError::storage_write_failed(root.display().to_string(), error.to_string())
+        })?;
         let acl_file = root.join("plain_acl.yml");
         write_acl_file(&acl_file, "first")?;
 
@@ -302,7 +304,9 @@ accounts:
 "#
             ),
         )
-        .map_err(|error| rocketmq_error::RocketMQError::Internal(error.to_string()))
+        .map_err(|error| {
+            rocketmq_error::RocketMQError::storage_write_failed(path.display().to_string(), error.to_string())
+        })
     }
 
     impl From<crate::runtime_bridge::AuthSyncBridgeSnapshot> for AuthSyncBridgeCounterSnapshot {

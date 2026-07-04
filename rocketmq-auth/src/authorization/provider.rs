@@ -19,7 +19,9 @@
 
 use std::sync::Arc;
 
+use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::SerializationError;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 
 use crate::authentication::provider::LocalAuthenticationMetadataProvider;
@@ -80,9 +82,25 @@ pub enum AuthorizationError {
     #[error("Internal authorization error: {0}")]
     InternalError(String),
 
-    /// Metadata service error (e.g., database, cache, remote service failure).
-    #[error("Metadata service error: {0}")]
-    MetadataServiceError(String),
+    /// Authorization metadata read failed.
+    #[error("Authorization metadata read failed for '{path}': {reason}")]
+    StorageReadFailed { path: String, reason: String },
+
+    /// Authorization metadata write failed.
+    #[error("Authorization metadata write failed for '{path}': {reason}")]
+    StorageWriteFailed { path: String, reason: String },
+
+    /// Authorization metadata lock acquisition failed.
+    #[error("Authorization metadata lock failed for '{0}'")]
+    StorageLockFailed(String),
+
+    /// Authorization metadata serialization or deserialization failed.
+    #[error("Authorization metadata {operation} failed for {format}: {reason}")]
+    SerializationFailed {
+        operation: &'static str,
+        format: &'static str,
+        reason: String,
+    },
 
     /// Authorization context is invalid or incomplete.
     #[error("Invalid authorization context: {0}")]
@@ -100,9 +118,25 @@ impl From<AuthorizationError> for RocketMQError {
             AuthorizationError::ConfigurationError(_) | AuthorizationError::NotInitialized(_) => {
                 RocketMQError::auth_config_invalid("auth.authorization", message)
             }
-            AuthorizationError::PolicyEvaluationFailed(_)
-            | AuthorizationError::InternalError(_)
-            | AuthorizationError::MetadataServiceError(_) => RocketMQError::Internal(message),
+            AuthorizationError::PolicyEvaluationFailed(_) => {
+                RocketMQError::Authentication(AuthError::AuthorizationFailed(message))
+            }
+            AuthorizationError::InternalError(_) => RocketMQError::Internal(message),
+            AuthorizationError::StorageReadFailed { path, reason } => RocketMQError::storage_read_failed(path, reason),
+            AuthorizationError::StorageWriteFailed { path, reason } => {
+                RocketMQError::storage_write_failed(path, reason)
+            }
+            AuthorizationError::StorageLockFailed(path) => RocketMQError::StorageLockFailed { path },
+            AuthorizationError::SerializationFailed {
+                operation: "encode",
+                format,
+                reason,
+            } => RocketMQError::Serialization(SerializationError::encode_failed(format, reason)),
+            AuthorizationError::SerializationFailed {
+                operation: _,
+                format,
+                reason,
+            } => RocketMQError::deserialization_failed(format, reason),
         }
     }
 }
@@ -627,7 +661,20 @@ mod tests {
             AuthorizationError::ConfigurationError("missing config".to_string()),
             AuthorizationError::NotInitialized("provider not ready".to_string()),
             AuthorizationError::InternalError("unexpected error".to_string()),
-            AuthorizationError::MetadataServiceError("db connection failed".to_string()),
+            AuthorizationError::StorageReadFailed {
+                path: "acls.json".to_string(),
+                reason: "read failed".to_string(),
+            },
+            AuthorizationError::StorageWriteFailed {
+                path: "acls.json".to_string(),
+                reason: "write failed".to_string(),
+            },
+            AuthorizationError::StorageLockFailed("acl cache".to_string()),
+            AuthorizationError::SerializationFailed {
+                operation: "decode",
+                format: "JSON",
+                reason: "invalid ACL snapshot".to_string(),
+            },
             AuthorizationError::InvalidContext("missing subject".to_string()),
         ];
 
@@ -661,6 +708,27 @@ mod tests {
 
         let internal = RocketMQError::from(AuthorizationError::InternalError("unexpected error".to_string()));
         assert!(matches!(internal, RocketMQError::Internal(_)));
+
+        let storage = RocketMQError::from(AuthorizationError::StorageWriteFailed {
+            path: "acls.json".to_string(),
+            reason: "permission denied".to_string(),
+        });
+        assert!(matches!(storage, RocketMQError::StorageWriteFailed { .. }));
+
+        let serialization = RocketMQError::from(AuthorizationError::SerializationFailed {
+            operation: "decode",
+            format: "JSON",
+            reason: "invalid ACL snapshot".to_string(),
+        });
+        assert!(matches!(serialization, RocketMQError::Serialization(_)));
+
+        let policy = RocketMQError::from(AuthorizationError::PolicyEvaluationFailed(
+            "policy engine rejected".to_string(),
+        ));
+        assert!(matches!(
+            policy,
+            RocketMQError::Authentication(AuthError::AuthorizationFailed(_))
+        ));
     }
 
     #[tokio::test]

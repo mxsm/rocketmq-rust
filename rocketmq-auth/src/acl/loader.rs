@@ -83,7 +83,7 @@ impl FileAclConfigLoader {
         self.blocking
             .spawn_io("auth.acl.discover_files", move || discover_acl_files(&roots))
             .await
-            .map_err(|error| RocketMQError::Internal(format!("acl file discovery task failed: {error}")))?
+            .map_err(|error| RocketMQError::storage_read_failed("auth.acl.discover_files", error.to_string()))?
     }
 }
 

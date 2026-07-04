@@ -40,7 +40,7 @@ pub(super) fn block_on_base_authorization(
 ) -> StrategyResult<()> {
     block_on_sync_bridge(
         || base.do_evaluate(context),
-        |error| AuthorizationError::InternalError(format!("failed to create authorization runtime: {error}")),
+        |error| AuthorizationError::ConfigurationError(format!("failed to create authorization runtime: {error}")),
         || AuthorizationError::InternalError("authorization provider thread panicked".to_string()),
     )
 }

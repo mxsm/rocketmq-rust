@@ -57,11 +57,7 @@ impl<P: AuthenticationMetadataProvider> UserAuthorizationHandler<P> {
         }
 
         let username = User::username_from_subject_key(subject.subject_key());
-        let user = self
-            .authentication_metadata_provider
-            .get_user(username)
-            .await
-            .map_err(|error| RocketMQError::authentication_failed(error.to_string()))?;
+        let user = self.authentication_metadata_provider.get_user(username).await?;
 
         if user.user_status() == Some(UserStatus::Disable) {
             return Err(RocketMQError::authentication_failed(format!(

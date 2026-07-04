@@ -176,8 +176,9 @@ impl AuthorizationMetadataManager {
     ///
     /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
     /// - `AuthorizationError::InvalidContext` if ACL validation fails
-    /// - `AuthorizationError::InternalError` if ACL already exists (and merge fails)
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::InvalidContext` if ACL already exists (and merge fails)
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -237,7 +238,8 @@ impl AuthorizationMetadataManager {
     ///
     /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
     /// - `AuthorizationError::InvalidContext` if ACL validation fails
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -293,7 +295,8 @@ impl AuthorizationMetadataManager {
     /// # Errors
     ///
     /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     pub async fn delete_acl<S: Subject + Send + Sync>(&self, subject: &S) -> ManagerResult<()> {
         self.delete_acl_with_filter(subject, None, None).await
     }
@@ -314,8 +317,9 @@ impl AuthorizationMetadataManager {
     /// # Errors
     ///
     /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::InternalError` if ACL doesn't exist
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::InvalidContext` if ACL doesn't exist
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -344,7 +348,7 @@ impl AuthorizationMetadataManager {
 
         // 3. Get existing ACL
         let mut acl = self.authorization_provider.get_acl(subject).await?.ok_or_else(|| {
-            AuthorizationError::InternalError(format!(
+            AuthorizationError::InvalidContext(format!(
                 "The ACL for subject '{}' does not exist",
                 subject.subject_key()
             ))
@@ -390,7 +394,8 @@ impl AuthorizationMetadataManager {
     /// # Errors
     ///
     /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -421,7 +426,8 @@ impl AuthorizationMetadataManager {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::MetadataServiceError` if storage operation fails
+    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    ///   storage operation fails
     ///
     /// # Examples
     ///
@@ -554,7 +560,10 @@ impl AuthorizationMetadataManager {
             Err(RocketMQError::Authentication(AuthError::UserNotFound(_))) => Err(AuthorizationError::SubjectNotFound(
                 format!("The subject of {subject_key} is not exist."),
             )),
-            Err(error) => Err(AuthorizationError::MetadataServiceError(error.to_string())),
+            Err(error) => Err(AuthorizationError::StorageReadFailed {
+                path: "auth.authentication.users".to_string(),
+                reason: error.to_string(),
+            }),
         }
     }
 }
