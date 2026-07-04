@@ -122,10 +122,13 @@ impl ProxyBrokerFacade {
             })??;
 
         response.ok_or_else(|| {
-            rocketmq_error::RocketMQError::Internal(format!(
-                "embedded broker produced no response for request code {}",
-                request.code()
-            ))
+            rocketmq_error::RocketMQError::response_process_failed(
+                "embedded_broker_response",
+                format!(
+                    "embedded broker produced no response for request code {}",
+                    request.code()
+                ),
+            )
         })
     }
 }

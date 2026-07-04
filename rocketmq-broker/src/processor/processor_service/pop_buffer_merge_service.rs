@@ -41,6 +41,7 @@ use rocketmq_common::utils::data_converter::DataConverter;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::UnifiedServiceError;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
@@ -961,9 +962,8 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                     report = %report.to_json(),
                     "[PopBuffer]Shutdown task group report is unhealthy"
                 );
-                return Err(RocketMQError::Internal(format!(
-                    "PopBufferMergeService shutdown report is unhealthy: {}",
-                    report.to_json()
+                return Err(RocketMQError::Service(UnifiedServiceError::ShutdownFailed(
+                    report.to_json(),
                 )));
             }
         }

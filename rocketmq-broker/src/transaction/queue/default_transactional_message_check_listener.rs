@@ -191,9 +191,9 @@ where
                 },
             )
             .map_err(|error| {
-                rocketmq_error::RocketMQError::Internal(format!(
+                rocketmq_error::RocketMQError::Service(rocketmq_error::UnifiedServiceError::StartupFailed(format!(
                     "failed to spawn transaction check message task: {error}"
-                ))
+                )))
             })?;
         Ok(())
     }

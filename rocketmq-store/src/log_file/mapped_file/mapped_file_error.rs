@@ -58,14 +58,14 @@ pub enum MappedFileError {
     /// This can occur during initial mmap creation, remapping after file expansion,
     /// or when the system runs out of virtual address space.
     #[error("Memory mapping failed: {0}")]
-    MmapFailed(String),
+    MmapFailed(#[source] io::Error),
 
     /// File synchronization (fsync/msync) failed.
     ///
     /// This error indicates that persisting data to disk failed, which may result
     /// in data loss if the system crashes.
     #[error("Flush operation failed: {0}")]
-    FlushFailed(String),
+    FlushFailed(#[source] io::Error),
 
     /// Invalid file name or path provided.
     ///
@@ -173,6 +173,7 @@ impl MappedFileError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
 
     #[test]
     fn test_out_of_bounds_error() {
@@ -197,7 +198,9 @@ mod tests {
 
     #[test]
     fn test_unrecoverable_error() {
-        let err = MappedFileError::MmapFailed("out of memory".to_string());
+        let err = MappedFileError::MmapFailed(io::Error::other("out of memory"));
+
         assert!(!err.is_recoverable());
+        assert!(err.source().is_some());
     }
 }
