@@ -126,8 +126,8 @@ impl Decoder for RpcCodec {
         let data = src.split_to(length);
 
         // Deserialize the request
-        let request: RpcRequest =
-            serde_json::from_slice(&data).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let request: RpcRequest = serde_json::from_slice(&data)
+            .map_err(|e| ControllerError::invalid_request_source("decode RPC request frame", e))?;
 
         debug!(
             "Decoded RPC request: id={}, type={:?}",
@@ -148,7 +148,8 @@ impl Encoder<RpcResponse> for RpcCodec {
         );
 
         // Serialize the response
-        let data = serde_json::to_vec(&item).map_err(|e| ControllerError::SerializationError(e.to_string()))?;
+        let data = serde_json::to_vec(&item)
+            .map_err(|e| ControllerError::serialization_source("encode RPC response frame", e))?;
 
         // Check size
         if data.len() > Self::MAX_FRAME_SIZE {

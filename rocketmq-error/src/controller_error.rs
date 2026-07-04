@@ -17,6 +17,7 @@
 //! This module provides error types specific to the RocketMQ controller subsystem,
 //! which manages broker lifecycles, master elections, and cluster coordination.
 
+use std::error::Error as StdError;
 use std::io;
 
 use thiserror::Error;
@@ -38,6 +39,14 @@ pub enum ControllerError {
     #[error("Raft error: {0}")]
     Raft(String),
 
+    /// Raft consensus errors with preserved source.
+    #[error("Raft error: {message}")]
+    RaftSource {
+        message: String,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
+
     /// Not the leader error
     #[error("Not leader, current leader is: {}", leader_id.map(|id| id.to_string()).unwrap_or_else(|| "unknown".to_string()))]
     NotLeader { leader_id: Option<u64> },
@@ -49,6 +58,14 @@ pub enum ControllerError {
     /// Invalid request
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
+
+    /// Invalid request with preserved decode or validation source.
+    #[error("Invalid request: {message}")]
+    InvalidRequestSource {
+        message: String,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
 
     /// Broker registration error
     #[error("Broker registration failed: {0}")]
@@ -70,9 +87,25 @@ pub enum ControllerError {
     #[error("Serialization error: {0}")]
     SerializationError(String),
 
+    /// Serialization error with preserved source.
+    #[error("Serialization error: {message}")]
+    SerializationSource {
+        message: String,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
+
     /// Storage error
     #[error("Storage error: {0}")]
     StorageError(String),
+
+    /// Storage error with preserved source.
+    #[error("Storage error: {message}")]
+    StorageSource {
+        message: String,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
 
     /// Network error
     #[error("Network error: {0}")]
@@ -91,6 +124,40 @@ pub enum ControllerError {
     Shutdown,
 }
 
+impl ControllerError {
+    #[inline]
+    pub fn raft_source(message: impl Into<String>, source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::RaftSource {
+            message: message.into(),
+            source: Box::new(source),
+        }
+    }
+
+    #[inline]
+    pub fn invalid_request_source(message: impl Into<String>, source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::InvalidRequestSource {
+            message: message.into(),
+            source: Box::new(source),
+        }
+    }
+
+    #[inline]
+    pub fn serialization_source(message: impl Into<String>, source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::SerializationSource {
+            message: message.into(),
+            source: Box::new(source),
+        }
+    }
+
+    #[inline]
+    pub fn storage_source(message: impl Into<String>, source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::StorageSource {
+            message: message.into(),
+            source: Box::new(source),
+        }
+    }
+}
+
 /// Result type alias for Controller operations
 pub type ControllerResult<T> = std::result::Result<T, ControllerError>;
 
@@ -106,6 +173,10 @@ mod tests {
         let err = ControllerError::Raft("raft error".to_string());
         assert_eq!(err.to_string(), "Raft error: raft error");
 
+        let err = ControllerError::raft_source("raft append failed", io::Error::other("transport closed"));
+        assert_eq!(err.to_string(), "Raft error: raft append failed");
+        assert!(err.source().is_some());
+
         let err = ControllerError::NotLeader { leader_id: Some(1) };
         assert_eq!(err.to_string(), "Not leader, current leader is: 1");
 
@@ -119,6 +190,10 @@ mod tests {
 
         let err = ControllerError::InvalidRequest("bad request".to_string());
         assert_eq!(err.to_string(), "Invalid request: bad request");
+
+        let err = ControllerError::invalid_request_source("decode request", io::Error::other("bad bytes"));
+        assert_eq!(err.to_string(), "Invalid request: decode request");
+        assert!(err.source().is_some());
 
         let err = ControllerError::BrokerRegistrationFailed("failed".to_string());
         assert_eq!(err.to_string(), "Broker registration failed: failed");
@@ -135,8 +210,16 @@ mod tests {
         let err = ControllerError::SerializationError("serde error".to_string());
         assert_eq!(err.to_string(), "Serialization error: serde error");
 
+        let err = ControllerError::serialization_source("encode response", io::Error::other("serde failure"));
+        assert_eq!(err.to_string(), "Serialization error: encode response");
+        assert!(err.source().is_some());
+
         let err = ControllerError::StorageError("disk full".to_string());
         assert_eq!(err.to_string(), "Storage error: disk full");
+
+        let err = ControllerError::storage_source("write metadata", io::Error::other("disk full"));
+        assert_eq!(err.to_string(), "Storage error: write metadata");
+        assert!(err.source().is_some());
 
         let err = ControllerError::NetworkError("disconnected".to_string());
         assert_eq!(err.to_string(), "Network error: disconnected");

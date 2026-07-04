@@ -64,7 +64,7 @@ impl RocksDBBackend {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
-                .map_err(|e| ControllerError::StorageError(format!("Failed to create directory: {}", e)))?;
+                .map_err(|e| ControllerError::storage_source("create RocksDB parent directory", e))?;
         }
 
         // Configure RocksDB options
@@ -90,10 +90,7 @@ impl RocksDBBackend {
         let db = blocking
             .spawn_io("controller.rocksdb.open", {
                 let path = path.clone();
-                move || {
-                    DB::open(&opts, &path)
-                        .map_err(|e| ControllerError::StorageError(format!("Failed to open RocksDB: {}", e)))
-                }
+                move || DB::open(&opts, &path).map_err(|e| ControllerError::storage_source("open RocksDB", e))
             })
             .await
             .map_err(map_blocking_error)??;
@@ -145,7 +142,7 @@ impl RocksDBBackend {
 }
 
 fn map_blocking_error(error: rocketmq_runtime::RuntimeError) -> ControllerError {
-    ControllerError::StorageError(format!("RocksDB blocking task failed: {error}"))
+    ControllerError::storage_source("RocksDB blocking task failed", error)
 }
 
 #[async_trait]
@@ -159,7 +156,7 @@ impl StorageBackend for RocksDBBackend {
 
         self.spawn_io("controller.rocksdb.put", move || {
             db.put(key.as_bytes(), value)
-                .map_err(|e| ControllerError::StorageError(format!("RocksDB put failed: {}", e)))
+                .map_err(|e| ControllerError::storage_source("RocksDB put failed", e))
         })
         .await?;
 
@@ -174,7 +171,7 @@ impl StorageBackend for RocksDBBackend {
 
         self.spawn_io("controller.rocksdb.get", move || {
             db.get(key.as_bytes())
-                .map_err(|e| ControllerError::StorageError(format!("RocksDB get failed: {}", e)))
+                .map_err(|e| ControllerError::storage_source("RocksDB get failed", e))
         })
         .await
     }
@@ -187,7 +184,7 @@ impl StorageBackend for RocksDBBackend {
 
         self.spawn_io("controller.rocksdb.delete", move || {
             db.delete(key.as_bytes())
-                .map_err(|e| ControllerError::StorageError(format!("RocksDB delete failed: {}", e)))
+                .map_err(|e| ControllerError::storage_source("RocksDB delete failed", e))
         })
         .await?;
 
@@ -214,10 +211,7 @@ impl StorageBackend for RocksDBBackend {
                         }
                     }
                     Err(e) => {
-                        return Err(ControllerError::StorageError(format!(
-                            "RocksDB iteration failed: {}",
-                            e
-                        )));
+                        return Err(ControllerError::storage_source("RocksDB iteration failed", e));
                     }
                 }
             }
@@ -240,7 +234,7 @@ impl StorageBackend for RocksDBBackend {
             }
 
             db.write(batch)
-                .map_err(|e| ControllerError::StorageError(format!("RocksDB batch write failed: {}", e)))
+                .map_err(|e| ControllerError::storage_source("RocksDB batch write failed", e))
         })
         .await?;
 
@@ -260,7 +254,7 @@ impl StorageBackend for RocksDBBackend {
             }
 
             db.write(batch)
-                .map_err(|e| ControllerError::StorageError(format!("RocksDB batch delete failed: {}", e)))
+                .map_err(|e| ControllerError::storage_source("RocksDB batch delete failed", e))
         })
         .await?;
 
@@ -276,7 +270,7 @@ impl StorageBackend for RocksDBBackend {
         self.spawn_io("controller.rocksdb.exists", move || {
             db.get(key.as_bytes())
                 .map(|opt| opt.is_some())
-                .map_err(|e| ControllerError::StorageError(format!("RocksDB exists check failed: {}", e)))
+                .map_err(|e| ControllerError::storage_source("RocksDB exists check failed", e))
         })
         .await
     }
@@ -296,16 +290,13 @@ impl StorageBackend for RocksDBBackend {
                         batch.delete(&key);
                     }
                     Err(e) => {
-                        return Err(ControllerError::StorageError(format!(
-                            "RocksDB iteration failed: {}",
-                            e
-                        )));
+                        return Err(ControllerError::storage_source("RocksDB iteration failed", e));
                     }
                 }
             }
 
             db.write(batch)
-                .map_err(|e| ControllerError::StorageError(format!("RocksDB clear failed: {}", e)))
+                .map_err(|e| ControllerError::storage_source("RocksDB clear failed", e))
         })
         .await?;
 
@@ -319,7 +310,7 @@ impl StorageBackend for RocksDBBackend {
 
         self.spawn_io("controller.rocksdb.sync", move || {
             db.flush()
-                .map_err(|e| ControllerError::StorageError(format!("RocksDB sync failed: {}", e)))
+                .map_err(|e| ControllerError::storage_source("RocksDB sync failed", e))
         })
         .await?;
 
@@ -343,10 +334,7 @@ impl StorageBackend for RocksDBBackend {
                         total_size += (key.len() + value.len()) as u64;
                     }
                     Err(e) => {
-                        return Err(ControllerError::StorageError(format!(
-                            "RocksDB iteration failed: {}",
-                            e
-                        )));
+                        return Err(ControllerError::storage_source("RocksDB iteration failed", e));
                     }
                 }
             }

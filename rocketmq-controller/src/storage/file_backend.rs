@@ -60,12 +60,12 @@ impl FileBackend {
         // Create directories
         fs::create_dir_all(&path)
             .await
-            .map_err(|e| ControllerError::StorageError(format!("Failed to create directory: {}", e)))?;
+            .map_err(|e| ControllerError::storage_source("create storage directory", e))?;
 
         let data_dir = path.join("data");
         fs::create_dir_all(&data_dir)
             .await
-            .map_err(|e| ControllerError::StorageError(format!("Failed to create data directory: {}", e)))?;
+            .map_err(|e| ControllerError::storage_source("create storage data directory", e))?;
 
         let backend = Self {
             path,
@@ -96,10 +96,10 @@ impl FileBackend {
 
         let content = fs::read(&metadata_path)
             .await
-            .map_err(|e| ControllerError::StorageError(format!("Failed to read metadata: {}", e)))?;
+            .map_err(|e| ControllerError::storage_source("read storage metadata", e))?;
 
         let loaded_index: HashMap<String, PathBuf> = serde_json::from_slice(&content)
-            .map_err(|e| ControllerError::SerializationError(format!("Failed to parse metadata: {}", e)))?;
+            .map_err(|e| ControllerError::serialization_source("parse storage metadata", e))?;
 
         *self.index.write() = loaded_index;
 
@@ -114,11 +114,11 @@ impl FileBackend {
 
         let index = self.index.read().clone();
         let content = serde_json::to_vec_pretty(&index)
-            .map_err(|e| ControllerError::SerializationError(format!("Failed to serialize metadata: {}", e)))?;
+            .map_err(|e| ControllerError::serialization_source("serialize storage metadata", e))?;
 
         fs::write(&metadata_path, content)
             .await
-            .map_err(|e| ControllerError::StorageError(format!("Failed to write metadata: {}", e)))?;
+            .map_err(|e| ControllerError::storage_source("write storage metadata", e))?;
 
         Ok(())
     }
@@ -161,15 +161,15 @@ impl StorageBackend for FileBackend {
         // Write data to file
         let mut file = fs::File::create(&file_path)
             .await
-            .map_err(|e| ControllerError::StorageError(format!("Failed to create file: {}", e)))?;
+            .map_err(|e| ControllerError::storage_source("create storage data file", e))?;
 
         file.write_all(value)
             .await
-            .map_err(|e| ControllerError::StorageError(format!("Failed to write file: {}", e)))?;
+            .map_err(|e| ControllerError::storage_source("write storage data file", e))?;
 
         file.sync_all()
             .await
-            .map_err(|e| ControllerError::StorageError(format!("Failed to sync file: {}", e)))?;
+            .map_err(|e| ControllerError::storage_source("sync storage data file", e))?;
 
         // Update index
         self.index.write().insert(key.to_string(), file_path);
@@ -200,12 +200,12 @@ impl StorageBackend for FileBackend {
         // Read file
         let mut file = fs::File::open(&file_path)
             .await
-            .map_err(|e| ControllerError::StorageError(format!("Failed to open file: {}", e)))?;
+            .map_err(|e| ControllerError::storage_source("open storage data file", e))?;
 
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer)
             .await
-            .map_err(|e| ControllerError::StorageError(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ControllerError::storage_source("read storage data file", e))?;
 
         Ok(Some(buffer))
     }
@@ -222,7 +222,7 @@ impl StorageBackend for FileBackend {
         if file_path.exists() {
             fs::remove_file(&file_path)
                 .await
-                .map_err(|e| ControllerError::StorageError(format!("Failed to delete file: {}", e)))?;
+                .map_err(|e| ControllerError::storage_source("delete storage data file", e))?;
         }
 
         // Save index
@@ -281,11 +281,11 @@ impl StorageBackend for FileBackend {
         if data_dir.exists() {
             fs::remove_dir_all(&data_dir)
                 .await
-                .map_err(|e| ControllerError::StorageError(format!("Failed to clear data: {}", e)))?;
+                .map_err(|e| ControllerError::storage_source("clear storage data directory", e))?;
 
             fs::create_dir_all(&data_dir)
                 .await
-                .map_err(|e| ControllerError::StorageError(format!("Failed to recreate data directory: {}", e)))?;
+                .map_err(|e| ControllerError::storage_source("recreate storage data directory", e))?;
         }
 
         // Clear index

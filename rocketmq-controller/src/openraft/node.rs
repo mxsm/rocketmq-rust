@@ -83,7 +83,7 @@ impl RaftNodeManager {
         let raft_config = Arc::new(
             raft_config
                 .validate()
-                .map_err(|e| ControllerError::Internal(format!("Invalid Raft config: {}", e)))?,
+                .map_err(|e| ControllerError::raft_source("validate Raft config", e))?,
         );
 
         // Create Raft instance
@@ -95,7 +95,7 @@ impl RaftNodeManager {
             store.state_machine.clone(),
         )
         .await
-        .map_err(|e| ControllerError::Internal(format!("Failed to create Raft: {}", e)))?;
+        .map_err(|e| ControllerError::raft_source("create Raft node", e))?;
 
         info!("Created OpenRaft node with ID: {}", node_id);
 
@@ -113,7 +113,7 @@ impl RaftNodeManager {
         self.raft
             .initialize(nodes)
             .await
-            .map_err(|e| ControllerError::Internal(format!("Failed to initialize cluster: {}", e)))?;
+            .map_err(|e| ControllerError::raft_source("initialize Raft cluster", e))?;
 
         info!("Raft cluster initialized successfully");
         Ok(())
@@ -126,7 +126,7 @@ impl RaftNodeManager {
         self.raft
             .add_learner(node_id, node, blocking)
             .await
-            .map_err(|e| ControllerError::Internal(format!("Failed to add learner: {}", e)))?;
+            .map_err(|e| ControllerError::raft_source(format!("add Raft learner {node_id}"), e))?;
 
         info!("Learner node {} added successfully", node_id);
         Ok(())
@@ -139,7 +139,7 @@ impl RaftNodeManager {
         self.raft
             .change_membership(members, retain)
             .await
-            .map_err(|e| ControllerError::Internal(format!("Failed to change membership: {}", e)))?;
+            .map_err(|e| ControllerError::raft_source("change Raft membership", e))?;
 
         info!("Cluster membership changed successfully");
         Ok(())
@@ -152,17 +152,9 @@ impl RaftNodeManager {
             .trigger()
             .allow_next_revert(&node_id, allow)
             .await
+            .map_err(|e| ControllerError::raft_source(format!("send allow-next-revert request for node {node_id}"), e))?
             .map_err(|e| {
-                ControllerError::Internal(format!(
-                    "Failed to send allow-next-revert request for node {}: {}",
-                    node_id, e
-                ))
-            })?
-            .map_err(|e| {
-                ControllerError::Internal(format!(
-                    "Failed to apply allow-next-revert request for node {}: {}",
-                    node_id, e
-                ))
+                ControllerError::raft_source(format!("apply allow-next-revert request for node {node_id}"), e)
             })?;
         Ok(())
     }
@@ -196,7 +188,7 @@ impl RaftNodeManager {
         self.raft
             .client_write(request)
             .await
-            .map_err(|e| ControllerError::Internal(format!("Client write failed: {}", e)))
+            .map_err(|e| ControllerError::raft_source("client write", e))
     }
 
     /// Get the Raft instance
@@ -216,7 +208,7 @@ impl RaftNodeManager {
         self.raft
             .shutdown()
             .await
-            .map_err(|e| ControllerError::Internal(format!("Shutdown failed: {}", e)))?;
+            .map_err(|e| ControllerError::raft_source("shutdown Raft node", e))?;
 
         info!("Raft node {} shut down successfully", self.node_id);
         Ok(())

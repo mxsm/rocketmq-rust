@@ -103,12 +103,13 @@ impl CreateTopicProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for CreateTopicProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: CreateTopicRequest =
-            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: CreateTopicRequest = serde_json::from_slice(request)
+            .map_err(|e| ControllerError::invalid_request_source("decode create topic request", e))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response)
+            .map_err(|e| ControllerError::serialization_source("encode create topic response", e))
     }
 }
 
@@ -174,12 +175,13 @@ impl UpdateTopicProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for UpdateTopicProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: UpdateTopicRequest =
-            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: UpdateTopicRequest = serde_json::from_slice(request)
+            .map_err(|e| ControllerError::invalid_request_source("decode update topic request", e))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response)
+            .map_err(|e| ControllerError::serialization_source("encode update topic response", e))
     }
 }
 
@@ -233,11 +235,12 @@ impl DeleteTopicProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for DeleteTopicProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: DeleteTopicRequest =
-            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: DeleteTopicRequest = serde_json::from_slice(request)
+            .map_err(|e| ControllerError::invalid_request_source("decode delete topic request", e))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response)
+            .map_err(|e| ControllerError::serialization_source("encode delete topic response", e))
     }
 }
