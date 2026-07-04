@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
-use rocketmq_error::RocketmqError;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
@@ -82,6 +83,13 @@ pub type PopCallbackFn = Arc<
         + Send
         + Sync,
 >;
+
+fn broker_response_code(error: &(dyn Error + Send + 'static)) -> Option<ResponseCode> {
+    error.downcast_ref::<RocketMQError>().and_then(|error| match error {
+        RocketMQError::BrokerOperationFailed { code, .. } => Some(ResponseCode::from(*code)),
+        _ => None,
+    })
+}
 
 pub struct DefaultPopCallback {
     pub(crate) push_consumer_impl: ArcMut<DefaultMQPushConsumerImpl>,
@@ -175,47 +183,22 @@ impl PopCallback for DefaultPopCallback {
             return;
         };
         let topic = message_queue_inner.topic_str();
+        let broker_code = broker_response_code(err.as_ref());
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
-            if let Some(er) = err.downcast_ref::<RocketmqError>() {
-                match er {
-                    RocketmqError::MQClientBrokerError(broker_error) => {
-                        if ResponseCode::from(broker_error.response_code()) == ResponseCode::SubscriptionNotLatest {
-                            warn!(
-                                "the subscription is not latest, group={}",
-                                push_consumer_impl.consumer_config.consumer_group,
-                            );
-                        } else {
-                            warn!(
-                                "execute the pop request exception, group={}",
-                                push_consumer_impl.consumer_config.consumer_group
-                            );
-                        }
-                    }
-                    _ => {
-                        warn!(
-                            "execute the pop request exception, group={}",
-                            push_consumer_impl.consumer_config.consumer_group
-                        );
-                    }
-                }
+            if broker_code == Some(ResponseCode::SubscriptionNotLatest) {
+                warn!(
+                    "the subscription is not latest, group={}",
+                    push_consumer_impl.consumer_config.consumer_group,
+                );
             } else {
                 warn!(
-                    "execute the pull request exception, group={}",
+                    "execute the pop request exception, group={}",
                     push_consumer_impl.consumer_config.consumer_group
                 );
             }
         }
-        let time_delay = if let Some(er) = err.downcast_ref::<RocketmqError>() {
-            match er {
-                RocketmqError::MQClientBrokerError(broker_error) => {
-                    if ResponseCode::from(broker_error.response_code()) == ResponseCode::FlowControl {
-                        PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL
-                    } else {
-                        push_consumer_impl.pull_time_delay_mills_when_exception
-                    }
-                }
-                _ => push_consumer_impl.pull_time_delay_mills_when_exception,
-            }
+        let time_delay = if broker_code == Some(ResponseCode::FlowControl) {
+            PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL
         } else {
             push_consumer_impl.pull_time_delay_mills_when_exception
         };
@@ -263,6 +246,17 @@ mod tests {
             subscription_data: None,
             pop_request: None,
         }
+    }
+
+    #[test]
+    fn broker_response_code_reads_typed_broker_error() {
+        let error = rocketmq_error::RocketMQError::broker_operation_failed(
+            "POP_MESSAGE",
+            ResponseCode::SubscriptionNotLatest.to_i32(),
+            "subscription not latest",
+        );
+
+        assert_eq!(broker_response_code(&error), Some(ResponseCode::SubscriptionNotLatest));
     }
 
     #[tokio::test]

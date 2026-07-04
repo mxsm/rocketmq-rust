@@ -49,8 +49,7 @@ use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::RecallMessageHandle;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::ClientErr;
-use rocketmq_error::RocketmqError::RemotingTooMuchRequestError;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
@@ -468,6 +467,16 @@ impl DefaultMQProducerImpl {
         } else {
             tracing::error!("Async send failed without callback: {}", error);
         }
+    }
+
+    #[inline]
+    fn async_send_rejected_error(message: impl Into<String>) -> RocketMQError {
+        RocketMQError::illegal_argument(message)
+    }
+
+    #[inline]
+    fn request_cause_from_error(error: &dyn std::error::Error) -> Box<dyn std::error::Error + Send + Sync> {
+        Box::new(RocketMQError::illegal_argument(error.to_string()))
     }
 
     #[inline]
@@ -908,10 +917,7 @@ impl DefaultMQProducerImpl {
         let future = async move {
             let cost_time = begin_start_time.elapsed().as_millis() as u64;
             let Some(remaining_timeout) = Self::remaining_async_timeout(timeout, cost_time) else {
-                Self::notify_callback_exception(
-                    &send_callback_clone,
-                    &RemotingTooMuchRequestError("call timeout".to_string()),
-                );
+                Self::notify_callback_exception(&send_callback_clone, &Self::async_send_rejected_error("call timeout"));
                 return Ok(None);
             };
 
@@ -1051,10 +1057,7 @@ impl DefaultMQProducerImpl {
 
             let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
             let Some(remaining_timeout) = Self::remaining_async_timeout(timeout, cost_time) else {
-                Self::notify_callback_exception(
-                    &send_callback_inner,
-                    &RemotingTooMuchRequestError("call timeout".to_string()),
-                );
+                Self::notify_callback_exception(&send_callback_inner, &Self::async_send_rejected_error("call timeout"));
                 return;
             };
             let result = producer_impl
@@ -1105,7 +1108,7 @@ impl DefaultMQProducerImpl {
             let Some(remaining_timeout) = Self::remaining_async_timeout(timeout, cost_time) else {
                 Self::notify_callback_exception(
                     &send_callback_inner,
-                    &RemotingTooMuchRequestError("asyncSend call timeout".to_string()),
+                    &Self::async_send_rejected_error("asyncSend call timeout"),
                 );
                 return;
             };
@@ -1149,7 +1152,7 @@ impl DefaultMQProducerImpl {
             let Some(remaining_timeout) = timeout.checked_sub(cost_time).filter(|remaining| *remaining > 0) else {
                 Self::notify_callback_exception(
                     &send_callback,
-                    &RemotingTooMuchRequestError("send message tryAcquire semaphoreAsyncNum timeout".to_string()),
+                    &Self::async_send_rejected_error("send message tryAcquire semaphoreAsyncNum timeout"),
                 );
                 return Ok(());
             };
@@ -1164,9 +1167,7 @@ impl DefaultMQProducerImpl {
                     Err(_) => {
                         Self::notify_callback_exception(
                             &send_callback,
-                            &RemotingTooMuchRequestError(
-                                "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
-                            ),
+                            &Self::async_send_rejected_error("send message tryAcquire semaphoreAsyncNum timeout"),
                         );
                         return Ok(());
                     }
@@ -1174,7 +1175,7 @@ impl DefaultMQProducerImpl {
                 Err(_) => {
                     Self::notify_callback_exception(
                         &send_callback,
-                        &RemotingTooMuchRequestError("send message tryAcquire semaphoreAsyncNum timeout".to_string()),
+                        &Self::async_send_rejected_error("send message tryAcquire semaphoreAsyncNum timeout"),
                     );
                     return Ok(());
                 }
@@ -1185,7 +1186,7 @@ impl DefaultMQProducerImpl {
             let Some(remaining_timeout) = timeout.checked_sub(cost_time).filter(|remaining| *remaining > 0) else {
                 Self::notify_callback_exception(
                     &send_callback,
-                    &RemotingTooMuchRequestError("send message tryAcquire semaphoreAsyncSize timeout".to_string()),
+                    &Self::async_send_rejected_error("send message tryAcquire semaphoreAsyncSize timeout"),
                 );
                 return Ok(());
             };
@@ -1202,9 +1203,7 @@ impl DefaultMQProducerImpl {
                     Err(_) => {
                         Self::notify_callback_exception(
                             &send_callback,
-                            &RemotingTooMuchRequestError(
-                                "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
-                            ),
+                            &Self::async_send_rejected_error("send message tryAcquire semaphoreAsyncSize timeout"),
                         );
                         return Ok(());
                     }
@@ -1212,7 +1211,7 @@ impl DefaultMQProducerImpl {
                 Err(_) => {
                     Self::notify_callback_exception(
                         &send_callback,
-                        &RemotingTooMuchRequestError("send message tryAcquire semaphoreAsyncSize timeout".to_string()),
+                        &Self::async_send_rejected_error("send message tryAcquire semaphoreAsyncSize timeout"),
                     );
                     return Ok(());
                 }
@@ -2165,9 +2164,7 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
-                    ClientErr::new(error.to_string()),
-                )) as Box<dyn std::error::Error + Send + Sync>);
+                request_response_future_inner.set_cause(Self::request_cause_from_error(error));
             }
         };
         let topic = msg.topic().clone();
@@ -2225,9 +2222,7 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(
-                    error.to_string(),
-                ))) as Box<dyn std::error::Error + Send + Sync>);
+                request_response_future.set_cause(Self::request_cause_from_error(error));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -2271,9 +2266,7 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
-                    ClientErr::new(error.to_string()),
-                )) as Box<dyn std::error::Error + Send + Sync>);
+                request_response_future_inner.set_cause(Self::request_cause_from_error(error));
             }
         };
         let topic = msg.topic().clone();
@@ -2328,9 +2321,7 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(
-                    error.to_string(),
-                ))) as Box<dyn std::error::Error + Send + Sync>);
+                request_response_future.set_cause(Self::request_cause_from_error(error));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -2376,9 +2367,7 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(
-                    error.to_string(),
-                ))) as Box<dyn std::error::Error + Send + Sync>);
+                request_response_future.set_cause(Self::request_cause_from_error(error));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -2428,9 +2417,7 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 //request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
-                    ClientErr::new(error.to_string()),
-                )) as Box<dyn std::error::Error + Send + Sync>);
+                request_response_future_inner.set_cause(Self::request_cause_from_error(error));
             }
         };
         let send_result = self
@@ -3637,6 +3624,17 @@ mod tests {
             .mut_from_ref()
             .set_default_mqproducer_impl_inner(ArcMut::downgrade(&producer));
         producer
+    }
+
+    #[test]
+    fn request_cause_from_error_uses_typed_error() {
+        let cause = DefaultMQProducerImpl::request_cause_from_error(&std::io::Error::other("send failed"));
+        let error = cause
+            .downcast_ref::<rocketmq_error::RocketMQError>()
+            .expect("request cause should use RocketMQError");
+
+        assert!(matches!(error, rocketmq_error::RocketMQError::IllegalArgument(_)));
+        assert_eq!(error.to_string(), "Illegal argument: send failed");
     }
 
     #[test]
