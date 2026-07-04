@@ -19,6 +19,8 @@ use crate::boundary::RemotingSpec;
 use crate::kind::ErrorCode;
 use crate::kind::ErrorKind;
 use crate::kind::ErrorScope;
+use crate::policy::ObserveSpec;
+use crate::policy::RecoverySpec;
 
 /// Static metadata for one [`ErrorKind`].
 ///
@@ -35,6 +37,8 @@ pub struct ErrorSpec {
     pub grpc: GrpcSpec,
     pub http: HttpSpec,
     pub cli: CliSpec,
+    pub recovery: RecoverySpec,
+    pub observe: ObserveSpec,
 }
 
 impl ErrorSpec {
@@ -49,6 +53,8 @@ impl ErrorSpec {
             grpc: GrpcSpec::for_kind(kind),
             http: HttpSpec::for_kind(kind),
             cli: CliSpec::for_kind(kind),
+            recovery: RecoverySpec::for_kind(kind),
+            observe: ObserveSpec::for_kind(kind),
         }
     }
 }

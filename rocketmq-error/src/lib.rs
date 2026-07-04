@@ -55,6 +55,7 @@ pub mod unified;
 pub mod boundary;
 pub mod context;
 pub mod kind;
+pub mod policy;
 pub mod spec;
 
 // Auth error module
@@ -94,6 +95,10 @@ pub use filter_error::FilterError;
 pub use kind::ErrorCode;
 pub use kind::ErrorKind;
 pub use kind::ErrorScope;
+pub use policy::ErrorSeverity;
+pub use policy::ObserveSpec;
+pub use policy::RecoverySpec;
+pub use policy::RetryClass;
 pub use spec::error_spec;
 pub use spec::ErrorSpec;
 pub use spec::ALL_ERROR_SPECS;
