@@ -55,6 +55,7 @@ use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::filter::ArcMessageFilter;
+use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -89,6 +90,12 @@ fn wakeup_write_lock_index(remote_address: SocketAddr, shard_count: usize) -> us
 fn wakeup_write_lock_for_channel(locks: &[Arc<Mutex<()>>], channel: &Channel) -> Arc<Mutex<()>> {
     let index = wakeup_write_lock_index(channel.remote_address(), locks.len());
     locks[index].clone()
+}
+
+fn store_read_max_msg_bytes(max_msg_bytes: Option<i32>) -> i32 {
+    max_msg_bytes
+        .filter(|max_msg_bytes| *max_msg_bytes > 0)
+        .unwrap_or(MAX_PULL_MSG_SIZE)
 }
 
 /// Handles pull message requests from consumers.
@@ -921,13 +928,13 @@ where
                     .broker_runtime_inner
                     .message_store()
                     .unwrap()
-                    .get_message(
+                    .get_message_with_size_limit(
                         group,
                         topic,
                         queue_id,
                         request_header.queue_offset,
                         request_header.max_msg_nums,
-                        //   MAX_PULL_MSG_SIZE,
+                        store_read_max_msg_bytes(request_header.max_msg_bytes),
                         Some(message_filter.clone()),
                     )
                     .await;
@@ -1333,6 +1340,14 @@ mod tests {
 
         assert_eq!(first, same);
         assert!(indexes.len() > 1);
+    }
+
+    #[test]
+    fn store_read_max_msg_bytes_uses_header_or_store_default() {
+        assert_eq!(store_read_max_msg_bytes(Some(4096)), 4096);
+        assert_eq!(store_read_max_msg_bytes(Some(0)), MAX_PULL_MSG_SIZE);
+        assert_eq!(store_read_max_msg_bytes(Some(-1)), MAX_PULL_MSG_SIZE);
+        assert_eq!(store_read_max_msg_bytes(None), MAX_PULL_MSG_SIZE);
     }
 
     #[test]
