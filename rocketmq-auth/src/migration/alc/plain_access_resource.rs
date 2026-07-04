@@ -56,7 +56,7 @@ impl fmt::Debug for PlainAccessResource {
             .field("resource_perm_map", &self.resource_perm_map)
             .field("request_code", &self.request_code)
             .field("content_len", &self.content.as_ref().map(Vec::len))
-            .field("signature", &self.signature)
+            .field("signature", &self.signature.as_ref().map(|_| "<redacted>"))
             .field("secret_token", &self.secret_token.as_ref().map(|_| "<redacted>"))
             .field("recognition", &self.recognition)
             .finish()
@@ -202,6 +202,7 @@ mod tests {
         let mut resource = PlainAccessResource::new();
         resource.set_access_key(CheetahString::from("ak"));
         resource.set_secret_key(CheetahString::from("secret-key-value"));
+        resource.set_signature(CheetahString::from("signature-value"));
         resource.set_secret_token(CheetahString::from("secret-token-value"));
 
         let debug = format!("{resource:?}");
@@ -209,6 +210,7 @@ mod tests {
         assert!(debug.contains("ak"));
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("secret-key-value"));
+        assert!(!debug.contains("signature-value"));
         assert!(!debug.contains("secret-token-value"));
     }
 }

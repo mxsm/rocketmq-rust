@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
+use std::fmt;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::REDACTED;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UserInfo {
     pub username: Option<CheetahString>,
@@ -27,17 +28,32 @@ pub struct UserInfo {
     pub user_status: Option<CheetahString>,
 }
 
-impl Display for UserInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for UserInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UserInfo")
+            .field("username", &self.username)
+            .field("password", &redacted_if_present(self.password.as_ref()))
+            .field("user_type", &self.user_type)
+            .field("user_status", &self.user_status)
+            .finish()
+    }
+}
+
+impl fmt::Display for UserInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "UserInfo [username={}, password={}, user_type={}, user_status={}]",
             self.username.as_ref().unwrap_or(&CheetahString::new()),
-            self.password.as_ref().unwrap_or(&CheetahString::new()),
+            redacted_if_present(self.password.as_ref()).unwrap_or_default(),
             self.user_type.as_ref().unwrap_or(&CheetahString::new()),
             self.user_status.as_ref().unwrap_or(&CheetahString::new())
         )
     }
+}
+
+fn redacted_if_present<T>(value: Option<T>) -> Option<&'static str> {
+    value.map(|_| REDACTED)
 }
 
 #[cfg(test)]
@@ -120,7 +136,23 @@ mod tests {
         let display = format!("{}", user_info);
         assert_eq!(
             display,
-            "UserInfo [username=user, password=pass, user_type=admin, user_status=active]"
+            "UserInfo [username=user, password=<redacted>, user_type=admin, user_status=active]"
         );
+        assert!(!display.contains("password=pass"));
+    }
+
+    #[test]
+    fn debug_user_info_redacts_password() {
+        let user_info = UserInfo {
+            username: Some(CheetahString::from("user")),
+            password: Some(CheetahString::from("plain-password")),
+            user_type: Some(CheetahString::from("admin")),
+            user_status: Some(CheetahString::from("active")),
+        };
+        let debug = format!("{user_info:?}");
+
+        assert!(debug.contains("user"));
+        assert!(debug.contains(REDACTED));
+        assert!(!debug.contains("plain-password"));
     }
 }

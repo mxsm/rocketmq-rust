@@ -14,11 +14,13 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::REDACTED;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -798,7 +800,7 @@ impl BrokerIdentity {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerConfig {
     #[serde(default = "defaults::broker_identity")]
@@ -1398,6 +1400,37 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::stateful_authorization_cache_negative_enable")]
     pub stateful_authorization_cache_negative_enable: bool,
+}
+
+impl fmt::Debug for BrokerConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrokerConfig")
+            .field("broker_identity", &self.broker_identity)
+            .field("broker_ip1", &self.broker_ip1)
+            .field("broker_ip2", &self.broker_ip2)
+            .field("listen_port", &self.listen_port)
+            .field("authentication_enabled", &self.authentication_enabled)
+            .field("authorization_enabled", &self.authorization_enabled)
+            .field(
+                "init_authentication_user",
+                &redacted_if_not_empty(&self.init_authentication_user),
+            )
+            .field(
+                "inner_client_authentication_credentials",
+                &redacted_if_not_empty(&self.inner_client_authentication_credentials),
+            )
+            .field("signature_algorithm", &self.signature_algorithm)
+            .finish_non_exhaustive()
+    }
+}
+
+fn redacted_if_not_empty(value: &CheetahString) -> Option<&'static str> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(REDACTED)
+    }
 }
 
 impl Default for BrokerConfig {
@@ -2185,6 +2218,7 @@ pub struct TimerWheelConfig {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+    use rocketmq_error::REDACTED;
 
     use super::BrokerConfig;
     use crate::common::metrics::LogExporterType;
@@ -2569,6 +2603,23 @@ mod tests {
         assert_eq!(config.acl_file_watch_interval_millis, 5_000);
         assert_eq!(config.signature_algorithm.as_str(), "HmacSHA1");
         assert_eq!(config.request_timestamp_expired_millis, 0);
+    }
+
+    #[test]
+    fn broker_config_debug_redacts_embedded_auth_credentials() {
+        let config = BrokerConfig {
+            init_authentication_user: CheetahString::from("admin:init-secret"),
+            inner_client_authentication_credentials: CheetahString::from(
+                r#"{"accessKey":"inner","secretKey":"inner-secret"}"#,
+            ),
+            ..BrokerConfig::default()
+        };
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains(REDACTED));
+        assert!(!debug.contains("init-secret"));
+        assert!(!debug.contains("inner-secret"));
     }
 
     #[test]

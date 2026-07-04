@@ -1861,7 +1861,7 @@ fn map_acl_user(target: &AclTarget, user: &UserInfo) -> AclUserView {
         broker_name: target.broker_name.clone(),
         broker_addr: target.broker_addr.clone(),
         username: user.username.as_ref().map(ToString::to_string).unwrap_or_default(),
-        password: user.password.as_ref().map(ToString::to_string),
+        password: None,
         user_type: user.user_type.as_ref().map(ToString::to_string),
         user_status: user.user_status.as_ref().map(ToString::to_string),
     }
@@ -2347,8 +2347,10 @@ fn required_request_field<'a>(value: Option<&'a str>, label: &str) -> Result<&'a
 
 #[cfg(test)]
 mod tests {
+    use super::AclTarget;
     use super::build_order_conf;
     use super::classify_topic;
+    use super::map_acl_user;
     use super::map_message;
     use super::normalize_message_type;
     use super::parse_rate_value;
@@ -2360,6 +2362,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_common::common::message::message_builder::MessageBuilder;
     use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_remoting::protocol::body::user_info::UserInfo;
     use std::collections::BTreeMap;
     use std::collections::HashSet;
 
@@ -2406,6 +2409,25 @@ mod tests {
         let brokers = HashSet::from(["broker-b".to_string(), "broker-a".to_string()]);
 
         assert_eq!(build_order_conf(&brokers, 8), "broker-a:8;broker-b:8");
+    }
+
+    #[test]
+    fn map_acl_user_does_not_expose_password() {
+        let target = AclTarget {
+            broker_name: "broker-a".to_string(),
+            broker_addr: "127.0.0.1:10911".to_string(),
+        };
+        let user = UserInfo {
+            username: Some(CheetahString::from("alice")),
+            password: Some(CheetahString::from("broker-password")),
+            user_type: Some(CheetahString::from("Normal")),
+            user_status: Some(CheetahString::from("enable")),
+        };
+
+        let view = map_acl_user(&target, &user);
+
+        assert_eq!(view.username, "alice");
+        assert_eq!(view.password, None);
     }
 
     #[test]

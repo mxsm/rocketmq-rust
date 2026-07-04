@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
 use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
 use rocketmq_auth::authentication::acl_signer::cal_signature_segments;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::REDACTED;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::RPCHook;
 use smallvec::SmallVec;
@@ -32,9 +34,18 @@ use crate::common::session_credentials::SIGNATURE;
 /// custom header into `extFields`, sort all extension fields by key, concatenate
 /// every value except `Signature`, append the request body, and write the HMAC
 /// signature back to `extFields`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AclClientRPCHook {
     session_credentials: SessionCredentials,
+}
+
+impl fmt::Debug for AclClientRPCHook {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AclClientRPCHook")
+            .field("session_credentials", &REDACTED)
+            .finish()
+    }
 }
 
 impl AclClientRPCHook {
@@ -170,5 +181,17 @@ mod tests {
         assert!(hook
             .do_before_request("127.0.0.1:9876".parse().unwrap(), &mut request)
             .is_err());
+    }
+
+    #[test]
+    fn acl_hook_debug_redacts_session_credentials() {
+        let hook = AclClientRPCHook::new(SessionCredentials::with_token("ak", "secret", "token"));
+
+        let debug = format!("{hook:?}");
+
+        assert!(debug.contains(REDACTED));
+        assert!(!debug.contains("ak"));
+        assert!(!debug.contains("secret"));
+        assert!(!debug.contains("token"));
     }
 }
