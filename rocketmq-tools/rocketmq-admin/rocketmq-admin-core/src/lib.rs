@@ -34,6 +34,7 @@ pub mod core {
     pub mod consumer;
     pub mod container;
     pub mod controller;
+    pub mod error_view;
     pub mod export_data;
     pub mod ha;
     pub mod lite;
@@ -50,6 +51,10 @@ pub mod core {
     pub use rocketmq_error::RocketMQError;
     pub use rocketmq_error::RocketMQResult;
     pub use rocketmq_error::ToolsError;
+
+    pub use self::error_view::stable_error_code;
+    pub use self::error_view::stable_error_message;
+    pub use self::error_view::AdminErrorView;
 }
 
 pub mod admin;

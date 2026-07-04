@@ -24,6 +24,9 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::core::admin::AdminBuilder;
+use crate::core::stable_error_code;
+use crate::core::stable_error_message;
+use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
 
@@ -517,7 +520,18 @@ pub struct BrokerRuntimeStatsSection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrokerRuntimeStatsFailure {
     pub broker_addr: CheetahString,
+    pub error_code: String,
     pub error: String,
+}
+
+impl BrokerRuntimeStatsFailure {
+    pub fn from_error(broker_addr: CheetahString, error: &RocketMQError) -> Self {
+        Self {
+            broker_addr,
+            error_code: stable_error_code(error),
+            error: stable_error_message(error),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -740,7 +754,18 @@ impl SwitchTimerEngineRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrokerOperationFailure {
     pub broker_addr: CheetahString,
+    pub error_code: String,
     pub error: String,
+}
+
+impl BrokerOperationFailure {
+    pub fn from_error(broker_addr: CheetahString, error: &RocketMQError) -> Self {
+        Self {
+            broker_addr,
+            error_code: stable_error_code(error),
+            error: stable_error_message(error),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

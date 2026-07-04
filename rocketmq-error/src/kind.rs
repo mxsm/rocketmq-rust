@@ -87,6 +87,36 @@ pub enum ErrorCategory {
     Version,
 }
 
+impl ErrorCategory {
+    /// Return the stable category name used by external adapters.
+    #[inline]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Network => "network",
+            Self::Serialization => "serialization",
+            Self::Protocol => "protocol",
+            Self::Rpc => "rpc",
+            Self::Authentication => "authentication",
+            Self::Controller => "controller",
+            Self::Broker => "broker",
+            Self::Route => "route",
+            Self::Client => "client",
+            Self::Tools => "tools",
+            Self::Filter => "filter",
+            Self::Storage => "storage",
+            Self::Configuration => "configuration",
+            Self::System => "system",
+            Self::Version => "version",
+        }
+    }
+}
+
+impl fmt::Display for ErrorCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Stable logical error kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ErrorKind {

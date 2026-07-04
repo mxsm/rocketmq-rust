@@ -13,15 +13,28 @@
 // limitations under the License.
 
 use clap::Parser;
+use rocketmq_error::CliErrorView;
 use rocketmq_store_inspect::command_line::Commands;
 use rocketmq_store_inspect::command_line::RootCli;
 use rocketmq_store_inspect::content_show::print_content;
 
 fn main() {
+    let exit_code = run();
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+}
+
+fn run() -> i32 {
     let cli = RootCli::parse();
     match cli.command {
         Commands::ReadMessageLog { config, from, to } => {
-            print_content(from, to, config);
+            if let Err(error) = print_content(from, to, config) {
+                let view = CliErrorView::from_error(&error);
+                eprintln!("{}", view.render_stderr());
+                return view.exit_code().as_i32();
+            }
         }
     }
+    0
 }

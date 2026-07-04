@@ -54,6 +54,7 @@ pub mod unified;
 
 // Stable error taxonomy
 pub mod boundary;
+pub mod cli;
 pub mod context;
 pub mod kind;
 pub mod policy;
@@ -83,6 +84,7 @@ pub use boundary::HttpSpec;
 pub use boundary::HttpStatusCode;
 pub use boundary::RemotingResponseCode;
 pub use boundary::RemotingSpec;
+pub use cli::CliErrorView;
 pub use client_error::ClientError;
 pub use context::ErrorContext;
 pub use context::ErrorContextField;

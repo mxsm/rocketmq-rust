@@ -15,6 +15,9 @@ use serde::Serialize;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
+use crate::core::stable_error_code;
+use crate::core::stable_error_message;
+use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,7 +76,18 @@ pub struct StatsAllRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatsAllTopicFailure {
     pub topic: CheetahString,
+    pub error_code: String,
     pub error: String,
+}
+
+impl StatsAllTopicFailure {
+    pub fn from_error(topic: CheetahString, error: &RocketMQError) -> Self {
+        Self {
+            topic,
+            error_code: stable_error_code(error),
+            error: stable_error_message(error),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -111,10 +125,9 @@ impl StatsService {
 
             match collect_topic_detail(admin, topic, request.active_topic()).await {
                 Ok(mut rows) => result.rows.append(&mut rows),
-                Err(error) => result.failures.push(StatsAllTopicFailure {
-                    topic: topic.clone(),
-                    error: error.to_string(),
-                }),
+                Err(error) => result
+                    .failures
+                    .push(StatsAllTopicFailure::from_error(topic.clone(), &error)),
             }
         }
 
