@@ -226,27 +226,30 @@ rg -n "v2::Code::|tonic::Code|rocketmq_payload_override" rocketmq-proxy/src/stat
 
 **范围**：`rocketmq-dashboard/rocketmq-dashboard-web/backend/src/error/dashboard_error.rs`、`rocketmq-dashboard-common`、dashboard backend service/config/admin 层。
 
-**当前缺口**：
+**完成状态**：
 
-- `DashboardError::RocketMq(#[from] RocketMQError)` 已存在。
-- `status_code()` 对 `RocketMq` 当前固定返回 `BAD_GATEWAY`。
-- `code()` 返回本地字符串，例如 `ROCKETMQ_ERROR`，没有使用 `error.spec().code`。
-- HTTP response body 使用 `self.to_string()`，没有区分 public message 和内部 detail。
+- `DashboardError::RocketMq` 的 HTTP status 已由 `error.spec().http.status` 派生，API code 已使用 `error.spec().code.as_str()`。
+- HTTP response body 已改为 `RocketMQError::public_message()` + redacted context，不再使用 `Display` 作为外部契约。
+- local `Validation/Config/Auth/NotFound/Internal` 保留稳定 code/status；配置与内部 source error 通过 `ConfigSource/InternalSource` 保留 source，但响应体只暴露安全消息。
+- 配置读写、SQLite 配置、monitor 配置与 dashboard task manager 的底层错误文本不再直接拼接进 HTTP error body。
+- `scripts/error_architecture_guard.py` 已加入 dashboard HTTP boundary 回归检查，阻止回退到 `BAD_GATEWAY/ROCKETMQ_ERROR/self.to_string()` 路径。
+
+**追踪**：Issue [#7943](https://github.com/mxsm/rocketmq-rust/issues/7943)，PR [#7944](https://github.com/mxsm/rocketmq-rust/pull/7944)。
 
 **开发 checklist**：
 
-- [ ] 对 `DashboardError::RocketMq(error)` 使用 `error.spec().http.status` 生成 HTTP status。
-- [ ] API code 使用 `error.spec().code.as_str()`，或明确加 dashboard prefix。
-- [ ] response message 使用 `spec.public_message` + redacted context，避免泄露内部 detail。
-- [ ] 对 local `Validation/Config/Auth/NotFound/Internal` 建立稳定 code。
-- [ ] 配置读写、监控配置、admin client 的 `format!("...{error}")` 路径改成 typed source 或 redacted message。
-- [ ] 增加 dashboard backend HTTP error mapping tests。
+- [x] 对 `DashboardError::RocketMq(error)` 使用 `error.spec().http.status` 生成 HTTP status。
+- [x] API code 使用 `error.spec().code.as_str()`，或明确加 dashboard prefix。
+- [x] response message 使用 `spec.public_message` + redacted context，避免泄露内部 detail。
+- [x] 对 local `Validation/Config/Auth/NotFound/Internal` 建立稳定 code。
+- [x] 配置读写、监控配置、admin client 的 `format!("...{error}")` 路径改成 typed source 或 redacted message。
+- [x] 增加 dashboard backend HTTP error mapping tests。
 
 **验收 checklist**：
 
-- [ ] `RocketMQError::route_not_found` 等典型错误映射到正确 HTTP status/code。
-- [ ] dashboard API 不用 display text 作为机器契约。
-- [ ] secret/token/signature 不出现在 error body。
+- [x] `RocketMQError::route_not_found` 等典型错误映射到正确 HTTP status/code。
+- [x] dashboard API 不用 display text 作为机器契约。
+- [x] secret/token/signature 不出现在 error body。
 
 **建议验证**：
 

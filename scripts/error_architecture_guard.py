@@ -282,6 +282,21 @@ def check_required_mapping_adapters() -> list[Finding]:
             "local_error_grpc_mapping",
             "public_message()",
         ],
+        ROOT
+        / "rocketmq-dashboard"
+        / "rocketmq-dashboard-web"
+        / "backend"
+        / "src"
+        / "error"
+        / "dashboard_error.rs": [
+            "error.spec().http.status",
+            "error.spec().code.as_str()",
+            "error.public_message()",
+            "error.context()",
+            "config_source",
+            "internal_source",
+            "response_message",
+        ],
     }
     findings: list[Finding] = []
     for path, needles in checks.items():
@@ -305,6 +320,44 @@ def check_proxy_grpc_boundary() -> list[Finding]:
         "is_topic_route_not_found_message": "RocketMQ gRPC mapping must not parse display text for topic-route errors",
     }
     return scan_forbidden_terms([path], forbidden)
+
+
+def check_dashboard_http_boundary() -> list[Finding]:
+    error_path = (
+        ROOT
+        / "rocketmq-dashboard"
+        / "rocketmq-dashboard-web"
+        / "backend"
+        / "src"
+        / "error"
+        / "dashboard_error.rs"
+    )
+    if not error_path.exists():
+        return [Finding(error_path, 1, "dashboard HTTP error mapper is missing")]
+
+    forbidden = {
+        'Self::RocketMq(_) => "ROCKETMQ_ERROR"': "dashboard RocketMQ API code must come from ErrorSpec.code",
+        "Self::RocketMq(_) => StatusCode::BAD_GATEWAY": "dashboard RocketMQ HTTP status must come from ErrorSpec.http",
+        "ApiResponse::failure(self.code(), self.to_string())": "dashboard error body must use public/redacted response messages",
+    }
+    findings = scan_forbidden_terms([error_path], forbidden)
+
+    backend_paths = rust_files_under("rocketmq-dashboard", "rocketmq-dashboard-web", "backend", "src")
+    for path in backend_paths:
+        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+            if is_test_context(path, line_number):
+                continue
+            if "{error}" not in line:
+                continue
+            if "DashboardError::Config(format!" in line or "DashboardError::Internal(format!" in line:
+                findings.append(
+                    Finding(
+                        path,
+                        line_number,
+                        "dashboard config/internal source errors must use typed source or redacted response messages",
+                    )
+                )
+    return findings
 
 
 def check_error_spec_contract() -> list[Finding]:
@@ -442,6 +495,7 @@ def run() -> int:
         ("processor generic response allowlist", check_processor_generic_response_allowlist),
         ("required mapping adapters", check_required_mapping_adapters),
         ("proxy grpc boundary", check_proxy_grpc_boundary),
+        ("dashboard http boundary", check_dashboard_http_boundary),
         ("error spec contract", check_error_spec_contract),
         ("internal error allowlist", check_internal_error_allowlist),
         ("anyhow result allowlist", check_anyhow_result_allowlist),

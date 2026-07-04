@@ -132,23 +132,23 @@ fn load_entries(path: &PathBuf) -> Result<BTreeMap<String, ConsumerMonitorConfig
     }
 
     let content = fs::read_to_string(path)
-        .map_err(|error| DashboardError::Config(format!("Failed to read monitor config file: {error}")))?;
+        .map_err(|error| DashboardError::config_source("Failed to read monitor config file", error))?;
     if content.trim().is_empty() {
         return Ok(BTreeMap::new());
     }
     serde_json::from_str(&content)
-        .map_err(|error| DashboardError::Config(format!("Failed to parse monitor config file: {error}")))
+        .map_err(|error| DashboardError::config_source("Failed to parse monitor config file", error))
 }
 
 fn save_entries(path: &PathBuf, entries: &BTreeMap<String, ConsumerMonitorConfig>) -> Result<(), DashboardError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
-            .map_err(|error| DashboardError::Config(format!("Failed to create monitor config directory: {error}")))?;
+            .map_err(|error| DashboardError::config_source("Failed to create monitor config directory", error))?;
     }
     let content = serde_json::to_string_pretty(entries)
-        .map_err(|error| DashboardError::Internal(format!("Failed to serialize monitor config: {error}")))?;
+        .map_err(|error| DashboardError::internal_source("Failed to serialize monitor config", error))?;
     fs::write(path, content)
-        .map_err(|error| DashboardError::Config(format!("Failed to write monitor config file: {error}")))
+        .map_err(|error| DashboardError::config_source("Failed to write monitor config file", error))
 }
 
 #[cfg(test)]
