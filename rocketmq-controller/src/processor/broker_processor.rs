@@ -103,14 +103,15 @@ impl RegisterBrokerProcessor {
 impl RequestProcessor for RegisterBrokerProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
         // Deserialize request
-        let req: RegisterBrokerRequest =
-            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: RegisterBrokerRequest = serde_json::from_slice(request)
+            .map_err(|e| ControllerError::invalid_request_source("decode register broker request", e))?;
 
         // Process request
         let response = self.process_request(req).await?;
 
         // Serialize response
-        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response)
+            .map_err(|e| ControllerError::serialization_source("encode register broker response", e))
     }
 }
 
@@ -164,12 +165,13 @@ impl UnregisterBrokerProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for UnregisterBrokerProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: UnregisterBrokerRequest =
-            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: UnregisterBrokerRequest = serde_json::from_slice(request)
+            .map_err(|e| ControllerError::invalid_request_source("decode unregister broker request", e))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response)
+            .map_err(|e| ControllerError::serialization_source("encode unregister broker response", e))
     }
 }
 
@@ -212,12 +214,13 @@ impl BrokerHeartbeatProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for BrokerHeartbeatProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: BrokerHeartbeatRequest =
-            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: BrokerHeartbeatRequest = serde_json::from_slice(request)
+            .map_err(|e| ControllerError::invalid_request_source("decode broker heartbeat request", e))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response)
+            .map_err(|e| ControllerError::serialization_source("encode broker heartbeat response", e))
     }
 }
 
@@ -295,11 +298,12 @@ impl ElectMasterProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for ElectMasterProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: ElectMasterRequest =
-            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: ElectMasterRequest = serde_json::from_slice(request)
+            .map_err(|e| ControllerError::invalid_request_source("decode elect master request", e))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response)
+            .map_err(|e| ControllerError::serialization_source("encode elect master response", e))
     }
 }

@@ -76,12 +76,13 @@ impl GetMetadataProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for GetMetadataProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: GetMetadataRequest =
-            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: GetMetadataRequest = serde_json::from_slice(request)
+            .map_err(|e| ControllerError::invalid_request_source("decode get metadata request", e))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response)
+            .map_err(|e| ControllerError::serialization_source("encode get metadata response", e))
     }
 }
 

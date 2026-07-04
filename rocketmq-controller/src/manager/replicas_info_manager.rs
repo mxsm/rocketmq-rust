@@ -983,13 +983,13 @@ impl ReplicasInfoManager {
                 .collect(),
         };
 
-        serde_json::to_vec(&state).map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&state).map_err(|e| ControllerError::serialization_source("serialize sync state data", e))
     }
 
     /// Deserialize the state machine from bytes
     pub fn deserialize_from(&self, data: &[u8]) -> Result<()> {
-        let state: SerializedState =
-            serde_json::from_slice(data).map_err(|e| ControllerError::SerializationError(e.to_string()))?;
+        let state: SerializedState = serde_json::from_slice(data)
+            .map_err(|e| ControllerError::serialization_source("deserialize sync state data", e))?;
 
         self.replica_info_table.clear();
         self.sync_state_set_info_table.clear();
@@ -1039,7 +1039,7 @@ impl ReplicasInfoManager {
             .split(';')
             .map(|s| {
                 s.parse::<u64>()
-                    .map_err(|e| ControllerError::InvalidRequest(e.to_string()))
+                    .map_err(|e| ControllerError::invalid_request_source("deserialize broker replica info", e))
             })
             .collect()
     }
