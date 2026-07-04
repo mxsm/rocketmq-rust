@@ -20,8 +20,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::bail;
-use anyhow::Context;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
+use rocketmq_error::UnifiedServiceError;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduledTaskConfig;
@@ -59,14 +60,13 @@ impl TokioExecutorService {
         Self::try_new().unwrap_or_else(|error| panic!("failed to create TokioExecutorService: {error:#}"))
     }
 
-    pub fn try_new() -> anyhow::Result<TokioExecutorService> {
+    pub fn try_new() -> RocketMQResult<TokioExecutorService> {
         Self::from_config(common_runtime_config(
             num_cpus::get(),
             "rocketmq-common-tokio-executor",
             Duration::from_secs(30),
             num_cpus::get().saturating_mul(4),
         ))
-        .context("failed to create TokioExecutorService runtime")
     }
 
     pub fn new_with_config(
@@ -84,7 +84,7 @@ impl TokioExecutorService {
         thread_prefix: Option<impl Into<String>>,
         keep_alive: Duration,
         max_blocking_threads: usize,
-    ) -> anyhow::Result<TokioExecutorService> {
+    ) -> RocketMQResult<TokioExecutorService> {
         validate_runtime_config(thread_num, max_blocking_threads)?;
         let thread_prefix_inner = if let Some(thread_prefix) = thread_prefix {
             thread_prefix.into()
@@ -97,11 +97,11 @@ impl TokioExecutorService {
             keep_alive,
             max_blocking_threads,
         ))
-        .context("failed to create configured TokioExecutorService runtime")
     }
 
-    fn from_config(config: RuntimeConfig) -> anyhow::Result<TokioExecutorService> {
-        let inner = RuntimeOwner::new(config)?;
+    fn from_config(config: RuntimeConfig) -> RocketMQResult<TokioExecutorService> {
+        let inner = RuntimeOwner::new(config)
+            .map_err(|error| service_startup_failed("failed to create TokioExecutorService runtime", error))?;
         let task_group = inner.context().root_group().child("tokio-executor");
         Ok(TokioExecutorService { inner, task_group })
     }
@@ -181,14 +181,14 @@ impl FuturesExecutorServiceBuilder {
         self
     }
 
-    pub fn create(&mut self) -> anyhow::Result<FuturesExecutorService> {
+    pub fn create(&mut self) -> RocketMQResult<FuturesExecutorService> {
         let name_prefix = self.thread_name_prefix.as_deref().unwrap_or("Default-Executor");
         let thread_pool = futures::executor::ThreadPool::builder()
             .stack_size(self.stack_size)
             .pool_size(self.pool_size)
             .name_prefix(name_prefix)
             .create()
-            .context("failed to create futures executor thread pool")?;
+            .map_err(|error| service_startup_failed("failed to create futures executor thread pool", error))?;
         Ok(FuturesExecutorService { inner: thread_pool })
     }
 }
@@ -208,14 +208,13 @@ impl ScheduledExecutorService {
         Self::try_new().unwrap_or_else(|error| panic!("failed to create ScheduledExecutorService: {error:#}"))
     }
 
-    pub fn try_new() -> anyhow::Result<ScheduledExecutorService> {
+    pub fn try_new() -> RocketMQResult<ScheduledExecutorService> {
         Self::from_config(common_runtime_config(
             num_cpus::get(),
             "rocketmq-common-scheduled-executor",
             Duration::from_secs(30),
             num_cpus::get().saturating_mul(4),
         ))
-        .context("failed to create ScheduledExecutorService runtime")
     }
 
     pub fn new_with_config(
@@ -233,7 +232,7 @@ impl ScheduledExecutorService {
         thread_prefix: Option<impl Into<String>>,
         keep_alive: Duration,
         max_blocking_threads: usize,
-    ) -> anyhow::Result<ScheduledExecutorService> {
+    ) -> RocketMQResult<ScheduledExecutorService> {
         validate_runtime_config(thread_num, max_blocking_threads)?;
         let thread_prefix_inner = if let Some(thread_prefix) = thread_prefix {
             thread_prefix.into()
@@ -246,7 +245,6 @@ impl ScheduledExecutorService {
             keep_alive,
             max_blocking_threads,
         ))
-        .context("failed to create configured ScheduledExecutorService runtime")
     }
 
     pub fn schedule_at_fixed_rate<F>(&self, task: F, initial_delay: Option<Duration>, period: Duration)
@@ -278,8 +276,9 @@ impl ScheduledExecutorService {
         }
     }
 
-    fn from_config(config: RuntimeConfig) -> anyhow::Result<ScheduledExecutorService> {
-        let inner = RuntimeOwner::new(config)?;
+    fn from_config(config: RuntimeConfig) -> RocketMQResult<ScheduledExecutorService> {
+        let inner = RuntimeOwner::new(config)
+            .map_err(|error| service_startup_failed("failed to create ScheduledExecutorService runtime", error))?;
         let scheduled_tasks = ScheduledTaskGroup::new(inner.context().root_group().child("scheduled"));
         Ok(ScheduledExecutorService { inner, scheduled_tasks })
     }
@@ -299,14 +298,34 @@ fn common_runtime_config(
     config
 }
 
-fn validate_runtime_config(thread_num: usize, max_blocking_threads: usize) -> anyhow::Result<()> {
+fn validate_runtime_config(thread_num: usize, max_blocking_threads: usize) -> RocketMQResult<()> {
     if thread_num == 0 {
-        bail!("thread_num must be greater than zero");
+        return Err(config_invalid_value(
+            "thread_num",
+            thread_num,
+            "thread_num must be greater than zero",
+        ));
     }
     if max_blocking_threads == 0 {
-        bail!("max_blocking_threads must be greater than zero");
+        return Err(config_invalid_value(
+            "max_blocking_threads",
+            max_blocking_threads,
+            "max_blocking_threads must be greater than zero",
+        ));
     }
     Ok(())
+}
+
+fn config_invalid_value(key: &'static str, value: usize, reason: &'static str) -> RocketMQError {
+    RocketMQError::ConfigInvalidValue {
+        key,
+        value: value.to_string(),
+        reason: reason.to_string(),
+    }
+}
+
+fn service_startup_failed(context: &'static str, error: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!("{context}: {error}")))
 }
 
 #[cfg(test)]

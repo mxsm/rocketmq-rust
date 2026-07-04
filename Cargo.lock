@@ -4186,7 +4186,6 @@ dependencies = [
 name = "rocketmq-common"
 version = "1.0.0"
 dependencies = [
- "anyhow",
  "base64",
  "byteorder",
  "bytes",

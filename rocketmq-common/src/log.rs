@@ -15,6 +15,7 @@
 use chrono::Offset;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::UnifiedServiceError;
 use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
@@ -60,7 +61,7 @@ pub fn init_logger() -> RocketMQResult<()> {
         .with_thread_ids(true)
         .with_max_level(level)
         .try_init()
-        .map_err(|e| RocketMQError::Internal(format!("Failed to initialize logger: {}", e)))?;
+        .map_err(logger_startup_failed)?;
 
     Ok(())
 }
@@ -89,7 +90,7 @@ pub fn init_logger_with_level(level: Level) -> RocketMQResult<()> {
         .with_thread_ids(true)
         .with_max_level(tracing_level)
         .try_init()
-        .map_err(|e| RocketMQError::Internal(format!("Failed to initialize logger: {}", e)))?;
+        .map_err(logger_startup_failed)?;
 
     Ok(())
 }
@@ -154,15 +155,21 @@ pub fn init_logger_with_file(
         .with(console_layer)
         .with(file_layer)
         .try_init()
-        .map_err(|e| RocketMQError::Internal(format!("Failed to initialize logger: {}", e)))?;
+        .map_err(logger_startup_failed)?;
 
     // Store the guard in a static variable to prevent it from being dropped
     // Using OnceLock instead of Box::leak to avoid memory leak
     WORKER_GUARD
         .set(guard)
-        .map_err(|_| RocketMQError::Internal("Logger already initialized".to_string()))?;
+        .map_err(|_| RocketMQError::Service(UnifiedServiceError::AlreadyRunning))?;
 
     Ok(())
+}
+
+fn logger_startup_failed(error: impl fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "Failed to initialize logger: {error}"
+    )))
 }
 
 /// decides the time zone of the logs
