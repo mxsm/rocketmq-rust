@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,13 +37,17 @@ use crate::long_polling::pull_request::PullRequest;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 
 const TOPIC_QUEUE_ID_SEPARATOR: &str = "@";
+const NO_PENDING_DEADLINE: u64 = u64::MAX;
+const LONG_POLLING_FALLBACK_SCAN_MILLIS: u64 = 5_000;
 
 pub struct PullRequestHoldService<MS: MessageStore> {
     pull_request_table: Arc<parking_lot::RwLock<HashMap<String, ManyPullRequest>>>,
     pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
     shutdown: Arc<Notify>,
+    schedule_signal: Arc<Notify>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     running: AtomicBool,
+    next_deadline_millis: AtomicU64,
     task_group: Mutex<Option<TaskGroup>>,
 }
 
@@ -58,8 +63,10 @@ where
             pull_request_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             pull_message_processor,
             shutdown: Arc::new(Default::default()),
+            schedule_signal: Arc::new(Default::default()),
             broker_runtime_inner,
             running: AtomicBool::new(false),
+            next_deadline_millis: AtomicU64::new(NO_PENDING_DEADLINE),
             task_group: Mutex::new(None),
         }
     }
@@ -90,13 +97,10 @@ where
 
         if let Err(error) = task_group.spawn_service("broker.long-polling.pull-request-hold.scan", async move {
             loop {
-                let handle_future = if this.broker_config().long_polling_enable {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5))
-                } else {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(
-                        this.broker_config().short_polling_time_mills,
-                    ))
-                };
+                let service = this.pull_request_hold_service().unwrap();
+                let shutdown = Arc::clone(&service.shutdown);
+                let schedule_signal = Arc::clone(&service.schedule_signal);
+                let handle_future = tokio::time::sleep(service.next_scan_delay());
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
                         if let Some(service) = this.pull_request_hold_service() {
@@ -106,12 +110,15 @@ where
                         break;
                     }
                     _ = handle_future => {}
-                    _ = this.pull_request_hold_service().as_ref().unwrap().shutdown.notified() => {
+                    _ = shutdown.notified() => {
                         if let Some(service) = this.pull_request_hold_service() {
                             service.running.store(false, Ordering::Release);
                         }
                         info!("PullRequestHoldService: shutdown..........");
                         break;
+                    }
+                    _ = schedule_signal.notified() => {
+                        continue;
                     }
                 }
                 let instant = Instant::now();
@@ -154,7 +161,47 @@ where
         let mut table = self.pull_request_table.write();
         let mpr = table.entry(key).or_insert_with(ManyPullRequest::new);
         pull_request.request_command_mut().set_suspended_ref(true);
+        self.note_request_deadline(pull_request.deadline_millis());
         mpr.add_pull_request(pull_request);
+    }
+
+    fn note_request_deadline(&self, deadline_millis: u64) {
+        let mut current = self.next_deadline_millis.load(Ordering::Acquire);
+        while deadline_millis < current {
+            match self.next_deadline_millis.compare_exchange(
+                current,
+                deadline_millis,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    self.schedule_signal.notify_one();
+                    break;
+                }
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    fn rebuild_next_deadline(&self) {
+        let next_deadline = self
+            .pull_request_table
+            .read()
+            .values()
+            .filter_map(ManyPullRequest::min_deadline_millis)
+            .min()
+            .unwrap_or(NO_PENDING_DEADLINE);
+        self.next_deadline_millis.store(next_deadline, Ordering::Release);
+    }
+
+    fn next_scan_delay(&self) -> Duration {
+        let delay_millis = next_hold_scan_delay_millis(
+            self.next_deadline_millis.load(Ordering::Acquire),
+            current_millis(),
+            self.broker_runtime_inner.broker_config().long_polling_enable,
+            self.broker_runtime_inner.broker_config().short_polling_time_mills,
+        );
+        Duration::from_millis(delay_millis)
     }
 
     fn check_hold_request(&self) {
@@ -175,6 +222,7 @@ where
                 .get_max_offset_in_queue(&topic, queue_id);
             self.notify_message_arriving(&topic, queue_id, max_offset);
         }
+        self.rebuild_next_deadline();
     }
 
     pub fn notify_message_arriving(&self, topic: &CheetahString, queue_id: i32, max_offset: i64) {
@@ -193,6 +241,7 @@ where
     ) {
         let key = build_key(topic, queue_id);
         let mut table = self.pull_request_table.write();
+        let mut deadline_changed = false;
         if let Some(mpr) = table.get_mut(&key) {
             if let Some(request_list) = mpr.clone_list_and_clear() {
                 if request_list.is_empty() {
@@ -252,11 +301,18 @@ where
                 }
 
                 if !replay_list.is_empty() {
+                    if let Some(deadline) = replay_list.iter().map(PullRequest::deadline_millis).min() {
+                        self.note_request_deadline(deadline);
+                    }
                     let mut table = self.pull_request_table.write();
                     let mpr = table.entry(key).or_insert_with(ManyPullRequest::new);
                     mpr.add_pull_requests(replay_list);
                 }
+                deadline_changed = true;
             }
+        }
+        if deadline_changed {
+            self.rebuild_next_deadline();
         }
     }
 
@@ -279,11 +335,27 @@ where
                 }
             }
         }
+        self.rebuild_next_deadline();
     }
 }
 
 fn build_key(topic: &str, queue_id: i32) -> String {
     format!("{topic}{TOPIC_QUEUE_ID_SEPARATOR}{queue_id}")
+}
+
+fn next_hold_scan_delay_millis(
+    next_deadline_millis: u64,
+    now_millis: u64,
+    long_polling_enable: bool,
+    short_polling_time_mills: u64,
+) -> u64 {
+    if !long_polling_enable {
+        return short_polling_time_mills;
+    }
+    if next_deadline_millis == NO_PENDING_DEADLINE {
+        return LONG_POLLING_FALLBACK_SCAN_MILLIS;
+    }
+    next_deadline_millis.saturating_sub(now_millis)
 }
 
 #[cfg(test)]
@@ -316,5 +388,16 @@ mod tests {
 
         service.shutdown().await;
         assert!(!service.is_running());
+    }
+
+    #[test]
+    fn next_hold_scan_delay_uses_deadline_when_long_polling_is_enabled() {
+        assert_eq!(
+            next_hold_scan_delay_millis(NO_PENDING_DEADLINE, 1_000, true, 123),
+            5_000
+        );
+        assert_eq!(next_hold_scan_delay_millis(1_250, 1_000, true, 123), 250);
+        assert_eq!(next_hold_scan_delay_millis(900, 1_000, true, 123), 0);
+        assert_eq!(next_hold_scan_delay_millis(1_250, 1_000, false, 123), 123);
     }
 }
