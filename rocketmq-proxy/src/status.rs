@@ -14,6 +14,8 @@
 
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_client_rust::producer::send_status::SendStatus;
+use rocketmq_error::GrpcPayloadCode;
+use rocketmq_error::GrpcStatusCode;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use tonic::Code as TonicCode;
@@ -137,7 +139,23 @@ impl ProxyStatusMapper {
         }
 
         let payload = Self::from_error(error);
-        let tonic_code = match v2::Code::try_from(payload.code).unwrap_or(v2::Code::InternalError) {
+        let payload_code = v2::Code::try_from(payload.code).unwrap_or(v2::Code::InternalError);
+        let tonic_code = Self::tonic_code_for_error(error, payload_code);
+
+        TonicStatus::new(tonic_code, payload.message)
+    }
+
+    fn tonic_code_for_error(error: &ProxyError, payload_code: v2::Code) -> TonicCode {
+        match error {
+            ProxyError::RocketMQ(inner) if Self::rocketmq_payload_override(inner).is_none() => {
+                Self::grpc_status_to_tonic_code(inner.spec().grpc.status)
+            }
+            _ => Self::tonic_code_from_payload_code(payload_code),
+        }
+    }
+
+    fn tonic_code_from_payload_code(payload_code: v2::Code) -> TonicCode {
+        match payload_code {
             v2::Code::BadRequest
             | v2::Code::IllegalAccessPoint
             | v2::Code::IllegalTopic
@@ -166,57 +184,71 @@ impl ProxyStatusMapper {
             | v2::Code::ConsumerGroupNotFound
             | v2::Code::OffsetNotFound => TonicCode::NotFound,
             v2::Code::RequestTimeout | v2::Code::ProxyTimeout => TonicCode::DeadlineExceeded,
-            v2::Code::TooManyRequests | v2::Code::LiteTopicQuotaExceeded | v2::Code::LiteSubscriptionQuotaExceeded => {
-                TonicCode::ResourceExhausted
-            }
+            v2::Code::MessageBodyTooLarge
+            | v2::Code::TooManyRequests
+            | v2::Code::LiteTopicQuotaExceeded
+            | v2::Code::LiteSubscriptionQuotaExceeded => TonicCode::ResourceExhausted,
             v2::Code::NotImplemented
             | v2::Code::Unsupported
             | v2::Code::VersionUnsupported
             | v2::Code::VerifyFifoMessageUnsupported => TonicCode::Unimplemented,
             _ => TonicCode::Internal,
-        };
-
-        TonicStatus::new(tonic_code, payload.message)
+        }
     }
 
     fn from_rocketmq_error(error: &RocketMQError) -> v2::Code {
+        Self::rocketmq_payload_override(error).unwrap_or_else(|| Self::grpc_payload_to_code(error.spec().grpc.payload))
+    }
+
+    fn rocketmq_payload_override(error: &RocketMQError) -> Option<v2::Code> {
         match error {
-            RocketMQError::TopicNotExist { .. } | RocketMQError::RouteNotFound { .. } => v2::Code::TopicNotFound,
-            RocketMQError::SubscriptionGroupNotExist { .. } => v2::Code::ConsumerGroupNotFound,
-            RocketMQError::Authentication(_) => v2::Code::Unauthorized,
-            RocketMQError::BrokerPermissionDenied { .. } | RocketMQError::TopicSendingForbidden { .. } => {
-                v2::Code::Forbidden
-            }
-            RocketMQError::MessageTooLarge { .. } => v2::Code::MessageBodyTooLarge,
             RocketMQError::IllegalArgument(message) if is_topic_route_not_found_message(message) => {
-                v2::Code::TopicNotFound
+                Some(v2::Code::TopicNotFound)
             }
-            RocketMQError::IllegalArgument(_)
-            | RocketMQError::InvalidProperty(_)
-            | RocketMQError::ConfigParseFailed { .. }
-            | RocketMQError::ConfigMissing { .. }
-            | RocketMQError::ConfigInvalidValue { .. }
-            | RocketMQError::AuthConfigInvalid { .. }
-            | RocketMQError::RequestBodyInvalid { .. }
-            | RocketMQError::RequestHeaderError(_)
-            | RocketMQError::ResponseProcessFailed { .. }
-            | RocketMQError::MissingRequiredMessageProperty { .. } => v2::Code::BadRequest,
-            RocketMQError::BrokerNotFound { .. }
-            | RocketMQError::QueueNotExist { .. }
-            | RocketMQError::ClusterNotFound { .. } => v2::Code::NotFound,
             RocketMQError::BrokerOperationFailed { code, .. } => match ResponseCode::from(*code) {
-                ResponseCode::NoPermission => v2::Code::Forbidden,
-                ResponseCode::TopicNotExist => v2::Code::TopicNotFound,
-                ResponseCode::SubscriptionGroupNotExist => v2::Code::ConsumerGroupNotFound,
-                ResponseCode::UserNotExist | ResponseCode::PolicyNotExist => v2::Code::NotFound,
-                ResponseCode::QueryNotFound => v2::Code::OffsetNotFound,
-                ResponseCode::PullOffsetMoved => v2::Code::IllegalOffset,
-                ResponseCode::RequestCodeNotSupported => v2::Code::Unsupported,
-                _ => v2::Code::InternalError,
+                ResponseCode::NoPermission => Some(v2::Code::Forbidden),
+                ResponseCode::TopicNotExist => Some(v2::Code::TopicNotFound),
+                ResponseCode::SubscriptionGroupNotExist => Some(v2::Code::ConsumerGroupNotFound),
+                ResponseCode::UserNotExist | ResponseCode::PolicyNotExist => Some(v2::Code::NotFound),
+                ResponseCode::QueryNotFound => Some(v2::Code::OffsetNotFound),
+                ResponseCode::PullOffsetMoved => Some(v2::Code::IllegalOffset),
+                ResponseCode::RequestCodeNotSupported => Some(v2::Code::Unsupported),
+                _ => Some(v2::Code::InternalError),
             },
-            RocketMQError::Timeout { .. } => v2::Code::ProxyTimeout,
-            RocketMQError::Network(_) => v2::Code::RequestTimeout,
-            _ => v2::Code::InternalError,
+            _ => None,
+        }
+    }
+
+    fn grpc_payload_to_code(payload: GrpcPayloadCode) -> v2::Code {
+        match payload {
+            GrpcPayloadCode::InternalError => v2::Code::InternalError,
+            GrpcPayloadCode::BadRequest => v2::Code::BadRequest,
+            GrpcPayloadCode::Unauthorized => v2::Code::Unauthorized,
+            GrpcPayloadCode::Forbidden => v2::Code::Forbidden,
+            GrpcPayloadCode::NotFound => v2::Code::NotFound,
+            GrpcPayloadCode::TopicNotFound => v2::Code::TopicNotFound,
+            GrpcPayloadCode::ConsumerGroupNotFound => v2::Code::ConsumerGroupNotFound,
+            GrpcPayloadCode::MessageNotFound => v2::Code::MessageNotFound,
+            GrpcPayloadCode::MessageBodyTooLarge => v2::Code::MessageBodyTooLarge,
+            GrpcPayloadCode::RequestTimeout => v2::Code::RequestTimeout,
+            GrpcPayloadCode::ProxyTimeout => v2::Code::ProxyTimeout,
+            GrpcPayloadCode::TooManyRequests => v2::Code::TooManyRequests,
+            GrpcPayloadCode::Unsupported => v2::Code::Unsupported,
+        }
+    }
+
+    fn grpc_status_to_tonic_code(status: GrpcStatusCode) -> TonicCode {
+        match status {
+            GrpcStatusCode::InvalidArgument => TonicCode::InvalidArgument,
+            GrpcStatusCode::Unauthenticated => TonicCode::Unauthenticated,
+            GrpcStatusCode::PermissionDenied => TonicCode::PermissionDenied,
+            GrpcStatusCode::NotFound => TonicCode::NotFound,
+            GrpcStatusCode::DeadlineExceeded => TonicCode::DeadlineExceeded,
+            GrpcStatusCode::ResourceExhausted => TonicCode::ResourceExhausted,
+            GrpcStatusCode::FailedPrecondition => TonicCode::FailedPrecondition,
+            GrpcStatusCode::Unimplemented => TonicCode::Unimplemented,
+            GrpcStatusCode::Unavailable => TonicCode::Unavailable,
+            GrpcStatusCode::Internal => TonicCode::Internal,
         }
     }
 }
@@ -336,5 +368,30 @@ mod tests {
                 tonic::Code::InvalidArgument
             );
         }
+    }
+
+    #[test]
+    fn rocketmq_errors_use_central_grpc_boundary_spec() {
+        let retry_exhausted = ProxyError::RocketMQ(RocketMQError::RetryLimitExceeded {
+            group: "GID_test".to_owned(),
+            current: 3,
+            max: 3,
+        });
+        let retry_payload = ProxyStatusMapper::from_error(&retry_exhausted);
+        assert_eq!(retry_payload.code, v2::Code::TooManyRequests as i32);
+        assert_eq!(
+            ProxyStatusMapper::to_tonic_status(&retry_exhausted).code(),
+            tonic::Code::ResourceExhausted
+        );
+
+        let not_master = ProxyError::RocketMQ(RocketMQError::NotMasterBroker {
+            master_address: "127.0.0.1:10911".to_owned(),
+        });
+        let not_master_payload = ProxyStatusMapper::from_error(&not_master);
+        assert_eq!(not_master_payload.code, v2::Code::InternalError as i32);
+        assert_eq!(
+            ProxyStatusMapper::to_tonic_status(&not_master).code(),
+            tonic::Code::FailedPrecondition
+        );
     }
 }
