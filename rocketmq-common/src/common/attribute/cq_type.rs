@@ -15,8 +15,6 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::anyhow;
-
 #[derive(PartialEq, Default, Debug, Copy, Clone)]
 pub enum CQType {
     #[default]
@@ -35,15 +33,36 @@ impl fmt::Display for CQType {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseCQTypeError {
+    value: String,
+}
+
+impl ParseCQTypeError {
+    fn new(value: &str) -> Self {
+        Self {
+            value: value.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ParseCQTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Parse from string error,Invalid CQType: {}", self.value)
+    }
+}
+
+impl std::error::Error for ParseCQTypeError {}
+
 impl FromStr for CQType {
-    type Err = anyhow::Error;
+    type Err = ParseCQTypeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_uppercase().as_str() {
             "SIMPLECQ" => Ok(CQType::SimpleCQ),
             "BATCHCQ" => Ok(CQType::BatchCQ),
             "ROCKSDBCQ" => Ok(CQType::RocksDBCQ),
-            _ => Err(anyhow!("Parse from string error,Invalid CQType: {}", s)),
+            _ => Err(ParseCQTypeError::new(s)),
         }
     }
 }

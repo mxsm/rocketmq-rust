@@ -36,7 +36,6 @@ rocketmq-rust  = { workspace = true }
 rocketmq-error = { workspace = true, features = ["with_serde", "with_config"] }
 rocketmq-runtime = { workspace = true }
 
-anyhow.workspace = true
 tokio.workspace  = true
 
 tracing.workspace            = true
