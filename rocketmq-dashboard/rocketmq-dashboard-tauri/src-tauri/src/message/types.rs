@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_error::RocketMQError;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -23,7 +24,7 @@ pub(crate) type MessageResult<T> = Result<T, MessageError>;
 pub(crate) enum MessageError {
     Configuration(String),
     Validation(String),
-    RocketMQ(String),
+    RocketMQ(RocketMQError),
 }
 
 impl fmt::Display for MessageError {

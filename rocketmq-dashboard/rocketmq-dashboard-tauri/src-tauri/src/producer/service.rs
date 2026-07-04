@@ -174,7 +174,7 @@ impl ProducerManager {
         let connection = admin
             .examine_producer_connection_info(request.producer_group.clone().into(), request.topic.clone().into())
             .await
-            .map_err(|error| ProducerError::RocketMQ(error.to_string()))?;
+            .map_err(ProducerError::RocketMQ)?;
 
         Ok(build_connection_view(request, connection))
     }
@@ -184,10 +184,7 @@ impl ProducerManager {
         admin: &mut DefaultMQAdminExt,
         snapshot: &NameServerConfigSnapshot,
     ) -> ProducerResult<ProducerTopicOptionsView> {
-        let topic_list = admin
-            .fetch_all_topic_list()
-            .await
-            .map_err(|error| ProducerError::RocketMQ(error.to_string()))?;
+        let topic_list = admin.fetch_all_topic_list().await.map_err(ProducerError::RocketMQ)?;
         let mut topics: Vec<String> = topic_list.topic_list.iter().map(|topic| topic.to_string()).collect();
         topics.sort();
 

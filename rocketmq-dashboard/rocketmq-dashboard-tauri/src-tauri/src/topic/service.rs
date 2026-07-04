@@ -61,6 +61,7 @@ use rocketmq_dashboard_common::TopicConfigQueryRequest;
 use rocketmq_dashboard_common::TopicConfigRequest;
 use rocketmq_dashboard_common::TopicListRequest;
 use rocketmq_dashboard_common::TopicQueryRequest;
+use rocketmq_error::ErrorKind;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
@@ -499,7 +500,7 @@ impl TopicManager {
 
     fn should_reset_session<T>(result: &TopicResult<T>) -> bool {
         match result {
-            Err(TopicError::RocketMQ(message)) => is_reconnect_worthy_error(message),
+            Err(TopicError::RocketMQ(error)) => is_reconnect_worthy_error(error),
             _ => false,
         }
     }
@@ -510,14 +511,11 @@ impl TopicManager {
         snapshot: &NameServerConfigSnapshot,
         request: TopicListRequest,
     ) -> TopicResult<TopicListResponse> {
-        let topic_list = admin
-            .fetch_all_topic_list()
-            .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+        let topic_list = admin.fetch_all_topic_list().await.map_err(TopicError::RocketMQ)?;
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+            .map_err(TopicError::RocketMQ)?;
         let targets = cluster_targets_from_cluster_info(&cluster_info);
         let topic_configs = collect_topic_configs(admin, &cluster_info).await?;
 
@@ -538,7 +536,7 @@ impl TopicManager {
             let route = admin
                 .examine_topic_route_info(topic.clone().into())
                 .await
-                .map_err(|error| TopicError::RocketMQ(error.to_string()))?
+                .map_err(TopicError::RocketMQ)?
                 .unwrap_or_default();
             let (clusters, brokers, read_queue_count, write_queue_count, perm) = summarize_route(&route);
 
@@ -586,7 +584,7 @@ impl TopicManager {
         let request = StatsAllQueryRequest::new(false, None::<String>);
         let stats_result = StatsService::query_stats_all_with_admin(admin, &request)
             .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+            .map_err(TopicError::RocketMQ)?;
 
         Ok(TopicCurrentStatsResponse {
             items: build_topic_current_stats_items(stats_result.rows),
@@ -633,7 +631,7 @@ impl TopicManager {
                             master_addr,
                             error_message
                         );
-                        last_error = Some(error_message);
+                        last_error = Some(error);
                     }
                 }
             }
@@ -641,7 +639,10 @@ impl TopicManager {
 
         if successful_brokers == 0 {
             return Err(TopicError::RocketMQ(last_error.unwrap_or_else(|| {
-                format!("Topic `{}` has no reachable master broker.", request.topic)
+                RocketMQError::response_process_failed(
+                    "examine_topic_stats",
+                    format!("Topic `{}` has no reachable master broker.", request.topic),
+                )
             })));
         }
 
@@ -663,7 +664,7 @@ impl TopicManager {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+            .map_err(TopicError::RocketMQ)?;
         let route = require_topic_route(admin, &request.topic).await?;
         let broker_configs = collect_route_topic_configs(admin, &route, &request.topic).await?;
         let selected_config = match request.broker_name.as_deref() {
@@ -701,7 +702,7 @@ impl TopicManager {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+            .map_err(TopicError::RocketMQ)?;
         let mut target_addrs = HashSet::new();
         let mut target_broker_names = HashSet::new();
         for cluster_name in &request.cluster_name_list {
@@ -768,7 +769,7 @@ impl TopicManager {
             admin
                 .create_and_update_topic_config(broker_addr.clone(), topic_config.clone())
                 .await
-                .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+                .map_err(TopicError::RocketMQ)?;
         }
 
         if request.order {
@@ -776,7 +777,7 @@ impl TopicManager {
             admin
                 .create_or_update_order_conf(request.topic_name.clone().into(), order_conf.into(), true)
                 .await
-                .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+                .map_err(TopicError::RocketMQ)?;
         }
 
         Ok(TopicMutationResult {
@@ -822,7 +823,7 @@ impl TopicManager {
             admin
                 .delete_topic(topic.clone().into(), cluster_name.clone().into())
                 .await
-                .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+                .map_err(TopicError::RocketMQ)?;
         }
 
         Ok(TopicMutationResult {
@@ -851,7 +852,7 @@ impl TopicManager {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+            .map_err(TopicError::RocketMQ)?;
         let broker_addr = find_master_addr_by_broker_name(&cluster_info, &broker_name).ok_or_else(|| {
             TopicError::Validation(format!(
                 "Broker `{broker_name}` was not found in the current cluster view."
@@ -867,7 +868,7 @@ impl TopicManager {
         admin
             .delete_topic_in_broker(HashSet::from([broker_addr]), topic.clone().into())
             .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+            .map_err(TopicError::RocketMQ)?;
 
         Ok(TopicMutationResult {
             success: true,
@@ -885,7 +886,7 @@ impl TopicManager {
         let groups = admin
             .query_topic_consume_by_who(request.topic.clone().into())
             .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+            .map_err(TopicError::RocketMQ)?;
         let mut consumer_groups: Vec<String> = groups.group_list.into_iter().map(|group| group.to_string()).collect();
         consumer_groups.sort();
         Ok(TopicConsumerGroupListResponse {
@@ -918,7 +919,7 @@ impl TopicManager {
                     None,
                 )
                 .await
-                .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+                .map_err(TopicError::RocketMQ)?;
             items.push(TopicConsumerInfoView {
                 consumer_group,
                 total_diff: stats.compute_total_diff(),
@@ -981,10 +982,10 @@ impl TopicManager {
                                 request.force,
                             )
                             .await
-                            .map_err(|fallback_error| TopicError::RocketMQ(fallback_error.to_string()))?;
+                            .map_err(TopicError::RocketMQ)?;
                         affected_queues += rollback_stats.len();
                     }
-                    Err(error) => return Err(TopicError::RocketMQ(error.to_string())),
+                    Err(error) => return Err(TopicError::RocketMQ(error)),
                 }
             }
 
@@ -1059,19 +1060,20 @@ impl TopicManager {
             .client_config(client_config)
             .build();
 
-        producer
-            .start()
-            .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+        producer.start().await.map_err(TopicError::RocketMQ)?;
 
         let message = build_send_message(&request, &normalized_message_body);
         let send_result = producer
             .send_with_timeout(message, 5_000)
             .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()));
+            .map_err(TopicError::RocketMQ);
         producer.shutdown().await;
-        let send_result = send_result?
-            .ok_or_else(|| TopicError::RocketMQ("Broker acknowledged send without returning a result.".into()))?;
+        let send_result = send_result?.ok_or_else(|| {
+            TopicError::RocketMQ(RocketMQError::response_process_failed(
+                "send_message",
+                "Broker acknowledged send without returning a result.",
+            ))
+        })?;
 
         Ok(map_send_result(request.topic, send_result))
     }
@@ -1132,7 +1134,10 @@ async fn send_transaction_message_with_runtime(
             move || -> TopicResult<TopicSendMessageResult> {
                 let runtime = transaction_message_runtime()?;
                 let runtime = runtime.lock().map_err(|error| {
-                    TopicError::RocketMQ(format!("transaction message runtime lock poisoned: {error}"))
+                    TopicError::RocketMQ(RocketMQError::response_process_failed(
+                        "transaction_message_runtime",
+                        format!("transaction message runtime lock poisoned: {error}"),
+                    ))
                 })?;
 
                 runtime.block_on(async move {
@@ -1153,16 +1158,13 @@ async fn send_transaction_message_with_runtime(
                         .transaction_listener(DashboardTransactionListener)
                         .build();
 
-                    producer
-                        .start()
-                        .await
-                        .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+                    producer.start().await.map_err(TopicError::RocketMQ)?;
 
                     let message = build_send_message(&request, &normalized_message_body);
                     let tx_result = producer
                         .send_message_in_transaction::<(), _>(message, None)
                         .await
-                        .map_err(|error| TopicError::RocketMQ(error.to_string()));
+                        .map_err(TopicError::RocketMQ);
                     producer.shutdown().await;
                     let tx_result = tx_result?;
 
@@ -1171,14 +1173,22 @@ async fn send_transaction_message_with_runtime(
             },
         )
         .await
-        .map_err(|error| TopicError::RocketMQ(error.to_string()))?
+        .map_err(|error| {
+            TopicError::RocketMQ(RocketMQError::response_process_failed(
+                "dashboard-topic-transaction-send",
+                error.to_string(),
+            ))
+        })?
 }
 
 fn transaction_message_blocking_executor() -> TopicResult<BlockingExecutor> {
     let runtime = transaction_message_runtime()?;
-    let runtime = runtime
-        .lock()
-        .map_err(|error| TopicError::RocketMQ(format!("transaction message runtime lock poisoned: {error}")))?;
+    let runtime = runtime.lock().map_err(|error| {
+        TopicError::RocketMQ(RocketMQError::response_process_failed(
+            "transaction_message_runtime",
+            format!("transaction message runtime lock poisoned: {error}"),
+        ))
+    })?;
     Ok(runtime.context().blocking().clone())
 }
 
@@ -1200,7 +1210,12 @@ fn transaction_message_runtime() -> TopicResult<&'static StdMutex<RuntimeOwner>>
         },
         ..RuntimeConfig::default()
     })
-    .map_err(|error| TopicError::RocketMQ(format!("failed to start transaction message runtime: {error}")))?;
+    .map_err(|error| {
+        TopicError::RocketMQ(RocketMQError::response_process_failed(
+            "transaction_message_runtime",
+            format!("failed to start transaction message runtime: {error}"),
+        ))
+    })?;
 
     let _ = TRANSACTION_MESSAGE_RUNTIME.set(StdMutex::new(runtime));
     Ok(TRANSACTION_MESSAGE_RUNTIME
@@ -1247,7 +1262,10 @@ fn map_transaction_send_result(
     transaction_result: rocketmq_client_rust::producer::transaction_send_result::TransactionSendResult,
 ) -> TopicResult<TopicSendMessageResult> {
     let send_result = transaction_result.send_result.ok_or_else(|| {
-        TopicError::RocketMQ("Transaction producer completed without returning a send result.".into())
+        TopicError::RocketMQ(RocketMQError::response_process_failed(
+            "send_message_in_transaction",
+            "Transaction producer completed without returning a send result.",
+        ))
     })?;
     let mut result = map_send_result(topic, send_result);
     result.local_transaction_state = transaction_result
@@ -1290,7 +1308,7 @@ async fn require_topic_route(admin: &mut DefaultMQAdminExt, topic: &str) -> Topi
     admin
         .examine_topic_route_info(topic.to_string().into())
         .await
-        .map_err(|error| TopicError::RocketMQ(error.to_string()))?
+        .map_err(TopicError::RocketMQ)?
         .ok_or_else(|| TopicError::Validation(format!("Topic `{topic}` was not found.")))
 }
 
@@ -1350,7 +1368,7 @@ async fn collect_topic_configs(
         let wrapper: TopicConfigSerializeWrapper = admin
             .get_all_topic_config(broker_addr, 5_000)
             .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+            .map_err(TopicError::RocketMQ)?;
         if let Some(config_table) = wrapper.topic_config_table() {
             for (topic, config) in config_table {
                 topic_configs
@@ -1420,14 +1438,18 @@ fn master_targets_by_cluster_name(
     cluster_info: &ClusterInfo,
     cluster_name: &str,
 ) -> TopicResult<Vec<(String, CheetahString)>> {
-    let cluster_addr_table = cluster_info
-        .cluster_addr_table
-        .as_ref()
-        .ok_or_else(|| TopicError::RocketMQ("NameServer did not return cluster address data.".into()))?;
-    let broker_addr_table = cluster_info
-        .broker_addr_table
-        .as_ref()
-        .ok_or_else(|| TopicError::RocketMQ("NameServer did not return broker address data.".into()))?;
+    let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
+        TopicError::RocketMQ(RocketMQError::response_process_failed(
+            "examine_broker_cluster_info",
+            "NameServer did not return cluster address data.",
+        ))
+    })?;
+    let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
+        TopicError::RocketMQ(RocketMQError::response_process_failed(
+            "examine_broker_cluster_info",
+            "NameServer did not return broker address data.",
+        ))
+    })?;
     let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
         TopicError::Validation(format!(
             "Cluster `{cluster_name}` was not found in the current NameServer view."
@@ -1457,7 +1479,7 @@ async fn collect_route_topic_configs(
             let config = admin
                 .examine_topic_config(master_addr.clone(), topic.to_string().into())
                 .await
-                .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+                .map_err(TopicError::RocketMQ)?;
             snapshots.push(TopicBrokerConfigSnapshot {
                 broker_name: broker.broker_name().to_string(),
                 cluster_name: Some(broker.cluster().to_string()),
@@ -1732,7 +1754,11 @@ fn map_status_view(topic: &str, stats: &TopicStatsTable) -> TopicStatusView {
     }
 }
 
-fn is_reconnect_worthy_error(message: &str) -> bool {
+fn is_reconnect_worthy_error(error: &RocketMQError) -> bool {
+    matches!(error.kind(), ErrorKind::Network | ErrorKind::Timeout) || is_reconnect_worthy_message(&error.to_string())
+}
+
+fn is_reconnect_worthy_message(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
     [
         "connect",
@@ -1875,7 +1901,7 @@ mod tests {
     use super::classify_topic;
     use super::cluster_targets_from_cluster_info;
     use super::find_master_addr_by_broker_name;
-    use super::is_reconnect_worthy_error;
+    use super::is_reconnect_worthy_message;
     use super::map_send_result;
     use super::map_transaction_send_result;
     use super::master_targets_by_cluster_name;
@@ -2106,10 +2132,10 @@ mod tests {
 
     #[test]
     fn reconnect_error_detection_only_matches_transport_failures() {
-        assert!(is_reconnect_worthy_error("connection refused by broker"));
-        assert!(is_reconnect_worthy_error("request timeout while talking to namesrv"));
-        assert!(!is_reconnect_worthy_error("topic stats info not found"));
-        assert!(!is_reconnect_worthy_error("topic returned no queue offset data"));
+        assert!(is_reconnect_worthy_message("connection refused by broker"));
+        assert!(is_reconnect_worthy_message("request timeout while talking to namesrv"));
+        assert!(!is_reconnect_worthy_message("topic stats info not found"));
+        assert!(!is_reconnect_worthy_message("topic returned no queue offset data"));
     }
 
     #[test]

@@ -43,6 +43,8 @@ use rocketmq_dashboard_common::ConsumerGroupListRequest;
 use rocketmq_dashboard_common::ConsumerGroupRefreshRequest;
 use rocketmq_dashboard_common::ConsumerTopicDetailQueryRequest;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
+use rocketmq_error::ErrorKind;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -370,7 +372,7 @@ impl ConsumerManager {
 
     fn should_reset_session<T>(result: &ConsumerResult<T>) -> bool {
         match result {
-            Err(ConsumerError::RocketMQ(message)) => is_reconnect_worthy_error(message),
+            Err(ConsumerError::RocketMQ(error)) => is_reconnect_worthy_error(error),
             _ => false,
         }
     }
@@ -384,7 +386,7 @@ impl ConsumerManager {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+            .map_err(ConsumerError::RocketMQ)?;
         let group_map = collect_consumer_group_meta(admin, &cluster_info).await?;
         let address = normalize_address(request.address.as_deref());
 
@@ -415,7 +417,7 @@ impl ConsumerManager {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+            .map_err(ConsumerError::RocketMQ)?;
         let group_map = collect_consumer_group_meta(admin, &cluster_info).await?;
         let raw_group_name = strip_system_prefix(&request.consumer_group);
         let meta = group_map.get(raw_group_name.as_str()).ok_or_else(|| {
@@ -444,7 +446,7 @@ impl ConsumerManager {
         let connection = admin
             .examine_consumer_connection_info(raw_group_name.into(), first_address(request.address.as_deref()))
             .await
-            .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+            .map_err(ConsumerError::RocketMQ)?;
 
         Ok(build_consumer_connection_view(raw_group_name, connection))
     }
@@ -460,14 +462,14 @@ impl ConsumerManager {
             admin
                 .examine_consume_stats(raw_group_name.into(), None, None, None, None)
                 .await
-                .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?
+                .map_err(ConsumerError::RocketMQ)?
         } else {
             let mut merged_stats = ConsumeStats::new();
             for broker_addr in broker_addresses {
                 let stats = admin
                     .examine_consume_stats(raw_group_name.into(), None, None, Some(broker_addr), Some(3_000))
                     .await
-                    .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+                    .map_err(ConsumerError::RocketMQ)?;
                 merged_stats.consume_tps += stats.get_consume_tps();
                 merged_stats
                     .get_offset_table_mut()
@@ -494,7 +496,7 @@ impl ConsumerManager {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+            .map_err(ConsumerError::RocketMQ)?;
 
         let broker_address = match normalize_address(request.address.as_deref()) {
             Some(address) => address,
@@ -518,7 +520,7 @@ impl ConsumerManager {
         let config = admin
             .examine_subscription_group_config(broker_address.clone(), raw_group_name.into())
             .await
-            .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+            .map_err(ConsumerError::RocketMQ)?;
 
         let broker_name = resolve_broker_name_by_address(&cluster_info, broker_address.as_str()).unwrap_or_default();
 
@@ -539,7 +541,7 @@ impl ConsumerManager {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+            .map_err(ConsumerError::RocketMQ)?;
         let broker_names =
             resolve_consumer_target_broker_names(&cluster_info, &request.cluster_name_list, &request.broker_name_list)?;
 
@@ -567,7 +569,7 @@ impl ConsumerManager {
             admin
                 .create_and_update_subscription_group_config(broker_addr, config.clone())
                 .await
-                .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+                .map_err(ConsumerError::RocketMQ)?;
         }
 
         Ok(ConsumerMutationResult {
@@ -586,7 +588,7 @@ impl ConsumerManager {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+            .map_err(ConsumerError::RocketMQ)?;
         let group_map = collect_consumer_group_meta(admin, &cluster_info).await?;
         let meta = group_map.get(raw_group_name).ok_or_else(|| {
             ConsumerError::Validation(format!(
@@ -621,14 +623,14 @@ impl ConsumerManager {
             admin
                 .delete_subscription_group(broker_addr.clone(), raw_group_name.into(), Some(true))
                 .await
-                .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+                .map_err(ConsumerError::RocketMQ)?;
 
             for topic in consumer_internal_topics(raw_group_name) {
                 let broker_targets = HashSet::from([broker_addr.clone()]);
                 admin
                     .delete_topic_in_broker(broker_targets, topic.clone().into())
                     .await
-                    .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+                    .map_err(ConsumerError::RocketMQ)?;
 
                 if delete_in_namesrv {
                     let namesrv_targets: HashSet<CheetahString> =
@@ -636,7 +638,7 @@ impl ConsumerManager {
                     admin
                         .delete_topic_in_name_server(namesrv_targets, None, topic.into())
                         .await
-                        .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+                        .map_err(ConsumerError::RocketMQ)?;
                 }
             }
         }
@@ -663,13 +665,12 @@ async fn collect_consumer_group_meta(
                 wrapper
             }
             Err(error) => {
-                let message = error.to_string();
                 log::warn!(
                     "Failed to fetch subscription groups from broker `{}` while collecting consumer groups: {}",
                     broker_addr,
-                    message
+                    error
                 );
-                last_error = Some(message);
+                last_error = Some(error);
                 continue;
             }
         };
@@ -685,7 +686,10 @@ async fn collect_consumer_group_meta(
 
     if successful_brokers == 0 {
         return Err(ConsumerError::RocketMQ(last_error.unwrap_or_else(|| {
-            "No broker subscription metadata could be loaded.".to_string()
+            RocketMQError::response_process_failed(
+                "get_all_subscription_group",
+                "No broker subscription metadata could be loaded.",
+            )
         })));
     }
 
@@ -966,7 +970,11 @@ fn now_timestamp_millis() -> i64 {
         .unwrap_or_default()
 }
 
-fn is_reconnect_worthy_error(message: &str) -> bool {
+fn is_reconnect_worthy_error(error: &RocketMQError) -> bool {
+    matches!(error.kind(), ErrorKind::Network | ErrorKind::Timeout) || is_reconnect_worthy_message(&error.to_string())
+}
+
+fn is_reconnect_worthy_message(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
     [
         "connect",
@@ -1246,7 +1254,7 @@ mod tests {
     use super::build_consumer_topic_detail_view;
     use super::build_summary;
     use super::classify_consumer_group;
-    use super::is_reconnect_worthy_error;
+    use super::is_reconnect_worthy_message;
     use super::is_system_consumer_group;
     use super::resolve_broker_name_by_address;
     use super::resolve_first_consumer_broker_address;
@@ -1403,10 +1411,10 @@ mod tests {
 
     #[test]
     fn reconnect_error_detection_only_matches_transport_failures() {
-        assert!(is_reconnect_worthy_error("connection refused by broker"));
-        assert!(is_reconnect_worthy_error("request timeout while talking to namesrv"));
-        assert!(!is_reconnect_worthy_error("consumer group not found"));
-        assert!(!is_reconnect_worthy_error("subscription group metadata is empty"));
+        assert!(is_reconnect_worthy_message("connection refused by broker"));
+        assert!(is_reconnect_worthy_message("request timeout while talking to namesrv"));
+        assert!(!is_reconnect_worthy_message("consumer group not found"));
+        assert!(!is_reconnect_worthy_message("subscription group metadata is empty"));
     }
 
     #[test]

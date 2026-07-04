@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_error::RocketMQError;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt;
@@ -22,7 +23,7 @@ pub(crate) type ProducerResult<T> = Result<T, ProducerError>;
 pub(crate) enum ProducerError {
     Configuration(String),
     Validation(String),
-    RocketMQ(String),
+    RocketMQ(RocketMQError),
 }
 
 impl fmt::Display for ProducerError {

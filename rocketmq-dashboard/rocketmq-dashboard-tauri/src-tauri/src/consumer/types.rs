@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_error::RocketMQError;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt;
@@ -22,7 +23,7 @@ pub(crate) type ConsumerResult<T> = Result<T, ConsumerError>;
 pub(crate) enum ConsumerError {
     Configuration(String),
     Validation(String),
-    RocketMQ(String),
+    RocketMQ(RocketMQError),
 }
 
 impl fmt::Display for ConsumerError {

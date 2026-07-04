@@ -206,7 +206,7 @@ impl ClusterManager {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| ClusterError::RocketMQ(error.to_string()))?;
+            .map_err(ClusterError::RocketMQ)?;
         let items = build_cluster_items(admin, &cluster_info).await;
         let mut clusters: Vec<String> = cluster_info
             .cluster_addr_table
@@ -248,7 +248,7 @@ impl ClusterManager {
         let properties = admin
             .get_broker_config(CheetahString::from(broker_addr))
             .await
-            .map_err(|error| ClusterError::RocketMQ(error.to_string()))?;
+            .map_err(ClusterError::RocketMQ)?;
 
         Ok(ClusterBrokerConfigView {
             broker_addr: broker_addr.to_string(),
@@ -272,7 +272,7 @@ impl ClusterManager {
         let kv_table = admin
             .fetch_broker_runtime_stats(CheetahString::from(broker_addr))
             .await
-            .map_err(|error| ClusterError::RocketMQ(error.to_string()))?;
+            .map_err(ClusterError::RocketMQ)?;
 
         Ok(ClusterBrokerStatusView {
             broker_addr: broker_addr.to_string(),
