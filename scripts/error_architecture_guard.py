@@ -47,6 +47,24 @@ INTERNAL_ERROR_ALLOWLIST = (
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/",
 )
 
+ANYHOW_RESULT_ALLOWLIST: dict[str, str] = {
+    "rocketmq/src/schedule.rs": "internal scheduler futures use anyhow at the outer async worker boundary",
+    "rocketmq-broker/src/broker_runtime.rs": "broker runtime stores scheduled worker handles and placeholders",
+    "rocketmq-dashboard/rocketmq-dashboard-gpui/build.rs": "build script boundary",
+    "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/nameserver/db.rs": "standalone Tauri boundary pending dashboard alignment",
+    "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/nameserver/runtime.rs": "standalone Tauri boundary pending dashboard alignment",
+    "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/nameserver/service.rs": "standalone Tauri boundary pending dashboard alignment",
+    "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/proxy/db.rs": "standalone Tauri boundary pending dashboard alignment",
+    "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/proxy/service.rs": "standalone Tauri boundary pending dashboard alignment",
+    "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/lib.rs": "web backend process boundary",
+    "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/main.rs": "web backend process boundary",
+    "rocketmq-remoting/src/remoting_server/rocketmq_tokio_server.rs": "internal remoting accept-loop worker boundary",
+    "rocketmq-store/src/ha/default_ha_client.rs": "internal HA replication worker boundary",
+    "rocketmq-store/src/stats/broker_stats_manager.rs": "internal scheduled worker handle boundary",
+    "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs": "TUI process boundary",
+    "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/rocketmq_tui_app.rs": "TUI terminal runtime boundary",
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class Finding:
@@ -72,6 +90,10 @@ def rust_files_under(*parts: str) -> list[Path]:
 
 def rust_files() -> list[Path]:
     return sorted(path for path in ROOT.rglob(f"*{RUST_SUFFIX}") if "target" not in path.parts)
+
+
+def rel_path(path: Path) -> str:
+    return path.relative_to(ROOT).as_posix()
 
 
 def is_test_context(path: Path, line_number: int) -> bool:
@@ -102,6 +124,18 @@ def is_test_context(path: Path, line_number: int) -> bool:
         if test_module_depth is not None and depth < test_module_depth:
             test_module_depth = None
     return False
+
+
+def is_anyhow_result_allowlisted(path: Path) -> bool:
+    rel = rel_path(path)
+    rel_parts = path.relative_to(ROOT).parts
+    if "examples" in rel_parts or "tests" in rel_parts or "benches" in rel_parts:
+        return True
+    if "src" in rel_parts and "bin" in rel_parts:
+        return True
+    if path.name == "build.rs":
+        return True
+    return rel in ANYHOW_RESULT_ALLOWLIST
 
 
 def scan_forbidden_terms(paths: Iterable[Path], forbidden: dict[str, str]) -> list[Finding]:
@@ -247,6 +281,27 @@ def check_internal_error_allowlist() -> list[Finding]:
     return findings
 
 
+def check_anyhow_result_allowlist() -> list[Finding]:
+    findings: list[Finding] = []
+    forbidden_terms = ("anyhow::Result", "anyhow::Error", "use anyhow::Result")
+    for path in rust_files():
+        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+            stripped = line.strip()
+            if not any(term in line for term in forbidden_terms):
+                continue
+            if stripped.startswith("//") or stripped.startswith("///") or is_test_context(path, line_number):
+                continue
+            if not is_anyhow_result_allowlisted(path):
+                findings.append(
+                    Finding(
+                        path,
+                        line_number,
+                        "anyhow Result/Error requires a typed result or an anyhow allowlist entry",
+                    )
+                )
+    return findings
+
+
 def check_redaction_guards() -> list[Finding]:
     required_tokens = {
         ROOT / "rocketmq-error" / "src" / "context.rs": [
@@ -300,6 +355,7 @@ def run() -> int:
         ("required mapping adapters", check_required_mapping_adapters),
         ("error spec contract", check_error_spec_contract),
         ("internal error allowlist", check_internal_error_allowlist),
+        ("anyhow result allowlist", check_anyhow_result_allowlist),
         ("redaction guards", check_redaction_guards),
     ]
     all_findings: list[Finding] = []

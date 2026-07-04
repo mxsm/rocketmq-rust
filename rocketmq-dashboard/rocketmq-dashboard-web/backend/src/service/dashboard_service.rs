@@ -66,12 +66,14 @@ struct DashboardTaskManagerInner {
 }
 
 impl DashboardTaskManager {
-    pub fn spawn<F>(&self, task_name: &'static str, task: F) -> anyhow::Result<()>
+    pub fn spawn<F>(&self, task_name: &'static str, task: F) -> Result<(), DashboardError>
     where
         F: Future<Output = ()> + Send + 'static,
     {
         let mut abort_handles = self.inner.abort_handles.lock().map_err(|error| {
-            anyhow::anyhow!("dashboard task manager lock poisoned while spawning {task_name}: {error}")
+            DashboardError::Internal(format!(
+                "dashboard task manager lock poisoned while spawning {task_name}: {error}"
+            ))
         })?;
         let handle = tokio::task::spawn(async move {
             tracing::debug!(task = task_name, "Dashboard background task started");
@@ -190,7 +192,7 @@ pub fn spawn_dashboard_history_collector(
     admin_facade: WebAdminFacade,
     history_store: DashboardHistoryStore,
     interval_secs: u64,
-) -> anyhow::Result<()> {
+) -> Result<(), DashboardError> {
     task_manager.spawn("dashboard-history-collector", async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs.max(1)));
         loop {

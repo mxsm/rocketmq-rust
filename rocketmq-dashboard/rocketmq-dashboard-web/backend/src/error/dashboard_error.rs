@@ -15,6 +15,7 @@ use crate::model::ApiResponse;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use rocketmq_dashboard_common::DashboardCommonError;
 use rocketmq_error::RocketMQError;
 use thiserror::Error;
 
@@ -34,6 +35,18 @@ pub enum DashboardError {
     NotImplemented(String),
     #[error("{0}")]
     Internal(String),
+}
+
+impl From<DashboardCommonError> for DashboardError {
+    fn from(error: DashboardCommonError) -> Self {
+        match error {
+            DashboardCommonError::Validation(message) | DashboardCommonError::ParseInt { message, .. } => {
+                Self::Validation(message)
+            }
+            DashboardCommonError::Store(message) => Self::Config(message),
+            DashboardCommonError::Runtime(message) => Self::Internal(message),
+        }
+    }
 }
 
 impl DashboardError {

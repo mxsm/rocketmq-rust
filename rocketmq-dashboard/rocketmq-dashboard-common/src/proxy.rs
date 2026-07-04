@@ -14,10 +14,8 @@
 
 //! Shared Proxy-domain models for dashboard implementations.
 
-use anyhow::anyhow;
-use anyhow::bail;
-use anyhow::Context;
-use anyhow::Result;
+use crate::error::DashboardCommonError;
+use crate::error::DashboardCommonResult as Result;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -46,18 +44,20 @@ pub fn normalize_proxy_address(address: &str) -> Result<String> {
     let trimmed = address.trim();
     let (host_part, port_part) = trimmed
         .rsplit_once(':')
-        .ok_or_else(|| anyhow!("Proxy address must be in host:port format"))?;
+        .ok_or_else(|| DashboardCommonError::validation("Proxy address must be in host:port format"))?;
 
     let host = host_part.trim().to_ascii_lowercase();
     if host.is_empty() {
-        bail!("Proxy host cannot be empty");
+        return Err(DashboardCommonError::validation("Proxy host cannot be empty"));
     }
     if host.chars().any(char::is_whitespace) {
-        bail!("Proxy host cannot contain whitespace");
+        return Err(DashboardCommonError::validation("Proxy host cannot contain whitespace"));
     }
 
     let port = port_part.trim();
-    let port_number: u16 = port.parse().with_context(|| format!("Invalid Proxy port `{port}`"))?;
+    let port_number: u16 = port
+        .parse()
+        .map_err(|error| DashboardCommonError::parse_int(format!("Invalid Proxy port `{port}`"), error))?;
 
     Ok(format!("{host}:{port_number}"))
 }
@@ -69,7 +69,7 @@ pub fn canonicalize_proxy_snapshot(snapshot: &ProxyConfigSnapshot) -> Result<Pro
     for address in &snapshot.proxy_addr_list {
         let normalized = normalize_proxy_address(address)?;
         if !seen.insert(normalized.clone()) {
-            bail!("Proxy address already exists");
+            return Err(DashboardCommonError::validation("Proxy address already exists"));
         }
         addresses.push(normalized);
     }
@@ -82,7 +82,9 @@ pub fn canonicalize_proxy_snapshot(snapshot: &ProxyConfigSnapshot) -> Result<Pro
 
     if let Some(current) = &current_proxy_addr {
         if !addresses.iter().any(|address| address == current) {
-            bail!("Current Proxy must exist in the address list");
+            return Err(DashboardCommonError::validation(
+                "Current Proxy must exist in the address list",
+            ));
         }
     }
 

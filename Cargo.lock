@@ -4269,10 +4269,10 @@ dependencies = [
 name = "rocketmq-dashboard-common"
 version = "1.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
 ]
 

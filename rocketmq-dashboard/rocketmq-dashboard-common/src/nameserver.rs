@@ -14,10 +14,8 @@
 
 //! Shared NameServer configuration domain for RocketMQ dashboard frontends.
 
-use anyhow::anyhow;
-use anyhow::bail;
-use anyhow::Context;
-use anyhow::Result;
+use crate::error::DashboardCommonError;
+use crate::error::DashboardCommonResult as Result;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -107,7 +105,7 @@ where
                 .iter()
                 .any(|item| item == &normalized_address)
             {
-                bail!("NameServer address not found");
+                return Err(DashboardCommonError::validation("NameServer address not found"));
             }
 
             snapshot.current_namesrv = Some(normalized_address.clone());
@@ -123,7 +121,7 @@ where
                 .iter()
                 .any(|item| item == &normalized_address)
             {
-                bail!("NameServer address already exists");
+                return Err(DashboardCommonError::validation("NameServer address already exists"));
             }
 
             snapshot.namesrv_addr_list.push(normalized_address.clone());
@@ -135,14 +133,14 @@ where
         let normalized_address = normalize_nameserver_address(address)?;
         self.mutate_snapshot("NameServer removed", move |snapshot| {
             if snapshot.current_namesrv.as_deref() == Some(normalized_address.as_str()) {
-                bail!("Cannot delete the active NameServer");
+                return Err(DashboardCommonError::validation("Cannot delete the active NameServer"));
             }
 
             let original_len = snapshot.namesrv_addr_list.len();
             snapshot.namesrv_addr_list.retain(|item| item != &normalized_address);
 
             if snapshot.namesrv_addr_list.len() == original_len {
-                bail!("NameServer address not found");
+                return Err(DashboardCommonError::validation("NameServer address not found"));
             }
 
             Ok(())
@@ -189,17 +187,17 @@ pub fn normalize_nameserver_address(address: &str) -> Result<String> {
     let trimmed = address.trim();
     let (host_part, port_part) = trimmed
         .rsplit_once(':')
-        .ok_or_else(|| anyhow!("NameServer address must be in host:port format"))?;
+        .ok_or_else(|| DashboardCommonError::validation("NameServer address must be in host:port format"))?;
 
     let host = host_part.trim().to_ascii_lowercase();
     if host.is_empty() {
-        bail!("NameServer host cannot be empty");
+        return Err(DashboardCommonError::validation("NameServer host cannot be empty"));
     }
 
     let port = port_part.trim();
     let port_number: u16 = port
         .parse()
-        .with_context(|| format!("Invalid NameServer port `{port}`"))?;
+        .map_err(|error| DashboardCommonError::parse_int(format!("Invalid NameServer port `{port}`"), error))?;
 
     Ok(format!("{host}:{port_number}"))
 }
@@ -211,7 +209,7 @@ pub fn canonicalize_snapshot(snapshot: &NameServerConfigSnapshot) -> Result<Name
     for address in &snapshot.namesrv_addr_list {
         let normalized = normalize_nameserver_address(address)?;
         if !seen.insert(normalized.clone()) {
-            bail!("NameServer address already exists");
+            return Err(DashboardCommonError::validation("NameServer address already exists"));
         }
         addresses.push(normalized);
     }
@@ -224,7 +222,9 @@ pub fn canonicalize_snapshot(snapshot: &NameServerConfigSnapshot) -> Result<Name
 
     if let Some(current) = &current_namesrv {
         if !addresses.iter().any(|address| address == current) {
-            bail!("Current NameServer must exist in the address list");
+            return Err(DashboardCommonError::validation(
+                "Current NameServer must exist in the address list",
+            ));
         }
     }
 
@@ -238,6 +238,9 @@ pub fn canonicalize_snapshot(snapshot: &NameServerConfigSnapshot) -> Result<Name
 
 #[cfg(test)]
 mod tests {
+    use crate::DashboardCommonError;
+    use crate::DashboardCommonResult;
+
     use super::NameServerConfigSnapshot;
     use super::NameServerConfigStore;
     use super::NameServerConfigTransaction;
@@ -264,18 +267,18 @@ mod tests {
     }
 
     impl NameServerConfigTransaction for MemoryTransaction {
-        fn load_snapshot(&mut self) -> anyhow::Result<NameServerConfigSnapshot> {
+        fn load_snapshot(&mut self) -> DashboardCommonResult<NameServerConfigSnapshot> {
             Ok(self.snapshot.clone())
         }
 
-        fn save_snapshot(&mut self, snapshot: &NameServerConfigSnapshot) -> anyhow::Result<()> {
+        fn save_snapshot(&mut self, snapshot: &NameServerConfigSnapshot) -> DashboardCommonResult<()> {
             self.snapshot = snapshot.clone();
             Ok(())
         }
     }
 
     impl NameServerConfigStore for MemoryStore {
-        fn load_snapshot(&self) -> anyhow::Result<NameServerConfigSnapshot> {
+        fn load_snapshot(&self) -> DashboardCommonResult<NameServerConfigSnapshot> {
             Ok(self
                 .snapshot
                 .lock()
@@ -283,9 +286,9 @@ mod tests {
                 .clone())
         }
 
-        fn run_in_transaction<T, F>(&self, operation: F) -> anyhow::Result<T>
+        fn run_in_transaction<T, F>(&self, operation: F) -> DashboardCommonResult<T>
         where
-            F: FnOnce(&mut dyn NameServerConfigTransaction) -> anyhow::Result<T>,
+            F: FnOnce(&mut dyn NameServerConfigTransaction) -> DashboardCommonResult<T>,
         {
             let mut transaction = MemoryTransaction {
                 snapshot: self.load_snapshot()?,
@@ -321,9 +324,9 @@ mod tests {
     }
 
     impl NameServerRuntimeAdapter for RuntimeSpy {
-        fn apply_snapshot(&self, snapshot: &NameServerConfigSnapshot) -> anyhow::Result<()> {
+        fn apply_snapshot(&self, snapshot: &NameServerConfigSnapshot) -> DashboardCommonResult<()> {
             if *self.fail_apply.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) {
-                anyhow::bail!("runtime apply failed");
+                return Err(DashboardCommonError::runtime("runtime apply failed"));
             }
 
             self.applied_snapshots

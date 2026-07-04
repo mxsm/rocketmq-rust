@@ -22,10 +22,12 @@ use crate::rocketmq_serializable::RocketMQSerializable;
 pub trait CommandCustomHeader: AsAny {
     /// Checks the fields of the implementing type.  
     ///  
-    /// Returns a `Result` indicating whether the fields are valid or not.  
-    /// If the fields are valid, the `Ok` variant is returned with an empty `()` value.  
-    /// If the fields are invalid, an `Err` variant is returned with an associated `Error` value.  
-    fn check_fields(&self) -> anyhow::Result<(), anyhow::Error> {
+    /// Returns a typed result indicating whether the fields are valid.
+    ///
+    /// If the fields are valid, the `Ok` variant is returned with an empty `()` value.
+    /// If the fields are invalid, an error with a stable [`rocketmq_error::ErrorKind`]
+    /// is returned.
+    fn check_fields(&self) -> rocketmq_error::RocketMQResult<()> {
         Ok(())
     }
 
