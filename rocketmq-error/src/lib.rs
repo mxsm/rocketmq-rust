@@ -130,16 +130,12 @@ use std::io;
 
 use thiserror::Error;
 
-// Legacy type aliases (deprecated - use RocketMQResult and Result from unified module)
+// Legacy type alias (deprecated - use RocketMQResult from unified module)
 // Kept for backward compatibility with existing code
 #[deprecated(since = "0.7.0", note = "Use unified::RocketMQResult instead")]
 pub type LegacyRocketMQResult<T> = std::result::Result<T, RocketmqError>;
 
-#[deprecated(since = "0.7.0", note = "Use unified::Result instead")]
-pub type LegacyResult<T> = anyhow::Result<T>;
-
 // Re-export unified result types as the primary API
-pub use unified::Result;
 pub use unified::RocketMQResult;
 // Import ServiceError for use in legacy RocketmqError enum
 use unified::ServiceError;

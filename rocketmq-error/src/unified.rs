@@ -860,12 +860,6 @@ pub enum ServiceError {
 /// ```
 pub type RocketMQResult<T> = std::result::Result<T, RocketMQError>;
 
-/// Alias for anyhow::Result for internal use
-///
-/// Use this for internal error handling where you don't need
-/// to expose specific error types to the public API.
-pub type Result<T> = anyhow::Result<T>;
-
 #[cfg(test)]
 mod tests {
     use super::*;
