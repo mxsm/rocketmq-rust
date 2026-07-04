@@ -32,7 +32,7 @@ pub type AdminFuture<'a, T, E> = Pin<Box<dyn Future<Output = AdminResult<T, E>> 
 pub enum AdminErrorCode {
     ValidationError,
     ConfigError,
-    RocketmqError,
+    RocketMqError,
     NotFound,
     NotImplemented,
     InternalError,
@@ -300,6 +300,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::AdminErrorCode;
     use super::AdminList;
     use super::DashboardAdminFacade;
     use super::DashboardAdminProvider;
@@ -470,5 +471,12 @@ mod tests {
 
         let route = facade.topic_route("TopicTest").await.expect("topic route");
         assert_eq!(route, "TopicTest-route");
+    }
+
+    #[test]
+    fn admin_error_code_uses_typed_rocket_mq_name() {
+        let serialized = serde_json::to_string(&AdminErrorCode::RocketMqError).expect("serialize error code");
+
+        assert_eq!(serialized, "\"ROCKET_MQ_ERROR\"");
     }
 }

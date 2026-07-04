@@ -36,7 +36,7 @@ fn remoting_boundary_files_do_not_use_legacy_error_enum() {
     ];
 
     for source in files {
-        assert!(!source.contains("RocketmqError"));
+        assert!(!source.contains(concat!("Rocket", "mqError")));
         assert!(!source.contains("DecodingError"));
         assert!(!source.contains("FromStrErr"));
         assert!(!source.contains("IllegalArgumentError"));
