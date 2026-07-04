@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::boundary::CliSpec;
+use crate::boundary::GrpcSpec;
+use crate::boundary::HttpSpec;
+use crate::boundary::RemotingSpec;
 use crate::kind::ErrorCode;
 use crate::kind::ErrorKind;
 use crate::kind::ErrorScope;
@@ -27,6 +31,10 @@ pub struct ErrorSpec {
     pub code: ErrorCode,
     pub scope: ErrorScope,
     pub public_message: &'static str,
+    pub remoting: RemotingSpec,
+    pub grpc: GrpcSpec,
+    pub http: HttpSpec,
+    pub cli: CliSpec,
 }
 
 impl ErrorSpec {
@@ -37,6 +45,10 @@ impl ErrorSpec {
             code: kind.code(),
             scope: kind.scope(),
             public_message,
+            remoting: RemotingSpec::for_kind(kind),
+            grpc: GrpcSpec::for_kind(kind),
+            http: HttpSpec::for_kind(kind),
+            cli: CliSpec::for_kind(kind),
         }
     }
 }
