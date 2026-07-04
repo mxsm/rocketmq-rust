@@ -14,6 +14,8 @@
 
 use std::fmt;
 
+use crate::kind::ErrorKind;
+
 pub const REDACTED: &str = "<redacted>";
 
 /// Wrapper for values that must never be formatted directly.
@@ -63,6 +65,64 @@ impl<T> fmt::Debug for Sensitive<T> {
 pub enum RedactionKind {
     Public,
     Sensitive,
+}
+
+/// Spec-level redaction policy for external error surfaces.
+///
+/// `Public` means the stable public message and explicitly public context fields
+/// are safe for API/CLI/log surfaces. `RedactSensitive` means external adapters
+/// must prefer `ErrorSpec::public_message` and redaction-aware context over raw
+/// `Display` or `Debug` output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RedactionPolicy {
+    Public,
+    RedactSensitive,
+}
+
+impl RedactionPolicy {
+    /// Return the default external-surface redaction policy for an error kind.
+    #[inline]
+    pub const fn for_kind(kind: ErrorKind) -> Self {
+        match kind {
+            ErrorKind::Network
+            | ErrorKind::Serialization
+            | ErrorKind::Protocol
+            | ErrorKind::Rpc
+            | ErrorKind::Authentication
+            | ErrorKind::BrokerRegistrationFailed
+            | ErrorKind::BrokerOperationFailed
+            | ErrorKind::MessageValidationFailed
+            | ErrorKind::BrokerPermissionDenied
+            | ErrorKind::NotMasterBroker
+            | ErrorKind::TopicSendingForbidden
+            | ErrorKind::BrokerAsyncTaskFailed
+            | ErrorKind::RequestBodyInvalid
+            | ErrorKind::RequestHeaderError
+            | ErrorKind::ResponseProcessFailed
+            | ErrorKind::Filter
+            | ErrorKind::StorageReadFailed
+            | ErrorKind::StorageWriteFailed
+            | ErrorKind::StorageCorrupted
+            | ErrorKind::StorageOutOfSpace
+            | ErrorKind::StorageLockFailed
+            | ErrorKind::ConfigParseFailed
+            | ErrorKind::ConfigMissing
+            | ErrorKind::ConfigInvalidValue
+            | ErrorKind::AuthConfigInvalid
+            | ErrorKind::AuthHotReloadFailed
+            | ErrorKind::Controller
+            | ErrorKind::ControllerRaftError
+            | ErrorKind::ControllerConsensusTimeout
+            | ErrorKind::ControllerSnapshotFailed
+            | ErrorKind::Io
+            | ErrorKind::IllegalArgument
+            | ErrorKind::Internal
+            | ErrorKind::Service
+            | ErrorKind::NotInitialized
+            | ErrorKind::Tools => Self::RedactSensitive,
+            _ => Self::Public,
+        }
+    }
 }
 
 /// One structured error context field.

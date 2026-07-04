@@ -29,6 +29,24 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parents[1]
 RUST_SUFFIX = ".rs"
 
+INTERNAL_ERROR_ALLOWLIST = (
+    "rocketmq-auth/src/authorization/provider.rs",
+    "rocketmq-broker/src/",
+    "rocketmq-client/src/",
+    "rocketmq-common/src/common/controller/controller_config.rs",
+    "rocketmq-controller/src/",
+    "rocketmq-namesrv/src/",
+    "rocketmq-proxy/src/",
+    "rocketmq-remoting/src/",
+    "rocketmq-remoting/src/protocol/body/consumer_running_info.rs",
+    "rocketmq-remoting/src/protocol/static_topic/",
+    "rocketmq-tieredstore/src/",
+    "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/",
+    "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/admin/",
+    "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/",
+    "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/",
+)
+
 
 @dataclasses.dataclass(frozen=True)
 class Finding:
@@ -50,6 +68,10 @@ def rust_files_under(*parts: str) -> list[Path]:
     if not root.exists():
         return []
     return sorted(path for path in root.rglob(f"*{RUST_SUFFIX}") if "target" not in path.parts)
+
+
+def rust_files() -> list[Path]:
+    return sorted(path for path in ROOT.rglob(f"*{RUST_SUFFIX}") if "target" not in path.parts)
 
 
 def is_test_context(path: Path, line_number: int) -> bool:
@@ -164,6 +186,67 @@ def check_required_mapping_adapters() -> list[Finding]:
     return findings
 
 
+def check_error_spec_contract() -> list[Finding]:
+    required_tokens = {
+        ROOT / "rocketmq-error" / "src" / "kind.rs": [
+            "pub enum ErrorCategory",
+            "pub const fn category(self) -> ErrorCategory",
+        ],
+        ROOT / "rocketmq-error" / "src" / "context.rs": [
+            "pub enum RedactionPolicy",
+            "pub const fn for_kind(kind: ErrorKind) -> Self",
+        ],
+        ROOT / "rocketmq-error" / "src" / "spec.rs": [
+            "pub category: ErrorCategory",
+            "pub redact: RedactionPolicy",
+            "category: kind.category()",
+            "redact: RedactionPolicy::for_kind(kind)",
+        ],
+        ROOT / "rocketmq-error" / "tests" / "error_spec_registry.rs": [
+            "assert_eq!(spec.category, spec.kind.category())",
+            "assert_eq!(spec.redact, RedactionPolicy::for_kind(spec.kind))",
+        ],
+        ROOT / "rocketmq-error" / "tests" / "error_context_redaction.rs": [
+            "rocketmq_error_exposes_public_message_and_redacted_context",
+            "internal_error=<redacted>",
+        ],
+    }
+    findings: list[Finding] = []
+    for path, needles in required_tokens.items():
+        if not path.exists():
+            findings.append(Finding(path, 1, "required error spec contract file is missing"))
+            continue
+        text = read_text(path)
+        for needle in needles:
+            if needle not in text:
+                findings.append(Finding(path, 1, f"required error spec contract token missing: {needle}"))
+    return findings
+
+
+def is_internal_error_allowlisted(path: Path) -> bool:
+    rel = path.relative_to(ROOT).as_posix()
+    return any(rel == prefix or rel.startswith(prefix) for prefix in INTERNAL_ERROR_ALLOWLIST)
+
+
+def check_internal_error_allowlist() -> list[Finding]:
+    findings: list[Finding] = []
+    for path in rust_files():
+        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+            if "RocketMQError::Internal(" not in line:
+                continue
+            if is_test_context(path, line_number):
+                continue
+            if not is_internal_error_allowlisted(path):
+                findings.append(
+                    Finding(
+                        path,
+                        line_number,
+                        "RocketMQError::Internal requires a typed variant or an internal-error allowlist entry",
+                    )
+                )
+    return findings
+
+
 def check_redaction_guards() -> list[Finding]:
     required_tokens = {
         ROOT / "rocketmq-error" / "src" / "context.rs": [
@@ -215,6 +298,8 @@ def run() -> int:
         ("core public surface", check_error_and_common_public_surface),
         ("processor boundary mappings", check_processor_boundary_mappings),
         ("required mapping adapters", check_required_mapping_adapters),
+        ("error spec contract", check_error_spec_contract),
+        ("internal error allowlist", check_internal_error_allowlist),
         ("redaction guards", check_redaction_guards),
     ]
     all_findings: list[Finding] = []

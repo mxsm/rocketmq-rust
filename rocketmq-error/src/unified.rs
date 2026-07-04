@@ -29,6 +29,8 @@ use std::io;
 // Re-export filter error
 pub use crate::filter_error::FilterError;
 
+use crate::context::ErrorContext;
+use crate::context::Sensitive;
 use crate::kind::ErrorKind;
 use crate::spec::ErrorSpec;
 pub use network::NetworkError;
@@ -472,6 +474,151 @@ impl RocketMQError {
         self.kind().spec()
     }
 
+    /// Return the stable external message for this error.
+    ///
+    /// `Display` and `Debug` remain diagnostic surfaces and may include local
+    /// details. Boundary adapters should use this public message together with
+    /// [`Self::context`] when building API, CLI, log, or protocol responses.
+    #[inline]
+    pub fn public_message(&self) -> &'static str {
+        self.spec().public_message
+    }
+
+    /// Return redaction-aware structured context for this error.
+    ///
+    /// The returned context is a snapshot derived from the current enum variant.
+    /// Sensitive details are represented through [`Sensitive`] so external
+    /// adapters can safely render the context without leaking raw values.
+    pub fn context(&self) -> ErrorContext {
+        match self {
+            Self::Network(error) => {
+                ErrorContext::new().with_sensitive("addr", Sensitive::new(error.addr().to_string()))
+            }
+            Self::Serialization(error) => redacted_context("serialization_error", error.to_string()),
+            Self::Protocol(error) => ErrorContext::new().with_field("protocol_error", error.to_string()),
+            Self::Rpc(error) => redacted_context("rpc_error", error.to_string()),
+            Self::Authentication(error) => redacted_context("auth_error", error.to_string()),
+            Self::Controller(error) => redacted_context("controller_error", error.to_string()),
+            Self::InvalidProperty(property) => ErrorContext::new().with_field("property", property.as_str()),
+            Self::BrokerNotFound { name } => ErrorContext::new().with_field("broker", name.as_str()),
+            Self::BrokerRegistrationFailed { name, reason } => ErrorContext::new()
+                .with_field("broker", name.as_str())
+                .with_field("reason", reason.as_str()),
+            Self::BrokerOperationFailed {
+                operation,
+                code,
+                message,
+                broker_addr,
+            } => {
+                let mut context = ErrorContext::new()
+                    .with_field("operation", *operation)
+                    .with_field("broker_code", code.to_string())
+                    .with_field("message", message.as_str());
+                if let Some(addr) = broker_addr {
+                    context = context.with_sensitive("broker_addr", Sensitive::new(addr.clone()));
+                }
+                context
+            }
+            Self::TopicNotExist { topic } => ErrorContext::new().with_field("topic", topic.as_str()),
+            Self::QueueNotExist { topic, queue_id } => ErrorContext::new()
+                .with_field("topic", topic.as_str())
+                .with_field("queue_id", queue_id.to_string()),
+            Self::SubscriptionGroupNotExist { group } => ErrorContext::new().with_field("group", group.as_str()),
+            Self::QueueIdOutOfRange { topic, queue_id, max } => ErrorContext::new()
+                .with_field("topic", topic.as_str())
+                .with_field("queue_id", queue_id.to_string())
+                .with_field("max_queue_id", max.to_string()),
+            Self::MessageTooLarge { actual, limit } => ErrorContext::new()
+                .with_field("actual_bytes", actual.to_string())
+                .with_field("limit_bytes", limit.to_string()),
+            Self::MessageValidationFailed { reason } => ErrorContext::new().with_field("reason", reason.as_str()),
+            Self::RetryLimitExceeded { group, current, max } => ErrorContext::new()
+                .with_field("group", group.as_str())
+                .with_field("current", current.to_string())
+                .with_field("max", max.to_string()),
+            Self::TransactionRejected => ErrorContext::new(),
+            Self::BrokerPermissionDenied { operation } => {
+                ErrorContext::new().with_field("operation", operation.as_str())
+            }
+            Self::NotMasterBroker { master_address } => {
+                ErrorContext::new().with_sensitive("master_address", Sensitive::new(master_address.clone()))
+            }
+            Self::MessageLookupFailed { offset } => ErrorContext::new().with_field("offset", offset.to_string()),
+            Self::TopicSendingForbidden { topic } => ErrorContext::new().with_field("topic", topic.as_str()),
+            Self::BrokerAsyncTaskFailed { task, context, .. } => ErrorContext::new()
+                .with_field("task", *task)
+                .with_sensitive("context", Sensitive::new(context.clone())),
+            Self::RequestBodyInvalid { operation, reason } => ErrorContext::new()
+                .with_field("operation", *operation)
+                .with_field("reason", reason.as_str()),
+            Self::RequestHeaderError(reason) => ErrorContext::new().with_field("reason", reason.as_str()),
+            Self::ResponseProcessFailed { operation, reason } => ErrorContext::new()
+                .with_field("operation", *operation)
+                .with_field("reason", reason.as_str()),
+            Self::RouteNotFound { topic } => ErrorContext::new().with_field("topic", topic.as_str()),
+            Self::RouteInconsistent { topic, reason } => ErrorContext::new()
+                .with_field("topic", topic.as_str())
+                .with_field("reason", reason.as_str()),
+            Self::RouteRegistrationConflict { broker_name, reason } => ErrorContext::new()
+                .with_field("broker", broker_name.as_str())
+                .with_field("reason", reason.as_str()),
+            Self::RouteVersionConflict { expected, actual } => ErrorContext::new()
+                .with_field("expected", expected.to_string())
+                .with_field("actual", actual.to_string()),
+            Self::ClusterNotFound { cluster } => ErrorContext::new().with_field("cluster", cluster.as_str()),
+            Self::ClientNotStarted
+            | Self::ClientAlreadyStarted
+            | Self::ClientShuttingDown
+            | Self::ProducerNotAvailable
+            | Self::ConsumerNotAvailable => ErrorContext::new(),
+            Self::ClientInvalidState { expected, actual } => ErrorContext::new()
+                .with_field("expected", *expected)
+                .with_field("actual", actual.as_str()),
+            Self::Tools(error) => redacted_context("tools_error", error.to_string()),
+            Self::Filter(error) => ErrorContext::new().with_field("filter_error", error.to_string()),
+            Self::StorageReadFailed { path, reason } | Self::StorageWriteFailed { path, reason } => ErrorContext::new()
+                .with_sensitive("path", Sensitive::new(path.clone()))
+                .with_sensitive("reason", Sensitive::new(reason.clone())),
+            Self::StorageCorrupted { path } | Self::StorageOutOfSpace { path } | Self::StorageLockFailed { path } => {
+                ErrorContext::new().with_sensitive("path", Sensitive::new(path.clone()))
+            }
+            Self::ConfigParseFailed { key, reason } => ErrorContext::new()
+                .with_field("key", *key)
+                .with_sensitive("reason", Sensitive::new(reason.clone())),
+            Self::ConfigMissing { key } => ErrorContext::new().with_field("key", *key),
+            Self::ConfigInvalidValue { key, value, reason } => ErrorContext::new()
+                .with_field("key", *key)
+                .with_sensitive("value", Sensitive::new(value.clone()))
+                .with_sensitive("reason", Sensitive::new(reason.clone())),
+            Self::AuthConfigInvalid { key, reason } => ErrorContext::new()
+                .with_field("key", *key)
+                .with_sensitive("reason", Sensitive::new(reason.clone())),
+            Self::AuthHotReloadFailed { path, reason } => ErrorContext::new()
+                .with_sensitive("path", Sensitive::new(path.clone()))
+                .with_sensitive("reason", Sensitive::new(reason.clone())),
+            Self::ControllerNotLeader { leader_id } => ErrorContext::new().with_field(
+                "leader_id",
+                leader_id.map_or_else(|| "unknown".to_string(), |id| id.to_string()),
+            ),
+            Self::ControllerRaftError { reason } | Self::ControllerSnapshotFailed { reason } => {
+                ErrorContext::new().with_sensitive("reason", Sensitive::new(reason.clone()))
+            }
+            Self::ControllerConsensusTimeout { operation, timeout_ms } => ErrorContext::new()
+                .with_field("operation", *operation)
+                .with_field("timeout_ms", timeout_ms.to_string()),
+            Self::IO(error) => redacted_context("io_error", error.to_string()),
+            Self::IllegalArgument(message) => ErrorContext::new().with_field("message", message.as_str()),
+            Self::Timeout { operation, timeout_ms } => ErrorContext::new()
+                .with_field("operation", *operation)
+                .with_field("timeout_ms", timeout_ms.to_string()),
+            Self::Internal(message) => redacted_context("internal_error", message.clone()),
+            Self::Service(error) => redacted_context("service_error", error.to_string()),
+            Self::InvalidVersionOrdinal(ordinal) => ErrorContext::new().with_field("ordinal", ordinal.to_string()),
+            Self::NotInitialized(reason) => ErrorContext::new().with_field("reason", reason.as_str()),
+            Self::MissingRequiredMessageProperty { property } => ErrorContext::new().with_field("property", *property),
+        }
+    }
+
     /// Create a network connection failed error
     #[inline]
     pub fn network_connection_failed(addr: impl Into<String>, reason: impl Into<String>) -> Self {
@@ -763,6 +910,10 @@ impl RocketMQError {
     pub fn filter_uninitialized() -> Self {
         Self::Filter(FilterError::uninitialized())
     }
+}
+
+fn redacted_context(key: &'static str, value: impl Into<String>) -> ErrorContext {
+    ErrorContext::new().with_sensitive(key, Sensitive::new(value.into()))
 }
 
 // ============================================================================

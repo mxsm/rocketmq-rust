@@ -87,12 +87,14 @@ pub use client_error::ClientError;
 pub use context::ErrorContext;
 pub use context::ErrorContextField;
 pub use context::RedactionKind;
+pub use context::RedactionPolicy;
 pub use context::Sensitive;
 pub use context::REDACTED;
 pub use controller_error::ControllerError;
 pub use controller_error::ControllerResult;
 // Re-export filter error types
 pub use filter_error::FilterError;
+pub use kind::ErrorCategory;
 pub use kind::ErrorCode;
 pub use kind::ErrorKind;
 pub use kind::ErrorScope;
