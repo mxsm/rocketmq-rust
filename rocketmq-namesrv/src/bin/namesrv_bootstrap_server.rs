@@ -20,6 +20,7 @@ use std::process;
 
 use anyhow::bail;
 use anyhow::Context;
+use anyhow::Result;
 use clap::Parser;
 use config::Config;
 use rocketmq_common::common::controller::controller_config::RaftPeer;
@@ -32,7 +33,6 @@ use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
 use rocketmq_controller::ControllerCli;
 use rocketmq_controller::ControllerConfig;
-use rocketmq_error::Result;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_runtime::RuntimeConfig;

@@ -30,9 +30,9 @@
 //! cargo run --example cli_usage -- --help
 //! ```
 
+use anyhow::Result;
 use rocketmq_controller::parse_command_line;
 use rocketmq_controller::ControllerCli;
-use rocketmq_error::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {

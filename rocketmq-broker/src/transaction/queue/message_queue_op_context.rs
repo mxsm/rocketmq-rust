@@ -3,8 +3,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use anyhow::Error;
-use rocketmq_error::Result;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use tokio::sync::mpsc;
 use tokio::time;
 
@@ -44,23 +44,28 @@ impl MessageQueueOpContext {
         self.last_write_timestamp.store(timestamp, Ordering::Release);
     }
 
-    pub async fn push(&self, msg: String) -> Result<()> {
+    pub async fn push(&self, msg: String) -> RocketMQResult<()> {
         if self.context_receiver.len() > self.queue_capacity {
-            return Err(anyhow::Error::msg("queue is full".to_string()));
+            return Err(RocketMQError::Internal("queue is full".to_string()));
         }
-        self.context_queue.send(msg).map_err(anyhow::Error::new)
+        self.context_queue
+            .send(msg)
+            .map_err(|error| RocketMQError::Internal(format!("queue send failed: {error}")))
     }
-    pub async fn offer(&self, item: String, timeout: std::time::Duration) -> Result<()> {
+    pub async fn offer(&self, item: String, timeout: std::time::Duration) -> RocketMQResult<()> {
         if let Ok(res) = time::timeout(timeout, self.push(item)).await {
             return res;
         }
-        Err(Error::msg("offer time out"))
+        Err(RocketMQError::Timeout {
+            operation: "message_queue_offer",
+            timeout_ms: timeout.as_millis() as u64,
+        })
     }
-    pub async fn pull(&mut self) -> Result<String> {
+    pub async fn pull(&mut self) -> RocketMQResult<String> {
         if let Some(item) = self.context_receiver.recv().await {
             return Ok(item);
         }
-        Err(Error::msg("pull failed, channel closed".to_string()))
+        Err(RocketMQError::Internal("pull failed, channel closed".to_string()))
     }
     pub async fn is_empty(&self) -> bool {
         self.context_receiver.len() == 0
