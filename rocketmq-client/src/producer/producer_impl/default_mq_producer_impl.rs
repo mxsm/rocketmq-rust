@@ -71,6 +71,9 @@ use crate::base::client_config::ClientConfig;
 use crate::base::query_result::QueryResult;
 use crate::base::validators::Validators;
 use crate::common::client_error_code::ClientErrorCode;
+use crate::common::retry_decision::producer_send_fault_decision;
+use crate::common::retry_decision::producer_send_retry_decision;
+use crate::common::retry_decision::ClientRetryDecision;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::check_forbidden_context::CheckForbiddenContext;
 use crate::hook::check_forbidden_hook::CheckForbiddenHook;
@@ -1345,10 +1348,12 @@ impl DefaultMQProducerImpl {
                     return Ok(result);
                 }
                 Err(e) => {
+                    let retry_decision = self.retry_decision_on_error(&e);
+
                     // Handle send error
                     self.handle_send_error(&mq, &e, elapsed, ctx.invoke_id).await;
 
-                    if !self.should_retry_on_error(&e) {
+                    if !retry_decision.should_retry() {
                         return Err(e);
                     }
 
@@ -1401,32 +1406,27 @@ impl DefaultMQProducerImpl {
     ) {
         let broker_name = mq.broker_name();
 
-        match error {
-            rocketmq_error::RocketMQError::IllegalArgument(_) => {
-                self.update_fault_item(broker_name, elapsed, false, true).await;
-                warn!(
-                    "sendKernelImpl exception, resend at once, InvokeID: {}, RT: {}ms, Broker: {:?}, {}",
-                    invoke_id, elapsed, mq, error
-                );
-            }
-            rocketmq_error::RocketMQError::BrokerOperationFailed { .. } => {
-                self.update_fault_item(broker_name, elapsed, true, false).await;
-            }
-            rocketmq_error::RocketMQError::Network(_) => {
-                let reachable = !self.mq_fault_strategy.is_start_detector_enable();
-                self.update_fault_item(broker_name, elapsed, true, reachable).await;
-            }
-            _ => {}
+        let Some(fault_decision) =
+            producer_send_fault_decision(error, self.mq_fault_strategy.is_start_detector_enable())
+        else {
+            return;
+        };
+
+        self.update_fault_item(broker_name, elapsed, fault_decision.isolation, fault_decision.reachable)
+            .await;
+
+        if fault_decision.log_resend_immediately {
+            warn!(
+                "sendKernelImpl exception, resend at once, InvokeID: {}, RT: {}ms, Broker: {:?}, {}",
+                invoke_id, elapsed, mq, error
+            );
         }
     }
 
-    /// Check if should retry based on error type
+    /// Build retry decision for producer send failures.
     #[inline]
-    fn should_retry_on_error(&self, error: &rocketmq_error::RocketMQError) -> bool {
-        crate::common::retry_decision::should_retry_producer_send_error(
-            error,
-            self.producer_config.retry_response_codes(),
-        )
+    fn retry_decision_on_error(&self, error: &RocketMQError) -> ClientRetryDecision {
+        producer_send_retry_decision(error, self.producer_config.retry_response_codes())
     }
 
     /// Check if should retry based on send result

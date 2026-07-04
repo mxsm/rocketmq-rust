@@ -402,6 +402,45 @@ def check_client_callback_boundary() -> list[Finding]:
     return [*findings, *scan_forbidden_terms(guarded_paths, forbidden)]
 
 
+def check_client_retry_boundary() -> list[Finding]:
+    required_tokens = {
+        ROOT / "rocketmq-client" / "src" / "common" / "retry_decision.rs": [
+            "error.kind().spec().recovery.retry",
+            "pub(crate) struct ClientRetryEffect",
+            "pub(crate) fn producer_send_retry_decision",
+            "pub(crate) fn producer_send_fault_decision",
+            "retry_response_codes.contains(code)",
+            "Java producer retries only configured broker response codes for send.",
+        ],
+        ROOT
+        / "rocketmq-client"
+        / "src"
+        / "producer"
+        / "producer_impl"
+        / "default_mq_producer_impl.rs": [
+            "producer_send_retry_decision(error, self.producer_config.retry_response_codes())",
+            "producer_send_fault_decision(error, self.mq_fault_strategy.is_start_detector_enable())",
+        ],
+    }
+    findings: list[Finding] = []
+    for path, needles in required_tokens.items():
+        if not path.exists():
+            findings.append(Finding(path, 1, "client retry boundary file is missing"))
+            continue
+        text = read_text(path)
+        for needle in needles:
+            if needle not in text:
+                findings.append(Finding(path, 1, f"required client retry boundary token missing: {needle}"))
+
+    forbidden = {
+        "to_string()": "client retry decisions must not parse or build display strings",
+        "format!(": "client retry decisions must use ErrorSpec recovery policy, not local text construction",
+        "downcast_ref": "client retry decisions must not use runtime downcast",
+    }
+    retry_path = ROOT / "rocketmq-client" / "src" / "common" / "retry_decision.rs"
+    return [*findings, *scan_forbidden_terms([retry_path], forbidden)]
+
+
 def check_error_spec_contract() -> list[Finding]:
     required_tokens = {
         ROOT / "rocketmq-error" / "src" / "kind.rs": [
@@ -539,6 +578,7 @@ def run() -> int:
         ("proxy grpc boundary", check_proxy_grpc_boundary),
         ("dashboard http boundary", check_dashboard_http_boundary),
         ("client callback boundary", check_client_callback_boundary),
+        ("client retry boundary", check_client_retry_boundary),
         ("error spec contract", check_error_spec_contract),
         ("internal error allowlist", check_internal_error_allowlist),
         ("anyhow result allowlist", check_anyhow_result_allowlist),
