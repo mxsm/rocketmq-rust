@@ -15,11 +15,11 @@
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
-use rocketmq_error::RocketmqError;
 use tokio_util::codec::BytesCodec;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
+use crate::error_helpers::encoder_error;
 use crate::protocol::remoting_command::RemotingCommand;
 
 /// Encodes a `RemotingCommand` into a `BytesMut` buffer.
@@ -154,9 +154,9 @@ impl Encoder<Bytes> for CompositeCodec {
     type Error = rocketmq_error::RocketMQError;
 
     fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        self.bytes_codec.encode(item, dst).map_err(|error| {
-            RocketmqError::RemotingCommandEncoderError(format!("Error encoding bytes: {error}")).into()
-        })
+        self.bytes_codec
+            .encode(item, dst)
+            .map_err(|error| encoder_error(format!("Error encoding bytes: {error}")))
     }
 }
 
