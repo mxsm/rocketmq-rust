@@ -14,10 +14,15 @@
 
 use thiserror::Error;
 
+use rocketmq_error::RocketMQError;
+
 #[derive(Debug, Error)]
 pub enum StoreError {
-    #[error("RocksDB error: {0}")]
-    RocksDb(String),
+    #[error("RocksDB error: {source}")]
+    RocksDb {
+        #[source]
+        source: Box<RocketMQError>,
+    },
 
     #[error("Store is not started")]
     NotStarted,
@@ -50,6 +55,15 @@ pub enum StoreError {
     MappedFileNotFound,
 }
 
+impl StoreError {
+    #[inline]
+    pub fn rocksdb(source: RocketMQError) -> Self {
+        Self::RocksDb {
+            source: Box::new(source),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum HAError {
     #[error("IO error: {0}")]
@@ -67,11 +81,17 @@ pub type HAResult<T> = std::result::Result<T, HAError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
 
     #[test]
     fn rocksdb_error() {
-        let error = StoreError::RocksDb("Database error".to_string());
-        assert_eq!(format!("{}", error), "RocksDB error: Database error");
+        let error = StoreError::rocksdb(RocketMQError::storage_write_failed("rocksdb", "Database error"));
+
+        assert_eq!(
+            format!("{}", error),
+            "RocksDB error: Storage write failed for 'rocksdb': Database error"
+        );
+        assert!(error.source().is_some());
     }
 
     #[test]

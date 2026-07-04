@@ -326,7 +326,7 @@ impl MappedBuffer {
     /// Returns `MappedFileError::FlushFailed` if msync fails
     pub fn flush(&self) -> MappedFileResult<()> {
         let mmap = self.mmap.write();
-        mmap.flush().map_err(|e| MappedFileError::FlushFailed(e.to_string()))
+        mmap.flush().map_err(MappedFileError::FlushFailed)
     }
 
     /// Flushes a specific range to disk.
@@ -356,7 +356,7 @@ impl MappedBuffer {
         let end = self.offset + range.end;
 
         mmap.flush_range(start, end - start)
-            .map_err(|e| MappedFileError::FlushFailed(e.to_string()))
+            .map_err(MappedFileError::FlushFailed)
     }
 
     /// Returns a clone of the underlying mmap Arc for advanced usage.

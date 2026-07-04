@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::UnifiedServiceError;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use tokio::sync::mpsc;
 use tokio::time;
 
@@ -46,11 +48,15 @@ impl MessageQueueOpContext {
 
     pub async fn push(&self, msg: String) -> RocketMQResult<()> {
         if self.context_receiver.len() > self.queue_capacity {
-            return Err(RocketMQError::Internal("queue is full".to_string()));
+            return Err(RocketMQError::broker_operation_failed(
+                "message_queue_push",
+                ResponseCode::SystemBusy as i32,
+                "queue is full",
+            ));
         }
         self.context_queue
             .send(msg)
-            .map_err(|error| RocketMQError::Internal(format!("queue send failed: {error}")))
+            .map_err(|_| RocketMQError::Service(UnifiedServiceError::Interrupted))
     }
     pub async fn offer(&self, item: String, timeout: std::time::Duration) -> RocketMQResult<()> {
         if let Ok(res) = time::timeout(timeout, self.push(item)).await {
@@ -65,7 +71,7 @@ impl MessageQueueOpContext {
         if let Some(item) = self.context_receiver.recv().await {
             return Ok(item);
         }
-        Err(RocketMQError::Internal("pull failed, channel closed".to_string()))
+        Err(RocketMQError::Service(UnifiedServiceError::Interrupted))
     }
     pub async fn is_empty(&self) -> bool {
         self.context_receiver.len() == 0

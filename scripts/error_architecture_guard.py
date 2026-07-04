@@ -95,6 +95,44 @@ PROCESSOR_GENERIC_RESPONSE_TERMS = (
     "RemotingSysResponseCode::NoPermission",
 )
 
+SOURCE_STRINGIFICATION_ALLOWLIST: dict[str, str] = {
+    "rocketmq-auth/src/acl/loader.rs": "ACL file loader still maps serde and filesystem failures into public auth storage errors",
+    "rocketmq-auth/src/authentication/factory/authentication_factory.rs": "authentication factory exposes stable auth config errors while provider errors remain string reasons",
+    "rocketmq-auth/src/authentication/provider/default_authentication_provider.rs": "default authentication provider maps AuthError into public authentication failure text",
+    "rocketmq-auth/src/authentication/provider/local_authentication_metadata_provider.rs": "local authentication metadata provider persists JSON/filesystem details as public storage reasons",
+    "rocketmq-auth/src/authentication/strategy.rs": "authentication strategy trait returns local AuthError without a source-bearing variant",
+    "rocketmq-auth/src/authorization/builder/default_authorization_context_builder.rs": "authorization context builder maps parser failures into user-facing invalid-context reasons",
+    "rocketmq-auth/src/authorization/factory.rs": "authorization factory exposes stable auth config errors while provider errors remain string reasons",
+    "rocketmq-auth/src/authorization/manager/metadata_manager.rs": "authorization metadata manager keeps provider failures as public configuration reasons",
+    "rocketmq-auth/src/authorization/manager/metadata_manager_impl.rs": "authorization metadata manager implementation keeps provider failures as public configuration reasons",
+    "rocketmq-auth/src/authorization/metadata_provider/local.rs": "local authorization metadata provider persists JSON/filesystem details as public storage reasons",
+    "rocketmq-auth/src/authorization/provider.rs": "authorization provider converts domain AuthorizationError into RocketMQError at the auth boundary",
+    "rocketmq-auth/src/authorization/strategy/abstract_authorization_strategy.rs": "authorization strategy keeps provider failures as configuration reasons",
+    "rocketmq-auth/src/lib.rs": "auth bootstrap helpers expose storage errors through public RocketMQError storage variants",
+    "rocketmq-auth/src/migration/alc/plain_permission_manager.rs": "legacy ACL migration keeps parser detail as compatibility text",
+    "rocketmq-auth/src/runtime.rs": "auth runtime composes provider failures into public authentication errors",
+    "rocketmq-auth/src/runtime_bridge.rs": "runtime bridge exports string diagnostics across a trait boundary",
+    "rocketmq-broker/src/command.rs": "broker CLI argument parser stores address parse detail in command error text",
+    "rocketmq-broker/src/processor/admin_broker_processor.rs": "admin remoting parser keeps Java-compatible request body remarks",
+    "rocketmq-broker/src/processor/admin_broker_processor/message_related_handler.rs": "message admin remoting path keeps decode detail as protocol remark",
+    "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs": "topic queue mapping persistence currently reports executor/persist failures as broker internal diagnostics",
+    "rocketmq-controller/src/controller/open_raft_controller.rs": "OpenRaft controller startup and scheduler runtime boundaries report task and bind failures as typed controller diagnostics",
+    "rocketmq-controller/src/processor/controller_request_processor.rs": "controller config remoting endpoint maps UTF-8 parser detail into request validation text",
+    "rocketmq-controller/src/openraft/log_store.rs": "OpenRaft log store trait requires std::io::Error at the storage boundary",
+    "rocketmq-controller/src/openraft/network/grpc_client.rs": "OpenRaft network API requires std::io::Error-backed NetworkError values",
+    "rocketmq-controller/src/openraft/state_machine.rs": "OpenRaft state machine and snapshot traits require std::io::Error at the storage boundary",
+    "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs": "HA service trait exposes string service diagnostics",
+    "rocketmq-store/src/ha/default_ha_connection.rs": "HA connection joins async runtime errors into service diagnostics",
+    "rocketmq-store/src/ha/default_ha_service.rs": "HA service joins async runtime errors into service diagnostics",
+    "rocketmq-store/src/ha/group_transfer_service.rs": "HA group transfer keeps request wait failures as service diagnostics",
+    "rocketmq-store/src/ha/ha_connection_state_notification_service.rs": "HA notification service reports channel failures as service diagnostics",
+    "rocketmq-store/src/message_store/local_file_message_store.rs": "local file message store records recovery progress and HA/storage diagnostics as display text",
+    "rocketmq-store/src/rocksdb/consume_queue.rs": "RocksDB group commit background worker stores task failure text for later reporting",
+    "rocketmq-store/src/rocksdb/error.rs": "rocksdb crate errors are converted to RocketMQ storage variants until the error kernel grows external source slots",
+    "rocketmq-store/src/tieredstore.rs": "tiered store test helper creates temporary directories and maps setup failures to RocketMQError",
+    "rocketmq-store/src/utils/ffi.rs": "FFI helpers expose OS error reasons across a C-compatible boundary",
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class Finding:
@@ -478,6 +516,85 @@ def check_error_spec_contract() -> list[Finding]:
     return findings
 
 
+def is_source_stringification_allowlisted(path: Path) -> bool:
+    rel = path.relative_to(ROOT).as_posix()
+    return rel in SOURCE_STRINGIFICATION_ALLOWLIST
+
+
+def is_source_stringification_line(line: str) -> bool:
+    if ".to_string()" not in line:
+        return "RocketMQError::Internal(format!(" in line
+
+    if re.search(r"\b(error|err|e)\b", line) is None:
+        return False
+
+    if "map_err(" in line:
+        return True
+    if "std::io::Error::other(" in line or "io::Error::other(" in line:
+        return True
+    if "RocketMQError::Internal(" in line:
+        return True
+    if "RocketMQError::storage_" in line or "RocketMQError::auth_config_invalid(" in line:
+        return True
+    if "RocketMQError::authentication_failed(" in line or "RocketMQError::request_body_invalid(" in line:
+        return True
+    if "StoreError::" in line or "HAError::" in line or "MappedFileError::" in line:
+        return True
+    if "AuthorizationError::" in line or "AuthError::" in line:
+        return True
+    return False
+
+
+def check_source_stringification_allowlist() -> list[Finding]:
+    required_tokens = {
+        ROOT / "rocketmq-store" / "src" / "store_error.rs": [
+            "pub fn rocksdb(source: RocketMQError) -> Self",
+            "#[source]",
+            "source: Box<RocketMQError>",
+        ],
+        ROOT / "rocketmq-store" / "src" / "log_file" / "mapped_file" / "mapped_file_error.rs": [
+            "MmapFailed(#[source] io::Error)",
+            "FlushFailed(#[source] io::Error)",
+        ],
+        ROOT / "rocketmq-store" / "src" / "message_store" / "rocksdb_message_store.rs": [
+            "map_err(StoreError::rocksdb)",
+            "StoreError::rocksdb(error)",
+        ],
+    }
+    findings: list[Finding] = []
+    for path, needles in required_tokens.items():
+        if not path.exists():
+            findings.append(Finding(path, 1, "required source-preservation file is missing"))
+            continue
+        text = read_text(path)
+        for needle in needles:
+            if needle not in text:
+                findings.append(Finding(path, 1, f"required source-preservation token missing: {needle}"))
+
+    domain_paths = [
+        *rust_files_under("rocketmq-store", "src"),
+        *rust_files_under("rocketmq-controller", "src"),
+        *rust_files_under("rocketmq-auth", "src"),
+        *rust_files_under("rocketmq-broker", "src"),
+    ]
+    for path in domain_paths:
+        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("///") or is_test_context(path, line_number):
+                continue
+            if not is_source_stringification_line(line):
+                continue
+            if not is_source_stringification_allowlisted(path):
+                findings.append(
+                    Finding(
+                        path,
+                        line_number,
+                        "source stringification requires a typed source wrapper or SOURCE_STRINGIFICATION_ALLOWLIST entry",
+                    )
+                )
+    return findings
+
+
 def is_internal_error_allowlisted(path: Path) -> bool:
     rel = path.relative_to(ROOT).as_posix()
     return any(rel == prefix or rel.startswith(prefix) for prefix in INTERNAL_ERROR_ALLOWLIST)
@@ -580,6 +697,7 @@ def run() -> int:
         ("client callback boundary", check_client_callback_boundary),
         ("client retry boundary", check_client_retry_boundary),
         ("error spec contract", check_error_spec_contract),
+        ("source stringification allowlist", check_source_stringification_allowlist),
         ("internal error allowlist", check_internal_error_allowlist),
         ("anyhow result allowlist", check_anyhow_result_allowlist),
         ("redaction guards", check_redaction_guards),

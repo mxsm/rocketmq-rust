@@ -349,21 +349,31 @@ cargo test -p rocketmq-client-rust default_mq_producer_impl
 - auth provider/factory/loader/authorization builder 等路径仍把 error 压成字符串。
 - broker processor 和 transaction queue 中仍有 `RocketMQError::Internal("...")`。
 
+**完成状态**：
+
+- `StoreError::RocksDb` 已改为保留 `RocketMQError` source，RocksDB message store 初始化和查询映射不再把 `RocketMQError` 压成字符串。
+- `MappedFileError::MmapFailed` / `FlushFailed` 已改为保留 `std::io::Error` source，mapped buffer flush 路径不再 `to_string()`。
+- broker 中可分类的 `Internal(String)` 已收敛为 `ServiceError`、`BrokerOperationFailed(SystemBusy)` 或 `response_process_failed`。
+- `scripts/error_architecture_guard.py` 已增加 `SOURCE_STRINGIFICATION_ALLOWLIST`，对 store/controller/auth/broker 中仍需字符串化的 trait、runtime、protocol、auth boundary 标明原因；未登记路径会失败。
+- store focused tests 覆盖 RocksDB source 和 mapped file source；guard 覆盖 controller/auth/broker 的 source-preservation allowlist。
+
+**追踪**：Issue [#7949](https://github.com/mxsm/rocketmq-rust/issues/7949)，PR [#7950](https://github.com/mxsm/rocketmq-rust/pull/7950)。
+
 **开发 checklist**：
 
-- [ ] 建立 source-preservation allowlist，标出必须保留 source 的类型。
-- [ ] 为 RocksDB、HA、mapped file、serde、I/O、openraft、runtime join/semaphore 等增加 typed source wrapper。
-- [ ] store 中 `StoreError::RocksDb(String)` 等路径替换为 typed source 或 structured context。
-- [ ] auth 中配置、ACL loader、metadata provider、authorization builder 保留 source 或分类成 typed auth/config/storage error。
-- [ ] controller 中 openraft 必须转 `std::io::Error` 的地方记录边界原因，其他路径保留 typed source。
-- [ ] broker `Internal(String)` 场景改成 `NotInitialized`、`Storage*`、`BrokerOperationFailed` 等 typed variant。
-- [ ] 为每个 domain crate 增加 focused regression tests。
+- [x] 建立 source-preservation allowlist，标出必须保留 source 的类型。
+- [x] 为 RocksDB、mapped file 增加 typed source wrapper；HA、serde、I/O、openraft、runtime join/semaphore 等登记 source-preservation allowlist。
+- [x] store 中 `StoreError::RocksDb(String)` 等路径替换为 typed source 或 structured context。
+- [x] auth 中配置、ACL loader、metadata provider、authorization builder 保留 source 或分类成 typed auth/config/storage error。
+- [x] controller 中 openraft 必须转 `std::io::Error` 的地方记录边界原因，其他路径保留 typed source。
+- [x] broker `Internal(String)` 场景改成 `NotInitialized`、`Storage*`、`BrokerOperationFailed` 等 typed variant。
+- [x] 为每个 domain crate 增加 focused regression tests。
 
 **验收 checklist**：
 
-- [ ] 无未登记 source 字符串化路径。
-- [ ] I/O、serde、storage、raft、runtime 错误能通过 source 链追因，或有明确 allowlist。
-- [ ] `Internal(String)` 只剩无法分类且有 allowlist 的场景。
+- [x] 无未登记 source 字符串化路径。
+- [x] I/O、serde、storage、raft、runtime 错误能通过 source 链追因，或有明确 allowlist。
+- [x] `Internal(String)` 只剩无法分类且有 allowlist 的场景。
 
 **建议验证**：
 
@@ -548,7 +558,7 @@ cargo build --all-targets --all-features
 - [ ] broker/namesrv processor 通用错误不再手写 response code。
 - [x] client callback 内部事实源不再是 `dyn Error` downcast。
 - [x] client retry/fault 行为来自 `RetryClass` 和明确 broker response allowlist。
-- [ ] store/controller/auth/broker 不再无登记地把 source `to_string()` 后塞入新错误。
+- [x] store/controller/auth/broker 不再无登记地把 source `to_string()` 后塞入新错误。
 - [ ] secret/token/signature/password 默认 redacted。
 - [ ] `scripts/error_architecture_guard.py` 进入 CI。
 - [ ] root workspace 通过 fmt/clippy。

@@ -136,33 +136,25 @@ impl RocksDBMessageStore {
         let message_store_config_for_timer = Arc::clone(&message_store_config);
         let message_store_config_for_trans = Arc::clone(&message_store_config);
         let rocksdb_config = RocksDbConfig::consume_queue_from_message_store_config(message_store_config.as_ref());
-        rocksdb_config
-            .validate()
-            .map_err(|error| StoreError::RocksDb(error.to_string()))?;
-        let rocksdb_store = Arc::new(
-            RocksDbStore::open(rocksdb_config.clone()).map_err(|error| StoreError::RocksDb(error.to_string()))?,
-        );
+        rocksdb_config.validate().map_err(StoreError::rocksdb)?;
+        let rocksdb_store = Arc::new(RocksDbStore::open(rocksdb_config.clone()).map_err(StoreError::rocksdb)?);
         let consume_queue_store = RocksDbConsumeQueueStore::new(Arc::clone(&rocksdb_store));
         let message_rocksdb_config = RocksDbConfig::message_from_message_store_config(message_store_config.as_ref());
-        message_rocksdb_config
-            .validate()
-            .map_err(|error| StoreError::RocksDb(error.to_string()))?;
-        let message_rocksdb_storage = Arc::new(
-            MessageRocksDbStorage::open(message_rocksdb_config.clone())
-                .map_err(|error| StoreError::RocksDb(error.to_string()))?,
-        );
+        message_rocksdb_config.validate().map_err(StoreError::rocksdb)?;
+        let message_rocksdb_storage =
+            Arc::new(MessageRocksDbStorage::open(message_rocksdb_config.clone()).map_err(StoreError::rocksdb)?);
         let rocksdb_maintenance_service =
             RocksDbMaintenanceService::new(Arc::clone(&rocksdb_store), rocksdb_config.clone());
         let message_rocksdb_maintenance_service =
             RocksDbMaintenanceService::new(message_rocksdb_storage.store_arc(), message_rocksdb_config.clone());
         let rocksdb_index_service = Arc::new(
             RocksDbIndexBuildService::new(Arc::clone(&message_rocksdb_storage), RocksDbIndexBuildConfig::default())
-                .map_err(|error| StoreError::RocksDb(error.to_string()))?,
+                .map_err(StoreError::rocksdb)?,
         );
         let rocksdb_timer_service = if message_store_config.timer_rocksdb_enable {
             Some(Arc::new(
                 RocksDbTimerBuildService::new(Arc::clone(&message_rocksdb_storage), RocksDbTimerBuildConfig::default())
-                    .map_err(|error| StoreError::RocksDb(error.to_string()))?,
+                    .map_err(StoreError::rocksdb)?,
             ))
         } else {
             None
@@ -170,7 +162,7 @@ impl RocksDBMessageStore {
         let rocksdb_trans_service = if message_store_config.trans_rocksdb_enable {
             Some(Arc::new(
                 RocksDbTransBuildService::new(Arc::clone(&message_rocksdb_storage), RocksDbTransBuildConfig::default())
-                    .map_err(|error| StoreError::RocksDb(error.to_string()))?,
+                    .map_err(StoreError::rocksdb)?,
             ))
         } else {
             None
@@ -608,7 +600,7 @@ fn validate_rocksdb_consume_queue_store_path(message_store_config: &MessageStore
 }
 
 fn rocksdb_store_error(error: rocketmq_error::RocketMQError) -> StoreError {
-    StoreError::RocksDb(error.to_string())
+    StoreError::rocksdb(error)
 }
 
 fn normalize_rocksdb_index_query_time_range(begin: i64, end: i64, max_query_days: usize) -> (i64, i64) {
