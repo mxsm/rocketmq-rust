@@ -154,7 +154,7 @@ pub(super) fn request_header_codec_inner(input: proc_macro::TokenStream) -> proc
                                        #field_name: Some(
                                               map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                                               .cloned()
-                                              .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
+                                              .ok_or(rocketmq_error::RocketMQError::request_header_error(
                                                  format!("Missing {} field", Self::#static_name),
                                               ))?
                                           ),
@@ -164,7 +164,7 @@ pub(super) fn request_header_codec_inner(input: proc_macro::TokenStream) -> proc
                                        Some(
                                               map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                                               .cloned()
-                                              .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
+                                              .ok_or(rocketmq_error::RocketMQError::request_header_error(
                                                  format!("Missing {} field", Self::#static_name),
                                               ))?.to_string()
                                           )
@@ -183,11 +183,11 @@ pub(super) fn request_header_codec_inner(input: proc_macro::TokenStream) -> proc
                         } else if required {
                             quote! {
                                    #field_name: Some(
-                                          map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
+                                          map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(rocketmq_error::RocketMQError::request_header_error(
                                              format!("Missing {} field", Self::#static_name),
                                          ))?
                                          .parse::<#value>()
-                                         .map_err(|_| rocketmq_error::RocketmqError::DeserializeHeaderError(format!("Parse {} field error", Self::#static_name)))?
+                                         .map_err(|_| rocketmq_error::RocketMQError::request_header_error(format!("Parse {} field error", Self::#static_name)))?
                                       ),
                                }
                         } else {
@@ -203,7 +203,7 @@ pub(super) fn request_header_codec_inner(input: proc_macro::TokenStream) -> proc
                                     quote! {
                                        #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                                               .cloned()
-                                              .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
+                                              .ok_or(rocketmq_error::RocketMQError::request_header_error(
                                                  format!("Missing {} field", Self::#static_name),
                                               ))?,
                                      }
@@ -211,7 +211,7 @@ pub(super) fn request_header_codec_inner(input: proc_macro::TokenStream) -> proc
                                     quote! {
                                        #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                                               .cloned()
-                                              .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
+                                              .ok_or(rocketmq_error::RocketMQError::request_header_error(
                                                  format!("Missing {} field", Self::#static_name),
                                               ))?.to_string(),
                                      }
@@ -228,11 +228,11 @@ pub(super) fn request_header_codec_inner(input: proc_macro::TokenStream) -> proc
                              }
                         } else if required {
                             quote! {
-                                     #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
+                                     #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(rocketmq_error::RocketMQError::request_header_error(
                                          format!("Missing {} field", Self::#static_name),
                                      ))?
                                      .parse::<#types>()
-                                     .map_err(|_| rocketmq_error::RocketmqError::DeserializeHeaderError(format!("Parse {} field error", Self::#static_name)))?,
+                                     .map_err(|_| rocketmq_error::RocketMQError::request_header_error(format!("Parse {} field error", Self::#static_name)))?,
                                    }
                         } else {
                             quote! {
@@ -513,7 +513,7 @@ impl FieldMetadata {
             // CheetahString (required)
             (TypeCategory::CheetahString, false, true) => quote! {
                 #field_ident: #local_ident.ok_or_else(||
-                    rocketmq_error::RocketmqError::DeserializeHeaderError(#missing_msg.to_string())
+                    rocketmq_error::RocketMQError::request_header_error(#missing_msg.to_string())
                 )?,
             },
             // CheetahString (optional with default)
@@ -527,7 +527,7 @@ impl FieldMetadata {
             // String (required)
             (TypeCategory::String, false, true) => quote! {
                 #field_ident: #local_ident.ok_or_else(||
-                    rocketmq_error::RocketmqError::DeserializeHeaderError(#missing_msg.to_string())
+                    rocketmq_error::RocketMQError::request_header_error(#missing_msg.to_string())
                 )?.to_string(),
             },
             // String (optional with default)
@@ -542,7 +542,7 @@ impl FieldMetadata {
                     #field_ident: match #local_ident {
                         Some(s) => s.as_str().parse::<#inner_ty>()
                             .map(Some)
-                            .map_err(|_| rocketmq_error::RocketmqError::DeserializeHeaderError(#parse_error.to_string()))?,
+                            .map_err(|_| rocketmq_error::RocketMQError::request_header_error(#parse_error.to_string()))?,
                         None => None,
                     },
                 }
@@ -553,10 +553,10 @@ impl FieldMetadata {
                 let parse_error = format!("Parse {} field error", self.wire_key);
                 quote! {
                     #field_ident: #local_ident
-                        .ok_or_else(|| rocketmq_error::RocketmqError::DeserializeHeaderError(#missing_msg.to_string()))?
+                        .ok_or_else(|| rocketmq_error::RocketMQError::request_header_error(#missing_msg.to_string()))?
                         .as_str()
                         .parse::<#ty>()
-                        .map_err(|_| rocketmq_error::RocketmqError::DeserializeHeaderError(#parse_error.to_string()))?,
+                        .map_err(|_| rocketmq_error::RocketMQError::request_header_error(#parse_error.to_string()))?,
                 }
             }
             // Primitive (optional with default)
