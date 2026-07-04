@@ -112,7 +112,6 @@ const fn observe_severity(kind: ErrorKind) -> ErrorSeverity {
         | ErrorKind::NotMasterBroker
         | ErrorKind::ControllerNotLeader => ErrorSeverity::Warn,
         ErrorKind::StorageCorrupted | ErrorKind::StorageOutOfSpace => ErrorSeverity::Critical,
-        ErrorKind::Legacy => ErrorSeverity::Debug,
         _ => ErrorSeverity::Error,
     }
 }

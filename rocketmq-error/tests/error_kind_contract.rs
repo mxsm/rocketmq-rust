@@ -56,7 +56,7 @@ fn all_error_kinds_have_unique_codes() {
     }
 
     assert!(ErrorKind::ALL.contains(&ErrorKind::Network));
-    assert!(ErrorKind::ALL.contains(&ErrorKind::Legacy));
+    assert!(ErrorKind::ALL.contains(&ErrorKind::NotInitialized));
 }
 
 #[test]

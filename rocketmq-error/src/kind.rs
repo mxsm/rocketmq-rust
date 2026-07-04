@@ -61,12 +61,10 @@ pub enum ErrorScope {
     Configuration,
     System,
     Version,
-    Legacy,
 }
 
 /// Stable logical error kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[allow(deprecated)]
 pub enum ErrorKind {
     Network,
     Serialization,
@@ -127,7 +125,6 @@ pub enum ErrorKind {
     Internal,
     Service,
     InvalidVersionOrdinal,
-    Legacy,
     NotInitialized,
     MissingRequiredMessageProperty,
 }
@@ -194,7 +191,6 @@ impl ErrorKind {
         Self::Internal,
         Self::Service,
         Self::InvalidVersionOrdinal,
-        Self::Legacy,
         Self::NotInitialized,
         Self::MissingRequiredMessageProperty,
     ];
@@ -262,7 +258,6 @@ impl ErrorKind {
             Self::Internal => "INTERNAL",
             Self::Service => "SERVICE_ERROR",
             Self::InvalidVersionOrdinal => "INVALID_VERSION_ORDINAL",
-            Self::Legacy => "LEGACY",
             Self::NotInitialized => "NOT_INITIALIZED",
             Self::MissingRequiredMessageProperty => "MISSING_REQUIRED_MESSAGE_PROPERTY",
         })
@@ -329,7 +324,6 @@ impl ErrorKind {
             | Self::Service
             | Self::NotInitialized => ErrorScope::System,
             Self::InvalidVersionOrdinal => ErrorScope::Version,
-            Self::Legacy => ErrorScope::Legacy,
             Self::MissingRequiredMessageProperty => ErrorScope::Protocol,
         }
     }
