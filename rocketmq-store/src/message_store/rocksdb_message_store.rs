@@ -126,7 +126,7 @@ impl RocksDBMessageStore {
         notify_message_arrive_in_batch: bool,
     ) -> Result<Self, StoreError> {
         if !message_store_config.is_enable_rocksdb_store() {
-            return Err(StoreError::General(
+            return Err(StoreError::Config(
                 "RocksDBMessageStore requires store_type=RocksDB".to_string(),
             ));
         }
@@ -598,7 +598,7 @@ impl RocksDBMessageStore {
 fn validate_rocksdb_consume_queue_store_path(message_store_config: &MessageStoreConfig) -> Result<(), StoreError> {
     let conflict_path = RocksDbConfig::consume_queue_conflict_path_from_message_store_config(message_store_config);
     if conflict_path.join("CURRENT").is_file() {
-        return Err(StoreError::General(format!(
+        return Err(StoreError::Config(format!(
             "found RocksDB consume queue in incompatible path: {}, maybe incompatible \
              use_separate_store_path_for_rocksdb_cq config",
             conflict_path.display()
