@@ -52,6 +52,7 @@
 pub mod unified;
 
 // Stable error taxonomy
+pub mod boundary;
 pub mod context;
 pub mod kind;
 pub mod spec;
@@ -71,6 +72,15 @@ pub mod client_error;
 // Re-export new error types as primary API
 // Re-export auth error types from unified module
 // Re-export controller error types
+pub use boundary::CliExitCode;
+pub use boundary::CliSpec;
+pub use boundary::GrpcPayloadCode;
+pub use boundary::GrpcSpec;
+pub use boundary::GrpcStatusCode;
+pub use boundary::HttpSpec;
+pub use boundary::HttpStatusCode;
+pub use boundary::RemotingResponseCode;
+pub use boundary::RemotingSpec;
 pub use client_error::ClientError;
 pub use context::ErrorContext;
 pub use context::ErrorContextField;
