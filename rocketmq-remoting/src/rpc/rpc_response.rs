@@ -14,7 +14,7 @@
 
 use std::any::Any;
 
-use rocketmq_error::RocketmqError;
+use rocketmq_error::RocketMQError;
 use rocketmq_rust::ArcMut;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
@@ -24,7 +24,7 @@ pub struct RpcResponse {
     pub code: i32,
     pub header: Option<ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
     pub body: Option<Box<dyn Any>>,
-    pub exception: Option<RocketmqError>,
+    pub exception: Option<RocketMQError>,
 }
 
 impl RpcResponse {
@@ -58,10 +58,10 @@ impl RpcResponse {
         }
     }
 
-    pub fn new_exception(exception: Option<RocketmqError>) -> Self {
+    pub fn new_exception(exception: Option<RocketMQError>) -> Self {
         Self {
             code: exception.as_ref().map_or(0, |e| match e {
-                RocketmqError::RpcError(code, _) => *code,
+                RocketMQError::BrokerOperationFailed { code, .. } => *code,
                 _ => 0,
             }),
             header: None,
@@ -90,5 +90,35 @@ impl RpcResponse {
             body,
             exception: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_error::RocketMQError;
+
+    use super::*;
+
+    #[test]
+    fn new_exception_accepts_typed_broker_operation_error() {
+        let response = RpcResponse::new_exception(Some(RocketMQError::broker_operation_failed(
+            "RPC",
+            206,
+            "broker rejected",
+        )));
+
+        assert_eq!(response.code, 206);
+        assert!(matches!(
+            response.exception,
+            Some(RocketMQError::BrokerOperationFailed { code: 206, .. })
+        ));
+    }
+
+    #[test]
+    fn new_exception_uses_zero_code_for_non_broker_error() {
+        let response = RpcResponse::new_exception(Some(RocketMQError::Internal("local failure".to_string())));
+
+        assert_eq!(response.code, 0);
+        assert!(matches!(response.exception, Some(RocketMQError::Internal(_))));
     }
 }
