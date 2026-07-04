@@ -102,6 +102,12 @@ impl ClientConfigBuilder {
         self
     }
 
+    /// Sets the PullMessageService pull worker shard count.
+    pub fn pull_message_service_shards(mut self, shards: usize) -> Self {
+        self.config.set_pull_message_service_shards(shards);
+        self
+    }
+
     // ========================================================================
     // Namespace configuration
     // ========================================================================
@@ -372,6 +378,7 @@ impl ClientConfigBuilder {
 
         // Validate thread pool sizes
         ClientConfigValidator::validate_client_callback_executor_threads(self.config.client_callback_executor_threads)?;
+        ClientConfigValidator::validate_pull_message_service_shards(self.config.pull_message_service_shards)?;
 
         // Only validate concurrent heartbeat thread pool size if concurrent heartbeat is enabled
         if self.config.enable_concurrent_heartbeat {
@@ -411,6 +418,7 @@ mod tests {
             .enable_tls(true)
             .enable_concurrent_heartbeat(true)
             .concurrent_heartbeat_thread_pool_size(4)
+            .pull_message_service_shards(4)
             .build()
             .unwrap();
 
@@ -423,6 +431,7 @@ mod tests {
         assert!(config.tls_config.enable);
         assert!(config.enable_concurrent_heartbeat);
         assert_eq!(config.concurrent_heartbeat_thread_pool_size, 4);
+        assert_eq!(config.pull_message_service_shards, 4);
     }
 
     #[test]

@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::BinaryHeap;
 use std::future::Future;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
@@ -23,6 +26,7 @@ use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::Instant;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_error::RocketMQError;
 use rocketmq_rust::ArcMut;
@@ -47,6 +51,9 @@ use crate::runtime::ClientTrackedTaskHandle;
 
 /// Default queue capacity for message requests
 const DEFAULT_QUEUE_CAPACITY: usize = 4096;
+
+/// Maximum default shard count for pull request workers.
+const DEFAULT_MAX_PULL_SHARDS: usize = 8;
 
 /// Default shutdown timeout in milliseconds
 const DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 1000;
@@ -83,8 +90,20 @@ pub struct PullMessageService {
     /// Queue capacity
     queue_capacity: usize,
 
+    /// Pull request worker shard count.
+    shard_count: usize,
+
+    /// Pull request dispatcher installed after service startup.
+    pull_dispatcher: Arc<StdMutex<Option<PullRequestDispatcher>>>,
+
     /// Main service loop task handle
     main_task_handle: Arc<tokio::sync::Mutex<Option<ClientTrackedTaskHandle>>>,
+
+    /// Pull worker task handles.
+    pull_shard_task_handles: Arc<tokio::sync::Mutex<Vec<ClientTrackedTaskHandle>>>,
+
+    /// Shared pull worker metrics.
+    pull_shard_metrics: Arc<Vec<Arc<PullRequestShardMetrics>>>,
 
     /// Tracks the shared delayed scheduler and immediate generic tasks.
     scheduled_task_tracker: TaskTracker,
@@ -106,6 +125,7 @@ pub struct PullMessageServiceLifecycleProbe {
     pub task_count_after_shutdown: usize,
     pub shutdown_elapsed_us: u128,
     pub delayed_scheduler: PullMessageServiceDelayedSchedulerSnapshot,
+    pub shards: PullMessageServiceShardSnapshot,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
@@ -115,6 +135,97 @@ pub struct PullMessageServiceDelayedSchedulerSnapshot {
     pub expired_count: u64,
     pub cancelled_count: u64,
     pub scheduler_task_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PullMessageServiceShardSnapshot {
+    pub shard_count: usize,
+    pub pending_count: usize,
+    pub submitted_count: u64,
+    pub processed_count: u64,
+    pub rejected_count: u64,
+    pub worker_task_count: usize,
+    pub shards: Vec<PullMessageServiceShardMetricSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct PullMessageServiceShardMetricSnapshot {
+    pub index: usize,
+    pub pending_count: usize,
+    pub submitted_count: u64,
+    pub processed_count: u64,
+    pub rejected_count: u64,
+}
+
+#[derive(Default)]
+struct PullRequestShardMetrics {
+    pending_count: AtomicUsize,
+    submitted_count: AtomicU64,
+    processed_count: AtomicU64,
+    rejected_count: AtomicU64,
+}
+
+impl PullRequestShardMetrics {
+    fn record_submitted(&self) {
+        self.submitted_count.fetch_add(1, Ordering::Relaxed);
+        self.pending_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_processed(&self) {
+        self.processed_count.fetch_add(1, Ordering::Relaxed);
+        self.decrement_pending();
+    }
+
+    fn record_rejected(&self) {
+        self.rejected_count.fetch_add(1, Ordering::Relaxed);
+        self.decrement_pending();
+    }
+
+    fn decrement_pending(&self) {
+        let _ = self
+            .pending_count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                Some(current.saturating_sub(1))
+            });
+    }
+
+    fn snapshot(&self, index: usize) -> PullMessageServiceShardMetricSnapshot {
+        PullMessageServiceShardMetricSnapshot {
+            index,
+            pending_count: self.pending_count.load(Ordering::Relaxed),
+            submitted_count: self.submitted_count.load(Ordering::Relaxed),
+            processed_count: self.processed_count.load(Ordering::Relaxed),
+            rejected_count: self.rejected_count.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PullRequestDispatcher {
+    client_id: CheetahString,
+    shards: Arc<Vec<PullRequestShard>>,
+}
+
+impl PullRequestDispatcher {
+    async fn dispatch(&self, request: PullRequest) {
+        let shard_index = pull_request_shard_index(self.client_id.as_str(), &request, self.shards.len());
+        let shard = &self.shards[shard_index];
+        shard.metrics.record_submitted();
+        if let Err(error) = shard.tx.send(request).await {
+            shard.metrics.record_rejected();
+            warn!(
+                shard_index = shard.index,
+                "Failed to send sharded pull request: {:?}", error
+            );
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PullRequestShard {
+    index: usize,
+    tx: mpsc::Sender<PullRequest>,
+    metrics: Arc<PullRequestShardMetrics>,
 }
 
 #[derive(Default)]
@@ -172,7 +283,7 @@ struct DelayedScheduleCommand {
 enum DelayedSchedulePayload {
     Pull {
         request: PullRequest,
-        tx: Option<MessageRequestSender>,
+        dispatcher: Option<PullRequestDispatcher>,
     },
     Pop {
         request: PopRequest,
@@ -188,11 +299,11 @@ impl DelayedSchedulePayload {
         }
 
         match self {
-            Self::Pull { request, tx } => {
-                if let Some(tx) = tx {
-                    if let Err(error) = tx.send(Box::new(request)).await {
-                        warn!("Failed to send pull request: {:?}", error);
-                    }
+            Self::Pull { request, dispatcher } => {
+                if let Some(dispatcher) = dispatcher {
+                    dispatcher.dispatch(request).await;
+                } else {
+                    warn!("PullMessageService not started");
                 }
             }
             Self::Pop { request, tx } => {
@@ -352,20 +463,83 @@ fn cancel_delayed_queue(
     metrics.record_cancelled(cancelled);
 }
 
+fn default_pull_shard_count() -> usize {
+    num_cpus::get().clamp(1, DEFAULT_MAX_PULL_SHARDS)
+}
+
+fn normalize_pull_shard_count(shard_count: usize) -> usize {
+    shard_count.max(1)
+}
+
+fn pull_request_shard_index(client_id: &str, request: &PullRequest, shard_count: usize) -> usize {
+    let shard_count = normalize_pull_shard_count(shard_count);
+    let mut hasher = DefaultHasher::new();
+    client_id.hash(&mut hasher);
+    request.consumer_group.hash(&mut hasher);
+    request.message_queue.hash(&mut hasher);
+    (hasher.finish() as usize) % shard_count
+}
+
+async fn run_pull_request_shard_worker(
+    index: usize,
+    mut rx: mpsc::Receiver<PullRequest>,
+    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    mut instance: ArcMut<MQClientInstance>,
+    metrics: Arc<PullRequestShardMetrics>,
+) {
+    info!(shard_index = index, "PullMessageService shard worker started");
+
+    loop {
+        tokio::select! {
+            _ = shutdown_rx.recv() => {
+                break;
+            }
+            Some(request) = rx.recv() => {
+                PullMessageService::pull_message(request, &mut instance).await;
+                metrics.record_processed();
+            }
+            else => {
+                break;
+            }
+        }
+    }
+
+    info!(shard_index = index, "PullMessageService shard worker end");
+}
+
 impl PullMessageService {
     /// Creates a new PullMessageService instance
     pub fn new() -> Self {
-        Self::with_capacity(DEFAULT_QUEUE_CAPACITY)
+        Self::with_capacity_and_shards(DEFAULT_QUEUE_CAPACITY, default_pull_shard_count())
     }
 
     /// Creates a new PullMessageService instance with custom queue capacity
     pub fn with_capacity(queue_capacity: usize) -> Self {
+        Self::with_capacity_and_shards(queue_capacity, default_pull_shard_count())
+    }
+
+    /// Creates a new PullMessageService instance with custom shard count.
+    pub fn with_shards(shard_count: usize) -> Self {
+        Self::with_capacity_and_shards(DEFAULT_QUEUE_CAPACITY, shard_count)
+    }
+
+    /// Creates a new PullMessageService instance with custom queue capacity and shard count.
+    pub fn with_capacity_and_shards(queue_capacity: usize, shard_count: usize) -> Self {
+        let shard_count = normalize_pull_shard_count(shard_count);
+        let pull_shard_metrics = (0..shard_count)
+            .map(|_| Arc::new(PullRequestShardMetrics::default()))
+            .collect();
+
         PullMessageService {
             tx: None,
             tx_shutdown: None,
             stopped: Arc::new(AtomicBool::new(false)),
             queue_capacity,
+            shard_count,
+            pull_dispatcher: Arc::new(StdMutex::new(None)),
             main_task_handle: Arc::new(tokio::sync::Mutex::new(None)),
+            pull_shard_task_handles: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            pull_shard_metrics: Arc::new(pull_shard_metrics),
             scheduled_task_tracker: TaskTracker::new(),
             scheduled_task_shutdown: CancellationToken::new(),
             delayed_scheduler_tx: Arc::new(StdMutex::new(None)),
@@ -385,6 +559,18 @@ impl PullMessageService {
         "PullMessageService"
     }
 
+    /// Returns configured pull request shard count.
+    #[inline]
+    pub fn shard_count(&self) -> usize {
+        self.shard_count
+    }
+
+    /// Returns the shard index for a pull request and client id.
+    #[doc(hidden)]
+    pub fn shard_index_for_pull_request(&self, client_id: &str, pull_request: &PullRequest) -> usize {
+        pull_request_shard_index(client_id, pull_request, self.shard_count)
+    }
+
     /// Starts the pull message service
     ///
     /// # Arguments
@@ -392,7 +578,7 @@ impl PullMessageService {
     ///
     /// # Errors
     /// Returns error if service is already started
-    pub async fn start(&mut self, mut instance: ArcMut<MQClientInstance>) -> Result<(), RocketMQError> {
+    pub async fn start(&mut self, instance: ArcMut<MQClientInstance>) -> Result<(), RocketMQError> {
         if self.tx.is_some() {
             warn!("{} already started", self.get_service_name());
             return Ok(());
@@ -400,6 +586,7 @@ impl PullMessageService {
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(self.queue_capacity);
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
+        let mut pop_instance = instance.clone();
 
         let handle = spawn_client_tracked_task("rocketmq-client-pull-message-service", async move {
             info!("{} service started", "PullMessageService");
@@ -412,7 +599,7 @@ impl PullMessageService {
                     }
                     Some(request) = rx.recv() => {
                         // Process request with exception handling
-                        if let Err(e) = Self::process_request(request, &mut instance).await {
+                        if let Err(e) = Self::process_request(request, &mut pop_instance).await {
                             error!("{} failed to process request: {:?}", "PullMessageService", e);
                         }
                     }
@@ -423,25 +610,102 @@ impl PullMessageService {
         })
         .map_err(|error| RocketMQError::Internal(format!("failed to spawn PullMessageService main loop: {error}")))?;
 
+        let mut pull_shards = Vec::with_capacity(self.shard_count);
+        let mut pull_handles = Vec::with_capacity(self.shard_count);
+        for index in 0..self.shard_count {
+            let (shard_tx, shard_rx) = mpsc::channel::<PullRequest>(self.queue_capacity);
+            let metrics = self.pull_shard_metrics[index].clone();
+            let worker_instance = instance.clone();
+            let shutdown_rx = tx_shutdown.subscribe();
+            let handle = spawn_client_tracked_task(
+                "rocketmq-client-pull-message-service-shard",
+                run_pull_request_shard_worker(index, shard_rx, shutdown_rx, worker_instance, metrics.clone()),
+            )
+            .map_err(|error| {
+                RocketMQError::Internal(format!("failed to spawn PullMessageService shard worker: {error}"))
+            })?;
+
+            pull_shards.push(PullRequestShard {
+                index,
+                tx: shard_tx,
+                metrics,
+            });
+            pull_handles.push(handle);
+        }
+
+        {
+            let mut dispatcher = self
+                .pull_dispatcher
+                .lock()
+                .expect("pull dispatcher lock should not be poisoned");
+            *dispatcher = Some(PullRequestDispatcher {
+                client_id: instance.client_id.clone(),
+                shards: Arc::new(pull_shards),
+            });
+        }
+
         self.tx = Some(tx);
         self.tx_shutdown = Some(tx_shutdown);
         self.stopped.store(false, Ordering::Release);
         *self.main_task_handle.lock().await = Some(handle);
+        *self.pull_shard_task_handles.lock().await = pull_handles;
 
         Ok(())
     }
 
     async fn main_task_count(&self) -> usize {
-        self.main_task_handle
+        let main_count = self
+            .main_task_handle
             .lock()
             .await
             .as_ref()
             .map(ClientTrackedTaskHandle::task_count)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let shard_count = self
+            .pull_shard_task_handles
+            .lock()
+            .await
+            .iter()
+            .map(ClientTrackedTaskHandle::task_count)
+            .sum::<usize>();
+        main_count + shard_count
     }
 
     pub fn delayed_scheduler_snapshot(&self) -> PullMessageServiceDelayedSchedulerSnapshot {
         self.delayed_scheduler_metrics.snapshot()
+    }
+
+    pub async fn shard_snapshot(&self) -> PullMessageServiceShardSnapshot {
+        let shards = self
+            .pull_shard_metrics
+            .iter()
+            .enumerate()
+            .map(|(index, metrics)| metrics.snapshot(index))
+            .collect::<Vec<_>>();
+        let worker_task_count = self
+            .pull_shard_task_handles
+            .lock()
+            .await
+            .iter()
+            .map(ClientTrackedTaskHandle::task_count)
+            .sum();
+
+        PullMessageServiceShardSnapshot {
+            shard_count: self.shard_count,
+            pending_count: shards.iter().map(|snapshot| snapshot.pending_count).sum(),
+            submitted_count: shards.iter().map(|snapshot| snapshot.submitted_count).sum(),
+            processed_count: shards.iter().map(|snapshot| snapshot.processed_count).sum(),
+            rejected_count: shards.iter().map(|snapshot| snapshot.rejected_count).sum(),
+            worker_task_count,
+            shards,
+        }
+    }
+
+    fn pull_dispatcher(&self) -> Option<PullRequestDispatcher> {
+        self.pull_dispatcher
+            .lock()
+            .expect("pull dispatcher lock should not be poisoned")
+            .clone()
     }
 
     fn submit_delayed(&self, payload: DelayedSchedulePayload, time_delay: u64) {
@@ -564,7 +828,7 @@ impl PullMessageService {
         self.submit_delayed(
             DelayedSchedulePayload::Pull {
                 request: pull_request,
-                tx: self.tx.clone(),
+                dispatcher: self.pull_dispatcher(),
             },
             time_delay,
         );
@@ -583,10 +847,8 @@ impl PullMessageService {
             return;
         }
 
-        if let Some(tx) = &self.tx {
-            if let Err(e) = tx.send(Box::new(pull_request)).await {
-                error!("executePullRequestImmediately messageRequestQueue.put error: {:?}", e);
-            }
+        if let Some(dispatcher) = self.pull_dispatcher() {
+            dispatcher.dispatch(pull_request).await;
         } else {
             warn!("PullMessageService not started");
         }
@@ -689,6 +951,10 @@ impl PullMessageService {
             .lock()
             .expect("delayed scheduler sender lock should not be poisoned")
             .take();
+        self.pull_dispatcher
+            .lock()
+            .expect("pull dispatcher lock should not be poisoned")
+            .take();
 
         // 2. Send shutdown signal
         if let Some(tx_shutdown) = &self.tx_shutdown {
@@ -706,6 +972,18 @@ impl PullMessageService {
                 warn!(
                     report = %report.to_json(),
                     "{} main loop shutdown report is unhealthy",
+                    self.get_service_name()
+                );
+            }
+        }
+
+        let shard_tasks = std::mem::take(&mut *self.pull_shard_task_handles.lock().await);
+        for handle in shard_tasks {
+            let report = handle.shutdown(timeout).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "{} shard worker shutdown report is unhealthy",
                     self.get_service_name()
                 );
             }
@@ -746,24 +1024,27 @@ pub async fn run_pull_message_service_lifecycle_probe() -> PullMessageServiceLif
 
     let start_result = service.start(instance.clone()).await;
     let task_count_before_shutdown = service.main_task_count().await;
+    let expected_task_count_before_shutdown = service.shard_count() + 1;
 
     let shutdown_started = Instant::now();
     let shutdown_result = service.shutdown(1_000).await;
     let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
     let task_count_after_shutdown = service.main_task_count().await;
     let delayed_scheduler = service.delayed_scheduler_snapshot();
+    let shards = service.shard_snapshot().await;
 
     instance.shutdown().await;
 
     PullMessageServiceLifecycleProbe {
         healthy: start_result.is_ok()
             && shutdown_result.is_ok()
-            && task_count_before_shutdown == 1
+            && task_count_before_shutdown == expected_task_count_before_shutdown
             && task_count_after_shutdown == 0,
         task_count_before_shutdown,
         task_count_after_shutdown,
         shutdown_elapsed_us,
         delayed_scheduler,
+        shards,
     }
 }
 
@@ -860,7 +1141,7 @@ mod tests {
         let probe = run_pull_message_service_lifecycle_probe().await;
 
         assert!(probe.healthy, "{probe:?}");
-        assert_eq!(probe.task_count_before_shutdown, 1);
+        assert_eq!(probe.task_count_before_shutdown, probe.shards.shard_count + 1);
         assert_eq!(probe.task_count_after_shutdown, 0);
     }
 }

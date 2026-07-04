@@ -71,6 +71,9 @@ pub struct ClientConfig {
     /// Default: number of CPU cores (matches Java: Runtime.getRuntime().availableProcessors())
     // java client has this option, but we keep it for compatibility and future will remove it if it's not needed
     pub concurrent_heartbeat_thread_pool_size: usize,
+    /// Pull request worker shard count for PullMessageService.
+    /// Default: min(number of CPU cores, 8).
+    pub pull_message_service_shards: usize,
 }
 
 impl Default for ClientConfig {
@@ -151,6 +154,7 @@ impl ClientConfig {
             trace_msg_batch_num: 10,
             max_page_size_in_get_metadata: 2000,
             concurrent_heartbeat_thread_pool_size: num_cpus::get(),
+            pull_message_service_shards: num_cpus::get().clamp(1, 8),
         }
     }
 }
@@ -639,6 +643,16 @@ impl ClientConfig {
         self.concurrent_heartbeat_thread_pool_size = size;
     }
 
+    #[inline]
+    pub fn get_pull_message_service_shards(&self) -> usize {
+        self.pull_message_service_shards
+    }
+
+    #[inline]
+    pub fn set_pull_message_service_shards(&mut self, shards: usize) {
+        self.pull_message_service_shards = shards;
+    }
+
     // ============ Utility Methods ============
 
     /// Clones the configuration
@@ -683,6 +697,7 @@ impl ClientConfig {
         self.max_page_size_in_get_metadata = other.max_page_size_in_get_metadata;
         self.enable_concurrent_heartbeat = other.enable_concurrent_heartbeat;
         self.concurrent_heartbeat_thread_pool_size = other.concurrent_heartbeat_thread_pool_size;
+        self.pull_message_service_shards = other.pull_message_service_shards;
     }
 
     /// Deprecated: Use with_namespace instead
@@ -729,7 +744,7 @@ impl std::fmt::Display for ClientConfig {
              {:?}, enable_stream_request_type: {}, send_latency_enable: {}, start_detector_enable: {}, \
              enable_heartbeat_channel_event_listener: {}, enable_trace: {}, trace_topic: {:?}, trace_msg_batch_num: \
              {}, max_page_size_in_get_metadata: {}, enable_concurrent_heartbeat: {}, \
-             concurrent_heartbeat_thread_pool_size: {} }}",
+             concurrent_heartbeat_thread_pool_size: {}, pull_message_service_shards: {} }}",
             self.namesrv_addr,
             self.client_ip,
             self.instance_name,
@@ -762,7 +777,8 @@ impl std::fmt::Display for ClientConfig {
             self.trace_msg_batch_num,
             self.max_page_size_in_get_metadata,
             self.enable_concurrent_heartbeat,
-            self.concurrent_heartbeat_thread_pool_size
+            self.concurrent_heartbeat_thread_pool_size,
+            self.pull_message_service_shards
         )
     }
 }
@@ -795,6 +811,7 @@ mod tests {
         source.set_max_page_size_in_get_metadata(4096);
         source.set_enable_concurrent_heartbeat(true);
         source.set_concurrent_heartbeat_thread_pool_size(8);
+        source.set_pull_message_service_shards(4);
 
         let mut target = ClientConfig::default();
         target.set_use_tls(false);
@@ -804,6 +821,7 @@ mod tests {
         target.set_max_page_size_in_get_metadata(2000);
         target.set_enable_concurrent_heartbeat(false);
         target.set_concurrent_heartbeat_thread_pool_size(1);
+        target.set_pull_message_service_shards(1);
 
         target.reset_client_config(&source);
 
@@ -818,6 +836,7 @@ mod tests {
         assert_eq!(target.get_max_page_size_in_get_metadata(), 4096);
         assert!(target.is_enable_concurrent_heartbeat());
         assert_eq!(target.get_concurrent_heartbeat_thread_pool_size(), 8);
+        assert_eq!(target.get_pull_message_service_shards(), 4);
     }
 
     #[test]
