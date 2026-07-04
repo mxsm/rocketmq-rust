@@ -64,6 +64,7 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
@@ -1743,14 +1744,18 @@ fn master_targets_by_cluster_name(
     cluster_info: &ClusterInfo,
     cluster_name: &str,
 ) -> Result<Vec<(String, CheetahString)>, DashboardError> {
-    let cluster_addr_table = cluster_info
-        .cluster_addr_table
-        .as_ref()
-        .ok_or_else(|| DashboardError::RocketMq("NameServer did not return cluster address data".to_string()))?;
-    let broker_addr_table = cluster_info
-        .broker_addr_table
-        .as_ref()
-        .ok_or_else(|| DashboardError::RocketMq("NameServer did not return broker address data".to_string()))?;
+    let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
+        DashboardError::RocketMq(RocketMQError::response_process_failed(
+            "examine_broker_cluster_info",
+            "NameServer did not return cluster address data",
+        ))
+    })?;
+    let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
+        DashboardError::RocketMq(RocketMQError::response_process_failed(
+            "examine_broker_cluster_info",
+            "NameServer did not return broker address data",
+        ))
+    })?;
     let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
         DashboardError::Validation(format!(
             "Cluster `{cluster_name}` was not found in the current NameServer view"
@@ -2322,8 +2327,8 @@ fn unique_admin_group() -> String {
     format!("dashboard-web-admin-{}-{millis}", std::process::id())
 }
 
-fn map_rocketmq_error(error: impl ToString) -> DashboardError {
-    DashboardError::RocketMq(error.to_string())
+fn map_rocketmq_error(error: RocketMQError) -> DashboardError {
+    DashboardError::RocketMq(error)
 }
 
 fn validate_name(value: &str, label: &str) -> Result<(), DashboardError> {
