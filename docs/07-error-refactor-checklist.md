@@ -70,7 +70,7 @@ classes: wide
 | M7 | domain crate source preservation | store/auth/controller/broker 仍有 source 字符串化 | I/O、serde、rocksdb、raft、runtime source 有 typed 保留或 allowlist |
 | M8 | redaction 全仓库收口 | 重点模型已脱敏，未全量使用中心 `Sensitive<T>` | secret/token/signature/password Debug/Display/log 有 guard |
 | M9 | CI guard 收口 | `scripts/error_architecture_guard.py` 可通过，但未见 CI 调用 | root CI 和相关 dashboard CI 调用 guard |
-| M10 | standalone 验证 | 未全量校验 | 受影响 standalone project 按各自目录 clippy 通过 |
+| M10 | standalone 验证 | 已全量校验 | 受影响 standalone project 按各自目录 clippy 通过 |
 
 ## 任务卡与 Checklist
 
@@ -522,25 +522,35 @@ rg -n "anyhow::Result|spec\\(\\)\\.cli|CliExitCode" rocketmq-tools --glob "*.rs"
 
 **当前缺口**：
 
-- standalone 项目不由 root workspace clippy 覆盖。
-- dashboard common/web/tauri/gpui 中仍存在 `anyhow::Result`。
-- dashboard web backend HTTP boundary 未接入 `spec().http`。
+- standalone 项目不由 root workspace clippy 覆盖，需要按各自目录独立验证。
+- dashboard common/web/tauri/gpui 中的 `anyhow::Result` 已由 guard allowlist 限定在 build script、process/app boundary 或已登记 dashboard alignment 边界。
+- dashboard web backend HTTP boundary 已接入 `spec().http`，并由 error architecture guard 覆盖。
+
+**完成状态**：
+
+- `rocketmq-example` standalone `cargo fmt --all` 与 `cargo clippy --all-targets -- -D warnings` 已通过。
+- dashboard GPUI standalone `cargo fmt --all` 与 `cargo clippy --all-targets --all-features -- -D warnings` 已通过。
+- dashboard Tauri `src-tauri` standalone `cargo fmt --all` 与 `cargo clippy --all-targets --all-features -- -D warnings` 已通过。
+- dashboard web backend standalone `cargo fmt --all`、`cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo build --all-targets --all-features` 已通过。
+- root workspace `cargo fmt --all`、`cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` 与 `py scripts\error_architecture_guard.py` 已通过。
+
+**追踪**：Issue [#7957](https://github.com/mxsm/rocketmq-rust/issues/7957)，PR [#7958](https://github.com/mxsm/rocketmq-rust/pull/7958)。
 
 **开发 checklist**：
 
-- [ ] 根据共享 API 变更更新 `rocketmq-example`。
-- [ ] 根据 dashboard common typed result 变更更新 GPUI/Tauri/Web。
-- [ ] Tauri backend 中 `anyhow` 留在 app boundary，服务层按 typed error 收口。
-- [ ] Web backend 完成 HTTP adapter 后同步 common provider。
-- [ ] 分别运行各 standalone 目录的 clippy/build。
+- [x] 根据共享 API 变更更新 `rocketmq-example`。
+- [x] 根据 dashboard common typed result 变更更新 GPUI/Tauri/Web。
+- [x] Tauri backend 中 `anyhow` 留在 app boundary，服务层按 typed error 收口。
+- [x] Web backend 完成 HTTP adapter 后同步 common provider。
+- [x] 分别运行各 standalone 目录的 clippy/build。
 
 **验收 checklist**：
 
-- [ ] root workspace validation 通过。
-- [ ] `rocketmq-example` standalone clippy 通过。
-- [ ] dashboard GPUI standalone clippy 通过。
-- [ ] dashboard Tauri `src-tauri` standalone clippy 通过。
-- [ ] dashboard web backend clippy/build 通过。
+- [x] root workspace validation 通过。
+- [x] `rocketmq-example` standalone clippy 通过。
+- [x] dashboard GPUI standalone clippy 通过。
+- [x] dashboard Tauri `src-tauri` standalone clippy 通过。
+- [x] dashboard web backend clippy/build 通过。
 
 **建议验证**：
 
@@ -591,7 +601,7 @@ cargo build --all-targets --all-features
 - [x] secret/token/signature/password 默认 redacted。
 - [x] `scripts/error_architecture_guard.py` 进入 CI。
 - [x] root workspace 通过 fmt/clippy。
-- [ ] 受影响 standalone 项目分别通过各自 clippy/build。
+- [x] 受影响 standalone 项目分别通过各自 clippy/build。
 
 ## 最终验证矩阵
 
