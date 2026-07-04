@@ -1556,11 +1556,20 @@ mod bench_support_tests {
         assert_eq!(report.sendfile_optimized.sendfile_syscall_count, 32);
         assert_eq!(report.sendfile_optimized.fallback_bytes, 0);
         assert!(report.vectored_baseline.user_cpu_nanos > 0, "{report:?}");
-        assert!(
-            report.sendfile_optimized.user_cpu_nanos <= report.vectored_baseline.user_cpu_nanos,
+        assert!(report.sendfile_optimized.user_cpu_nanos > 0, "{report:?}");
+
+        let expected_user_cpu_reduction_percent = report
+            .vectored_baseline
+            .user_cpu_nanos
+            .saturating_sub(report.sendfile_optimized.user_cpu_nanos)
+            .checked_mul(100)
+            .and_then(|reduction| reduction.checked_div(report.vectored_baseline.user_cpu_nanos))
+            .and_then(|percent| usize::try_from(percent).ok())
+            .unwrap_or(0);
+        assert_eq!(
+            report.user_cpu_reduction_percent, expected_user_cpu_reduction_percent,
             "{report:?}"
         );
-        assert!(report.user_cpu_reduction_percent > 0, "{report:?}");
     }
 
     #[cfg(feature = "rocksdb_store")]
