@@ -22,6 +22,7 @@ use tonic::Code as TonicCode;
 use tonic::Status as TonicStatus;
 
 use crate::error::ProxyError;
+use crate::error::ProxyErrorKind;
 use crate::proto::v2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +58,18 @@ impl From<ProxyPayloadStatus> for v2::Status {
             code: value.code,
             message: value.message,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProxyGrpcMapping {
+    payload: v2::Code,
+    status: TonicCode,
+}
+
+impl ProxyGrpcMapping {
+    const fn new(payload: v2::Code, status: TonicCode) -> Self {
+        Self { payload, status }
     }
 }
 
@@ -99,28 +112,22 @@ impl ProxyStatusMapper {
     }
 
     pub fn from_error_payload(error: &ProxyError) -> ProxyPayloadStatus {
-        let code = match error {
-            ProxyError::ClientIdRequired => v2::Code::ClientIdRequired,
-            ProxyError::UnrecognizedClientType(_) => v2::Code::UnrecognizedClientType,
-            ProxyError::NotImplemented { .. } => v2::Code::NotImplemented,
-            ProxyError::TooManyRequests { .. } => v2::Code::TooManyRequests,
-            ProxyError::InvalidMetadata { .. } => v2::Code::BadRequest,
-            ProxyError::Transport { .. } => v2::Code::InternalError,
-            ProxyError::IllegalMessageId { .. } => v2::Code::IllegalMessageId,
-            ProxyError::InvalidTransactionId { .. } => v2::Code::InvalidTransactionId,
-            ProxyError::IllegalMessageGroup { .. } => v2::Code::IllegalMessageGroup,
-            ProxyError::IllegalDeliveryTime { .. } => v2::Code::IllegalDeliveryTime,
-            ProxyError::IllegalPollingTime { .. } => v2::Code::IllegalPollingTime,
-            ProxyError::IllegalOffset { .. } => v2::Code::IllegalOffset,
-            ProxyError::IllegalInvisibleTime { .. } => v2::Code::IllegalInvisibleTime,
-            ProxyError::IllegalFilterExpression { .. } => v2::Code::IllegalFilterExpression,
-            ProxyError::InvalidReceiptHandle { .. } => v2::Code::InvalidReceiptHandle,
-            ProxyError::IllegalLiteTopic { .. } => v2::Code::IllegalLiteTopic,
-            ProxyError::LiteSubscriptionQuotaExceeded { .. } => v2::Code::LiteSubscriptionQuotaExceeded,
-            ProxyError::MessagePropertyConflictWithType { .. } => v2::Code::MessagePropertyConflictWithType,
-            ProxyError::RocketMQ(inner) => Self::from_rocketmq_error(inner),
+        let (code, message) = match error {
+            ProxyError::RocketMQ(inner) => (
+                Self::rocketmq_error_grpc_mapping(inner).payload,
+                inner.public_message().to_owned(),
+            ),
+            local => (
+                Self::local_error_grpc_mapping(
+                    local
+                        .local_kind()
+                        .expect("non-RocketMQ proxy errors must expose local kind"),
+                )
+                .payload,
+                local.to_string(),
+            ),
         };
-        Self::from_payload_code(code, error.to_string())
+        Self::from_payload_code(code, message)
     }
 
     pub fn from_error(error: &ProxyError) -> v2::Status {
@@ -139,81 +146,109 @@ impl ProxyStatusMapper {
         }
 
         let payload = Self::from_error(error);
-        let payload_code = v2::Code::try_from(payload.code).unwrap_or(v2::Code::InternalError);
-        let tonic_code = Self::tonic_code_for_error(error, payload_code);
+        let tonic_code = match error {
+            ProxyError::RocketMQ(inner) => Self::rocketmq_error_grpc_mapping(inner).status,
+            local => {
+                Self::local_error_grpc_mapping(
+                    local
+                        .local_kind()
+                        .expect("non-RocketMQ proxy errors must expose local kind"),
+                )
+                .status
+            }
+        };
 
         TonicStatus::new(tonic_code, payload.message)
     }
 
-    fn tonic_code_for_error(error: &ProxyError, payload_code: v2::Code) -> TonicCode {
-        match error {
-            ProxyError::RocketMQ(inner) if Self::rocketmq_payload_override(inner).is_none() => {
-                Self::grpc_status_to_tonic_code(inner.spec().grpc.status)
+    fn local_error_grpc_mapping(kind: ProxyErrorKind) -> ProxyGrpcMapping {
+        match kind {
+            ProxyErrorKind::ClientIdRequired => {
+                ProxyGrpcMapping::new(v2::Code::ClientIdRequired, TonicCode::InvalidArgument)
             }
-            _ => Self::tonic_code_from_payload_code(payload_code),
+            ProxyErrorKind::UnrecognizedClientType => {
+                ProxyGrpcMapping::new(v2::Code::UnrecognizedClientType, TonicCode::InvalidArgument)
+            }
+            ProxyErrorKind::NotImplemented => ProxyGrpcMapping::new(v2::Code::NotImplemented, TonicCode::Unimplemented),
+            ProxyErrorKind::TooManyRequests => {
+                ProxyGrpcMapping::new(v2::Code::TooManyRequests, TonicCode::ResourceExhausted)
+            }
+            ProxyErrorKind::InvalidMetadata => ProxyGrpcMapping::new(v2::Code::BadRequest, TonicCode::InvalidArgument),
+            ProxyErrorKind::Transport => ProxyGrpcMapping::new(v2::Code::InternalError, TonicCode::Unavailable),
+            ProxyErrorKind::IllegalMessageId => {
+                ProxyGrpcMapping::new(v2::Code::IllegalMessageId, TonicCode::InvalidArgument)
+            }
+            ProxyErrorKind::InvalidTransactionId => {
+                ProxyGrpcMapping::new(v2::Code::InvalidTransactionId, TonicCode::InvalidArgument)
+            }
+            ProxyErrorKind::IllegalMessageGroup => {
+                ProxyGrpcMapping::new(v2::Code::IllegalMessageGroup, TonicCode::InvalidArgument)
+            }
+            ProxyErrorKind::IllegalDeliveryTime => {
+                ProxyGrpcMapping::new(v2::Code::IllegalDeliveryTime, TonicCode::InvalidArgument)
+            }
+            ProxyErrorKind::IllegalPollingTime => {
+                ProxyGrpcMapping::new(v2::Code::IllegalPollingTime, TonicCode::InvalidArgument)
+            }
+            ProxyErrorKind::IllegalOffset => ProxyGrpcMapping::new(v2::Code::IllegalOffset, TonicCode::InvalidArgument),
+            ProxyErrorKind::IllegalInvisibleTime => {
+                ProxyGrpcMapping::new(v2::Code::IllegalInvisibleTime, TonicCode::InvalidArgument)
+            }
+            ProxyErrorKind::IllegalFilterExpression => {
+                ProxyGrpcMapping::new(v2::Code::IllegalFilterExpression, TonicCode::InvalidArgument)
+            }
+            ProxyErrorKind::InvalidReceiptHandle => {
+                ProxyGrpcMapping::new(v2::Code::InvalidReceiptHandle, TonicCode::InvalidArgument)
+            }
+            ProxyErrorKind::IllegalLiteTopic => {
+                ProxyGrpcMapping::new(v2::Code::IllegalLiteTopic, TonicCode::InvalidArgument)
+            }
+            ProxyErrorKind::LiteSubscriptionQuotaExceeded => {
+                ProxyGrpcMapping::new(v2::Code::LiteSubscriptionQuotaExceeded, TonicCode::ResourceExhausted)
+            }
+            ProxyErrorKind::MessagePropertyConflictWithType => {
+                ProxyGrpcMapping::new(v2::Code::MessagePropertyConflictWithType, TonicCode::InvalidArgument)
+            }
         }
     }
 
-    fn tonic_code_from_payload_code(payload_code: v2::Code) -> TonicCode {
-        match payload_code {
-            v2::Code::BadRequest
-            | v2::Code::IllegalAccessPoint
-            | v2::Code::IllegalTopic
-            | v2::Code::IllegalConsumerGroup
-            | v2::Code::IllegalMessageTag
-            | v2::Code::IllegalMessageKey
-            | v2::Code::IllegalMessageGroup
-            | v2::Code::IllegalMessagePropertyKey
-            | v2::Code::InvalidTransactionId
-            | v2::Code::IllegalMessageId
-            | v2::Code::IllegalFilterExpression
-            | v2::Code::IllegalInvisibleTime
-            | v2::Code::IllegalDeliveryTime
-            | v2::Code::InvalidReceiptHandle
-            | v2::Code::MessagePropertyConflictWithType
-            | v2::Code::UnrecognizedClientType
-            | v2::Code::ClientIdRequired
-            | v2::Code::IllegalPollingTime
-            | v2::Code::IllegalOffset
-            | v2::Code::IllegalLiteTopic => TonicCode::InvalidArgument,
-            v2::Code::Unauthorized => TonicCode::Unauthenticated,
-            v2::Code::Forbidden => TonicCode::PermissionDenied,
-            v2::Code::NotFound
-            | v2::Code::MessageNotFound
-            | v2::Code::TopicNotFound
-            | v2::Code::ConsumerGroupNotFound
-            | v2::Code::OffsetNotFound => TonicCode::NotFound,
-            v2::Code::RequestTimeout | v2::Code::ProxyTimeout => TonicCode::DeadlineExceeded,
-            v2::Code::MessageBodyTooLarge
-            | v2::Code::TooManyRequests
-            | v2::Code::LiteTopicQuotaExceeded
-            | v2::Code::LiteSubscriptionQuotaExceeded => TonicCode::ResourceExhausted,
-            v2::Code::NotImplemented
-            | v2::Code::Unsupported
-            | v2::Code::VersionUnsupported
-            | v2::Code::VerifyFifoMessageUnsupported => TonicCode::Unimplemented,
-            _ => TonicCode::Internal,
-        }
+    fn rocketmq_error_grpc_mapping(error: &RocketMQError) -> ProxyGrpcMapping {
+        Self::broker_response_payload_override(error).unwrap_or_else(|| {
+            let grpc = error.spec().grpc;
+            ProxyGrpcMapping::new(
+                Self::grpc_payload_to_code(grpc.payload),
+                Self::grpc_status_to_tonic_code(grpc.status),
+            )
+        })
     }
 
-    fn from_rocketmq_error(error: &RocketMQError) -> v2::Code {
-        Self::rocketmq_payload_override(error).unwrap_or_else(|| Self::grpc_payload_to_code(error.spec().grpc.payload))
-    }
-
-    fn rocketmq_payload_override(error: &RocketMQError) -> Option<v2::Code> {
+    fn broker_response_payload_override(error: &RocketMQError) -> Option<ProxyGrpcMapping> {
         match error {
-            RocketMQError::IllegalArgument(message) if is_topic_route_not_found_message(message) => {
-                Some(v2::Code::TopicNotFound)
-            }
             RocketMQError::BrokerOperationFailed { code, .. } => match ResponseCode::from(*code) {
-                ResponseCode::NoPermission => Some(v2::Code::Forbidden),
-                ResponseCode::TopicNotExist => Some(v2::Code::TopicNotFound),
-                ResponseCode::SubscriptionGroupNotExist => Some(v2::Code::ConsumerGroupNotFound),
-                ResponseCode::UserNotExist | ResponseCode::PolicyNotExist => Some(v2::Code::NotFound),
-                ResponseCode::QueryNotFound => Some(v2::Code::OffsetNotFound),
-                ResponseCode::PullOffsetMoved => Some(v2::Code::IllegalOffset),
-                ResponseCode::RequestCodeNotSupported => Some(v2::Code::Unsupported),
-                _ => Some(v2::Code::InternalError),
+                ResponseCode::NoPermission => {
+                    Some(ProxyGrpcMapping::new(v2::Code::Forbidden, TonicCode::PermissionDenied))
+                }
+                ResponseCode::TopicNotExist => {
+                    Some(ProxyGrpcMapping::new(v2::Code::TopicNotFound, TonicCode::NotFound))
+                }
+                ResponseCode::SubscriptionGroupNotExist => Some(ProxyGrpcMapping::new(
+                    v2::Code::ConsumerGroupNotFound,
+                    TonicCode::NotFound,
+                )),
+                ResponseCode::UserNotExist | ResponseCode::PolicyNotExist => {
+                    Some(ProxyGrpcMapping::new(v2::Code::NotFound, TonicCode::NotFound))
+                }
+                ResponseCode::QueryNotFound => {
+                    Some(ProxyGrpcMapping::new(v2::Code::OffsetNotFound, TonicCode::NotFound))
+                }
+                ResponseCode::PullOffsetMoved => Some(ProxyGrpcMapping::new(
+                    v2::Code::IllegalOffset,
+                    TonicCode::InvalidArgument,
+                )),
+                ResponseCode::RequestCodeNotSupported => {
+                    Some(ProxyGrpcMapping::new(v2::Code::Unsupported, TonicCode::Unimplemented))
+                }
+                _ => Some(ProxyGrpcMapping::new(v2::Code::InternalError, TonicCode::Internal)),
             },
             _ => None,
         }
@@ -253,12 +288,6 @@ impl ProxyStatusMapper {
     }
 }
 
-fn is_topic_route_not_found_message(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    (lower.contains("code: 17") || lower.contains("code:17"))
-        && (lower.contains("no topic route info") || lower.contains("no route info"))
-}
-
 #[cfg(test)]
 mod tests {
     use rocketmq_error::RocketMQError;
@@ -266,6 +295,7 @@ mod tests {
 
     use super::ProxyStatusMapper;
     use crate::error::ProxyError;
+    use crate::error::ProxyErrorKind;
     use crate::proto::v2;
 
     #[test]
@@ -281,12 +311,19 @@ mod tests {
     }
 
     #[test]
-    fn namesrv_topic_route_illegal_argument_maps_to_topic_not_found() {
+    fn route_not_found_requires_typed_error_instead_of_display_text() {
         let status = ProxyStatusMapper::from_error(&ProxyError::RocketMQ(RocketMQError::illegal_argument(
             "CODE: 17  DESC: No topic route info in name server for the topic: TestTopic",
         )));
 
-        assert_eq!(status.code, v2::Code::TopicNotFound as i32);
+        assert_eq!(status.code, v2::Code::BadRequest as i32);
+        assert_eq!(
+            ProxyStatusMapper::to_tonic_status(&ProxyError::RocketMQ(RocketMQError::illegal_argument(
+                "CODE: 17  DESC: No topic route info in name server for the topic: TestTopic",
+            )))
+            .code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]
@@ -349,6 +386,36 @@ mod tests {
     }
 
     #[test]
+    fn broker_response_overrides_have_explicit_payload_and_tonic_status() {
+        for (response_code, expected_grpc_code, expected_tonic_code) in [
+            (
+                ResponseCode::QueryNotFound,
+                v2::Code::OffsetNotFound,
+                tonic::Code::NotFound,
+            ),
+            (
+                ResponseCode::PullOffsetMoved,
+                v2::Code::IllegalOffset,
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                ResponseCode::RequestCodeNotSupported,
+                v2::Code::Unsupported,
+                tonic::Code::Unimplemented,
+            ),
+        ] {
+            let error = ProxyError::RocketMQ(RocketMQError::broker_operation_failed(
+                "BROKER",
+                response_code.to_i32(),
+                "broker response override",
+            ));
+            let payload_status = ProxyStatusMapper::from_error(&error);
+            assert_eq!(payload_status.code, expected_grpc_code as i32);
+            assert_eq!(ProxyStatusMapper::to_tonic_status(&error).code(), expected_tonic_code);
+        }
+    }
+
+    #[test]
     fn auth_config_errors_map_to_bad_request_payload_and_transport_status() {
         for error in [
             ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue {
@@ -392,6 +459,42 @@ mod tests {
         assert_eq!(
             ProxyStatusMapper::to_tonic_status(&not_master).code(),
             tonic::Code::FailedPrecondition
+        );
+    }
+
+    #[test]
+    fn rocketmq_error_payload_message_uses_public_message() {
+        let inner = RocketMQError::ConfigInvalidValue {
+            key: "auth.authorization",
+            value: "local".to_owned(),
+            reason: "provider not ready".to_owned(),
+        };
+        let expected_message = inner.public_message().to_owned();
+        let error = ProxyError::RocketMQ(inner);
+
+        let status = ProxyStatusMapper::from_error(&error);
+
+        assert_eq!(status.message, expected_message);
+    }
+
+    #[test]
+    fn local_proxy_errors_use_local_only_kind_mapping() {
+        let lite_topic = ProxyError::illegal_lite_topic("not an LMQ");
+        assert_eq!(lite_topic.local_kind(), Some(ProxyErrorKind::IllegalLiteTopic));
+        let lite_topic_status = ProxyStatusMapper::from_error(&lite_topic);
+        assert_eq!(lite_topic_status.code, v2::Code::IllegalLiteTopic as i32);
+        assert_eq!(
+            ProxyStatusMapper::to_tonic_status(&lite_topic).code(),
+            tonic::Code::InvalidArgument
+        );
+
+        let quota = ProxyError::lite_subscription_quota_exceeded("subscription limit reached");
+        assert_eq!(quota.local_kind(), Some(ProxyErrorKind::LiteSubscriptionQuotaExceeded));
+        let quota_status = ProxyStatusMapper::from_error(&quota);
+        assert_eq!(quota_status.code, v2::Code::LiteSubscriptionQuotaExceeded as i32);
+        assert_eq!(
+            ProxyStatusMapper::to_tonic_status(&quota).code(),
+            tonic::Code::ResourceExhausted
         );
     }
 }

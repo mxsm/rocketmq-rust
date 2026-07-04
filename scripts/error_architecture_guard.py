@@ -274,9 +274,13 @@ def check_required_mapping_adapters() -> list[Finding]:
             "internal_error_with_opaque",
         ],
         ROOT / "rocketmq-proxy" / "src" / "status.rs": [
+            "ProxyErrorKind",
+            "broker_response_payload_override",
             "error.spec().grpc",
             "grpc_payload_to_code",
             "grpc_status_to_tonic_code",
+            "local_error_grpc_mapping",
+            "public_message()",
         ],
     }
     findings: list[Finding] = []
@@ -289,6 +293,18 @@ def check_required_mapping_adapters() -> list[Finding]:
             if needle not in text:
                 findings.append(Finding(path, 1, f"required mapping adapter token missing: {needle}"))
     return findings
+
+
+def check_proxy_grpc_boundary() -> list[Finding]:
+    path = ROOT / "rocketmq-proxy" / "src" / "status.rs"
+    if not path.exists():
+        return [Finding(path, 1, "proxy gRPC status mapper is missing")]
+
+    forbidden = {
+        "tonic_code_from_payload_code": "proxy gRPC transport status must come from central spec, broker override, or local-only kind",
+        "is_topic_route_not_found_message": "RocketMQ gRPC mapping must not parse display text for topic-route errors",
+    }
+    return scan_forbidden_terms([path], forbidden)
 
 
 def check_error_spec_contract() -> list[Finding]:
@@ -425,6 +441,7 @@ def run() -> int:
         ("processor boundary mappings", check_processor_boundary_mappings),
         ("processor generic response allowlist", check_processor_generic_response_allowlist),
         ("required mapping adapters", check_required_mapping_adapters),
+        ("proxy grpc boundary", check_proxy_grpc_boundary),
         ("error spec contract", check_error_spec_contract),
         ("internal error allowlist", check_internal_error_allowlist),
         ("anyhow result allowlist", check_anyhow_result_allowlist),

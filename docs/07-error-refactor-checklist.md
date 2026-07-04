@@ -191,26 +191,29 @@ py scripts\error_architecture_guard.py
 
 **范围**：`rocketmq-proxy/src/status.rs`、`rocketmq-proxy/src/error.rs`、相关 gRPC tests。
 
-**当前缺口**：
+**完成状态**：
 
-- `ProxyError::RocketMQ` 路径部分读取 `error.spec().grpc`。
-- `rocketmq_payload_override` 和 `tonic_code_from_payload_code` 仍保留本地映射表。
-- 部分 local `ProxyError` 仍直接映射 `v2::Code`，没有中心 metadata 或明确 local-only 分类。
+- `ProxyError::RocketMQ` 默认 payload/status 已由 `ErrorSpec.grpc` 派生，payload message 使用 `RocketMQError::public_message()`，不再依赖 `Display` 文本。
+- broker response code 兼容路径已收敛为显式 `broker_response_payload_override` allowlist，并同时声明 payload code 与 tonic status。
+- proxy local-only 错误已建立 `ProxyErrorKind`，本地映射集中在 `local_error_grpc_mapping`。
+- 旧的 `tonic_code_from_payload_code` 旁路 helper 和 display-string topic-route 推断已移除，并由 `scripts/error_architecture_guard.py` 阻止回退。
+
+**追踪**：Issue [#7941](https://github.com/mxsm/rocketmq-rust/issues/7941)，PR [#7942](https://github.com/mxsm/rocketmq-rust/pull/7942)。
 
 **开发 checklist**：
 
-- [ ] 区分 `RocketMQError` 通用路径与 proxy local-only 错误路径。
-- [ ] `RocketMQError` 默认 payload/status 从 `ErrorSpec.grpc` 派生。
-- [ ] 只保留必须基于 broker response code 的 override，并写清 allowlist。
-- [ ] 为 proxy local-only error 建立 `ProxyErrorKind` 或转换到 `RocketMQError`。
-- [ ] 避免新增旁路 gRPC 映射表。
-- [ ] 补齐 `v2::Code` 与 `tonic::Code` 的 focused tests。
+- [x] 区分 `RocketMQError` 通用路径与 proxy local-only 错误路径。
+- [x] `RocketMQError` 默认 payload/status 从 `ErrorSpec.grpc` 派生。
+- [x] 只保留必须基于 broker response code 的 override，并写清 allowlist。
+- [x] 为 proxy local-only error 建立 `ProxyErrorKind` 或转换到 `RocketMQError`。
+- [x] 避免新增旁路 gRPC 映射表。
+- [x] 补齐 `v2::Code` 与 `tonic::Code` 的 focused tests。
 
 **验收 checklist**：
 
-- [ ] `RocketMQError` gRPC 输出不依赖 display string。
-- [ ] override 分支都有测试和注释说明。
-- [ ] 新增 proxy error 不会绕过中心 spec 或 local-only allowlist。
+- [x] `RocketMQError` gRPC 输出不依赖 display string。
+- [x] override 分支都有测试和注释说明。
+- [x] 新增 proxy error 不会绕过中心 spec 或 local-only allowlist。
 
 **建议验证**：
 

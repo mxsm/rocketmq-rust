@@ -17,6 +17,28 @@ use thiserror::Error;
 
 pub type ProxyResult<T> = std::result::Result<T, ProxyError>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProxyErrorKind {
+    ClientIdRequired,
+    UnrecognizedClientType,
+    NotImplemented,
+    TooManyRequests,
+    InvalidMetadata,
+    Transport,
+    IllegalMessageId,
+    InvalidTransactionId,
+    IllegalMessageGroup,
+    IllegalDeliveryTime,
+    IllegalPollingTime,
+    IllegalOffset,
+    IllegalInvisibleTime,
+    IllegalFilterExpression,
+    InvalidReceiptHandle,
+    IllegalLiteTopic,
+    LiteSubscriptionQuotaExceeded,
+    MessagePropertyConflictWithType,
+}
+
 #[derive(Debug, Error)]
 pub enum ProxyError {
     #[error(transparent)]
@@ -78,6 +100,30 @@ pub enum ProxyError {
 }
 
 impl ProxyError {
+    pub fn local_kind(&self) -> Option<ProxyErrorKind> {
+        Some(match self {
+            Self::RocketMQ(_) => return None,
+            Self::ClientIdRequired => ProxyErrorKind::ClientIdRequired,
+            Self::UnrecognizedClientType(_) => ProxyErrorKind::UnrecognizedClientType,
+            Self::NotImplemented { .. } => ProxyErrorKind::NotImplemented,
+            Self::TooManyRequests { .. } => ProxyErrorKind::TooManyRequests,
+            Self::InvalidMetadata { .. } => ProxyErrorKind::InvalidMetadata,
+            Self::Transport { .. } => ProxyErrorKind::Transport,
+            Self::IllegalMessageId { .. } => ProxyErrorKind::IllegalMessageId,
+            Self::InvalidTransactionId { .. } => ProxyErrorKind::InvalidTransactionId,
+            Self::IllegalMessageGroup { .. } => ProxyErrorKind::IllegalMessageGroup,
+            Self::IllegalDeliveryTime { .. } => ProxyErrorKind::IllegalDeliveryTime,
+            Self::IllegalPollingTime { .. } => ProxyErrorKind::IllegalPollingTime,
+            Self::IllegalOffset { .. } => ProxyErrorKind::IllegalOffset,
+            Self::IllegalInvisibleTime { .. } => ProxyErrorKind::IllegalInvisibleTime,
+            Self::IllegalFilterExpression { .. } => ProxyErrorKind::IllegalFilterExpression,
+            Self::InvalidReceiptHandle { .. } => ProxyErrorKind::InvalidReceiptHandle,
+            Self::IllegalLiteTopic { .. } => ProxyErrorKind::IllegalLiteTopic,
+            Self::LiteSubscriptionQuotaExceeded { .. } => ProxyErrorKind::LiteSubscriptionQuotaExceeded,
+            Self::MessagePropertyConflictWithType { .. } => ProxyErrorKind::MessagePropertyConflictWithType,
+        })
+    }
+
     pub fn not_implemented(feature: &'static str) -> Self {
         Self::NotImplemented { feature }
     }
