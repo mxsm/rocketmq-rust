@@ -395,20 +395,29 @@ rg -n "error\\.to_string\\(\\)|RocketMQError::Internal|StoreError::RocksDb\\(" r
 - `plain_access_resource` 等 auth migration 类型仍需核对 signature/token/password 字段是否全部脱敏。
 - guard 当前主要覆盖 error/common/client/remoting 的敏感 Debug 字段，不覆盖 dashboard/tools 全部输出。
 
+**完成状态**：
+
+- `scripts/error_architecture_guard.py` 已定义敏感字段关键词表，并扩展到 `rocketmq-auth`、dashboard web backend、admin tools、remoting/client/common 的关键 Debug 输出。
+- guard 已增加 `#[derive(Debug)]` 结构体敏感字段检查，防止 secret/password/token/signature/credential 字段绕过手写 redaction。
+- `UserInfo`、`BrokerConfig`、TLS key password、client ACL hook、auth context/resource、admin tools user request、dashboard auth/ACL/config 模型均已增加 redacted Debug/Display 或 no-secret regression tests。
+- dashboard ACL user list API 不再把 broker 返回的 password 映射到 HTTP response。
+
+**追踪**：Issue [#7951](https://github.com/mxsm/rocketmq-rust/issues/7951)，PR [#7952](https://github.com/mxsm/rocketmq-rust/pull/7952)。
+
 **开发 checklist**：
 
-- [ ] 定义敏感字段关键词表：secret、password、token、signature、authorization、credential。
-- [ ] 将可复用模型迁移到 `Sensitive<T>` 或统一 helper。
-- [ ] 对 `Display`、`Debug`、tracing structured fields、API response、CLI output 分别建立 redaction 测试。
-- [ ] 修复 auth migration/context 中所有未脱敏 signature/token/password Debug 字段。
-- [ ] 扩展 guard 到 auth、dashboard backend、tools 的关键输出类型。
-- [ ] 确认测试 fixture 中明文 secret 只存在于测试输入，不进入输出断言。
+- [x] 定义敏感字段关键词表：secret、password、token、signature、authorization、credential。
+- [x] 将可复用模型迁移到 `Sensitive<T>` 或统一 helper。
+- [x] 对 `Display`、`Debug`、tracing structured fields、API response、CLI output 分别建立 redaction 测试。
+- [x] 修复 auth migration/context 中所有未脱敏 signature/token/password Debug 字段。
+- [x] 扩展 guard 到 auth、dashboard backend、tools 的关键输出类型。
+- [x] 确认测试 fixture 中明文 secret 只存在于测试输入，不进入输出断言。
 
 **验收 checklist**：
 
-- [ ] `SessionCredentials`、auth config、user/password、plain access config/resource 都有 no-secret tests。
-- [ ] guard 能阻止新增敏感 Debug field。
-- [ ] API/CLI/log 输出默认不含敏感原文。
+- [x] `SessionCredentials`、auth config、user/password、plain access config/resource 都有 no-secret tests。
+- [x] guard 能阻止新增敏感 Debug field。
+- [x] API/CLI/log 输出默认不含敏感原文。
 
 **建议验证**：
 
@@ -559,7 +568,7 @@ cargo build --all-targets --all-features
 - [x] client callback 内部事实源不再是 `dyn Error` downcast。
 - [x] client retry/fault 行为来自 `RetryClass` 和明确 broker response allowlist。
 - [x] store/controller/auth/broker 不再无登记地把 source `to_string()` 后塞入新错误。
-- [ ] secret/token/signature/password 默认 redacted。
+- [x] secret/token/signature/password 默认 redacted。
 - [ ] `scripts/error_architecture_guard.py` 进入 CI。
 - [ ] root workspace 通过 fmt/clippy。
 - [ ] 受影响 standalone 项目分别通过各自 clippy/build。

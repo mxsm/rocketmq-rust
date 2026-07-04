@@ -13,14 +13,16 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::fmt;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::REDACTED;
 
 use crate::authentication::context::base_authentication_context::BaseAuthenticationContext;
 use crate::authentication::AsAny;
 use crate::authorization::context::authentication_context::AuthenticationContext;
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct DefaultAuthenticationContext {
     pub base: BaseAuthenticationContext,
 
@@ -29,6 +31,19 @@ pub struct DefaultAuthenticationContext {
     signature: Option<CheetahString>,
     request_timestamp: Option<CheetahString>,
     request_timestamp_millis: Option<i64>,
+}
+
+impl fmt::Debug for DefaultAuthenticationContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DefaultAuthenticationContext")
+            .field("username", &self.username)
+            .field("content_len", &self.content.as_ref().map(Vec::len))
+            .field("signature", &self.signature.as_ref().map(|_| REDACTED))
+            .field("request_timestamp", &self.request_timestamp)
+            .field("request_timestamp_millis", &self.request_timestamp_millis)
+            .finish_non_exhaustive()
+    }
 }
 
 impl DefaultAuthenticationContext {
@@ -140,5 +155,20 @@ mod tests {
         let mut context_mut = DefaultAuthenticationContext::new();
         let any_mut = context_mut.as_any_mut();
         assert!(any_mut.is::<DefaultAuthenticationContext>());
+    }
+
+    #[test]
+    fn default_authentication_context_debug_redacts_signature() {
+        let mut context = DefaultAuthenticationContext::new();
+        context.set_username(CheetahString::from("alice"));
+        context.set_content(vec![1, 2, 3, 4]);
+        context.set_signature(CheetahString::from("signature-secret"));
+
+        let debug = format!("{context:?}");
+
+        assert!(debug.contains("alice"));
+        assert!(debug.contains("content_len"));
+        assert!(debug.contains(REDACTED));
+        assert!(!debug.contains("signature-secret"));
     }
 }

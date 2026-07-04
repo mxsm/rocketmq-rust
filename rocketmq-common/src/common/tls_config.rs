@@ -15,6 +15,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+use rocketmq_error::REDACTED;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -281,7 +282,7 @@ impl TlsConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TlsServerConfig {
     #[serde(default)]
@@ -306,7 +307,22 @@ pub struct TlsServerConfig {
     pub trust_cert_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl fmt::Debug for TlsServerConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TlsServerConfig")
+            .field("mode", &self.mode)
+            .field("need_client_auth", &self.need_client_auth)
+            .field("key_path", &self.key_path)
+            .field("key_password", &self.key_password.as_ref().map(|_| REDACTED))
+            .field("cert_path", &self.cert_path)
+            .field("auth_client", &self.auth_client)
+            .field("trust_cert_path", &self.trust_cert_path)
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TlsClientConfig {
     #[serde(default)]
@@ -323,6 +339,19 @@ pub struct TlsClientConfig {
 
     #[serde(default)]
     pub trust_cert_path: Option<String>,
+}
+
+impl fmt::Debug for TlsClientConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TlsClientConfig")
+            .field("key_path", &self.key_path)
+            .field("key_password", &self.key_password.as_ref().map(|_| REDACTED))
+            .field("cert_path", &self.cert_path)
+            .field("auth_server", &self.auth_server)
+            .field("trust_cert_path", &self.trust_cert_path)
+            .finish()
+    }
 }
 
 impl Default for TlsClientConfig {
@@ -475,5 +504,25 @@ mod tests {
         assert!(entries.contains(&("tls.server.mode", "enforcing".to_string())));
         assert!(entries.contains(&("tls.server.certPath", "/certs/server.pem".to_string())));
         assert!(entries.contains(&("tls.client.trustCertPath", "/certs/ca.pem".to_string())));
+    }
+
+    #[test]
+    fn tls_config_debug_redacts_key_passwords() {
+        let server = TlsServerConfig {
+            key_password: Some("server-key-password".to_string()),
+            ..TlsServerConfig::default()
+        };
+        let client = TlsClientConfig {
+            key_password: Some("client-key-password".to_string()),
+            ..TlsClientConfig::default()
+        };
+
+        let server_debug = format!("{server:?}");
+        let client_debug = format!("{client:?}");
+
+        assert!(server_debug.contains(REDACTED));
+        assert!(client_debug.contains(REDACTED));
+        assert!(!server_debug.contains("server-key-password"));
+        assert!(!client_debug.contains("client-key-password"));
     }
 }

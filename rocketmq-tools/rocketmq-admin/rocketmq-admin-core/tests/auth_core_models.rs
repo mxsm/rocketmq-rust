@@ -65,6 +65,35 @@ fn auth_user_update_and_list_requests_preserve_optional_fields() {
 }
 
 #[test]
+fn auth_user_request_debug_redacts_passwords() {
+    let create = CreateUserRequest::try_new(
+        Some("127.0.0.1:10911".to_string()),
+        None,
+        "alice",
+        "create-secret",
+        Some("NORMAL".to_string()),
+    )
+    .unwrap();
+    let update = UpdateUserRequest::try_new(
+        None,
+        Some("DefaultCluster".to_string()),
+        "alice",
+        Some("update-secret".to_string()),
+        Some("NORMAL".to_string()),
+        Some("ENABLE".to_string()),
+    )
+    .unwrap();
+
+    let create_debug = format!("{create:?}");
+    let update_debug = format!("{update:?}");
+
+    assert!(create_debug.contains("<redacted>"));
+    assert!(update_debug.contains("<redacted>"));
+    assert!(!create_debug.contains("create-secret"));
+    assert!(!update_debug.contains("update-secret"));
+}
+
+#[test]
 fn auth_acl_create_request_trims_fields_and_builds_acl_info() {
     let request = CreateAclRequest::try_new(
         Some(" 127.0.0.1:10911 ".to_string()),

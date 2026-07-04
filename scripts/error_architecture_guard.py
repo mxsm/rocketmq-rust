@@ -29,6 +29,21 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parents[1]
 RUST_SUFFIX = ".rs"
 
+SENSITIVE_FIELD_TERMS = (
+    "secret",
+    "password",
+    "token",
+    "signature",
+    "authorization",
+    "credential",
+)
+
+SENSITIVE_DEBUG_FIELD_TERMS = tuple(term for term in SENSITIVE_FIELD_TERMS if term != "authorization")
+
+NON_SENSITIVE_DEBUG_FIELD_NAMES = {
+    "signature_algorithm",
+}
+
 INTERNAL_ERROR_ALLOWLIST = (
     "rocketmq-auth/src/authorization/provider.rs",
     "rocketmq-broker/src/",
@@ -194,6 +209,35 @@ def is_test_context(path: Path, line_number: int) -> bool:
     return False
 
 
+def iter_non_test_lines(path: Path) -> Iterable[tuple[int, str]]:
+    """Yield source lines while skipping test-only modules in one pass."""
+    rel_parts = path.relative_to(ROOT).parts
+    if "tests" in rel_parts or "benches" in rel_parts or "examples" in rel_parts:
+        return
+    if "src" in rel_parts and "bin" in rel_parts:
+        return
+
+    depth = 0
+    test_module_depth: int | None = None
+    pending_test_cfg = False
+    for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+        stripped = line.strip()
+        if stripped == "#[cfg(test)]":
+            pending_test_cfg = True
+        elif pending_test_cfg and re.match(r"(pub\([^)]*\)\s+|pub\s+)?mod\s+tests\b", stripped):
+            test_module_depth = depth + stripped.count("{") - stripped.count("}")
+            pending_test_cfg = False
+        elif stripped and not stripped.startswith("#"):
+            pending_test_cfg = False
+
+        if test_module_depth is None:
+            yield line_number, line
+
+        depth += line.count("{") - line.count("}")
+        if test_module_depth is not None and depth < test_module_depth:
+            test_module_depth = None
+
+
 def is_anyhow_result_allowlisted(path: Path) -> bool:
     rel = rel_path(path)
     rel_parts = path.relative_to(ROOT).parts
@@ -265,6 +309,69 @@ def check_processor_boundary_mappings() -> list[Finding]:
                         "processor unsupported-code responses must use rocketmq_remoting::error_response",
                     )
                 )
+    return findings
+
+
+def contains_redaction_marker(line: str) -> bool:
+    return any(
+        marker in line
+        for marker in (
+            "<redacted>",
+            "REDACTED",
+            "redacted_if_present",
+            "redacted_value",
+            "Sensitive::new",
+        )
+    )
+
+
+def sensitive_debug_field_name(field_name: str) -> bool:
+    lower = field_name.lower()
+    if lower in NON_SENSITIVE_DEBUG_FIELD_NAMES:
+        return False
+    return any(term in lower for term in SENSITIVE_DEBUG_FIELD_TERMS)
+
+
+def find_sensitive_derive_debug_fields(paths: Iterable[Path]) -> list[Finding]:
+    findings: list[Finding] = []
+    field_pattern = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:")
+    struct_pattern = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?struct\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+
+    for path in paths:
+        lines = list(iter_non_test_lines(path))
+        pending_debug_derive_line: int | None = None
+        for index, (line_number, line) in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("#[derive") and "Debug" in stripped:
+                pending_debug_derive_line = line_number
+                continue
+            if pending_debug_derive_line is None:
+                continue
+            if stripped.startswith("#[") or not stripped:
+                continue
+
+            if not struct_pattern.match(stripped):
+                pending_debug_derive_line = None
+                continue
+
+            depth = line.count("{") - line.count("}")
+            for field_index in range(index + 1, len(lines)):
+                _, field_line = lines[field_index]
+                field_match = field_pattern.match(field_line.strip())
+                if field_match and sensitive_debug_field_name(field_match.group(1)):
+                    findings.append(
+                        Finding(
+                            path,
+                            pending_debug_derive_line,
+                            "derive(Debug) on a struct with sensitive fields requires a manual redacted Debug impl",
+                        )
+                    )
+                    break
+                depth += field_line.count("{") - field_line.count("}")
+                if depth <= 0:
+                    break
+
+            pending_debug_derive_line = None
     return findings
 
 
@@ -655,6 +762,65 @@ def check_redaction_guards() -> list[Finding]:
             "debug_and_display_redact_secret_key",
             "<redacted>",
         ],
+        ROOT / "rocketmq-client" / "src" / "common" / "session_credentials.rs": [
+            "session_credentials_debug_redacts_sensitive_fields",
+            "session_credentials_display",
+        ],
+        ROOT / "rocketmq-remoting" / "src" / "protocol" / "body" / "user_info.rs": [
+            "debug_user_info_redacts_password",
+            "password=<redacted>",
+        ],
+        ROOT / "rocketmq-auth" / "src" / "config.rs": [
+            "auth_config_debug_redacts_embedded_credentials",
+            "<redacted>",
+        ],
+        ROOT / "rocketmq-auth" / "src" / "authentication" / "model" / "user.rs": [
+            "user_debug_redacts_password",
+            "<redacted>",
+        ],
+        ROOT / "rocketmq-auth" / "src" / "migration" / "alc" / "plain_access_resource.rs": [
+            "plain_access_resource_debug_redacts_secrets",
+            "signature-value",
+        ],
+        ROOT / "rocketmq-auth" / "src" / "migration" / "alc" / "plain_access_config.rs": [
+            "plain_access_config_debug_redacts_secret_key",
+            "<redacted>",
+        ],
+        ROOT / "rocketmq-auth" / "src" / "authentication" / "acl_client_rpc_hook.rs": [
+            "secret_key",
+            "<redacted>",
+        ],
+        ROOT
+        / "rocketmq-tools"
+        / "rocketmq-admin"
+        / "rocketmq-admin-core"
+        / "tests"
+        / "auth_core_models.rs": [
+            "auth_user_request_debug_redacts_passwords",
+            "<redacted>",
+        ],
+        ROOT / "rocketmq-dashboard" / "rocketmq-dashboard-web" / "backend" / "src" / "model" / "acl_model.rs": [
+            "acl_user_debug_redacts_passwords",
+            "REDACTED",
+        ],
+        ROOT / "rocketmq-dashboard" / "rocketmq-dashboard-web" / "backend" / "src" / "model" / "auth_model.rs": [
+            "auth_model_debug_redacts_password_and_session_id",
+            "REDACTED",
+        ],
+        ROOT / "rocketmq-dashboard" / "rocketmq-dashboard-web" / "backend" / "src" / "config" / "app_config.rs": [
+            "auth_config_debug_redacts_password",
+            "<redacted>",
+        ],
+        ROOT
+        / "rocketmq-dashboard"
+        / "rocketmq-dashboard-web"
+        / "backend"
+        / "src"
+        / "admin"
+        / "dashboard_admin_client.rs": [
+            "map_acl_user_does_not_expose_password",
+            "password: None",
+        ],
     }
     findings: list[Finding] = []
     for path, needles in required_tokens.items():
@@ -666,23 +832,22 @@ def check_redaction_guards() -> list[Finding]:
             if needle not in text:
                 findings.append(Finding(path, 1, f"required redaction token missing: {needle}"))
 
-    sensitive_field_pattern = re.compile(r'\.field\(".*(secret|password|token|signature).*",', re.I)
-    for path in [
+    debug_field_pattern = re.compile(r'\.field\("([^"]+)",')
+    redaction_paths = [
         *rust_files_under("rocketmq-error", "src"),
         *rust_files_under("rocketmq-common", "src"),
         *rust_files_under("rocketmq-client", "src"),
         *rust_files_under("rocketmq-remoting", "src"),
-    ]:
-        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
-            if is_test_context(path, line_number):
-                continue
-            if (
-                sensitive_field_pattern.search(line)
-                and "<redacted>" not in line
-                and "REDACTED" not in line
-                and "redacted_value" not in line
-            ):
+        *rust_files_under("rocketmq-auth", "src"),
+        *rust_files_under("rocketmq-tools", "rocketmq-admin"),
+        *rust_files_under("rocketmq-dashboard", "rocketmq-dashboard-web", "backend", "src"),
+    ]
+    for path in redaction_paths:
+        for line_number, line in iter_non_test_lines(path):
+            match = debug_field_pattern.search(line)
+            if match and sensitive_debug_field_name(match.group(1)) and not contains_redaction_marker(line):
                 findings.append(Finding(path, line_number, "sensitive Debug field must be explicitly redacted"))
+    findings.extend(find_sensitive_derive_debug_fields(redaction_paths))
     return findings
 
 

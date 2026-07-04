@@ -14,10 +14,12 @@
 
 //! Authentication and authorization admin service models and operations.
 
+use std::fmt;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_error::REDACTED;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::body::acl_info::PolicyEntryInfo;
 use rocketmq_remoting::protocol::body::acl_info::PolicyInfo;
@@ -38,13 +40,26 @@ pub enum AuthTarget {
     ClusterName(CheetahString),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateUserRequest {
     target: AuthTarget,
     username: CheetahString,
     password: CheetahString,
     user_type: CheetahString,
     namesrv_addr: Option<String>,
+}
+
+impl fmt::Debug for CreateUserRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CreateUserRequest")
+            .field("target", &self.target)
+            .field("username", &self.username)
+            .field("password", &REDACTED)
+            .field("user_type", &self.user_type)
+            .field("namesrv_addr", &self.namesrv_addr)
+            .finish()
+    }
 }
 
 impl CreateUserRequest {
@@ -96,7 +111,7 @@ impl CreateUserRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateUserRequest {
     target: AuthTarget,
     username: CheetahString,
@@ -104,6 +119,20 @@ pub struct UpdateUserRequest {
     user_type: Option<CheetahString>,
     user_status: Option<CheetahString>,
     namesrv_addr: Option<String>,
+}
+
+impl fmt::Debug for UpdateUserRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UpdateUserRequest")
+            .field("target", &self.target)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| REDACTED))
+            .field("user_type", &self.user_type)
+            .field("user_status", &self.user_status)
+            .field("namesrv_addr", &self.namesrv_addr)
+            .finish()
+    }
 }
 
 impl UpdateUserRequest {

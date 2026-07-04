@@ -14,7 +14,9 @@
 use crate::error::DashboardError;
 use crate::model::DashboardConfigView;
 use crate::model::StorageBackend;
+use rocketmq_error::REDACTED;
 use std::env;
+use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
@@ -40,11 +42,22 @@ pub struct StorageConfig {
     pub path: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AuthConfig {
     pub login_required: bool,
     pub username: String,
     pub password: String,
+}
+
+impl fmt::Debug for AuthConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthConfig")
+            .field("login_required", &self.login_required)
+            .field("username", &self.username)
+            .field("password", &REDACTED)
+            .finish()
+    }
 }
 
 impl AppConfig {
@@ -238,6 +251,7 @@ impl SqliteConfigStore {
 
 #[cfg(test)]
 mod tests {
+    use super::AuthConfig;
     use super::ConfigStore;
     use super::StorageConfig;
     use crate::model::DashboardConfigView;
@@ -285,5 +299,19 @@ mod tests {
 
         assert_eq!(loaded.current_proxy_addr.as_deref(), Some("localhost:8081"));
         assert_eq!(loaded.storage_backend, StorageBackend::Sqlite);
+    }
+
+    #[test]
+    fn auth_config_debug_redacts_password() {
+        let config = AuthConfig {
+            login_required: true,
+            username: "admin".to_string(),
+            password: "dashboard-secret".to_string(),
+        };
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("dashboard-secret"));
     }
 }
