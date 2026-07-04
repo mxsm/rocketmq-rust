@@ -130,10 +130,10 @@ fn load_snapshot_from_connection(connection: &Connection) -> Result<ProxyConfigS
         proxy_addr_list.push(address);
     }
 
-    canonicalize_proxy_snapshot(&ProxyConfigSnapshot {
+    Ok(canonicalize_proxy_snapshot(&ProxyConfigSnapshot {
         current_proxy_addr,
         proxy_addr_list,
-    })
+    })?)
 }
 
 fn save_snapshot_to_transaction(transaction: &Transaction<'_>, snapshot: &ProxyConfigSnapshot) -> Result<()> {

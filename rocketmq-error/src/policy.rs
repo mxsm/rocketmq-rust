@@ -56,7 +56,9 @@ impl RecoverySpec {
             | ErrorKind::RetryLimitExceeded
             | ErrorKind::StorageLockFailed
             | ErrorKind::Tools => RetryClass::AfterBackoff,
-            ErrorKind::MessageLookupFailed | ErrorKind::SubscriptionGroupNotExist => RetryClass::Immediate,
+            ErrorKind::MessageLookupFailed | ErrorKind::QueryNotFound | ErrorKind::SubscriptionGroupNotExist => {
+                RetryClass::Immediate
+            }
             _ => RetryClass::Never,
         })
     }
@@ -106,6 +108,7 @@ const fn observe_severity(kind: ErrorKind) -> ErrorSeverity {
         | ErrorKind::SubscriptionGroupNotExist
         | ErrorKind::QueueNotExist
         | ErrorKind::MessageLookupFailed
+        | ErrorKind::QueryNotFound
         | ErrorKind::Network
         | ErrorKind::Timeout
         | ErrorKind::RetryLimitExceeded

@@ -143,23 +143,23 @@ impl NameServerManager {
     }
 
     pub(crate) fn add_name_server(&self, address: &str) -> Result<NameServerMutationResult> {
-        self.service.add_nameserver(address)
+        Ok(self.service.add_nameserver(address)?)
     }
 
     pub(crate) fn switch_name_server(&self, address: &str) -> Result<NameServerMutationResult> {
-        self.service.update_current_nameserver(address)
+        Ok(self.service.update_current_nameserver(address)?)
     }
 
     pub(crate) fn delete_name_server(&self, address: &str) -> Result<NameServerMutationResult> {
-        self.service.delete_nameserver(address)
+        Ok(self.service.delete_nameserver(address)?)
     }
 
     pub(crate) fn update_vip_channel(&self, enabled: bool) -> Result<NameServerMutationResult> {
-        self.service.update_use_vip_channel(enabled)
+        Ok(self.service.update_use_vip_channel(enabled)?)
     }
 
     pub(crate) fn update_use_tls(&self, enabled: bool) -> Result<NameServerMutationResult> {
-        self.service.update_use_tls(enabled)
+        Ok(self.service.update_use_tls(enabled)?)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]

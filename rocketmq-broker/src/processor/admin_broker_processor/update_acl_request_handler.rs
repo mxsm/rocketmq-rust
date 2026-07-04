@@ -72,7 +72,12 @@ impl<MS: MessageStore> UpdateAclRequestHandler<MS> {
         };
         let acl_info = match AclInfo::decode(body) {
             Ok(acl_info) => acl_info,
-            Err(error) => return Ok(Some(map_error_response(response, error))),
+            Err(error) => {
+                return Ok(Some(map_error_response(
+                    response,
+                    super::auth_admin_body_decode_error("decode acl body", error),
+                )));
+            }
         };
         let acl = match AclConverter::convert_acl_info(&acl_info, request_header.subject.as_str()) {
             Ok(acl) => acl,

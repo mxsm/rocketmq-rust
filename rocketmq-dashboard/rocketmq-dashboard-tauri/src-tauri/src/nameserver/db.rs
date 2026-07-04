@@ -14,6 +14,8 @@
 
 use anyhow::Result;
 use chrono::Utc;
+use rocketmq_dashboard_common::DashboardCommonError;
+use rocketmq_dashboard_common::DashboardCommonResult;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::NameServerConfigStore;
 use rocketmq_dashboard_common::NameServerConfigTransaction;
@@ -117,32 +119,32 @@ struct SqliteNameServerTransaction<'tx> {
 }
 
 impl NameServerConfigTransaction for SqliteNameServerTransaction<'_> {
-    fn load_snapshot(&mut self) -> Result<NameServerConfigSnapshot> {
+    fn load_snapshot(&mut self) -> DashboardCommonResult<NameServerConfigSnapshot> {
         load_snapshot_from_connection(&self.transaction)
     }
 
-    fn save_snapshot(&mut self, snapshot: &NameServerConfigSnapshot) -> Result<()> {
+    fn save_snapshot(&mut self, snapshot: &NameServerConfigSnapshot) -> DashboardCommonResult<()> {
         save_snapshot_to_transaction(&self.transaction, snapshot)
     }
 }
 
 impl NameServerConfigStore for SqliteNameServerStore {
-    fn load_snapshot(&self) -> Result<NameServerConfigSnapshot> {
-        let connection = self.db.connection()?;
+    fn load_snapshot(&self) -> DashboardCommonResult<NameServerConfigSnapshot> {
+        let connection = self.db.connection().map_err(store_error)?;
         load_snapshot_from_connection(&connection)
     }
 
-    fn run_in_transaction<T, F>(&self, operation: F) -> Result<T>
+    fn run_in_transaction<T, F>(&self, operation: F) -> DashboardCommonResult<T>
     where
-        F: FnOnce(&mut dyn NameServerConfigTransaction) -> Result<T>,
+        F: FnOnce(&mut dyn NameServerConfigTransaction) -> DashboardCommonResult<T>,
     {
-        let mut connection = self.db.connection()?;
-        let transaction = connection.transaction()?;
+        let mut connection = self.db.connection().map_err(store_error)?;
+        let transaction = connection.transaction().map_err(store_error)?;
         let mut tx_store = SqliteNameServerTransaction { transaction };
 
         match operation(&mut tx_store) {
             Ok(value) => {
-                tx_store.transaction.commit()?;
+                tx_store.transaction.commit().map_err(store_error)?;
                 Ok(value)
             }
             Err(error) => Err(error),
@@ -150,21 +152,23 @@ impl NameServerConfigStore for SqliteNameServerStore {
     }
 }
 
-fn load_snapshot_from_connection(connection: &Connection) -> Result<NameServerConfigSnapshot> {
-    let mut statement = connection.prepare(
-        "
+fn load_snapshot_from_connection(connection: &Connection) -> DashboardCommonResult<NameServerConfigSnapshot> {
+    let mut statement = connection
+        .prepare(
+            "
         SELECT address, is_current
         FROM nameserver_addresses
         ORDER BY sort_order ASC, id ASC
         ",
-    )?;
-    let mut rows = statement.query([])?;
+        )
+        .map_err(store_error)?;
+    let mut rows = statement.query([]).map_err(store_error)?;
     let mut current_namesrv = None;
     let mut namesrv_addr_list = Vec::new();
 
-    while let Some(row) = rows.next()? {
-        let address: String = row.get(0)?;
-        let is_current = row.get::<_, i64>(1)? != 0;
+    while let Some(row) = rows.next().map_err(store_error)? {
+        let address: String = row.get(0).map_err(store_error)?;
+        let is_current = row.get::<_, i64>(1).map_err(store_error)? != 0;
         if is_current && current_namesrv.is_none() {
             current_namesrv = Some(address.clone());
         }
@@ -181,7 +185,8 @@ fn load_snapshot_from_connection(connection: &Connection) -> Result<NameServerCo
             [],
             |row| Ok((row.get::<_, i64>(0)? != 0, row.get::<_, i64>(1)? != 0)),
         )
-        .optional()?;
+        .optional()
+        .map_err(store_error)?;
 
     let (use_vip_channel, use_tls) = settings.unwrap_or((true, false));
 
@@ -193,29 +198,37 @@ fn load_snapshot_from_connection(connection: &Connection) -> Result<NameServerCo
     })
 }
 
-fn save_snapshot_to_transaction(transaction: &Transaction<'_>, snapshot: &NameServerConfigSnapshot) -> Result<()> {
+fn save_snapshot_to_transaction(
+    transaction: &Transaction<'_>,
+    snapshot: &NameServerConfigSnapshot,
+) -> DashboardCommonResult<()> {
     let snapshot = canonicalize_snapshot(snapshot)?;
     let now = Utc::now().to_rfc3339();
 
-    transaction.execute("DELETE FROM nameserver_addresses", [])?;
+    transaction
+        .execute("DELETE FROM nameserver_addresses", [])
+        .map_err(store_error)?;
 
     for (index, address) in snapshot.namesrv_addr_list.iter().enumerate() {
-        transaction.execute(
-            "
+        transaction
+            .execute(
+                "
             INSERT INTO nameserver_addresses (address, is_current, sort_order, created_at, updated_at)
             VALUES (?1, ?2, ?3, ?4, ?4)
             ",
-            params![
-                address,
-                bool_to_i64(snapshot.current_namesrv.as_deref() == Some(address.as_str())),
-                index as i64,
-                now
-            ],
-        )?;
+                params![
+                    address,
+                    bool_to_i64(snapshot.current_namesrv.as_deref() == Some(address.as_str())),
+                    index as i64,
+                    now
+                ],
+            )
+            .map_err(store_error)?;
     }
 
-    transaction.execute(
-        "
+    transaction
+        .execute(
+            "
         INSERT INTO nameserver_settings (id, use_vip_channel, use_tls, created_at, updated_at)
         VALUES (1, ?1, ?2, ?3, ?3)
         ON CONFLICT(id) DO UPDATE SET
@@ -223,14 +236,19 @@ fn save_snapshot_to_transaction(transaction: &Transaction<'_>, snapshot: &NameSe
             use_tls = excluded.use_tls,
             updated_at = excluded.updated_at
         ",
-        params![
-            bool_to_i64(snapshot.use_vip_channel),
-            bool_to_i64(snapshot.use_tls),
-            now
-        ],
-    )?;
+            params![
+                bool_to_i64(snapshot.use_vip_channel),
+                bool_to_i64(snapshot.use_tls),
+                now
+            ],
+        )
+        .map_err(store_error)?;
 
     Ok(())
+}
+
+fn store_error(error: impl std::fmt::Display) -> DashboardCommonError {
+    DashboardCommonError::store(error.to_string())
 }
 
 fn repair_snapshot_tables(transaction: &Transaction<'_>) -> Result<()> {

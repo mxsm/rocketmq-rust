@@ -34,6 +34,17 @@ pub fn command_from_error_with_remark(error: &RocketMQError, remark: impl Into<S
     RemotingCommand::create_response_command_with_code_remark(error.spec().remoting.code.as_i32(), remark.into())
 }
 
+/// Apply a typed RocketMQ error mapping to an existing remoting response.
+pub fn apply_error_to_response(
+    response: RemotingCommand,
+    error: &RocketMQError,
+    remark: impl Into<String>,
+) -> RemotingCommand {
+    response
+        .set_code(error.spec().remoting.code.as_i32())
+        .set_remark(remark.into())
+}
+
 /// Convert a typed RocketMQ error into a remoting response command with an
 /// explicit wire remark and request opaque.
 pub fn command_from_error_with_remark_and_opaque(
@@ -75,12 +86,57 @@ pub fn request_code_not_supported_with_remark_and_opaque(
     request_code_not_supported_with_remark(request_code, remark).set_opaque(opaque)
 }
 
+/// Build an invalid-parameter response from the central remoting boundary
+/// mapping.
+pub fn invalid_parameter_with_remark(remark: impl Into<String>) -> RemotingCommand {
+    let remark = remark.into();
+    let error = RocketMQError::illegal_argument(remark.clone());
+    command_from_error_with_remark(&error, remark)
+}
+
+/// Build an invalid-parameter response and preserve request opaque.
+pub fn invalid_parameter_with_remark_and_opaque(remark: impl Into<String>, opaque: i32) -> RemotingCommand {
+    invalid_parameter_with_remark(remark).set_opaque(opaque)
+}
+
+/// Build a no-permission response from the central remoting boundary mapping.
+pub fn no_permission_with_remark(remark: impl Into<String>) -> RemotingCommand {
+    let remark = remark.into();
+    let error = RocketMQError::BrokerPermissionDenied {
+        operation: remark.clone(),
+    };
+    command_from_error_with_remark(&error, remark)
+}
+
+/// Build a no-permission response and preserve request opaque.
+pub fn no_permission_with_remark_and_opaque(remark: impl Into<String>, opaque: i32) -> RemotingCommand {
+    no_permission_with_remark(remark).set_opaque(opaque)
+}
+
+/// Build a query-not-found response from the central remoting boundary mapping.
+pub fn query_not_found_with_remark(remark: impl Into<String>) -> RemotingCommand {
+    let remark = remark.into();
+    let error = RocketMQError::query_not_found(remark.clone());
+    command_from_error_with_remark(&error, remark)
+}
+
+/// Build a query-not-found response and preserve request opaque.
+pub fn query_not_found_with_remark_and_opaque(remark: impl Into<String>, opaque: i32) -> RemotingCommand {
+    query_not_found_with_remark(remark).set_opaque(opaque)
+}
+
 /// Build a generic internal-error response from the central remoting boundary
 /// mapping.
-pub fn internal_error_with_opaque(opaque: i32, remark: impl Into<String>) -> RemotingCommand {
+pub fn internal_error(remark: impl Into<String>) -> RemotingCommand {
     let remark = remark.into();
     let error = RocketMQError::Internal(remark.clone());
-    command_from_error_with_remark_and_opaque(&error, remark, opaque)
+    command_from_error_with_remark(&error, remark)
+}
+
+/// Build a generic internal-error response from the central remoting boundary
+/// mapping and preserve request opaque.
+pub fn internal_error_with_opaque(opaque: i32, remark: impl Into<String>) -> RemotingCommand {
+    internal_error(remark).set_opaque(opaque)
 }
 
 #[cfg(test)]
@@ -126,5 +182,33 @@ mod tests {
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
         assert_eq!(response.opaque(), 9);
         assert_eq!(response.remark().map(|remark| remark.as_str()), Some("worker failed"));
+    }
+
+    #[test]
+    fn common_response_helpers_use_central_remoting_spec() {
+        let invalid = invalid_parameter_with_remark_and_opaque("bad argument", 11);
+        assert_eq!(ResponseCode::from(invalid.code()), ResponseCode::InvalidParameter);
+        assert_eq!(invalid.opaque(), 11);
+
+        let denied = no_permission_with_remark_and_opaque("forbidden", 12);
+        assert_eq!(ResponseCode::from(denied.code()), ResponseCode::NoPermission);
+        assert_eq!(denied.opaque(), 12);
+
+        let missing = query_not_found_with_remark_and_opaque("missing kv", 13);
+        assert_eq!(ResponseCode::from(missing.code()), ResponseCode::QueryNotFound);
+        assert_eq!(missing.opaque(), 13);
+    }
+
+    #[test]
+    fn apply_error_to_response_preserves_existing_response_shape() {
+        let response = apply_error_to_response(
+            RemotingCommand::create_response_command().set_opaque(23),
+            &RocketMQError::illegal_argument("bad field"),
+            "bad field",
+        );
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+        assert_eq!(response.opaque(), 23);
+        assert_eq!(response.remark().map(|remark| remark.as_str()), Some("bad field"));
     }
 }

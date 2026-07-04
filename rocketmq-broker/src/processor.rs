@@ -539,7 +539,7 @@ where
 
         let response = match processor.process_request(channel, ctx, &mut queued_request).await {
             Ok(response) => response,
-            Err(error) => Some(system_error_response(opaque, error.to_string())),
+            Err(error) => Some(error_response::command_from_error_with_opaque(&error, opaque)),
         };
         broker_fast_failure.complete(queue_kind, &task, response);
     }

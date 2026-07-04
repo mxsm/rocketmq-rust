@@ -20,8 +20,8 @@ use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils;
 use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -98,10 +98,11 @@ impl ClientRequestProcessor {
 
             if !namesrv_ready {
                 warn!("name server not ready. request code {}", request.code());
-                return Ok(Some(
-                    RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
-                        .set_remark("name server not ready"),
-                ));
+                let error = rocketmq_error::RocketMQError::not_initialized("name server not ready");
+                return Ok(Some(error_response::command_from_error_with_remark(
+                    &error,
+                    "name server not ready",
+                )));
             }
         }
 

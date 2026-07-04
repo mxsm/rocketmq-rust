@@ -94,6 +94,7 @@ pub const ALL_ERROR_SPECS: &[ErrorSpec] = &[
     spec!(BrokerPermissionDenied, "Broker permission was denied"),
     spec!(NotMasterBroker, "Broker is not the master"),
     spec!(MessageLookupFailed, "Message lookup failed"),
+    spec!(QueryNotFound, "Query result was not found"),
     spec!(TopicSendingForbidden, "Topic sending is forbidden"),
     spec!(BrokerAsyncTaskFailed, "Broker asynchronous operation failed"),
     spec!(RequestBodyInvalid, "Request body is invalid"),

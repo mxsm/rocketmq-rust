@@ -633,24 +633,29 @@ fn get_legacy_acl_cmd_response(request_code: RequestCode, remark: &str) -> Optio
 }
 
 fn map_auth_admin_error_response(response: RemotingCommand, error: RocketMQError) -> RemotingCommand {
-    let (code, remark) = match &error {
-        RocketMQError::IllegalArgument(message) | RocketMQError::RequestHeaderError(message) => {
-            (ResponseCode::InvalidParameter, message.clone())
-        }
-        RocketMQError::RequestBodyInvalid { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
-        RocketMQError::ConfigParseFailed { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
-        RocketMQError::ConfigMissing { key } => (ResponseCode::InvalidParameter, (*key).to_owned()),
-        RocketMQError::ConfigInvalidValue { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
-        RocketMQError::AuthConfigInvalid { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
-        RocketMQError::AuthHotReloadFailed { reason, .. } => (ResponseCode::SystemError, reason.clone()),
-        RocketMQError::Serialization(_) => (ResponseCode::InvalidParameter, error.to_string()),
-        RocketMQError::Authentication(AuthError::UserNotFound(_)) => (ResponseCode::UserNotExist, error.to_string()),
-        RocketMQError::Authentication(_) => (ResponseCode::NoPermission, error.to_string()),
-        RocketMQError::BrokerPermissionDenied { operation } => (ResponseCode::NoPermission, operation.clone()),
-        other => (ResponseCode::SystemError, other.to_string()),
+    if matches!(error, RocketMQError::Authentication(AuthError::UserNotFound(_))) {
+        return response
+            .set_code(ResponseCode::UserNotExist)
+            .set_remark(error.to_string());
+    }
+
+    let remark = match &error {
+        RocketMQError::IllegalArgument(message) | RocketMQError::RequestHeaderError(message) => message.clone(),
+        RocketMQError::RequestBodyInvalid { reason, .. }
+        | RocketMQError::ConfigParseFailed { reason, .. }
+        | RocketMQError::ConfigInvalidValue { reason, .. }
+        | RocketMQError::AuthConfigInvalid { reason, .. }
+        | RocketMQError::AuthHotReloadFailed { reason, .. } => reason.clone(),
+        RocketMQError::ConfigMissing { key } => (*key).to_owned(),
+        RocketMQError::BrokerPermissionDenied { operation } => operation.clone(),
+        other => other.to_string(),
     };
 
-    response.set_code(code).set_remark(remark)
+    error_response::apply_error_to_response(response, &error, remark)
+}
+
+fn auth_admin_body_decode_error(operation: &'static str, error: RocketMQError) -> RocketMQError {
+    RocketMQError::request_body_invalid(operation, error.to_string())
 }
 
 #[cfg(test)]
@@ -715,7 +720,7 @@ mod tests {
 
         let response = map_auth_admin_error_response(
             RemotingCommand::create_response_command(),
-            RocketMQError::deserialization_failed("JSON", "malformed auth admin body"),
+            RocketMQError::request_body_invalid("decode", "malformed auth admin body"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
     }
