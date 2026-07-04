@@ -39,13 +39,15 @@ impl BlockingClient {
     /// # drop(client);
     /// }
     /// ```
-    pub fn connect<T: tokio::net::ToSocketAddrs>(_addr: T) -> anyhow::Result<BlockingClient> {
+    pub fn connect<T: tokio::net::ToSocketAddrs>(_addr: T) -> rocketmq_error::RocketMQResult<BlockingClient> {
         /*let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         let inner = rt.block_on(crate::clients::Client::connect(addr))?;
         Ok(BlockingClient { inner, rt })*/
-        anyhow::bail!("BlockingClient is not supported by the current async remoting client")
+        Err(rocketmq_error::RocketMQError::not_initialized(
+            "BlockingClient is not supported by the current async remoting client",
+        ))
     }
 
     /*    pub fn invoke_oneway(

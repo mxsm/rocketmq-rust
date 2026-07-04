@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
-use anyhow::bail;
-use anyhow::Context;
 use rocketmq_admin_core::core::topic::TopicTarget;
+use rocketmq_admin_core::core::RocketMQError;
+use rocketmq_admin_core::core::RocketMQResult;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use serde::Serialize;
 
@@ -13,7 +13,7 @@ use crate::admin_facade::TuiAdminFacade;
 use crate::state::CommandFormState;
 use crate::view_model::CommandResultViewModel;
 
-type CommandExecutionFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<CommandResultViewModel>> + 'a>>;
+type CommandExecutionFuture<'a> = Pin<Box<dyn Future<Output = RocketMQResult<CommandResultViewModel>> + 'a>>;
 
 pub fn execute_command_with_progress<'a, F>(
     facade: &'a TuiAdminFacade,
@@ -737,8 +737,7 @@ where
         }),
         "consumer.start_monitoring" => Box::pin(async move {
             let result = {
-                let max_events =
-                    usize::try_from(form.number_u64("max_events")?).context("max_events is out of range for usize")?;
+                let max_events = number_usize_arg(form, "max_events")?;
                 let result = facade
                     .start_monitoring_with_progress(
                         form.number_u32("round_count")?,
@@ -1016,7 +1015,7 @@ where
                 let result = facade
                     .send_message_status(
                         form.required_string("broker_name")?,
-                        usize::try_from(form.number_u64("message_size")?)?,
+                        number_usize_arg(form, "message_size")?,
                         form.number_u32("count")?,
                     )
                     .await?;
@@ -1030,7 +1029,7 @@ where
                     .check_message_send_rt(
                         form.required_string("topic")?,
                         form.number_u64("amount")?,
-                        usize::try_from(form.number_u64("size")?)?,
+                        number_usize_arg(form, "size")?,
                     )
                     .await?;
                 CommandResultViewModel::check_message_send_rt(spec.title, &result)
@@ -1423,39 +1422,43 @@ where
             };
             Ok(result)
         }),
-        unknown => Box::pin(async move { bail!("unknown command id: {unknown}") }),
+        unknown => Box::pin(async move {
+            Err(RocketMQError::illegal_argument(format!(
+                "unknown command id: {unknown}"
+            )))
+        }),
     }
 }
 
-fn topic_target(form: &CommandFormState) -> anyhow::Result<TopicTarget> {
+fn topic_target(form: &CommandFormState) -> RocketMQResult<TopicTarget> {
     let target = form.required_string("target")?;
     match form.enum_string("target_type")?.as_str() {
         "broker" => Ok(TopicTarget::Broker(target.into())),
         "cluster" => Ok(TopicTarget::Cluster(target.into())),
-        value => bail!("invalid target_type: {value}"),
+        value => Err(RocketMQError::illegal_argument(format!("invalid target_type: {value}"))),
     }
 }
 
 fn broker_config_update_request(
     facade: &TuiAdminFacade,
     form: &CommandFormState,
-) -> anyhow::Result<rocketmq_admin_core::core::broker::BrokerConfigUpdateRequest> {
+) -> RocketMQResult<rocketmq_admin_core::core::broker::BrokerConfigUpdateRequest> {
     let entries: BTreeMap<String, String> = form.key_value_map("entries")?.into_iter().collect();
-    facade
-        .broker_config_update_request(
-            form.optional_string("broker_addr"),
-            form.optional_string("cluster_name"),
-            entries,
-            form.bool_value("rollback_enabled")?,
-        )
-        .context("failed to build broker config update request")
+    facade.broker_config_update_request(
+        form.optional_string("broker_addr"),
+        form.optional_string("cluster_name"),
+        entries,
+        form.bool_value("rollback_enabled")?,
+    )
 }
 
-fn message_request_mode(mode: String) -> anyhow::Result<MessageRequestMode> {
+fn message_request_mode(mode: String) -> RocketMQResult<MessageRequestMode> {
     match mode.trim().to_ascii_lowercase().as_str() {
         "pull" => Ok(MessageRequestMode::Pull),
         "pop" => Ok(MessageRequestMode::Pop),
-        value => bail!("invalid consume mode: {value}"),
+        value => Err(RocketMQError::illegal_argument(format!(
+            "invalid consume mode: {value}"
+        ))),
     }
 }
 
@@ -1466,19 +1469,20 @@ fn operation_target_label(broker_addr: Option<String>, cluster_name: Option<Stri
         .unwrap_or_else(|| fallback.to_string())
 }
 
-fn optional_u64_arg(form: &CommandFormState, name: &str) -> anyhow::Result<Option<u64>> {
+fn optional_u64_arg(form: &CommandFormState, name: &str) -> RocketMQResult<Option<u64>> {
     form.optional_string(name)
         .map(|value| {
-            value
-                .parse::<u64>()
-                .map_err(|error| anyhow::anyhow!("{name} must be an unsigned integer: {error}"))
+            value.parse::<u64>().map_err(|error| {
+                RocketMQError::illegal_argument(format!("{name} must be an unsigned integer: {error}"))
+            })
         })
         .transpose()
 }
 
-fn number_usize_arg(form: &CommandFormState, name: &str) -> anyhow::Result<usize> {
+fn number_usize_arg(form: &CommandFormState, name: &str) -> RocketMQResult<usize> {
     let value = form.number_u64(name)?;
-    usize::try_from(value).map_err(|error| anyhow::anyhow!("{name} is out of range for usize: {error}"))
+    usize::try_from(value)
+        .map_err(|error| RocketMQError::illegal_argument(format!("{name} is out of range for usize: {error}")))
 }
 
 fn export_output_or_view<T>(
@@ -1487,7 +1491,7 @@ fn export_output_or_view<T>(
     form: &CommandFormState,
     value: &T,
     view: CommandResultViewModel,
-) -> anyhow::Result<CommandResultViewModel>
+) -> RocketMQResult<CommandResultViewModel>
 where
     T: Serialize + ?Sized,
 {

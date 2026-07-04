@@ -14,8 +14,8 @@
 
 //! API definitions and client interfaces
 
+use crate::error::DashboardCommonResult as Result;
 use crate::models::*;
-use anyhow::Result;
 
 /// Dashboard API client trait
 #[async_trait::async_trait]

@@ -14,6 +14,7 @@
 use crate::admin::DashboardAdminClient;
 use crate::config::AppConfig;
 use crate::config::ConfigStore;
+use crate::error::DashboardError;
 use crate::model::DashboardConfigView;
 use crate::service::AuthState;
 use crate::service::DashboardHistoryStore;
@@ -38,7 +39,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn try_new(config: AppConfig) -> anyhow::Result<Self> {
+    pub async fn try_new(config: AppConfig) -> Result<Self, DashboardError> {
         let config_store = Arc::new(ConfigStore::new(&config.storage)?);
         let auth_state = Arc::new(AuthState::new(config.auth));
         let monitor_store = Arc::new(MonitorStore::new(config.monitor_store_path));

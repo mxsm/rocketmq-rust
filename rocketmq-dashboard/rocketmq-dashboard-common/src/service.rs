@@ -15,8 +15,8 @@
 //! Business logic and service layer
 
 use crate::api::DashboardClient;
+use crate::error::DashboardCommonResult as Result;
 use crate::models::*;
-use anyhow::Result;
 use std::sync::Arc;
 
 /// Dashboard service for business logic

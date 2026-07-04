@@ -48,7 +48,7 @@ pub struct AuthConfig {
 }
 
 impl AppConfig {
-    pub fn load() -> anyhow::Result<Self> {
+    pub fn load() -> Result<Self, DashboardError> {
         let storage_backend =
             StorageBackend::parse(&env::var("DASHBOARD_WEB_STORAGE_BACKEND").unwrap_or_else(|_| "file".to_string()));
         let storage_path = env::var("DASHBOARD_WEB_STORAGE_PATH")
@@ -114,7 +114,7 @@ pub enum ConfigStore {
 }
 
 impl ConfigStore {
-    pub fn new(config: &StorageConfig) -> anyhow::Result<Self> {
+    pub fn new(config: &StorageConfig) -> Result<Self, DashboardError> {
         match config.backend {
             StorageBackend::File => Ok(Self::File(FileConfigStore {
                 path: config.path.clone(),

@@ -16,9 +16,10 @@ use std::path::PathBuf;
 
 use config::Config;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+use rocketmq_error::RocketMQResult;
 use tracing::info;
 
-pub fn parse_command_and_config_file(config_file: PathBuf) -> anyhow::Result<NamesrvConfig, anyhow::Error> {
+pub fn parse_command_and_config_file(config_file: PathBuf) -> RocketMQResult<NamesrvConfig> {
     let namesrv_config = Config::builder()
         .add_source(config::File::with_name(
             config_file.to_string_lossy().into_owned().as_str(),

@@ -2435,9 +2435,9 @@ dependencies = [
 name = "rocketmq-dashboard-common"
 version = "1.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "serde",
+ "thiserror",
 ]
 
 [[package]]
