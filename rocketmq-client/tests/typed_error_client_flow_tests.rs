@@ -35,3 +35,25 @@ fn client_public_api_does_not_export_dead_error_module() {
 
     assert!(!lib.contains(concat!("pub mod client", "_error;")));
 }
+
+#[test]
+fn client_callback_error_paths_use_typed_rocketmq_error() {
+    let pull_callback = include_str!("../src/consumer/pull_callback.rs");
+    let pop_callback = include_str!("../src/consumer/pop_callback.rs");
+    let request_callback = include_str!("../src/producer/request_callback.rs");
+    let request_future = include_str!("../src/producer/request_response_future.rs");
+
+    assert!(pull_callback.contains("fn on_exception(&mut self, e: RocketMQError)"));
+    assert!(pull_callback.contains("fn broker_response_code(error: &RocketMQError)"));
+    assert!(!pull_callback.contains("downcast_ref::<RocketMQError>"));
+    assert!(!pull_callback.contains("Box<dyn std::error::Error + Send>"));
+
+    assert!(pop_callback.contains("fn on_error(&mut self, e: RocketMQError)"));
+    assert!(pop_callback.contains("fn broker_response_code(error: &RocketMQError)"));
+    assert!(!pop_callback.contains("downcast_ref::<RocketMQError>"));
+    assert!(!pop_callback.contains("Box<dyn std::error::Error + Send>"));
+
+    assert!(request_callback.contains("Option<&RocketMQError>"));
+    assert!(request_future.contains("type RequestCause = Arc<RocketMQError>"));
+    assert!(!request_future.contains("type RequestCause = Arc<dyn"));
+}

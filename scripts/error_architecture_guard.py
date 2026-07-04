@@ -360,6 +360,48 @@ def check_dashboard_http_boundary() -> list[Finding]:
     return findings
 
 
+def check_client_callback_boundary() -> list[Finding]:
+    required_tokens = {
+        ROOT / "rocketmq-client" / "src" / "consumer" / "pull_callback.rs": [
+            "fn on_exception(&mut self, e: RocketMQError)",
+            "fn broker_response_code(error: &RocketMQError)",
+            "RocketMQError::BrokerOperationFailed",
+        ],
+        ROOT / "rocketmq-client" / "src" / "consumer" / "pop_callback.rs": [
+            "fn on_error(&mut self, e: RocketMQError)",
+            "fn broker_response_code(error: &RocketMQError)",
+            "RocketMQError::BrokerOperationFailed",
+        ],
+        ROOT / "rocketmq-client" / "src" / "producer" / "request_callback.rs": [
+            "Option<&RocketMQError>",
+        ],
+        ROOT / "rocketmq-client" / "src" / "producer" / "request_response_future.rs": [
+            "type RequestCause = Arc<RocketMQError>",
+            "pub fn set_cause(&self, cause: RocketMQError)",
+        ],
+    }
+    findings: list[Finding] = []
+    for path, needles in required_tokens.items():
+        if not path.exists():
+            findings.append(Finding(path, 1, "client callback boundary file is missing"))
+            continue
+        text = read_text(path)
+        for needle in needles:
+            if needle not in text:
+                findings.append(Finding(path, 1, f"required client callback boundary token missing: {needle}"))
+
+    forbidden = {
+        "downcast_ref::<RocketMQError>": "client callback error paths must use typed RocketMQError directly",
+        "downcast_ref::<rocketmq_error::RocketMQError>": "client callback error paths must use typed RocketMQError directly",
+        "broker_response_code(error: &(dyn": "client broker response code lookup must not downcast dyn Error",
+        "type RequestCause = Arc<dyn": "request future cause must store RocketMQError directly",
+        "Option<&dyn std::error::Error>": "request callback must expose RocketMQError directly",
+        "Box<dyn std::error::Error + Send>": "pull/pop callbacks must expose RocketMQError directly",
+    }
+    guarded_paths = list(required_tokens)
+    return [*findings, *scan_forbidden_terms(guarded_paths, forbidden)]
+
+
 def check_error_spec_contract() -> list[Finding]:
     required_tokens = {
         ROOT / "rocketmq-error" / "src" / "kind.rs": [
@@ -496,6 +538,7 @@ def run() -> int:
         ("required mapping adapters", check_required_mapping_adapters),
         ("proxy grpc boundary", check_proxy_grpc_boundary),
         ("dashboard http boundary", check_dashboard_http_boundary),
+        ("client callback boundary", check_client_callback_boundary),
         ("error spec contract", check_error_spec_contract),
         ("internal error allowlist", check_internal_error_allowlist),
         ("anyhow result allowlist", check_anyhow_result_allowlist),

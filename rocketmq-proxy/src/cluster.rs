@@ -1494,7 +1494,7 @@ impl PopCallback for PopResultCallback {
         }
     }
 
-    fn on_error(&mut self, error: Box<dyn std::error::Error + Send>) {
+    fn on_error(&mut self, error: rocketmq_error::RocketMQError) {
         if let Some(sender) = self.sender.take() {
             let _ = sender.send(Err(ProxyError::Transport {
                 message: error.to_string(),

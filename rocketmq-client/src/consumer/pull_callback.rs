@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
 use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -30,20 +29,19 @@ use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::consumer_impl::re_balance::Rebalance;
 use crate::consumer::pull_status::PullStatus;
 
-pub type PullCallbackFn =
-    Arc<dyn FnOnce(Option<PullResultExt>, Option<Box<dyn std::error::Error + Send>>) + Send + Sync>;
+pub type PullCallbackFn = Arc<dyn FnOnce(Option<PullResultExt>, Option<RocketMQError>) + Send + Sync>;
 
-fn broker_response_code(error: &(dyn Error + Send + 'static)) -> Option<ResponseCode> {
-    error.downcast_ref::<RocketMQError>().and_then(|error| match error {
+fn broker_response_code(error: &RocketMQError) -> Option<ResponseCode> {
+    match error {
         RocketMQError::BrokerOperationFailed { code, .. } => Some(ResponseCode::from(*code)),
         _ => None,
-    })
+    }
 }
 
 #[trait_variant::make(PullCallback: Send)]
 pub trait PullCallbackLocal: Sync {
     async fn on_success(&mut self, pull_result: PullResultExt);
-    fn on_exception(&mut self, e: Box<dyn std::error::Error + Send>);
+    fn on_exception(&mut self, e: RocketMQError);
 }
 
 pub(crate) struct DefaultPullCallback {
@@ -190,7 +188,7 @@ impl PullCallback for DefaultPullCallback {
         };
     }
 
-    fn on_exception(&mut self, err: Box<dyn std::error::Error + Send>) {
+    fn on_exception(&mut self, err: RocketMQError) {
         let Some(message_queue_inner) = self.message_queue_inner.take() else {
             warn!(
                 "pull callback exception ignored: message queue is missing, error={}",
@@ -206,7 +204,7 @@ impl PullCallback for DefaultPullCallback {
             return;
         };
         let topic = message_queue_inner.topic_str();
-        let broker_code = broker_response_code(err.as_ref());
+        let broker_code = broker_response_code(&err);
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if broker_code == Some(ResponseCode::SubscriptionNotLatest) {
                 warn!(
@@ -233,8 +231,6 @@ impl PullCallback for DefaultPullCallback {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
     use bytes::Bytes;
 
     use super::*;
@@ -258,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn broker_response_code_reads_typed_broker_error() {
+    fn broker_response_code_reads_broker_error_without_downcast() {
         let error = rocketmq_error::RocketMQError::broker_operation_failed(
             "PULL_MESSAGE",
             ResponseCode::FlowControl.to_i32(),
@@ -286,6 +282,6 @@ mod tests {
         let mut callback = new_callback();
         callback.message_queue_inner = Some(MessageQueue::from_parts("topic", "broker-a", 0));
 
-        PullCallback::on_exception(&mut callback, Box::new(io::Error::other("test error")));
+        PullCallback::on_exception(&mut callback, RocketMQError::illegal_argument("test error"));
     }
 }

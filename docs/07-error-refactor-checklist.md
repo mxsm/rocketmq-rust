@@ -264,24 +264,29 @@ cargo build --all-targets --all-features
 
 **范围**：`rocketmq-client/src/consumer/pull_callback.rs`、`pop_callback.rs`、producer/consumer callback API、相关 tests。
 
-**当前缺口**：
+**完成状态**：
 
-- legacy downcast 已移除。
-- 仍存在 `dyn Error` + `downcast_ref::<RocketMQError>()`，内部事实源还不是 typed error。
+- `PullCallback` / `PopCallback` 的 public error 参数已改为 `RocketMQError`，默认回调不再接收 boxed `dyn Error`。
+- pull/pop 的 broker response code 判断已直接匹配 `RocketMQError::BrokerOperationFailed`，移除了 runtime downcast helper。
+- request-response callback API 已改为 `Option<&RocketMQError>`，`RequestResponseFuture` 的 cause 直接存储 `Arc<RocketMQError>`。
+- request future timeout scan 与 async request 失败路径都写入 typed `RocketMQError` cause。
+- `typed_error_client_flow_tests` 和 `scripts/error_architecture_guard.py` 已覆盖 callback typed boundary，阻止回退到 dyn/downcast。
+
+**追踪**：Issue [#7945](https://github.com/mxsm/rocketmq-rust/issues/7945)，PR [#7946](https://github.com/mxsm/rocketmq-rust/pull/7946)。
 
 **开发 checklist**：
 
-- [ ] 修改 pull/pop callback 内部错误类型为 `RocketMQError`。
-- [ ] 移除 `broker_response_code(error: &(dyn Error + Send + 'static))` 这类 downcast helper。
-- [ ] 对 broker response code 使用 typed variant 或 `ErrorKind`/spec/recovery policy。
-- [ ] 更新 public callback trait；本轮重构允许 breaking change，不保留旧 ABI。
-- [ ] 更新调用方和测试，确保回调错误判断不依赖 runtime downcast。
+- [x] 修改 pull/pop callback 内部错误类型为 `RocketMQError`。
+- [x] 移除 `broker_response_code(error: &(dyn Error + Send + 'static))` 这类 downcast helper。
+- [x] 对 broker response code 使用 typed variant 或 `ErrorKind`/spec/recovery policy。
+- [x] 更新 public callback trait；本轮重构允许 breaking change，不保留旧 ABI。
+- [x] 更新调用方和测试，确保回调错误判断不依赖 runtime downcast。
 
 **验收 checklist**：
 
-- [ ] `pull_callback.rs`、`pop_callback.rs` 无 `dyn Error` downcast。
-- [ ] callback 错误路径可直接读取 `RocketMQError::kind()` / `spec()`。
-- [ ] 订阅落后、flow control 等 broker response 行为仍保持。
+- [x] `pull_callback.rs`、`pop_callback.rs` 无 `dyn Error` downcast。
+- [x] callback 错误路径可直接读取 `RocketMQError::kind()` / `spec()`。
+- [x] 订阅落后、flow control 等 broker response 行为仍保持。
 
 **建议验证**：
 

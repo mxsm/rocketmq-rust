@@ -475,8 +475,8 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    fn request_cause_from_error(error: &dyn std::error::Error) -> Box<dyn std::error::Error + Send + Sync> {
-        Box::new(RocketMQError::illegal_argument(error.to_string()))
+    fn request_cause_from_error(error: &dyn std::error::Error) -> RocketMQError {
+        RocketMQError::illegal_argument(error.to_string())
     }
 
     #[inline]
@@ -3624,10 +3624,7 @@ mod tests {
 
     #[test]
     fn request_cause_from_error_uses_typed_error() {
-        let cause = DefaultMQProducerImpl::request_cause_from_error(&std::io::Error::other("send failed"));
-        let error = cause
-            .downcast_ref::<rocketmq_error::RocketMQError>()
-            .expect("request cause should use RocketMQError");
+        let error = DefaultMQProducerImpl::request_cause_from_error(&std::io::Error::other("send failed"));
 
         assert!(matches!(error, rocketmq_error::RocketMQError::IllegalArgument(_)));
         assert_eq!(error.to_string(), "Illegal argument: send failed");
