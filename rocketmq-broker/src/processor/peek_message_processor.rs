@@ -21,7 +21,9 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::FAQUrl;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::peek_message_request_header::PeekMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
@@ -89,11 +91,13 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
                     e,
                     channel.remote_address()
                 );
-                return Ok(Some(
-                    response
-                        .set_code(ResponseCode::RequestCodeNotSupported)
-                        .set_remark(format!("decode request header failed: {:?}", e)),
-                ));
+                let remark = format!("decode request header failed: {:?}", e);
+                let error = RocketMQError::request_header_error(remark.clone());
+                return Ok(Some(error_response::command_from_error_with_remark_and_opaque(
+                    &error,
+                    remark,
+                    request.opaque(),
+                )));
             }
         };
 

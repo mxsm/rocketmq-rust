@@ -55,6 +55,7 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode::SystemError;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
@@ -136,11 +137,12 @@ where
             | RequestCode::ConsumerSendMsgBack => self.process_request_inner(channel, ctx, request_code, request).await,
             _ => {
                 warn!("SendMessageProcessor received unknown request code: {:?}", request_code);
-                let response = RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::RequestCodeNotSupported,
+                let response = error_response::request_code_not_supported_with_remark_and_opaque(
+                    request.code(),
                     format!("request code {} not supported", request.code()),
+                    request.opaque(),
                 );
-                Ok(Some(response.set_opaque(request.opaque())))
+                Ok(Some(response))
             }
         }
     }

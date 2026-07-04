@@ -28,6 +28,7 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::batch_ack::BatchAck;
 use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
@@ -78,11 +79,11 @@ where
             }
             _ => {
                 warn!("AckMessageProcessor received unknown request code: {:?}", request_code);
-                let response = RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::RequestCodeNotSupported,
+                Ok(Some(error_response::request_code_not_supported_with_remark_and_opaque(
+                    request.code(),
                     format!("AckMessageProcessor request code {} not supported", request.code()),
-                );
-                Ok(Some(response.set_opaque(request.opaque())))
+                    request.opaque(),
+                )))
             }
         }
     }
