@@ -24,6 +24,7 @@ use rocketmq_rust::ArcMut;
 use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+use crate::consumer::default_mq_push_consumer::ConsumerTuningProfile;
 use crate::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use crate::consumer::message_queue_listener::ArcMessageQueueListener;
 use crate::trace::trace_dispatcher::ArcTraceDispatcher;
@@ -64,6 +65,7 @@ pub struct DefaultMQPushConsumerBuilder {
     trace_dispatcher: Option<ArcTraceDispatcher>,
     client_rebalance: Option<bool>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
+    tuning_profile: Option<ConsumerTuningProfile>,
 }
 
 impl DefaultMQPushConsumerBuilder {
@@ -270,9 +272,18 @@ impl DefaultMQPushConsumerBuilder {
         self
     }
 
+    #[inline]
+    pub fn tuning_profile(mut self, tuning_profile: ConsumerTuningProfile) -> Self {
+        self.tuning_profile = Some(tuning_profile);
+        self
+    }
+
     // Build method to create a DefaultMQPushConsumer instance
     pub fn build(mut self) -> DefaultMQPushConsumer {
         let mut consumer_config = ConsumerConfig::default();
+        if let Some(profile) = self.tuning_profile {
+            consumer_config.apply_tuning_profile(profile);
+        }
 
         // Set optional fields with consistent pattern
         if let Some(value) = self.consumer_group {
@@ -374,5 +385,27 @@ impl DefaultMQPushConsumerBuilder {
         consumer_config.rpc_hook = self.rpc_hook.clone();
 
         DefaultMQPushConsumer::new(self.client_config, consumer_config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::consumer::default_mq_push_consumer::ConsumerTuningProfile;
+
+    #[test]
+    fn tuning_profile_applies_before_explicit_builder_overrides() {
+        let consumer = DefaultMQPushConsumerBuilder::new()
+            .consumer_group("push_profile_builder_group")
+            .tuning_profile(ConsumerTuningProfile::Throughput)
+            .pull_batch_size(64)
+            .pull_batch_size_in_bytes(768 * 1024)
+            .build();
+
+        assert_eq!(consumer.consume_message_batch_max_size(), 16);
+        assert_eq!(consumer.pull_batch_size(), 64);
+        assert_eq!(consumer.pull_batch_size_in_bytes(), 768 * 1024);
+        assert_eq!(consumer.pull_threshold_for_queue(), 4096);
+        assert_eq!(consumer.pull_threshold_size_for_queue(), 256);
     }
 }
