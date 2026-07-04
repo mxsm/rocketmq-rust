@@ -856,13 +856,10 @@ where
         msg_offset_info: &mut String,
         order_count_info: &mut str,
     ) -> i64 {
-        let lock_key = CheetahString::from_string(format!(
-            "{}{}{}{}{}",
+        let lock_key = CheetahString::from_string(QueueLockManager::build_lock_key(
             topic,
-            PopAckConstants::SPLIT,
-            request_header.consumer_group,
-            PopAckConstants::SPLIT,
-            queue_id
+            &request_header.consumer_group,
+            queue_id,
         ));
         let offset = self
             .get_pop_offset(
@@ -1366,14 +1363,7 @@ where
     }
 
     fn reset_pop_offset(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32) -> Option<i64> {
-        let lock_key = CheetahString::from_string(format!(
-            "{}{}{}{}{}",
-            topic,
-            PopAckConstants::SPLIT,
-            group,
-            PopAckConstants::SPLIT,
-            queue_id
-        ));
+        let lock_key = CheetahString::from_string(QueueLockManager::build_lock_key(topic, group, queue_id));
         let reset_offset = self
             .broker_runtime_inner
             .consumer_offset_manager()
