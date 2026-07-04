@@ -745,7 +745,7 @@ impl DefaultMQProducer {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         <Self as MQProducer>::request_with_callback(self, msg, request_callback, timeout).await
@@ -776,7 +776,7 @@ impl DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
-        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
         T: Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
@@ -803,7 +803,7 @@ impl DefaultMQProducer {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         <Self as MQProducer>::request_to_queue_with_callback(self, msg, mq, request_callback, timeout).await
@@ -2251,7 +2251,7 @@ impl MQProducer for DefaultMQProducer {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
@@ -2292,7 +2292,7 @@ impl MQProducer for DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
-        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
         T: Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
@@ -2330,7 +2330,7 @@ impl MQProducer for DefaultMQProducer {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
@@ -2434,7 +2434,7 @@ mod facade_tests {
 
     #[tokio::test]
     async fn default_mq_producer_exposes_modern_java_request_facade_methods_without_trait_import() {
-        let request_callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&dyn std::error::Error>| {};
+        let request_callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&rocketmq_error::RocketMQError>| {};
         assert_not_initialized(
             unstarted_producer()
                 .request_with_callback(message(), request_callback, 1000)
@@ -2450,7 +2450,7 @@ mod facade_tests {
 
         assert_not_initialized(unstarted_producer().request_to_queue(message(), queue(), 1000).await);
 
-        let request_callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&dyn std::error::Error>| {};
+        let request_callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&rocketmq_error::RocketMQError>| {};
         assert_not_initialized(
             unstarted_producer()
                 .request_to_queue_with_callback(message(), queue(), request_callback, 1000)
@@ -2474,7 +2474,7 @@ mod tests {
             default_mqproducer_impl: None,
         };
         let msg = Message::builder().topic("test-topic").empty_body().build_unchecked();
-        let callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&dyn std::error::Error>| {
+        let callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&rocketmq_error::RocketMQError>| {
             // no-op
         };
         let result = producer.request_with_callback(msg, callback, 1000).await;
@@ -2519,7 +2519,7 @@ mod tests {
         };
         let msg = Message::builder().topic("test-topic").empty_body().build_unchecked();
         let selector = |_queues: &[MessageQueue], _msg: &Message, _arg: &i32| -> Option<MessageQueue> { None };
-        let callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&dyn std::error::Error>| {
+        let callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&rocketmq_error::RocketMQError>| {
             // no-op
         };
         let result = producer

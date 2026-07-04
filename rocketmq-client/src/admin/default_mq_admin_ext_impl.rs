@@ -742,7 +742,7 @@ impl DefaultMQAdminExtImpl {
         struct NoopPullCallback;
         impl PullCallback for NoopPullCallback {
             async fn on_success(&mut self, _pull_result: PullResultExt) {}
-            fn on_exception(&mut self, _e: Box<dyn std::error::Error + Send>) {}
+            fn on_exception(&mut self, _e: rocketmq_error::RocketMQError) {}
         }
 
         let api_impl = self.mq_client_api()?;

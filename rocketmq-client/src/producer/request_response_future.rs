@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -23,12 +22,13 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_error::RocketMQError;
 use tokio::sync::Notify;
 
 use crate::producer::request_callback::RequestCallbackFn;
 
 type ResponseMessage = Box<dyn MessageTrait + Send>;
-type RequestCause = Arc<dyn Error + Send + Sync>;
+type RequestCause = Arc<RocketMQError>;
 
 pub struct RequestResponseFuture {
     correlation_id: CheetahString,
@@ -75,10 +75,7 @@ impl RequestResponseFuture {
                     None,
                 );
             } else {
-                callback(
-                    None,
-                    cause.as_ref().map(|cause| cause.as_ref() as &dyn std::error::Error),
-                );
+                callback(None, cause.as_deref());
             }
         }
     }
@@ -90,8 +87,11 @@ impl RequestResponseFuture {
     pub async fn wait_response_message(&self, timeout: Duration) -> Option<Box<dyn MessageTrait + Send>> {
         match tokio::time::timeout(timeout, self.notify.notified()).await {
             Ok(_) => self.get_response_msg(),
-            Err(error) => {
-                self.set_cause(Box::new(error));
+            Err(_) => {
+                self.set_cause(RocketMQError::Timeout {
+                    operation: "request_reply_wait",
+                    timeout_ms: timeout.as_millis() as u64,
+                });
                 None
             }
         }
@@ -175,9 +175,9 @@ impl RequestResponseFuture {
             .clone()
     }
 
-    pub fn set_cause(&self, cause: Box<dyn Error + Send + Sync>) {
+    pub fn set_cause(&self, cause: RocketMQError) {
         let mut stored_cause = self.cause.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        *stored_cause = Some(Arc::from(cause));
+        *stored_cause = Some(Arc::new(cause));
     }
 }
 

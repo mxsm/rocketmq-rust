@@ -3645,12 +3645,12 @@ impl MQClientAPIImpl {
                         pull_callback.on_success(pull_result).await;
                     }
                     Err(error) => {
-                        pull_callback.on_exception(Box::new(error));
+                        pull_callback.on_exception(error);
                     }
                 }
             }
             Err(err) => {
-                pull_callback.on_exception(Box::new(err));
+                pull_callback.on_exception(err);
             }
         }
         Ok(())
@@ -4284,12 +4284,12 @@ impl MQClientAPIImpl {
                         pop_callback.on_success(pop_result).await;
                     }
                     Err(e) => {
-                        pop_callback.on_error(Box::new(e));
+                        pop_callback.on_error(e);
                     }
                 }
             }
             Err(e) => {
-                pop_callback.on_error(Box::new(e));
+                pop_callback.on_error(e);
             }
         }
         Ok(())
@@ -4320,12 +4320,12 @@ impl MQClientAPIImpl {
                         pop_callback.on_success(pop_result).await;
                     }
                     Err(e) => {
-                        pop_callback.on_error(Box::new(e));
+                        pop_callback.on_error(e);
                     }
                 }
             }
             Err(e) => {
-                pop_callback.on_error(Box::new(e));
+                pop_callback.on_error(e);
             }
         }
         Ok(())

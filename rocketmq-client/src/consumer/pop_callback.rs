@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -48,12 +47,12 @@ pub trait PopCallbackInner {
     /// # Arguments
     ///
     /// * `e` - The error encountered during the pop operation.
-    fn on_error(&mut self, e: Box<dyn std::error::Error + Send>);
+    fn on_error(&mut self, e: RocketMQError);
 }
 
 /*impl<F, Fut> PopCallback for F
 where
-    F: Fn(Option<PopResult>, Option<Box<dyn std::error::Error + Send>>) -> Fut + Send + Sync,
+    F: Fn(Option<PopResult>, Option<RocketMQError>) -> Fut + Send + Sync,
     Fut: Future<Output = ()> + Send,
 {
     /// Calls the function with the pop result when the pop operation is successful.
@@ -70,7 +69,7 @@ where
     /// # Arguments
     ///
     /// * `e` - The error encountered during the pop operation.
-    fn on_error(&self, e: Box<dyn std::error::Error + Send>) {
+    fn on_error(&self, e: RocketMQError) {
         (*self)(None, Some(e));
     }
 }*/
@@ -79,16 +78,14 @@ where
 ///
 /// This type alias defines a callback function that takes a `PopResult` and returns a boxed future.
 pub type PopCallbackFn = Arc<
-    dyn Fn(Option<PopResult>, Option<Box<dyn std::error::Error>>) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>>
-        + Send
-        + Sync,
+    dyn Fn(Option<PopResult>, Option<RocketMQError>) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync,
 >;
 
-fn broker_response_code(error: &(dyn Error + Send + 'static)) -> Option<ResponseCode> {
-    error.downcast_ref::<RocketMQError>().and_then(|error| match error {
+fn broker_response_code(error: &RocketMQError) -> Option<ResponseCode> {
+    match error {
         RocketMQError::BrokerOperationFailed { code, .. } => Some(ResponseCode::from(*code)),
         _ => None,
-    })
+    }
 }
 
 pub struct DefaultPopCallback {
@@ -168,7 +165,7 @@ impl PopCallback for DefaultPopCallback {
         }
     }
 
-    fn on_error(&mut self, err: Box<dyn std::error::Error + Send>) {
+    fn on_error(&mut self, err: RocketMQError) {
         let mut push_consumer_impl = self.push_consumer_impl.clone();
 
         let Some(message_queue_inner) = self.message_queue_inner.take() else {
@@ -183,7 +180,7 @@ impl PopCallback for DefaultPopCallback {
             return;
         };
         let topic = message_queue_inner.topic_str();
-        let broker_code = broker_response_code(err.as_ref());
+        let broker_code = broker_response_code(&err);
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if broker_code == Some(ResponseCode::SubscriptionNotLatest) {
                 warn!(
@@ -209,8 +206,6 @@ impl PopCallback for DefaultPopCallback {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
     use cheetah_string::CheetahString;
     use rocketmq_common::common::message::message_ext::MessageExt;
 
@@ -249,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn broker_response_code_reads_typed_broker_error() {
+    fn broker_response_code_reads_broker_error_without_downcast() {
         let error = rocketmq_error::RocketMQError::broker_operation_failed(
             "POP_MESSAGE",
             ResponseCode::SubscriptionNotLatest.to_i32(),
@@ -303,7 +298,7 @@ mod tests {
     fn error_without_message_queue_is_ignored_without_panic() {
         let mut callback = new_callback();
 
-        PopCallback::on_error(&mut callback, Box::new(io::Error::other("test error")));
+        PopCallback::on_error(&mut callback, RocketMQError::illegal_argument("test error"));
     }
 
     #[test]
@@ -311,6 +306,6 @@ mod tests {
         let mut callback = new_callback();
         callback.message_queue_inner = Some(message_queue());
 
-        PopCallback::on_error(&mut callback, Box::new(io::Error::other("test error")));
+        PopCallback::on_error(&mut callback, RocketMQError::illegal_argument("test error"));
     }
 }
