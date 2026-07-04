@@ -18,5 +18,6 @@ pub mod admin_tool_result;
 pub mod admin_tools_result_code_enum;
 pub mod client_error_code;
 pub mod nameserver_access_config;
+pub(crate) mod retry_decision;
 pub mod session_credentials;
 pub mod thread_local_index;

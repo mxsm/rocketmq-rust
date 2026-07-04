@@ -1423,14 +1423,10 @@ impl DefaultMQProducerImpl {
     /// Check if should retry based on error type
     #[inline]
     fn should_retry_on_error(&self, error: &rocketmq_error::RocketMQError) -> bool {
-        match error {
-            rocketmq_error::RocketMQError::IllegalArgument(_) => true,
-            rocketmq_error::RocketMQError::Network(_) => true,
-            rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. } => {
-                self.producer_config.retry_response_codes().contains(code)
-            }
-            _ => false,
-        }
+        crate::common::retry_decision::should_retry_producer_send_error(
+            error,
+            self.producer_config.retry_response_codes(),
+        )
     }
 
     /// Check if should retry based on send result
