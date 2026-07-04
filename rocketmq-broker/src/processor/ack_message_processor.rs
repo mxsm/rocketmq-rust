@@ -50,6 +50,7 @@ use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
+use crate::processor::pop_message_processor::QueueLockManager;
 use crate::processor::processor_service::pop_revive_service::PopReviveService;
 
 pub struct AckMessageProcessor<MS: MessageStore> {
@@ -474,14 +475,7 @@ where
         channel: &Channel,
         response: &mut RemotingCommand,
     ) {
-        let lock_key = CheetahString::from_string(format!(
-            "{}{}{}{}{}",
-            topic,
-            PopAckConstants::SPLIT,
-            consume_group,
-            PopAckConstants::SPLIT,
-            q_id
-        ));
+        let lock_key = CheetahString::from_string(QueueLockManager::build_lock_key(&topic, &consume_group, q_id));
         let old_offset = self
             .broker_runtime_inner
             .consumer_offset_manager()

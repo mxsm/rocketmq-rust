@@ -293,15 +293,15 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         if !self.serving.load(Ordering::Acquire) {
             return false;
         }
-        let point_wrapper = match self.buffer.get(&CheetahString::from_string(format!(
-            "{}{}{}{}{}{}",
+        let merge_key = PopCheckPointWrapper::build_merge_key(
             ack_msg.topic(),
             ack_msg.consumer_group(),
             ack_msg.queue_id(),
             ack_msg.start_offset(),
             ack_msg.pop_time(),
-            ack_msg.broker_name()
-        ))) {
+            ack_msg.broker_name(),
+        );
+        let point_wrapper = match self.buffer.get(&merge_key) {
             Some(wrapper) => wrapper,
             None => {
                 if self.broker_runtime_inner.broker_config().enable_pop_log {
@@ -1264,23 +1264,7 @@ impl std::fmt::Display for PopCheckPointWrapper {
 
 impl PopCheckPointWrapper {
     pub fn new(revive_queue_id: i32, revive_queue_offset: i64, ck: Arc<PopCheckPoint>, next_begin_offset: i64) -> Self {
-        let lock_key = format!(
-            "{}{}{}{}{}",
-            ck.topic,
-            PopAckConstants::SPLIT,
-            ck.cid,
-            PopAckConstants::SPLIT,
-            ck.queue_id
-        );
-        let merge_key = format!(
-            "{}{}{}{}{}{}",
-            ck.topic,
-            ck.cid,
-            ck.queue_id,
-            ck.start_offset,
-            ck.pop_time,
-            ck.broker_name.clone().unwrap_or_default()
-        );
+        let (lock_key, merge_key) = Self::build_keys(ck.as_ref());
         Self {
             revive_queue_id,
             revive_queue_offset: AtomicI64::new(revive_queue_offset),
@@ -1288,8 +1272,8 @@ impl PopCheckPointWrapper {
             bits: AtomicI32::new(0),
             to_store_bits: AtomicI32::new(0),
             next_begin_offset,
-            lock_key: CheetahString::from(lock_key),
-            merge_key: CheetahString::from(merge_key),
+            lock_key,
+            merge_key,
             just_offset: false,
             ck_stored: AtomicBool::new(false),
         }
@@ -1302,23 +1286,7 @@ impl PopCheckPointWrapper {
         next_begin_offset: i64,
         just_offset: bool,
     ) -> Self {
-        let lock_key = format!(
-            "{}{}{}{}{}",
-            ck.topic,
-            PopAckConstants::SPLIT,
-            ck.cid,
-            PopAckConstants::SPLIT,
-            ck.queue_id
-        );
-        let merge_key = format!(
-            "{}{}{}{}{}{}",
-            ck.topic,
-            ck.cid,
-            ck.queue_id,
-            ck.start_offset,
-            ck.pop_time,
-            ck.broker_name.clone().unwrap_or_default()
-        );
+        let (lock_key, merge_key) = Self::build_keys(ck.as_ref());
         Self {
             revive_queue_id,
             revive_queue_offset: AtomicI64::new(revive_queue_offset),
@@ -1326,11 +1294,48 @@ impl PopCheckPointWrapper {
             bits: AtomicI32::new(0),
             to_store_bits: AtomicI32::new(0),
             next_begin_offset,
-            lock_key: CheetahString::from(lock_key),
-            merge_key: CheetahString::from(merge_key),
+            lock_key,
+            merge_key,
             just_offset,
             ck_stored: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn build_lock_key(
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
+        queue_id: i32,
+    ) -> CheetahString {
+        CheetahString::from_string(QueueLockManager::build_lock_key(topic, consumer_group, queue_id))
+    }
+
+    pub(crate) fn build_merge_key(
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
+        queue_id: i32,
+        start_offset: i64,
+        pop_time: i64,
+        broker_name: &str,
+    ) -> CheetahString {
+        CheetahString::from_string(format!(
+            "{}{}{}{}{}{}",
+            topic, consumer_group, queue_id, start_offset, pop_time, broker_name
+        ))
+    }
+
+    fn build_keys(ck: &PopCheckPoint) -> (CheetahString, CheetahString) {
+        let broker_name = ck.broker_name.as_ref().map(CheetahString::as_str).unwrap_or_default();
+        (
+            Self::build_lock_key(&ck.topic, &ck.cid, ck.queue_id),
+            Self::build_merge_key(
+                &ck.topic,
+                &ck.cid,
+                ck.queue_id,
+                ck.start_offset,
+                ck.pop_time,
+                broker_name,
+            ),
+        )
     }
 
     #[inline]
@@ -1421,6 +1426,39 @@ mod tests {
         assert_eq!(wrapper.get_next_begin_offset(), 200);
         assert_eq!(wrapper.get_ck(), &ck);
         assert!(wrapper.is_just_offset());
+    }
+
+    #[test]
+    fn checkpoint_wrapper_key_helpers_match_existing_formats() {
+        let ck = Arc::new(PopCheckPoint {
+            topic: CheetahString::from_static_str("topic-a"),
+            cid: CheetahString::from_static_str("group-a"),
+            queue_id: 3,
+            start_offset: 42,
+            pop_time: 1_000,
+            broker_name: Some(CheetahString::from_static_str("broker-a")),
+            ..Default::default()
+        });
+        let wrapper = PopCheckPointWrapper::new(1, 100, ck.clone(), 200);
+
+        assert_eq!(wrapper.get_lock_key().as_str(), "topic-a@group-a@3");
+        assert_eq!(wrapper.get_merge_key().as_str(), "topic-agroup-a3421000broker-a");
+        assert_eq!(
+            PopCheckPointWrapper::build_lock_key(&ck.topic, &ck.cid, ck.queue_id).as_str(),
+            wrapper.get_lock_key().as_str()
+        );
+        assert_eq!(
+            PopCheckPointWrapper::build_merge_key(
+                &ck.topic,
+                &ck.cid,
+                ck.queue_id,
+                ck.start_offset,
+                ck.pop_time,
+                ck.broker_name.as_ref().expect("broker name")
+            )
+            .as_str(),
+            wrapper.get_merge_key().as_str()
+        );
     }
 
     #[test]
