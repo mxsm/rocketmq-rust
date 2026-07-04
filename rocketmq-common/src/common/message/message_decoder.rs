@@ -487,6 +487,53 @@ pub fn decodes_batch(byte_buffer: &mut Bytes, read_body: bool, decompress_body: 
     messages
 }
 
+fn split_next_message_frame(byte_buffer: &mut Bytes) -> Option<Bytes> {
+    let remaining = byte_buffer.remaining();
+    if remaining < 4 {
+        return None;
+    }
+
+    let mut header = byte_buffer.clone();
+    let store_size = header.get_i32();
+    if store_size <= 0 || store_size as usize > remaining {
+        return None;
+    }
+
+    Some(byte_buffer.split_to(store_size as usize))
+}
+
+pub fn decodes_batch_with_metadata_filter<F>(
+    byte_buffer: &mut Bytes,
+    read_body: bool,
+    decompress_body: bool,
+    mut should_decode_body: F,
+) -> Vec<MessageExt>
+where
+    F: FnMut(&MessageExt) -> bool,
+{
+    let mut messages = Vec::new();
+    while byte_buffer.has_remaining() {
+        let Some(frame) = split_next_message_frame(byte_buffer) else {
+            break;
+        };
+        let mut metadata_frame = frame.clone();
+        let Some(metadata) = decode(&mut metadata_frame, false, false, false, false, false) else {
+            break;
+        };
+        if !should_decode_body(&metadata) {
+            continue;
+        }
+
+        let mut full_frame = frame;
+        if let Some(msg_ext) = decode(&mut full_frame, read_body, decompress_body, false, false, false) {
+            messages.push(msg_ext);
+        } else {
+            break;
+        }
+    }
+    messages
+}
+
 pub fn decodes_batch_client(byte_buffer: &mut Bytes, read_body: bool, decompress_body: bool) -> Vec<MessageClientExt> {
     let mut messages = Vec::new();
     while byte_buffer.has_remaining() {
@@ -977,6 +1024,49 @@ mod tests {
     use bytes::BytesMut;
 
     use super::*;
+
+    fn message_ext_with_tag(queue_offset: i64, tag: &str, body_size: usize) -> MessageExt {
+        let message = Message::builder()
+            .topic("MetadataFilterTopic")
+            .tags(tag)
+            .body(vec![b'x'; body_size])
+            .build()
+            .expect("test message should build");
+
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_queue_id(1);
+        message_ext.set_queue_offset(queue_offset);
+        message_ext.set_commit_log_offset(queue_offset * 1024);
+        message_ext
+    }
+
+    #[test]
+    fn decodes_batch_with_metadata_filter_skips_bodies_for_rejected_frames() {
+        let rejected = message_ext_with_tag(0, "Skip", 1024);
+        let accepted = message_ext_with_tag(1, "Keep", 32);
+        let mut payload = BytesMut::new();
+        payload.put_slice(&encode(&rejected, false).expect("rejected message should encode"));
+        payload.put_slice(&encode(&accepted, false).expect("accepted message should encode"));
+        let mut payload = payload.freeze();
+        let mut inspected = Vec::new();
+
+        let messages = decodes_batch_with_metadata_filter(&mut payload, true, false, |metadata| {
+            inspected.push((metadata.queue_offset, metadata.get_body().is_some(), metadata.tags()));
+            metadata.tags().as_deref() == Some("Keep")
+        });
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].queue_offset, 1);
+        assert_eq!(
+            messages[0].get_body().expect("accepted body should materialize").len(),
+            32
+        );
+        assert_eq!(payload.len(), 0);
+        assert_eq!(inspected.len(), 2);
+        assert_eq!(inspected[0], (0, false, Some(CheetahString::from_static_str("Skip"))));
+        assert_eq!(inspected[1], (1, false, Some(CheetahString::from_static_str("Keep"))));
+    }
 
     #[test]
     fn message_properties_to_string_preserves_separator_format() {
