@@ -15,13 +15,13 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use anyhow::Result;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_controller::parse_command_line;
 use rocketmq_controller::typ::Node;
 use rocketmq_controller::ControllerManager;
 use rocketmq_error::ControllerError;
-use rocketmq_error::Result;
 use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
