@@ -460,7 +460,7 @@ impl LocalFileMessageStore {
         let store_checkpoint = Arc::new(
             StoreCheckpoint::new(get_store_checkpoint(message_store_config.store_path_root_dir.as_str())).map_err(
                 |error| {
-                    StoreError::General(format!(
+                    StoreError::Storage(format!(
                         "failed to create store checkpoint under {}: {error}",
                         message_store_config.store_path_root_dir
                     ))
@@ -628,7 +628,7 @@ impl LocalFileMessageStore {
         }
 
         let tiered_store = Arc::new(TieredStore::new(tiered_store_config).map_err(|error| {
-            StoreError::General(format!(
+            StoreError::TieredStore(format!(
                 "failed to create tieredstore for local file message store: {error}"
             ))
         })?);
@@ -925,12 +925,12 @@ impl LocalFileMessageStore {
 
     fn validate_supported_configuration(&self) -> Result<(), StoreError> {
         if Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref()) {
-            return Err(StoreError::General(
+            return Err(StoreError::DLedger(
                 "DLedger commit log is Java-specific and is intentionally unsupported in rocketmq-rust".to_string(),
             ));
         }
         if self.message_store_config.timer_rocksdb_enable && !self.message_store_config.is_enable_rocksdb_store() {
-            return Err(StoreError::General(
+            return Err(StoreError::Unsupported(
                 "Timer RocksDB backend is not implemented in rocketmq-rust; keep timer_rocksdb_enable=false"
                     .to_string(),
             ));
@@ -938,7 +938,7 @@ impl LocalFileMessageStore {
 
         let enabled_rocksdb_options = Self::enabled_rocksdb_specific_options(self.message_store_config.as_ref());
         if !self.message_store_config.is_enable_rocksdb_store() && !enabled_rocksdb_options.is_empty() {
-            return Err(StoreError::General(format!(
+            return Err(StoreError::Config(format!(
                 "RocksDB-specific configuration requires store_type=RocksDB: {}",
                 enabled_rocksdb_options.join(", ")
             )));
@@ -947,7 +947,7 @@ impl LocalFileMessageStore {
             && self.message_store_config.linux_memory_lock_budget_bytes == 0
             && !self.message_store_config.linux_memory_lock_warn_only
         {
-            return Err(StoreError::General(
+            return Err(StoreError::Config(
                 "linux_memory_lock_mode=active_file requires explicit linux_memory_lock_budget_bytes when \
                  linux_memory_lock_warn_only=false; set linux_memory_lock_budget_bytes or \
                  linux_memory_lock_warn_only=true"
@@ -975,7 +975,7 @@ impl LocalFileMessageStore {
 
     fn message_store_arc_or_error(&self, operation: &str) -> Result<ArcMut<LocalFileMessageStore>, StoreError> {
         self.message_store_arc.clone().ok_or_else(|| {
-            StoreError::General(format!(
+            StoreError::InvalidState(format!(
                 "message store arc is not set; call set_message_store_arc before {operation}"
             ))
         })
@@ -989,7 +989,7 @@ impl LocalFileMessageStore {
         let lock_path = PathBuf::from(get_lock_file(self.message_store_config.store_path_root_dir.as_str()));
         if let Some(parent) = lock_path.parent() {
             fs::create_dir_all(parent).map_err(|error| {
-                StoreError::General(format!(
+                StoreError::Storage(format!(
                     "failed to create store lock parent directory {}: {error}",
                     parent.display()
                 ))
@@ -1003,25 +1003,25 @@ impl LocalFileMessageStore {
             .truncate(false)
             .open(&lock_path)
             .map_err(|error| {
-                StoreError::General(format!(
+                StoreError::Storage(format!(
                     "failed to open store lock file {}: {error}",
                     lock_path.display()
                 ))
             })?;
         file.try_lock_exclusive().map_err(|error| {
-            StoreError::General(format!(
+            StoreError::Storage(format!(
                 "message store lock file is held by another instance: {} ({error})",
                 lock_path.display()
             ))
         })?;
         file.set_len(0).map_err(|error| {
-            StoreError::General(format!(
+            StoreError::Storage(format!(
                 "failed to truncate store lock file {}: {error}",
                 lock_path.display()
             ))
         })?;
         writeln!(file, "pid={}", std::process::id()).map_err(|error| {
-            StoreError::General(format!(
+            StoreError::Storage(format!(
                 "failed to write store lock file {}: {error}",
                 lock_path.display()
             ))
@@ -1900,22 +1900,22 @@ impl MessageStore for LocalFileMessageStore {
         match self.lifecycle_state() {
             StoreLifecycleState::Initialized => {}
             StoreLifecycleState::Created => {
-                return Err(StoreError::General(
+                return Err(StoreError::InvalidState(
                     "message store must be initialized before start".to_string(),
                 ));
             }
             StoreLifecycleState::Started => {
-                return Err(StoreError::General("message store is already started".to_string()));
+                return Err(StoreError::InvalidState("message store is already started".to_string()));
             }
             StoreLifecycleState::Shutdown => {
-                return Err(StoreError::General(
+                return Err(StoreError::InvalidState(
                     "message store is shutdown; call init before start".to_string(),
                 ));
             }
             StoreLifecycleState::RecoveringConsumeQueue
             | StoreLifecycleState::RecoveringCommitLog
             | StoreLifecycleState::RecoveringTopicQueueTable => {
-                return Err(StoreError::General(
+                return Err(StoreError::InvalidState(
                     "message store is recovering; start is not allowed".to_string(),
                 ));
             }
@@ -1932,7 +1932,7 @@ impl MessageStore for LocalFileMessageStore {
                 tiered_store
                     .start()
                     .await
-                    .map_err(|error| StoreError::General(format!("failed to start tieredstore: {error}")))?;
+                    .map_err(|error| StoreError::TieredStore(format!("failed to start tieredstore: {error}")))?;
             }
 
             self.reput_message_service
@@ -1968,7 +1968,7 @@ impl MessageStore for LocalFileMessageStore {
             if let Some(ha_service) = self.ha_service.as_mut() {
                 ha_service.start().await.map_err(|e| {
                     error!("HA service start failed: {:?}", e);
-                    StoreError::General(e.to_string())
+                    StoreError::Ha(e.to_string())
                 })?;
             }
             self.create_temp_file();
@@ -2006,14 +2006,14 @@ impl MessageStore for LocalFileMessageStore {
             StoreLifecycleState::Created | StoreLifecycleState::Shutdown => {}
             StoreLifecycleState::Initialized => return Ok(()),
             StoreLifecycleState::Started => {
-                return Err(StoreError::General(
+                return Err(StoreError::InvalidState(
                     "message store cannot be initialized while started".to_string(),
                 ));
             }
             StoreLifecycleState::RecoveringConsumeQueue
             | StoreLifecycleState::RecoveringCommitLog
             | StoreLifecycleState::RecoveringTopicQueueTable => {
-                return Err(StoreError::General(
+                return Err(StoreError::InvalidState(
                     "message store cannot be initialized while recovering".to_string(),
                 ));
             }
@@ -2062,7 +2062,7 @@ impl MessageStore for LocalFileMessageStore {
         if self.is_transient_store_pool_enable() {
             match self.transient_store_pool.init() {
                 Ok(_) => {}
-                Err(e) => return Err(StoreError::General(e.to_string())),
+                Err(e) => return Err(StoreError::Storage(e.to_string())),
             }
         }
         self.shutdown.store(false, Ordering::Release);
@@ -2608,7 +2608,7 @@ impl MessageStore for LocalFileMessageStore {
                     Ok(offset) if offset >= 0 => return Ok(offset),
                     Ok(_) => {}
                     Err(error) => {
-                        return Err(StoreError::General(format!(
+                        return Err(StoreError::TieredStore(format!(
                             "tieredstore offset by time lookup failed: {error}"
                         )));
                     }
@@ -3203,7 +3203,7 @@ impl MessageStore for LocalFileMessageStore {
                 .fetcher()
                 .get_message_timestamp(topic.to_string(), queue_id, consume_queue_offset)
                 .await
-                .map_err(|error| StoreError::General(format!("tieredstore timestamp lookup failed: {error}")));
+                .map_err(|error| StoreError::TieredStore(format!("tieredstore timestamp lookup failed: {error}")));
         }
         Ok(-1)
     }
@@ -6043,7 +6043,7 @@ mod tests {
         ] {
             let mut store = new_configured_test_store(&temp_dir, message_store_config);
             let error = store.init().await.expect_err("DLedger should be rejected explicitly");
-            assert!(matches!(error, StoreError::General(message) if message.contains("DLedger commit log")));
+            assert!(matches!(error, StoreError::DLedger(message) if message.contains("DLedger commit log")));
         }
     }
 
@@ -6069,7 +6069,7 @@ mod tests {
             .expect_err("local file store should reject rocksdb-only configuration");
         assert!(matches!(
             error,
-            StoreError::General(message)
+            StoreError::Config(message)
             if message.contains("store_type=RocksDB")
                 && message.contains("clean_rocksdb_dirty_cq_interval_min")
                 && message.contains("stat_rocksdb_cq_interval_sec")
@@ -6099,7 +6099,7 @@ mod tests {
             .expect_err("strict active_file memory locking should require explicit budget");
         assert!(matches!(
             error,
-            StoreError::General(message)
+            StoreError::Config(message)
                 if message.contains("active_file")
                     && message.contains("linux_memory_lock_budget_bytes")
                     && message.contains("linux_memory_lock_warn_only=true")
@@ -6360,7 +6360,7 @@ mod tests {
             .expect_err("timer rocksdb backend is not implemented");
         assert!(matches!(
             error,
-            StoreError::General(message)
+            StoreError::Unsupported(message)
                 if message.contains("Timer RocksDB backend")
                     && message.contains("timer_rocksdb_enable=false")
         ));
@@ -6592,7 +6592,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            StoreError::General(message) if message.contains("initialized before start")
+            StoreError::InvalidState(message) if message.contains("initialized before start")
         ));
         assert!(!temp_dir.path().join("lock").exists());
     }
@@ -6618,7 +6618,7 @@ mod tests {
             .expect_err("second store should not start while lock is held");
         assert!(matches!(
             error,
-            StoreError::General(message) if message.contains("lock file is held")
+            StoreError::Storage(message) if message.contains("lock file is held")
         ));
 
         first.shutdown().await;
@@ -7257,14 +7257,14 @@ mod tests {
             .expect_err("start should be rejected during recovery");
         assert!(matches!(
             start_error,
-            StoreError::General(message) if message.contains("recovering")
+            StoreError::InvalidState(message) if message.contains("recovering")
         ));
 
         store.set_lifecycle_state(StoreLifecycleState::RecoveringTopicQueueTable);
         let init_error = store.init().await.expect_err("init should be rejected during recovery");
         assert!(matches!(
             init_error,
-            StoreError::General(message) if message.contains("recovering")
+            StoreError::InvalidState(message) if message.contains("recovering")
         ));
     }
 

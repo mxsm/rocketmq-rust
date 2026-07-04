@@ -25,8 +25,26 @@ pub enum StoreError {
     #[error("Message not found")]
     MessageNotFound,
 
-    #[error("General store error: {0}")]
-    General(String),
+    #[error("Store configuration error: {0}")]
+    Config(String),
+
+    #[error("Unsupported store configuration: {0}")]
+    Unsupported(String),
+
+    #[error("Invalid store state: {0}")]
+    InvalidState(String),
+
+    #[error("Store storage error: {0}")]
+    Storage(String),
+
+    #[error("Tiered store error: {0}")]
+    TieredStore(String),
+
+    #[error("HA store error: {0}")]
+    Ha(String),
+
+    #[error("DLedger store error: {0}")]
+    DLedger(String),
 
     #[error("Mapped file not found")]
     MappedFileNotFound,
@@ -69,8 +87,8 @@ mod tests {
     }
 
     #[test]
-    fn general_store_error() {
-        let error = StoreError::General("An error occurred".to_string());
-        assert_eq!(format!("{}", error), "General store error: An error occurred");
+    fn typed_store_error() {
+        let error = StoreError::InvalidState("An error occurred".to_string());
+        assert_eq!(format!("{}", error), "Invalid store state: An error occurred");
     }
 }
