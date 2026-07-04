@@ -339,7 +339,9 @@ impl MQClientInstance {
             lock_namesrv: Arc::default(),
             lock_heartbeat: Arc::default(),
             service_state: ServiceState::CreateJust,
-            pull_message_service: ArcMut::new(PullMessageService::new()),
+            pull_message_service: ArcMut::new(PullMessageService::with_shards(
+                client_config.pull_message_service_shards,
+            )),
             rebalance_service: RebalanceService::new(),
             default_producer,
             broker_addr_table,

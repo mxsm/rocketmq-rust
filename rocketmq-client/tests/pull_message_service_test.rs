@@ -67,6 +67,26 @@ async fn test_service_creation_with_custom_capacity() {
     assert!(!service.is_stopped());
 }
 
+#[test]
+fn test_service_creation_with_custom_shards_normalizes_zero() {
+    let service = PullMessageService::with_capacity_and_shards(1024, 0);
+
+    assert_eq!(service.shard_count(), 1);
+}
+
+#[test]
+fn test_same_queue_maps_to_same_pull_shard() {
+    let service = PullMessageService::with_capacity_and_shards(1024, 4);
+    let first = create_test_pull_request("test_group", "test_topic");
+    let mut second = create_test_pull_request("test_group", "test_topic");
+    second.set_next_offset(1024);
+
+    assert_eq!(
+        service.shard_index_for_pull_request("test_client", &first),
+        service.shard_index_for_pull_request("test_client", &second)
+    );
+}
+
 #[tokio::test]
 async fn test_service_start_and_shutdown() {
     let mut service = PullMessageService::new();
@@ -81,6 +101,29 @@ async fn test_service_start_and_shutdown() {
     let result = service.shutdown(1000).await;
     assert!(result.is_ok());
     assert!(service.is_stopped());
+}
+
+#[tokio::test]
+async fn test_start_spawns_configured_pull_workers() {
+    let mut service = PullMessageService::with_capacity_and_shards(1024, 4);
+    let instance = create_mock_client_instance();
+
+    service.start(instance).await.unwrap();
+
+    let mut snapshot = service.shard_snapshot().await;
+    for _ in 0..100 {
+        if snapshot.worker_task_count == 4 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        snapshot = service.shard_snapshot().await;
+    }
+
+    assert_eq!(snapshot.shard_count, 4);
+    assert_eq!(snapshot.worker_task_count, 4);
+    assert_eq!(snapshot.shards.len(), 4);
+
+    service.shutdown(1000).await.unwrap();
 }
 
 #[tokio::test]

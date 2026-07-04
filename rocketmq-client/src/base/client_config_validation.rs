@@ -68,6 +68,9 @@ impl ClientConfigValidator {
     /// Maximum MQ client API timeout (60 seconds)
     pub const MAX_MQ_CLIENT_API_TIMEOUT: u64 = 60_000;
 
+    /// Maximum PullMessageService shard multiplier.
+    pub const MAX_PULL_MESSAGE_SERVICE_SHARDS_PER_CPU: usize = 8;
+
     // =========================================================================
     // Validation Methods
     // =========================================================================
@@ -238,6 +241,34 @@ impl ClientConfigValidator {
 
         Ok(())
     }
+
+    /// Validate PullMessageService shard count.
+    ///
+    /// Ensures the shard count is greater than 0 and stays within a reasonable
+    /// CPU-scaled upper bound.
+    pub fn validate_pull_message_service_shards(shards: usize) -> RocketMQResult<()> {
+        if shards == 0 {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "pull_message_service_shards",
+                value: shards.to_string(),
+                reason: "must be greater than 0".to_string(),
+            });
+        }
+
+        #[allow(clippy::redundant_closure)]
+        let cpu_count = std::panic::catch_unwind(|| num_cpus::get()).unwrap_or(4);
+        let max_shards = cpu_count * Self::MAX_PULL_MESSAGE_SERVICE_SHARDS_PER_CPU;
+
+        if shards > max_shards {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "pull_message_service_shards",
+                value: shards.to_string(),
+                reason: format!("should not exceed {} (CPU cores * 8)", max_shards),
+            });
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -287,6 +318,13 @@ mod tests {
     fn test_validate_concurrent_heartbeat_thread_pool_size_valid() {
         assert!(ClientConfigValidator::validate_concurrent_heartbeat_thread_pool_size(1).is_ok());
         assert!(ClientConfigValidator::validate_concurrent_heartbeat_thread_pool_size(4).is_ok());
+    }
+
+    #[test]
+    fn test_validate_pull_message_service_shards() {
+        assert!(ClientConfigValidator::validate_pull_message_service_shards(1).is_ok());
+        assert!(ClientConfigValidator::validate_pull_message_service_shards(4).is_ok());
+        assert!(ClientConfigValidator::validate_pull_message_service_shards(0).is_err());
     }
 
     #[test]
