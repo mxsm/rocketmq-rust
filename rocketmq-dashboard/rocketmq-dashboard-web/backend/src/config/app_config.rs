@@ -153,20 +153,20 @@ impl FileConfigStore {
         }
 
         let content = fs::read_to_string(&self.path)
-            .map_err(|error| DashboardError::Config(format!("Failed to read config file: {error}")))?;
+            .map_err(|error| DashboardError::config_source("Failed to read config file", error))?;
         serde_json::from_str(&content)
-            .map_err(|error| DashboardError::Config(format!("Failed to parse config file: {error}")))
+            .map_err(|error| DashboardError::config_source("Failed to parse config file", error))
     }
 
     fn save(&self, config: &DashboardConfigView) -> Result<(), DashboardError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
-                .map_err(|error| DashboardError::Config(format!("Failed to create config directory: {error}")))?;
+                .map_err(|error| DashboardError::config_source("Failed to create config directory", error))?;
         }
         let content = serde_json::to_string_pretty(config)
-            .map_err(|error| DashboardError::Internal(format!("Failed to serialize config: {error}")))?;
+            .map_err(|error| DashboardError::internal_source("Failed to serialize config", error))?;
         fs::write(&self.path, content)
-            .map_err(|error| DashboardError::Config(format!("Failed to write config file: {error}")))
+            .map_err(|error| DashboardError::config_source("Failed to write config file", error))
     }
 }
 
@@ -186,7 +186,7 @@ impl SqliteConfigStore {
                 )",
                 [],
             )
-            .map_err(|error| DashboardError::Config(format!("Failed to initialize config table: {error}")))?;
+            .map_err(|error| DashboardError::config_source("Failed to initialize config table", error))?;
 
         let payload = connection
             .query_row("SELECT payload FROM dashboard_config WHERE id = 1", [], |row| {
@@ -196,7 +196,7 @@ impl SqliteConfigStore {
 
         if let Some(payload) = payload {
             return serde_json::from_str(&payload)
-                .map_err(|error| DashboardError::Config(format!("Failed to parse SQLite config payload: {error}")));
+                .map_err(|error| DashboardError::config_source("Failed to parse SQLite config payload", error));
         }
 
         self.save(default_config)?;
@@ -206,7 +206,7 @@ impl SqliteConfigStore {
     fn save(&self, config: &DashboardConfigView) -> Result<(), DashboardError> {
         let connection = self.open_connection()?;
         let payload = serde_json::to_string_pretty(config)
-            .map_err(|error| DashboardError::Internal(format!("Failed to serialize config: {error}")))?;
+            .map_err(|error| DashboardError::internal_source("Failed to serialize config", error))?;
         connection
             .execute(
                 "CREATE TABLE IF NOT EXISTS dashboard_config (
@@ -215,24 +215,24 @@ impl SqliteConfigStore {
                 )",
                 [],
             )
-            .map_err(|error| DashboardError::Config(format!("Failed to initialize config table: {error}")))?;
+            .map_err(|error| DashboardError::config_source("Failed to initialize config table", error))?;
         connection
             .execute(
                 "INSERT INTO dashboard_config (id, payload) VALUES (1, ?1)
                  ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
                 [payload],
             )
-            .map_err(|error| DashboardError::Config(format!("Failed to write SQLite config: {error}")))?;
+            .map_err(|error| DashboardError::config_source("Failed to write SQLite config", error))?;
         Ok(())
     }
 
     fn open_connection(&self) -> Result<rusqlite::Connection, DashboardError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
-                .map_err(|error| DashboardError::Config(format!("Failed to create SQLite directory: {error}")))?;
+                .map_err(|error| DashboardError::config_source("Failed to create SQLite directory", error))?;
         }
         rusqlite::Connection::open(&self.path)
-            .map_err(|error| DashboardError::Config(format!("Failed to open SQLite config store: {error}")))
+            .map_err(|error| DashboardError::config_source("Failed to open SQLite config store", error))
     }
 }
 

@@ -16,8 +16,12 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use rocketmq_dashboard_common::DashboardCommonError;
+use rocketmq_error::HttpStatusCode;
 use rocketmq_error::RocketMQError;
+use std::error::Error as StdError;
 use thiserror::Error;
+
+type DashboardErrorSource = Box<dyn StdError + Send + Sync + 'static>;
 
 #[derive(Debug, Error)]
 pub enum DashboardError {
@@ -25,6 +29,12 @@ pub enum DashboardError {
     Validation(String),
     #[error("{0}")]
     Config(String),
+    #[error("{message}")]
+    ConfigSource {
+        message: &'static str,
+        #[source]
+        source: DashboardErrorSource,
+    },
     #[error(transparent)]
     RocketMq(#[from] RocketMQError),
     #[error("{0}")]
@@ -35,6 +45,12 @@ pub enum DashboardError {
     NotImplemented(String),
     #[error("{0}")]
     Internal(String),
+    #[error("{message}")]
+    InternalSource {
+        message: &'static str,
+        #[source]
+        source: DashboardErrorSource,
+    },
 }
 
 impl From<DashboardCommonError> for DashboardError {
@@ -50,27 +66,60 @@ impl From<DashboardCommonError> for DashboardError {
 }
 
 impl DashboardError {
+    pub fn config_source<E>(message: &'static str, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::ConfigSource {
+            message,
+            source: Box::new(source),
+        }
+    }
+
+    pub fn internal_source<E>(message: &'static str, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::InternalSource {
+            message,
+            source: Box::new(source),
+        }
+    }
+
     pub fn code(&self) -> &'static str {
         match self {
             Self::Validation(_) => "VALIDATION_ERROR",
-            Self::Config(_) => "CONFIG_ERROR",
-            Self::RocketMq(_) => "ROCKETMQ_ERROR",
+            Self::Config(_) | Self::ConfigSource { .. } => "CONFIG_ERROR",
+            Self::RocketMq(error) => error.spec().code.as_str(),
             Self::NotFound(_) => "NOT_FOUND",
             Self::Auth(_) => "AUTH_ERROR",
             Self::NotImplemented(_) => "NOT_IMPLEMENTED",
-            Self::Internal(_) => "INTERNAL_ERROR",
+            Self::Internal(_) | Self::InternalSource { .. } => "INTERNAL_ERROR",
         }
     }
 
     pub fn status_code(&self) -> StatusCode {
         match self {
             Self::Validation(_) => StatusCode::BAD_REQUEST,
-            Self::Config(_) => StatusCode::BAD_REQUEST,
-            Self::RocketMq(_) => StatusCode::BAD_GATEWAY,
+            Self::Config(_) | Self::ConfigSource { .. } => StatusCode::BAD_REQUEST,
+            Self::RocketMq(error) => status_code_from_spec(error.spec().http.status),
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Auth(_) => StatusCode::UNAUTHORIZED,
             Self::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
-            Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Internal(_) | Self::InternalSource { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn response_message(&self) -> String {
+        match self {
+            Self::Validation(message)
+            | Self::Config(message)
+            | Self::NotFound(message)
+            | Self::Auth(message)
+            | Self::NotImplemented(message)
+            | Self::Internal(message) => message.clone(),
+            Self::ConfigSource { message, .. } | Self::InternalSource { message, .. } => (*message).to_string(),
+            Self::RocketMq(error) => rocketmq_response_message(error),
         }
     }
 }
@@ -78,7 +127,126 @@ impl DashboardError {
 impl IntoResponse for DashboardError {
     fn into_response(self) -> axum::response::Response {
         let status = self.status_code();
-        let body = ApiResponse::failure(self.code(), self.to_string());
+        let body = ApiResponse::failure(self.code(), self.response_message());
         (status, Json(body)).into_response()
+    }
+}
+
+fn status_code_from_spec(status: HttpStatusCode) -> StatusCode {
+    StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn rocketmq_response_message(error: &RocketMQError) -> String {
+    let context = error.context();
+    if context.is_empty() {
+        error.public_message().to_string()
+    } else {
+        format!("{} ({context})", error.public_message())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DashboardError;
+    use crate::model::ApiResponse;
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use rocketmq_error::REDACTED;
+    use rocketmq_error::RocketMQError;
+    use serde_json::Value;
+    use std::io;
+
+    async fn failure_response(error: DashboardError) -> (StatusCode, ApiResponse<Value>) {
+        let response = error.into_response();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read response body");
+        let body = serde_json::from_slice(&bytes).expect("deserialize error response");
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn rocketmq_error_uses_central_http_spec_and_code() {
+        let error = RocketMQError::route_not_found("TopicA");
+        let public_message = error.public_message();
+
+        let (status, body) = failure_response(DashboardError::from(error)).await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(!body.success);
+        assert_eq!(body.code, "ROUTE_NOT_FOUND");
+        assert!(body.message.starts_with(public_message));
+        assert!(body.message.contains("topic=TopicA"));
+    }
+
+    #[tokio::test]
+    async fn rocketmq_error_response_uses_redacted_context() {
+        let (status, body) = failure_response(DashboardError::from(RocketMQError::Internal(
+            "password=plain-text".to_string(),
+        )))
+        .await;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body.code, "INTERNAL");
+        assert!(body.message.contains(REDACTED));
+        assert!(!body.message.contains("password=plain-text"));
+    }
+
+    #[tokio::test]
+    async fn local_source_error_response_hides_source_detail() {
+        let error = DashboardError::config_source(
+            "Failed to read config file",
+            io::Error::new(io::ErrorKind::PermissionDenied, "token=plain-text"),
+        );
+
+        let (status, body) = failure_response(error).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.code, "CONFIG_ERROR");
+        assert_eq!(body.message, "Failed to read config file");
+        assert!(!body.message.contains("token=plain-text"));
+    }
+
+    #[test]
+    fn local_error_codes_are_stable() {
+        let cases = [
+            (
+                DashboardError::Validation("invalid".to_string()),
+                "VALIDATION_ERROR",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                DashboardError::Config("bad config".to_string()),
+                "CONFIG_ERROR",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                DashboardError::NotFound("missing".to_string()),
+                "NOT_FOUND",
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                DashboardError::Auth("denied".to_string()),
+                "AUTH_ERROR",
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                DashboardError::NotImplemented("todo".to_string()),
+                "NOT_IMPLEMENTED",
+                StatusCode::NOT_IMPLEMENTED,
+            ),
+            (
+                DashboardError::Internal("failed".to_string()),
+                "INTERNAL_ERROR",
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ];
+
+        for (error, code, status) in cases {
+            assert_eq!(error.code(), code);
+            assert_eq!(error.status_code(), status);
+        }
     }
 }

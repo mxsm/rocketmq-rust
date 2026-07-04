@@ -70,9 +70,9 @@ impl DashboardTaskManager {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let mut abort_handles = self.inner.abort_handles.lock().map_err(|error| {
+        let mut abort_handles = self.inner.abort_handles.lock().map_err(|_| {
             DashboardError::Internal(format!(
-                "dashboard task manager lock poisoned while spawning {task_name}: {error}"
+                "dashboard task manager lock poisoned while spawning {task_name}"
             ))
         })?;
         let handle = tokio::task::spawn(async move {
