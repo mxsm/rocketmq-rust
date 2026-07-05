@@ -124,7 +124,7 @@ impl RpcServer {
             parent_task_group.child("rocketmq-controller.rpc-server")
         } else {
             let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-                ControllerError::Internal(format!("No Tokio runtime for RPC server tasks: {error}"))
+                ControllerError::runtime_error(format!("No Tokio runtime for RPC server tasks: {error}"))
             })?;
             TaskGroup::root("rocketmq-controller.rpc-server", RuntimeHandle::new(runtime))
         };
@@ -177,7 +177,7 @@ impl RpcServer {
                     }
                 }
             })
-            .map_err(|error| ControllerError::Internal(format!("Failed to spawn RPC accept loop: {error}")))?;
+            .map_err(|error| ControllerError::runtime_error(format!("Failed to spawn RPC accept loop: {error}")))?;
         *self.task_group.lock() = Some(task_group);
 
         Ok(())
