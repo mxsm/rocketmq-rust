@@ -13,6 +13,7 @@ Generate GitHub issue drafts from the repository's real issue forms. Template-dr
 - User's rough draft mentions generic sections or non-existent template names — must be converted to real forms
 - Issue must preserve exact template title prefix (including emoji), label set, and field order
 - Local filesystem paths must be audited and removed before publishing
+- Public issue titles and body content must be English-only
 
 **When NOT to use:** Non-rocketmq-rust repositories, pure discussion/questions that should not become GitHub issues, or requests where the user explicitly says not to apply issue templates.
 
@@ -58,14 +59,15 @@ Rules:
 - Never mark prerequisite/contribution checkboxes complete unless confirmed or actually performed.
 - Tasks must be actionable: name affected modules, expected behavior, tests, and validation commands.
 - Use RocketMQ domain vocabulary (broker, namesrv, commitlog, consume queue, Tokio runtime, etc.) only where it helps the form.
+- Write all public issue title/body text in English. Repository-relative paths, code identifiers, commands, issue numbers, Markdown punctuation, and the template emoji are allowed; Chinese or other non-English prose is not allowed.
 
 ### 3. Remove Local Paths
 
 Strip Windows/Unix home paths, `file://` links, user-home env vars, local screenshot/temp/IDE paths. Rewrite to repository-relative paths or generic descriptions ("local broker log").
 
-Audit before publishing:
+Audit before publishing, including the title when available:
 ```bash
-python <skill-dir>/scripts/audit_issue_paths.py <draft.md>
+python <skill-dir>/scripts/audit_issue_paths.py --title "<title>" <draft.md>
 ```
 Fix every finding.
 
@@ -82,6 +84,7 @@ Fix every finding.
 | Inventing template names (e.g., `architecture.yml`) | Verify files exist in checkout; use only real filenames |
 | Marking checkboxes complete without confirmation | List unconfirmed items as missing |
 | Leaving a local Windows user path in draft | Run `audit_issue_paths.py` before finalizing |
+| Writing issue prose in Chinese or mixed language | Rewrite the title/body in English and rerun the audit |
 | Using feature_request for test-only work | Unit test additions → `unit_test.yml` |
 | Copying mojibake emoji from terminal | Re-read file with UTF-8 or use file content directly |
 
@@ -98,5 +101,6 @@ Fix every finding.
 - Labels match the selected template.
 - Body fields appear in template order.
 - Required fields have content or are listed under `Missing info`.
+- Title/body are English-only.
 - Checkboxes are not falsely marked complete.
-- Path audit passes with no local absolute paths or machine-specific roots.
+- Path and English audit passes with no local absolute paths, machine-specific roots, or non-English prose.

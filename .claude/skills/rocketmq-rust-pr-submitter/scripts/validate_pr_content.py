@@ -53,6 +53,8 @@ REQUIRED_HEADINGS = [
     "### How Did You Test This Change?",
 ]
 
+ALLOWED_NON_ASCII = frozenset("\U0001F41B\U0001F4DD\u2728\U0001F680\u267B\uFE0F\U0001F9EA\ufeff")
+
 
 def find_local_paths(text: str) -> list[str]:
     findings: list[str] = []
@@ -60,6 +62,16 @@ def find_local_paths(text: str) -> list[str]:
         for name, pattern in LOCAL_PATH_PATTERNS:
             for match in pattern.finditer(line):
                 findings.append(f"line {line_no}: {name}: {match.group(0)}")
+    return findings
+
+
+def find_non_english_text(text: str) -> list[str]:
+    findings: list[str] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        for char in line:
+            if ord(char) < 128 or char in ALLOWED_NON_ASCII:
+                continue
+            findings.append(f"line {line_no}: non-English character: U+{ord(char):04X} {char!r}")
     return findings
 
 
@@ -116,6 +128,8 @@ def main() -> int:
 
     for finding in find_local_paths(args.title + "\n" + body):
         errors.append(f"local path leak: {finding}")
+    for finding in find_non_english_text(args.title + "\n" + body):
+        errors.append(f"non-English text: {finding}")
 
     if errors:
         print("PR content validation failed:", file=sys.stderr)
