@@ -45,7 +45,6 @@ NON_SENSITIVE_DEBUG_FIELD_NAMES = {
 }
 
 INTERNAL_ERROR_ALLOWLIST = (
-    "rocketmq-auth/src/authorization/provider.rs",
     "rocketmq-broker/src/",
     "rocketmq-client/src/",
     "rocketmq-controller/src/",
