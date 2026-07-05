@@ -38,6 +38,17 @@ use crate::protocol::RemotingSerializable;
 
 pub struct TopicQueueMappingUtils;
 
+fn static_topic_mapping_invalid_item(reason: impl Into<String>) -> RocketMQError {
+    RocketMQError::illegal_argument(reason)
+}
+
+fn static_topic_mapping_inconsistent(reason: impl Into<String>) -> RocketMQError {
+    RocketMQError::RouteInconsistent {
+        topic: "static_topic_mapping".to_string(),
+        reason: reason.into(),
+    }
+}
+
 impl TopicQueueMappingUtils {
     pub fn find_logic_queue_mapping_item(
         mapping_items: &[LogicQueueMappingItem],
@@ -234,36 +245,36 @@ impl TopicQueueMappingUtils {
         for i in (0..items.len()).rev() {
             let item = &items[i];
             if item.start_offset < 0 || item.gen < 0 || item.queue_id < 0 {
-                return Err(RocketMQError::Internal(
-                    "The field is illegal, should not be negative".to_string(),
+                return Err(static_topic_mapping_invalid_item(
+                    "The field is illegal, should not be negative",
                 ));
             }
             if items.len() >= 2 && i <= items.len() - 2 && items[i].logic_offset < 0 {
-                return Err(RocketMQError::Internal(
-                    "The non-latest item has negative logic offset".to_string(),
+                return Err(static_topic_mapping_invalid_item(
+                    "The non-latest item has negative logic offset",
                 ));
             }
             if last_gen != -1 && item.gen >= last_gen {
-                return Err(RocketMQError::Internal(
-                    "The gen does not increase monotonically".to_string(),
+                return Err(static_topic_mapping_invalid_item(
+                    "The gen does not increase monotonically",
                 ));
             }
 
             if item.end_offset != -1 && item.end_offset < item.start_offset {
-                return Err(RocketMQError::Internal(
-                    "The endOffset is smaller than the start offset".to_string(),
+                return Err(static_topic_mapping_invalid_item(
+                    "The endOffset is smaller than the start offset",
                 ));
             }
 
             if last_offset != -1 && item.logic_offset != -1 {
                 if item.logic_offset >= last_offset {
-                    return Err(RocketMQError::Internal(
-                        "The base logic offset does not increase monotonically".to_string(),
+                    return Err(static_topic_mapping_invalid_item(
+                        "The base logic offset does not increase monotonically",
                     ));
                 }
                 if item.compute_max_static_queue_offset() >= last_offset {
-                    return Err(RocketMQError::Internal(
-                        "The max logic offset does not increase monotonically".to_string(),
+                    return Err(static_topic_mapping_invalid_item(
+                        "The max logic offset does not increase monotonically",
                     ));
                 }
             }
@@ -282,15 +293,15 @@ impl TopicQueueMappingUtils {
 
     pub fn get_leader_item(items: &[LogicQueueMappingItem]) -> RocketMQResult<LogicQueueMappingItem> {
         if items.is_empty() {
-            return Err(RocketMQError::Internal(
-                "get_leader_item failed with empty items".to_string(),
+            return Err(static_topic_mapping_inconsistent(
+                "get_leader_item failed with empty items",
             ));
         }
         if let Some(i) = items.last() {
             return Ok(i.clone());
         }
-        Err(RocketMQError::Internal(
-            "get_leader_item failed with empty items".to_string(),
+        Err(static_topic_mapping_inconsistent(
+            "get_leader_item failed with empty items",
         ))
     }
     pub fn get_leader_broker(items: &[LogicQueueMappingItem]) -> RocketMQResult<CheetahString> {
@@ -298,8 +309,8 @@ impl TopicQueueMappingUtils {
         if let Some(bname) = &item.bname {
             return Ok(bname.to_string().into());
         }
-        Err(RocketMQError::Internal(
-            "get_leader_broker fn get Item with None bname".to_string(),
+        Err(static_topic_mapping_inconsistent(
+            "get_leader_broker fn get Item with None bname",
         ))
     }
     pub fn check_and_build_mapping_items(
@@ -889,6 +900,8 @@ impl TopicQueueMappingUtils {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_error::ErrorKind;
+
     use super::*;
 
     #[test]
@@ -911,6 +924,41 @@ mod tests {
         ];
 
         assert!(TopicQueueMappingUtils::check_logic_queue_mapping_item_offset(&items).is_ok());
+    }
+
+    #[test]
+    fn check_logic_queue_mapping_item_offset_rejects_negative_fields_as_illegal_argument() {
+        let items = vec![LogicQueueMappingItem {
+            gen: -1,
+            logic_offset: 0,
+            start_offset: 0,
+            end_offset: -1,
+            queue_id: 0,
+            ..Default::default()
+        }];
+
+        let error = TopicQueueMappingUtils::check_logic_queue_mapping_item_offset(&items)
+            .expect_err("negative gen should be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::IllegalArgument);
+    }
+
+    #[test]
+    fn get_leader_broker_reports_missing_broker_as_route_inconsistent() {
+        let items = vec![LogicQueueMappingItem {
+            gen: 0,
+            logic_offset: 0,
+            start_offset: 0,
+            end_offset: -1,
+            queue_id: 0,
+            bname: None,
+            ..Default::default()
+        }];
+
+        let error = TopicQueueMappingUtils::get_leader_broker(&items)
+            .expect_err("leader item without broker should be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::RouteInconsistent);
     }
 
     #[test]
