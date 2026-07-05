@@ -818,9 +818,7 @@ impl DefaultMQAdminExtImpl {
         let topic_route_data = self
             .examine_topic_route_info(route_topic.clone())
             .await?
-            .ok_or_else(|| {
-                rocketmq_error::RocketMQError::Internal(format!("Topic route not found for: {}", route_topic))
-            })?;
+            .ok_or_else(|| admin_route_not_found(&route_topic))?;
 
         let mut message_list: Vec<MessageExt> = Vec::new();
         let mut index_last_update_timestamp: u64 = 0;
@@ -3909,6 +3907,10 @@ fn retain_java_user_topic_config(
     });
 }
 
+fn admin_route_not_found(route_topic: &CheetahString) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::route_not_found(route_topic.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -3949,6 +3951,7 @@ mod tests {
     use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
     use rocketmq_rust::ArcMut;
 
+    use super::admin_route_not_found;
     use super::broker_addrs_for_cluster;
     use super::broker_operator_result;
     use super::choose_min_broker_notify_addrs;
@@ -3982,7 +3985,16 @@ mod tests {
     use super::update_group_forbidden_request_header;
     use super::validate_acl_file_path_for_global_white_addr_config;
     use super::DefaultMQAdminExtImpl;
+    use rocketmq_error::ErrorKind;
     use rocketmq_error::RocketMQError;
+
+    #[test]
+    fn admin_route_not_found_uses_route_error_kind() {
+        let error = admin_route_not_found(&CheetahString::from_static_str("RouteTopic"));
+
+        assert_eq!(error.kind(), ErrorKind::RouteNotFound);
+        assert!(error.to_string().contains("RouteTopic"));
+    }
 
     fn new_unstarted_admin() -> DefaultMQAdminExtImpl {
         DefaultMQAdminExtImpl::new(
