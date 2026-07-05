@@ -36,6 +36,7 @@ use rocketmq_common::utils::network_util::NetworkUtil;
 use rocketmq_controller::ControllerManager;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::UnifiedServiceError;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RemotingClientShutdownReport;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
@@ -346,7 +347,7 @@ impl NameServerBootstrap {
                 "namesrv.shutdown-relay",
                 relay_shutdown_signal(shutdown_tx, shutdown_signal),
             )
-            .map_err(|error| RocketMQError::Internal(format!("failed to spawn shutdown relay: {error}")))?;
+            .map_err(|error| namesrv_startup_failed("spawn shutdown relay", error))?;
         let start_result = self.name_server_runtime.start_with_shutdown_report().await;
         let report = relay_group.shutdown(Duration::from_secs(5)).await;
         if let Err(error) = report.assert_no_task_leak() {
@@ -370,6 +371,12 @@ where
     if let Err(e) = shutdown_tx.send(()) {
         error!("Failed to broadcast shutdown signal: {}", e);
     }
+}
+
+fn namesrv_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "NameServer {operation}: {error}"
+    )))
 }
 
 impl NameServerRuntime {
@@ -569,9 +576,7 @@ impl NameServerRuntime {
                     }
                 }
             })
-            .map_err(|error| {
-                RocketMQError::Internal(format!("failed to start broker health check scheduled task: {error}"))
-            })?;
+            .map_err(|error| namesrv_startup_failed("start broker health check scheduled task", error))?;
         self.scheduled_tasks = Some(scheduled_tasks);
 
         info!(
@@ -653,7 +658,7 @@ impl NameServerRuntime {
                 let _ = server_report_tx.send(report);
                 debug!("Server task completed");
             })
-            .map_err(|error| RocketMQError::Internal(format!("failed to spawn namesrv server task: {error}")))?;
+            .map_err(|error| namesrv_startup_failed("spawn server task", error))?;
         self.server_task_group = Some(server_task_group);
         self.server_report_rx = Some(server_report_rx);
 
@@ -1635,6 +1640,7 @@ mod tests {
     use rocketmq_common::common::tls_config::TlsMode;
     use rocketmq_common::common::TopicSysFlag;
     use rocketmq_common::CRC32Utils;
+    use rocketmq_error::ErrorKind;
     use rocketmq_remoting::code::request_code::RequestCode;
     use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::connection::ConnectionState;
@@ -1694,6 +1700,14 @@ mod tests {
 
     fn build_bootstrap_with_default_v2() -> NameServerBootstrap {
         build_bootstrap_with_v2_config(NamesrvConfig::default())
+    }
+
+    #[test]
+    fn namesrv_startup_failed_uses_service_error_kind() {
+        let error = namesrv_startup_failed("spawn test service", "task group closed");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+        assert!(error.to_string().contains("NameServer spawn test service"));
     }
 
     #[tokio::test]
