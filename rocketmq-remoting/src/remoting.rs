@@ -65,7 +65,7 @@ pub trait RemotingService: Send {
 pub trait InvokeCallback {
     fn operation_complete(&self, response_future: ResponseFuture);
     fn operation_succeed(&self, response: RemotingCommand);
-    fn operation_fail(&self, throwable: Box<dyn std::error::Error>);
+    fn operation_fail(&self, throwable: rocketmq_error::RocketMQError);
 }
 
 #[allow(unused_variables)]
@@ -336,49 +336,21 @@ pub(crate) mod inner {
         exception: Option<RocketMQError>,
     ) -> HandleErrorResult {
         if let Some(exception_inner) = exception {
-            match exception_inner {
-                RocketMQError::Internal(message) if message.starts_with("Abort") => {
-                    let code = ResponseCode::SystemError;
-                    if oneway_rpc {
-                        return HandleErrorResult::ReturnMethod;
-                    }
-                    let response = RemotingCommand::create_response_command_with_code_remark(code, message);
-                    tokio::select! {
-                        result =ctx.connection_mut().send_command(response.set_opaque(opaque)) => match result{
-                            Ok(_) =>{},
-                            Err(err) => {
-                                match err {
-                                    RocketMQError::IO(io_error) => {
-                                        error!("send response failed: {}", io_error);
-                                        return HandleErrorResult::ReturnMethod;
-                                    }
-                                    _ => { error!("send response failed: {}", err);}
+            if !oneway_rpc {
+                let response = crate::error_response::command_from_error(&exception_inner);
+                tokio::select! {
+                    result =ctx.connection_mut().send_command(response.set_opaque(opaque)) => match result{
+                        Ok(_) =>{},
+                        Err(err) => {
+                            match err {
+                                RocketMQError::IO(io_error) => {
+                                    error!("send response failed: {}", io_error);
+                                    return HandleErrorResult::ReturnMethod;
                                 }
-                            },
+                                _ => { error!("send response failed: {}", err);}
+                            }
                         },
-                    }
-                }
-                _ => {
-                    if !oneway_rpc {
-                        let response = RemotingCommand::create_response_command_with_code_remark(
-                            ResponseCode::SystemError,
-                            exception_inner.to_string(),
-                        );
-                        tokio::select! {
-                            result =ctx.connection_mut().send_command(response.set_opaque(opaque)) => match result{
-                                Ok(_) =>{},
-                                Err(err) => {
-                                    match err {
-                                        RocketMQError::IO(io_error) => {
-                                            error!("send response failed: {}", io_error);
-                                            return HandleErrorResult::ReturnMethod;
-                                        }
-                                        _ => { error!("send response failed: {}", err);}
-                                    }
-                                },
-                            },
-                        }
-                    }
+                    },
                 }
             }
             HandleErrorResult::ReturnMethod

@@ -97,15 +97,24 @@ mod tests {
 
     impl RemotingSerializable for FailingSerializable {
         fn encode(&self) -> RocketMQResult<Vec<u8>> {
-            Err(RocketMQError::Internal("forced encode failure".to_string()))
+            Err(RocketMQError::response_process_failed(
+                "encode remoting body",
+                "forced encode failure",
+            ))
         }
 
         fn serialize_json(&self) -> RocketMQResult<String> {
-            Err(RocketMQError::Internal("forced json failure".to_string()))
+            Err(RocketMQError::response_process_failed(
+                "serialize remoting body",
+                "forced json failure",
+            ))
         }
 
         fn serialize_json_pretty(&self) -> RocketMQResult<String> {
-            Err(RocketMQError::Internal("forced pretty json failure".to_string()))
+            Err(RocketMQError::response_process_failed(
+                "serialize remoting body pretty",
+                "forced pretty json failure",
+            ))
         }
     }
 

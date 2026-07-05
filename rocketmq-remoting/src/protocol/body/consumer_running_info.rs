@@ -293,9 +293,9 @@ impl ConsumerRunningInfo {
     pub async fn analyze_subscription(
         cri_table: BTreeMap<String /* clientId */, ConsumerRunningInfo>,
     ) -> RocketMQResult<()> {
-        let first = cri_table.first_key_value().ok_or(RocketMQError::Internal(
-            "analyze_subscription err :cri_table is empty".to_string(),
-        ))?;
+        let first = cri_table.first_key_value().ok_or_else(|| {
+            RocketMQError::response_process_failed("analyze_subscription", "consumer running info table is empty")
+        })?;
         let prev = first.1;
 
         let push = matches!(prev.consume_type, ConsumeType::ConsumePassively);
@@ -307,8 +307,9 @@ impl ConsumerRunningInfo {
             for v in cri_table.values() {
                 if v.subscription_set != prev.subscription_set {
                     // Different subscription in the same group of consumer
-                    return Err(RocketMQError::Internal(
-                        "Different subscription in the same group of consumer".to_string(),
+                    return Err(RocketMQError::response_process_failed(
+                        "analyze_subscription",
+                        "different subscription in the same consumer group",
                     ));
                 }
 
@@ -360,6 +361,22 @@ impl ConsumerRunningInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn analyze_subscription_empty_table_uses_response_process_error() {
+        let error = ConsumerRunningInfo::analyze_subscription(BTreeMap::new())
+            .await
+            .expect_err("empty consumer running info should be rejected");
+
+        assert_eq!(error.kind(), rocketmq_error::ErrorKind::ResponseProcessFailed);
+        assert!(matches!(
+            error,
+            RocketMQError::ResponseProcessFailed {
+                operation: "analyze_subscription",
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn consumer_running_info_default() {

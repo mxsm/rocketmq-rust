@@ -103,7 +103,7 @@ use crate::tls::TlsConfig;
 /// use rocketmq_remoting::clients::RocketmqDefaultClient;
 /// use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 ///
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// # async fn example() -> rocketmq_error::RocketMQResult<()> {
 /// let config = Arc::new(TokioClientConfig::default());
 /// let processor = Default::default();
 /// let client = RocketmqDefaultClient::new(config, processor);
@@ -1183,7 +1183,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
     /// ```rust,ignore
     /// # use rocketmq_remoting::clients::RocketmqDefaultClient;
     /// # use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    /// # async fn example(client: &RocketmqDefaultClient) -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn example(client: &RocketmqDefaultClient) -> rocketmq_error::RocketMQResult<()> {
     /// let request = RemotingCommand::create_request_command(/* ... */);
     /// let response = client.invoke_request(
     ///     Some(&"127.0.0.1:10911".into()),

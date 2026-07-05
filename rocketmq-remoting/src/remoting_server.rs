@@ -41,16 +41,16 @@ pub trait RemotingServer: RemotingService {
         &mut self,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<RemotingCommand, Box<dyn std::error::Error>>;
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand>;
     fn invoke_async(
         &mut self,
         request: RemotingCommand,
         timeout_millis: u64,
         invoke_callback: Box<dyn InvokeCallback>,
-    ) -> Result<(), Box<dyn std::error::Error>>;
+    ) -> rocketmq_error::RocketMQResult<()>;
     fn invoke_oneway(
         &mut self,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<(), Box<dyn std::error::Error>>;*/
+    ) -> rocketmq_error::RocketMQResult<()>;*/
 }
