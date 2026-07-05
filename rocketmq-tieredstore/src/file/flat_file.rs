@@ -422,7 +422,11 @@ where
         let existing = match segment_type {
             FileSegmentType::CommitLog => self.commit_log_segments.lock().last().cloned(),
             FileSegmentType::ConsumeQueue => self.consume_queue_segments.lock().last().cloned(),
-            FileSegmentType::Index => return Err(error::internal("index segment is managed by tiered index service")),
+            FileSegmentType::Index => {
+                return Err(error::invalid_segment_type(
+                    "index segment is managed by tiered index service",
+                ));
+            }
         };
         if let Some(segment) = existing {
             if segment.can_hold(absolute_offset, append_len) {
@@ -480,7 +484,9 @@ where
         match segment_type {
             FileSegmentType::CommitLog => Ok(self.config.commit_log_segment_size),
             FileSegmentType::ConsumeQueue => Ok(self.config.consume_queue_segment_size),
-            FileSegmentType::Index => Err(error::internal("index segment is managed by tiered index service")),
+            FileSegmentType::Index => Err(error::invalid_segment_type(
+                "index segment is managed by tiered index service",
+            )),
         }
     }
 

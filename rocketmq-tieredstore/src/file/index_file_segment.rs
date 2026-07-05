@@ -155,7 +155,7 @@ where
 
         for _ in 0..2 {
             let Some(timestamp) = segment_timestamps.last().copied() else {
-                return Err(error::internal("tiered index manifest is unexpectedly empty"));
+                return Err(error::storage_corrupted(self.manifest_path()));
             };
             let path = self.segment_path(timestamp);
             match self.try_append_to_segment(&path, timestamp, entry).await? {
@@ -168,7 +168,10 @@ where
             }
         }
 
-        Err(error::internal("failed to append tiered index entry after rolling"))
+        Err(error::storage_write_failed(
+            self.directory.clone(),
+            "failed to append tiered index entry after rolling",
+        ))
     }
 
     pub async fn load_entries(&self) -> Result<Vec<TieredIndexEntry>, RocketMQError> {
