@@ -1327,7 +1327,7 @@ where
         let message_store = self
             .broker_runtime_inner
             .message_store()
-            .ok_or_else(|| RocketMQError::Internal("Message store not initialized".to_string()))?;
+            .ok_or_else(message_store_not_initialized)?;
 
         let msg_ext: Option<MessageExt> = message_store.look_message_by_offset(request_header.offset);
         let Some(mut msg_ext) = msg_ext else {
@@ -1420,7 +1420,7 @@ where
             .broker_runtime_inner
             .message_store_mut()
             .as_mut()
-            .ok_or_else(|| RocketMQError::Internal("Message store not initialized".to_string()))?;
+            .ok_or_else(message_store_not_initialized)?;
         let put_message_result = message_store.put_message(msg_inner).await;
         let commercial_owner = request
             .get_ext_fields()
@@ -1706,6 +1706,10 @@ fn rewrite_response_for_static_topic(
     None
 }
 
+fn message_store_not_initialized() -> RocketMQError {
+    RocketMQError::not_initialized("message_store")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1729,6 +1733,13 @@ mod tests {
 
         let hooks: Vec<Box<dyn SendMessageHook>> = vec![Box::new(NoopSendMessageHook)];
         assert!(has_registered_send_message_hooks(&hooks));
+    }
+
+    #[test]
+    fn message_store_not_initialized_uses_not_initialized_kind() {
+        let error = message_store_not_initialized();
+
+        assert_eq!(error.kind(), rocketmq_error::ErrorKind::NotInitialized);
     }
 
     #[test]
