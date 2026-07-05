@@ -116,9 +116,15 @@ mod tests {
 
     #[test]
     fn new_exception_uses_zero_code_for_non_broker_error() {
-        let response = RpcResponse::new_exception(Some(RocketMQError::Internal("local failure".to_string())));
+        let response = RpcResponse::new_exception(Some(RocketMQError::response_process_failed(
+            "rpc_response",
+            "local failure",
+        )));
 
         assert_eq!(response.code, 0);
-        assert!(matches!(response.exception, Some(RocketMQError::Internal(_))));
+        assert!(matches!(
+            response.exception,
+            Some(RocketMQError::ResponseProcessFailed { .. })
+        ));
     }
 }

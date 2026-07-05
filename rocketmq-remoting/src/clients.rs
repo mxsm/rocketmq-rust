@@ -15,6 +15,7 @@
 pub use blocking_client::BlockingClient;
 use cheetah_string::CheetahString;
 pub use client::Client;
+use rocketmq_error::RocketMQError;
 
 use crate::base::response_future::ResponseFuture;
 use crate::protocol::remoting_command::RemotingCommand;
@@ -112,7 +113,7 @@ pub trait RemotingClient: RemotingService {
 
 impl<T> InvokeCallback for T
 where
-    T: Fn(Option<RemotingCommand>, Option<Box<dyn std::error::Error>>, Option<ResponseFuture>) + Send + Sync,
+    T: Fn(Option<RemotingCommand>, Option<RocketMQError>, Option<ResponseFuture>) + Send + Sync,
 {
     fn operation_complete(&self, response_future: ResponseFuture) {
         self(None, None, Some(response_future))
@@ -122,7 +123,7 @@ where
         self(Some(response), None, None)
     }
 
-    fn operation_fail(&self, throwable: Box<dyn std::error::Error>) {
+    fn operation_fail(&self, throwable: RocketMQError) {
         self(None, Some(throwable), None)
     }
 }

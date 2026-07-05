@@ -18,6 +18,7 @@
 //! for common remoting scenarios.
 
 use rocketmq_error::RocketMQError;
+use rocketmq_error::UnifiedServiceError;
 
 /// Create an I/O error from std::io::Error
 #[inline]
@@ -91,7 +92,11 @@ pub fn channel_recv_failed(msg: impl Into<String>) -> RocketMQError {
 /// Create an abort process error
 #[inline]
 pub fn abort_process_error(code: i32, msg: impl Into<String>) -> RocketMQError {
-    RocketMQError::Internal(format!("Abort process error {}: {}", code, msg.into()))
+    RocketMQError::Service(UnifiedServiceError::ShutdownFailed(format!(
+        "Abort process error {}: {}",
+        code,
+        msg.into()
+    )))
 }
 
 /// Create a remoting command encoder error
@@ -101,4 +106,22 @@ pub fn encoder_error(msg: impl Into<String>) -> RocketMQError {
         format: "command",
         message: msg.into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_error::UnifiedServiceError;
+
+    use super::*;
+
+    #[test]
+    fn abort_process_error_uses_service_lifecycle_error() {
+        let error = abort_process_error(500, "shutdown requested");
+
+        assert!(matches!(
+            error,
+            RocketMQError::Service(UnifiedServiceError::ShutdownFailed(message))
+                if message.contains("Abort process error 500")
+        ));
+    }
 }
