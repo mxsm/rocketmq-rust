@@ -6,7 +6,6 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_remoting::protocol::static_topic::topic_remapping_detail_wrapper;
 use rocketmq_remoting::protocol::static_topic::topic_remapping_detail_wrapper::TopicRemappingDetailWrapper;
@@ -18,6 +17,7 @@ use serde::Serialize;
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::admin::mq_admin_utils::MQAdminUtils;
 use crate::core::admin::AdminBuilder;
+use crate::core::errors;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
 
@@ -213,9 +213,9 @@ impl StaticTopicService {
         let cluster_addr_table = cluster_info
             .cluster_addr_table
             .as_ref()
-            .ok_or_else(|| RocketMQError::Internal("The Cluster info is empty".to_string()))?;
+            .ok_or_else(|| errors::cluster_metadata_unavailable("cluster address table is empty"))?;
         if cluster_addr_table.is_empty() {
-            return Err(RocketMQError::Internal("The Cluster info is empty".to_string()));
+            return Err(errors::cluster_metadata_unavailable("cluster address table is empty"));
         }
 
         let mut target_brokers: HashSet<CheetahString> = request.broker_names().iter().cloned().collect();
@@ -225,7 +225,7 @@ impl StaticTopicService {
             }
         }
         if target_brokers.is_empty() {
-            return Err(RocketMQError::Internal("Find none brokers, do nothing".to_string()));
+            return Err(errors::broker_not_found("static topic target brokers"));
         }
 
         let mut broker_config_map = MQAdminUtils::examine_topic_config_all(request.topic(), admin).await?;
@@ -311,9 +311,9 @@ impl StaticTopicService {
         let cluster_addr_table = cluster_info
             .cluster_addr_table
             .as_ref()
-            .ok_or_else(|| RocketMQError::Internal("The Cluster info is empty".to_string()))?;
+            .ok_or_else(|| errors::cluster_metadata_unavailable("cluster address table is empty"))?;
         if cluster_addr_table.is_empty() {
-            return Err(RocketMQError::Internal("The Cluster info is empty".to_string()));
+            return Err(errors::cluster_metadata_unavailable("cluster address table is empty"));
         }
 
         let client_metadata = ClientMetadata::new();
@@ -326,23 +326,18 @@ impl StaticTopicService {
             }
         }
         if target_brokers.is_empty() {
-            return Err(RocketMQError::Internal("Find none brokers, do nothing".to_string()));
+            return Err(errors::broker_not_found("static topic target brokers"));
         }
 
         for broker in &target_brokers {
             if client_metadata.find_master_broker_addr(broker).is_none() {
-                return Err(RocketMQError::Internal(format!(
-                    "Can't find addr for broker {}",
-                    broker
-                )));
+                return Err(errors::broker_not_found(format!("master address for broker {broker}")));
             }
         }
 
         let mut broker_config_map = MQAdminUtils::examine_topic_config_all(request.topic(), admin).await?;
         if broker_config_map.is_empty() {
-            return Err(RocketMQError::Internal(
-                "No topic route to do the remapping".to_string(),
-            ));
+            return Err(errors::topic_route_not_found(request.topic().to_string()));
         }
 
         let max_epoch_and_num =

@@ -26,8 +26,8 @@ use serde::Serialize;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
+use crate::core::errors;
 use crate::core::resolver::BrokerAddressResolver;
-use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
 
@@ -156,7 +156,7 @@ impl HaService {
             HaStatusTarget::BrokerAddr(broker_addr) => vec![broker_addr.clone()],
             HaStatusTarget::ClusterName(cluster_name) => {
                 let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    RocketMQError::Internal(format!("HaService: Failed to get cluster info: {error}"))
+                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
                 })?;
                 BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.as_str())?
             }
@@ -165,9 +165,10 @@ impl HaService {
         let mut entries = Vec::with_capacity(broker_addrs.len());
         for broker_addr in broker_addrs {
             let runtime_info = admin.get_broker_ha_status(broker_addr.clone()).await.map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "HaService: Failed to get broker HA status from {broker_addr}: {error}"
-                ))
+                errors::broker_operation_failed(
+                    "get_broker_ha_status",
+                    format!("HaService: failed to get broker HA status from {broker_addr}: {error}"),
+                )
             })?;
             entries.push(HaStatusEntry {
                 broker_addr,
@@ -198,7 +199,7 @@ impl HaService {
             SyncStateSetTarget::BrokerName(broker_name) => vec![broker_name.clone()],
             SyncStateSetTarget::ClusterName(cluster_name) => {
                 let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    RocketMQError::Internal(format!("HaService: Failed to get cluster info: {error}"))
+                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
                 })?;
                 BrokerAddressResolver::fetch_broker_name_by_cluster_name(&cluster_info, cluster_name.as_str())?
                     .into_iter()
@@ -216,9 +217,7 @@ impl HaService {
         let broker_replicas_info = admin
             .get_in_sync_state_data(request.controller_address.clone(), brokers)
             .await
-            .map_err(|error| {
-                RocketMQError::Internal(format!("HaService: Failed to get in sync state data: {error}"))
-            })?;
+            .map_err(|error| errors::broker_operation_failed("get_in_sync_state_data", error.to_string()))?;
         Ok(SyncStateSetQueryResult {
             broker_replicas_info: Some(broker_replicas_info),
         })

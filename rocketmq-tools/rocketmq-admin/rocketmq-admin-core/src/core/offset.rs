@@ -28,6 +28,7 @@ use serde::Serialize;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
+use crate::core::errors;
 use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
@@ -363,7 +364,7 @@ impl OffsetService {
                 request.offline(),
             )
             .await
-            .map_err(|error| RocketMQError::Internal(format!("OffsetService: failed to clone group offset: {error}")));
+            .map_err(|error| errors::broker_operation_failed("clone_group_offset", error.to_string()));
         admin.shutdown().await;
         result
     }

@@ -265,9 +265,9 @@ impl std::ops::DerefMut for AdminGuard {
 
 fn current_admin_guard_runtime() -> RocketMQResult<tokio::runtime::Handle> {
     tokio::runtime::Handle::try_current().map_err(|error| {
-        RocketMQError::Internal(format!(
+        RocketMQError::Service(rocketmq_error::UnifiedServiceError::StartupFailed(format!(
             "AdminGuard automatic shutdown requires an active Tokio runtime: {error}"
-        ))
+        )))
     })
 }
 
@@ -407,12 +407,12 @@ mod tests {
         let error = current_admin_guard_runtime()
             .expect_err("AdminGuard automatic shutdown should require an active Tokio runtime");
 
-        match error {
-            RocketMQError::Internal(message) => assert!(
-                message.contains("AdminGuard automatic shutdown requires an active Tokio runtime"),
-                "unexpected error message: {message}"
-            ),
-            other => panic!("unexpected error variant: {other}"),
-        }
+        assert_eq!(error.kind(), rocketmq_error::ErrorKind::Service);
+        assert!(
+            error
+                .to_string()
+                .contains("AdminGuard automatic shutdown requires an active Tokio runtime"),
+            "unexpected error message: {error}"
+        );
     }
 }

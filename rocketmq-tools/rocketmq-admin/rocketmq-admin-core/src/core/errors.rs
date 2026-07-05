@@ -1,4 +1,5 @@
 use rocketmq_error::RocketMQError;
+use rocketmq_error::SerializationError;
 use rocketmq_error::ToolsError;
 
 pub(crate) fn cluster_metadata_unavailable(reason: impl Into<String>) -> RocketMQError {
@@ -19,6 +20,18 @@ pub(crate) fn broker_not_found(broker: impl Into<String>) -> RocketMQError {
 
 pub(crate) fn broker_operation_failed(operation: &'static str, reason: impl Into<String>) -> RocketMQError {
     RocketMQError::broker_operation_failed(operation, 0, reason)
+}
+
+pub(crate) fn admin_operation_failed(operation: &'static str, reason: impl Into<String>) -> RocketMQError {
+    RocketMQError::response_process_failed(operation, reason)
+}
+
+pub(crate) fn admin_validation_failed(field: impl Into<String>, reason: impl Into<String>) -> RocketMQError {
+    RocketMQError::validation_error(field, reason)
+}
+
+pub(crate) fn admin_serialization_failed(format: &'static str, reason: impl Into<String>) -> RocketMQError {
+    RocketMQError::Serialization(SerializationError::encode_failed(format, reason))
 }
 
 pub(crate) fn topic_route_not_found(topic: impl Into<String>) -> RocketMQError {

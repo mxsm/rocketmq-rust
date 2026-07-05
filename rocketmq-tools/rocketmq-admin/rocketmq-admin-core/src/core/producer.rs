@@ -31,7 +31,7 @@ use serde::Serialize;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
-use crate::core::RocketMQError;
+use crate::core::errors;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
 
@@ -168,7 +168,7 @@ impl SendMessageRequest {
         };
         builder
             .build()
-            .map_err(|error| RocketMQError::Internal(format!("SendMessageRequest: failed to build message: {error}")))
+            .map_err(|error| errors::admin_validation_failed("message", error.to_string()))
     }
 }
 
@@ -319,7 +319,7 @@ impl ProducerService {
         producer
             .start()
             .await
-            .map_err(|error| RocketMQError::Internal(format!("ProducerService: failed to start producer: {error}")))?;
+            .map_err(|error| errors::admin_operation_failed("start_producer", error.to_string()))?;
 
         let message = request.message()?;
         let send_result = if let (Some(broker_name), Some(queue_id)) = (request.broker_name(), request.queue_id()) {
@@ -328,7 +328,7 @@ impl ProducerService {
         } else {
             producer.send(message).await
         }
-        .map_err(|error| RocketMQError::Internal(format!("ProducerService: failed to send message: {error}")))?;
+        .map_err(|error| errors::broker_operation_failed("send_message", error.to_string()))?;
 
         let row = if let Some(result) = send_result {
             SendMessageResultRow {
@@ -389,16 +389,12 @@ impl ProducerService {
         producer
             .start()
             .await
-            .map_err(|error| RocketMQError::Internal(format!("ProducerService: failed to start producer: {error}")))?;
+            .map_err(|error| errors::admin_operation_failed("start_producer", error.to_string()))?;
 
         producer
             .send(build_diagnostic_message(request.broker_name().as_str(), 16))
             .await
-            .map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "ProducerService: failed to warm up sendMsgStatus producer: {error}"
-                ))
-            })?;
+            .map_err(|error| errors::broker_operation_failed("send_message_status_warmup", error.to_string()))?;
 
         let mut rows = Vec::with_capacity(request.count() as usize);
         for _ in 0..request.count() {
@@ -409,9 +405,7 @@ impl ProducerService {
                     request.message_size(),
                 ))
                 .await
-                .map_err(|error| {
-                    RocketMQError::Internal(format!("ProducerService: sendMsgStatus command failed: {error}"))
-                })?;
+                .map_err(|error| errors::broker_operation_failed("send_message_status", error.to_string()))?;
             let rt_millis = current_millis() - begin;
             rows.push(SendMessageStatusRow {
                 rt_millis,
@@ -446,17 +440,13 @@ impl ProducerService {
         producer
             .start()
             .await
-            .map_err(|error| RocketMQError::Internal(format!("ProducerService: failed to start producer: {error}")))?;
+            .map_err(|error| errors::admin_operation_failed("start_producer", error.to_string()))?;
 
         let message = Message::builder()
             .topic(request.topic().as_str())
             .body_slice(&vec![b'a'; request.size()])
             .build()
-            .map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "ProducerService: failed to build checkMsgSendRT message: {error}"
-                ))
-            })?;
+            .map_err(|error| errors::admin_validation_failed("message", error.to_string()))?;
         let broker_name_holder = Arc::new(Mutex::new(String::new()));
         let queue_id_holder = Arc::new(Mutex::new(0));
         let mut rows = Vec::with_capacity(request.amount() as usize);
