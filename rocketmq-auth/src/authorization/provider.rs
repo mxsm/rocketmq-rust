@@ -78,9 +78,9 @@ pub enum AuthorizationError {
     #[error("Authorization provider not initialized: {0}")]
     NotInitialized(String),
 
-    /// Internal error during authorization processing.
-    #[error("Internal authorization error: {0}")]
-    InternalError(String),
+    /// Authorization provider runtime failed while processing a request.
+    #[error("Authorization provider runtime failed: {0}")]
+    ProviderRuntimeFailed(String),
 
     /// Authorization metadata read failed.
     #[error("Authorization metadata read failed for '{path}': {reason}")]
@@ -120,10 +120,9 @@ impl From<AuthorizationError> for RocketMQError {
             AuthorizationError::ConfigurationError(_) | AuthorizationError::NotInitialized(_) => {
                 RocketMQError::auth_config_invalid("auth.authorization", message)
             }
-            AuthorizationError::PolicyEvaluationFailed(_) => {
+            AuthorizationError::PolicyEvaluationFailed(_) | AuthorizationError::ProviderRuntimeFailed(_) => {
                 RocketMQError::Authentication(AuthError::AuthorizationFailed(message))
             }
-            AuthorizationError::InternalError(_) => RocketMQError::Authentication(AuthError::Other(message)),
             AuthorizationError::StorageReadFailed { path, reason } => RocketMQError::storage_read_failed(path, reason),
             AuthorizationError::StorageWriteFailed { path, reason } => {
                 RocketMQError::storage_write_failed(path, reason)
@@ -662,7 +661,7 @@ mod tests {
             AuthorizationError::PolicyEvaluationFailed("invalid policy".to_string()),
             AuthorizationError::ConfigurationError("missing config".to_string()),
             AuthorizationError::NotInitialized("provider not ready".to_string()),
-            AuthorizationError::InternalError("unexpected error".to_string()),
+            AuthorizationError::ProviderRuntimeFailed("unexpected error".to_string()),
             AuthorizationError::StorageReadFailed {
                 path: "acls.json".to_string(),
                 reason: "read failed".to_string(),
@@ -711,8 +710,13 @@ mod tests {
             }
         ));
 
-        let internal = RocketMQError::from(AuthorizationError::InternalError("unexpected error".to_string()));
-        assert!(matches!(internal, RocketMQError::Authentication(AuthError::Other(_))));
+        let provider_runtime = RocketMQError::from(AuthorizationError::ProviderRuntimeFailed(
+            "unexpected error".to_string(),
+        ));
+        assert!(matches!(
+            provider_runtime,
+            RocketMQError::Authentication(AuthError::AuthorizationFailed(_))
+        ));
 
         let storage = RocketMQError::from(AuthorizationError::StorageWriteFailed {
             path: "acls.json".to_string(),
