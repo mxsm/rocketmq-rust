@@ -403,7 +403,7 @@ impl TopicQueueMappingUtils {
             return Ok(file_name.into());
         }
 
-        Err(RocketMQError::Internal("write file failed".to_string()))
+        Err(RocketMQError::ConfigMissing { key: "java.io.tmpdir" })
     }
     pub fn check_target_brokers_complete(
         target_brokers: &HashSet<CheetahString>,
@@ -988,6 +988,42 @@ mod tests {
             .expect_err("duplicate physical queue should be rejected");
 
         assert_eq!(error.kind(), ErrorKind::RouteInconsistent);
+    }
+
+    #[test]
+    fn write_to_temp_reports_missing_temp_dir_as_config_missing() {
+        struct EnvVarGuard {
+            key: &'static str,
+            original: Option<std::ffi::OsString>,
+        }
+
+        impl EnvVarGuard {
+            fn remove(key: &'static str) -> Self {
+                let original = std::env::var_os(key);
+                unsafe {
+                    std::env::remove_var(key);
+                }
+                Self { key, original }
+            }
+        }
+
+        impl Drop for EnvVarGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    match &self.original {
+                        Some(value) => std::env::set_var(self.key, value),
+                        None => std::env::remove_var(self.key),
+                    }
+                }
+            }
+        }
+
+        let _guard = EnvVarGuard::remove("java.io.tmpdir");
+
+        let error = TopicQueueMappingUtils::write_to_temp(&TopicRemappingDetailWrapper::empty(), false)
+            .expect_err("missing temp directory property should be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::ConfigMissing);
     }
 
     #[test]
