@@ -959,7 +959,7 @@ impl PullMessageService {
         if let Some(tx_shutdown) = &self.tx_shutdown {
             tx_shutdown
                 .send(())
-                .map_err(|_| RocketMQError::Internal("Failed to send shutdown signal".to_string()))?;
+                .map_err(|_| pull_message_service_shutdown_signal_failed())?;
         }
 
         // 3. Wait for main loop to exit (with timeout)
@@ -1086,6 +1086,13 @@ fn pull_message_service_request_type_mismatch(expected: &'static str) -> RocketM
     }
 }
 
+fn pull_message_service_shutdown_signal_failed() -> RocketMQError {
+    RocketMQError::ClientInvalidState {
+        expected: "active shutdown receiver",
+        actual: "shutdown receiver unavailable".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1198,6 +1205,21 @@ mod tests {
             .expect("shutdown should release delayed task tracker");
 
         assert!(!ran.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn shutdown_reports_closed_shutdown_receiver_as_client_invalid_state() {
+        let mut service = PullMessageService::new();
+        let (tx_shutdown, rx_shutdown) = tokio::sync::broadcast::channel(1);
+        drop(rx_shutdown);
+        service.tx_shutdown = Some(tx_shutdown);
+
+        let error = match service.shutdown(100).await {
+            Ok(_) => panic!("closed shutdown receiver should be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
     }
 
     #[tokio::test]
