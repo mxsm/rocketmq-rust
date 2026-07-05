@@ -257,16 +257,20 @@ mod tests {
     #[tokio::test]
     async fn test_with_timeout_propagates_error() {
         async fn failing_operation() -> RocketMQResult<String> {
-            Err(RocketMQError::Internal("Test error".to_string()))
+            Err(RocketMQError::ClientInvalidState {
+                expected: "ready test operation",
+                actual: "failed test operation".to_string(),
+            })
         }
 
         let result = with_timeout(Duration::from_millis(100), failing_operation()).await;
         assert!(result.is_err());
         match result.unwrap_err() {
-            RocketMQError::Internal(msg) => {
-                assert_eq!(msg, "Test error");
+            RocketMQError::ClientInvalidState { expected, actual } => {
+                assert_eq!(expected, "ready test operation");
+                assert_eq!(actual, "failed test operation");
             }
-            _ => panic!("Expected internal error"),
+            _ => panic!("Expected client invalid state error"),
         }
     }
 }

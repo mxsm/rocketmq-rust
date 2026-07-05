@@ -159,6 +159,13 @@ const SOCKS_PROXY_JSON: &str = "socksProxyJson";
 const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
 const ROCKSDB_CONFIG_TYPE_CONSUMER_OFFSETS: &str = "consumerOffsets";
 
+fn sync_pull_result_missing(operation: &'static str) -> RocketMQError {
+    RocketMQError::ClientInvalidState {
+        expected: "PullResultExt returned by sync pull_message",
+        actual: format!("{operation} returned None"),
+    }
+}
+
 fn encode_topic_attributes(attributes: &HashMap<CheetahString, CheetahString>) -> Option<CheetahString> {
     if attributes.is_empty() {
         return None;
@@ -756,7 +763,7 @@ impl DefaultMQAdminExtImpl {
             NoopPullCallback,
         )
         .await?
-        .ok_or_else(|| rocketmq_error::RocketMQError::Internal("pull_message returned None in sync mode".into()))?;
+        .ok_or_else(|| sync_pull_result_missing("DefaultMQAdminExtImpl::pull_message_from_queue"))?;
 
         if result.pull_result.pull_status == PullStatus::Found {
             if let Some(mut message_binary) = result.message_binary.take() {
@@ -3978,6 +3985,7 @@ mod tests {
     use super::retain_java_user_topic_config;
     use super::search_offset_timestamp_to_java_long;
     use super::select_consumer_direct_connection;
+    use super::sync_pull_result_missing;
     use super::timeout_millis_to_u64;
     use super::timestamp_to_java_long;
     use super::topic_list_from_lite_topic_names;
@@ -3994,6 +4002,16 @@ mod tests {
 
         assert_eq!(error.kind(), ErrorKind::RouteNotFound);
         assert!(error.to_string().contains("RouteTopic"));
+    }
+
+    #[test]
+    fn sync_pull_result_missing_uses_client_invalid_state() {
+        let error = sync_pull_result_missing("DefaultMQAdminExtImpl::pull_message_from_queue");
+
+        assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
+        assert!(error
+            .to_string()
+            .contains("DefaultMQAdminExtImpl::pull_message_from_queue returned None"));
     }
 
     fn new_unstarted_admin() -> DefaultMQAdminExtImpl {
