@@ -777,7 +777,7 @@ impl PullMessageService {
                     Self::pull_message(*pull_request, instance).await;
                     Ok(())
                 } else {
-                    Err(RocketMQError::Internal("Failed to downcast to PullRequest".to_string()))
+                    Err(pull_message_service_request_type_mismatch("PullRequest"))
                 }
             }
             MessageRequestMode::Pop => {
@@ -785,7 +785,7 @@ impl PullMessageService {
                     Self::pop_message(*pop_request, instance).await;
                     Ok(())
                 } else {
-                    Err(RocketMQError::Internal("Failed to downcast to PopRequest".to_string()))
+                    Err(pull_message_service_request_type_mismatch("PopRequest"))
                 }
             }
         }
@@ -1079,6 +1079,13 @@ fn pull_message_service_startup_failed(operation: &'static str, error: impl std:
     )))
 }
 
+fn pull_message_service_request_type_mismatch(expected: &'static str) -> RocketMQError {
+    RocketMQError::ClientInvalidState {
+        expected,
+        actual: "message request payload type mismatch".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1090,6 +1097,49 @@ mod tests {
 
         assert_eq!(error.kind(), ErrorKind::Service);
         assert!(error.to_string().contains("PullMessageService spawn test worker"));
+    }
+
+    #[test]
+    fn pull_message_service_request_type_mismatch_uses_client_invalid_state() {
+        let error = pull_message_service_request_type_mismatch("PullRequest");
+
+        assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
+        assert!(error.to_string().contains("PullRequest"));
+    }
+
+    struct MismatchedMessageRequest {
+        mode: MessageRequestMode,
+    }
+
+    impl MessageRequest for MismatchedMessageRequest {
+        fn get_message_request_mode(&self) -> MessageRequestMode {
+            self.mode
+        }
+    }
+
+    async fn process_mismatched_request(mode: MessageRequestMode) -> RocketMQError {
+        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "pull-message-mismatch-test", None);
+
+        match PullMessageService::process_request(Box::new(MismatchedMessageRequest { mode }), &mut instance).await {
+            Ok(_) => panic!("mismatched message request should be rejected"),
+            Err(error) => error,
+        }
+    }
+
+    #[tokio::test]
+    async fn process_request_reports_pull_downcast_mismatch_as_client_invalid_state() {
+        let error = process_mismatched_request(MessageRequestMode::Pull).await;
+
+        assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
+        assert!(error.to_string().contains("PullRequest"));
+    }
+
+    #[tokio::test]
+    async fn process_request_reports_pop_downcast_mismatch_as_client_invalid_state() {
+        let error = process_mismatched_request(MessageRequestMode::Pop).await;
+
+        assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
+        assert!(error.to_string().contains("PopRequest"));
     }
 
     #[test]
