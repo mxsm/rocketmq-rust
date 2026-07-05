@@ -32,7 +32,7 @@ use serde::Serialize;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
-use crate::core::RocketMQError;
+use crate::core::errors;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
 
@@ -311,9 +311,10 @@ impl ClusterService {
         request: &ClusterSendMessageRtRequest,
         broker_names: &ClusterBrokerNameQueryResult,
     ) -> RocketMQResult<ClusterSendMessageRtResult> {
-        producer.start().await.map_err(|error| {
-            RocketMQError::Internal(format!("ClusterService: failed to start cluster RT producer: {error}"))
-        })?;
+        producer
+            .start()
+            .await
+            .map_err(|error| errors::admin_operation_failed("start_cluster_rt_producer", error.to_string()))?;
 
         let mut rows = Vec::new();
         for (cluster_name, broker_names) in &broker_names.broker_names_by_cluster {

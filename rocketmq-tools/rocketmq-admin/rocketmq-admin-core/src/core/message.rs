@@ -46,6 +46,7 @@ use serde::Serialize;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
+use crate::core::errors;
 use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
@@ -192,8 +193,8 @@ async fn resolve_message_queues(
     let topic_route = admin
         .examine_topic_route_info(CheetahString::from(route_topic))
         .await
-        .map_err(|error| RocketMQError::Internal(format!("Failed to get topic route info: {error}")))?
-        .ok_or_else(|| RocketMQError::Internal(format!("Topic route not found for: {route_topic}")))?;
+        .map_err(|error| errors::broker_operation_failed("examine_topic_route_info", error.to_string()))?
+        .ok_or_else(|| errors::topic_route_not_found(route_topic))?;
 
     Ok(route_topic_queues(&topic_route, topic))
 }
@@ -206,8 +207,8 @@ async fn resolve_broker_addr(
     let topic_route = admin
         .examine_topic_route_info(CheetahString::from(route_topic))
         .await
-        .map_err(|error| RocketMQError::Internal(format!("Failed to get topic route info: {error}")))?
-        .ok_or_else(|| RocketMQError::Internal(format!("Topic route not found for: {route_topic}")))?;
+        .map_err(|error| errors::broker_operation_failed("examine_topic_route_info", error.to_string()))?
+        .ok_or_else(|| errors::topic_route_not_found(route_topic))?;
 
     let broker_data = topic_route
         .broker_datas
@@ -221,7 +222,7 @@ async fn resolve_broker_addr(
 
     broker_data
         .select_broker_addr()
-        .ok_or_else(|| RocketMQError::Internal(format!("No available address for broker '{broker_name}'")))
+        .ok_or_else(|| errors::broker_not_found(format!("available address for broker {broker_name}")))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1082,22 +1083,21 @@ impl MessageService {
         };
 
         if !file_path.exists() {
-            return Err(RocketMQError::Internal(format!(
-                "file {} not exist.",
-                file_path.display()
-            )));
+            return Err(RocketMQError::storage_read_failed(
+                file_path.display().to_string(),
+                "file does not exist",
+            ));
         }
 
         if file_path.is_dir() {
-            return Err(RocketMQError::Internal(format!(
-                "file {} is a directory.",
-                file_path.display()
-            )));
+            return Err(RocketMQError::storage_read_failed(
+                file_path.display().to_string(),
+                "path is a directory",
+            ));
         }
 
-        let data = fs::read(file_path).map_err(|error| {
-            RocketMQError::Internal(format!("Failed to read file {}: {}", file_path.display(), error))
-        })?;
+        let data = fs::read(file_path)
+            .map_err(|error| RocketMQError::storage_read_failed(file_path.display().to_string(), error.to_string()))?;
 
         Ok(DumpCompactionLogResult {
             messages: decode_compaction_log_messages(data),
@@ -1133,7 +1133,7 @@ impl MessageService {
                 request.last_key.clone(),
             )
             .await
-            .map_err(|error| RocketMQError::Internal(format!("Failed to query message by key: {error}")))?;
+            .map_err(|error| errors::broker_operation_failed("query_message_by_key", error.to_string()))?;
 
         let rows = query_result
             .message_list()
@@ -1277,14 +1277,14 @@ impl MessageService {
             admin
                 .pull_message_from_queue(broker_addr.as_str(), &route_mq, "*", 0, 1, PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| RocketMQError::Internal(format!("Failed to warm up route topic pull: {error}")))?;
+                .map_err(|error| errors::broker_operation_failed("pull_route_topic_message", error.to_string()))?;
         }
 
         let mq = MessageQueue::from_parts(request.topic.clone(), request.broker_name.clone(), request.queue_id);
         let pull_result = admin
             .pull_message_from_queue(broker_addr.as_str(), &mq, "*", request.offset, 1, PULL_TIMEOUT_MILLIS)
             .await
-            .map_err(|error| RocketMQError::Internal(format!("Failed to pull message by offset: {error}")))?;
+            .map_err(|error| errors::broker_operation_failed("pull_message_by_offset", error.to_string()))?;
 
         let pull_status = *pull_result.pull_status();
         let message = if pull_status == PullStatus::Found {
@@ -1600,19 +1600,22 @@ impl MessageService {
         let route_topic = request.lmq_parent_topic.as_ref().unwrap_or(&request.topic);
         let message_queues = resolve_message_queues(admin, request.topic.as_str(), route_topic.as_str()).await?;
         if message_queues.is_empty() {
-            return Err(RocketMQError::Internal("No available message queue found".to_string()));
+            return Err(errors::topic_route_inconsistent(
+                request.topic.to_string(),
+                "no available message queue found",
+            ));
         }
 
         for (mq, broker_addr) in message_queues {
             let mut min_offset = admin
                 .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| RocketMQError::Internal(format!("Failed to get min offset: {error}")))?;
+                .map_err(|error| errors::broker_operation_failed("min_offset", error.to_string()))?;
 
             let mut max_offset = admin
                 .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| RocketMQError::Internal(format!("Failed to get max offset: {error}")))?;
+                .map_err(|error| errors::broker_operation_failed("max_offset", error.to_string()))?;
 
             if let Some(begin_timestamp) = request.begin_timestamp {
                 min_offset = admin
@@ -1624,7 +1627,7 @@ impl MessageService {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| RocketMQError::Internal(format!("Failed to search begin offset: {error}")))?
+                    .map_err(|error| errors::broker_operation_failed("search_begin_offset", error.to_string()))?
                     as i64;
             }
 
@@ -1638,7 +1641,7 @@ impl MessageService {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| RocketMQError::Internal(format!("Failed to search end offset: {error}")))?
+                    .map_err(|error| errors::broker_operation_failed("search_end_offset", error.to_string()))?
                     as i64;
             }
 
@@ -1732,11 +1735,11 @@ impl MessageService {
         let mut min_offset = admin
             .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
             .await
-            .map_err(|error| RocketMQError::Internal(format!("Failed to get min offset: {error}")))?;
+            .map_err(|error| errors::broker_operation_failed("min_offset", error.to_string()))?;
         let mut max_offset = admin
             .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
             .await
-            .map_err(|error| RocketMQError::Internal(format!("Failed to get max offset: {error}")))?;
+            .map_err(|error| errors::broker_operation_failed("max_offset", error.to_string()))?;
 
         if let Some(begin_timestamp) = request.begin_timestamp {
             min_offset = admin
@@ -1748,7 +1751,7 @@ impl MessageService {
                     PULL_TIMEOUT_MILLIS,
                 )
                 .await
-                .map_err(|error| RocketMQError::Internal(format!("Failed to search begin offset: {error}")))?
+                .map_err(|error| errors::broker_operation_failed("search_begin_offset", error.to_string()))?
                 as i64;
         }
 
@@ -1762,7 +1765,7 @@ impl MessageService {
                     PULL_TIMEOUT_MILLIS,
                 )
                 .await
-                .map_err(|error| RocketMQError::Internal(format!("Failed to search end offset: {error}")))?
+                .map_err(|error| errors::broker_operation_failed("search_end_offset", error.to_string()))?
                 as i64;
         }
 
@@ -1871,8 +1874,8 @@ impl MessageService {
         let topic_route = admin
             .examine_topic_route_info(request.topic.clone())
             .await
-            .map_err(|error| RocketMQError::Internal(format!("Failed to examine topic route info: {error}")))?
-            .ok_or_else(|| RocketMQError::Internal(format!("Topic route not found for: {}", request.topic)))?;
+            .map_err(|error| errors::broker_operation_failed("examine_topic_route_info", error.to_string()))?
+            .ok_or_else(|| errors::topic_route_not_found(request.topic.to_string()))?;
 
         let mut count_left = request.message_number;
         for (mq, broker_addr) in route_topic_queues(&topic_route, request.topic.as_str()) {
@@ -1883,11 +1886,11 @@ impl MessageService {
             let mut min_offset = admin
                 .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| RocketMQError::Internal(format!("Failed to get min offset: {error}")))?;
+                .map_err(|error| errors::broker_operation_failed("min_offset", error.to_string()))?;
             let mut max_offset = admin
                 .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| RocketMQError::Internal(format!("Failed to get max offset: {error}")))?;
+                .map_err(|error| errors::broker_operation_failed("max_offset", error.to_string()))?;
 
             if let Some(begin_timestamp) = request.begin_timestamp {
                 if begin_timestamp > 0 {
@@ -1900,7 +1903,7 @@ impl MessageService {
                             PULL_TIMEOUT_MILLIS,
                         )
                         .await
-                        .map_err(|error| RocketMQError::Internal(format!("Failed to search begin offset: {error}")))?
+                        .map_err(|error| errors::broker_operation_failed("search_begin_offset", error.to_string()))?
                         as i64;
                 }
             }
@@ -1916,7 +1919,7 @@ impl MessageService {
                             PULL_TIMEOUT_MILLIS,
                         )
                         .await
-                        .map_err(|error| RocketMQError::Internal(format!("Failed to search end offset: {error}")))?
+                        .map_err(|error| errors::broker_operation_failed("search_end_offset", error.to_string()))?
                         as i64;
                 }
             }
@@ -1956,11 +1959,11 @@ impl MessageService {
         let mut min_offset = admin
             .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
             .await
-            .map_err(|error| RocketMQError::Internal(format!("Failed to get min offset: {error}")))?;
+            .map_err(|error| errors::broker_operation_failed("min_offset", error.to_string()))?;
         let mut max_offset = admin
             .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
             .await
-            .map_err(|error| RocketMQError::Internal(format!("Failed to get max offset: {error}")))?;
+            .map_err(|error| errors::broker_operation_failed("max_offset", error.to_string()))?;
 
         if let Some(begin_timestamp) = request.begin_timestamp {
             if begin_timestamp > 0 {
@@ -1973,7 +1976,7 @@ impl MessageService {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| RocketMQError::Internal(format!("Failed to search begin offset: {error}")))?
+                    .map_err(|error| errors::broker_operation_failed("search_begin_offset", error.to_string()))?
                     as i64;
             }
         }
@@ -1989,7 +1992,7 @@ impl MessageService {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| RocketMQError::Internal(format!("Failed to search end offset: {error}")))?
+                    .map_err(|error| errors::broker_operation_failed("search_end_offset", error.to_string()))?
                     as i64;
             }
         }

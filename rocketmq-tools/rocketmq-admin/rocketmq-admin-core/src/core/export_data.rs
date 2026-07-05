@@ -34,6 +34,7 @@ use serde::Serialize;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
+use crate::core::errors;
 use crate::core::resolver::BrokerAddressResolver;
 use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
@@ -746,8 +747,9 @@ impl ExportService {
         #[cfg(not(feature = "rocksdb-export"))]
         {
             let _ = config_type;
-            Err(RocketMQError::Internal(
-                "ExportService: RocksDB metadata export requires the rocksdb-export feature".to_string(),
+            Err(errors::admin_validation_failed(
+                "rocksdb-export",
+                "RocksDB metadata export requires the rocksdb-export feature",
             ))
         }
 
@@ -758,11 +760,7 @@ impl ExportService {
             opts.create_if_missing(false);
 
             let db = DB::open_for_read_only(&opts, &full_path, false).map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "ExportService: failed to open RocksDB path {}: {}",
-                    full_path.display(),
-                    error
-                ))
+                RocketMQError::storage_read_failed(full_path.display().to_string(), error.to_string())
             })?;
 
             let entries = Self::convert_rocksdb_metadata_entries(config_type, iterate_rocksdb_metadata(&db)?)?;
@@ -827,10 +825,10 @@ impl ExportService {
             }
 
             let master_properties = admin.get_broker_config(master_addr.clone()).await.map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "ExportService: Failed to get broker config for {}: {}",
-                    master_addr, error
-                ))
+                errors::broker_operation_failed(
+                    "get_broker_config",
+                    format!("ExportService: failed to get broker config for {master_addr}: {error}"),
+                )
             })?;
 
             master_broker_size += 1;
@@ -872,7 +870,7 @@ impl ExportService {
         let broker_addr_table = cluster_info
             .broker_addr_table
             .as_ref()
-            .ok_or_else(|| RocketMQError::Internal("ExportService: broker address table is empty".to_string()))?;
+            .ok_or_else(|| errors::broker_metadata_unavailable("broker address table is empty"))?;
 
         let mut result = ExportMetricsResult::default();
         for broker_name in broker_names {
@@ -1170,31 +1168,34 @@ impl ExportService {
     {
         let output_path = request.output_path();
         if output_path.is_dir() {
-            return Err(RocketMQError::Internal(format!(
-                "ExportService: output path {} is a directory",
-                output_path.display()
-            )));
+            return Err(RocketMQError::storage_write_failed(
+                output_path.display().to_string(),
+                "output path is a directory",
+            ));
         }
 
         if let Some(parent) = output_path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
             if !parent.exists() {
-                return Err(RocketMQError::Internal(format!(
-                    "ExportService: output directory {} does not exist",
-                    parent.display()
-                )));
+                return Err(RocketMQError::storage_write_failed(
+                    parent.display().to_string(),
+                    "output directory does not exist",
+                ));
             }
         }
 
         let overwritten = output_path.exists();
         if overwritten && !request.overwrite() {
-            return Err(RocketMQError::Internal(format!(
-                "ExportService: output file {} already exists; enable overwrite to replace it",
-                output_path.display()
-            )));
+            return Err(errors::admin_validation_failed(
+                "output",
+                format!(
+                    "output file {} already exists; enable overwrite to replace it",
+                    output_path.display()
+                ),
+            ));
         }
 
         let bytes = serde_json::to_vec_pretty(value)
-            .map_err(|error| RocketMQError::Internal(format!("ExportService: failed to serialize export: {error}")))?;
+            .map_err(|error| errors::admin_serialization_failed("JSON", error.to_string()))?;
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -1202,18 +1203,10 @@ impl ExportService {
             .create_new(!request.overwrite())
             .open(output_path)
             .map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "ExportService: failed to open output file {}: {}",
-                    output_path.display(),
-                    error
-                ))
+                RocketMQError::storage_write_failed(output_path.display().to_string(), error.to_string())
             })?;
         file.write_all(&bytes).map_err(|error| {
-            RocketMQError::Internal(format!(
-                "ExportService: failed to write output file {}: {}",
-                output_path.display(),
-                error
-            ))
+            RocketMQError::storage_write_failed(output_path.display().to_string(), error.to_string())
         })?;
 
         Ok(ExportFileWriteResult {
@@ -1381,12 +1374,7 @@ fn resolve_export_metrics_broker_names(
         .cluster_addr_table
         .as_ref()
         .and_then(|cluster_addr_table| cluster_addr_table.get(cluster_name))
-        .ok_or_else(|| {
-            RocketMQError::Internal(format!(
-                "ExportService: cluster {} does not exist or has no brokers",
-                cluster_name
-            ))
-        })?;
+        .ok_or_else(|| errors::cluster_not_found(cluster_name.to_string()))?;
     let mut broker_names = broker_names.iter().cloned().collect::<Vec<_>>();
     broker_names.sort();
     Ok(broker_names)
@@ -1450,20 +1438,14 @@ fn normalize_client_info(client_info: Vec<String>) -> Vec<String> {
 
 fn convert_consumer_offset_entry(entry: ExportMetadataInRocksDbEntry) -> RocketMQResult<ExportMetadataInRocksDbEntry> {
     let wrapper = serde_json::from_str::<serde_json::Value>(&entry.value).map_err(|error| {
-        RocketMQError::Internal(format!(
-            "ExportService: failed to parse consumerOffsets entry {}: {}",
-            entry.key, error
-        ))
+        errors::admin_serialization_failed("JSON", format!("consumerOffsets entry {}: {error}", entry.key))
     })?;
     let offset_table = wrapper
         .get("offsetTable")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
     let value = serde_json::to_string(&offset_table).map_err(|error| {
-        RocketMQError::Internal(format!(
-            "ExportService: failed to serialize consumerOffsets entry {}: {}",
-            entry.key, error
-        ))
+        errors::admin_serialization_failed("JSON", format!("consumerOffsets entry {}: {error}", entry.key))
     })?;
 
     Ok(ExportMetadataInRocksDbEntry { key: entry.key, value })
@@ -1474,8 +1456,7 @@ fn iterate_rocksdb_metadata(db: &DB) -> RocketMQResult<Vec<ExportMetadataInRocks
     let mut entries = Vec::new();
     let iter = db.iterator(rocksdb::IteratorMode::Start);
     for item in iter {
-        let (key, value) =
-            item.map_err(|error| RocketMQError::Internal(format!("ExportService: RocksDB iterator error: {error}")))?;
+        let (key, value) = item.map_err(|error| RocketMQError::storage_read_failed("rocksdb", error.to_string()))?;
         entries.push(ExportMetadataInRocksDbEntry {
             key: String::from_utf8_lossy(&key).to_string(),
             value: String::from_utf8_lossy(&value).to_string(),

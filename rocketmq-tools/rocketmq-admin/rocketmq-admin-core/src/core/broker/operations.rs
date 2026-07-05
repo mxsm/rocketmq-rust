@@ -67,6 +67,7 @@ use super::types::ResetMasterFlushOffsetRequest;
 use super::types::SwitchTimerEngineRequest;
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
+use crate::core::errors;
 use crate::core::resolver::BrokerAddressResolver;
 use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
@@ -99,9 +100,7 @@ impl BrokerService {
             .delete_expired_commit_log(request.cluster_name().cloned(), request.broker_addr().cloned())
             .await
             .map(|success| BrokerBooleanOperationResult { success })
-            .map_err(|error| {
-                RocketMQError::Internal(format!("BrokerService: failed to delete expired commit log: {error}"))
-            });
+            .map_err(|error| errors::broker_operation_failed("delete_expired_commit_log", error.to_string()));
         admin.shutdown().await;
         result
     }
@@ -117,7 +116,7 @@ impl BrokerService {
             .clean_unused_topic(request.cluster_name().cloned(), request.broker_addr().cloned())
             .await
             .map(|success| BrokerBooleanOperationResult { success })
-            .map_err(|error| RocketMQError::Internal(format!("BrokerService: failed to clean unused topic: {error}")));
+            .map_err(|error| errors::broker_operation_failed("clean_unused_topic", error.to_string()));
         admin.shutdown().await;
         result
     }
@@ -133,11 +132,14 @@ impl BrokerService {
             .reset_master_flush_offset(request.broker_addr().clone(), request.master_flush_offset())
             .await
             .map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "BrokerService: failed to reset master flush offset for {}: {}",
-                    request.broker_addr(),
-                    error
-                ))
+                errors::broker_operation_failed(
+                    "reset_master_flush_offset",
+                    format!(
+                        "BrokerService: failed to reset master flush offset for {}: {}",
+                        request.broker_addr(),
+                        error
+                    ),
+                )
             });
         admin.shutdown().await;
         result
@@ -284,7 +286,7 @@ impl BrokerService {
             }
             BrokerTarget::ClusterName(cluster_name) => {
                 let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
                 })?;
                 let master_and_slave_map =
                     BrokerAddressResolver::fetch_master_and_slave_distinguish(&cluster_info, cluster_name.as_str())?;
@@ -342,9 +344,10 @@ impl BrokerService {
         admin: &DefaultMQAdminExt,
         request: &BrokerEpochQueryRequest,
     ) -> RocketMQResult<BrokerEpochQueryResult> {
-        let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-            RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
-        })?;
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(|error| errors::broker_operation_failed("examine_broker_cluster_info", error.to_string()))?;
         let mut broker_addrs = match request.target() {
             BrokerEpochQueryTarget::BrokerName(broker_name) => {
                 BrokerAddressResolver::fetch_master_and_slave_addr_by_broker_name(&cluster_info, broker_name.as_str())?
@@ -430,8 +433,9 @@ impl BrokerService {
         }
 
         if report.targets.is_empty() {
-            return Err(RocketMQError::Internal(
-                "BrokerService: no broker targets matched the cleanExpiredCQ scope".to_string(),
+            return Err(errors::admin_validation_failed(
+                "cleanExpiredCQTarget",
+                "no broker targets matched the cleanExpiredCQ scope",
             ));
         }
 
@@ -528,11 +532,14 @@ impl BrokerService {
             )
             .await
             .map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "BrokerService: failed to fetch consume stats from {}: {}",
-                    request.broker_addr(),
-                    error
-                ))
+                errors::broker_operation_failed(
+                    "fetch_consume_stats_in_broker",
+                    format!(
+                        "BrokerService: failed to fetch consume stats from {}: {}",
+                        request.broker_addr(),
+                        error
+                    ),
+                )
             })?;
 
         Ok(build_broker_consume_stats_result(
@@ -570,7 +577,7 @@ impl BrokerService {
             }
             BrokerTarget::ClusterName(cluster_name) => {
                 let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
                 })?;
                 let mut broker_addrs =
                     BrokerAddressResolver::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name)?
@@ -611,7 +618,7 @@ impl BrokerService {
             }
             BrokerTarget::ClusterName(cluster_name) => {
                 let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
                 })?;
                 let master_and_slave_map =
                     BrokerAddressResolver::fetch_master_and_slave_distinguish(&cluster_info, cluster_name.as_str())?;
@@ -763,26 +770,35 @@ impl BrokerService {
                     let base_error = format!("BrokerService: failed to update broker {}: {}", plan.broker_addr, error);
 
                     if !rollback_enabled {
-                        return Err(RocketMQError::Internal(format!(
-                            "{}. Automatic rollback is disabled, previous successful updates are retained.",
-                            base_error
-                        )));
+                        return Err(errors::admin_operation_failed(
+                            "update_broker_config",
+                            format!(
+                                "{}. Automatic rollback is disabled, previous successful updates are retained.",
+                                base_error
+                            ),
+                        ));
                     }
 
                     let rollback_failures = rollback_applied_updates(admin, &applied_updates).await;
                     if rollback_failures.is_empty() {
-                        return Err(RocketMQError::Internal(format!(
-                            "{}. Automatic rollback succeeded for {} previously updated broker(s).",
-                            base_error,
-                            applied_updates.len()
-                        )));
+                        return Err(errors::admin_operation_failed(
+                            "update_broker_config",
+                            format!(
+                                "{}. Automatic rollback succeeded for {} previously updated broker(s).",
+                                base_error,
+                                applied_updates.len()
+                            ),
+                        ));
                     }
 
-                    return Err(RocketMQError::Internal(format!(
-                        "{}. Rollback encountered issues: {}",
-                        base_error,
-                        rollback_failures.join("; ")
-                    )));
+                    return Err(errors::admin_operation_failed(
+                        "update_broker_config",
+                        format!(
+                            "{}. Rollback encountered issues: {}",
+                            base_error,
+                            rollback_failures.join("; ")
+                        ),
+                    ));
                 }
             }
         }
@@ -801,7 +817,7 @@ impl BrokerService {
             BrokerTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
             BrokerTarget::ClusterName(cluster_name) => {
                 let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
                 })?;
 
                 let mut broker_addrs =
@@ -813,9 +829,8 @@ impl BrokerService {
                 broker_addrs.dedup();
 
                 if broker_addrs.is_empty() {
-                    return Err(RocketMQError::Internal(format!(
-                        "BrokerService: cluster {} has no broker address",
-                        cluster_name
+                    return Err(errors::broker_not_found(format!(
+                        "cluster {cluster_name} broker address"
                     )));
                 }
 
@@ -832,7 +847,7 @@ impl BrokerService {
             BrokerTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
             BrokerTarget::ClusterName(cluster_name) => {
                 let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
                 })?;
                 let mut broker_addrs =
                     BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.as_str())?;
@@ -849,10 +864,10 @@ impl BrokerService {
         key_pattern: Option<&Regex>,
     ) -> RocketMQResult<Vec<BrokerConfigEntry>> {
         let properties = admin.get_broker_config(broker_addr.clone()).await.map_err(|error| {
-            RocketMQError::Internal(format!(
-                "BrokerService: failed to get broker config for {}: {}",
-                broker_addr, error
-            ))
+            errors::broker_operation_failed(
+                "get_broker_config",
+                format!("BrokerService: failed to get broker config for {broker_addr}: {error}"),
+            )
         })?;
 
         Ok(filter_and_sort_properties(properties, key_pattern))
@@ -867,10 +882,10 @@ impl BrokerService {
             .get_cold_data_flow_ctr_info(broker_addr.clone())
             .await
             .map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "BrokerService: failed to get cold data flow ctr info from {}: {}",
-                    broker_addr, error
-                ))
+                errors::broker_operation_failed(
+                    "get_cold_data_flow_ctr_info",
+                    format!("BrokerService: failed to get cold data flow ctr info from {broker_addr}: {error}"),
+                )
             })?;
 
         Ok(ColdDataFlowCtrInfoSection {
@@ -888,10 +903,10 @@ impl BrokerService {
             .get_broker_epoch_cache(broker_addr.clone())
             .await
             .map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "BrokerService: failed to get broker epoch cache from {}: {}",
-                    broker_addr, error
-                ))
+                errors::broker_operation_failed(
+                    "get_broker_epoch_cache",
+                    format!("BrokerService: failed to get broker epoch cache from {broker_addr}: {error}"),
+                )
             })?;
 
         let max_offset = epoch_cache.get_max_offset();
@@ -926,19 +941,17 @@ impl BrokerService {
             if let Some(topic) = request.topic() {
                 let topic_targets = Self::fetch_topic_broker_targets(admin, topic).await?;
                 if !topic_targets.iter().any(|target| target == broker_addr) {
-                    return Err(RocketMQError::Internal(format!(
-                        "BrokerService: broker {} is not found in route info of topic {}",
-                        broker_addr, topic
-                    )));
+                    return Err(errors::broker_not_found(format!("{broker_addr} for topic {topic}")));
                 }
             }
             return Ok(vec![broker_addr.clone()]);
         }
 
         let cluster_targets = if let Some(cluster_name) = request.cluster_name() {
-            let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
-            })?;
+            let cluster_info = admin
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|error| errors::broker_operation_failed("examine_broker_cluster_info", error.to_string()))?;
             Some(BrokerAddressResolver::fetch_master_and_slave_addr_by_cluster_name(
                 &cluster_info,
                 cluster_name.as_str(),
@@ -968,9 +981,10 @@ impl BrokerService {
     }
 
     async fn fetch_all_broker_targets(admin: &DefaultMQAdminExt) -> RocketMQResult<Vec<CheetahString>> {
-        let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-            RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
-        })?;
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(|error| errors::broker_operation_failed("examine_broker_cluster_info", error.to_string()))?;
         let mut targets = Vec::new();
         if let Some(broker_addr_table) = cluster_info.broker_addr_table {
             for broker_data in broker_addr_table.values() {
@@ -990,14 +1004,12 @@ impl BrokerService {
             .examine_topic_route_info(topic.clone())
             .await
             .map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "BrokerService: failed to examine topic route info for {}: {}",
-                    topic, error
-                ))
+                errors::broker_operation_failed(
+                    "examine_topic_route_info",
+                    format!("BrokerService: failed to examine topic route info for {topic}: {error}"),
+                )
             })?
-            .ok_or_else(|| {
-                RocketMQError::Internal(format!("BrokerService: topic {} route info is unavailable", topic))
-            })?;
+            .ok_or_else(|| errors::topic_route_not_found(topic.to_string()))?;
 
         let mut targets = Vec::new();
         for broker_data in route_data.broker_datas {
@@ -1006,10 +1018,10 @@ impl BrokerService {
         targets.sort();
         targets.dedup();
         if targets.is_empty() {
-            return Err(RocketMQError::Internal(format!(
-                "BrokerService: topic {} has no broker targets",
-                topic
-            )));
+            return Err(errors::topic_route_inconsistent(
+                topic.to_string(),
+                "topic has no broker targets",
+            ));
         }
         Ok(targets)
     }
@@ -1022,7 +1034,7 @@ impl BrokerService {
             BrokerTarget::BrokerAddr(addr) => Ok(vec![(BrokerConfigSectionTarget::Broker(addr.clone()), addr.clone())]),
             BrokerTarget::ClusterName(cluster_name) => {
                 let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
                 })?;
                 let master_and_slave_map =
                     BrokerAddressResolver::fetch_master_and_slave_distinguish(&cluster_info, cluster_name.as_str())?;
@@ -1052,9 +1064,8 @@ impl BrokerService {
                 }
 
                 if targets.is_empty() {
-                    return Err(RocketMQError::Internal(format!(
-                        "BrokerService: cluster {} has no broker address",
-                        cluster_name
+                    return Err(errors::broker_not_found(format!(
+                        "cluster {cluster_name} broker address"
                     )));
                 }
                 Ok(targets)
@@ -1069,10 +1080,10 @@ impl BrokerService {
         broker_addr: CheetahString,
     ) -> RocketMQResult<CommitLogReadAheadSection> {
         let current_config = admin.get_broker_config(broker_addr.clone()).await.map_err(|error| {
-            RocketMQError::Internal(format!(
-                "BrokerService: failed to get broker config for {}: {}",
-                broker_addr, error
-            ))
+            errors::broker_operation_failed(
+                "get_broker_config",
+                format!("BrokerService: failed to get broker config for {broker_addr}: {error}"),
+            )
         })?;
         let size_key_for_update = resolve_read_ahead_size_key(request, &current_config)?;
 
@@ -1110,16 +1121,16 @@ impl BrokerService {
             .update_broker_config(broker_addr.clone(), properties)
             .await
             .map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "BrokerService: failed to update broker {}: {}",
-                    broker_addr, error
-                ))
+                errors::broker_operation_failed(
+                    "update_broker_config",
+                    format!("BrokerService: failed to update broker {broker_addr}: {error}"),
+                )
             })?;
         let updated_config = admin.get_broker_config(broker_addr.clone()).await.map_err(|error| {
-            RocketMQError::Internal(format!(
-                "BrokerService: failed to fetch updated broker config for {}: {}",
-                broker_addr, error
-            ))
+            errors::broker_operation_failed(
+                "get_broker_config",
+                format!("BrokerService: failed to fetch updated broker config for {broker_addr}: {error}"),
+            )
         })?;
 
         Ok(CommitLogReadAheadSection {
@@ -1140,10 +1151,10 @@ impl BrokerService {
             .fetch_broker_runtime_stats(broker_addr.clone())
             .await
             .map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "BrokerService: failed to fetch broker runtime stats from {}: {}",
-                    broker_addr, error
-                ))
+                errors::broker_operation_failed(
+                    "fetch_broker_runtime_stats",
+                    format!("BrokerService: failed to fetch broker runtime stats from {broker_addr}: {error}"),
+                )
             })?;
 
         Ok(sort_runtime_stats_entries(kv_table.table))
@@ -1236,10 +1247,10 @@ async fn fetch_broker_config_snapshot(
     broker_addr: &CheetahString,
 ) -> RocketMQResult<HashMap<CheetahString, CheetahString>> {
     admin.get_broker_config(broker_addr.clone()).await.map_err(|error| {
-        RocketMQError::Internal(format!(
-            "BrokerService: failed to get broker config for {}: {}",
-            broker_addr, error
-        ))
+        errors::broker_operation_failed(
+            "get_broker_config",
+            format!("BrokerService: failed to get broker config for {broker_addr}: {error}"),
+        )
     })
 }
 
