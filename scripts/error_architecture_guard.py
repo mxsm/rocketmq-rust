@@ -48,7 +48,6 @@ INTERNAL_ERROR_ALLOWLIST = (
     "rocketmq-auth/src/authorization/provider.rs",
     "rocketmq-broker/src/",
     "rocketmq-client/src/",
-    "rocketmq-common/src/common/controller/controller_config.rs",
     "rocketmq-controller/src/",
     "rocketmq-namesrv/src/",
     "rocketmq-proxy/src/",
