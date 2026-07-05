@@ -52,7 +52,10 @@ use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::SerializationError;
+use rocketmq_error::UnifiedServiceError;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
@@ -79,6 +82,19 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tracing::info;
+
+fn openraft_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "OpenRaft controller {operation}: {error}"
+    )))
+}
+
+fn openraft_response_decode_failed(error: serde_json::Error) -> RocketMQError {
+    RocketMQError::Serialization(SerializationError::decode_failed(
+        "JSON",
+        format!("OpenRaft inactive broker scan response: {error}"),
+    ))
+}
 
 /// OpenRaft-based controller implementation
 ///
@@ -164,11 +180,8 @@ impl OpenRaftController {
         let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
             parent_task_group.child("rocketmq-controller.openraft")
         } else {
-            let handle = tokio::runtime::Handle::try_current().map_err(|error| {
-                rocketmq_error::RocketMQError::Internal(format!(
-                    "No Tokio runtime for OpenRaft controller tasks: {error}"
-                ))
-            })?;
+            let handle = tokio::runtime::Handle::try_current()
+                .map_err(|error| openraft_startup_failed("create task group", error))?;
             TaskGroup::root("rocketmq-controller.openraft", RuntimeHandle::new(handle))
         };
         *guard = Some(task_group.clone());
@@ -462,12 +475,7 @@ impl OpenRaftController {
         let Some(body) = response.data.body else {
             return Ok(Vec::new());
         };
-        serde_json::from_slice(&body).map_err(|error| {
-            rocketmq_error::RocketMQError::Internal(format!(
-                "Failed to decode replicated inactive broker scan response: {}",
-                error
-            ))
-        })
+        serde_json::from_slice(&body).map_err(openraft_response_decode_failed)
     }
 
     pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
@@ -558,9 +566,10 @@ impl Controller for OpenRaftController {
         let addr = raft_addr;
         let node_id = self.config.node_id;
         let listener = TcpListener::bind(addr).await.map_err(|error| {
-            rocketmq_error::RocketMQError::Internal(format!(
-                "Failed to bind OpenRaft gRPC server for node {node_id} on {addr}: {error}"
-            ))
+            RocketMQError::network_connection_failed(
+                addr.to_string(),
+                format!("bind OpenRaft gRPC server for node {node_id}: {error}"),
+            )
         })?;
         let task_group = self.ensure_task_group()?;
         let shutdown_token = task_group.cancellation_token();
@@ -586,11 +595,7 @@ impl Controller for OpenRaftController {
                     info!("gRPC server for node {} stopped gracefully", node_id);
                 }
             })
-            .map_err(|error| {
-                rocketmq_error::RocketMQError::Internal(format!(
-                    "Failed to spawn OpenRaft gRPC server task for node {node_id}: {error}"
-                ))
-            })?;
+            .map_err(|error| openraft_startup_failed("spawn gRPC server task", format!("node {node_id}: {error}")))?;
 
         self.node = Some(node);
         self.shutdown_tx = Some(shutdown_tx);
@@ -692,9 +697,7 @@ impl Controller for OpenRaftController {
         }) {
             self.scheduling.store(false, Ordering::Release);
             self.stop_scan_task_group().await;
-            return Err(rocketmq_error::RocketMQError::Internal(format!(
-                "Failed to schedule OpenRaft active broker scan task: {error}"
-            )));
+            return Err(openraft_startup_failed("schedule active broker scan task", error));
         }
         Ok(())
     }
@@ -957,9 +960,27 @@ mod tests {
 
     use rocketmq_common::common::controller::controller_config::RaftPeer;
     use rocketmq_common::common::controller::ControllerConfig;
+    use rocketmq_error::ErrorKind;
     use rocketmq_rust::ArcMut;
 
     use super::*;
+
+    #[test]
+    fn openraft_startup_failed_uses_service_error_kind() {
+        let error = openraft_startup_failed("spawn test service", "task group closed");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+        assert!(error.to_string().contains("OpenRaft controller spawn test service"));
+    }
+
+    #[test]
+    fn openraft_response_decode_failed_uses_serialization_error_kind() {
+        let serde_error = serde_json::from_str::<serde_json::Value>("{").expect_err("invalid json");
+        let error = openraft_response_decode_failed(serde_error);
+
+        assert_eq!(error.kind(), ErrorKind::Serialization);
+        assert!(error.to_string().contains("OpenRaft inactive broker scan response"));
+    }
 
     #[tokio::test]
     async fn startup_binds_grpc_listener_before_returning() {
