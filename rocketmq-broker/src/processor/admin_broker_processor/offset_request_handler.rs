@@ -138,14 +138,14 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         }
 
         let max_item =
-            TopicQueueMappingUtils::find_logic_queue_mapping_item(&mapping_context.mapping_item_list, 0, true).ok_or(
-                rocketmq_error::RocketMQError::Internal(
-                    "Cannot find logic queue mapping item in static topic min offset request handling".to_string(),
-                ),
-            )?;
-        request_header.set_broker_name(max_item.bname.clone().ok_or(rocketmq_error::RocketMQError::Internal(
-            "Broker name is None in logic queue mapping item in static topic min offset request handling".to_string(),
-        ))?);
+            TopicQueueMappingUtils::find_logic_queue_mapping_item(&mapping_context.mapping_item_list, 0, true)
+                .ok_or_else(|| static_topic_offset_mapping_missing("static topic min offset request handling"))?;
+        request_header.set_broker_name(
+            max_item
+                .bname
+                .clone()
+                .ok_or_else(|| static_topic_offset_broker_name_missing("static topic min offset request handling"))?,
+        );
         request_header.set_lo(Some(false));
         request_header.queue_id = max_item.queue_id;
         let max_physical_offset = if max_item.bname == mapping_detail.topic_queue_mapping_info.bname {
@@ -206,12 +206,13 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
 
         let max_item =
             TopicQueueMappingUtils::find_logic_queue_mapping_item(&mapping_context.mapping_item_list, i64::MAX, true)
-                .ok_or(rocketmq_error::RocketMQError::Internal(
-                "Cannot find logic queue mapping item in static topic max offset request handling".to_string(),
-            ))?;
-        request_header.set_broker_name(max_item.bname.clone().ok_or(rocketmq_error::RocketMQError::Internal(
-            "Broker name is None in logic queue mapping item in static topic max offset request handling".to_string(),
-        ))?);
+                .ok_or_else(|| static_topic_offset_mapping_missing("static topic max offset request handling"))?;
+        request_header.set_broker_name(
+            max_item
+                .bname
+                .clone()
+                .ok_or_else(|| static_topic_offset_broker_name_missing("static topic max offset request handling"))?,
+        );
         request_header.set_lo(Some(false));
         request_header.queue_id = max_item.queue_id;
         let max_physical_offset = if max_item.bname == mapping_detail.topic_queue_mapping_info.bname {
@@ -415,9 +416,7 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
             mapping_item
                 .bname
                 .clone()
-                .ok_or(rocketmq_error::RocketMQError::Internal(
-                    "Broker name is None in logic queue mapping item in earliest msg storetime handling".to_string(),
-                ))?,
+                .ok_or_else(|| static_topic_offset_broker_name_missing("earliest msg storetime handling"))?,
         );
         request_header.set_lo(Some(false));
         request_header.queue_id = mapping_item.queue_id;
@@ -458,6 +457,19 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
             GetEarliestMsgStoretimeResponseHeader { timestamp },
         )))
     }
+}
+
+fn static_topic_offset_mapping_missing(operation: &'static str) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::RouteInconsistent {
+        topic: "static_topic_offset".to_string(),
+        reason: format!("Cannot find logic queue mapping item in {operation}"),
+    }
+}
+
+fn static_topic_offset_broker_name_missing(operation: &'static str) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::request_header_error(format!(
+        "Broker name is missing in logic queue mapping item for {operation}"
+    ))
 }
 
 #[cfg(test)]
@@ -522,6 +534,20 @@ mod tests {
         let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
         let inner = ArcMut::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
+    }
+
+    #[test]
+    fn static_topic_offset_mapping_missing_uses_route_inconsistent_kind() {
+        let error = static_topic_offset_mapping_missing("test operation");
+
+        assert_eq!(error.kind(), rocketmq_error::ErrorKind::RouteInconsistent);
+    }
+
+    #[test]
+    fn static_topic_offset_broker_name_missing_uses_request_header_kind() {
+        let error = static_topic_offset_broker_name_missing("test operation");
+
+        assert_eq!(error.kind(), rocketmq_error::ErrorKind::RequestHeaderError);
     }
 
     #[tokio::test]

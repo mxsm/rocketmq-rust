@@ -98,11 +98,10 @@ impl ProxyBrokerFacade {
         mut request: rocketmq_remoting::protocol::remoting_command::RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<rocketmq_remoting::protocol::remoting_command::RemotingCommand> {
         request.make_custom_header_to_net();
-        let mut processor = self.runtime.proxy_request_processor().ok_or_else(|| {
-            rocketmq_error::RocketMQError::Internal(
-                "embedded broker request processor is not ready; call start() first".to_owned(),
-            )
-        })?;
+        let mut processor = self
+            .runtime
+            .proxy_request_processor()
+            .ok_or_else(embedded_broker_request_processor_not_ready)?;
 
         let opaque = request.opaque();
         let mut harness = LocalRequestHarness::new().await?;
@@ -133,6 +132,10 @@ impl ProxyBrokerFacade {
     }
 }
 
+fn embedded_broker_request_processor_not_ready() -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::not_initialized("embedded_broker_request_processor")
+}
+
 fn build_topic_route(broker_config: &BrokerConfig, topic_config: &TopicConfig) -> TopicRouteData {
     let broker_name = broker_config.broker_identity.broker_name.clone();
     let broker_addr = CheetahString::from(format!(
@@ -157,5 +160,19 @@ fn build_topic_route(broker_config: &BrokerConfig, topic_config: &TopicConfig) -
             None,
         )],
         ..TopicRouteData::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_error::ErrorKind;
+
+    use super::*;
+
+    #[test]
+    fn embedded_broker_request_processor_not_ready_uses_not_initialized_kind() {
+        let error = embedded_broker_request_processor_not_ready();
+
+        assert_eq!(error.kind(), ErrorKind::NotInitialized);
     }
 }

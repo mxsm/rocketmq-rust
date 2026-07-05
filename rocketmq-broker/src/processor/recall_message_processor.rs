@@ -361,7 +361,7 @@ where
                 {
                     let response_header = response
                         .read_custom_header_mut::<RecallMessageResponseHeader>()
-                        .ok_or_else(|| RocketMQError::Internal("Response header missing".to_string()))?;
+                        .ok_or_else(recall_response_header_missing)?;
 
                     response_header.set_msg_id(message_id.as_str());
                 }
@@ -374,7 +374,7 @@ where
                 {
                     let response_header = response
                         .read_custom_header_mut::<RecallMessageResponseHeader>()
-                        .ok_or_else(|| RocketMQError::Internal("Response header missing".to_string()))?;
+                        .ok_or_else(recall_response_header_missing)?;
 
                     response_header.set_msg_id(message_id.as_str());
                 }
@@ -391,6 +391,10 @@ where
     }
 }
 
+fn recall_response_header_missing() -> RocketMQError {
+    RocketMQError::response_process_failed("RECALL_MESSAGE", "response header is missing")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,5 +402,12 @@ mod tests {
     #[test]
     fn test_recall_message_tag_constant() {
         assert_eq!(RECALL_MESSAGE_TAG, "_RECALL_TAG_");
+    }
+
+    #[test]
+    fn recall_response_header_missing_uses_response_process_failed_kind() {
+        let error = recall_response_header_missing();
+
+        assert_eq!(error.kind(), rocketmq_error::ErrorKind::ResponseProcessFailed);
     }
 }
