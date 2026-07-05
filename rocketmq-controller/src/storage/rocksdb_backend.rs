@@ -367,7 +367,18 @@ mod tests {
         let error = RocksDBBackend::new_blocking_executor(None)
             .expect_err("RocksDB blocking executor should require an ambient Tokio runtime");
 
-        assert!(error.to_string().contains("no current Tokio runtime"));
+        match error {
+            ControllerError::StorageSource { message, source } => {
+                assert_eq!(message, "RocksDB blocking task failed");
+                assert!(
+                    source
+                        .downcast_ref::<RuntimeError>()
+                        .is_some_and(|error| matches!(error, RuntimeError::NoCurrentRuntime)),
+                    "expected missing Tokio runtime source, got: {source}"
+                );
+            }
+            error => panic!("expected storage error, got: {error}"),
+        }
     }
 
     #[tokio::test]
