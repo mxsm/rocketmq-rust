@@ -20,6 +20,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
+use rocketmq_error::UnifiedServiceError;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::Shutdown;
 use serde::Serialize;
@@ -39,6 +42,18 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     spawn_client_tracked_task("rocketmq-client-rebalance-service", task)
+}
+
+fn rebalance_service_startup_failed(error: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "RebalanceService start: {error}"
+    )))
+}
+
+fn rebalance_service_shutdown_failed(reason: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::ShutdownFailed(format!(
+        "RebalanceService shutdown: {reason}"
+    )))
 }
 
 /// Configuration for RebalanceService.
@@ -220,10 +235,7 @@ impl RebalanceService {
         &self.config
     }
 
-    pub async fn start(
-        &mut self,
-        mut instance: ArcMut<MQClientInstance>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(&mut self, mut instance: ArcMut<MQClientInstance>) -> RocketMQResult<()> {
         // Prevent duplicate starts
         if self.started.swap(true, Ordering::SeqCst) {
             warn!("RebalanceService already started, ignoring duplicate start call");
@@ -323,7 +335,7 @@ impl RebalanceService {
             Err(error) => {
                 self.started.store(false, Ordering::SeqCst);
                 self.tx_shutdown = None;
-                return Err(Box::new(error));
+                return Err(rebalance_service_startup_failed(error));
             }
         };
 
@@ -344,7 +356,7 @@ impl RebalanceService {
         self.notify.notify_waiters();
     }
 
-    pub async fn shutdown(&self, timeout_ms: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn shutdown(&self, timeout_ms: u64) -> RocketMQResult<()> {
         // If not started, return directly
         if !self.started.load(Ordering::SeqCst) {
             info!("RebalanceService not started, shutdown skipped");
@@ -374,7 +386,7 @@ impl RebalanceService {
                 report = %report.to_json(),
                 "RebalanceService shutdown report is unhealthy"
             );
-            return Err("Shutdown timeout".into());
+            return Err(rebalance_service_shutdown_failed("task group did not stop cleanly"));
         }
 
         // Fallback for older or failed starts where no handle was captured.
@@ -385,7 +397,9 @@ impl RebalanceService {
                 Ok(()) => {}
                 Err(_) => {
                     warn!("RebalanceService shutdown timeout after {}ms", timeout_ms);
-                    return Err("Shutdown timeout".into());
+                    return Err(rebalance_service_shutdown_failed(
+                        "timeout waiting for stopped notification",
+                    ));
                 }
             }
         }

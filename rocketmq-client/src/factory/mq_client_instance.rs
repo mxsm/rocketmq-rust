@@ -37,6 +37,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
@@ -2045,7 +2046,7 @@ impl MQClientInstance {
         Ok(())
     }
 
-    pub async fn do_rebalance(&mut self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn do_rebalance(&mut self) -> RocketMQResult<bool> {
         let mut balanced = true;
         for entry in self.consumer_table.iter() {
             match entry.value().try_rebalance().await {
