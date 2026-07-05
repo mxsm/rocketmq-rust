@@ -493,7 +493,11 @@ fn serialize_cq_ext_unit(
         bit_map_size: cq_ext_unit.bit_map_size(),
         filter_bit_map: cq_ext_unit.filter_bit_map(),
     })
-    .map_err(|error| rocketmq_error::RocketMQError::Internal(error.to_string()))
+    .map_err(cq_ext_unit_response_serialize_error)
+}
+
+fn cq_ext_unit_response_serialize_error(error: serde_json::Error) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::response_process_failed("query_consume_queue.cq_ext_unit", error.to_string())
 }
 
 #[cfg(test)]
@@ -505,6 +509,7 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_error::ErrorKind;
     use rocketmq_remoting::base::response_future::ResponseFuture;
     use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::connection::Connection;
@@ -564,6 +569,16 @@ mod tests {
         let response_table = ArcMut::new(std::collections::HashMap::<i32, ResponseFuture>::new());
         let inner = ArcMut::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
+    }
+
+    #[test]
+    fn cq_ext_unit_response_serialize_error_uses_response_process_kind() {
+        let serde_error =
+            serde_json::from_str::<serde_json::Value>("{").expect_err("invalid json should produce a serde error");
+        let error = cq_ext_unit_response_serialize_error(serde_error);
+
+        assert_eq!(error.kind(), ErrorKind::ResponseProcessFailed);
+        assert!(error.to_string().contains("query_consume_queue.cq_ext_unit"));
     }
 
     #[tokio::test]
