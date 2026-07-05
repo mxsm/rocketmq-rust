@@ -29,6 +29,7 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_rust::ArcMut;
@@ -220,7 +221,7 @@ where
         transaction_timeout: u64,
         transaction_check_max: i32,
         listener: Listener,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> RocketMQResult<()> {
         let topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC);
 
         //TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC only one read and write queue
@@ -314,7 +315,7 @@ where
         done_op_offset: &mut Vec<i64>,
         mut pull_result: Option<PullResult>,
         mut listener: Listener,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> RocketMQResult<()> {
         let mut get_message_null_count = 1;
         let mut new_offset = half_offset;
         let mut consume_half_offset = half_offset;
@@ -655,7 +656,7 @@ where
         done_op_offset: &mut Vec<i64>,
         msg_ext: &MessageExt,
         check_immunity_time_str: &str,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> RocketMQResult<bool> {
         let prepare_queue_offset_str = msg_ext.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
         ));
@@ -788,11 +789,7 @@ where
     }
 
     /// Get half message
-    async fn get_half_msg(
-        &self,
-        message_queue: &MessageQueue,
-        offset: i64,
-    ) -> Result<GetResult, Box<dyn std::error::Error + Send + Sync>> {
+    async fn get_half_msg(&self, message_queue: &MessageQueue, offset: i64) -> RocketMQResult<GetResult> {
         let mut get_result = GetResult::new();
 
         if let Some(result) = self.pull_half_msg(message_queue, offset, PULL_MSG_RETRY_NUMBER).await {
@@ -859,7 +856,7 @@ where
         mini_offset: i64,
         op_msg_map: &mut HashMap<i64, HashSet<i64>>,
         done_op_offset: &mut Vec<i64>,
-    ) -> Result<Option<PullResult>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> RocketMQResult<Option<PullResult>> {
         let pull_result = self.pull_op_msg(op_queue, pull_offset_of_op, OP_MSG_PULL_NUMS).await;
 
         let Some(pull_result) = pull_result else {
@@ -1139,5 +1136,15 @@ mod tests {
             10_000,
             1_000
         ));
+    }
+
+    #[test]
+    fn transactional_message_service_uses_typed_errors() {
+        let source = include_str!("default_transactional_message_service.rs");
+
+        assert!(source.contains(") -> RocketMQResult<()>"));
+        assert!(source.contains(") -> RocketMQResult<GetResult>"));
+        assert!(source.contains(") -> RocketMQResult<Option<PullResult>>"));
+        assert!(!source.contains(concat!("Box<dyn std::error::", "Error")));
     }
 }
