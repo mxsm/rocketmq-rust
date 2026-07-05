@@ -19,6 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownReport;
@@ -306,7 +308,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
     /// - Accept loop: Single-threaded (TcpListener)
     /// - Handler tasks: Multi-threaded (Tokio runtime)
     /// - Event dispatcher: Independent task (non-blocking)
-    async fn run(&mut self) -> anyhow::Result<()> {
+    async fn run(&mut self) -> RocketMQResult<()> {
         info!("Server ready to accept connections");
 
         // Event notification channel (unbounded to prevent accept() blocking)
@@ -487,7 +489,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
     /// # Performance
     /// - Fast path: Single syscall when no errors
     /// - Slow path: Exponential backoff prevents thundering herd
-    async fn accept(&mut self) -> anyhow::Result<(TcpStream, SocketAddr)> {
+    async fn accept(&mut self) -> RocketMQResult<(TcpStream, SocketAddr)> {
         let mut backoff = 1;
         const MAX_BACKOFF: u64 = 64;
 
@@ -516,12 +518,10 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
     }
 }
 
-async fn acquire_connection_permit(limit_connections: &Arc<Semaphore>) -> anyhow::Result<OwnedSemaphorePermit> {
-    limit_connections
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|err| anyhow::anyhow!("connection limit semaphore closed: {err}"))
+async fn acquire_connection_permit(limit_connections: &Arc<Semaphore>) -> RocketMQResult<OwnedSemaphorePermit> {
+    limit_connections.clone().acquire_owned().await.map_err(|err| {
+        RocketMQError::network_connection_failed("remoting-server", format!("connection limit semaphore closed: {err}"))
+    })
 }
 
 pub struct RocketMQServer<RP> {

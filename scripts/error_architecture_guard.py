@@ -69,7 +69,6 @@ ANYHOW_RESULT_ALLOWLIST: dict[str, str] = {
     "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/proxy/service.rs": "standalone Tauri boundary pending dashboard alignment",
     "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/lib.rs": "web backend process boundary",
     "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/main.rs": "web backend process boundary",
-    "rocketmq-remoting/src/remoting_server/rocketmq_tokio_server.rs": "internal remoting accept-loop worker boundary",
     "rocketmq-store/src/ha/default_ha_client.rs": "internal HA replication worker boundary",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs": "TUI process boundary",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/rocketmq_tui_app.rs": "TUI terminal runtime boundary",
