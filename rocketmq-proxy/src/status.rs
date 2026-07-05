@@ -113,10 +113,13 @@ impl ProxyStatusMapper {
 
     pub fn from_error_payload(error: &ProxyError) -> ProxyPayloadStatus {
         let (code, message) = match error {
-            ProxyError::RocketMQ(inner) => (
-                Self::rocketmq_error_grpc_mapping(inner).payload,
-                inner.public_message().to_owned(),
-            ),
+            ProxyError::RocketMQ(inner) => {
+                let view = inner.boundary_view();
+                (
+                    Self::rocketmq_error_grpc_mapping(inner).payload,
+                    view.message().to_owned(),
+                )
+            }
             local => (
                 Self::local_error_grpc_mapping(
                     local
@@ -214,7 +217,7 @@ impl ProxyStatusMapper {
 
     fn rocketmq_error_grpc_mapping(error: &RocketMQError) -> ProxyGrpcMapping {
         Self::broker_response_payload_override(error).unwrap_or_else(|| {
-            let grpc = error.spec().grpc;
+            let grpc = error.boundary_view().grpc();
             ProxyGrpcMapping::new(
                 Self::grpc_payload_to_code(grpc.payload),
                 Self::grpc_status_to_tonic_code(grpc.status),

@@ -54,3 +54,15 @@ fn rocketmq_error_exposes_public_message_and_redacted_context() {
     assert_eq!(context.to_string(), "internal_error=<redacted>");
     assert!(!context.to_string().contains("plain-text"));
 }
+
+#[test]
+fn boundary_view_exposes_public_message_and_redacted_context() {
+    let error = RocketMQError::Internal("password=plain-text".to_string());
+    let view = error.boundary_view();
+
+    assert_eq!(view.code().as_str(), "INTERNAL");
+    assert_eq!(view.message(), "Internal error");
+    assert_eq!(view.context().to_string(), "internal_error=<redacted>");
+    assert!(!view.context().to_string().contains("plain-text"));
+    assert!(!view.is_retryable());
+}

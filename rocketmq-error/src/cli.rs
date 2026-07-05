@@ -34,13 +34,13 @@ impl CliErrorView {
     /// Build a CLI view from the central error spec registry.
     #[inline]
     pub fn from_error(error: &RocketMQError) -> Self {
-        let spec = error.spec();
+        let view = error.boundary_view();
         Self {
-            exit_code: spec.cli.exit_code,
-            code: spec.code,
-            category: spec.category,
-            message: spec.public_message,
-            context: error.context(),
+            exit_code: view.cli().exit_code,
+            code: view.code(),
+            category: view.category(),
+            message: view.message(),
+            context: view.context().clone(),
         }
     }
 

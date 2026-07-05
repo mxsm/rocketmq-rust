@@ -12,7 +12,137 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::ErrorCategory;
+use crate::ErrorCode;
+use crate::ErrorContext;
 use crate::ErrorKind;
+use crate::ErrorSeverity;
+use crate::ObserveSpec;
+use crate::RecoverySpec;
+use crate::RetryClass;
+
+/// Public, redaction-aware projection of a typed RocketMQ error.
+///
+/// Boundary adapters should use this view instead of formatting
+/// [`RocketMQError`](crate::RocketMQError) directly. `Display` remains a
+/// diagnostic surface and can contain internal details; this view contains only
+/// stable metadata, public messages, and redacted context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundaryErrorView {
+    kind: ErrorKind,
+    code: ErrorCode,
+    category: ErrorCategory,
+    message: &'static str,
+    context: ErrorContext,
+    remoting: RemotingSpec,
+    grpc: GrpcSpec,
+    http: HttpSpec,
+    cli: CliSpec,
+    recovery: RecoverySpec,
+    observe: ObserveSpec,
+}
+
+impl BoundaryErrorView {
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    pub(crate) fn new(
+        kind: ErrorKind,
+        code: ErrorCode,
+        category: ErrorCategory,
+        message: &'static str,
+        context: ErrorContext,
+        remoting: RemotingSpec,
+        grpc: GrpcSpec,
+        http: HttpSpec,
+        cli: CliSpec,
+        recovery: RecoverySpec,
+        observe: ObserveSpec,
+    ) -> Self {
+        Self {
+            kind,
+            code,
+            category,
+            message,
+            context,
+            remoting,
+            grpc,
+            http,
+            cli,
+            recovery,
+            observe,
+        }
+    }
+
+    #[inline]
+    pub const fn kind(&self) -> ErrorKind {
+        self.kind
+    }
+
+    #[inline]
+    pub const fn code(&self) -> ErrorCode {
+        self.code
+    }
+
+    #[inline]
+    pub const fn category(&self) -> ErrorCategory {
+        self.category
+    }
+
+    #[inline]
+    pub const fn message(&self) -> &'static str {
+        self.message
+    }
+
+    #[inline]
+    pub const fn context(&self) -> &ErrorContext {
+        &self.context
+    }
+
+    #[inline]
+    pub const fn remoting(&self) -> RemotingSpec {
+        self.remoting
+    }
+
+    #[inline]
+    pub const fn grpc(&self) -> GrpcSpec {
+        self.grpc
+    }
+
+    #[inline]
+    pub const fn http(&self) -> HttpSpec {
+        self.http
+    }
+
+    #[inline]
+    pub const fn cli(&self) -> CliSpec {
+        self.cli
+    }
+
+    #[inline]
+    pub const fn recovery(&self) -> RecoverySpec {
+        self.recovery
+    }
+
+    #[inline]
+    pub const fn retry(&self) -> RetryClass {
+        self.recovery.retry
+    }
+
+    #[inline]
+    pub const fn is_retryable(&self) -> bool {
+        !matches!(self.retry(), RetryClass::Never)
+    }
+
+    #[inline]
+    pub const fn observe(&self) -> ObserveSpec {
+        self.observe
+    }
+
+    #[inline]
+    pub const fn severity(&self) -> ErrorSeverity {
+        self.observe.severity
+    }
+}
 
 /// Remoting response-code primitive.
 ///

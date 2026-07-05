@@ -29,6 +29,7 @@ use std::io;
 // Re-export filter error
 pub use crate::filter_error::FilterError;
 
+use crate::boundary::BoundaryErrorView;
 use crate::context::ErrorContext;
 use crate::context::Sensitive;
 use crate::kind::ErrorKind;
@@ -623,6 +624,26 @@ impl RocketMQError {
             Self::NotInitialized(reason) => ErrorContext::new().with_field("reason", reason.as_str()),
             Self::MissingRequiredMessageProperty { property } => ErrorContext::new().with_field("property", *property),
         }
+    }
+
+    /// Return a public, redaction-aware snapshot for protocol and UI
+    /// boundaries.
+    #[inline]
+    pub fn boundary_view(&self) -> BoundaryErrorView {
+        let spec = self.spec();
+        BoundaryErrorView::new(
+            spec.kind,
+            spec.code,
+            spec.category,
+            spec.public_message,
+            self.context(),
+            spec.remoting,
+            spec.grpc,
+            spec.http,
+            spec.cli,
+            spec.recovery,
+            spec.observe,
+        )
     }
 
     /// Create a network connection failed error

@@ -75,6 +75,7 @@ pub mod client_error;
 // Re-export new error types as primary API
 // Re-export auth error types from unified module
 // Re-export controller error types
+pub use boundary::BoundaryErrorView;
 pub use boundary::CliExitCode;
 pub use boundary::CliSpec;
 pub use boundary::GrpcPayloadCode;
