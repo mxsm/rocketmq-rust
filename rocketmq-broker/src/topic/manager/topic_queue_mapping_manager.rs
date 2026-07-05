@@ -22,6 +22,7 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::UnifiedServiceError;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_queue_wrapper::TopicQueueMappingSerializeWrapper;
 use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
@@ -335,12 +336,13 @@ impl TopicQueueMappingManager {
         }
 
         let file_name = self.config_file_path();
+        let error_path = file_name.clone();
         self.blocking_executor()?
             .spawn_io("broker.topic_queue_mapping.persist_clean_result", move || {
                 rocketmq_common::FileUtils::string_to_file(json.as_str(), file_name.as_str())
             })
             .await
-            .map_err(|err| RocketMQError::Internal(format!("persist topic queue mapping clean result failed: {err}")))?
+            .map_err(|err| topic_queue_mapping_persist_failed(error_path.as_str(), err))?
     }
 
     pub fn delete(&self, topic: &CheetahString) {
@@ -383,9 +385,7 @@ impl TopicQueueMappingManager {
             },
             group.child("rocketmq-broker.topic_queue_mapping.blocking-reaper"),
         )
-        .map_err(|error| {
-            RocketMQError::Internal(format!("create topic queue mapping blocking executor failed: {error}"))
-        })
+        .map_err(|error| topic_queue_mapping_startup_failed("create blocking executor", error))
     }
 
     fn blocking_task_group(&self) -> RocketMQResult<TaskGroup> {
@@ -393,16 +393,23 @@ impl TopicQueueMappingManager {
             return Ok(parent_task_group.child("rocketmq-broker.topic_queue_mapping.blocking"));
         }
 
-        let handle = Handle::try_current().map_err(|error| {
-            RocketMQError::Internal(format!(
-                "topic queue mapping blocking executor requires a Tokio runtime: {error}"
-            ))
-        })?;
+        let handle = Handle::try_current()
+            .map_err(|error| topic_queue_mapping_startup_failed("resolve Tokio runtime", error))?;
         Ok(TaskGroup::root(
             "rocketmq-broker.topic_queue_mapping.blocking",
             RuntimeHandle::new(handle),
         ))
     }
+}
+
+fn topic_queue_mapping_persist_failed(path: &str, error: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::storage_write_failed(path, format!("persist clean result failed: {error}"))
+}
+
+fn topic_queue_mapping_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "topic queue mapping {operation}: {error}"
+    )))
 }
 
 //Fully implemented will be removed
@@ -445,6 +452,7 @@ mod tests {
     use std::sync::Arc;
 
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_error::ErrorKind;
     use rocketmq_runtime::RuntimeContext;
 
     use super::*;
@@ -457,6 +465,22 @@ mod tests {
         assert!(Arc::ptr_eq(&manager.broker_config, &broker_config));
         assert_eq!(manager.data_version.lock().get_state_version(), 0);
         assert_eq!(manager.topic_queue_mapping_table.len(), 0);
+    }
+
+    #[test]
+    fn topic_queue_mapping_persist_failed_uses_storage_write_error_kind() {
+        let error = topic_queue_mapping_persist_failed("topic_queue_mapping.json", "disk full");
+
+        assert_eq!(error.kind(), ErrorKind::StorageWriteFailed);
+        assert!(error.to_string().contains("topic_queue_mapping.json"));
+    }
+
+    #[test]
+    fn topic_queue_mapping_startup_failed_uses_service_error_kind() {
+        let error = topic_queue_mapping_startup_failed("create test executor", "task group closed");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+        assert!(error.to_string().contains("topic queue mapping create test executor"));
     }
 
     #[tokio::test]
