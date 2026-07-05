@@ -90,7 +90,7 @@ impl DashboardError {
         match self {
             Self::Validation(_) => "VALIDATION_ERROR",
             Self::Config(_) | Self::ConfigSource { .. } => "CONFIG_ERROR",
-            Self::RocketMq(error) => error.spec().code.as_str(),
+            Self::RocketMq(error) => error.boundary_view().code().as_str(),
             Self::NotFound(_) => "NOT_FOUND",
             Self::Auth(_) => "AUTH_ERROR",
             Self::NotImplemented(_) => "NOT_IMPLEMENTED",
@@ -102,7 +102,7 @@ impl DashboardError {
         match self {
             Self::Validation(_) => StatusCode::BAD_REQUEST,
             Self::Config(_) | Self::ConfigSource { .. } => StatusCode::BAD_REQUEST,
-            Self::RocketMq(error) => status_code_from_spec(error.spec().http.status),
+            Self::RocketMq(error) => status_code_from_spec(error.boundary_view().http().status),
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Auth(_) => StatusCode::UNAUTHORIZED,
             Self::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
@@ -137,11 +137,11 @@ fn status_code_from_spec(status: HttpStatusCode) -> StatusCode {
 }
 
 fn rocketmq_response_message(error: &RocketMQError) -> String {
-    let context = error.context();
-    if context.is_empty() {
-        error.public_message().to_string()
+    let view = error.boundary_view();
+    if view.context().is_empty() {
+        view.message().to_string()
     } else {
-        format!("{} ({context})", error.public_message())
+        format!("{} ({})", view.message(), view.context())
     }
 }
 

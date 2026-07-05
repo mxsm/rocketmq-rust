@@ -411,8 +411,7 @@ def check_processor_generic_response_allowlist() -> list[Finding]:
 def check_required_mapping_adapters() -> list[Finding]:
     checks = {
         ROOT / "rocketmq-remoting" / "src" / "error_response.rs": [
-            "error.spec().remoting.code.as_i32()",
-            "error.public_message()",
+            "error.boundary_view()",
             "apply_error_to_response",
             "invalid_parameter_with_remark",
             "request_code_not_supported_with_remark",
@@ -422,11 +421,11 @@ def check_required_mapping_adapters() -> list[Finding]:
         ROOT / "rocketmq-proxy" / "src" / "status.rs": [
             "ProxyErrorKind",
             "broker_response_payload_override",
-            "error.spec().grpc",
+            "boundary_view().grpc()",
             "grpc_payload_to_code",
             "grpc_status_to_tonic_code",
             "local_error_grpc_mapping",
-            "public_message()",
+            "view.message()",
         ],
         ROOT
         / "rocketmq-dashboard"
@@ -435,17 +434,17 @@ def check_required_mapping_adapters() -> list[Finding]:
         / "src"
         / "error"
         / "dashboard_error.rs": [
-            "error.spec().http.status",
-            "error.spec().code.as_str()",
-            "error.public_message()",
-            "error.context()",
+            "error.boundary_view().http().status",
+            "error.boundary_view().code().as_str()",
+            "view.message()",
+            "view.context()",
             "config_source",
             "internal_source",
             "response_message",
         ],
         ROOT / "rocketmq-error" / "src" / "cli.rs": [
-            "spec.cli.exit_code",
-            "error.context()",
+            "error.boundary_view()",
+            "view.cli().exit_code",
             "render_stderr",
         ],
         ROOT / "rocketmq-tools" / "rocketmq-admin" / "rocketmq-admin-cli" / "src" / "rocketmq_cli.rs": [

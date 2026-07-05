@@ -19,7 +19,8 @@ use crate::protocol::remoting_command::RemotingCommand;
 
 /// Convert a typed RocketMQ error into a remoting response command.
 pub fn command_from_error(error: &RocketMQError) -> RemotingCommand {
-    command_from_error_with_remark(error, error.public_message())
+    let view = error.boundary_view();
+    RemotingCommand::create_response_command_with_code_remark(view.remoting().code.as_i32(), view.message())
 }
 
 /// Convert a typed RocketMQ error into a remoting response command and preserve
@@ -31,7 +32,8 @@ pub fn command_from_error_with_opaque(error: &RocketMQError, opaque: i32) -> Rem
 /// Convert a typed RocketMQ error into a remoting response command with an
 /// explicit wire remark.
 pub fn command_from_error_with_remark(error: &RocketMQError, remark: impl Into<String>) -> RemotingCommand {
-    RemotingCommand::create_response_command_with_code_remark(error.spec().remoting.code.as_i32(), remark.into())
+    let view = error.boundary_view();
+    RemotingCommand::create_response_command_with_code_remark(view.remoting().code.as_i32(), remark.into())
 }
 
 /// Apply a typed RocketMQ error mapping to an existing remoting response.
@@ -40,8 +42,9 @@ pub fn apply_error_to_response(
     error: &RocketMQError,
     remark: impl Into<String>,
 ) -> RemotingCommand {
+    let view = error.boundary_view();
     response
-        .set_code(error.spec().remoting.code.as_i32())
+        .set_code(view.remoting().code.as_i32())
         .set_remark(remark.into())
 }
 
