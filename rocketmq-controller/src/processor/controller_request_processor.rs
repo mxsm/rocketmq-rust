@@ -551,8 +551,12 @@ impl ControllerRequestProcessor {
     }
     // Helper function to parse properties
     async fn parse_properties_from_string(body: &[u8]) -> RocketMQResult<HashMap<String, String>> {
-        let content = String::from_utf8(body.to_vec())
-            .map_err(|e| RocketMQError::Internal(format!("parse property string err {}", e)))?;
+        let content = String::from_utf8(body.to_vec()).map_err(|error| {
+            RocketMQError::request_body_invalid(
+                "UPDATE_CONTROLLER_CONFIG",
+                format!("parse property string failed: {error}"),
+            )
+        })?;
         let mut properties = HashMap::new();
 
         for line in content.lines() {
@@ -959,6 +963,7 @@ impl RequestProcessor for ControllerRequestProcessor {
 mod tests {
     use super::*;
     use cheetah_string::CheetahString;
+    use rocketmq_error::ErrorKind;
 
     #[test]
     fn test_config_blacklist() {
@@ -972,6 +977,16 @@ mod tests {
         assert!(blacklist.contains("configBlackList"));
         assert!(blacklist.contains("configStorePath"));
         assert!(blacklist.contains("rocketmqHome"));
+    }
+
+    #[tokio::test]
+    async fn parse_properties_from_string_rejects_invalid_utf8_as_request_body() {
+        let error = ControllerRequestProcessor::parse_properties_from_string(&[0xff])
+            .await
+            .expect_err("invalid utf8 should be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::RequestBodyInvalid);
+        assert!(error.to_string().contains("UPDATE_CONTROLLER_CONFIG"));
     }
 
     #[test]
