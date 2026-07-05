@@ -341,7 +341,7 @@ impl NameServerBootstrap {
             .inner
             .task_group()
             .map(|task_group| task_group.child("namesrv.shutdown-relay"))
-            .ok_or_else(|| RocketMQError::Internal("NameServer task group is unavailable".to_string()))?;
+            .ok_or_else(|| namesrv_task_group_unavailable("spawn shutdown relay"))?;
         relay_group
             .spawn_service(
                 "namesrv.shutdown-relay",
@@ -376,6 +376,12 @@ where
 fn namesrv_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
     RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
         "NameServer {operation}: {error}"
+    )))
+}
+
+fn namesrv_task_group_unavailable(operation: &'static str) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "NameServer {operation}: task group is unavailable"
     )))
 }
 
@@ -558,7 +564,7 @@ impl NameServerRuntime {
             .inner
             .task_group()
             .map(|task_group| task_group.child("namesrv.scheduled"))
-            .ok_or_else(|| RocketMQError::Internal("NameServer task group is unavailable".to_string()))?;
+            .ok_or_else(|| namesrv_task_group_unavailable("start scheduled tasks"))?;
         let scheduled_tasks = ScheduledTaskGroup::new(task_group);
         let mut config = ScheduledTaskConfig::fixed_rate_no_overlap(
             "namesrv.scan-not-active-broker",
@@ -642,7 +648,7 @@ impl NameServerRuntime {
             .inner
             .task_group()
             .map(|task_group| task_group.child("namesrv.server"))
-            .ok_or_else(|| RocketMQError::Internal("NameServer task group is unavailable".to_string()))?;
+            .ok_or_else(|| namesrv_task_group_unavailable("spawn server task"))?;
         let (server_report_tx, server_report_rx) = oneshot::channel();
         server_task_group
             .spawn_service("namesrv.server", async move {
@@ -1708,6 +1714,14 @@ mod tests {
 
         assert_eq!(error.kind(), ErrorKind::Service);
         assert!(error.to_string().contains("NameServer spawn test service"));
+    }
+
+    #[test]
+    fn namesrv_task_group_unavailable_uses_service_error_kind() {
+        let error = namesrv_task_group_unavailable("spawn test service");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+        assert!(error.to_string().contains("task group is unavailable"));
     }
 
     #[tokio::test]
