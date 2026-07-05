@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
+
+use crate::core::errors;
 
 pub struct BrokerAddressResolver;
 
@@ -16,17 +17,13 @@ impl BrokerAddressResolver {
         cluster_name: &str,
     ) -> RocketMQResult<Vec<CheetahString>> {
         let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("BrokerAddressResolver: No cluster address table available from nameserver.".into())
+            errors::cluster_metadata_unavailable("cluster address table is unavailable from nameserver")
         })?;
-        let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
-            RocketMQError::Internal(format!(
-                "BrokerAddressResolver: Make sure the specified clusterName exists or the nameserver which connected \
-                 to is correct. Cluster: {}",
-                cluster_name
-            ))
-        })?;
+        let broker_names = cluster_addr_table
+            .get(cluster_name)
+            .ok_or_else(|| errors::cluster_not_found(cluster_name))?;
         let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("BrokerAddressResolver: No broker address table available from nameserver.".into())
+            errors::broker_metadata_unavailable("broker address table is unavailable from nameserver")
         })?;
 
         let mut master_addrs = Vec::new();
@@ -51,10 +48,7 @@ impl BrokerAddressResolver {
                 }
             }
         }
-        Err(RocketMQError::Internal(format!(
-            "BrokerAddressResolver: No broker address for broker name: {}",
-            broker_name
-        )))
+        Err(errors::broker_not_found(broker_name))
     }
 
     pub fn fetch_master_and_slave_addr_by_broker_name(
@@ -62,14 +56,11 @@ impl BrokerAddressResolver {
         broker_name: &str,
     ) -> RocketMQResult<Vec<CheetahString>> {
         let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("BrokerAddressResolver: No broker address table available from nameserver.".into())
+            errors::broker_metadata_unavailable("broker address table is unavailable from nameserver")
         })?;
-        let broker_data = broker_addr_table.get(broker_name).ok_or_else(|| {
-            RocketMQError::Internal(format!(
-                "BrokerAddressResolver: No broker data found for broker name: {}",
-                broker_name
-            ))
-        })?;
+        let broker_data = broker_addr_table
+            .get(broker_name)
+            .ok_or_else(|| errors::broker_not_found(broker_name))?;
         let mut addrs: Vec<CheetahString> = broker_data.broker_addrs().values().cloned().collect();
         addrs.sort();
         addrs.dedup();
@@ -85,11 +76,7 @@ impl BrokerAddressResolver {
                 return Ok(broker_names.iter().map(ToString::to_string).collect());
             }
         }
-        Err(RocketMQError::Internal(format!(
-            "BrokerAddressResolver: Make sure the specified clusterName exists or the nameserver which connected to \
-             is correct. Cluster: {}",
-            cluster_name
-        )))
+        Err(errors::cluster_not_found(cluster_name))
     }
 
     pub fn fetch_broker_name_by_addr(cluster_info: &ClusterInfo, broker_addr: &str) -> RocketMQResult<String> {
@@ -102,10 +89,7 @@ impl BrokerAddressResolver {
                 }
             }
         }
-        Err(RocketMQError::Internal(format!(
-            "BrokerAddressResolver: Make sure the specified broker address exists. Address: {}",
-            broker_addr
-        )))
+        Err(errors::broker_not_found(broker_addr))
     }
 
     pub fn fetch_master_and_slave_addr_by_cluster_name(
@@ -113,17 +97,13 @@ impl BrokerAddressResolver {
         cluster_name: &str,
     ) -> RocketMQResult<Vec<CheetahString>> {
         let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("BrokerAddressResolver: No cluster address table available from nameserver.".into())
+            errors::cluster_metadata_unavailable("cluster address table is unavailable from nameserver")
         })?;
-        let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
-            RocketMQError::Internal(format!(
-                "BrokerAddressResolver: Make sure the specified clusterName exists or the nameserver which connected \
-                 to is correct. Cluster: {}",
-                cluster_name
-            ))
-        })?;
+        let broker_names = cluster_addr_table
+            .get(cluster_name)
+            .ok_or_else(|| errors::cluster_not_found(cluster_name))?;
         let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("BrokerAddressResolver: No broker address table available from nameserver.".into())
+            errors::broker_metadata_unavailable("broker address table is unavailable from nameserver")
         })?;
 
         let mut all_addrs = Vec::new();
@@ -142,19 +122,15 @@ impl BrokerAddressResolver {
         let mut master_and_slave_map = HashMap::new();
 
         let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("BrokerAddressResolver: No cluster address table available from nameserver.".into())
+            errors::cluster_metadata_unavailable("cluster address table is unavailable from nameserver")
         })?;
 
-        let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
-            RocketMQError::Internal(format!(
-                "BrokerAddressResolver: Make sure the specified clusterName exists or the nameserver which connected \
-                 to is correct. Cluster: {}",
-                cluster_name
-            ))
-        })?;
+        let broker_names = cluster_addr_table
+            .get(cluster_name)
+            .ok_or_else(|| errors::cluster_not_found(cluster_name))?;
 
         let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("BrokerAddressResolver: No broker address table available from nameserver.".into())
+            errors::broker_metadata_unavailable("broker address table is unavailable from nameserver")
         })?;
 
         for broker_name in broker_names {
@@ -196,6 +172,7 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
 
+    use rocketmq_error::ErrorKind;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 
     use super::*;
@@ -228,6 +205,24 @@ mod tests {
         let result = BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, "DefaultCluster").unwrap();
 
         assert_eq!(result[0].as_str(), "192.168.1.1:10911");
+    }
+
+    #[test]
+    fn missing_cluster_table_uses_typed_admin_error() {
+        let cluster_info = ClusterInfo::new(None, None);
+        let error =
+            BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, "DefaultCluster").unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::ConfigInvalidValue);
+    }
+
+    #[test]
+    fn missing_broker_name_uses_typed_admin_error() {
+        let cluster_info = create_test_cluster_info();
+        let error =
+            BrokerAddressResolver::fetch_master_addr_by_broker_name(&cluster_info, "missing-broker").unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::BrokerNotFound);
     }
 
     #[test]

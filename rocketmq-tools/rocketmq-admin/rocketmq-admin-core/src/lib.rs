@@ -35,6 +35,7 @@ pub mod core {
     pub mod container;
     pub mod controller;
     pub mod error_view;
+    pub(crate) mod errors;
     pub mod export_data;
     pub mod ha;
     pub mod lite;
