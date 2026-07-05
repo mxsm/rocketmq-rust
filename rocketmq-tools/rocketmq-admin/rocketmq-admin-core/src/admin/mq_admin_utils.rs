@@ -18,7 +18,6 @@ use std::collections::HashSet;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::config::TopicConfig;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
@@ -29,6 +28,7 @@ use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_rust::ArcMut;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use crate::core::errors;
 
 pub struct MQAdminUtils {}
 impl MQAdminUtils {
@@ -38,9 +38,7 @@ impl MQAdminUtils {
     ) -> RocketMQResult<HashSet<CheetahString>> {
         let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await?;
         if cluster_info.cluster_addr_table.is_none() {
-            return Err(rocketmq_error::RocketMQError::Internal(
-                "The Cluster info is empty".to_string(),
-            ));
+            return Err(errors::cluster_metadata_unavailable("cluster address table is empty"));
         } else if let Some(c_table) = &cluster_info.cluster_addr_table {
             let mut all_brokers = HashSet::new();
             for broker in &brokers {
@@ -56,8 +54,8 @@ impl MQAdminUtils {
             }
             return Ok(all_brokers);
         }
-        Err(rocketmq_error::RocketMQError::Internal(
-            "get_all_brokers_in_same_cluster err".to_string(),
+        Err(errors::cluster_metadata_unavailable(
+            "cluster address table could not be read",
         ))
     }
     pub async fn complete_no_target_brokers(
@@ -102,12 +100,12 @@ impl MQAdminUtils {
         default_mq_admin_ext: &DefaultMQAdminExt,
         client_metadata: &ClientMetadata,
     ) -> RocketMQResult<()> {
-        let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await;
-        if let Ok(info) = &cluster_info {
-            client_metadata.refresh_cluster_info(Some(info));
-            return Ok(());
-        }
-        Err(RocketMQError::Internal("The Cluster info is empty".to_string()))
+        let cluster_info = default_mq_admin_ext
+            .examine_broker_cluster_info()
+            .await
+            .map_err(|error| errors::broker_operation_failed("examine_broker_cluster_info", error.to_string()))?;
+        client_metadata.refresh_cluster_info(Some(&cluster_info));
+        Ok(())
     }
     pub async fn get_broker_metadata(default_mq_admin_ext: &DefaultMQAdminExt) -> RocketMQResult<ClientMetadata> {
         let client_metadata = ClientMetadata::new();
@@ -118,10 +116,7 @@ impl MQAdminUtils {
         for broker in &brokers {
             let addr = client_metadata.find_master_broker_addr(broker);
             if addr.is_none() {
-                return Err(RocketMQError::Internal(format!(
-                    "Can't find addr for broker {}",
-                    broker
-                )));
+                return Err(errors::broker_not_found(format!("master address for broker {broker}")));
             }
         }
         Ok(())
@@ -277,11 +272,14 @@ impl MQAdminUtils {
 
                                     if let Some(topic_offset) = topic_offset {
                                         if topic_offset.get_max_offset() < old_leader.start_offset {
-                                            return Err(RocketMQError::Internal(format!(
-                                                "The max offset is smaller than the start offset {:?} {}",
-                                                old_leader,
-                                                topic_offset.get_max_offset()
-                                            )));
+                                            return Err(errors::topic_route_inconsistent(
+                                                topic.to_string(),
+                                                format!(
+                                                    "max offset is smaller than start offset for {:?}: {}",
+                                                    old_leader,
+                                                    topic_offset.get_max_offset()
+                                                ),
+                                            ));
                                         }
                                         new_leader.logic_offset = TopicQueueMappingUtils::block_seq_round_up(
                                             old_leader
@@ -298,10 +296,10 @@ impl MQAdminUtils {
                                             ));
                                         }
                                     } else {
-                                        return Err(RocketMQError::Internal(format!(
-                                            "Cannot get the max offset for old leader {:?}",
-                                            old_leader
-                                        )));
+                                        return Err(errors::topic_route_inconsistent(
+                                            topic.to_string(),
+                                            format!("max offset is unavailable for old leader {old_leader:?}"),
+                                        ));
                                     }
                                 }
                             }

@@ -27,6 +27,7 @@ use serde::Serialize;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
+use crate::core::errors;
 use crate::core::stable_error_code;
 use crate::core::stable_error_message;
 use crate::core::RocketMQError;
@@ -249,10 +250,10 @@ impl QueueService {
             )
             .await
             .map_err(|error| {
-                RocketMQError::Internal(format!(
-                    "QueueService: failed to query consume queue from {}: {}",
-                    broker_addr, error
-                ))
+                errors::broker_operation_failed(
+                    "query_consume_queue",
+                    format!("failed to query consume queue from {broker_addr}: {error}"),
+                )
             })?;
 
         Ok(QueryConsumeQueueResult {
@@ -277,9 +278,10 @@ impl QueueService {
         admin: &DefaultMQAdminExt,
         request: &CheckRocksdbCqWriteProgressRequest,
     ) -> RocketMQResult<CheckRocksdbCqWriteProgressResult> {
-        let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-            RocketMQError::Internal(format!("QueueService: failed to examine broker cluster info: {error}"))
-        })?;
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(|error| errors::broker_operation_failed("examine_broker_cluster_info", error.to_string()))?;
         let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() else {
             return Ok(CheckRocksdbCqWriteProgressResult {
                 cluster_found: false,
@@ -296,7 +298,7 @@ impl QueueService {
         };
 
         let Some(broker_addr_table) = cluster_info.broker_addr_table.as_ref() else {
-            return Err(RocketMQError::Internal("brokerAddrTable is empty".into()));
+            return Err(errors::broker_metadata_unavailable("broker address table is empty"));
         };
 
         let mut broker_names = cluster_broker_names.iter().cloned().collect::<Vec<_>>();
@@ -341,14 +343,16 @@ async fn resolve_topic_master_broker(
     admin: &DefaultMQAdminExt,
     topic: &CheetahString,
 ) -> RocketMQResult<CheetahString> {
-    let topic_route_data = admin.examine_topic_route_info(topic.clone()).await.map_err(|error| {
-        RocketMQError::Internal(format!("QueueService: failed to examine topic route info: {error}"))
-    })?;
+    let topic_route_data = admin
+        .examine_topic_route_info(topic.clone())
+        .await
+        .map_err(|error| errors::broker_operation_failed("examine_topic_route_info", error.to_string()))?;
 
-    let topic_route_data = topic_route_data.ok_or_else(|| RocketMQError::Internal("No topic route data!".into()))?;
+    let topic_route_data = topic_route_data.ok_or_else(|| errors::topic_route_not_found(topic.to_string()))?;
     if topic_route_data.broker_datas.is_empty() {
-        return Err(RocketMQError::Internal(
-            "No topic route data! broker_datas is empty".into(),
+        return Err(errors::topic_route_inconsistent(
+            topic.to_string(),
+            "broker data list is empty",
         ));
     }
 
@@ -356,7 +360,7 @@ async fn resolve_topic_master_broker(
         .broker_addrs()
         .get(&0u64)
         .cloned()
-        .ok_or_else(|| RocketMQError::Internal("No master broker address found in topic route data".into()))
+        .ok_or_else(|| errors::broker_not_found(format!("master broker for topic {topic}")))
 }
 
 fn admin_builder_with_rpc_hook(builder: AdminBuilder, rpc_hook: Option<Arc<dyn RPCHook>>) -> AdminBuilder {
