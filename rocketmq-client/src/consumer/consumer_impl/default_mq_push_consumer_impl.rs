@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::error::Error;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -1742,7 +1741,7 @@ impl DefaultMQPushConsumerImpl {
         impl AckCallback for DefaultAckCallback {
             fn on_success(&self, _ack_result: AckResult) {}
 
-            fn on_exception(&self, _e: Box<dyn Error>) {}
+            fn on_exception(&self, _e: rocketmq_error::RocketMQError) {}
         }
         let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
             error!("ackAsync error: MQClientAPIImpl is not initialized");

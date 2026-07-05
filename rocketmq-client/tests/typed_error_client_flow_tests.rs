@@ -38,10 +38,15 @@ fn client_public_api_does_not_export_dead_error_module() {
 
 #[test]
 fn client_callback_error_paths_use_typed_rocketmq_error() {
+    let ack_callback = include_str!("../src/consumer/ack_callback.rs");
     let pull_callback = include_str!("../src/consumer/pull_callback.rs");
     let pop_callback = include_str!("../src/consumer/pop_callback.rs");
     let request_callback = include_str!("../src/producer/request_callback.rs");
     let request_future = include_str!("../src/producer/request_response_future.rs");
+
+    assert!(ack_callback.contains("fn on_exception(&self, e: RocketMQError)"));
+    assert!(ack_callback.contains("Result<(), RocketMQError>"));
+    assert!(!ack_callback.contains("Box<dyn std::error::Error"));
 
     assert!(pull_callback.contains("fn on_exception(&mut self, e: RocketMQError)"));
     assert!(pull_callback.contains("fn broker_response_code(error: &RocketMQError)"));
@@ -56,4 +61,15 @@ fn client_callback_error_paths_use_typed_rocketmq_error() {
     assert!(request_callback.contains("Option<&RocketMQError>"));
     assert!(request_future.contains("type RequestCause = Arc<RocketMQError>"));
     assert!(!request_future.contains("type RequestCause = Arc<dyn"));
+}
+
+#[test]
+fn client_hook_contexts_store_typed_errors() {
+    let send_message_context = include_str!("../src/hook/send_message_context.rs");
+    let check_forbidden_context = include_str!("../src/hook/check_forbidden_context.rs");
+
+    assert!(send_message_context.contains("pub exception: Option<Arc<RocketMQError>>"));
+    assert!(check_forbidden_context.contains("pub exception: Option<RocketMQError>"));
+    assert!(!send_message_context.contains("Box<dyn Error + Send + Sync>"));
+    assert!(!check_forbidden_context.contains("Box<dyn std::error::Error + Send + Sync>"));
 }

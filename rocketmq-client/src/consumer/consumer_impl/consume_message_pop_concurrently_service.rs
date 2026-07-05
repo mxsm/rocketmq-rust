@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -565,7 +564,7 @@ impl ConsumeMessagePopConcurrentlyService {
         impl AckCallback for DefaultAckCallback {
             fn on_success(&self, ack_result: AckResult) {}
 
-            fn on_exception(&self, e: Box<dyn Error>) {
+            fn on_exception(&self, e: rocketmq_error::RocketMQError) {
                 error!("changePopInvisibleTime exception: {}", e);
             }
         }

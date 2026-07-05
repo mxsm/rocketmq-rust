@@ -1729,7 +1729,7 @@ impl DefaultMQProducerImpl {
             Err(err) => {
                 if self.has_send_message_hook() {
                     if let Some(smc) = send_message_context.as_mut() {
-                        smc.exception = Some(Self::boxed_context_error(err.to_string()));
+                        smc.exception = Some(Self::context_error(err.to_string()));
                     }
                     self.execute_send_message_hook_after(&send_message_context);
                 }
@@ -1760,8 +1760,8 @@ impl DefaultMQProducerImpl {
         !self.send_message_hook_list.is_empty()
     }
 
-    fn boxed_context_error(message: String) -> Arc<Box<dyn std::error::Error + Send + Sync>> {
-        Arc::new(Box::new(std::io::Error::other(message)))
+    fn context_error(message: String) -> Arc<RocketMQError> {
+        Arc::new(RocketMQError::response_process_failed("send_message", message))
     }
 
     #[inline]
@@ -3838,7 +3838,7 @@ mod tests {
         });
         producer.send_message_hook_list = vec![hook].into();
         let context = Some(SendMessageContext {
-            exception: Some(DefaultMQProducerImpl::boxed_context_error(
+            exception: Some(DefaultMQProducerImpl::context_error(
                 "sendKernelImpl exception".to_string(),
             )),
             ..Default::default()

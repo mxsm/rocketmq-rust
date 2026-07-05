@@ -1526,7 +1526,7 @@ impl AckCallback for AckResultCallback {
         self.send(Ok(ack_result));
     }
 
-    fn on_exception(&self, error: Box<dyn std::error::Error>) {
+    fn on_exception(&self, error: rocketmq_error::RocketMQError) {
         self.send(Err(ProxyError::Transport {
             message: error.to_string(),
         }));

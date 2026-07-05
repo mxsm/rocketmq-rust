@@ -156,7 +156,7 @@ struct DefaultAckCallback;
 impl crate::consumer::ack_callback::AckCallback for DefaultAckCallback {
     fn on_success(&self, _ack_result: AckResult) {}
 
-    fn on_exception(&self, e: Box<dyn std::error::Error>) {
+    fn on_exception(&self, e: rocketmq_error::RocketMQError) {
         error!("change_invisible_time callback exception: {}", e);
     }
 }

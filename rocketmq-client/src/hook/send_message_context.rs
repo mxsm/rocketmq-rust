@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::error::Error;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_error::RocketMQError;
 use rocketmq_rust::ArcMut;
 
 use crate::implementation::communication_mode::CommunicationMode;
@@ -55,7 +55,7 @@ pub struct SendMessageContext<'a> {
     pub born_host: Option<CheetahString>,
     pub communication_mode: Option<CommunicationMode>,
     pub send_result: Option<&'a SendResult>,
-    pub exception: Option<Arc<Box<dyn Error + Send + Sync>>>,
+    pub exception: Option<Arc<RocketMQError>>,
     pub mq_trace_context: Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
     pub trace_start_time: Option<u64>,
     pub props: HashMap<CheetahString, CheetahString>,
