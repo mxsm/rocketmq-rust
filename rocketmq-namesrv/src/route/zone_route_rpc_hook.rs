@@ -218,6 +218,14 @@ mod tests {
         SocketAddr::from(([127, 0, 0, 1], 9876))
     }
 
+    fn assert_hook_keeps_response_body(request: RemotingCommand, mut response: RemotingCommand) {
+        let original_body = response.body().cloned();
+        ZoneRouteRPCHook
+            .do_after_response(remote_addr(), &request, &mut response)
+            .unwrap();
+        assert_eq!(response.body(), original_body.as_ref());
+    }
+
     #[test]
     fn do_after_response_preserves_standard_json_for_accept_standard_json_only_requests() {
         let hook = ZoneRouteRPCHook;
@@ -262,5 +270,78 @@ mod tests {
 
         let decoded = TopicRouteData::decode(response.body().expect("legacy response should keep a body")).unwrap();
         assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn do_after_response_leaves_body_for_non_route_requests() {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo);
+        let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+            .set_body(sample_topic_route_data().encode().unwrap());
+
+        assert_hook_keeps_response_body(request, response);
+    }
+
+    #[test]
+    fn do_after_response_leaves_body_for_non_success_responses() {
+        let request = zone_route_request(Some(false), RocketMqVersion::V4_9_3 as i32);
+        let response = RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
+            .set_body(sample_topic_route_data().encode().unwrap());
+
+        assert_hook_keeps_response_body(request, response);
+    }
+
+    #[test]
+    fn do_after_response_leaves_body_when_zone_mode_is_missing_or_false() {
+        let mut missing_zone_mode = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new("TestTopic", None),
+        )
+        .set_version(RocketMqVersion::V4_9_3 as i32);
+        missing_zone_mode.make_custom_header_to_net();
+        missing_zone_mode.add_ext_field(mix_all::ZONE_NAME, "zone-a");
+        let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+            .set_body(sample_topic_route_data().encode().unwrap());
+        assert_hook_keeps_response_body(missing_zone_mode, response);
+
+        let mut disabled_zone_mode = zone_route_request(Some(false), RocketMqVersion::V4_9_3 as i32);
+        disabled_zone_mode.add_ext_field(mix_all::ZONE_MODE, "false");
+        let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+            .set_body(sample_topic_route_data().encode().unwrap());
+        assert_hook_keeps_response_body(disabled_zone_mode, response);
+    }
+
+    #[test]
+    fn do_after_response_leaves_body_when_zone_name_is_missing_or_empty() {
+        let mut missing_zone_name = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new("TestTopic", None),
+        )
+        .set_version(RocketMqVersion::V4_9_3 as i32);
+        missing_zone_name.make_custom_header_to_net();
+        missing_zone_name.add_ext_field(mix_all::ZONE_MODE, "true");
+        let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+            .set_body(sample_topic_route_data().encode().unwrap());
+        assert_hook_keeps_response_body(missing_zone_name, response);
+
+        let mut empty_zone_name = zone_route_request(Some(false), RocketMqVersion::V4_9_3 as i32);
+        empty_zone_name.add_ext_field(mix_all::ZONE_NAME, "");
+        let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+            .set_body(sample_topic_route_data().encode().unwrap());
+        assert_hook_keeps_response_body(empty_zone_name, response);
+    }
+
+    #[test]
+    fn filter_by_zone_name_matches_zone_case_insensitively() {
+        let mut topic_route_data = sample_topic_route_data();
+        topic_route_data.broker_datas[0]
+            .broker_addrs_mut()
+            .insert(MASTER_ID, CheetahString::from("10.0.0.1:10911"));
+
+        filter_by_zone_name(&mut topic_route_data, &CheetahString::from("ZONE-A"));
+
+        assert_eq!(topic_route_data.broker_datas.len(), 1);
+        assert_eq!(topic_route_data.broker_datas[0].broker_name(), "broker-a");
+        assert_eq!(topic_route_data.queue_datas.len(), 1);
+        assert_eq!(topic_route_data.queue_datas[0].broker_name, "broker-a");
     }
 }
