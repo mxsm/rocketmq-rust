@@ -19,6 +19,11 @@ use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::store_error::StoreError;
+
+fn group_commit_invalid_state(reason: impl Into<String>) -> StoreError {
+    StoreError::InvalidState(format!("group commit response {}", reason.into()))
+}
 
 pub struct GroupCommitResponse {
     flush_ok_receiver: Option<oneshot::Receiver<PutMessageStatus>>,
@@ -37,21 +42,19 @@ impl GroupCommitResponse {
     }
 
     /// Get a future that resolves when the flush operation completes
-    pub async fn wait_for_result(mut self) -> Result<PutMessageStatus, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn wait_for_result(mut self) -> Result<PutMessageStatus, StoreError> {
         if let Some(receiver) = self.flush_ok_receiver.take() {
             match receiver.await {
                 Ok(status) => Ok(status),
-                Err(_) => Err("Sender was dropped before sending result".into()),
+                Err(_) => Err(group_commit_invalid_state("sender dropped before sending result")),
             }
         } else {
-            Err("Receiver was already consumed".into())
+            Err(group_commit_invalid_state("receiver was already consumed"))
         }
     }
 
     /// Get a future that resolves when the flush operation completes with timeout
-    pub async fn wait_for_result_with_timeout(
-        &mut self,
-    ) -> Result<PutMessageStatus, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn wait_for_result_with_timeout(&mut self) -> Result<PutMessageStatus, StoreError> {
         if let Some(receiver) = self.flush_ok_receiver.take() {
             let timeout_duration = if self.deadline > Instant::now() {
                 self.deadline - Instant::now()
@@ -61,11 +64,11 @@ impl GroupCommitResponse {
 
             match tokio::time::timeout(timeout_duration, receiver).await {
                 Ok(Ok(status)) => Ok(status),
-                Ok(Err(_)) => Err("Sender was dropped before sending result".into()),
+                Ok(Err(_)) => Err(group_commit_invalid_state("sender dropped before sending result")),
                 Err(_) => Ok(PutMessageStatus::FlushDiskTimeout),
             }
         } else {
-            Err("Receiver was already consumed".into())
+            Err(group_commit_invalid_state("receiver was already consumed"))
         }
     }
 }
@@ -198,5 +201,25 @@ mod tests {
 
         assert!(elapsed >= Duration::from_millis(90)); // Allow some tolerance
         assert!(matches!(result, Ok(PutMessageStatus::FlushDiskTimeout)));
+    }
+
+    #[tokio::test]
+    async fn wait_for_result_returns_typed_error_after_receiver_consumed() {
+        let (_request, mut response) = GroupCommitRequest::new(12345, 0);
+        let first = response.wait_for_result_with_timeout().await;
+        let second = response.wait_for_result_with_timeout().await;
+
+        assert!(matches!(first, Ok(PutMessageStatus::FlushDiskTimeout)));
+        assert!(
+            matches!(second, Err(StoreError::InvalidState(message)) if message.contains("receiver was already consumed"))
+        );
+    }
+
+    #[test]
+    fn group_commit_response_uses_typed_errors() {
+        let source = include_str!("group_commit_request.rs");
+
+        assert!(source.contains("Result<PutMessageStatus, StoreError>"));
+        assert!(!source.contains(concat!("Box<dyn std::error::", "Error")));
     }
 }
