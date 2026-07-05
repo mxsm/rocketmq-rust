@@ -884,6 +884,71 @@ def check_redaction_guards() -> list[Finding]:
     return findings
 
 
+def current_error_codes() -> list[str]:
+    kind_path = ROOT / "rocketmq-error" / "src" / "kind.rs"
+    match = re.search(
+        r"pub const fn code\(self\).*?ErrorCode::new\(match self \{(.*?)\}\)\s*\}",
+        read_text(kind_path),
+        re.DOTALL,
+    )
+    if match is None:
+        return []
+    return re.findall(r'Self::\w+\s*=>\s*"([^"]+)"', match.group(1))
+
+
+def check_error_governance_artifacts() -> list[Finding]:
+    required_tokens = {
+        ROOT / "scripts" / "check-error-hygiene.ps1": [
+            "error_architecture_guard.py",
+            "python3",
+            "python",
+        ],
+        ROOT / "docs" / "07-error-hygiene-allowlist.md": [
+            "Current Path Allowlist",
+            "ERROR_ARCHITECTURE_GUARD_OK all",
+            "scripts/check-error-hygiene.ps1",
+        ],
+        ROOT / "docs" / "error-codes.md": [
+            "ErrorKind",
+            "ErrorSpec",
+            "BoundaryErrorView",
+            "Update Checklist",
+        ],
+        ROOT / "CONTRIBUTING.md": [
+            "### Error architecture",
+            "python scripts/error_architecture_guard.py",
+            r".\scripts\check-error-hygiene.ps1",
+        ],
+    }
+    findings: list[Finding] = []
+    for path, needles in required_tokens.items():
+        if not path.exists():
+            findings.append(Finding(path, 1, "required error governance artifact is missing"))
+            continue
+        text = read_text(path)
+        for needle in needles:
+            if needle not in text:
+                findings.append(Finding(path, 1, f"required error governance token missing: {needle}"))
+
+    error_codes_doc = ROOT / "docs" / "error-codes.md"
+    if error_codes_doc.exists():
+        text = read_text(error_codes_doc)
+        codes = current_error_codes()
+        if not codes:
+            findings.append(
+                Finding(
+                    ROOT / "rocketmq-error" / "src" / "kind.rs",
+                    1,
+                    "unable to parse stable error codes for documentation coverage",
+                )
+            )
+        for code in codes:
+            if f"`{code}`" not in text:
+                findings.append(Finding(error_codes_doc, 1, f"stable error code missing from docs: {code}"))
+
+    return findings
+
+
 def run() -> int:
     checks = [
         ("core public surface", check_error_and_common_public_surface),
@@ -899,6 +964,7 @@ def run() -> int:
         ("internal error allowlist", check_internal_error_allowlist),
         ("anyhow result allowlist", check_anyhow_result_allowlist),
         ("redaction guards", check_redaction_guards),
+        ("error governance artifacts", check_error_governance_artifacts),
     ]
     all_findings: list[Finding] = []
     for name, check in checks:

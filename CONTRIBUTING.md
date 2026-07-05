@@ -85,3 +85,29 @@ cargo test
   cargo install taplo-cli --locked
   taplo format -o align_entries=true **/Cargo.toml
   ```
+
+### Error architecture
+
+When adding or changing an error that can cross crate, process, protocol, or CLI
+boundaries:
+
+- Prefer `RocketMQResult` or a domain-specific result type in library code.
+- Do not add legacy aliases such as `RocketmqError`, `LegacyRocketMQResult`, or `LegacyResult`.
+- Do not expose `anyhow::Result` from library or public business APIs.
+- Add or reuse an `ErrorKind` and one `ErrorSpec` entry before exposing a new public error.
+- Use `BoundaryErrorView` or `ErrorSpec` protocol primitives for remoting, gRPC, HTTP, and CLI responses.
+- Keep sensitive values in `Sensitive<T>` or redacted `ErrorContext` fields.
+- Preserve source chains with typed wrappers and `#[source]` instead of early stringification.
+- Keep `RocketMQError::Internal` for audited internal invariants, not ordinary business failures.
+
+Run the error hygiene guard before opening a pull request:
+
+```shell
+python scripts/error_architecture_guard.py
+```
+
+On Windows, the same guard is available through:
+
+```powershell
+.\scripts\check-error-hygiene.ps1
+```
