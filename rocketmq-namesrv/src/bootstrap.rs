@@ -385,6 +385,13 @@ fn namesrv_task_group_unavailable(operation: &'static str) -> RocketMQError {
     )))
 }
 
+fn namesrv_runtime_state_error(message: impl Into<String>) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "NameServer runtime state: {}",
+        message.into()
+    )))
+}
+
 impl NameServerRuntime {
     /// Get current runtime state
     #[inline]
@@ -410,7 +417,7 @@ impl NameServerRuntime {
                 next.name()
             );
             error!("{}", error_msg);
-            return Err(RocketMQError::Internal(error_msg));
+            return Err(namesrv_runtime_state_error(error_msg));
         }
 
         // Perform atomic state transition
@@ -436,7 +443,7 @@ impl NameServerRuntime {
                 current.name()
             );
             error!("{}", error_msg);
-            return Err(RocketMQError::Internal(error_msg));
+            return Err(namesrv_runtime_state_error(error_msg));
         }
 
         Ok(())
@@ -530,8 +537,9 @@ impl NameServerRuntime {
             let controller_manager = ArcMut::new(ControllerManager::new(controller_config).await?);
             let initialized = ControllerManager::initialize(controller_manager.clone()).await?;
             if !initialized {
-                return Err(RocketMQError::Internal(
-                    "controller manager initialization returned false".to_string(),
+                return Err(namesrv_startup_failed(
+                    "initialize embedded controller",
+                    "controller manager initialization returned false",
                 ));
             }
             self.inner.controller_manager = Some(controller_manager);
@@ -1722,6 +1730,26 @@ mod tests {
 
         assert_eq!(error.kind(), ErrorKind::Service);
         assert!(error.to_string().contains("task group is unavailable"));
+    }
+
+    #[test]
+    fn namesrv_runtime_state_error_uses_service_error_kind() {
+        let error = namesrv_runtime_state_error("invalid Created -> Running transition");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+        assert!(error.to_string().contains("NameServer runtime state"));
+    }
+
+    #[test]
+    fn invalid_runtime_transition_uses_service_error_kind() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let error = bootstrap
+            .name_server_runtime
+            .transition_to(RuntimeState::Running)
+            .expect_err("Created -> Running should be invalid");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+        assert!(error.to_string().contains("Invalid state transition"));
     }
 
     #[tokio::test]
