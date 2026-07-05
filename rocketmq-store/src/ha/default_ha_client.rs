@@ -19,7 +19,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::bail;
 use bytes::BufMut;
 use bytes::BytesMut;
 use futures_util::SinkExt;
@@ -46,7 +45,9 @@ use crate::ha::default_ha_connection::transfer_header_size;
 use crate::ha::flow_monitor::FlowMonitor;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
+use crate::ha::HAConnectionError;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
+use crate::store_error::StoreError;
 
 /// Report header buffer size. Schema: slaveMaxOffset. Format:
 /// ┌───────────────────────────────────────────────┐
@@ -61,6 +62,8 @@ pub const CONTROLLER_REPORT_HEADER_SIZE: usize = 16;
 
 /// Maximum read buffer size (4MB)
 const READ_MAX_BUFFER_SIZE: usize = 1024 * 1024 * 4;
+
+type HAClientTaskResult<T> = Result<T, HAClientError>;
 
 /// Default HA Client implementation using bytes crate
 pub struct DefaultHAClient {
@@ -348,7 +351,7 @@ impl HAClient for DefaultHAClient {
                             let (kick_tx, kick_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
                             // use reader/writer to send errors back to main loop
-                            let (err_tx, mut err_rx) = tokio::sync::mpsc::unbounded_channel::<anyhow::Error>();
+                            let (err_tx, mut err_rx) = tokio::sync::mpsc::unbounded_channel::<HAClientError>();
                             let connection_group = service_loop_group.child("ha-client-connection");
 
                             // reader task: read data from master and dispatch to message store
@@ -606,7 +609,7 @@ struct ReaderTask {
     buf: BytesMut,
     dispatch_pos: usize,
     offset_tx: tokio::sync::mpsc::UnboundedSender<i64>,
-    err_tx: tokio::sync::mpsc::UnboundedSender<anyhow::Error>,
+    err_tx: tokio::sync::mpsc::UnboundedSender<HAClientError>,
     store: ArcMut<LocalFileMessageStore>,
     flow_monitor: Arc<FlowMonitor>,
     /// Last time slave read data from master
@@ -615,7 +618,7 @@ struct ReaderTask {
 }
 
 impl ReaderTask {
-    async fn run(&mut self) -> anyhow::Result<()> {
+    async fn run(&mut self) -> HAClientTaskResult<()> {
         loop {
             match self.reader.next().await {
                 Some(Ok(bytes)) => {
@@ -625,21 +628,21 @@ impl ReaderTask {
                     self.buf.extend_from_slice(&bytes);
 
                     if !self.dispatch_read().await? {
-                        bail!("dispatchReadRequest error");
+                        return Err(HAClientError::Service("dispatchReadRequest error".to_string()));
                     }
                     self.last_read_timestamp.store(current_millis(), Ordering::SeqCst);
                 }
                 Some(Err(e)) => {
-                    bail!(e);
+                    return Err(HAClientError::Io(e));
                 }
                 None => {
-                    bail!("read EOF");
+                    return Err(HAClientError::Connection("read EOF".to_string()));
                 }
             }
         }
     }
 
-    async fn dispatch_read(&mut self) -> anyhow::Result<bool> {
+    async fn dispatch_read(&mut self) -> HAClientTaskResult<bool> {
         loop {
             let header_size = transfer_header_size(self.enable_controller_mode);
             let diff = self.buf.len().saturating_sub(self.dispatch_pos);
@@ -657,11 +660,10 @@ impl ReaderTask {
 
             let slave_phy_offset = self.store.get_max_phy_offset();
             if slave_phy_offset != 0 && slave_phy_offset != master_phy_offset {
-                bail!(
+                return Err(HAClientError::Service(format!(
                     "master pushed offset != slave max, slave: {}, master: {}",
-                    slave_phy_offset,
-                    master_phy_offset
-                );
+                    slave_phy_offset, master_phy_offset
+                )));
             }
 
             if diff < header_size + body_size {
@@ -739,7 +741,7 @@ struct WriterTask {
 }
 
 impl WriterTask {
-    async fn run(&mut self) -> anyhow::Result<()> {
+    async fn run(&mut self) -> HAClientTaskResult<()> {
         let mut ticker = interval(Duration::from_millis(self.cfg.heartbeat_interval_ms.max(1000)));
 
         loop {
@@ -762,7 +764,7 @@ impl WriterTask {
         }
     }
 
-    async fn send_offset(&mut self, max_off: i64) -> anyhow::Result<()> {
+    async fn send_offset(&mut self, max_off: i64) -> HAClientTaskResult<()> {
         let broker_id = self.reported_broker_id_ref.load(Ordering::Relaxed);
         let bytes = Self::encode_offset_report(
             &mut self.report_offset,
@@ -795,6 +797,10 @@ impl WriterTask {
 pub enum HAClientError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error(transparent)]
+    HAConnection(#[from] HAConnectionError),
     #[error("Connection error: {0}")]
     Connection(String),
     #[error("Service error: {0}")]
