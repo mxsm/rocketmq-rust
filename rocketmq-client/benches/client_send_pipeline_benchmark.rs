@@ -44,6 +44,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -352,7 +353,7 @@ fn bench_async_backpressure_envelope(c: &mut Criterion) {
 fn bench_callback_dispatch(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("benchmark runtime should start");
     let send_result = SendResult::default();
-    let callback: ArcSendCallback = Arc::new(|result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
+    let callback: ArcSendCallback = Arc::new(|result: Option<&SendResult>, error: Option<&RocketMQError>| {
         black_box(result.is_some());
         black_box(error.is_some());
     });

@@ -238,7 +238,7 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
         if let Err(error) = producer
             .send_with_callback_timeout(
                 message(&config.topic, "RustAsyncBenchmark", body),
-                move |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
+                move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
                     let elapsed_ms = elapsed_ms_u64(begin.elapsed());
                     total_rt_ms_inner.fetch_add(elapsed_ms, Ordering::Relaxed);
                     update_max(&max_rt_ms_inner, elapsed_ms);

@@ -43,6 +43,7 @@ fn client_callback_error_paths_use_typed_rocketmq_error() {
     let pop_callback = include_str!("../src/consumer/pop_callback.rs");
     let request_callback = include_str!("../src/producer/request_callback.rs");
     let request_future = include_str!("../src/producer/request_response_future.rs");
+    let send_callback = include_str!("../src/producer/send_callback.rs");
 
     assert!(ack_callback.contains("fn on_exception(&self, e: RocketMQError)"));
     assert!(ack_callback.contains("Result<(), RocketMQError>"));
@@ -61,6 +62,10 @@ fn client_callback_error_paths_use_typed_rocketmq_error() {
     assert!(request_callback.contains("Option<&RocketMQError>"));
     assert!(request_future.contains("type RequestCause = Arc<RocketMQError>"));
     assert!(!request_future.contains("type RequestCause = Arc<dyn"));
+
+    assert!(send_callback.contains("fn on_exception(&self, error: &RocketMQError)"));
+    assert!(send_callback.contains("Option<&RocketMQError>"));
+    assert!(!send_callback.contains("Option<&dyn std::error::Error>"));
 }
 
 #[test]

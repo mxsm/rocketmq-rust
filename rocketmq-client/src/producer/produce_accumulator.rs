@@ -34,6 +34,7 @@ use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_error::RocketMQError;
 use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -594,7 +595,7 @@ impl ProduceAccumulator {
         let callbacks_for_send_error = callbacks.clone();
 
         // Create combined callback
-        let combined_callback = move |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
+        let combined_callback = move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
             release_hold_size(&callback_currently_hold_size, total_size);
             // Invoke all registered callbacks
             if let Some(result) = result {
@@ -1031,12 +1032,10 @@ mod tests {
             MessageAccumulation::new(aggregate_key.clone(), ArcMut::new(DefaultMQProducer::default()));
         let callback_invoked = Arc::new(AtomicBool::new(false));
         let callback_invoked_for_callback = callback_invoked.clone();
-        let callback: ArcSendCallback = Arc::new(
-            move |_result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                assert!(error.is_some());
-                callback_invoked_for_callback.store(true, Ordering::Release);
-            },
-        );
+        let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
+            assert!(error.is_some());
+            callback_invoked_for_callback.store(true, Ordering::Release);
+        });
         let message = Message::builder()
             .topic("test-topic")
             .body_slice(b"hello")
@@ -1972,7 +1971,7 @@ impl GuardForAsyncSendService {
         let callbacks_for_send_error = callbacks.clone();
 
         // Create combined callback
-        let combined_callback = move |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
+        let combined_callback = move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
             release_hold_size(&callback_currently_hold_size, total_size);
             if let Some(result) = result {
                 match split_send_results(result, callbacks.len()) {

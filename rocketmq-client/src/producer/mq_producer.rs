@@ -19,6 +19,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_error::RocketMQError;
 
 use crate::base::query_result::QueryResult;
 use crate::producer::send_callback::ArcSendCallback;
@@ -173,7 +174,7 @@ pub trait MQProducer {
     async fn send_with_callback<M, F>(&mut self, msg: M, send_callback: F) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
 
     /// Sends a message with a callback and a timeout.
     ///
@@ -197,7 +198,7 @@ pub trait MQProducer {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync;
 
     /// Sends a message without waiting for a response.
@@ -290,7 +291,7 @@ pub trait MQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
 
     /// Sends a message to a specific message queue with a callback and a timeout.
     ///
@@ -318,7 +319,7 @@ pub trait MQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
 
     /// Sends a message to a specific message queue without waiting for a response.
     ///
@@ -596,7 +597,7 @@ pub trait MQProducer {
     async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
 
     /// Sends a batch of messages with a callback and a timeout.
     ///
@@ -617,7 +618,7 @@ pub trait MQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
 
     /// Sends a batch of messages to a specific message queue with a callback.
     ///
@@ -638,7 +639,7 @@ pub trait MQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
 
     /// Sends a batch of messages to a specific message queue with a callback and a timeout.
     ///
@@ -661,7 +662,7 @@ pub trait MQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
 
     /// Sends a request message.
     ///

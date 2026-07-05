@@ -29,6 +29,7 @@ use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::rocketmq;
 
@@ -234,7 +235,7 @@ async fn batch_send_with_callback(producer: &mut DefaultMQProducer) -> RocketMQR
     producer
         .send_batch_with_callback(
             messages,
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+            |result: Option<&SendResult>, error: Option<&RocketMQError>| match (result, error) {
                 (Some(r), None) => println!("   Callback: Success - {:?}", r),
                 (None, Some(e)) => println!("   Callback: Error - {}", e),
                 _ => println!("   Callback: Unknown state"),
@@ -270,7 +271,7 @@ async fn batch_send_with_callback_timeout(producer: &mut DefaultMQProducer) -> R
     producer
         .send_batch_with_callback_timeout(
             messages,
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+            |result: Option<&SendResult>, error: Option<&RocketMQError>| match (result, error) {
                 (Some(r), None) => println!("   Callback: Success - {:?}", r),
                 (None, Some(e)) => println!("   Callback: Error - {}", e),
                 _ => println!("   Callback: Unknown state"),
@@ -311,7 +312,7 @@ async fn batch_send_to_queue_with_callback(
         .send_batch_to_queue_with_callback(
             messages,
             queue,
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+            |result: Option<&SendResult>, error: Option<&RocketMQError>| match (result, error) {
                 (Some(r), None) => println!("   Callback: Success - {:?}", r),
                 (None, Some(e)) => println!("   Callback: Error - {}", e),
                 _ => println!("   Callback: Unknown state"),
@@ -354,7 +355,7 @@ async fn batch_send_to_queue_with_callback_timeout(
         .send_batch_to_queue_with_callback_timeout(
             messages,
             queue,
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+            |result: Option<&SendResult>, error: Option<&RocketMQError>| match (result, error) {
                 (Some(r), None) => println!("   Callback: Success - {:?}", r),
                 (None, Some(e)) => println!("   Callback: Error - {}", e),
                 _ => println!("   Callback: Unknown state"),
