@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
+use rocketmq_error::UnifiedServiceError;
 use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -29,6 +30,8 @@ use crate::file::TieredFlatFileStore;
 use crate::provider::TieredStoreProvider;
 use crate::runtime;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
+
+type DispatcherTaskErrorSlot = Arc<tokio::sync::Mutex<Option<RocketMQError>>>;
 
 #[allow(async_fn_in_trait)]
 pub trait TieredDispatcher: Send + Sync {
@@ -51,7 +54,7 @@ where
     shutdown: CancellationToken,
     task_group: tokio::sync::Mutex<Option<rocketmq_runtime::TaskGroup>>,
     parent_task_group: Option<TaskGroup>,
-    task_error: Arc<tokio::sync::Mutex<Option<String>>>,
+    task_error: DispatcherTaskErrorSlot,
     metrics: Arc<TieredStoreMetrics>,
 }
 
@@ -155,9 +158,8 @@ where
         } else {
             ShutdownReport::new("rocketmq-tieredstore.dispatcher", std::time::Duration::ZERO)
         };
-        if let Some(error) = self.task_error.lock().await.take() {
-            return Err(RocketMQError::Internal(error));
-        }
+        let task_error = self.task_error.lock().await.take();
+        dispatcher_task_result(task_error)?;
         Ok(report)
     }
 
@@ -209,7 +211,7 @@ where
         let _permit = permits
             .acquire_owned()
             .await
-            .map_err(|err| RocketMQError::Internal(err.to_string()))?;
+            .map_err(|_| RocketMQError::Service(UnifiedServiceError::Interrupted))?;
         let result = Self::dispatch_one_inner(flat_file_store, &request).await;
         match &result {
             Ok(()) => {
@@ -297,10 +299,10 @@ where
         task_group
             .spawn_service("tiered-dispatcher", async move {
                 if let Err(error) = Self::run(flat_file_store, receiver, permits, shutdown, metrics).await {
-                    *task_error.lock().await = Some(error.to_string());
+                    *task_error.lock().await = Some(error);
                 }
             })
-            .map_err(|error| RocketMQError::Internal(error.to_string()))?;
+            .map_err(|error| dispatcher_startup_failed("spawn dispatcher worker", error))?;
         *self.task_group.lock().await = Some(task_group);
         Ok(())
     }
@@ -311,12 +313,26 @@ where
     }
 }
 
+fn dispatcher_task_result(error: Option<RocketMQError>) -> Result<(), RocketMQError> {
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn dispatcher_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "tieredstore dispatcher {operation}: {error}"
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
     use bytes::Bytes;
+    use rocketmq_error::ErrorKind;
     use rocketmq_error::RocketMQError;
     use rocketmq_runtime::RuntimeContext;
     use tokio_util::sync::CancellationToken;
@@ -326,6 +342,23 @@ mod tests {
     use crate::file::TieredFlatFileStore;
     use crate::metadata::JsonMetadataStore;
     use crate::provider::MemoryProvider;
+
+    #[test]
+    fn dispatcher_task_result_preserves_original_error_kind() {
+        let error = dispatcher_task_result(Some(RocketMQError::illegal_argument("dispatch offset gap")))
+            .expect_err("dispatcher worker error should be propagated");
+
+        assert_eq!(error.kind(), ErrorKind::IllegalArgument);
+        assert!(error.to_string().contains("dispatch offset gap"));
+    }
+
+    #[test]
+    fn dispatcher_startup_failed_uses_service_error_kind() {
+        let error = dispatcher_startup_failed("spawn test worker", "task group closed");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+        assert!(error.to_string().contains("tieredstore dispatcher spawn test worker"));
+    }
 
     #[tokio::test]
     async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), RocketMQError> {
