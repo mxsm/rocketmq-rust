@@ -412,6 +412,7 @@ def check_required_mapping_adapters() -> list[Finding]:
     checks = {
         ROOT / "rocketmq-remoting" / "src" / "error_response.rs": [
             "error.spec().remoting.code.as_i32()",
+            "error.public_message()",
             "apply_error_to_response",
             "invalid_parameter_with_remark",
             "request_code_not_supported_with_remark",
@@ -482,6 +483,16 @@ def check_required_mapping_adapters() -> list[Finding]:
         for needle in needles:
             if needle not in text:
                 findings.append(Finding(path, 1, f"required mapping adapter token missing: {needle}"))
+        if path == ROOT / "rocketmq-remoting" / "src" / "error_response.rs":
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                if "command_from_error_with_remark(error, error.to_string())" in line:
+                    findings.append(
+                        Finding(
+                            path,
+                            line_number,
+                            "remoting default error response must use public_message(), not raw Display",
+                        )
+                    )
     return findings
 
 

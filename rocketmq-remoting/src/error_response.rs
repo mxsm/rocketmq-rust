@@ -19,7 +19,7 @@ use crate::protocol::remoting_command::RemotingCommand;
 
 /// Convert a typed RocketMQ error into a remoting response command.
 pub fn command_from_error(error: &RocketMQError) -> RemotingCommand {
-    command_from_error_with_remark(error, error.to_string())
+    command_from_error_with_remark(error, error.public_message())
 }
 
 /// Convert a typed RocketMQ error into a remoting response command and preserve
@@ -154,10 +154,21 @@ mod tests {
             ResponseCode::from(response.code()),
             ResponseCode::from(RemotingResponseCode::InvalidParameter.as_i32())
         );
-        assert!(response
-            .remark()
-            .expect("remark should be set")
-            .contains("Response decode failed"));
+        assert_eq!(
+            response.remark().map(|remark| remark.as_str()),
+            Some("Response processing failed")
+        );
+    }
+
+    #[test]
+    fn command_from_error_uses_public_remark_for_internal_errors() {
+        let response = command_from_error(&RocketMQError::Internal(
+            "password=plain-text; worker failed".to_string(),
+        ));
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert_eq!(response.remark().map(|remark| remark.as_str()), Some("Internal error"));
+        assert!(!response.remark().expect("remark should be set").contains("plain-text"));
     }
 
     #[test]
