@@ -717,11 +717,7 @@ async fn query_assignment(
     );
     let response = facade.process_request(request).await?;
     if ResponseCode::from(response.code()) != ResponseCode::Success {
-        return Err(RocketMQError::Internal(format!(
-            "embedded broker query assignment failed: {}",
-            response.remark().cloned().unwrap_or_default()
-        ))
-        .into());
+        return Err(broker_operation_error("queryAssignment", &response).into());
     }
 
     let Some(body) = response.body() else {
@@ -1814,7 +1810,11 @@ fn sanitize_thread_component(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
+    use rocketmq_error::RocketMQError;
+    use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 
+    use super::broker_operation_error;
     use super::convert_topic_message_type;
     use crate::service::ProxyTopicMessageType;
 
@@ -1828,5 +1828,31 @@ mod tests {
             convert_topic_message_type(TopicMessageType::Priority),
             ProxyTopicMessageType::Priority
         );
+    }
+
+    #[test]
+    fn broker_operation_error_preserves_response_metadata() {
+        let response = RemotingCommand::create_response_command_with_code_remark(
+            ResponseCode::SystemError,
+            "assignment unavailable",
+        );
+
+        let error = broker_operation_error("queryAssignment", &response);
+
+        assert_eq!(error.kind(), rocketmq_error::ErrorKind::BrokerOperationFailed);
+        match error {
+            RocketMQError::BrokerOperationFailed {
+                operation,
+                code,
+                message,
+                broker_addr,
+            } => {
+                assert_eq!(operation, "queryAssignment");
+                assert_eq!(ResponseCode::from(code), ResponseCode::SystemError);
+                assert_eq!(message, "assignment unavailable");
+                assert_eq!(broker_addr, None);
+            }
+            other => panic!("expected BrokerOperationFailed, got {other:?}"),
+        }
     }
 }
