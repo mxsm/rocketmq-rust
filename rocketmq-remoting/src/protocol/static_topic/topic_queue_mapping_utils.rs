@@ -134,8 +134,8 @@ impl TopicQueueMappingUtils {
         broker_config_map: &HashMap<CheetahString, TopicConfigAndQueueMapping>,
     ) -> RocketMQResult<(i64, i32)> {
         if broker_config_map.is_empty() {
-            return Err(RocketMQError::Internal(
-                "check_name_epoch_num_consistence get empty config map".to_string(),
+            return Err(static_topic_mapping_inconsistent(
+                "check_name_epoch_num_consistence get empty config map",
             ));
         }
         //make sure it is not null
@@ -146,7 +146,7 @@ impl TopicQueueMappingUtils {
             let broker = entry.0;
             let config_mapping = entry.1;
             if config_mapping.topic_queue_mapping_detail.is_none() {
-                return Err(RocketMQError::Internal(format!(
+                return Err(static_topic_mapping_inconsistent(format!(
                     "Mapping info should not be null in broker {}",
                     broker
                 )));
@@ -155,13 +155,13 @@ impl TopicQueueMappingUtils {
             if let Some(mapping_detail) = &mapping_detail {
                 if let Some(broker_name) = &mapping_detail.topic_queue_mapping_info.bname {
                     if !broker.eq(broker_name) {
-                        return Err(RocketMQError::Internal(format!(
+                        return Err(static_topic_mapping_inconsistent(format!(
                             "The broker name is not equal {} != {} ",
                             broker, broker_name
                         )));
                     }
                     if mapping_detail.topic_queue_mapping_info.dirty {
-                        return Err(RocketMQError::Internal(format!(
+                        return Err(static_topic_mapping_inconsistent(format!(
                             "The mapping info is dirty in broker  {}",
                             broker
                         )));
@@ -169,26 +169,26 @@ impl TopicQueueMappingUtils {
                     if let Some(top) = &config_mapping.topic_config.topic_name {
                         if let Some(mapping_top) = &mapping_detail.topic_queue_mapping_info.topic {
                             if !top.eq(mapping_top) {
-                                return Err(RocketMQError::Internal(format!(
+                                return Err(static_topic_mapping_inconsistent(format!(
                                     "The topic name is inconsistent in broker  {}",
                                     broker
                                 )));
                             }
                             if !topic.eq(mapping_top) {
-                                return Err(RocketMQError::Internal(format!(
+                                return Err(static_topic_mapping_inconsistent(format!(
                                     "The topic name is not match for broker  {}",
                                     broker
                                 )));
                             }
                             if let Some(m_scope) = &mapping_detail.topic_queue_mapping_info.scope {
                                 if !scope.eq(m_scope) {
-                                    return Err(RocketMQError::Internal(format!(
+                                    return Err(static_topic_mapping_inconsistent(format!(
                                         "scope does not match {} != {} in {}",
                                         m_scope, scope, broker
                                     )));
                                 }
                                 if max_epoch != -1 && max_epoch != mapping_detail.topic_queue_mapping_info.epoch {
-                                    return Err(RocketMQError::Internal(format!(
+                                    return Err(static_topic_mapping_inconsistent(format!(
                                         "epoch does not match {} != {} in {}",
                                         max_epoch, mapping_detail.topic_queue_mapping_info.epoch, broker_name
                                     )));
@@ -196,7 +196,7 @@ impl TopicQueueMappingUtils {
                                     max_epoch = mapping_detail.topic_queue_mapping_info.epoch;
                                 }
                                 if max_num != -1 && max_num != mapping_detail.topic_queue_mapping_info.total_queues {
-                                    return Err(RocketMQError::Internal(format!(
+                                    return Err(static_topic_mapping_inconsistent(format!(
                                         "total queue number does not match {} != {} in {}",
                                         max_num, mapping_detail.topic_queue_mapping_info.total_queues, broker_name
                                     )));
@@ -210,8 +210,8 @@ impl TopicQueueMappingUtils {
                 }
             }
         }
-        Err(RocketMQError::Internal(
-            "check_name_epoch_num_consistence err ! maybe some var is none".to_string(),
+        Err(static_topic_mapping_inconsistent(
+            "check_name_epoch_num_consistence err ! maybe some var is none",
         ))
     }
     pub fn check_if_reuse_physical_queue(mapping_ones: &Vec<TopicQueueMappingOne>) -> RocketMQResult<()> {
@@ -221,7 +221,7 @@ impl TopicQueueMappingUtils {
                 if let Some(bname) = &item.bname {
                     let physical_queue_id = format!("{} - {}", bname, item.queue_id);
                     if let Some(id) = physical_queue_id_map.get(&physical_queue_id) {
-                        return Err(RocketMQError::Internal(format!(
+                        return Err(static_topic_mapping_inconsistent(format!(
                             "Topic {} global queue id {} and {} shared the same physical queue {}",
                             mapping_one.topic(),
                             mapping_one.global_id(),
@@ -347,7 +347,7 @@ impl TopicQueueMappingUtils {
 
                         if global_id_map.contains_key(global_id) {
                             if !replace {
-                                return Err(RocketMQError::Internal(format!(
+                                return Err(static_topic_mapping_inconsistent(format!(
                                     "The queue id is duplicated in broker {} {}",
                                     leader_broker_name, broker_name
                                 )));
@@ -371,7 +371,7 @@ impl TopicQueueMappingUtils {
 
         if check_consistence {
             if max_num as usize != global_id_map.len() {
-                return Err(RocketMQError::Internal(format!(
+                return Err(static_topic_mapping_inconsistent(format!(
                     "The total queue number in config does not match the real hosted queues {} != {}",
                     max_num,
                     global_id_map.len()
@@ -379,7 +379,7 @@ impl TopicQueueMappingUtils {
             }
             for i in 0..max_num {
                 if !global_id_map.contains_key(&i) {
-                    return Err(RocketMQError::Internal(format!(
+                    return Err(static_topic_mapping_inconsistent(format!(
                         "The queue number {} is not in globalIdMap",
                         i
                     )));
@@ -420,7 +420,7 @@ impl TopicQueueMappingUtils {
                 }
             }
             if !target_brokers.contains(broker) {
-                return Err(RocketMQError::Internal(format!(
+                return Err(static_topic_mapping_inconsistent(format!(
                     "The existed broker {} does not in target brokers ",
                     broker
                 )));
@@ -436,28 +436,26 @@ impl TopicQueueMappingUtils {
             let config_mapping = entry.1;
             if let Some(detail) = config_mapping.get_topic_queue_mapping_detail() {
                 if config_mapping.topic_config.read_queue_nums < config_mapping.topic_config.write_queue_nums {
-                    return Err(RocketMQError::Internal(
-                        "Read queues is smaller than write queues".to_string(),
+                    return Err(static_topic_mapping_inconsistent(
+                        "Read queues is smaller than write queues",
                     ));
                 }
                 if let Some(queues) = &detail.hosted_queues {
                     for items in queues.values() {
                         for item in items {
                             if item.start_offset != 0 {
-                                return Err(RocketMQError::Internal(
-                                    "The start offset does not begin from 0".to_string(),
+                                return Err(static_topic_mapping_inconsistent(
+                                    "The start offset does not begin from 0",
                                 ));
                             }
                             if let Some(bname) = &item.bname {
                                 let topic_config = broker_config_map.get(bname.as_str());
                                 if topic_config.is_none() {
-                                    return Err(RocketMQError::Internal(
-                                        "The broker of item does not exist".to_string(),
-                                    ));
+                                    return Err(static_topic_mapping_inconsistent("The broker of item does not exist"));
                                 } else if let Some(topic_config) = topic_config {
                                     if item.queue_id >= topic_config.topic_config.write_queue_nums as i32 {
-                                        return Err(RocketMQError::Internal(
-                                            "The physical queue id is overflow the write queues".to_string(),
+                                        return Err(static_topic_mapping_inconsistent(
+                                            "The physical queue id is overflow the write queues",
                                         ));
                                     }
                                 }
@@ -495,7 +493,7 @@ impl TopicQueueMappingUtils {
             TopicQueueMappingUtils::check_physical_queue_consistence(broker_config_map)?;
         }
         if (queue_num as usize) < global_id_map.len() {
-            return Err(RocketMQError::Internal(format!(
+            return Err(static_topic_mapping_inconsistent(format!(
                 "Cannot decrease the queue num for static topic {} < {}",
                 queue_num,
                 global_id_map.len()
@@ -503,8 +501,8 @@ impl TopicQueueMappingUtils {
         }
         //check the queue number
         if (queue_num as usize) == global_id_map.len() {
-            return Err(RocketMQError::Internal(
-                "The topic queue num is equal the existed queue num, do nothing".to_string(),
+            return Err(static_topic_mapping_inconsistent(
+                "The topic queue num is equal the existed queue num, do nothing",
             ));
         }
 
@@ -706,8 +704,8 @@ impl TopicQueueMappingUtils {
     ) -> RocketMQResult<()> {
         for mapping_one in mapping_ones {
             if !target_brokers.contains(&CheetahString::from(mapping_one.bname())) {
-                return Err(RocketMQError::Internal(
-                    "The leader broker is not in target brokers".to_string(),
+                return Err(static_topic_mapping_inconsistent(
+                    "The leader broker is not in target brokers",
                 ));
             }
         }
@@ -941,6 +939,55 @@ mod tests {
             .expect_err("negative gen should be rejected");
 
         assert_eq!(error.kind(), ErrorKind::IllegalArgument);
+    }
+
+    #[test]
+    fn check_name_epoch_num_consistence_rejects_empty_config_as_route_inconsistent() {
+        let broker_config_map = HashMap::<CheetahString, TopicConfigAndQueueMapping>::new();
+
+        let error = TopicQueueMappingUtils::check_name_epoch_num_consistence(
+            &CheetahString::from_static_str("TopicA"),
+            &broker_config_map,
+        )
+        .expect_err("empty static topic config map should be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::RouteInconsistent);
+    }
+
+    #[test]
+    fn check_if_reuse_physical_queue_reports_duplicate_physical_queue_as_route_inconsistent() {
+        let broker = CheetahString::from_static_str("broker-a");
+        let topic = CheetahString::from_static_str("TopicA");
+        let mapping_detail = TopicQueueMappingDetail {
+            topic_queue_mapping_info: TopicQueueMappingInfo::new(topic.clone(), 2, broker.clone(), 1),
+            hosted_queues: None,
+        };
+        let shared_physical_queue = LogicQueueMappingItem {
+            bname: Some(broker.clone()),
+            queue_id: 0,
+            ..Default::default()
+        };
+        let mapping_ones = vec![
+            TopicQueueMappingOne::new(
+                mapping_detail.clone(),
+                topic.to_string(),
+                broker.to_string(),
+                0,
+                vec![shared_physical_queue.clone()],
+            ),
+            TopicQueueMappingOne::new(
+                mapping_detail,
+                topic.to_string(),
+                broker.to_string(),
+                1,
+                vec![shared_physical_queue],
+            ),
+        ];
+
+        let error = TopicQueueMappingUtils::check_if_reuse_physical_queue(&mapping_ones)
+            .expect_err("duplicate physical queue should be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::RouteInconsistent);
     }
 
     #[test]
