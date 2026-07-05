@@ -116,8 +116,8 @@ impl TieredMetadataStore for JsonMetadataStore {
             let data = fs::read(&self.path)
                 .await
                 .map_err(|err| error::storage_read_failed(path_to_string(&self.path), err.to_string()))?;
-            let state =
-                serde_json::from_slice::<MetadataState>(&data).map_err(|err| error::internal(err.to_string()))?;
+            let state = serde_json::from_slice::<MetadataState>(&data)
+                .map_err(|_| error::storage_corrupted(path_to_string(&self.path)))?;
             *self.state.write() = state;
         }
 
@@ -139,7 +139,8 @@ impl TieredMetadataStore for JsonMetadataStore {
         #[cfg(feature = "serde")]
         {
             let snapshot = self.state.read().clone();
-            let data = serde_json::to_vec_pretty(&snapshot).map_err(|err| error::internal(err.to_string()))?;
+            let data = serde_json::to_vec_pretty(&snapshot)
+                .map_err(|err| error::storage_write_failed(path_to_string(&self.path), err.to_string()))?;
             let tmp_path = self.path.with_extension("json.tmp");
             fs::write(&tmp_path, data)
                 .await
