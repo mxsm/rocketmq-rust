@@ -3553,10 +3553,7 @@ impl MQClientAPIImpl {
                 let response_header = response
                     .decode_command_custom_header::<QueryMessageResponseHeader>()
                     .map_err(|e| {
-                        rocketmq_error::RocketMQError::Internal(format!(
-                            "decode QueryMessageResponseHeader failed: {}",
-                            e
-                        ))
+                        RocketMQError::response_process_failed("decode QueryMessageResponseHeader", e.to_string())
                     })?;
                 let body = response.body().cloned();
                 Ok(Some((response_header, body)))

@@ -36,6 +36,8 @@ use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssi
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::UnifiedServiceError;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -96,6 +98,19 @@ use crate::stat::consumer_stats_manager::ConsumerStatsManager;
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const ROUTE_REFRESH_MAX_TOPICS_PER_ROUND: usize = 64;
+
+fn client_scheduled_task_startup_failed(task: &'static str, error: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "MQClientInstance scheduled task {task}: {error}"
+    )))
+}
+
+fn sync_pull_result_missing(operation: &'static str) -> RocketMQError {
+    RocketMQError::ClientInvalidState {
+        expected: "PullResultExt returned by sync pull_message",
+        actual: format!("{operation} returned None"),
+    }
+}
 
 fn get_topic_config_request_header(topic: CheetahString) -> GetTopicConfigRequestHeader {
     let mut request_header = GetTopicConfigRequestHeader {
@@ -705,11 +720,7 @@ impl MQClientInstance {
                         api.fetch_name_server_addr().await;
                         Ok(())
                     })
-                    .map_err(|error| {
-                        rocketmq_error::RocketMQError::Internal(format!(
-                            "failed to start fetchNameServerAddr scheduled task: {error}"
-                        ))
-                    })?;
+                    .map_err(|error| client_scheduled_task_startup_failed("fetchNameServerAddr", error))?;
             } else {
                 warn!(
                     "ScheduledTask: fetchNameServerAddr skipped because mq_client_api_impl is None. [{}]",
@@ -731,11 +742,7 @@ impl MQClientInstance {
                     Ok(())
                 },
             )
-            .map_err(|error| {
-                rocketmq_error::RocketMQError::Internal(format!(
-                    "failed to start update_topic_route_info_from_name_server scheduled task: {error}"
-                ))
-            })?;
+            .map_err(|error| client_scheduled_task_startup_failed("update_topic_route_info_from_name_server", error))?;
 
         let client_instance = this.clone();
         let heartbeat_broker_interval = self.client_config.heartbeat_broker_interval;
@@ -751,11 +758,7 @@ impl MQClientInstance {
                     Ok(())
                 },
             )
-            .map_err(|error| {
-                rocketmq_error::RocketMQError::Internal(format!(
-                    "failed to start clean_offline_broker_and_send_heartbeat scheduled task: {error}"
-                ))
-            })?;
+            .map_err(|error| client_scheduled_task_startup_failed("clean_offline_broker_and_send_heartbeat", error))?;
 
         let client_instance = this;
         let persist_consumer_offset_interval = self.client_config.persist_consumer_offset_interval as u64;
@@ -770,11 +773,7 @@ impl MQClientInstance {
                     Ok(())
                 },
             )
-            .map_err(|error| {
-                rocketmq_error::RocketMQError::Internal(format!(
-                    "failed to start persistAllConsumerOffset scheduled task: {error}"
-                ))
-            })?;
+            .map_err(|error| client_scheduled_task_startup_failed("persistAllConsumerOffset", error))?;
 
         info!(
             "All scheduled tasks started, total tasks: {}",
@@ -1308,7 +1307,7 @@ impl MQClientInstance {
             NoopPullCallback,
         )
         .await?
-        .ok_or_else(|| rocketmq_error::RocketMQError::Internal("pull_message returned None in sync mode".into()))?;
+        .ok_or_else(|| sync_pull_result_missing("MQClientInstance::pull_message"))?;
 
         if result.pull_result.pull_status == PullStatus::Found {
             if let Some(mut message_binary) = result.message_binary.take() {
@@ -2659,6 +2658,7 @@ pub fn run_heartbeat_route_index_probe(
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_error::ErrorKind;
     use rocketmq_error::RocketMQError;
     use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
@@ -2670,6 +2670,24 @@ mod tests {
     use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
     use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
     use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
+
+    #[test]
+    fn client_scheduled_task_startup_failed_uses_service_error_kind() {
+        let error = client_scheduled_task_startup_failed("fetchNameServerAddr", "scheduler closed");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+        assert!(error.to_string().contains("fetchNameServerAddr"));
+    }
+
+    #[test]
+    fn sync_pull_result_missing_uses_client_invalid_state() {
+        let error = sync_pull_result_missing("MQClientInstance::pull_message");
+
+        assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
+        assert!(error
+            .to_string()
+            .contains("MQClientInstance::pull_message returned None"));
+    }
 
     #[tokio::test]
     async fn get_mq_client_api_impl_returns_client_not_started_instead_of_panicking() {
