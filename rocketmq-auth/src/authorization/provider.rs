@@ -111,7 +111,9 @@ impl From<AuthorizationError> for RocketMQError {
     fn from(error: AuthorizationError) -> Self {
         let message = error.to_string();
         match error {
-            AuthorizationError::PermissionDenied { .. } => RocketMQError::BrokerPermissionDenied { operation: message },
+            AuthorizationError::PermissionDenied { .. } => {
+                RocketMQError::Authentication(AuthError::AuthorizationFailed(message))
+            }
             AuthorizationError::SubjectNotFound(_)
             | AuthorizationError::ResourceNotFound(_)
             | AuthorizationError::InvalidContext(_) => RocketMQError::illegal_argument(message),
@@ -121,7 +123,7 @@ impl From<AuthorizationError> for RocketMQError {
             AuthorizationError::PolicyEvaluationFailed(_) => {
                 RocketMQError::Authentication(AuthError::AuthorizationFailed(message))
             }
-            AuthorizationError::InternalError(_) => RocketMQError::Internal(message),
+            AuthorizationError::InternalError(_) => RocketMQError::Authentication(AuthError::Other(message)),
             AuthorizationError::StorageReadFailed { path, reason } => RocketMQError::storage_read_failed(path, reason),
             AuthorizationError::StorageWriteFailed { path, reason } => {
                 RocketMQError::storage_write_failed(path, reason)
@@ -692,7 +694,10 @@ mod tests {
             resource: "topic:test".to_string(),
             reason: "insufficient permissions".to_string(),
         });
-        assert!(matches!(denied, RocketMQError::BrokerPermissionDenied { .. }));
+        assert!(matches!(
+            denied,
+            RocketMQError::Authentication(AuthError::AuthorizationFailed(_))
+        ));
 
         let invalid = RocketMQError::from(AuthorizationError::InvalidContext("missing subject".to_string()));
         assert!(matches!(invalid, RocketMQError::IllegalArgument(_)));
@@ -707,7 +712,7 @@ mod tests {
         ));
 
         let internal = RocketMQError::from(AuthorizationError::InternalError("unexpected error".to_string()));
-        assert!(matches!(internal, RocketMQError::Internal(_)));
+        assert!(matches!(internal, RocketMQError::Authentication(AuthError::Other(_))));
 
         let storage = RocketMQError::from(AuthorizationError::StorageWriteFailed {
             path: "acls.json".to_string(),
