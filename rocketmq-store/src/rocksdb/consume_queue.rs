@@ -760,8 +760,10 @@ impl RocksDbConsumeQueueGroupCommitConfig {
 pub struct RocksDbConsumeQueueGroupCommitService {
     sender: mpsc::Sender<ConsumeQueueBatchWriteRequest>,
     task_group: rocketmq_runtime::TaskGroup,
-    task_error: Arc<tokio::sync::Mutex<Option<String>>>,
+    task_error: GroupCommitTaskErrorSlot,
 }
+
+type GroupCommitTaskErrorSlot = Arc<tokio::sync::Mutex<Option<RocketMQError>>>;
 
 impl RocksDbConsumeQueueGroupCommitService {
     pub fn start(
@@ -776,7 +778,7 @@ impl RocksDbConsumeQueueGroupCommitService {
         task_group
             .spawn_service("consume-queue-group-commit", async move {
                 if let Err(error) = run_group_commit_loop(store, receiver, config.batch_size).await {
-                    *task_error_clone.lock().await = Some(error.to_string());
+                    *task_error_clone.lock().await = Some(error);
                 }
             })
             .map_err(|error| RocketMQError::storage_write_failed("rocksdb", error.to_string()))?;
@@ -802,13 +804,16 @@ impl RocksDbConsumeQueueGroupCommitService {
         drop(sender);
         let report = task_group.shutdown(std::time::Duration::from_secs(5)).await;
         crate::rocksdb::runtime::shutdown_report_result("consume queue group commit shutdown", report)?;
-        if let Some(error) = task_error.lock().await.take() {
-            return Err(RocketMQError::storage_write_failed(
-                "rocksdb",
-                format!("group commit worker failed: {error}"),
-            ));
-        }
+        let task_error = task_error.lock().await.take();
+        group_commit_worker_result(task_error)?;
         Ok(())
+    }
+}
+
+fn group_commit_worker_result(error: Option<RocketMQError>) -> Result<(), RocketMQError> {
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }
 
@@ -841,4 +846,24 @@ async fn run_group_commit_loop(
         .await??;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_error::ErrorKind;
+
+    use super::*;
+
+    #[test]
+    fn group_commit_worker_result_preserves_original_error_kind() {
+        let error = group_commit_worker_result(Some(RocketMQError::ConfigInvalidValue {
+            key: "rocksdb.consume_queue.group_commit.batch_size",
+            value: "0".to_string(),
+            reason: "batch size must be greater than zero".to_string(),
+        }))
+        .expect_err("group commit worker error should be propagated");
+
+        assert_eq!(error.kind(), ErrorKind::ConfigInvalidValue);
+        assert!(error.to_string().contains("batch size must be greater than zero"));
+    }
 }
