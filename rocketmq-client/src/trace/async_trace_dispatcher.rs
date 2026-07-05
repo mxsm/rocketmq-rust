@@ -36,6 +36,7 @@ use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::UnifiedServiceError;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_rust::ArcMut;
@@ -367,20 +368,15 @@ impl AsyncTraceDispatcher {
         self.tx
             .send(TraceWorkerCommand::Flush(TraceFlushResponder::Async(sender)))
             .await
-            .map_err(|_| RocketMQError::Internal("Trace dispatcher worker is stopped".to_string()))?;
+            .map_err(|_| trace_dispatcher_interrupted("worker is stopped"))?;
 
         match tokio::time::timeout(TRACE_WORKER_FLUSH_TIMEOUT, receiver).await {
             Ok(Ok(result)) => result?,
             Ok(Err(_)) => {
-                return Err(RocketMQError::Internal(
-                    "Trace dispatcher worker dropped flush acknowledgement".to_string(),
-                ));
+                return Err(trace_dispatcher_interrupted("worker dropped flush acknowledgement"));
             }
             Err(_) => {
-                return Err(RocketMQError::Internal(format!(
-                    "Trace dispatcher flush timed out after {:?}",
-                    TRACE_WORKER_FLUSH_TIMEOUT
-                )));
+                return Err(trace_dispatcher_flush_timeout());
             }
         }
         info!("Flush completed");
@@ -591,20 +587,15 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         let (sender, receiver) = std_mpsc::channel();
         self.tx
             .try_send(TraceWorkerCommand::Flush(TraceFlushResponder::Blocking(sender)))
-            .map_err(|error| RocketMQError::Internal(format!("Trace dispatcher flush queue failed: {error}")))?;
+            .map_err(|error| trace_dispatcher_interrupted(format!("flush queue failed: {error}")))?;
 
         match receiver.recv_timeout(TRACE_WORKER_FLUSH_TIMEOUT) {
             Ok(result) => result?,
             Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                return Err(RocketMQError::Internal(format!(
-                    "Trace dispatcher flush timed out after {:?}",
-                    TRACE_WORKER_FLUSH_TIMEOUT
-                )));
+                return Err(trace_dispatcher_flush_timeout());
             }
             Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(RocketMQError::Internal(
-                    "Trace dispatcher worker dropped flush acknowledgement".to_string(),
-                ));
+                return Err(trace_dispatcher_interrupted("worker dropped flush acknowledgement"));
             }
         }
 
@@ -693,7 +684,24 @@ where
 {
     spawn_client_tracked_task(thread_name, task)
         .map(TraceTaskHandle::Tracked)
-        .map_err(|error| RocketMQError::Internal(format!("failed to spawn {thread_name} task: {error}")))
+        .map_err(|error| trace_dispatcher_startup_failed(thread_name, error))
+}
+
+fn trace_dispatcher_interrupted(_reason: impl Into<String>) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::Interrupted)
+}
+
+fn trace_dispatcher_flush_timeout() -> RocketMQError {
+    RocketMQError::Timeout {
+        operation: "trace_dispatcher_flush",
+        timeout_ms: TRACE_WORKER_FLUSH_TIMEOUT.as_millis() as u64,
+    }
+}
+
+fn trace_dispatcher_startup_failed(thread_name: &'static str, error: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "failed to spawn {thread_name} task: {error}"
+    )))
 }
 
 fn decrement_queued_trace_count(state: &DispatcherState) {
@@ -1076,6 +1084,30 @@ pub async fn run_trace_worker_lifecycle_probe() -> TraceWorkerLifecycleProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_error::ErrorKind;
+
+    #[test]
+    fn trace_dispatcher_interrupted_uses_service_error_kind() {
+        let error = trace_dispatcher_interrupted("worker is stopped");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+    }
+
+    #[test]
+    fn trace_dispatcher_flush_timeout_uses_timeout_error_kind() {
+        let error = trace_dispatcher_flush_timeout();
+
+        assert_eq!(error.kind(), ErrorKind::Timeout);
+        assert!(error.to_string().contains("trace_dispatcher_flush"));
+    }
+
+    #[test]
+    fn trace_dispatcher_startup_failed_uses_service_error_kind() {
+        let error = trace_dispatcher_startup_failed("rocketmq-client-trace-test", "task group closed");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+        assert!(error.to_string().contains("rocketmq-client-trace-test"));
+    }
 
     #[test]
     fn spawn_trace_task_without_tokio_runtime_runs_on_fallback_thread() {
