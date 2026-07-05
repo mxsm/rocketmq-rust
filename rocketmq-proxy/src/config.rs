@@ -441,17 +441,24 @@ impl ProxyConfig {
     pub fn load_from_file(path: impl AsRef<Path>) -> ProxyResult<Self> {
         let path = path.as_ref();
         let builder = config::Config::builder().add_source(config::File::from(path));
-        let config = builder.build().map_err(|error| {
-            RocketMQError::Internal(format!("failed to build proxy config from {}: {error}", path.display()))
-        })?;
+        let config = builder
+            .build()
+            .map_err(|error| proxy_config_parse_failed("build", path, error))?;
 
-        config.try_deserialize().map_err(|error| {
-            RocketMQError::Internal(format!(
-                "failed to deserialize proxy config from {}: {error}",
-                path.display()
-            ))
-            .into()
-        })
+        config
+            .try_deserialize()
+            .map_err(|error| proxy_config_parse_failed("deserialize", path, error).into())
+    }
+}
+
+fn proxy_config_parse_failed(stage: &'static str, path: &Path, error: config::ConfigError) -> RocketMQError {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("proxy config");
+    RocketMQError::ConfigParseFailed {
+        key: "proxy.config",
+        reason: format!("failed to {stage} proxy config {file_name}: {error}"),
     }
 }
 
@@ -608,6 +615,26 @@ enableAclRpcHookForClusterMode: true
     }
 
     #[test]
+    fn proxy_config_load_missing_file_uses_config_parse_error() {
+        let path = unique_proxy_config_path("missing");
+
+        let error = ProxyConfig::load_from_file(path).expect_err("missing proxy config should fail");
+
+        assert_proxy_config_parse_error(error, "build");
+    }
+
+    #[test]
+    fn proxy_config_load_invalid_shape_uses_config_parse_error() {
+        let path = unique_proxy_config_path("invalid-shape");
+        std::fs::write(&path, "grpc: 1\n").expect("write invalid proxy config");
+
+        let error = ProxyConfig::load_from_file(&path).expect_err("invalid proxy config should fail");
+        let _ = std::fs::remove_file(path);
+
+        assert_proxy_config_parse_error(error, "deserialize");
+    }
+
+    #[test]
     fn proxy_auth_config_debug_redacts_embedded_credentials() {
         let config = ProxyAuthConfig {
             init_authentication_user: "admin:init-secret".to_owned(),
@@ -620,5 +647,29 @@ enableAclRpcHookForClusterMode: true
         assert!(!output.contains("init-secret"));
         assert!(!output.contains("inner-secret"));
         assert!(output.contains("<redacted>"));
+    }
+
+    fn unique_proxy_config_path(name: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("rocketmq-proxy-{name}-{nonce}.yaml"))
+    }
+
+    fn assert_proxy_config_parse_error(error: crate::error::ProxyError, expected_stage: &str) {
+        match error {
+            crate::error::ProxyError::RocketMQ(error) => {
+                assert_eq!(error.kind(), rocketmq_error::ErrorKind::ConfigParseFailed);
+                match error {
+                    RocketMQError::ConfigParseFailed { key, reason } => {
+                        assert_eq!(key, "proxy.config");
+                        assert!(reason.contains(expected_stage), "{reason}");
+                    }
+                    other => panic!("expected ConfigParseFailed, got {other:?}"),
+                }
+            }
+            other => panic!("expected RocketMQ proxy error, got {other:?}"),
+        }
     }
 }
