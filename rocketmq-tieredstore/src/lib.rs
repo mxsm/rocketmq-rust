@@ -58,6 +58,7 @@ pub use store::TieredStore;
 #[cfg(feature = "serde")]
 #[doc(hidden)]
 pub mod bench_support {
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
@@ -116,7 +117,7 @@ pub mod bench_support {
         request_count: usize,
     ) -> Result<TieredDispatcherLifecycleProbe, RocketMQError> {
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).map_err(|error| RocketMQError::Internal(error.to_string()))?;
+        create_probe_root(&root)?;
 
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: root.clone(),
@@ -203,7 +204,7 @@ pub mod bench_support {
         root: PathBuf,
     ) -> Result<TieredCleanupLifecycleProbe, RocketMQError> {
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).map_err(|error| RocketMQError::Internal(error.to_string()))?;
+        create_probe_root(&root)?;
 
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: root.clone(),
@@ -311,6 +312,11 @@ pub mod bench_support {
         std::env::temp_dir().join(format!("rocketmq-tieredstore-dispatcher-{}-{id}", std::process::id()))
     }
 
+    pub(super) fn create_probe_root(root: &Path) -> Result<(), RocketMQError> {
+        std::fs::create_dir_all(root)
+            .map_err(|error| RocketMQError::storage_write_failed(root.display().to_string(), error.to_string()))
+    }
+
     fn current_time_millis() -> i64 {
         match SystemTime::now().duration_since(UNIX_EPOCH) {
             Ok(duration) => duration.as_millis() as i64,
@@ -321,6 +327,19 @@ pub mod bench_support {
 
 #[cfg(all(test, feature = "serde"))]
 mod bench_support_tests {
+    use rocketmq_error::ErrorKind;
+
+    #[test]
+    fn create_probe_root_reports_storage_write_failure_for_file_path() {
+        let temp_file = tempfile::NamedTempFile::new().expect("temporary file should be created");
+        let path = temp_file.path().display().to_string();
+        let error =
+            super::bench_support::create_probe_root(temp_file.path()).expect_err("file path should not become a dir");
+
+        assert_eq!(error.kind(), ErrorKind::StorageWriteFailed);
+        assert!(error.to_string().contains(&path));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn tiered_dispatcher_lifecycle_probe_reports_clean_shutdown() {
         let probe =
