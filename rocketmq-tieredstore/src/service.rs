@@ -28,6 +28,8 @@ use crate::config::TieredStoreConfig;
 use crate::file::TieredFlatFileStore;
 use crate::provider::TieredStoreProvider;
 use crate::runtime;
+use crate::service::cleanup_service::cleanup_worker_result;
+use crate::service::cleanup_service::CleanupErrorSlot;
 use crate::service::cleanup_service::CleanupService;
 pub use crate::service::commit_log_recover_service::CommitLogRecoverService;
 pub use crate::service::commit_log_recover_service::TieredRecoverResult;
@@ -39,7 +41,7 @@ where
     cleanup_group: tokio::sync::Mutex<Option<rocketmq_runtime::TaskGroup>>,
     cleanup_schedule: tokio::sync::Mutex<Option<ScheduledTaskGroup>>,
     cleanup_shutdown: tokio::sync::Mutex<Option<CancellationToken>>,
-    cleanup_error: Arc<tokio::sync::Mutex<Option<String>>>,
+    cleanup_error: CleanupErrorSlot,
     parent_task_group: Option<TaskGroup>,
     _marker: std::marker::PhantomData<P>,
 }
@@ -110,9 +112,8 @@ where
             runtime::shutdown_report_result("tieredstore cleanup", report.clone())?;
             shutdown_report = Some(report);
         }
-        if let Some(error) = self.cleanup_error.lock().await.take() {
-            return Err(RocketMQError::Internal(error));
-        }
+        let cleanup_error = self.cleanup_error.lock().await.take();
+        cleanup_worker_result(cleanup_error)?;
         Ok(shutdown_report)
     }
 

@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_error::RocketMQError;
+use rocketmq_error::UnifiedServiceError;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
@@ -25,6 +26,8 @@ use tokio_util::sync::CancellationToken;
 use crate::config::TieredStoreConfig;
 use crate::file::TieredFlatFileStore;
 use crate::provider::TieredStoreProvider;
+
+pub(super) type CleanupErrorSlot = Arc<Mutex<Option<RocketMQError>>>;
 
 pub struct CleanupService<P>
 where
@@ -58,7 +61,7 @@ where
     pub fn schedule(
         &self,
         task_group: &TaskGroup,
-        cleanup_error: Arc<Mutex<Option<String>>>,
+        cleanup_error: CleanupErrorSlot,
     ) -> Result<ScheduledTaskGroup, RocketMQError> {
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let flat_file_store = self.flat_file_store.clone();
@@ -81,7 +84,7 @@ where
                         if let Err(error) = flat_file_store.cleanup_expired(current_time_millis()).await {
                             let mut cleanup_error = cleanup_error_on_error.lock().await;
                             if cleanup_error.is_none() {
-                                *cleanup_error = Some(error.to_string());
+                                *cleanup_error = Some(error);
                             }
                             shutdown_on_error.cancel();
                             task_group_on_error.cancel();
@@ -89,7 +92,7 @@ where
                     }
                 },
             )
-            .map_err(|error| RocketMQError::Internal(error.to_string()))?;
+            .map_err(|error| cleanup_startup_failed("schedule cleanup expired files", error))?;
 
         let shutdown = self.shutdown.clone();
         let task_group_on_shutdown = task_group.clone();
@@ -105,7 +108,7 @@ where
             })
             .map_err(|error| {
                 task_group.cancel();
-                RocketMQError::Internal(error.to_string())
+                cleanup_startup_failed("spawn cleanup shutdown watcher", error)
             })?;
 
         Ok(scheduled_tasks)
@@ -123,11 +126,22 @@ where
         self.shutdown.cancelled().await;
         let report = task_group.shutdown(Duration::from_secs(5)).await;
         crate::runtime::shutdown_report_result("tieredstore cleanup run", report)?;
-        if let Some(error) = cleanup_error.lock().await.take() {
-            return Err(RocketMQError::Internal(error));
-        }
-        Ok(())
+        let cleanup_error = cleanup_error.lock().await.take();
+        cleanup_worker_result(cleanup_error)
     }
+}
+
+pub(super) fn cleanup_worker_result(error: Option<RocketMQError>) -> Result<(), RocketMQError> {
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn cleanup_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "tieredstore cleanup {operation}: {error}"
+    )))
 }
 
 fn current_time_millis() -> i64 {
@@ -143,6 +157,7 @@ mod tests {
     use std::time::Duration;
 
     use bytes::Bytes;
+    use rocketmq_error::ErrorKind;
     use rocketmq_error::RocketMQError;
     use tokio::time::sleep;
 
@@ -151,6 +166,23 @@ mod tests {
     use crate::file::CONSUME_QUEUE_UNIT_SIZE;
     use crate::metadata::JsonMetadataStore;
     use crate::provider::MemoryProvider;
+
+    #[test]
+    fn cleanup_worker_result_preserves_original_error_kind() {
+        let error = cleanup_worker_result(Some(RocketMQError::IllegalArgument("bad cleanup offset".to_owned())))
+            .expect_err("cleanup worker error should be propagated");
+
+        assert_eq!(error.kind(), ErrorKind::IllegalArgument);
+        assert!(error.to_string().contains("bad cleanup offset"));
+    }
+
+    #[test]
+    fn cleanup_startup_failed_uses_service_error_kind() {
+        let error = cleanup_startup_failed("schedule test", "task group closed");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+        assert!(error.to_string().contains("tieredstore cleanup schedule test"));
+    }
 
     #[tokio::test]
     async fn cleanup_service_runs_periodically_and_stops_on_shutdown() -> Result<(), RocketMQError> {
@@ -204,10 +236,10 @@ mod tests {
         task_group
             .spawn_service("cleanup-service-test", async move {
                 if let Err(error) = service.run().await {
-                    *task_error_clone.lock().await = Some(error.to_string());
+                    *task_error_clone.lock().await = Some(error);
                 }
             })
-            .map_err(|error| RocketMQError::Internal(error.to_string()))?;
+            .map_err(|error| cleanup_startup_failed("spawn cleanup service test", error))?;
 
         for _ in 0..50 {
             if provider.segment_size(first_commit_log_path.clone()).await? == 0 {
@@ -220,7 +252,7 @@ mod tests {
         let report = task_group.shutdown(Duration::from_secs(2)).await;
         crate::runtime::shutdown_report_result("cleanup service test", report)?;
         if let Some(error) = task_error.lock().await.take() {
-            return Err(RocketMQError::Internal(error));
+            return Err(error);
         }
 
         assert_eq!(provider.segment_size(first_commit_log_path).await?, 0);
