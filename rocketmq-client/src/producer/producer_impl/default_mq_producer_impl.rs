@@ -464,7 +464,7 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    fn notify_callback_exception(send_callback: &Option<ArcSendCallback>, error: &dyn std::error::Error) {
+    fn notify_callback_exception(send_callback: &Option<ArcSendCallback>, error: &RocketMQError) {
         if let Some(send_callback) = send_callback.as_ref() {
             send_callback.on_exception(error);
         } else {
@@ -478,8 +478,8 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    fn request_cause_from_error(error: &dyn std::error::Error) -> RocketMQError {
-        RocketMQError::illegal_argument(error.to_string())
+    fn request_cause_from_error(error: &RocketMQError) -> RocketMQError {
+        RocketMQError::response_process_failed("request_response_callback", error.to_string())
     }
 
     #[inline]
@@ -2152,7 +2152,7 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_response_future_inner = request_response_future.clone();
-        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
             if result.is_some() {
                 request_response_future_inner.set_send_request_ok(true);
                 return;
@@ -2212,7 +2212,7 @@ impl DefaultMQProducerImpl {
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
-        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
                 return;
@@ -2254,7 +2254,7 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_response_future_inner = request_response_future.clone();
-        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
             if result.is_some() {
                 request_response_future_inner.set_send_request_ok(true);
                 return;
@@ -2311,7 +2311,7 @@ impl DefaultMQProducerImpl {
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
-        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
                 return;
@@ -2356,7 +2356,7 @@ impl DefaultMQProducerImpl {
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
-        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
                 request_response_future.execute_request_callback();
@@ -2405,7 +2405,7 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_response_future_inner = request_response_future.clone();
-        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
             if result.is_some() {
                 request_response_future_inner.set_send_request_ok(true);
                 return;
@@ -3624,10 +3624,19 @@ mod tests {
 
     #[test]
     fn request_cause_from_error_uses_typed_error() {
-        let error = DefaultMQProducerImpl::request_cause_from_error(&std::io::Error::other("send failed"));
+        let error = DefaultMQProducerImpl::request_cause_from_error(&RocketMQError::network_request_failed(
+            "broker-a",
+            "send failed",
+        ));
 
-        assert!(matches!(error, rocketmq_error::RocketMQError::IllegalArgument(_)));
-        assert_eq!(error.to_string(), "Illegal argument: send failed");
+        assert!(matches!(
+            error,
+            rocketmq_error::RocketMQError::ResponseProcessFailed { .. }
+        ));
+        assert_eq!(
+            error.to_string(),
+            "Response request_response_callback failed: Send failed to broker-a: send failed"
+        );
     }
 
     #[test]
@@ -3851,7 +3860,7 @@ mod tests {
                 .lock()
                 .expect("exception message lock should not be poisoned")
                 .as_deref(),
-            Some("sendKernelImpl exception")
+            Some("Response send_message failed: sendKernelImpl exception")
         );
     }
 
@@ -4071,16 +4080,14 @@ mod tests {
         let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
         let notify_for_callback = notify.clone();
         let seen_for_callback = seen_error.clone();
-        let callback: ArcSendCallback = Arc::new(
-            move |_result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                if let Some(error) = error {
-                    *seen_for_callback
-                        .lock()
-                        .expect("seen error lock should not be poisoned") = Some(error.to_string());
-                    notify_for_callback.notify_one();
-                }
-            },
-        );
+        let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
+            if let Some(error) = error {
+                *seen_for_callback
+                    .lock()
+                    .expect("seen error lock should not be poisoned") = Some(error.to_string());
+                notify_for_callback.notify_one();
+            }
+        });
         let msg = Message::builder().topic("TopicTest").empty_body().build_unchecked();
         let mq = MessageQueue::from_parts("TopicTest", "broker-a", 0);
 
@@ -4109,16 +4116,14 @@ mod tests {
         let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
         let notify_for_callback = notify.clone();
         let seen_for_callback = seen_error.clone();
-        let callback: ArcSendCallback = Arc::new(
-            move |_result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                if let Some(error) = error {
-                    *seen_for_callback
-                        .lock()
-                        .expect("seen error lock should not be poisoned") = Some(error.to_string());
-                    notify_for_callback.notify_one();
-                }
-            },
-        );
+        let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
+            if let Some(error) = error {
+                *seen_for_callback
+                    .lock()
+                    .expect("seen error lock should not be poisoned") = Some(error.to_string());
+                notify_for_callback.notify_one();
+            }
+        });
         let msg = Message::builder().topic("TopicA").body_slice(b"body").build_unchecked();
         let mq = MessageQueue::from_parts("TopicB", "broker-a", 0);
 
@@ -4150,16 +4155,14 @@ mod tests {
         let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
         let notify_for_callback = notify.clone();
         let seen_for_callback = seen_error.clone();
-        let callback: ArcSendCallback = Arc::new(
-            move |_result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                if let Some(error) = error {
-                    *seen_for_callback
-                        .lock()
-                        .expect("seen error lock should not be poisoned") = Some(error.to_string());
-                    notify_for_callback.notify_one();
-                }
-            },
-        );
+        let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
+            if let Some(error) = error {
+                *seen_for_callback
+                    .lock()
+                    .expect("seen error lock should not be poisoned") = Some(error.to_string());
+                notify_for_callback.notify_one();
+            }
+        });
         let msg = Message::builder()
             .topic("TopicTest")
             .body_slice(b"body")

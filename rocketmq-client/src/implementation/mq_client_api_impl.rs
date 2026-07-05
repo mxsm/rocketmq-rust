@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::error::Error as StdError;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -2882,7 +2881,7 @@ impl MQClientAPIImpl {
     fn notify_send_callback_exception(
         send_callback: &Option<ArcSendCallback>,
         callback_executor: &Option<tokio::runtime::Handle>,
-        error: &dyn StdError,
+        error: &RocketMQError,
     ) {
         let Some(callback) = send_callback.as_ref().cloned() else {
             return;
@@ -2891,7 +2890,7 @@ impl MQClientAPIImpl {
         if let Some(executor) = callback_executor.as_ref() {
             let message = error.to_string();
             executor.spawn(async move {
-                let error = std::io::Error::other(message);
+                let error = RocketMQError::response_process_failed("send_callback", message);
                 callback.on_exception(&error);
             });
         } else {
@@ -7093,16 +7092,14 @@ mod tests {
             .build()
             .expect("callback runtime should build");
         let (tx, rx) = std::sync::mpsc::channel();
-        let callback: ArcSendCallback = Arc::new(
-            move |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                tx.send((
-                    std::thread::current().name().unwrap_or_default().to_string(),
-                    result.is_some(),
-                    error.is_some(),
-                ))
-                .expect("test receiver should be alive");
-            },
-        );
+        let callback: ArcSendCallback = Arc::new(move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
+            tx.send((
+                std::thread::current().name().unwrap_or_default().to_string(),
+                result.is_some(),
+                error.is_some(),
+            ))
+            .expect("test receiver should be alive");
+        });
 
         MQClientAPIImpl::notify_send_callback_success(
             &Some(callback),
@@ -7127,17 +7124,15 @@ mod tests {
             .build()
             .expect("callback runtime should build");
         let (tx, rx) = std::sync::mpsc::channel();
-        let callback: ArcSendCallback = Arc::new(
-            move |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                tx.send((
-                    std::thread::current().name().unwrap_or_default().to_string(),
-                    result.is_some(),
-                    error.map(ToString::to_string),
-                ))
-                .expect("test receiver should be alive");
-            },
-        );
-        let error = std::io::Error::other("callback failure");
+        let callback: ArcSendCallback = Arc::new(move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
+            tx.send((
+                std::thread::current().name().unwrap_or_default().to_string(),
+                result.is_some(),
+                error.map(ToString::to_string),
+            ))
+            .expect("test receiver should be alive");
+        });
+        let error = RocketMQError::network_request_failed("broker-a", "callback failure");
 
         MQClientAPIImpl::notify_send_callback_exception(&Some(callback), &Some(runtime.handle().clone()), &error);
 
@@ -7146,7 +7141,10 @@ mod tests {
             .expect("callback should execute on configured runtime");
         assert_eq!(thread_name, "rocketmq-callback-error");
         assert!(!has_result);
-        assert_eq!(error.as_deref(), Some("callback failure"));
+        assert_eq!(
+            error.as_deref(),
+            Some("Response send_callback failed: Send failed to broker-a: callback failure")
+        );
     }
 
     #[tokio::test]

@@ -469,7 +469,7 @@ impl DefaultMQProducer {
     pub async fn send_with_callback<M, F>(&mut self, msg: M, send_callback: F) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         <Self as MQProducer>::send_with_callback(self, msg, send_callback).await
     }
@@ -481,7 +481,7 @@ impl DefaultMQProducer {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         <Self as MQProducer>::send_with_callback_timeout(self, msg, send_callback, timeout).await
@@ -525,7 +525,7 @@ impl DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         <Self as MQProducer>::send_to_queue_with_callback(self, msg, mq, send_callback).await
     }
@@ -539,7 +539,7 @@ impl DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         <Self as MQProducer>::send_to_queue_with_callback_timeout(self, msg, mq, send_callback, timeout).await
     }
@@ -682,7 +682,7 @@ impl DefaultMQProducer {
     pub async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         <Self as MQProducer>::send_batch_with_callback(self, msgs, f).await
     }
@@ -695,7 +695,7 @@ impl DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         <Self as MQProducer>::send_batch_with_callback_timeout(self, msgs, f, timeout).await
     }
@@ -708,7 +708,7 @@ impl DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         <Self as MQProducer>::send_batch_to_queue_with_callback(self, msgs, mq, f).await
     }
@@ -722,7 +722,7 @@ impl DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         <Self as MQProducer>::send_batch_to_queue_with_callback_timeout(self, msgs, mq, f, timeout).await
     }
@@ -1811,7 +1811,7 @@ impl MQProducer for DefaultMQProducer {
     async fn send_with_callback<M, F>(&mut self, mut msg: M, send_callback: F) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         let send_callback_inner = Arc::new(send_callback);
@@ -1840,7 +1840,7 @@ impl MQProducer for DefaultMQProducer {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic().as_str()));
@@ -1908,7 +1908,7 @@ impl MQProducer for DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self.client_config.queue_with_namespace(mq);
@@ -1932,7 +1932,7 @@ impl MQProducer for DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self.client_config.queue_with_namespace(mq);
@@ -2159,7 +2159,7 @@ impl MQProducer for DefaultMQProducer {
     async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         let batch = self.batch(msgs)?;
         self.default_mqproducer_impl
@@ -2178,7 +2178,7 @@ impl MQProducer for DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         let batch = self.batch(msgs)?;
         self.default_mqproducer_impl
@@ -2197,7 +2197,7 @@ impl MQProducer for DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         let batch = self.batch(msgs)?;
         let mq = self.client_config.queue_with_namespace(mq);
@@ -2217,7 +2217,7 @@ impl MQProducer for DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         let batch = self.batch(msgs)?;
         let mq = self.client_config.queue_with_namespace(mq);
@@ -2424,7 +2424,7 @@ mod facade_tests {
                 .await,
         );
 
-        let callback = |_result: Option<&SendResult>, _err: Option<&dyn std::error::Error>| {};
+        let callback = |_result: Option<&SendResult>, _err: Option<&RocketMQError>| {};
         assert_not_initialized(
             unstarted_producer()
                 .send_batch_to_queue_with_callback_timeout(vec![message()], queue(), callback, 1000)
@@ -2547,7 +2547,7 @@ mod tests {
             .topic("test-topic")
             .body(Bytes::from_static(b"Hello world"))
             .build_unchecked();
-        let callback = |_msg: Option<&SendResult>, _err: Option<&dyn std::error::Error>| {
+        let callback = |_msg: Option<&SendResult>, _err: Option<&RocketMQError>| {
             // no-op
         };
         let result: RocketMQResult<()> = producer.send_batch_with_callback(vec![msg], callback).await;
@@ -2622,7 +2622,7 @@ mod tests {
             .topic("test-topic")
             .body(Bytes::from_static(b"Hello world"))
             .build_unchecked();
-        let callback = |_msg: Option<&SendResult>, _err: Option<&dyn std::error::Error>| {
+        let callback = |_msg: Option<&SendResult>, _err: Option<&RocketMQError>| {
             // no-op
         };
         let result: RocketMQResult<()> = producer
@@ -2650,7 +2650,7 @@ mod tests {
             .topic("test-topic")
             .body(Bytes::from_static(b"Hello world"))
             .build_unchecked();
-        let callback = |_msg: Option<&SendResult>, _err: Option<&dyn std::error::Error>| {
+        let callback = |_msg: Option<&SendResult>, _err: Option<&RocketMQError>| {
             // no-op
         };
         let mq = MessageQueue::new();
