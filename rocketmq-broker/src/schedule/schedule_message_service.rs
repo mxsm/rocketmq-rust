@@ -42,6 +42,9 @@ use rocketmq_common::FileUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
+use rocketmq_error::UnifiedServiceError;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_runtime::ScheduledTaskConfig;
@@ -81,6 +84,12 @@ const INITIAL_QUEUE_CAPACITY: usize = 128;
 const MAX_PENDING_QUEUE_SIZE: usize = 10000;
 
 pub type DeliverPendingTable<MS> = Arc<DashMap<i32, Arc<Mutex<VecDeque<PutResultProcess<MS>>>>>>;
+
+fn schedule_message_service_startup_failed(error: impl Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "ScheduleMessageService: {error}"
+    )))
+}
 
 /// `ScheduleMessageService` is the core service in RocketMQ specifically designed to manage and
 /// deliver delayed messages (scheduled messages). It supports the consumption of messages after a
@@ -237,14 +246,14 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     /// # Returns
     ///
     /// `Ok(())` on successful start, error otherwise
-    pub fn start(this: ArcMut<Self>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn start(this: ArcMut<Self>) -> RocketMQResult<()> {
         Self::start_with_persist_initial_delay(this, Duration::from_millis(PERSIST_DELAY_INITIAL_DELAY))
     }
 
     pub(crate) fn start_with_persist_initial_delay(
         this: ArcMut<Self>,
         persist_initial_delay: Duration,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> RocketMQResult<()> {
         if this
             .started
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
@@ -304,7 +313,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     pub(crate) fn start_persist_task_for_probe(
         this: ArcMut<Self>,
         persist_initial_delay: Duration,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> RocketMQResult<()> {
         if this
             .started
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
@@ -323,18 +332,14 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         Ok(())
     }
 
-    fn install_task_groups(this: &ArcMut<Self>) -> Result<ScheduledTaskGroup, Box<dyn std::error::Error>> {
+    fn install_task_groups(this: &ArcMut<Self>) -> RocketMQResult<ScheduledTaskGroup> {
         let task_group = this
             .broker_controller
             .broker_task_group_or_current(
                 "rocketmq-broker.schedule",
                 "failed to start ScheduleMessageService outside Tokio runtime",
             )
-            .ok_or_else(|| {
-                Box::<dyn std::error::Error>::from(std::io::Error::other(
-                    "failed to start ScheduleMessageService outside Tokio runtime",
-                ))
-            })?;
+            .ok_or_else(|| schedule_message_service_startup_failed("outside Tokio runtime"))?;
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         *this.task_group.lock() = Some(task_group);
         *this.scheduled_tasks.lock() = Some(scheduled_tasks.clone());
@@ -466,12 +471,12 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         *current = data_version;
     }
 
-    fn load_super(&self) -> Result<bool, Box<dyn std::error::Error>> {
+    fn load_super(&self) -> RocketMQResult<bool> {
         // Mock implementation for the parent class load method
         Ok(true)
     }
 
-    pub fn load_when_sync_delay_offset(&self) -> Result<bool, Box<dyn std::error::Error>> {
+    pub fn load_when_sync_delay_offset(&self) -> RocketMQResult<bool> {
         let result = self.load_super()?;
         let parse_result = self.parse_delay_level();
         Ok(result && parse_result)
@@ -884,7 +889,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
     }
 
     /// Execute when the scheduled time is up for messages
-    async fn execute_on_time_up(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn execute_on_time_up(&self) -> RocketMQResult<()> {
         // Get the consume queue for this delay level
         let queue_id = delay_level_to_queue_id(self.delay_level);
         let cq = self
@@ -1070,7 +1075,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         offset: i64,
         offset_py: i64,
         size_py: i32,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> RocketMQResult<bool> {
         let mut result_process = self
             .deliver_message(msg_inner, msg_id, offset, offset_py, size_py, false)
             .await?;
@@ -1095,7 +1100,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         offset: i64,
         offset_py: i64,
         size_py: i32,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> RocketMQResult<bool> {
         let processes_queue_table = self
             .schedule_service
             .deliver_pending_table
@@ -1158,7 +1163,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         offset_py: i64,
         size_py: i32,
         auto_resend: bool,
-    ) -> Result<PutResultProcess<MS>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> RocketMQResult<PutResultProcess<MS>> {
         // Create a channel for the async result
 
         let topic = msg_inner.get_topic().clone();
@@ -1844,5 +1849,14 @@ mod tests {
         // Verify camelCase format
         assert!(json.contains("offsetTable"));
         assert!(json.contains("dataVersion"));
+    }
+
+    #[test]
+    fn schedule_message_service_uses_typed_errors() {
+        let source = include_str!("schedule_message_service.rs");
+
+        assert!(source.contains("RocketMQResult<ScheduledTaskGroup>"));
+        assert!(source.contains("RocketMQResult<PutResultProcess<MS>>"));
+        assert!(!source.contains(concat!("Box<dyn std::error::", "Error")));
     }
 }
