@@ -115,6 +115,10 @@ pub enum ControllerError {
     #[error("Operation timeout after {timeout_ms}ms")]
     Timeout { timeout_ms: u64 },
 
+    /// Controller runtime or task lifecycle error.
+    #[error("Runtime error: {0}")]
+    RuntimeError(String),
+
     /// Internal error
     #[error("Internal error: {0}")]
     Internal(String),
@@ -155,6 +159,11 @@ impl ControllerError {
             message: message.into(),
             source: Box::new(source),
         }
+    }
+
+    #[inline]
+    pub fn runtime_error(message: impl Into<String>) -> Self {
+        Self::RuntimeError(message.into())
     }
 }
 
@@ -226,6 +235,9 @@ mod tests {
 
         let err = ControllerError::Timeout { timeout_ms: 5000 };
         assert_eq!(err.to_string(), "Operation timeout after 5000ms");
+
+        let err = ControllerError::runtime_error("task group closed");
+        assert_eq!(err.to_string(), "Runtime error: task group closed");
 
         let err = ControllerError::Internal("panic".to_string());
         assert_eq!(err.to_string(), "Internal error: panic");

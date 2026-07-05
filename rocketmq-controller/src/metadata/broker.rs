@@ -128,7 +128,7 @@ impl BrokerManager {
             parent_task_group.child("rocketmq-controller.metadata.broker")
         } else {
             let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-                ControllerError::Internal(format!(
+                ControllerError::runtime_error(format!(
                     "No Tokio runtime for broker manager heartbeat checker: {error}"
                 ))
             })?;
@@ -148,7 +148,9 @@ impl BrokerManager {
                     }
                 },
             )
-            .map_err(|error| ControllerError::Internal(format!("Failed to spawn broker heartbeat checker: {error}")))?;
+            .map_err(|error| {
+                ControllerError::runtime_error(format!("Failed to spawn broker heartbeat checker: {error}"))
+            })?;
         *self.scheduled_tasks.lock() = Some(scheduled_tasks);
         *self.task_group.lock() = Some(task_group);
 

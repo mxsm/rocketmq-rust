@@ -477,7 +477,7 @@ impl ControllerManager {
         let metadata = Arc::new(
             MetadataStore::new(config.clone())
                 .await
-                .map_err(|e| ControllerError::Internal(format!("Failed to create metadata store: {}", e)))?,
+                .map_err(|e| ControllerError::storage_source("create metadata store", e))?,
         );
 
         // Initialize processor manager (needs Arc<RaftController>)
@@ -557,7 +557,7 @@ impl ControllerManager {
             parent_task_group.child("rocketmq-controller.manager")
         } else {
             let handle = tokio::runtime::Handle::try_current().map_err(|error| {
-                ControllerError::Internal(format!("No Tokio runtime for controller tasks: {error}"))
+                ControllerError::runtime_error(format!("No Tokio runtime for controller tasks: {error}"))
             })?;
             TaskGroup::root("rocketmq-controller.manager", RuntimeHandle::new(handle))
         };
@@ -756,9 +756,8 @@ impl ControllerManager {
         // Start Raft controller first (critical for leader election)
         if let Err(e) = self.raft_controller.mut_from_ref().startup().await {
             self.running.store(false, Ordering::SeqCst);
-            return Err(ControllerError::Internal(format!(
-                "Failed to start Raft controller: {}",
-                e
+            return Err(ControllerError::runtime_error(format!(
+                "Failed to start Raft controller: {e}"
             )));
         }
         info!("Raft controller started");
@@ -772,19 +771,15 @@ impl ControllerManager {
         // Start metadata store
         if let Err(e) = self.metadata.start().await {
             self.running.store(false, Ordering::SeqCst);
-            return Err(ControllerError::Internal(format!(
-                "Failed to start metadata store: {}",
-                e
-            )));
+            return Err(ControllerError::storage_source("start metadata store", e));
         }
         info!("Metadata store started");
 
         // Start processor manager (for request handling)
         if let Err(e) = self.processor.start().await {
             self.running.store(false, Ordering::SeqCst);
-            return Err(ControllerError::Internal(format!(
-                "Failed to start processor manager: {}",
-                e
+            return Err(ControllerError::runtime_error(format!(
+                "Failed to start processor manager: {e}"
             )));
         }
         info!("Processor manager started");
@@ -819,7 +814,7 @@ impl ControllerManager {
                     _ => {}
                 }
             }) {
-                return Err(ControllerError::Internal(format!(
+                return Err(ControllerError::runtime_error(format!(
                     "Failed to spawn controller remoting server task: {error}"
                 )));
             }
@@ -1103,7 +1098,9 @@ impl ControllerManager {
                     }
                 }
             })
-            .map_err(|error| ControllerError::Internal(format!("Failed to schedule leadership watch task: {error}")))?;
+            .map_err(|error| {
+                ControllerError::runtime_error(format!("Failed to schedule leadership watch task: {error}"))
+            })?;
 
         *self.leadership_watch_tasks.lock() = Some(scheduled_tasks);
         Ok(())
@@ -1112,12 +1109,12 @@ impl ControllerManager {
     async fn apply_leadership_state(&self, is_leader: bool) -> Result<()> {
         if is_leader {
             self.raft_controller.start_scheduling().await.map_err(|error| {
-                ControllerError::Internal(format!("Failed to start controller scheduling: {}", error))
+                ControllerError::runtime_error(format!("Failed to start controller scheduling: {error}"))
             })?;
             info!("Leader-only scheduling enabled on controller {}", self.config.node_id);
         } else {
             self.raft_controller.stop_scheduling().await.map_err(|error| {
-                ControllerError::Internal(format!("Failed to stop controller scheduling: {}", error))
+                ControllerError::runtime_error(format!("Failed to stop controller scheduling: {error}"))
             })?;
             self.reset_notify_dispatch_state();
             info!(
@@ -1192,10 +1189,10 @@ impl ControllerManager {
             .notify_dispatch_tx
             .lock()
             .clone()
-            .ok_or_else(|| ControllerError::Internal("Notify worker is not initialized".to_string()))?;
+            .ok_or_else(|| ControllerError::NotInitialized("Notify worker is not initialized".to_string()))?;
         sender
             .send(task)
-            .map_err(|error| ControllerError::Internal(format!("Failed to enqueue notify task: {}", error)))
+            .map_err(|error| ControllerError::runtime_error(format!("Failed to enqueue notify task: {error}")))
     }
 
     fn notify_retry_delay(&self, attempt: u32) -> Duration {
@@ -1305,7 +1302,7 @@ impl ControllerManager {
                     manager.process_notify_task(task).await;
                 }
             })
-            .map_err(|error| ControllerError::Internal(format!("Failed to spawn notify worker task: {error}")))?;
+            .map_err(|error| ControllerError::runtime_error(format!("Failed to spawn notify worker task: {error}")))?;
         Ok(())
     }
 
@@ -1314,10 +1311,10 @@ impl ControllerManager {
         let response_header = response
             .decode_command_custom_header::<ElectMasterResponseHeader>()
             .map_err(|error| {
-                ControllerError::Internal(format!(
-                    "Failed to decode elect-master response header for broker role notify: {:?}",
-                    error
-                ))
+                ControllerError::serialization_source(
+                    "decode elect-master response header for broker role notify",
+                    error,
+                )
             })?;
 
         let Some(body) = response.body() else {
@@ -1325,10 +1322,7 @@ impl ControllerManager {
         };
 
         let response_body = ElectMasterResponseBody::decode(body).map_err(|error| {
-            ControllerError::Internal(format!(
-                "Failed to decode elect-master response body for broker role notify: {}",
-                error
-            ))
+            ControllerError::serialization_source("decode elect-master response body for broker role notify", error)
         })?;
 
         let Some(member_group) = response_body.broker_member_group else {
@@ -1349,10 +1343,7 @@ impl ControllerManager {
         let sync_state_set = SyncStateSet::with_values(response_body.sync_state_set, sync_state_set_epoch)
             .encode()
             .map_err(|error| {
-                ControllerError::Internal(format!(
-                    "Failed to encode sync state set for broker role notify: {}",
-                    error
-                ))
+                ControllerError::serialization_source("encode sync state set for broker role notify", error)
             })?;
 
         for (broker_id, broker_addr) in member_group.broker_addrs {
