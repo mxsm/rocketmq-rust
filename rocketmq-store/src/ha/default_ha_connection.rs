@@ -75,6 +75,8 @@ pub const TRANSFER_HEADER_SIZE: usize = 8 + 4;
 pub(crate) const CONTROLLER_TRANSFER_HEADER_SIZE: usize = TRANSFER_HEADER_SIZE + 8;
 pub(crate) const DEFAULT_HA_TRANSFER_BATCH_SIZE: usize = 256 * 1024;
 
+type HAConnectionResult<T> = Result<T, HAConnectionError>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TransferHeader {
     pub master_phy_offset: i64,
@@ -542,7 +544,7 @@ impl ReadSocketService {
         info!("{} service end", self.get_service_name());
     }
 
-    async fn process_incoming_data(&mut self, data: BytesMut) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn process_incoming_data(&mut self, data: BytesMut) -> HAConnectionResult<()> {
         if self.buffer.len() + data.len() > READ_MAX_BUFFER_SIZE {
             self.compact_buffer();
         }
@@ -561,7 +563,7 @@ impl ReadSocketService {
         available_data >= REPORT_HEADER_SIZE
     }
 
-    async fn process_message(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn process_message(&mut self) -> HAConnectionResult<()> {
         let buffer_position = self.buffer.len();
         let available_data = buffer_position - self.process_position;
 
@@ -740,7 +742,7 @@ impl WriteSocketService {
         info!("{} service end", self.get_service_name());
     }
 
-    async fn process_transfer(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn process_transfer(&mut self) -> HAConnectionResult<()> {
         let slave_request_offset = self.slave_request_offset.load(Ordering::Relaxed);
         if slave_request_offset == -1 {
             sleep(Duration::from_millis(10)).await;
@@ -878,7 +880,7 @@ impl WriteSocketService {
         }
     }
 
-    async fn send_heartbeat(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send_heartbeat(&mut self) -> HAConnectionResult<()> {
         let next_offset = self.next_transfer_from_where.load(Ordering::Relaxed);
         let confirm_offset = self.ha_service.get_default_message_store().get_confirm_offset();
         let frame_header = encode_transfer_header(
@@ -906,7 +908,7 @@ impl WriteSocketService {
         Ok(())
     }
 
-    async fn send_data(&mut self, mut batch: TransferBatch) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send_data(&mut self, mut batch: TransferBatch) -> HAConnectionResult<()> {
         let confirm_offset = self.ha_service.get_default_message_store().get_confirm_offset();
         let header_bytes = encode_transfer_header(
             &mut self.byte_buffer_header,
@@ -1032,5 +1034,13 @@ mod tests {
     #[test]
     fn non_zero_configured_ha_transfer_batch_size_is_preserved() {
         assert_eq!(effective_ha_transfer_batch_size(64 * 1024), 64 * 1024);
+    }
+
+    #[test]
+    fn ha_connection_helpers_use_typed_errors() {
+        let source = include_str!("default_ha_connection.rs");
+
+        assert!(source.matches("HAConnectionResult<()>").count() >= 5);
+        assert!(!source.contains(concat!("Box<dyn std::error::", "Error")));
     }
 }
