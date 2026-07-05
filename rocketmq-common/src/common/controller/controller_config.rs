@@ -20,6 +20,7 @@ use std::path::PathBuf;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
@@ -262,6 +263,25 @@ impl Clone for ControllerConfig {
             enable_elect_unclean_master_local: self.enable_elect_unclean_master_local,
             rw_lock: RwLock::new(()),
         }
+    }
+}
+
+fn parse_update_value<T>(key: &'static str, value: &str) -> RocketMQResult<T>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_str(value).map_err(|error| RocketMQError::ConfigInvalidValue {
+        key,
+        value: value.to_string(),
+        reason: error.to_string(),
+    })
+}
+
+fn unknown_update_key(key: &str) -> RocketMQError {
+    RocketMQError::ConfigInvalidValue {
+        key: "property",
+        value: key.to_string(),
+        reason: "unknown controller configuration property".to_string(),
     }
 }
 
@@ -663,8 +683,7 @@ impl ControllerConfig {
                 }
 
                 "configStorePath" => {
-                    self.config_store_path =
-                        serde_json::from_str::<PathBuf>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.config_store_path = parse_update_value::<PathBuf>("configStorePath", value)?;
                 }
 
                 "controllerType" => {
@@ -673,22 +692,20 @@ impl ControllerConfig {
 
                 "scanNotActiveBrokerInterval" => {
                     self.scan_not_active_broker_interval =
-                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                        parse_update_value::<u64>("scanNotActiveBrokerInterval", value)?;
                 }
 
                 "controllerThreadPoolNums" => {
-                    self.controller_thread_pool_nums =
-                        serde_json::from_str::<usize>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.controller_thread_pool_nums = parse_update_value::<usize>("controllerThreadPoolNums", value)?;
                 }
 
                 "controllerRequestThreadPoolQueueCapacity" => {
                     self.controller_request_thread_pool_queue_capacity =
-                        serde_json::from_str::<usize>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                        parse_update_value::<usize>("controllerRequestThreadPoolQueueCapacity", value)?;
                 }
 
                 "mappedFileSize" => {
-                    self.mapped_file_size =
-                        serde_json::from_str::<usize>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.mapped_file_size = parse_update_value::<usize>("mappedFileSize", value)?;
                 }
 
                 "controllerStorePath" => {
@@ -696,38 +713,33 @@ impl ControllerConfig {
                 }
 
                 "electMasterMaxRetryCount" => {
-                    self.elect_master_max_retry_count =
-                        serde_json::from_str::<u32>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.elect_master_max_retry_count = parse_update_value::<u32>("electMasterMaxRetryCount", value)?;
                 }
 
                 "enableElectUncleanMaster" => {
-                    self.enable_elect_unclean_master =
-                        serde_json::from_str::<bool>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.enable_elect_unclean_master = parse_update_value::<bool>("enableElectUncleanMaster", value)?;
                 }
 
                 "isProcessReadEvent" => {
-                    self.is_process_read_event =
-                        serde_json::from_str::<bool>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.is_process_read_event = parse_update_value::<bool>("isProcessReadEvent", value)?;
                 }
 
                 "notifyBrokerRoleChanged" => {
-                    self.notify_broker_role_changed =
-                        serde_json::from_str::<bool>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.notify_broker_role_changed = parse_update_value::<bool>("notifyBrokerRoleChanged", value)?;
                 }
 
                 "scanInactiveMasterInterval" => {
                     self.scan_inactive_master_interval =
-                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                        parse_update_value::<u64>("scanInactiveMasterInterval", value)?;
                 }
 
                 "raftScanWaitTimeoutMs" | "jRaftScanWaitTimeoutMs" => {
-                    self.raft_scan_wait_timeout_ms =
-                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.raft_scan_wait_timeout_ms = parse_update_value::<u64>("raftScanWaitTimeoutMs", value)?;
                 }
 
                 "metricsExporterType" => {
-                    self.metrics_exporter_type = serde_json::from_str::<MetricsExporterType>(value)
-                        .map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.metrics_exporter_type =
+                        parse_update_value::<MetricsExporterType>("metricsExporterType", value)?;
                 }
 
                 "metricsGrpcExporterTarget" => {
@@ -740,22 +752,21 @@ impl ControllerConfig {
 
                 "metricGrpcExporterTimeOutInMills" => {
                     self.metric_grpc_exporter_time_out_in_mills =
-                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                        parse_update_value::<u64>("metricGrpcExporterTimeOutInMills", value)?;
                 }
 
                 "metricGrpcExporterIntervalInMills" => {
                     self.metric_grpc_exporter_interval_in_mills =
-                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                        parse_update_value::<u64>("metricGrpcExporterIntervalInMills", value)?;
                 }
 
                 "metricLoggingExporterIntervalInMills" => {
                     self.metric_logging_exporter_interval_in_mills =
-                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                        parse_update_value::<u64>("metricLoggingExporterIntervalInMills", value)?;
                 }
 
                 "metricsPromExporterPort" => {
-                    self.metrics_prom_exporter_port =
-                        serde_json::from_str::<u16>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.metrics_prom_exporter_port = parse_update_value::<u16>("metricsPromExporterPort", value)?;
                 }
 
                 "metricsPromExporterHost" => {
@@ -767,8 +778,7 @@ impl ControllerConfig {
                 }
 
                 "metricsInDelta" => {
-                    self.metrics_in_delta =
-                        serde_json::from_str::<bool>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.metrics_in_delta = parse_update_value::<bool>("metricsInDelta", value)?;
                 }
 
                 "configBlackList" => {
@@ -776,33 +786,27 @@ impl ControllerConfig {
                 }
 
                 "nodeId" => {
-                    self.node_id =
-                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.node_id = parse_update_value::<u64>("nodeId", value)?;
                 }
 
                 "listenAddr" => {
-                    self.listen_addr = serde_json::from_str::<SocketAddr>(value)
-                        .map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.listen_addr = parse_update_value::<SocketAddr>("listenAddr", value)?;
                 }
 
                 "raftPeers" => {
-                    self.raft_peers = serde_json::from_str::<Vec<RaftPeer>>(value)
-                        .map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.raft_peers = parse_update_value::<Vec<RaftPeer>>("raftPeers", value)?;
                 }
 
                 "controllerPeers" => {
-                    self.controller_peers = serde_json::from_str::<Vec<RaftPeer>>(value)
-                        .map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.controller_peers = parse_update_value::<Vec<RaftPeer>>("controllerPeers", value)?;
                 }
 
                 "electionTimeoutMs" => {
-                    self.election_timeout_ms =
-                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.election_timeout_ms = parse_update_value::<u64>("electionTimeoutMs", value)?;
                 }
 
                 "heartbeatIntervalMs" => {
-                    self.heartbeat_interval_ms =
-                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.heartbeat_interval_ms = parse_update_value::<u64>("heartbeatIntervalMs", value)?;
                 }
 
                 "storagePath" => {
@@ -810,16 +814,15 @@ impl ControllerConfig {
                 }
 
                 "storageBackend" => {
-                    self.storage_backend = serde_json::from_str::<StorageBackendType>(value)
-                        .map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.storage_backend = parse_update_value::<StorageBackendType>("storageBackend", value)?;
                 }
 
                 "enableElectUncleanMasterLocal" => {
                     self.enable_elect_unclean_master_local =
-                        serde_json::from_str::<bool>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                        parse_update_value::<bool>("enableElectUncleanMasterLocal", value)?;
                 }
                 _ => {
-                    return Err(RocketMQError::Internal(format!("found unknown property: {}", key)));
+                    return Err(unknown_update_key(key));
                 }
             }
         }
@@ -962,5 +965,38 @@ mod tests {
         let result = config.to_properties_string();
 
         assert!(result.contains("raftPeers=1-127.0.0.1:9877;2-127.0.0.1:9878"));
+    }
+
+    #[tokio::test]
+    async fn update_reports_invalid_values_as_config_errors() {
+        let mut config = ControllerConfig::default();
+        let mut properties = HashMap::new();
+        properties.insert("scanNotActiveBrokerInterval".to_string(), "not-a-number".to_string());
+
+        let error = config.update(properties).await.expect_err("invalid value should fail");
+
+        assert_eq!(error.kind(), rocketmq_error::ErrorKind::ConfigInvalidValue);
+        assert!(matches!(
+            error,
+            RocketMQError::ConfigInvalidValue {
+                key: "scanNotActiveBrokerInterval",
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn update_reports_unknown_keys_as_config_errors() {
+        let mut config = ControllerConfig::default();
+        let mut properties = HashMap::new();
+        properties.insert("unknownControllerProperty".to_string(), "1".to_string());
+
+        let error = config.update(properties).await.expect_err("unknown key should fail");
+
+        assert_eq!(error.kind(), rocketmq_error::ErrorKind::ConfigInvalidValue);
+        assert!(matches!(
+            error,
+            RocketMQError::ConfigInvalidValue { key: "property", .. }
+        ));
     }
 }
