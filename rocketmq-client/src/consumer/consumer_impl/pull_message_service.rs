@@ -29,6 +29,7 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::UnifiedServiceError;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::Shutdown;
 use serde::Serialize;
@@ -608,7 +609,7 @@ impl PullMessageService {
 
             info!("{} service end", "PullMessageService");
         })
-        .map_err(|error| RocketMQError::Internal(format!("failed to spawn PullMessageService main loop: {error}")))?;
+        .map_err(|error| pull_message_service_startup_failed("spawn main loop", error))?;
 
         let mut pull_shards = Vec::with_capacity(self.shard_count);
         let mut pull_handles = Vec::with_capacity(self.shard_count);
@@ -621,9 +622,7 @@ impl PullMessageService {
                 "rocketmq-client-pull-message-service-shard",
                 run_pull_request_shard_worker(index, shard_rx, shutdown_rx, worker_instance, metrics.clone()),
             )
-            .map_err(|error| {
-                RocketMQError::Internal(format!("failed to spawn PullMessageService shard worker: {error}"))
-            })?;
+            .map_err(|error| pull_message_service_startup_failed("spawn shard worker", error))?;
 
             pull_shards.push(PullRequestShard {
                 index,
@@ -1074,9 +1073,24 @@ fn spawn_scheduled_pull_message_task<F>(
     }
 }
 
+fn pull_message_service_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+        "PullMessageService {operation}: {error}"
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_error::ErrorKind;
+
+    #[test]
+    fn pull_message_service_startup_failed_uses_service_error_kind() {
+        let error = pull_message_service_startup_failed("spawn test worker", "task group closed");
+
+        assert_eq!(error.kind(), ErrorKind::Service);
+        assert!(error.to_string().contains("PullMessageService spawn test worker"));
+    }
 
     #[test]
     fn execute_task_without_tokio_runtime_does_not_spawn_panic() {
