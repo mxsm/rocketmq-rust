@@ -12,6 +12,8 @@ use rocketmq_controller::processor::controller_request_processor::ControllerRequ
 use rocketmq_controller::typ::Node;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
+use rocketmq_error::ErrorKind;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::base::response_future::ResponseFuture;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -125,6 +127,13 @@ impl ProcessorHarness {
             .expect("processor should return a response");
         response.make_custom_header_to_net();
         response
+    }
+
+    async fn send_result(&mut self, mut request: RemotingCommand) -> RocketMQResult<Option<RemotingCommand>> {
+        request.make_custom_header_to_net();
+        self.processor
+            .process_request(self.channel.clone(), self.ctx.clone(), &mut request)
+            .await
     }
 
     async fn apply_broker_id(
@@ -446,6 +455,37 @@ async fn controller_request_contract_broker_heartbeat() {
         "heartbeat request to mark broker active",
     )
     .await;
+
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn controller_request_contract_broker_heartbeat_rejects_missing_timeout_header() {
+    let mut harness = ProcessorHarness::new().await;
+    let header = BrokerHeartbeatRequestHeader {
+        cluster_name: CheetahString::from_static_str(CLUSTER_NAME),
+        broker_addr: CheetahString::from_static_str(BROKER_ADDR_1),
+        broker_name: CheetahString::from_static_str(BROKER_NAME),
+        broker_id: Some(FIRST_BROKER_CONTROLLER_ID as i64),
+        epoch: Some(1),
+        max_offset: Some(100),
+        confirm_offset: Some(80),
+        heartbeat_timeout_mills: None,
+        election_priority: Some(1),
+    };
+
+    let error = match harness
+        .send_result(RemotingCommand::create_request_command(
+            RequestCode::BrokerHeartbeat,
+            header,
+        ))
+        .await
+    {
+        Ok(_) => panic!("missing heartbeat timeout should be rejected"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), ErrorKind::RequestHeaderError);
 
     harness.shutdown().await;
 }
