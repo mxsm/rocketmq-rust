@@ -98,7 +98,7 @@ impl AckCallback for RootAckCallback {
         assert_eq!(ack_result.status(), AckStatus::Ok);
     }
 
-    fn on_exception(&self, _e: Box<dyn std::error::Error>) {}
+    fn on_exception(&self, _e: rocketmq_error::RocketMQError) {}
 }
 
 struct RootMessageQueueListener;

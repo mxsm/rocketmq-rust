@@ -24,6 +24,8 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 
+use rocketmq_error::RocketMQError;
+
 /// Enumeration representing the state of a CompletableFuture.
 #[derive(Copy, Clone, PartialEq)]
 enum State {
@@ -43,7 +45,7 @@ struct CompletableFutureState<T> {
     data: Option<T>,
 
     /// An optional error value contained within the CompletableFuture upon completion.
-    error: Option<Box<dyn std::error::Error + Send + Sync>>,
+    error: Option<RocketMQError>,
 }
 
 fn lock_state<T>(state: &Mutex<CompletableFutureState<T>>) -> MutexGuard<'_, CompletableFutureState<T>> {
@@ -59,10 +61,7 @@ fn complete_state<T>(state: &Mutex<CompletableFutureState<T>>, data: T) {
     }
 }
 
-fn complete_exceptionally<T>(
-    state: &Mutex<CompletableFutureState<T>>,
-    error: Box<dyn std::error::Error + Send + Sync>,
-) {
+fn complete_exceptionally<T>(state: &Mutex<CompletableFutureState<T>>, error: RocketMQError) {
     let mut state = lock_state(state);
     state.completed = State::Ready;
     state.error = Some(error);
@@ -116,7 +115,7 @@ impl<T: Send + 'static> CompletableFuture<T> {
         complete_state(&self.state, result);
     }
 
-    pub fn complete_exceptionally(&mut self, error: Box<dyn std::error::Error + Send + Sync>) {
+    pub fn complete_exceptionally(&mut self, error: RocketMQError) {
         complete_exceptionally(&self.state, error);
     }
 }
@@ -213,5 +212,16 @@ mod tests {
         cf.complete(42);
 
         assert_eq!(futures::executor::block_on(cf), Some(42));
+    }
+
+    #[test]
+    fn completable_future_exceptional_completion_accepts_typed_error() {
+        let mut cf: CompletableFuture<i32> = CompletableFuture::new();
+        cf.complete_exceptionally(RocketMQError::response_process_failed(
+            "completable_future",
+            "test failure",
+        ));
+
+        assert_eq!(futures::executor::block_on(cf), None);
     }
 }

@@ -2605,11 +2605,7 @@ impl MQClientAPIImpl {
                     operation: "sendMessageAsync",
                     timeout_ms: timeout_millis,
                 };
-                Self::execute_async_send_hook_after(
-                    &context_data,
-                    None,
-                    Some(Self::boxed_context_error(err.to_string())),
-                );
+                Self::execute_async_send_hook_after(&context_data, None, Some(Self::context_error(err.to_string())));
                 Self::notify_send_callback_exception(&send_callback, &callback_executor, &err);
                 return;
             }
@@ -2644,7 +2640,7 @@ impl MQClientAPIImpl {
                             Self::execute_async_send_hook_after(
                                 &context_data,
                                 None,
-                                Some(Self::boxed_context_error(err_obj.to_string())),
+                                Some(Self::context_error(err_obj.to_string())),
                             );
                             Self::notify_send_callback_exception(&send_callback, &callback_executor, &err_obj);
                             return;
@@ -2684,7 +2680,7 @@ impl MQClientAPIImpl {
                                     Self::execute_async_send_hook_after(
                                         &context_data,
                                         None,
-                                        Some(Self::boxed_context_error(err_obj.to_string())),
+                                        Some(Self::context_error(err_obj.to_string())),
                                     );
                                     Self::notify_send_callback_exception(&send_callback, &callback_executor, &err_obj);
                                     return;
@@ -2720,7 +2716,7 @@ impl MQClientAPIImpl {
                             Self::execute_async_send_hook_after(
                                 &context_data,
                                 None,
-                                Some(Self::boxed_context_error(err_obj.to_string())),
+                                Some(Self::context_error(err_obj.to_string())),
                             );
                             Self::notify_send_callback_exception(&send_callback, &callback_executor, &err_obj);
                             return;
@@ -2759,11 +2755,7 @@ impl MQClientAPIImpl {
                         }
                     }
 
-                    Self::execute_async_send_hook_after(
-                        &context_data,
-                        None,
-                        Some(Self::boxed_context_error(e.to_string())),
-                    );
+                    Self::execute_async_send_hook_after(&context_data, None, Some(Self::context_error(e.to_string())));
                     Self::notify_send_callback_exception(&send_callback, &callback_executor, &e);
                     return;
                 }
@@ -2810,7 +2802,7 @@ impl MQClientAPIImpl {
     fn execute_async_send_hook_after(
         context_data: &Option<AsyncSendHookContext>,
         send_result: Option<&SendResult>,
-        exception: Option<Arc<Box<dyn StdError + Send + Sync>>>,
+        exception: Option<Arc<RocketMQError>>,
     ) {
         let Some(context_data) = context_data.as_ref() else {
             return;
@@ -2838,8 +2830,8 @@ impl MQClientAPIImpl {
         producer.execute_send_message_hook_after(&context);
     }
 
-    fn boxed_context_error(message: String) -> Arc<Box<dyn StdError + Send + Sync>> {
-        Arc::new(Box::new(std::io::Error::other(message)))
+    fn context_error(message: String) -> Arc<RocketMQError> {
+        Arc::new(RocketMQError::response_process_failed("send_callback", message))
     }
 
     fn spawn_api_background_task<F>(
@@ -4249,7 +4241,7 @@ impl MQClientAPIImpl {
                 ack_callback.on_success(ack_result);
             }
             Err(e) => {
-                ack_callback.on_exception(Box::new(e) as Box<dyn std::error::Error>);
+                ack_callback.on_exception(e);
             }
         };
         Ok(())
@@ -4749,7 +4741,7 @@ impl MQClientAPIImpl {
                 ack_callback.on_success(ack_result);
             }
             Err(e) => {
-                ack_callback.on_exception(Box::new(e) as Box<dyn std::error::Error>);
+                ack_callback.on_exception(e);
             }
         }
         Ok(())
