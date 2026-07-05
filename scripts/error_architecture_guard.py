@@ -61,8 +61,6 @@ INTERNAL_ERROR_ALLOWLIST = (
 )
 
 ANYHOW_RESULT_ALLOWLIST: dict[str, str] = {
-    "rocketmq/src/schedule.rs": "internal scheduler futures use anyhow at the outer async worker boundary",
-    "rocketmq-broker/src/broker_runtime.rs": "broker runtime stores scheduled worker handles and placeholders",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/build.rs": "build script boundary",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/nameserver/db.rs": "standalone Tauri boundary pending dashboard alignment",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/nameserver/runtime.rs": "standalone Tauri boundary pending dashboard alignment",
@@ -73,7 +71,6 @@ ANYHOW_RESULT_ALLOWLIST: dict[str, str] = {
     "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/main.rs": "web backend process boundary",
     "rocketmq-remoting/src/remoting_server/rocketmq_tokio_server.rs": "internal remoting accept-loop worker boundary",
     "rocketmq-store/src/ha/default_ha_client.rs": "internal HA replication worker boundary",
-    "rocketmq-store/src/stats/broker_stats_manager.rs": "internal scheduled worker handle boundary",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs": "TUI process boundary",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/rocketmq_tui_app.rs": "TUI terminal runtime boundary",
 }

@@ -45,6 +45,7 @@ use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
@@ -2217,7 +2218,7 @@ impl BrokerRuntime {
         }
     }
 
-    fn log_scheduled_task_start(task_name: &str, task_id: anyhow::Result<u64>) {
+    fn log_scheduled_task_start(task_name: &str, task_id: RocketMQResult<u64>) {
         if let Err(error) = task_id {
             error!("Failed to start scheduled task {task_name}: {error}");
         }
@@ -5125,7 +5126,7 @@ mod tests {
                     async move {
                         let _marker = DropMarker(dropped);
                         started.store(true, Ordering::Release);
-                        future::pending::<anyhow::Result<()>>().await
+                        future::pending::<RocketMQResult<()>>().await
                     }
                 }
             })

@@ -60,9 +60,10 @@ pub mod simple_scheduler {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
-    use anyhow::anyhow;
-    use anyhow::Result;
     use parking_lot::RwLock;
+    use rocketmq_error::RocketMQError;
+    use rocketmq_error::RocketMQResult;
+    use rocketmq_error::UnifiedServiceError;
     use rocketmq_runtime::RuntimeHandle;
     use rocketmq_runtime::ShutdownReport;
     use rocketmq_runtime::TaskGroup;
@@ -78,6 +79,8 @@ pub mod simple_scheduler {
     use tracing::info;
 
     use crate::ArcMut;
+
+    type Result<T> = RocketMQResult<T>;
 
     #[derive(Debug, Clone, Copy)]
     pub enum ScheduleMode {
@@ -129,9 +132,11 @@ pub mod simple_scheduler {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        task_group
-            .spawn_service(task_name, future)
-            .map_err(|error| anyhow!("{operation} failed to spawn scheduled task driver: {error}"))
+        task_group.spawn_service(task_name, future).map_err(|error| {
+            RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+                "{operation} failed to spawn scheduled task driver: {error}"
+            )))
+        })
     }
 
     #[derive(Debug, Clone)]
@@ -216,8 +221,11 @@ pub mod simple_scheduler {
                 return Ok(task_group.clone());
             }
 
-            let handle = tokio::runtime::Handle::try_current()
-                .map_err(|error| anyhow!("{operation} requires a Tokio runtime: {error}"))?;
+            let handle = tokio::runtime::Handle::try_current().map_err(|error| {
+                RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
+                    "{operation} requires a Tokio runtime: {error}"
+                )))
+            })?;
             let new_group = TaskGroup::root("rocketmq.simple-scheduled-task-manager", RuntimeHandle::new(handle));
             *task_group = Some(new_group.clone());
             Ok(new_group)
@@ -882,6 +890,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use rocketmq_error::RocketMQResult;
     use rocketmq_runtime::RuntimeContext;
     use tokio::time;
 
@@ -1148,7 +1157,7 @@ mod tests {
                     async move {
                         let _marker = DropMarker(dropped);
                         started.store(true, Ordering::Release);
-                        future::pending::<anyhow::Result<()>>().await
+                        future::pending::<RocketMQResult<()>>().await
                     }
                 }
             })
@@ -1185,7 +1194,7 @@ mod tests {
                     let started = Arc::clone(&started);
                     async move {
                         started.store(true, Ordering::Release);
-                        future::pending::<anyhow::Result<()>>().await
+                        future::pending::<RocketMQResult<()>>().await
                     }
                 }
             })
