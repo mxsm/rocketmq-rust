@@ -520,6 +520,17 @@ impl BrokerShutdownComponentReport {
         }
     }
 
+    pub(crate) fn completed_with_detail(name: &'static str, elapsed: Duration, detail: impl Into<String>) -> Self {
+        Self {
+            name,
+            present: true,
+            healthy: true,
+            timed_out: false,
+            elapsed,
+            detail: Some(detail.into()),
+        }
+    }
+
     pub(crate) fn unhealthy(name: &'static str, elapsed: Duration, detail: impl Into<String>) -> Self {
         Self {
             name,
@@ -553,6 +564,18 @@ impl BrokerShutdownComponentReport {
             Self::completed(name, elapsed)
         } else {
             Self::unhealthy(name, elapsed, report.to_json())
+        }
+    }
+
+    pub(crate) fn from_telemetry_shutdown_report(
+        report: &rocketmq_observability::TelemetryShutdownReport,
+        elapsed: Duration,
+    ) -> Self {
+        let detail = report.to_json();
+        if report.is_healthy() {
+            Self::completed_with_detail("observability", elapsed, detail)
+        } else {
+            Self::unhealthy("observability", elapsed, detail)
         }
     }
 }
@@ -971,14 +994,15 @@ impl BrokerRuntime {
         {
             let started = Instant::now();
             if let Some(guard) = self.inner.observability_guard.take() {
-                if let Err(error) = guard.shutdown() {
-                    warn!("Failed to shutdown observability runtime: {error}");
-                    shutdown_report.observability =
-                        BrokerShutdownComponentReport::unhealthy("observability", started.elapsed(), error.to_string());
-                } else {
-                    shutdown_report.observability =
-                        BrokerShutdownComponentReport::completed("observability", started.elapsed());
+                let telemetry_report = guard.shutdown();
+                if !telemetry_report.is_healthy() {
+                    warn!(
+                        report = %telemetry_report.to_json(),
+                        "Failed to shutdown observability runtime cleanly"
+                    );
                 }
+                shutdown_report.observability =
+                    BrokerShutdownComponentReport::from_telemetry_shutdown_report(&telemetry_report, started.elapsed());
             } else {
                 shutdown_report.observability = BrokerShutdownComponentReport::skipped("observability");
             }
@@ -5146,6 +5170,57 @@ mod tests {
             vec!["message_store", "fast_failure"]
         );
         assert_eq!(report.timed_out_component_names(), vec!["message_store"]);
+    }
+
+    #[test]
+    fn broker_shutdown_report_records_healthy_telemetry_detail() {
+        let telemetry_report = rocketmq_observability::TelemetryShutdownReport {
+            subscriber_installed: true,
+            file_log_enabled: true,
+            dropped_log_lines: 0,
+            logs_shutdown_ok: true,
+            traces_shutdown_ok: true,
+            metrics_shutdown_ok: true,
+            logs_shutdown_error: None,
+            traces_shutdown_error: None,
+            metrics_shutdown_error: None,
+        };
+
+        let component =
+            BrokerShutdownComponentReport::from_telemetry_shutdown_report(&telemetry_report, Duration::from_millis(4));
+
+        assert!(component.present);
+        assert!(component.healthy);
+        assert_eq!(component.name, "observability");
+        let detail = component.detail.expect("telemetry detail should be recorded");
+        assert!(detail.contains("\"subscriber_installed\": true"));
+        assert!(detail.contains("\"file_log_enabled\": true"));
+    }
+
+    #[test]
+    fn broker_shutdown_report_marks_telemetry_provider_failure_unhealthy() {
+        let telemetry_report = rocketmq_observability::TelemetryShutdownReport {
+            subscriber_installed: true,
+            file_log_enabled: false,
+            dropped_log_lines: 0,
+            logs_shutdown_ok: false,
+            traces_shutdown_ok: true,
+            metrics_shutdown_ok: true,
+            logs_shutdown_error: Some("logger provider failed".to_string()),
+            traces_shutdown_error: None,
+            metrics_shutdown_error: None,
+        };
+
+        let component =
+            BrokerShutdownComponentReport::from_telemetry_shutdown_report(&telemetry_report, Duration::from_millis(5));
+
+        assert!(component.present);
+        assert!(!component.healthy);
+        assert_eq!(component.name, "observability");
+        assert!(component
+            .detail
+            .expect("telemetry failure detail should be recorded")
+            .contains("logger provider failed"));
     }
 
     #[tokio::test]

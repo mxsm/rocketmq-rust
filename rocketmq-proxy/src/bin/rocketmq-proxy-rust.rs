@@ -100,14 +100,17 @@ async fn run(service_context: ServiceContext) -> ProxyResult<()> {
             }
         })
         .await;
-    let shutdown_result = telemetry_guard.shutdown().map_err(|error| ProxyError::Transport {
-        message: format!("failed to shutdown proxy telemetry bootstrap: {error}"),
-    });
+    let shutdown_result = telemetry_guard
+        .shutdown()
+        .into_result()
+        .map_err(|error| ProxyError::Transport {
+            message: format!("failed to shutdown proxy telemetry bootstrap: {error}"),
+        });
 
     match (serve_result, shutdown_result) {
         (Err(error), _) => Err(error),
         (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Ok(_report)) => Ok(()),
     }
 }
 

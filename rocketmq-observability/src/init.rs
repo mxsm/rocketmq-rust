@@ -20,6 +20,48 @@ use crate::config::SubscriberInstallPolicy;
 use crate::config::SubscriberInstallStatus;
 use crate::error::ObservabilityError;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TelemetryProviderShutdownReport {
+    pub(crate) logs_shutdown_ok: bool,
+    pub(crate) traces_shutdown_ok: bool,
+    pub(crate) metrics_shutdown_ok: bool,
+    pub(crate) logs_shutdown_error: Option<String>,
+    pub(crate) traces_shutdown_error: Option<String>,
+    pub(crate) metrics_shutdown_error: Option<String>,
+}
+
+impl Default for TelemetryProviderShutdownReport {
+    fn default() -> Self {
+        Self {
+            logs_shutdown_ok: true,
+            traces_shutdown_ok: true,
+            metrics_shutdown_ok: true,
+            logs_shutdown_error: None,
+            traces_shutdown_error: None,
+            metrics_shutdown_error: None,
+        }
+    }
+}
+
+impl TelemetryProviderShutdownReport {
+    pub(crate) fn is_healthy(&self) -> bool {
+        self.logs_shutdown_ok && self.traces_shutdown_ok && self.metrics_shutdown_ok
+    }
+
+    pub(crate) fn into_result(self) -> Result<(), ObservabilityError> {
+        if let Some(error) = self.logs_shutdown_error {
+            return Err(ObservabilityError::logs_shutdown(error));
+        }
+        if let Some(error) = self.traces_shutdown_error {
+            return Err(ObservabilityError::traces_shutdown(error));
+        }
+        if let Some(error) = self.metrics_shutdown_error {
+            return Err(ObservabilityError::metrics_shutdown(error));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TelemetryGuard {
     subscriber_install_status: SubscriberInstallStatus,
@@ -39,6 +81,10 @@ impl TelemetryGuard {
     }
 
     pub fn shutdown(self) -> Result<(), ObservabilityError> {
+        self.shutdown_with_report().into_result()
+    }
+
+    pub(crate) fn shutdown_with_report(self) -> TelemetryProviderShutdownReport {
         self.shutdown_inner()
     }
 
@@ -51,33 +97,44 @@ impl TelemetryGuard {
     }
 
     #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
-    fn shutdown_inner(mut self) -> Result<(), ObservabilityError> {
+    fn shutdown_inner(mut self) -> TelemetryProviderShutdownReport {
+        let mut report = TelemetryProviderShutdownReport::default();
+
+        #[cfg(feature = "otel-logs")]
+        if let Some(provider) = self.logger_provider.take() {
+            if let Err(error) = provider.shutdown() {
+                report.logs_shutdown_ok = false;
+                report.logs_shutdown_error = Some(error.to_string());
+            }
+        }
+
+        #[cfg(feature = "otel-traces")]
+        if let Some(provider) = self.tracer_provider.take() {
+            if let Err(error) = provider.shutdown() {
+                report.traces_shutdown_ok = false;
+                report.traces_shutdown_error = Some(error.to_string());
+            }
+        }
+
+        #[cfg(feature = "otel-metrics")]
+        if let Some(provider) = self.meter_provider.take() {
+            if let Err(error) = provider.shutdown() {
+                report.metrics_shutdown_ok = false;
+                report.metrics_shutdown_error = Some(error.to_string());
+            }
+        }
+
         #[cfg(feature = "prometheus")]
         if let Some(prometheus_http) = self.prometheus_http.take() {
             prometheus_http.shutdown();
         }
 
-        #[cfg(feature = "otel-metrics")]
-        if let Some(provider) = self.meter_provider.take() {
-            provider.shutdown().map_err(ObservabilityError::metrics_shutdown)?;
-        }
-
-        #[cfg(feature = "otel-traces")]
-        if let Some(provider) = self.tracer_provider.take() {
-            provider.shutdown().map_err(ObservabilityError::traces_shutdown)?;
-        }
-
-        #[cfg(feature = "otel-logs")]
-        if let Some(provider) = self.logger_provider.take() {
-            provider.shutdown().map_err(ObservabilityError::logs_shutdown)?;
-        }
-
-        Ok(())
+        report
     }
 
     #[cfg(not(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs")))]
-    fn shutdown_inner(self) -> Result<(), ObservabilityError> {
-        Ok(())
+    fn shutdown_inner(self) -> TelemetryProviderShutdownReport {
+        TelemetryProviderShutdownReport::default()
     }
 
     #[cfg(feature = "otel-metrics")]

@@ -111,6 +111,7 @@ async fn run(service_context: ServiceContext) -> Result<()> {
     if let Err(error) = verify_rocketmq_home() {
         telemetry_guard
             .shutdown()
+            .into_result()
             .context("failed to shutdown broker telemetry bootstrap after ROCKETMQ_HOME validation failed")?;
         return Err(error);
     }
@@ -120,6 +121,7 @@ async fn run(service_context: ServiceContext) -> Result<()> {
         print_config(&broker_config, &message_store_config, args.print_important_config);
         telemetry_guard
             .shutdown()
+            .into_result()
             .context("failed to shutdown broker telemetry bootstrap after printing broker configuration")?;
         return Ok(());
     }

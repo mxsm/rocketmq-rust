@@ -138,12 +138,13 @@ async fn run(service_context: ServiceContext) -> Result<()> {
         .map_err(anyhow::Error::from);
     let shutdown_result = telemetry_guard
         .shutdown()
+        .into_result()
         .context("failed to shutdown namesrv telemetry bootstrap");
 
     match (boot_result, shutdown_result) {
         (Err(error), _) => Err(error),
         (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Ok(_report)) => Ok(()),
     }
 }
 
