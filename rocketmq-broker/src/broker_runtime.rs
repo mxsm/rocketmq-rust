@@ -206,7 +206,18 @@ fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
     }
 }
 
-#[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
+pub fn build_broker_telemetry_bootstrap_config(
+    broker_config: &BrokerConfig,
+) -> rocketmq_observability::TelemetryBootstrapConfig {
+    let mut observability = build_broker_observability_config(broker_config);
+    observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
+
+    rocketmq_observability::TelemetryBootstrapConfig {
+        observability,
+        logging: build_broker_logging_config(broker_config),
+    }
+}
+
 fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_observability::ObservabilityConfig {
     let metrics_enabled = broker_config.metrics_exporter_type.is_enable();
     let traces_enabled = broker_config.trace_exporter_type.is_enable();
@@ -250,7 +261,16 @@ fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_o
     config
 }
 
-#[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
+fn build_broker_logging_config(broker_config: &BrokerConfig) -> rocketmq_observability::LoggingConfig {
+    let mut config = rocketmq_observability::LoggingConfig::default();
+    config.file.directory = std::path::Path::new(broker_config.store_path_root_dir.as_str())
+        .join("logs")
+        .to_string_lossy()
+        .into_owned();
+    config.file.file_name_prefix = "rocketmq-broker".to_string();
+    config
+}
+
 fn parse_observability_key_values(values: &CheetahString) -> HashMap<String, String> {
     values
         .as_str()
@@ -770,8 +790,9 @@ impl BrokerRuntime {
             pop_inflight_message_counter,
             replicas_manager: None,
             broker_fast_failure,
-            #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
             observability_guard: None,
+            #[cfg(feature = "otel-metrics")]
+            observability_metrics_initialized: false,
             cold_data_pull_request_hold_service: Some(ColdDataPullRequestHoldService::default()),
             cold_data_cg_ctr_service: Some(ColdDataCgCtrService::new(
                 message_store_config.cold_data_flow_control_enable,
@@ -860,6 +881,10 @@ impl BrokerRuntime {
         }
     }
 
+    pub(crate) fn set_telemetry_runtime_guard(&mut self, guard: rocketmq_observability::TelemetryRuntimeGuard) {
+        self.inner.observability_guard = Some(guard);
+    }
+
     pub(crate) fn broker_config(&self) -> &BrokerConfig {
         self.inner.broker_config()
     }
@@ -943,7 +968,6 @@ impl BrokerRuntime {
             shutdown_report.auth = BrokerShutdownComponentReport::skipped("auth");
         }
 
-        #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
         {
             let started = Instant::now();
             if let Some(guard) = self.inner.observability_guard.take() {
@@ -959,11 +983,6 @@ impl BrokerRuntime {
                 shutdown_report.observability = BrokerShutdownComponentReport::skipped("observability");
             }
         }
-        #[cfg(not(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs")))]
-        {
-            shutdown_report.observability = BrokerShutdownComponentReport::skipped("observability");
-        }
-
         let started = Instant::now();
         let scheduled_report = self
             .shutdown_scheduled_tasks_with_timeout(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
@@ -1531,7 +1550,6 @@ impl BrokerRuntime {
     }
 
     fn initialize_resources(&mut self) {
-        #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
         self.initialize_observability();
 
         if self.inner.topic_queue_mapping_clean_service.is_none() {
@@ -1539,223 +1557,235 @@ impl BrokerRuntime {
         }
     }
 
-    #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
     fn initialize_observability(&mut self) {
-        if self.inner.observability_guard.is_some() {
-            return;
-        }
-
-        let config = build_broker_observability_config(&self.inner.broker_config);
+        let bootstrap_config = build_broker_telemetry_bootstrap_config(&self.inner.broker_config);
+        let config = &bootstrap_config.observability;
         if !config.enabled {
             return;
         }
 
-        match rocketmq_observability::init_observability(&config) {
-            Ok(guard) => {
-                #[cfg(feature = "otel-metrics")]
-                if let Some(provider) = guard.meter_provider() {
-                    let label_config = crate::metrics::broker_metrics_manager::BrokerMetricsLabelConfig::new(
-                        config.metrics.cardinality_limit,
-                        config.metrics.topic_label_enabled,
-                        config.metrics.consumer_group_label_enabled,
-                    );
-                    let sampling_config = crate::metrics::broker_metrics_manager::BrokerMetricsSamplingConfig::new(
-                        config.metrics.sample_ratio,
-                    );
-                    let attributes_supplier =
-                        Arc::new(crate::metrics::broker_metrics_manager::BrokerAttributesSupplier::new(
-                            self.inner.broker_config.broker_identity.broker_cluster_name.to_string(),
-                            self.inner.broker_config.broker_identity.get_canonical_name(),
-                        ));
-                    let broker_permission = i64::from(self.inner.broker_config.broker_permission);
-                    let topic_num_inner = self.inner.clone();
-                    let consumer_group_num_inner = self.inner.clone();
-                    let producer_connections_inner = self.inner.clone();
-                    let consumer_connections_inner = self.inner.clone();
-                    crate::metrics::broker_metrics_manager::BrokerMetricsManager::init_global_with_observables_and_configs(
-                        provider,
-                        attributes_supplier,
-                        label_config,
-                        sampling_config,
-                        None::<fn() -> Vec<(String, i64)>>,
-                        move || broker_permission,
-                        move || {
-                            i64::try_from(topic_num_inner.topic_config_manager().topic_config_table().len())
-                                .unwrap_or(i64::MAX)
-                        },
-                        move || {
-                            i64::try_from(consumer_group_num_inner.subscription_group_manager().group_count())
-                                .unwrap_or(i64::MAX)
-                        },
-                        move || {
-                            producer_connections_inner
-                                .producer_manager()
-                                .connection_count_by_client_attrs()
-                                .into_iter()
-                                .map(|(language, version, count)| {
-                                    (
-                                        crate::metrics::broker_metrics_manager::ProducerConnectionAttributes::new(
-                                            language.to_string(),
-                                            version,
-                                        ),
-                                        count,
-                                    )
-                                })
-                                .collect()
-                        },
-                        move || {
-                            consumer_connections_inner
-                                .consumer_manager()
-                                .connection_count_by_client_attrs()
-                                .into_iter()
-                                .map(|(group, language, version, consume_type, count)| {
-                                    (
-                                        crate::metrics::broker_metrics_manager::ConsumerConnectionAttributes::new(
-                                            group.to_string(),
-                                            language.to_string(),
-                                            version,
-                                            consume_type.to_string(),
-                                        ),
-                                        count,
-                                    )
-                                })
-                                .collect()
-                        },
-                    );
-                    let pop_offset_inner = self.inner.clone();
-                    let pop_checkpoint_inner = self.inner.clone();
-                    let pop_revive_inner = self.inner.clone();
-                    crate::metrics::pop_metrics_manager::PopMetricsManager::init_global_with_observables(
-                        provider,
-                        Arc::new(crate::metrics::pop_metrics_manager::BrokerAttributesSupplier::new(
-                            self.inner.broker_config.broker_identity.broker_cluster_name.to_string(),
-                            self.inner.broker_config.broker_identity.broker_name.to_string(),
-                            i64::try_from(self.inner.broker_config.broker_identity.broker_id).unwrap_or(i64::MAX),
-                        )),
-                        move || {
-                            pop_offset_inner
-                                .pop_message_processor()
-                                .map(|processor| {
-                                    i64::try_from(processor.pop_buffer_merge_service().offset_buffer_size_snapshot())
-                                        .unwrap_or(i64::MAX)
-                                })
-                                .unwrap_or(0)
-                        },
-                        move || {
-                            pop_checkpoint_inner
-                                .pop_message_processor()
-                                .map(|processor| {
-                                    i64::try_from(processor.pop_buffer_merge_service().checkpoint_buffer_size())
-                                        .unwrap_or(i64::MAX)
-                                })
-                                .unwrap_or(0)
-                        },
-                        move || {
-                            pop_revive_inner
-                                .ack_message_processor
-                                .as_ref()
-                                .map(|processor| processor.pop_revive_metrics())
-                                .unwrap_or_default()
-                        },
-                    );
+        if self.inner.observability_guard.is_none() {
+            match rocketmq_observability::logging::install_global(&bootstrap_config) {
+                Ok(guard) => self.inner.observability_guard = Some(guard),
+                Err(error) => {
+                    warn!("Failed to initialize broker observability: {error}");
+                    return;
+                }
+            }
+        }
 
-                    let store_meter = rocketmq_observability::meter(provider, "rocketmq-store");
-                    let store_observable_inner = self.inner.clone();
-                    let _ =
-                        rocketmq_observability::metrics::store::init_global_with_observables(&store_meter, move || {
-                            let Some(message_store) = store_observable_inner.message_store() else {
-                                return rocketmq_observability::metrics::store::StoreObservableValues::default();
-                            };
-                            let max_phy_offset = message_store.get_max_phy_offset();
-                            let min_phy_offset = message_store.get_min_phy_offset();
-                            let earliest_message_time = message_store.get_earliest_message_time_store();
-                            rocketmq_observability::metrics::store::StoreObservableValues {
-                                storage_size_bytes: (max_phy_offset - min_phy_offset).max(0),
-                                flush_behind_bytes: (max_phy_offset - message_store.get_flushed_where()).max(0),
-                                dispatch_behind_bytes: message_store.dispatch_behind_bytes().max(0),
-                                message_reserve_time_millis: if earliest_message_time > 0 {
-                                    current_millis() as i64 - earliest_message_time
-                                } else {
-                                    0
-                                },
-                            }
-                        });
+        #[cfg(feature = "otel-metrics")]
+        if !self.inner.observability_metrics_initialized {
+            self.inner.observability_metrics_initialized = true;
+            if let Some(provider) = self
+                .inner
+                .observability_guard
+                .as_ref()
+                .and_then(|guard| guard.telemetry_guard().meter_provider())
+            {
+                let label_config = crate::metrics::broker_metrics_manager::BrokerMetricsLabelConfig::new(
+                    config.metrics.cardinality_limit,
+                    config.metrics.topic_label_enabled,
+                    config.metrics.consumer_group_label_enabled,
+                );
+                let sampling_config = crate::metrics::broker_metrics_manager::BrokerMetricsSamplingConfig::new(
+                    config.metrics.sample_ratio,
+                );
+                let attributes_supplier =
+                    Arc::new(crate::metrics::broker_metrics_manager::BrokerAttributesSupplier::new(
+                        self.inner.broker_config.broker_identity.broker_cluster_name.to_string(),
+                        self.inner.broker_config.broker_identity.get_canonical_name(),
+                    ));
+                let broker_permission = i64::from(self.inner.broker_config.broker_permission);
+                let topic_num_inner = self.inner.clone();
+                let consumer_group_num_inner = self.inner.clone();
+                let producer_connections_inner = self.inner.clone();
+                let consumer_connections_inner = self.inner.clone();
+                crate::metrics::broker_metrics_manager::BrokerMetricsManager::init_global_with_observables_and_configs(
+                    provider,
+                    attributes_supplier,
+                    label_config,
+                    sampling_config,
+                    None::<fn() -> Vec<(String, i64)>>,
+                    move || broker_permission,
+                    move || {
+                        i64::try_from(topic_num_inner.topic_config_manager().topic_config_table().len())
+                            .unwrap_or(i64::MAX)
+                    },
+                    move || {
+                        i64::try_from(consumer_group_num_inner.subscription_group_manager().group_count())
+                            .unwrap_or(i64::MAX)
+                    },
+                    move || {
+                        producer_connections_inner
+                            .producer_manager()
+                            .connection_count_by_client_attrs()
+                            .into_iter()
+                            .map(|(language, version, count)| {
+                                (
+                                    crate::metrics::broker_metrics_manager::ProducerConnectionAttributes::new(
+                                        language.to_string(),
+                                        version,
+                                    ),
+                                    count,
+                                )
+                            })
+                            .collect()
+                    },
+                    move || {
+                        consumer_connections_inner
+                            .consumer_manager()
+                            .connection_count_by_client_attrs()
+                            .into_iter()
+                            .map(|(group, language, version, consume_type, count)| {
+                                (
+                                    crate::metrics::broker_metrics_manager::ConsumerConnectionAttributes::new(
+                                        group.to_string(),
+                                        language.to_string(),
+                                        version,
+                                        consume_type.to_string(),
+                                    ),
+                                    count,
+                                )
+                            })
+                            .collect()
+                    },
+                );
+                let pop_offset_inner = self.inner.clone();
+                let pop_checkpoint_inner = self.inner.clone();
+                let pop_revive_inner = self.inner.clone();
+                crate::metrics::pop_metrics_manager::PopMetricsManager::init_global_with_observables(
+                    provider,
+                    Arc::new(crate::metrics::pop_metrics_manager::BrokerAttributesSupplier::new(
+                        self.inner.broker_config.broker_identity.broker_cluster_name.to_string(),
+                        self.inner.broker_config.broker_identity.broker_name.to_string(),
+                        i64::try_from(self.inner.broker_config.broker_identity.broker_id).unwrap_or(i64::MAX),
+                    )),
+                    move || {
+                        pop_offset_inner
+                            .pop_message_processor()
+                            .map(|processor| {
+                                i64::try_from(processor.pop_buffer_merge_service().offset_buffer_size_snapshot())
+                                    .unwrap_or(i64::MAX)
+                            })
+                            .unwrap_or(0)
+                    },
+                    move || {
+                        pop_checkpoint_inner
+                            .pop_message_processor()
+                            .map(|processor| {
+                                i64::try_from(processor.pop_buffer_merge_service().checkpoint_buffer_size())
+                                    .unwrap_or(i64::MAX)
+                            })
+                            .unwrap_or(0)
+                    },
+                    move || {
+                        pop_revive_inner
+                            .ack_message_processor
+                            .as_ref()
+                            .map(|processor| processor.pop_revive_metrics())
+                            .unwrap_or_default()
+                    },
+                );
 
-                    let timer_observable_inner = self.inner.clone();
-                    let _ =
-                        rocketmq_observability::metrics::timer::init_global_with_observables(&store_meter, move || {
-                            let Some(timer_message_store) = timer_observable_inner.timer_message_store() else {
-                                return rocketmq_observability::metrics::timer::TimerObservableValues::default();
-                            };
-                            let (timing_messages, message_snapshot) = timer_message_store.runtime_backlog_metrics();
-                            rocketmq_observability::metrics::timer::TimerObservableValues {
-                                enqueue_lag: timer_message_store.get_enqueue_behind_messages(),
-                                enqueue_latency_millis: timer_message_store.get_enqueue_behind_millis(),
-                                dequeue_lag: timer_message_store.get_all_congest_num(),
-                                dequeue_latency_millis: timer_message_store.get_dequeue_behind_millis(),
-                                timing_messages: timing_messages.into_iter().collect(),
-                                message_snapshot: message_snapshot.into_iter().collect(),
-                            }
-                        });
-
-                    #[cfg(feature = "rocksdb_store")]
-                    {
-                        let rocksdb_observable_inner = self.inner.clone();
-                        let _ = rocketmq_observability::metrics::rocksdb::init_global_with_observables(
-                            &store_meter,
-                            move || {
-                                let Some(message_store) = rocksdb_observable_inner.message_store() else {
-                                    return Default::default();
-                                };
-                                let Some(metrics) = message_store.rocksdb_ticker_metrics() else {
-                                    return Default::default();
-                                };
-                                rocketmq_observability::metrics::rocksdb::RocksDbObservableValues {
-                                    bytes_written: metrics.bytes_written,
-                                    bytes_read: metrics.bytes_read,
-                                    times_written_self: metrics.times_written_self,
-                                    times_written_other: metrics.times_written_other,
-                                    block_cache_hit: metrics.block_cache_hit,
-                                    block_cache_miss: metrics.block_cache_miss,
-                                    times_compressed: metrics.times_compressed,
-                                    read_amplification_bytes: metrics.read_amplification_bytes,
-                                    times_read: metrics.times_read,
-                                }
-                            },
-                        );
+                let store_meter = rocketmq_observability::meter(provider, "rocketmq-store");
+                let store_observable_inner = self.inner.clone();
+                let _ = rocketmq_observability::metrics::store::init_global_with_observables(&store_meter, move || {
+                    let Some(message_store) = store_observable_inner.message_store() else {
+                        return rocketmq_observability::metrics::store::StoreObservableValues::default();
+                    };
+                    let max_phy_offset = message_store.get_max_phy_offset();
+                    let min_phy_offset = message_store.get_min_phy_offset();
+                    let earliest_message_time = message_store.get_earliest_message_time_store();
+                    rocketmq_observability::metrics::store::StoreObservableValues {
+                        storage_size_bytes: (max_phy_offset - min_phy_offset).max(0),
+                        flush_behind_bytes: (max_phy_offset - message_store.get_flushed_where()).max(0),
+                        dispatch_behind_bytes: message_store.dispatch_behind_bytes().max(0),
+                        message_reserve_time_millis: if earliest_message_time > 0 {
+                            current_millis() as i64 - earliest_message_time
+                        } else {
+                            0
+                        },
                     }
+                });
 
-                    #[cfg(feature = "tieredstore")]
-                    {
-                        let tiered_store_observable_inner = self.inner.clone();
-                        let _ = rocketmq_observability::metrics::tiered_store::init_global_with_observables(
-                            &store_meter,
-                            move || {
-                                let Some(message_store) = tiered_store_observable_inner.message_store() else {
-                                    return Default::default();
-                                };
-                                let Some(metrics) = message_store.tiered_store_metrics() else {
-                                    return Default::default();
-                                };
-                                metrics.observable_values()
-                            },
-                        );
+                let timer_observable_inner = self.inner.clone();
+                let _ = rocketmq_observability::metrics::timer::init_global_with_observables(&store_meter, move || {
+                    let Some(timer_message_store) = timer_observable_inner.timer_message_store() else {
+                        return rocketmq_observability::metrics::timer::TimerObservableValues::default();
+                    };
+                    let (timing_messages, message_snapshot) = timer_message_store.runtime_backlog_metrics();
+                    rocketmq_observability::metrics::timer::TimerObservableValues {
+                        enqueue_lag: timer_message_store.get_enqueue_behind_messages(),
+                        enqueue_latency_millis: timer_message_store.get_enqueue_behind_millis(),
+                        dequeue_lag: timer_message_store.get_all_congest_num(),
+                        dequeue_latency_millis: timer_message_store.get_dequeue_behind_millis(),
+                        timing_messages: timing_messages.into_iter().collect(),
+                        message_snapshot: message_snapshot.into_iter().collect(),
                     }
+                });
 
-                    let remoting_meter = rocketmq_observability::meter(provider, "rocketmq-remoting");
-                    let _ = rocketmq_observability::metrics::remoting::init_global(&remoting_meter);
+                #[cfg(feature = "rocksdb_store")]
+                {
+                    let rocksdb_observable_inner = self.inner.clone();
+                    let _ = rocketmq_observability::metrics::rocksdb::init_global_with_observables(
+                        &store_meter,
+                        move || {
+                            let Some(message_store) = rocksdb_observable_inner.message_store() else {
+                                return Default::default();
+                            };
+                            let Some(metrics) = message_store.rocksdb_ticker_metrics() else {
+                                return Default::default();
+                            };
+                            rocketmq_observability::metrics::rocksdb::RocksDbObservableValues {
+                                bytes_written: metrics.bytes_written,
+                                bytes_read: metrics.bytes_read,
+                                times_written_self: metrics.times_written_self,
+                                times_written_other: metrics.times_written_other,
+                                block_cache_hit: metrics.block_cache_hit,
+                                block_cache_miss: metrics.block_cache_miss,
+                                times_compressed: metrics.times_compressed,
+                                read_amplification_bytes: metrics.read_amplification_bytes,
+                                times_read: metrics.times_read,
+                            }
+                        },
+                    );
                 }
 
-                info!(
-                    exporter = ?config.metrics.exporter,
-                    trace_exporter = ?config.traces.exporter,
-                    log_exporter = ?config.logs.exporter,
-                    "initialized broker observability"
-                );
-                self.inner.observability_guard = Some(guard);
+                #[cfg(feature = "tieredstore")]
+                {
+                    let tiered_store_observable_inner = self.inner.clone();
+                    let _ = rocketmq_observability::metrics::tiered_store::init_global_with_observables(
+                        &store_meter,
+                        move || {
+                            let Some(message_store) = tiered_store_observable_inner.message_store() else {
+                                return Default::default();
+                            };
+                            let Some(metrics) = message_store.tiered_store_metrics() else {
+                                return Default::default();
+                            };
+                            metrics.observable_values()
+                        },
+                    );
+                }
+
+                let remoting_meter = rocketmq_observability::meter(provider, "rocketmq-remoting");
+                let _ = rocketmq_observability::metrics::remoting::init_global(&remoting_meter);
             }
-            Err(error) => warn!("Failed to initialize broker observability: {error}"),
         }
+
+        let Some(guard) = self.inner.observability_guard.as_ref() else {
+            return;
+        };
+        let subscriber_install_status = guard.subscriber_install_status();
+        info!(
+            metrics_exporter = ?config.metrics.exporter,
+            trace_exporter = ?config.traces.exporter,
+            log_exporter = ?config.logs.exporter,
+            subscriber_installed = subscriber_install_status.installed,
+            file_log_enabled = bootstrap_config.logging.file.enabled,
+            "initialized broker observability"
+        );
     }
 
     fn init_processor(&mut self) -> (DefaultServerProcessor, FasterServerProcessor) {
@@ -2885,8 +2915,9 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     pop_inflight_message_counter: PopInflightMessageCounter,
     replicas_manager: Option<ReplicasManager>,
     broker_fast_failure: BrokerFastFailure,
-    #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
-    observability_guard: Option<rocketmq_observability::TelemetryGuard>,
+    observability_guard: Option<rocketmq_observability::TelemetryRuntimeGuard>,
+    #[cfg(feature = "otel-metrics")]
+    observability_metrics_initialized: bool,
     cold_data_pull_request_hold_service: Option<ColdDataPullRequestHoldService>,
     cold_data_cg_ctr_service: Option<ColdDataCgCtrService>,
     is_schedule_service_start: Arc<AtomicBool>,
@@ -4898,6 +4929,35 @@ mod tests {
             Some("Bearer token")
         );
         assert_eq!(config.otlp.headers.get("tenant").map(String::as_str), Some("rocketmq"));
+    }
+
+    #[test]
+    fn build_broker_observability_config_maps_logging_bootstrap_defaults() {
+        let broker_config = BrokerConfig {
+            store_path_root_dir: "target/broker-telemetry-bootstrap".into(),
+            log_exporter_type: rocketmq_common::common::metrics::LogExporterType::Log,
+            ..Default::default()
+        };
+
+        let config = build_broker_telemetry_bootstrap_config(&broker_config);
+
+        assert_eq!(
+            config.observability.subscriber_install_policy,
+            rocketmq_observability::SubscriberInstallPolicy::Required
+        );
+        assert!(config.observability.enabled);
+        assert!(config.observability.logs.enabled);
+        assert!(config.logging.enabled);
+        assert_eq!(config.logging.filter, "info");
+        assert!(config.logging.console.enabled);
+        assert!(!config.logging.file.enabled);
+        assert_eq!(config.logging.file.file_name_prefix, "rocketmq-broker");
+
+        let expected_log_dir = std::path::Path::new("target/broker-telemetry-bootstrap").join("logs");
+        assert_eq!(
+            std::path::Path::new(config.logging.file.directory.as_str()),
+            expected_log_dir.as_path()
+        );
     }
 
     #[test]

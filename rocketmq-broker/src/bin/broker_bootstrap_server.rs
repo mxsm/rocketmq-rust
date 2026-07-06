@@ -15,11 +15,11 @@
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
-use std::process;
 
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
+use rocketmq_broker::build_broker_telemetry_bootstrap_config;
 use rocketmq_broker::command::Args;
 use rocketmq_broker::Builder;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -33,7 +33,6 @@ use rocketmq_runtime::ServiceContext;
 #[cfg(feature = "tieredstore")]
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -79,12 +78,6 @@ fn broker_runtime_config() -> RuntimeConfig {
 }
 
 async fn run(service_context: ServiceContext) -> Result<()> {
-    // Initialize logger
-    rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO)?;
-
-    // Print logo
-    println!("{}", LOGO);
-
     // Set remoting version
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
@@ -93,25 +86,11 @@ async fn run(service_context: ServiceContext) -> Result<()> {
 
     // Parse and validate command line arguments
     let args = Args::parse();
-    if let Err(e) = args.validate() {
-        error!("Invalid arguments: {}", e);
-        process::exit(-1);
-    }
-
-    // Check ROCKETMQ_HOME environment variable
-    if let Err(e) = verify_rocketmq_home() {
-        error!("{}", e);
-        process::exit(-2);
-    }
+    args.validate().context("invalid broker arguments")?;
 
     // Parse configuration from file and command line
-    let (mut broker_config, message_store_config) = match parse_config_file(&args) {
-        Ok(config) => config,
-        Err(e) => {
-            error!("Failed to parse configuration: {}", e);
-            process::exit(-3);
-        }
-    };
+    let (mut broker_config, message_store_config) =
+        parse_config_file(&args).context("failed to parse broker configuration")?;
 
     // Apply system properties (should be done before command line override)
     let properties = extract_properties_from_config(&broker_config);
@@ -121,16 +100,32 @@ async fn run(service_context: ServiceContext) -> Result<()> {
     apply_command_line_args(&mut broker_config, &args);
 
     // Validate broker configuration
-    if let Err(e) = validate_broker_config(&broker_config, &message_store_config) {
-        error!("Invalid broker configuration: {}", e);
-        process::exit(-4);
+    validate_broker_config(&broker_config, &message_store_config).context("invalid broker configuration")?;
+
+    let bootstrap_config = build_broker_telemetry_bootstrap_config(&broker_config);
+    let telemetry_guard = rocketmq_observability::logging::install_global(&bootstrap_config)
+        .context("failed to initialize broker telemetry bootstrap")?;
+    log_telemetry_bootstrap(&bootstrap_config, telemetry_guard.subscriber_install_status());
+
+    // Check ROCKETMQ_HOME environment variable
+    if let Err(error) = verify_rocketmq_home() {
+        telemetry_guard
+            .shutdown()
+            .context("failed to shutdown broker telemetry bootstrap after ROCKETMQ_HOME validation failed")?;
+        return Err(error);
     }
 
     // Handle print config and exit
     if args.should_exit_after_print() {
         print_config(&broker_config, &message_store_config, args.print_important_config);
-        process::exit(0);
+        telemetry_guard
+            .shutdown()
+            .context("failed to shutdown broker telemetry bootstrap after printing broker configuration")?;
+        return Ok(());
     }
+
+    // Print logo
+    println!("{}", LOGO);
 
     // Print startup info
     print_startup_info(&broker_config, &message_store_config);
@@ -140,11 +135,26 @@ async fn run(service_context: ServiceContext) -> Result<()> {
         .set_broker_config(broker_config)
         .set_message_store_config(message_store_config)
         .set_service_context(service_context)
+        .set_telemetry_runtime_guard(telemetry_guard)
         .build()
         .boot()
         .await;
 
     Ok(())
+}
+
+fn log_telemetry_bootstrap(
+    config: &rocketmq_observability::TelemetryBootstrapConfig,
+    subscriber_install_status: rocketmq_observability::SubscriberInstallStatus,
+) {
+    info!(
+        metrics_exporter = ?config.observability.metrics.exporter,
+        trace_exporter = ?config.observability.traces.exporter,
+        log_exporter = ?config.observability.logs.exporter,
+        subscriber_installed = subscriber_install_status.installed,
+        file_log_enabled = config.logging.file.enabled,
+        "broker telemetry bootstrap initialized"
+    );
 }
 
 /// Verify ROCKETMQ_HOME environment variable is set

@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_observability::TelemetryRuntimeGuard;
 use rocketmq_runtime::ServiceContext;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -66,6 +67,7 @@ pub struct Builder {
     broker_config: BrokerConfig,
     message_store_config: MessageStoreConfig,
     service_context: Option<ServiceContext>,
+    telemetry_runtime_guard: Option<TelemetryRuntimeGuard>,
 }
 
 impl Builder {
@@ -75,6 +77,7 @@ impl Builder {
             broker_config: Default::default(),
             message_store_config: MessageStoreConfig::default(),
             service_context: None,
+            telemetry_runtime_guard: None,
         }
     }
     #[inline]
@@ -93,15 +96,23 @@ impl Builder {
         self
     }
     #[inline]
+    pub fn set_telemetry_runtime_guard(mut self, telemetry_runtime_guard: TelemetryRuntimeGuard) -> Self {
+        self.telemetry_runtime_guard = Some(telemetry_runtime_guard);
+        self
+    }
+    #[inline]
     pub fn build(self) -> BrokerBootstrap {
         let broker_config = Arc::new(self.broker_config);
         let message_store_config = Arc::new(self.message_store_config);
-        let broker_runtime = match self.service_context {
+        let mut broker_runtime = match self.service_context {
             Some(service_context) => {
                 BrokerRuntime::new_with_service_context(broker_config, message_store_config, service_context)
             }
             None => BrokerRuntime::new(broker_config, message_store_config),
         };
+        if let Some(telemetry_runtime_guard) = self.telemetry_runtime_guard {
+            broker_runtime.set_telemetry_runtime_guard(telemetry_runtime_guard);
+        }
 
         BrokerBootstrap { broker_runtime }
     }
