@@ -26,9 +26,17 @@ pub mod sampling;
 pub mod semantic;
 pub mod trace;
 
+pub use config::ConsoleLogConfig;
+pub use config::FileLogConfig;
+pub use config::LogFormat;
+pub use config::LogRotation;
+pub use config::LoggingConfig;
+pub use config::NonBlockingLogConfig;
 pub use config::ObservabilityConfig;
+pub use config::ReloadConfig;
 pub use config::SubscriberInstallPolicy;
 pub use config::SubscriberInstallStatus;
+pub use config::TelemetryBootstrapConfig;
 pub use error::ObservabilityError;
 pub use init::init_observability;
 #[cfg(feature = "otel-metrics")]
