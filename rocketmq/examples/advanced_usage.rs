@@ -27,12 +27,11 @@ use rocketmq_rust::TaskScheduler;
 use tokio::time::sleep;
 use tracing::error;
 use tracing::info;
-use tracing::Level;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())?;
 
     // Create custom scheduler configuration
     let config = SchedulerConfig {
@@ -222,5 +221,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Final counter value: {}", counter.load(Ordering::Relaxed));
 
+    telemetry_guard.shutdown().into_result()?;
     Ok(())
 }

@@ -33,12 +33,11 @@ pub const TOPIC: &str = "TopicTest";
 //pub const SUB_EXPRESSION: &str = "TagA || TagC || TagD";
 pub const SUB_EXPRESSION: &str = "*";
 
-#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
-    //init logger
-    rocketmq_common::log::init_logger()?;
-
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
+            .expect("telemetry logging bootstrap should initialize");
     // create a producer builder with default configuration
     let builder = DefaultMQPushConsumer::builder();
 
@@ -52,6 +51,11 @@ pub async fn main() -> RocketMQResult<()> {
     consumer.register_message_listener_concurrently(MyMessageListener);
     consumer.start().await?;
     let _ = tokio::signal::ctrl_c().await;
+    telemetry_guard
+        .shutdown()
+        .into_result()
+        .expect("telemetry logging shutdown should succeed");
+
     Ok(())
 }
 

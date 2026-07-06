@@ -36,13 +36,12 @@ use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
-use tracing_subscriber::fmt;
-use tracing_subscriber::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::registry().with(fmt::layer()).init();
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
+            .expect("telemetry logging bootstrap should initialize");
 
     info!("Starting 3-node ControllerManager cluster example");
 
@@ -65,6 +64,11 @@ async fn main() -> Result<()> {
     shutdown_cluster(managers).await?;
 
     info!("Cluster shutdown complete");
+    telemetry_guard
+        .shutdown()
+        .into_result()
+        .expect("telemetry logging shutdown should succeed");
+
     Ok(())
 }
 

@@ -4483,13 +4483,13 @@ dependencies = [
  "cron",
  "parking_lot",
  "rocketmq-error",
+ "rocketmq-observability",
  "rocketmq-runtime",
  "serde",
  "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 
