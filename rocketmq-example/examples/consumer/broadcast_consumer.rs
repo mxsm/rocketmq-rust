@@ -39,11 +39,11 @@ pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "BroadcastConsumerTestTopic";
 pub const TAG: &str = "*";
 
-#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
-    rocketmq_common::log::init_logger()?;
-
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
+            .expect("telemetry logging bootstrap should initialize");
     let client_config = broadcast_client_config()?;
 
     let mut consumer = DefaultMQPushConsumer::builder()
@@ -61,6 +61,10 @@ pub async fn main() -> RocketMQResult<()> {
     info!("broadcast consumer started. group={}, topic={}", CONSUMER_GROUP, TOPIC);
     let _ = wait_for_signal().await;
     consumer.shutdown().await;
+    telemetry_guard
+        .shutdown()
+        .expect("telemetry logging shutdown should succeed");
+
     Ok(())
 }
 

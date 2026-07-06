@@ -77,13 +77,17 @@ impl SmokeConfig {
     }
 }
 
-#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
-    rocketmq_common::log::init_logger()?;
-
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
+            .expect("telemetry logging bootstrap should initialize");
     let config = SmokeConfig::from_env()?;
-    run_smoke(config).await
+    let result = run_smoke(config).await;
+    telemetry_guard
+        .shutdown()
+        .expect("telemetry logging shutdown should succeed");
+    result
 }
 
 async fn run_smoke(config: SmokeConfig) -> RocketMQResult<()> {

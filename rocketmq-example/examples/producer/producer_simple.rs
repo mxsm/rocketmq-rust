@@ -23,12 +23,11 @@ pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "ProducerSimpleTest";
 pub const TAG: &str = "TagA";
 
-#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
-    //init logger
-    rocketmq_common::log::init_logger()?;
-
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
+            .expect("telemetry logging bootstrap should initialize");
     // create a producer builder with default configuration
     let mut producer = DefaultMQProducer::builder()
         .producer_group(PRODUCER_GROUP)
@@ -47,5 +46,9 @@ pub async fn main() -> RocketMQResult<()> {
         println!("send result: {:?}", send_result);
     }
     producer.shutdown().await;
+    telemetry_guard
+        .shutdown()
+        .expect("telemetry logging shutdown should succeed");
+
     Ok(())
 }
