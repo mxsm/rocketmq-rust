@@ -16,7 +16,6 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::process;
 
 use anyhow::bail;
 use anyhow::Context;
@@ -39,7 +38,6 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceContext;
 use serde::Deserialize;
-use tracing::error;
 use tracing::info;
 
 const LOGO: &str = r#"
@@ -87,60 +85,106 @@ async fn run(service_context: ServiceContext) -> Result<()> {
     // Parse command line arguments first
     let args = Args::parse();
 
-    // Initialize the logger
-    rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO)?;
-
-    println!("{}", LOGO);
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
         (CURRENT_VERSION as u32).to_string(),
     );
 
     // Parse and merge configurations
-    match parse_and_merge_config(&args) {
-        Ok((namesrv_config, server_config, controller_config)) => {
-            // Handle print config item mode
-            if args.print_config_item {
-                print_config_and_exit(&namesrv_config, &server_config, controller_config.as_ref());
-            }
+    let (namesrv_config, server_config, controller_config) =
+        parse_and_merge_config(&args).context("failed to parse namesrv configuration")?;
 
-            // Validate ROCKETMQ_HOME is set
-            if namesrv_config.rocketmq_home.is_empty() {
-                error!(
-                    "Please set the ROCKETMQ_HOME variable in your environment to match the location of the RocketMQ \
-                     installation"
-                );
-                process::exit(-2);
-            }
-
-            info!("===== RocketMQ Name Server(Rust) Configuration =====");
-            info!("RocketMQ Home: {}", namesrv_config.rocketmq_home);
-            info!(
-                "Listen Address: {}:{}",
-                server_config.bind_address, server_config.listen_port
-            );
-            info!("KV Config Path: {}", namesrv_config.kv_config_path);
-            info!("Config Store Path: {}", namesrv_config.config_store_path);
-            info!("Use RouteInfoManager V2: {}", namesrv_config.use_route_info_manager_v2);
-            info!("===============================================");
-
-            // Start the name server
-            Builder::new()
-                .set_name_server_config(namesrv_config)
-                .set_server_config(server_config)
-                .set_controller_config_opt(controller_config)
-                .set_service_context(service_context)
-                .build()
-                .boot()
-                .await?;
-
-            Ok(())
-        }
-        Err(e) => {
-            error!("Failed to parse configuration: {}", e);
-            process::exit(-1);
-        }
+    // Handle print config item mode
+    if args.print_config_item {
+        print_config(&namesrv_config, &server_config, controller_config.as_ref());
+        return Ok(());
     }
+
+    // Validate ROCKETMQ_HOME is set
+    if namesrv_config.rocketmq_home.is_empty() {
+        bail!(
+            "Please set the ROCKETMQ_HOME variable in your environment to match the location of the RocketMQ \
+             installation"
+        );
+    }
+
+    let bootstrap_config = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
+    let telemetry_guard = rocketmq_observability::logging::install_global(&bootstrap_config)
+        .context("failed to initialize namesrv telemetry bootstrap")?;
+    log_telemetry_bootstrap(&bootstrap_config, telemetry_guard.subscriber_install_status());
+
+    println!("{}", LOGO);
+
+    info!("===== RocketMQ Name Server(Rust) Configuration =====");
+    info!("RocketMQ Home: {}", namesrv_config.rocketmq_home);
+    info!(
+        "Listen Address: {}:{}",
+        server_config.bind_address, server_config.listen_port
+    );
+    info!("KV Config Path: {}", namesrv_config.kv_config_path);
+    info!("Config Store Path: {}", namesrv_config.config_store_path);
+    info!("Use RouteInfoManager V2: {}", namesrv_config.use_route_info_manager_v2);
+    info!("===============================================");
+
+    // Start the name server
+    let boot_result = Builder::new()
+        .set_name_server_config(namesrv_config)
+        .set_server_config(server_config)
+        .set_controller_config_opt(controller_config)
+        .set_service_context(service_context)
+        .build()
+        .boot()
+        .await
+        .map_err(anyhow::Error::from);
+    let shutdown_result = telemetry_guard
+        .shutdown()
+        .context("failed to shutdown namesrv telemetry bootstrap");
+
+    match (boot_result, shutdown_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn build_namesrv_telemetry_bootstrap_config(
+    namesrv_config: &NamesrvConfig,
+) -> rocketmq_observability::TelemetryBootstrapConfig {
+    let mut observability = rocketmq_observability::ObservabilityConfig {
+        service_name: "rocketmq-namesrv".to_string(),
+        service_namespace: "rocketmq".to_string(),
+        node_type: "namesrv".to_string(),
+        node_id: format!("{}:{}", "namesrv", namesrv_config.rocketmq_home),
+        ..rocketmq_observability::ObservabilityConfig::default()
+    };
+    observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
+
+    let mut logging = rocketmq_observability::LoggingConfig::default();
+    logging.file.directory = service_log_directory(namesrv_config.rocketmq_home.as_str());
+    logging.file.file_name_prefix = "rocketmq-namesrv".to_string();
+
+    rocketmq_observability::TelemetryBootstrapConfig { observability, logging }
+}
+
+fn service_log_directory(rocketmq_home: &str) -> String {
+    if rocketmq_home.trim().is_empty() {
+        return "logs".to_string();
+    }
+    PathBuf::from(rocketmq_home).join("logs").to_string_lossy().into_owned()
+}
+
+fn log_telemetry_bootstrap(
+    config: &rocketmq_observability::TelemetryBootstrapConfig,
+    subscriber_install_status: rocketmq_observability::SubscriberInstallStatus,
+) {
+    info!(
+        metrics_exporter = ?config.observability.metrics.exporter,
+        trace_exporter = ?config.observability.traces.exporter,
+        log_exporter = ?config.observability.logs.exporter,
+        subscriber_installed = subscriber_install_status.installed,
+        file_log_enabled = config.logging.file.enabled,
+        "namesrv telemetry bootstrap initialized"
+    );
 }
 
 /// Parse configuration file and merge with command line arguments
@@ -194,8 +238,8 @@ fn apply_tls_properties_from_file(server_config: &mut ServerConfig, config_file:
     Ok(())
 }
 
-/// Print all configuration items and exit
-fn print_config_and_exit(
+/// Print all configuration items
+fn print_config(
     namesrv_config: &NamesrvConfig,
     server_config: &ServerConfig,
     controller_config: Option<&ControllerConfig>,
@@ -260,7 +304,6 @@ fn print_config_and_exit(
     }
 
     println!("\n===========================================\n");
-    process::exit(0);
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -501,4 +544,33 @@ struct Args {
     /// Command line override for kvConfigPath
     #[arg(long = "kvConfigPath", value_name = "PATH", help = "KV config file path")]
     kv_config_path: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn namesrv_telemetry_bootstrap_uses_required_logging_defaults() {
+        let namesrv_config = NamesrvConfig {
+            rocketmq_home: "target/namesrv-telemetry-bootstrap".to_string(),
+            ..NamesrvConfig::default()
+        };
+
+        let config = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
+
+        assert_eq!(config.observability.service_name, "rocketmq-namesrv");
+        assert_eq!(
+            config.observability.subscriber_install_policy,
+            rocketmq_observability::SubscriberInstallPolicy::Required
+        );
+        assert!(!config.observability.enabled);
+        assert!(config.logging.enabled);
+        assert!(config.logging.console.enabled);
+        assert!(!config.logging.file.enabled);
+        assert_eq!(config.logging.file.file_name_prefix, "rocketmq-namesrv");
+
+        let expected_log_dir = PathBuf::from("target/namesrv-telemetry-bootstrap").join("logs");
+        assert_eq!(PathBuf::from(config.logging.file.directory.as_str()), expected_log_dir);
+    }
 }
