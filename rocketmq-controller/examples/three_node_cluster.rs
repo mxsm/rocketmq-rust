@@ -38,7 +38,8 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())?;
 
     let peers = vec![
         RaftPeer {
@@ -129,5 +130,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::signal::ctrl_c().await?;
 
     node.shutdown().await?;
+    telemetry_guard.shutdown().into_result()?;
     Ok(())
 }
