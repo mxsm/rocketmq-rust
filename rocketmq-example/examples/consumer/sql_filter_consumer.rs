@@ -36,6 +36,7 @@ pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "SqlFilterConsumerTestTopic";
 pub const SQL_EXPRESSION: &str = "region = 'cn' AND priority >= 3";
 
+#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
     rocketmq_common::log::init_logger()?;

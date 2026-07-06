@@ -35,6 +35,7 @@ pub const TOPIC: &str = "SendToQueueTestTopic";
 pub const TAG: &str = "QueueTag";
 pub const TIMEOUT_MS: u64 = 3000;
 
+#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
     rocketmq_common::log::init_logger()?;

@@ -26,6 +26,7 @@ pub const TAG: &str = "TagA";
 // Send timeout in milliseconds
 pub const SEND_TIMEOUT_MS: u64 = 3000;
 
+#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
     // init logger

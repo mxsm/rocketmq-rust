@@ -38,6 +38,7 @@ pub const TOPIC: &str = "SendWithSelectorTestTopic";
 pub const TAG: &str = "SelectorTag";
 pub const TIMEOUT_MS: u64 = 3000;
 
+#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
     rocketmq_common::log::init_logger()?;

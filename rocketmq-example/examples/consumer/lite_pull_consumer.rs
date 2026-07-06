@@ -31,6 +31,7 @@ pub const TOPIC: &str = "LitePullConsumerTestTopic";
 pub const TAG_EXPRESSION: &str = "LitePullTag";
 pub const POLL_TIMEOUT_MS: u64 = 1000;
 
+#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
     rocketmq_common::log::init_logger()?;

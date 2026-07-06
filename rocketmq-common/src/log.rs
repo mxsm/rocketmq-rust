@@ -31,8 +31,11 @@ use chrono_tz::Tz;
 use time::UtcOffset;
 use tracing_subscriber::fmt::time::OffsetTime;
 
-/// Static storage for the worker guard to prevent premature log flushing.
-/// This ensures logs are properly written before the program exits.
+/// Compatibility-only storage for the legacy file logger worker guard.
+///
+/// New process entrypoints should hold the `TelemetryRuntimeGuard` returned by
+/// `rocketmq_observability::logging::install_global` instead of extending this
+/// static guard path.
 static WORKER_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 /// Cached local timezone to avoid repeated system calls
@@ -48,6 +51,10 @@ static LOCAL_TIMEZONE: OnceLock<Tz> = OnceLock::new();
 /// # Returns
 ///
 /// Returns `Ok(())` on success, or a `RocketMQError` if initialization fails.
+#[deprecated(
+    since = "1.0.0",
+    note = "use rocketmq_observability::logging::install_global with TelemetryBootstrapConfig"
+)]
 pub fn init_logger() -> RocketMQResult<()> {
     let info_level = std::env::var("RUST_LOG").unwrap_or_else(|_| String::from("INFO"));
     let level = tracing::Level::from_str(&info_level)
@@ -79,6 +86,10 @@ pub fn init_logger() -> RocketMQResult<()> {
 /// # Returns
 ///
 /// Returns `Ok(())` on success, or a `RocketMQError` if initialization fails.
+#[deprecated(
+    since = "1.0.0",
+    note = "use rocketmq_observability::logging::install_global with TelemetryBootstrapConfig"
+)]
 pub fn init_logger_with_level(level: Level) -> RocketMQResult<()> {
     let tracing_level = level.to_tracing_level()?;
 
@@ -115,6 +126,10 @@ pub fn init_logger_with_level(level: Level) -> RocketMQResult<()> {
 /// This function creates a non-blocking file writer to improve performance.
 /// The worker guard is stored in a static `OnceLock` to prevent premature flushing.
 /// This ensures logs are properly written before the program exits.
+#[deprecated(
+    since = "1.0.0",
+    note = "use rocketmq_observability::logging::install_global with TelemetryBootstrapConfig"
+)]
 pub fn init_logger_with_file(
     level: Level,
     directory: impl AsRef<Path>,
