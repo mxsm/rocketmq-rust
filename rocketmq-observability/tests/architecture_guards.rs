@@ -67,12 +67,13 @@ const SUBSCRIBER_INSTALL_PATTERNS: &[&str] = &[
 ];
 
 const SUBSCRIBER_INSTALL_ALLOWLIST: &[&str] = &[
-    // Legacy local logging entrypoint. This is tracked until the unified logging bootstrap replaces it.
+    // Deprecated compatibility wrapper. It must not grow new runtime behavior, but existing callers still compile.
     "rocketmq-common/src/log.rs",
-    // Current OpenTelemetry trace/log layer installation sites. Task 1 makes their install status explicit.
+    // Legacy observability entrypoint retained for source compatibility while production entries use logging.rs.
     "rocketmq-observability/src/init.rs",
     // Unified logging and telemetry bootstrap owns the new production subscriber installation path.
     "rocketmq-observability/src/logging.rs",
+    // Trace-only compatibility helper retained for callers that have not migrated to install_global yet.
     "rocketmq-observability/src/trace.rs",
 ];
 
@@ -151,10 +152,7 @@ fn subscriber_installation_sites_are_tracked() {
 
         let source =
             fs::read_to_string(&file).unwrap_or_else(|error| panic!("failed to read {}: {error}", file.display()));
-        if SUBSCRIBER_INSTALL_PATTERNS
-            .iter()
-            .any(|pattern| source.contains(pattern))
-        {
+        if has_subscriber_installation(&source) {
             unexpected_files.insert(relative_path);
         }
     }
@@ -164,6 +162,43 @@ fn subscriber_installation_sites_are_tracked() {
         "tracing subscriber installation must stay in tracked bootstrap files:\n{}",
         format_paths(&unexpected_files)
     );
+}
+
+#[test]
+fn subscriber_installation_detector_catches_direct_fmt_init() {
+    let source = r#"
+        fn main() {
+            tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
+        }
+    "#;
+
+    assert!(has_subscriber_installation(source));
+}
+
+#[test]
+fn subscriber_installation_detector_catches_imported_init_extension() {
+    let source = r#"
+        use tracing_subscriber::fmt;
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        fn install() {
+            fmt().with_target(true).try_init().expect("subscriber installs");
+        }
+    "#;
+
+    assert!(has_subscriber_installation(source));
+}
+
+#[test]
+fn subscriber_installation_detector_ignores_unrelated_init_methods() {
+    let source = r#"
+        fn install_store(store: &mut Store) {
+            store.init();
+            let _ = ratatui::try_init();
+        }
+    "#;
+
+    assert!(!has_subscriber_installation(source));
 }
 
 #[test]
@@ -242,6 +277,41 @@ fn has_metric_constant_definition(source: &str) -> bool {
                         .iter()
                         .any(|marker| trimmed.contains(marker))))
     })
+}
+
+fn has_subscriber_installation(source: &str) -> bool {
+    if SUBSCRIBER_INSTALL_PATTERNS
+        .iter()
+        .any(|pattern| source.contains(pattern))
+    {
+        return true;
+    }
+
+    if source.contains("set_global_default(")
+        && (source.contains("tracing::subscriber") || source.contains("tracing_subscriber"))
+    {
+        return true;
+    }
+
+    source
+        .split(';')
+        .any(|statement| subscriber_init_statement_installs_global_subscriber(source, statement))
+}
+
+fn subscriber_init_statement_installs_global_subscriber(source: &str, statement: &str) -> bool {
+    let invokes_init = statement.contains(".init(") || statement.contains(".try_init(");
+    if !invokes_init {
+        return false;
+    }
+
+    if statement.contains("tracing_subscriber::") {
+        return true;
+    }
+
+    source.contains("tracing_subscriber")
+        && (statement.contains("fmt()")
+            || statement.contains("registry()")
+            || (source.contains("SubscriberInitExt") && statement.contains(".with(")))
 }
 
 fn path_set(paths: &[&str]) -> BTreeSet<String> {
