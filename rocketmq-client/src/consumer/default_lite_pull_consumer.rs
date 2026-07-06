@@ -1132,10 +1132,10 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         match self.try_impl_() {
             Ok(impl_) => {
                 if let Err(e) = impl_.mut_from_ref().unsubscribe(wrapped_topic).await {
-                    tracing::warn!("Failed to unsubscribe from topic {}: {}", topic, e);
+                    tracing::warn!(topic = %topic, error = %e, "unsubscribe failed");
                 }
             }
-            Err(e) => tracing::warn!("Failed to unsubscribe from topic {}: {}", topic, e),
+            Err(e) => tracing::warn!(topic = %topic, error = %e, "unsubscribe failed"),
         }
     }
 
@@ -1191,12 +1191,12 @@ impl LitePullConsumer for DefaultLitePullConsumer {
             Ok(impl_) => match impl_.poll(self.consumer_config.poll_timeout_millis).await {
                 Ok(messages) => messages,
                 Err(e) => {
-                    tracing::error!("Poll failed: {}", e);
+                    tracing::error!(error = %e, "poll failed");
                     Vec::new()
                 }
             },
             Err(e) => {
-                tracing::error!("Poll failed: {}", e);
+                tracing::error!(error = %e, "poll failed");
                 Vec::new()
             }
         }
@@ -1208,12 +1208,12 @@ impl LitePullConsumer for DefaultLitePullConsumer {
             Ok(impl_) => match impl_.poll_with_timeout(timeout).await {
                 Ok(messages) => messages,
                 Err(e) => {
-                    tracing::error!("Poll failed: {}", e);
+                    tracing::error!(timeout_ms = timeout, error = %e, "poll failed");
                     Vec::new()
                 }
             },
             Err(e) => {
-                tracing::error!("Poll failed: {}", e);
+                tracing::error!(timeout_ms = timeout, error = %e, "poll failed");
                 Vec::new()
             }
         }

@@ -2498,7 +2498,11 @@ impl DefaultMQProducerImpl {
                 .await;
             let cost = begin_timestamp.elapsed().as_millis() as u64;
             if cost > 500 {
-                warn!("prepare send request for <{}> cost {} ms", msg.topic(), cost);
+                warn!(
+                    topic = %msg.topic(),
+                    elapsed_ms = cost,
+                    "prepare send request slow"
+                );
             }
         }
         Ok(())

@@ -1267,7 +1267,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                         pool.record_success(addr, latency_ms);
                     }
 
-                    debug!("Request to {} completed in {:?}", addr, latency);
+                    debug!(
+                        remote_addr = %addr,
+                        elapsed_ms = latency.as_millis() as u64,
+                        "request completed"
+                    );
                 }
                 Ok(response)
             }
@@ -1279,7 +1283,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                         pool.record_error(addr);
                     }
 
-                    warn!("Request to {} failed after {:?}: {:?}", addr, latency, err);
+                    warn!(
+                        remote_addr = %addr,
+                        elapsed_ms = latency.as_millis() as u64,
+                        error = ?err,
+                        "request failed"
+                    );
                 }
                 Err(err)
             }
@@ -1303,7 +1312,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         let client = self.get_and_create_client(Some(addr)).await;
         match client {
             None => {
-                error!("invokeOneway: get client for {} failed", addr);
+                error!(remote_addr = %addr, "invoke oneway client unavailable");
             }
             Some(mut client) => {
                 let mut request = request;
@@ -1314,13 +1323,17 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                         .cmd_handler
                         .do_before_rpc_hooks_with_addr(remote_address, Some(&mut request))
                     {
-                        warn!("invokeOneway: before RPC hook failed for {}: {:?}", addr, error);
+                        warn!(
+                            remote_addr = %addr,
+                            error = ?error,
+                            "invoke oneway before RPC hook failed"
+                        );
                         return;
                     }
                 }
                 let addr_clone = addr.clone();
                 let Some(task_group) = self.get_or_create_worker_task_group() else {
-                    warn!("invokeOneway: client is shut down, skipping send to {}", addr);
+                    warn!(remote_addr = %addr, "invoke oneway skipped because client is shut down");
                     return;
                 };
                 if let Err(error) = task_group.spawn_service("remoting.client.oneway-send", async move {
@@ -1333,17 +1346,26 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                     {
                         Ok(Ok(())) => {}
                         Ok(Err(e)) => {
-                            warn!("invokeOneway: send request to {} failed: {:?}", addr_clone, e);
+                            warn!(
+                                remote_addr = %addr_clone,
+                                error = ?e,
+                                "invoke oneway send failed"
+                            );
                         }
                         Err(_) => {
                             warn!(
-                                "invokeOneway: send request to {} timeout ({}ms)",
-                                addr_clone, timeout_millis
+                                remote_addr = %addr_clone,
+                                timeout_ms = timeout_millis,
+                                "invoke oneway send timed out"
                             );
                         }
                     }
                 }) {
-                    warn!("invokeOneway: failed to spawn send task for {}: {:?}", addr, error);
+                    warn!(
+                        remote_addr = %addr,
+                        error = ?error,
+                        "invoke oneway send task spawn failed"
+                    );
                 }
             }
         }

@@ -933,10 +933,10 @@ impl MappedFile for DefaultMappedFile {
         MappedFile::shutdown(self, interval_forcibly);
         if self.is_cleanup_over() {
             if let Err(e) = fs::remove_file(self.file_name.as_str()) {
-                error!("delete file failed: {:?}", e);
+                error!(file_name = %self.file_name, error = ?e, "delete file failed");
                 false
             } else {
-                info!("delete file success: {}", self.file_name);
+                info!(file_name = %self.file_name, "delete file success");
                 true
             }
         } else {
@@ -1016,14 +1016,14 @@ impl MappedFile for DefaultMappedFile {
     #[inline]
     fn mlock(&self) {
         if let Err(error) = lock_memory(self.get_mapped_file().as_ptr(), self.file_size as usize) {
-            warn!("Failed to mlock mapped file {}: {}", self.file_name, error);
+            warn!(file_name = %self.file_name, error = %error, "failed to mlock mapped file");
         }
     }
 
     #[inline]
     fn munlock(&self) {
         if let Err(error) = unlock_memory(self.get_mapped_file().as_ptr(), self.file_size as usize) {
-            warn!("Failed to munlock mapped file {}: {}", self.file_name, error);
+            warn!(file_name = %self.file_name, error = %error, "failed to munlock mapped file");
         }
     }
 
