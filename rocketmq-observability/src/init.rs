@@ -46,6 +46,10 @@ impl TelemetryGuard {
         self.subscriber_install_status
     }
 
+    pub(crate) fn set_subscriber_install_status(&mut self, status: SubscriberInstallStatus) {
+        self.subscriber_install_status = status;
+    }
+
     #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
     fn shutdown_inner(mut self) -> Result<(), ObservabilityError> {
         #[cfg(feature = "prometheus")]
@@ -102,7 +106,37 @@ pub fn meter(
     provider.meter(name)
 }
 
+/// Initializes observability providers and keeps the legacy best-effort subscriber install
+/// behavior.
+///
+/// New service entrypoints that need local console/file logging and OpenTelemetry trace/log layers
+/// in one subscriber should use `crate::logging::install_global` instead.
 pub fn init_observability(config: &ObservabilityConfig) -> Result<TelemetryGuard, ObservabilityError> {
+    let mut guard = init_telemetry_providers(config)?;
+
+    #[cfg(all(feature = "otel-traces", feature = "otel-logs"))]
+    let subscriber_install_status =
+        try_init_observability_subscriber(config, guard.tracer_provider.as_ref(), guard.logger_provider.as_ref());
+
+    #[cfg(all(feature = "otel-traces", not(feature = "otel-logs")))]
+    let subscriber_install_status = try_init_observability_subscriber(config, guard.tracer_provider.as_ref());
+
+    #[cfg(all(not(feature = "otel-traces"), feature = "otel-logs"))]
+    let subscriber_install_status = try_init_observability_subscriber(guard.logger_provider.as_ref());
+
+    #[cfg(not(any(feature = "otel-traces", feature = "otel-logs")))]
+    let subscriber_install_status = SubscriberInstallStatus::default();
+
+    guard.set_subscriber_install_status(subscriber_install_status);
+    if let Err(error) = enforce_subscriber_install_policy(config, guard.subscriber_install_status()) {
+        let _ = guard.shutdown();
+        return Err(error);
+    }
+
+    Ok(guard)
+}
+
+pub(crate) fn init_telemetry_providers(config: &ObservabilityConfig) -> Result<TelemetryGuard, ObservabilityError> {
     validate_config(config)?;
     crate::trace::configure_message_span_recording(&config.traces);
 
@@ -156,29 +190,10 @@ pub fn init_observability(config: &ObservabilityConfig) -> Result<TelemetryGuard
         return Err(ObservabilityError::FeatureDisabled("otel-logs"));
     }
 
-    #[cfg(all(feature = "otel-traces", feature = "otel-logs"))]
-    let subscriber_install_status =
-        try_init_observability_subscriber(config, guard.tracer_provider.as_ref(), guard.logger_provider.as_ref());
-
-    #[cfg(all(feature = "otel-traces", not(feature = "otel-logs")))]
-    let subscriber_install_status = try_init_observability_subscriber(config, guard.tracer_provider.as_ref());
-
-    #[cfg(all(not(feature = "otel-traces"), feature = "otel-logs"))]
-    let subscriber_install_status = try_init_observability_subscriber(guard.logger_provider.as_ref());
-
-    #[cfg(not(any(feature = "otel-traces", feature = "otel-logs")))]
-    let subscriber_install_status = SubscriberInstallStatus::default();
-
-    guard.subscriber_install_status = subscriber_install_status;
-    if let Err(error) = enforce_subscriber_install_policy(config, guard.subscriber_install_status) {
-        let _ = guard.shutdown();
-        return Err(error);
-    }
-
     Ok(guard)
 }
 
-fn enforce_subscriber_install_policy(
+pub(crate) fn enforce_subscriber_install_policy(
     config: &ObservabilityConfig,
     status: SubscriberInstallStatus,
 ) -> Result<(), ObservabilityError> {

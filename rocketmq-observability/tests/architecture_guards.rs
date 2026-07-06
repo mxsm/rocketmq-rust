@@ -71,6 +71,8 @@ const SUBSCRIBER_INSTALL_ALLOWLIST: &[&str] = &[
     "rocketmq-common/src/log.rs",
     // Current OpenTelemetry trace/log layer installation sites. Task 1 makes their install status explicit.
     "rocketmq-observability/src/init.rs",
+    // Unified logging and telemetry bootstrap owns the new production subscriber installation path.
+    "rocketmq-observability/src/logging.rs",
     "rocketmq-observability/src/trace.rs",
 ];
 

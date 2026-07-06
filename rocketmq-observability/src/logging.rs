@@ -18,6 +18,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::RollingFileAppender;
 use tracing_appender::rolling::Rotation;
 use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
 
@@ -25,7 +26,9 @@ use crate::config::ConsoleLogConfig;
 use crate::config::FileLogConfig;
 use crate::config::LogFormat;
 use crate::config::LogRotation;
+use crate::config::SubscriberInstallPolicy;
 use crate::config::SubscriberInstallStatus;
+use crate::config::TelemetryBootstrapConfig;
 use crate::error::ObservabilityError;
 use crate::init::TelemetryGuard;
 
@@ -47,6 +50,11 @@ impl LoggingGuard {
             worker_guards,
             dropped_log_counters,
         }
+    }
+
+    pub(crate) fn append(&mut self, mut other: Self) {
+        self.worker_guards.append(&mut other.worker_guards);
+        self.dropped_log_counters.append(&mut other.dropped_log_counters);
     }
 
     pub fn dropped_log_lines(&self) -> usize {
@@ -98,6 +106,108 @@ pub fn build_console_layer(config: &ConsoleLogConfig) -> Option<BoxedRegistryLay
         LogFormat::Compact => Some(Box::new(layer.compact())),
         LogFormat::Pretty => Some(Box::new(layer.pretty())),
         LogFormat::Json => Some(Box::new(layer.json())),
+    }
+}
+
+pub fn install_global(config: &TelemetryBootstrapConfig) -> Result<TelemetryRuntimeGuard, ObservabilityError> {
+    init_log_tracer();
+
+    let mut telemetry_guard = crate::init::init_telemetry_providers(&config.observability)?;
+    let (layers, logging_guard) = match build_subscriber_layers(config, &telemetry_guard) {
+        Ok(layers) => layers,
+        Err(error) => {
+            let _ = telemetry_guard.shutdown();
+            return Err(error);
+        }
+    };
+
+    let subscriber_install_status = install_subscriber_layers(layers);
+    telemetry_guard.set_subscriber_install_status(subscriber_install_status);
+
+    if let Err(error) = enforce_bootstrap_subscriber_policy(config, subscriber_install_status) {
+        let _ = telemetry_guard.shutdown();
+        drop(logging_guard);
+        return Err(error);
+    }
+
+    Ok(TelemetryRuntimeGuard::new(telemetry_guard, logging_guard))
+}
+
+fn init_log_tracer() {
+    if let Err(error) = tracing_log::LogTracer::init() {
+        tracing::debug!(
+            target: "rocketmq_observability",
+            %error,
+            "log tracer was already initialized; keeping the existing log facade bridge"
+        );
+    }
+}
+
+fn build_subscriber_layers(
+    config: &TelemetryBootstrapConfig,
+    telemetry_guard: &TelemetryGuard,
+) -> Result<(Vec<BoxedRegistryLayer>, LoggingGuard), ObservabilityError> {
+    let mut layers = Vec::new();
+    let mut logging_guard = LoggingGuard::noop();
+
+    if config.logging.enabled {
+        layers.push(Box::new(build_env_filter(config.logging.filter.as_str())?) as BoxedRegistryLayer);
+
+        if let Some(console_layer) = build_console_layer(&config.logging.console) {
+            layers.push(console_layer);
+        }
+
+        if let Some(file_layer) = build_file_layer(&config.logging.file)? {
+            let (layer, file_logging_guard) = file_layer.into_parts();
+            layers.push(layer);
+            logging_guard.append(file_logging_guard);
+        }
+    }
+
+    #[cfg(feature = "otel-traces")]
+    if let Some(tracer_provider) = telemetry_guard.tracer_provider() {
+        layers.push(Box::new(crate::trace::build_tracing_layer(
+            &config.observability,
+            tracer_provider,
+        )));
+    }
+
+    #[cfg(feature = "otel-logs")]
+    if let Some(logger_provider) = telemetry_guard.logger_provider() {
+        layers.push(Box::new(crate::logs::bridge::build_logs_layer(logger_provider)));
+    }
+
+    Ok((layers, logging_guard))
+}
+
+fn install_subscriber_layers(layers: Vec<BoxedRegistryLayer>) -> SubscriberInstallStatus {
+    if layers.is_empty() {
+        return SubscriberInstallStatus::default();
+    }
+
+    let result = tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layers));
+    SubscriberInstallStatus::attempted(result.is_ok())
+}
+
+fn enforce_bootstrap_subscriber_policy(
+    config: &TelemetryBootstrapConfig,
+    status: SubscriberInstallStatus,
+) -> Result<(), ObservabilityError> {
+    if !status.attempted || status.installed {
+        return Ok(());
+    }
+
+    match config.observability.subscriber_install_policy {
+        SubscriberInstallPolicy::Required => Err(ObservabilityError::subscriber_install_failed(status)),
+        SubscriberInstallPolicy::BestEffort => {
+            tracing::warn!(
+                target: "rocketmq_observability",
+                attempted = status.attempted,
+                installed = status.installed,
+                "tracing subscriber was already initialized; unified logging and OpenTelemetry layers were not installed"
+            );
+            Ok(())
+        }
     }
 }
 
@@ -213,7 +323,6 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
-    use tracing_subscriber::prelude::*;
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
