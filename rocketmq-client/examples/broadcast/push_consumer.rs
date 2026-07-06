@@ -33,6 +33,7 @@ pub const TOPIC: &str = "TopicTest";
 //pub const SUB_EXPRESSION: &str = "TagA || TagC || TagD";
 pub const SUB_EXPRESSION: &str = "*";
 
+#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
     //init logger

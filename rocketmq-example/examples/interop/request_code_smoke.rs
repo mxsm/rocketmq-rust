@@ -77,6 +77,7 @@ impl SmokeConfig {
     }
 }
 
+#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
     rocketmq_common::log::init_logger()?;
