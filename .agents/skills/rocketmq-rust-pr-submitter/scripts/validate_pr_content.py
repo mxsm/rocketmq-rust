@@ -13,6 +13,12 @@ TITLE_RE = re.compile(
     r"^\[ISSUE #(?P<issue>\d+)\](?P<emoji>🐛|📝|✨|🚀|♻️|🧪)(?P<summary>\S(?:.*\S)?)$",
 )
 
+TITLE_MARKER_RE = re.compile(
+    r"\b(?:task|phase|stage|step|part|milestone)\s*[-_:]?\s*(?:\d+|[ivxlcdm]+)\b",
+    re.IGNORECASE,
+)
+
+
 LOCAL_PATH_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "windows drive path",
@@ -109,8 +115,13 @@ def main() -> int:
         title_issue = None
     else:
         title_issue = title_match.group("issue")
-        if not title_match.group("summary").strip():
+        summary = title_match.group("summary").strip()
+        if not summary:
             errors.append("title summary must not be empty")
+        if TITLE_MARKER_RE.search(summary):
+            errors.append(
+                "title summary must describe the actual change and not use sequencing markers like task 1, stage 1, or phase 1",
+            )
 
     errors.extend(validate_heading_order(body))
 

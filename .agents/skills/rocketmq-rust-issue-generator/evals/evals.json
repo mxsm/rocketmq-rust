@@ -24,6 +24,12 @@
       "prompt": "Generate an issue for missing unit tests around consume queue recovery in rocketmq-rust. Use the repo's ISSUE_TEMPLATE files and make it suitable for GitHub.",
       "expected_output": "Selects the unit test template, keeps the `[Test🧪] ` title prefix, fills Test Scope and Test Cases with actionable items, includes all required fields, and uses only crate/module names or repository-relative paths when useful.",
       "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "Generate an issue title for task 1 stage 1 phase 1 of fixing nightly atomic API warnings in rocketmq-rust.",
+      "expected_output": "Keeps the correct template prefix and produces a content-based title such as fixing nightly atomic API warnings. The title must not include `task 1`, `stage 1`, `phase 1`, or similar sequencing markers.",
+      "files": []
     }
   ]
 }

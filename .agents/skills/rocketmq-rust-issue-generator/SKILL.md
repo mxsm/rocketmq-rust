@@ -57,6 +57,7 @@ Rules:
 - Every template field, in order. Required fields must have content or be listed as missing.
 - Use `Not applicable` only when a field clearly does not apply.
 - Never mark prerequisite/contribution checkboxes complete unless confirmed or actually performed.
+- Generate the title summary from the actual bug, feature, test gap, doc change, or refactor. Do not use sequencing-marker wording such as `task 1`, `stage 1`, `phase 1`, `step 3`, or `part 4`, even when the user's rough draft contains those words.
 - Tasks must be actionable: name affected modules, expected behavior, tests, and validation commands.
 - Use RocketMQ domain vocabulary (broker, namesrv, commitlog, consume queue, Tokio runtime, etc.) only where it helps the form.
 - Write all public issue title/body text in English. Repository-relative paths, code identifiers, commands, issue numbers, Markdown punctuation, and the template emoji are allowed; Chinese or other non-English prose is not allowed.
@@ -85,6 +86,7 @@ Fix every finding.
 | Marking checkboxes complete without confirmation | List unconfirmed items as missing |
 | Leaving a local Windows user path in draft | Run `audit_issue_paths.py` before finalizing |
 | Writing issue prose in Chinese or mixed language | Rewrite the title/body in English and rerun the audit |
+| Using process labels like `task 1`, `stage 1`, or `phase 1` in the title | Replace them with a concise summary of the actual change or problem |
 | Using feature_request for test-only work | Unit test additions → `unit_test.yml` |
 | Copying mojibake emoji from terminal | Re-read file with UTF-8 or use file content directly |
 
@@ -98,6 +100,7 @@ Fix every finding.
 
 - Selected template filename is real in the current checkout.
 - Title keeps the selected template prefix exactly, including emoji.
+- Title summary describes the actual change/problem and does not contain sequencing markers like `task 1`, `stage 1`, or `phase 1`.
 - Labels match the selected template.
 - Body fields appear in template order.
 - Required fields have content or are listed under `Missing info`.

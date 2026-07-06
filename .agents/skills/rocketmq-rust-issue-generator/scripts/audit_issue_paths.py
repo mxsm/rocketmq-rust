@@ -46,6 +46,12 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 ALLOWED_NON_ASCII = frozenset("🐛📝✨🚀♻️🧪\ufe0f\ufeff")
 
 
+TITLE_MARKER_RE = re.compile(
+    r"\b(?:task|phase|stage|step|part|milestone)\s*[-_:]?\s*(?:\d+|[ivxlcdm]+)\b",
+    re.IGNORECASE,
+)
+
+
 def read_input(path_arg: str) -> tuple[str, str]:
     if path_arg == "-":
         return "<stdin>", sys.stdin.read()
@@ -73,6 +79,10 @@ def find_non_english_text(text: str) -> list[tuple[int, str, str]]:
     return findings
 
 
+def find_title_markers(title: str) -> list[str]:
+    return [match.group(0) for match in TITLE_MARKER_RE.finditer(title)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Fail if a GitHub issue draft contains local filesystem paths or non-English text.",
@@ -92,9 +102,10 @@ def main() -> int:
     audited_text = f"{args.title}\n{text}" if args.title else text
     findings = scan_text(audited_text)
     english_findings = find_non_english_text(audited_text)
+    title_marker_findings = find_title_markers(args.title) if args.title else []
 
-    if not findings and not english_findings:
-        print(f"OK: no local paths or non-English text detected in {source}")
+    if not findings and not english_findings and not title_marker_findings:
+        print(f"OK: no local paths, title markers, or non-English text detected in {source}")
         return 0
 
     if findings:
@@ -105,6 +116,10 @@ def main() -> int:
         print(f"Non-English text findings in {source}:", file=sys.stderr)
         for line_no, name, value in english_findings:
             print(f"  line {line_no}: {name}: {value}", file=sys.stderr)
+    if title_marker_findings:
+        print(f"Sequencing-marker title findings in {source}:", file=sys.stderr)
+        for value in title_marker_findings:
+            print(f"  title: {value}", file=sys.stderr)
     return 1
 
 
