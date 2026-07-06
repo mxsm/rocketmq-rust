@@ -307,7 +307,11 @@ where
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if let Some(auth_runtime) = &self.auth_runtime {
             if let Err(error) = auth_runtime.check_remoting(&ctx, request).await {
-                let response = error_response::command_from_error_with_opaque(&error, request.opaque());
+                let response = error_response::command_from_error_with_remark_and_opaque(
+                    &error,
+                    error.to_string(),
+                    request.opaque(),
+                );
                 return Ok(Some(response));
             }
         }

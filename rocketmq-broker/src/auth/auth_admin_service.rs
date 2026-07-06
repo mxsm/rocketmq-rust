@@ -322,7 +322,10 @@ impl AuthAdminService {
 }
 
 fn map_authz_error(error: AuthorizationError) -> RocketMQError {
-    RocketMQError::from(error)
+    match error {
+        AuthorizationError::PermissionDenied { .. } => permission_denied(error.to_string()),
+        other => RocketMQError::from(other),
+    }
 }
 
 fn permission_denied(message: impl Into<String>) -> RocketMQError {
