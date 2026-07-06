@@ -1079,10 +1079,10 @@ impl DashboardAdminClient {
             "Direct consume returned {consume_result_text} for `{message_id}` on `{}` in consumer group `{}`",
             request.topic, request.consumer_group
         );
-        if let Some(remark) = consume_result.remark().map(ToString::to_string) {
-            if !remark.trim().is_empty() {
-                message.push_str(&format!(". Remark: {remark}"));
-            }
+        if let Some(remark) = consume_result.remark().map(ToString::to_string)
+            && !remark.trim().is_empty()
+        {
+            message.push_str(&format!(". Remark: {remark}"));
         }
 
         Ok(MutationResult { message })

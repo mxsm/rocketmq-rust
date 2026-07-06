@@ -432,8 +432,8 @@ mod tests {
 
         let mut eb = EncodeBuffer::with_config(cfg);
         // simulate occasional large spikes but mostly small writes
-        for i in 0..200 {
-            if i % 50 == 0 {
+        for i in 0_usize..200 {
+            if i.is_multiple_of(50) {
                 // large spike
                 eb.append(&[0u8; 4096]);
             } else {

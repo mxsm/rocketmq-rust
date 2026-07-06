@@ -226,10 +226,10 @@ fn bench_encode_buffer_rpc_workload(c: &mut Criterion) {
 
         b.iter(|| {
             // Simulate 100 RPC calls
-            for i in 0..100 {
-                let data = if i % 10 == 0 {
+            for i in 0_usize..100 {
+                let data = if i.is_multiple_of(10) {
                     &large_msg
-                } else if i % 3 == 0 {
+                } else if i.is_multiple_of(3) {
                     &medium_msg
                 } else {
                     &small_msg
@@ -249,10 +249,10 @@ fn bench_encode_buffer_rpc_workload(c: &mut Criterion) {
         let large_msg = vec![0u8; 8192];
 
         b.iter(|| {
-            for i in 0..100 {
-                let data = if i % 10 == 0 {
+            for i in 0_usize..100 {
+                let data = if i.is_multiple_of(10) {
                     &large_msg
-                } else if i % 3 == 0 {
+                } else if i.is_multiple_of(3) {
                     &medium_msg
                 } else {
                     &small_msg
@@ -278,8 +278,8 @@ fn bench_encode_buffer_worst_case(c: &mut Criterion) {
         let small = vec![0u8; 128];
 
         b.iter(|| {
-            for i in 0..50 {
-                let data = if i % 2 == 0 { &large } else { &small };
+            for i in 0_usize..50 {
+                let data = if i.is_multiple_of(2) { &large } else { &small };
                 eb.append(black_box(data));
                 let _ = black_box(eb.take_bytes());
             }
@@ -292,8 +292,8 @@ fn bench_encode_buffer_worst_case(c: &mut Criterion) {
         let small = vec![0u8; 128];
 
         b.iter(|| {
-            for i in 0..50 {
-                let data = if i % 2 == 0 { &large } else { &small };
+            for i in 0_usize..50 {
+                let data = if i.is_multiple_of(2) { &large } else { &small };
                 buf.extend_from_slice(black_box(data));
                 let len = buf.len();
                 let _ = black_box(buf.split_to(len).freeze());

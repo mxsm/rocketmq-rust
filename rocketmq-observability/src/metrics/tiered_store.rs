@@ -78,7 +78,7 @@ impl TieredStoreMetrics {
     pub fn record_dispatch_dequeued(&self) {
         let _ = self
             .dispatch_behind
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_sub(1));
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_sub(1));
     }
 
     pub fn record_commit_failure(&self) {

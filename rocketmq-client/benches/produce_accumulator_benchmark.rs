@@ -162,9 +162,9 @@ fn reserve_with_lock(counter: &AtomicU64, lock: &StdMutex<()>, body_size: u64, l
     true
 }
 
-fn reserve_with_fetch_update(counter: &AtomicU64, body_size: u64, limit: u64) -> bool {
+fn reserve_with_try_update(counter: &AtomicU64, body_size: u64, limit: u64) -> bool {
     counter
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
             let next = current.checked_add(body_size)?;
             (next <= limit).then_some(next)
         })
@@ -175,7 +175,7 @@ async fn bench_capacity_reservation(
     num_keys: usize,
     operations_per_key: usize,
     workers_per_key: usize,
-    use_fetch_update: bool,
+    use_try_update: bool,
 ) -> Duration {
     let counter = Arc::new(AtomicU64::new(0));
     let lock = Arc::new(StdMutex::new(()));
@@ -192,8 +192,8 @@ async fn bench_capacity_reservation(
             let task = tokio::spawn(async move {
                 let mut accepted = 0usize;
                 for _ in 0..operations_per_worker {
-                    let reserved = if use_fetch_update {
-                        reserve_with_fetch_update(&counter, 1, limit)
+                    let reserved = if use_try_update {
+                        reserve_with_try_update(&counter, 1, limit)
                     } else {
                         reserve_with_lock(&counter, &lock, 1, limit)
                     };
@@ -420,20 +420,20 @@ fn bench_capacity_reservation_control(c: &mut Criterion) {
         let workers_per_key = if num_keys == 1 { 64 } else { 4 };
         group.throughput(Throughput::Elements((num_keys * operations_per_key) as u64));
 
-        for (label, use_fetch_update) in [("Mutex_Lock", false), ("Atomic_FetchUpdate", true)] {
+        for (label, use_try_update) in [("Mutex_Lock", false), ("Atomic_TryUpdate", true)] {
             group.bench_with_input(BenchmarkId::new(label, num_keys), &num_keys, |b, &num_keys| {
                 b.to_async(&rt).iter(|| async move {
-                    bench_capacity_reservation(num_keys, operations_per_key, workers_per_key, use_fetch_update).await
+                    bench_capacity_reservation(num_keys, operations_per_key, workers_per_key, use_try_update).await
                 });
             });
         }
     }
 
     group.throughput(Throughput::Elements(40 * 50));
-    for (label, use_fetch_update) in [("Mutex_Lock_40x50", false), ("Atomic_FetchUpdate_40x50", true)] {
+    for (label, use_try_update) in [("Mutex_Lock_40x50", false), ("Atomic_TryUpdate_40x50", true)] {
         group.bench_function(label, |b| {
             b.to_async(&rt)
-                .iter(|| async move { bench_capacity_reservation(40, 50, 2, use_fetch_update).await });
+                .iter(|| async move { bench_capacity_reservation(40, 50, 2, use_try_update).await });
         });
     }
 

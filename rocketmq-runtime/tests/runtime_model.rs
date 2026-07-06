@@ -621,7 +621,7 @@ async fn task_group_concurrent_spawn_shutdown_leaves_no_metadata() {
                     Err(error) => panic!("unexpected task group spawn error: {error}"),
                 }
 
-                if task_index % 64 == 0 {
+                if task_index.is_multiple_of(64) {
                     tokio::task::yield_now().await;
                 }
             }

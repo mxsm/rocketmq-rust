@@ -15,4 +15,4 @@
 
 # https://doc.rust-lang.org/clippy/index.html
 too-many-arguments-threshold = 20
-msrv = "1.85.0"
+msrv = "1.95.0"

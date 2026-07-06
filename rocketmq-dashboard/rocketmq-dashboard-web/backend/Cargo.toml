@@ -4,7 +4,7 @@
 name = "rocketmq-dashboard-web-backend"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85.0"
+rust-version = "1.95.0"
 publish = false
 license = "Apache-2.0"
 description = "RocketMQ Dashboard Web backend"

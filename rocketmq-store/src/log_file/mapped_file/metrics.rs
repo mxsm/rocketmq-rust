@@ -200,7 +200,7 @@ impl MappedFileMetrics {
         let millis = duration_to_millis(duration);
         let _ = self
             .total_warm_time_ms
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(millis))
             });
         self.last_warm_time_ms.store(millis, Ordering::Relaxed);

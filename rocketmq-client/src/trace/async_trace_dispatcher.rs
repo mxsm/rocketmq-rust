@@ -707,7 +707,7 @@ fn trace_dispatcher_startup_failed(thread_name: &'static str, error: impl std::f
 fn decrement_queued_trace_count(state: &DispatcherState) {
     let _ = state
         .queued_count
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| count.checked_sub(1));
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |count| count.checked_sub(1));
 }
 
 fn reset_queued_trace_count(state: &DispatcherState) {

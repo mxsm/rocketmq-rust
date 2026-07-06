@@ -167,7 +167,7 @@ impl HttpTinyClient {
     /// Validate headers format (must be in key-value pairs)
     fn validate_headers(headers: Option<&[String]>) -> RocketMQResult<()> {
         if let Some(h) = headers {
-            if h.len() % 2 != 0 {
+            if !h.len().is_multiple_of(2) {
                 return Err(RocketMQError::validation_failed(
                     "headers",
                     format!("Headers must be in key-value pairs, got {} items", h.len()),
@@ -423,7 +423,7 @@ impl HttpTinyClient {
             _ => return Ok(None),
         };
 
-        if params.len() % 2 != 0 {
+        if !params.len().is_multiple_of(2) {
             return Err(RocketMQError::validation_failed(
                 "param_values",
                 "Parameter values must be in key-value pairs",

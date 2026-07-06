@@ -131,7 +131,7 @@ pub struct DirectIoRequest {
 impl DirectIoRequest {
     pub fn new(file_offset: u64, buffer: DirectIoBuffer) -> Result<Self, DirectIoValidationError> {
         let alignment = buffer.alignment();
-        if file_offset % alignment as u64 != 0 {
+        if !file_offset.is_multiple_of(alignment as u64) {
             return Err(DirectIoValidationError::UnalignedFileOffset {
                 offset: file_offset,
                 alignment,
@@ -183,7 +183,7 @@ fn validate_alignment(alignment: usize) -> Result<(), DirectIoValidationError> {
 fn validate_len(len: usize, alignment: usize) -> Result<(), DirectIoValidationError> {
     if len == 0 {
         Err(DirectIoValidationError::ZeroLength)
-    } else if len % alignment != 0 {
+    } else if !len.is_multiple_of(alignment) {
         Err(DirectIoValidationError::UnalignedLength { len, alignment })
     } else {
         Ok(())

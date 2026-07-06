@@ -218,7 +218,7 @@ impl fmt::Display for BitsArray {
         let mut s = String::with_capacity(self.bytes.len() * 8);
         for i in (0..self.bytes.len()).rev() {
             let mut j = 7;
-            if i == self.bytes.len() - 1 && self.bit_length % 8 > 0 {
+            if i == self.bytes.len() - 1 && !self.bit_length.is_multiple_of(8) {
                 j = self.bit_length % 8 - 1;
             }
             for k in (0..=j).rev() {
@@ -229,7 +229,7 @@ impl fmt::Display for BitsArray {
                     s.push('0');
                 }
             }
-            if i % 8 == 0 {
+            if i.is_multiple_of(8) {
                 s.push('\n');
             }
         }

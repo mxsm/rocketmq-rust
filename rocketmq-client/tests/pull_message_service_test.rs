@@ -364,7 +364,7 @@ async fn test_concurrent_execute_immediately() {
     let mut handles = vec![];
 
     // Spawn multiple tasks executing requests
-    for i in 0..10 {
+    for i in 0_usize..10 {
         let service_clone = service.clone();
         let handle = tokio::spawn(async move {
             let pull_request = create_test_pull_request(&format!("group_{}", i), &format!("topic_{}", i));
@@ -391,7 +391,7 @@ async fn test_concurrent_delayed_requests() {
     service.start(instance).await.unwrap();
 
     // Schedule multiple delayed requests
-    for i in 0..10 {
+    for i in 0_usize..10 {
         let service_clone = service.clone();
         let pull_request = create_test_pull_request(&format!("group_{}", i), &format!("topic_{}", i));
         service_clone.execute_pull_request_later(pull_request, 50 + (i as u64 * 10));
@@ -508,10 +508,10 @@ async fn test_mixed_immediate_and_delayed_requests() {
     service.start(instance).await.unwrap();
 
     // Mix of immediate and delayed
-    for i in 0..10 {
+    for i in 0_usize..10 {
         let pull_request = create_test_pull_request(&format!("group_{}", i), &format!("topic_{}", i));
 
-        if i % 2 == 0 {
+        if i.is_multiple_of(2) {
             service.execute_pull_request_immediately(pull_request).await;
         } else {
             service.execute_pull_request_later(pull_request, 50);

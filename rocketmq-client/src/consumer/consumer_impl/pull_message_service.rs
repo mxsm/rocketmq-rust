@@ -185,7 +185,7 @@ impl PullRequestShardMetrics {
     fn decrement_pending(&self) {
         let _ = self
             .pending_count
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 Some(current.saturating_sub(1))
             });
     }
@@ -260,7 +260,7 @@ impl DelayedSchedulerMetrics {
     fn decrement_depth(&self, count: usize) {
         let _ = self
             .queue_depth
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 Some(current.saturating_sub(count))
             });
     }

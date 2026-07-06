@@ -165,12 +165,11 @@ impl MessageManager {
         let query = normalize_message_page_query(request)?;
         let generation = self.runtime.generation();
 
-        if let Some(task_id) = query.task_id.as_deref() {
-            if let Some(entry) = self.page_cache.get(task_id).await {
-                if entry.matches_request(&query, generation) {
-                    return self.query_message_page_from_cache(query, entry).await;
-                }
-            }
+        if let Some(task_id) = query.task_id.as_deref()
+            && let Some(entry) = self.page_cache.get(task_id).await
+            && entry.matches_request(&query, generation)
+        {
+            return self.query_message_page_from_cache(query, entry).await;
         }
 
         self.query_first_message_page(query.first_page(), generation).await
@@ -183,12 +182,11 @@ impl MessageManager {
         let query = normalize_message_page_query(dlq_page_query_to_message_page_request(request)?)?;
         let generation = self.runtime.generation();
 
-        if let Some(task_id) = query.task_id.as_deref() {
-            if let Some(entry) = self.page_cache.get(task_id).await {
-                if entry.matches_request(&query, generation) {
-                    return self.query_message_page_from_cache(query, entry).await;
-                }
-            }
+        if let Some(task_id) = query.task_id.as_deref()
+            && let Some(entry) = self.page_cache.get(task_id).await
+            && entry.matches_request(&query, generation)
+        {
+            return self.query_message_page_from_cache(query, entry).await;
         }
 
         self.query_first_dlq_message_page(query.first_page(), generation).await

@@ -1357,7 +1357,7 @@ impl DefaultMappedFile {
                 }
                 touched_pages += 1;
 
-                if flush_disk_type == FlushDiskType::SyncFlush && touched_pages % flush_every_pages == 0 {
+                if flush_disk_type == FlushDiskType::SyncFlush && touched_pages.is_multiple_of(flush_every_pages) {
                     let end = (offset + 1).min(file_size);
                     if let Err(error) = flush_range(mapped_file, last_flush_offset, end - last_flush_offset) {
                         record_degradation(LinuxStorageDegradationEvent::new(

@@ -33,7 +33,7 @@ keywords = [
 ]
 readme = "README.md"
 description = "Examples for RocketMQ Rust implementation"
-rust-version = "1.85.0"
+rust-version = "1.95.0"
 resolver = "3"
 
 [dependencies]

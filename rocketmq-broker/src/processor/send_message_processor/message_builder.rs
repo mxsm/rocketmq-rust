@@ -49,7 +49,7 @@ pub(super) fn recall_handle_topic_and_timestamp(
     let precision_ms = message_store_config.timer_precision_ms;
     let timer_out_ms = if precision_ms == 0 {
         deliver_ms
-    } else if deliver_ms % precision_ms == 0 {
+    } else if deliver_ms.is_multiple_of(precision_ms) {
         deliver_ms.saturating_sub(precision_ms)
     } else {
         (deliver_ms / precision_ms) * precision_ms

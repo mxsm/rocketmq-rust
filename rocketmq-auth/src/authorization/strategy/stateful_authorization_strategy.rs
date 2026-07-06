@@ -423,7 +423,7 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
 
         // Periodic cleanup every 100 requests
         let counter = self.request_counter.fetch_add(1, Ordering::Relaxed);
-        if counter % 100 == 0 {
+        if counter.is_multiple_of(100) {
             self.evict_expired();
         }
 

@@ -175,7 +175,7 @@ impl StorageBackend for FileBackend {
         self.index.write().insert(key.to_string(), file_path);
 
         // Save index periodically (every 10 operations)
-        if self.index.read().len() % 10 == 0 {
+        if self.index.read().len().is_multiple_of(10) {
             self.save_index().await?;
         }
 

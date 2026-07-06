@@ -71,7 +71,10 @@ impl TimerWheel {
         let mut buffer = vec![0; expected_len];
         file.read_exact(&mut buffer)?;
         let mut slots = Vec::with_capacity(self.wheel_len());
-        for chunk in buffer.chunks_exact(Slot::SIZE as usize) {
+        const SLOT_SIZE: usize = Slot::SIZE as usize;
+        let (slot_chunks, remaining) = buffer.as_chunks::<SLOT_SIZE>();
+        debug_assert!(remaining.is_empty());
+        for chunk in slot_chunks {
             slots.push(Slot::new_with_num_magic(
                 read_i64(&chunk[0..8]),
                 read_i64(&chunk[8..16]),
