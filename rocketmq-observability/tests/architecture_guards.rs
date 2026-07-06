@@ -59,6 +59,21 @@ const METRIC_CONSTANT_CANONICAL_FILES: &[&str] = &[
 
 const METRIC_CONSTANT_LEGACY_ALLOWLIST: &[&str] = &[];
 
+const SUBSCRIBER_INSTALL_PATTERNS: &[&str] = &[
+    "tracing_subscriber::fmt()",
+    "tracing_subscriber::registry()",
+    "tracing::subscriber::set_global_default",
+    "tracing_subscriber::subscriber::set_global_default",
+];
+
+const SUBSCRIBER_INSTALL_ALLOWLIST: &[&str] = &[
+    // Legacy local logging entrypoint. This is tracked until the unified logging bootstrap replaces it.
+    "rocketmq-common/src/log.rs",
+    // Current OpenTelemetry trace/log layer installation sites. Task 1 makes their install status explicit.
+    "rocketmq-observability/src/init.rs",
+    "rocketmq-observability/src/trace.rs",
+];
+
 const CONTROLLER_METRIC_LITERAL_MARKERS: &[&str] = &[
     "\"role\"",
     "\"dledger_disk_usage\"",
@@ -114,6 +129,37 @@ fn business_crates_do_not_add_direct_opentelemetry_usage() {
         unexpected_files.is_empty(),
         "direct OpenTelemetry usage must live in rocketmq-observability; migrate or explicitly track legacy files \
          before adding new usages:\n{}",
+        format_paths(&unexpected_files)
+    );
+}
+
+#[test]
+fn subscriber_installation_sites_are_tracked() {
+    let workspace_root = workspace_root();
+    let mut allowed_files = path_set(SUBSCRIBER_INSTALL_ALLOWLIST);
+    let mut scan_dirs = WORKSPACE_CRATE_DIRS.to_vec();
+    scan_dirs.push("rocketmq-observability");
+
+    let mut unexpected_files = BTreeSet::new();
+    for file in workspace_src_files(&workspace_root, &scan_dirs) {
+        let relative_path = relative_slash_path(&workspace_root, &file);
+        if allowed_files.remove(relative_path.as_str()) {
+            continue;
+        }
+
+        let source =
+            fs::read_to_string(&file).unwrap_or_else(|error| panic!("failed to read {}: {error}", file.display()));
+        if SUBSCRIBER_INSTALL_PATTERNS
+            .iter()
+            .any(|pattern| source.contains(pattern))
+        {
+            unexpected_files.insert(relative_path);
+        }
+    }
+
+    assert!(
+        unexpected_files.is_empty(),
+        "tracing subscriber installation must stay in tracked bootstrap files:\n{}",
         format_paths(&unexpected_files)
     );
 }
