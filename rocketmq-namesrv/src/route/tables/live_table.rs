@@ -470,8 +470,11 @@ mod tests {
 
         // Within timeout
         assert!(live_info.is_alive(1000 + 60_000)); // 1 minute later
+        assert!(live_info.is_alive(1000 + 119_999)); // just before timeout
+        assert!(live_info.is_alive(999)); // current time moved backwards
 
         // Exceeded timeout (default 2 minutes)
+        assert!(!live_info.is_alive(1000 + 120_000)); // exact timeout boundary
         assert!(!live_info.is_alive(1000 + 150_000)); // 2.5 minutes later
     }
 
@@ -536,6 +539,46 @@ mod tests {
             .expect("broker should be found by remote address");
         assert_eq!(found_broker_info, broker_info);
         assert_eq!(found_live_info.remote_addr, remote_addr);
+    }
+
+    #[test]
+    fn test_get_broker_by_addr_returns_none_for_unknown_addr() {
+        let table = BrokerLiveTable::new();
+        let broker_info = create_test_broker_addr_info("broker-a", 0);
+
+        table.register(broker_info, create_test_live_info(1000));
+
+        assert!(table.get_broker_by_addr("unknown:10911").is_none());
+        assert!(table.get_broker_info_by_addr("unknown:10911").is_none());
+    }
+
+    #[test]
+    fn test_update_last_update_timestamp_by_addr_info_preserves_live_info_fields() {
+        let table = BrokerLiveTable::new();
+        let broker_info = create_test_broker_addr_info("broker-a", 0);
+        let remote_addr = SocketAddr::from_str("127.0.0.1:10912").unwrap();
+        let channel_id = CheetahString::from_static_str("test-channel-002");
+        let mut data_version = DataVersion::new();
+        data_version.set_state_version(7);
+        data_version.set_timestamp(12345);
+        data_version.set_counter(9);
+        let live_info = BrokerLiveInfo::new(1000, data_version.clone(), remote_addr, channel_id.clone())
+            .with_timeout(45_000)
+            .with_ha_server("ha-server:10912");
+
+        table.register(broker_info.clone(), live_info);
+        table.update_last_update_timestamp_by_addr_info(&broker_info);
+
+        let updated = table.get(&broker_info).unwrap();
+        assert!(updated.last_update_timestamp > 1000);
+        assert_eq!(updated.heartbeat_timeout_millis, 45_000);
+        assert_eq!(updated.data_version, data_version);
+        assert_eq!(
+            updated.ha_server_addr,
+            Some(CheetahString::from_static_str("ha-server:10912"))
+        );
+        assert_eq!(updated.remote_addr, remote_addr);
+        assert_eq!(updated.channel_id, channel_id);
     }
 
     #[test]
