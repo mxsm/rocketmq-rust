@@ -67,8 +67,6 @@ fn proxy_runtime_error(action: &'static str) -> impl FnOnce(rocketmq_runtime::Ru
 }
 
 async fn run(service_context: ServiceContext) -> ProxyResult<()> {
-    rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO)?;
-
     let args = Args::parse()?;
     let mut config = match args.config_file {
         Some(ref path) => ProxyConfig::load_from_file(path)?,
@@ -81,20 +79,66 @@ async fn run(service_context: ServiceContext) -> ProxyResult<()> {
         return Ok(());
     }
 
+    let bootstrap_config = build_proxy_telemetry_bootstrap_config(&config);
+    let telemetry_guard =
+        rocketmq_observability::logging::install_global(&bootstrap_config).map_err(|error| ProxyError::Transport {
+            message: format!("failed to initialize proxy telemetry bootstrap: {error}"),
+        })?;
+    log_telemetry_bootstrap(&bootstrap_config, telemetry_guard.subscriber_install_status());
+
     info!(
         "Starting RocketMQ proxy: mode={:?}, grpc={}, remotingEnabled={}, remoting={}",
         config.mode, config.grpc.listen_addr, config.remoting.enabled, config.remoting.listen_addr
     );
 
-    ProxyRuntime::builder(config)
+    let serve_result = ProxyRuntime::builder(config)
         .with_service_context(service_context)
         .build()
         .serve_with_shutdown(async {
             if let Err(error) = tokio::signal::ctrl_c().await {
-                eprintln!("failed to listen for ctrl-c: {error}");
+                tracing::warn!(error = %error, "failed to listen for ctrl-c");
             }
         })
-        .await
+        .await;
+    let shutdown_result = telemetry_guard.shutdown().map_err(|error| ProxyError::Transport {
+        message: format!("failed to shutdown proxy telemetry bootstrap: {error}"),
+    });
+
+    match (serve_result, shutdown_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn build_proxy_telemetry_bootstrap_config(_config: &ProxyConfig) -> rocketmq_observability::TelemetryBootstrapConfig {
+    let mut observability = rocketmq_observability::ObservabilityConfig {
+        service_name: "rocketmq-proxy".to_string(),
+        service_namespace: "rocketmq".to_string(),
+        node_type: "proxy".to_string(),
+        node_id: "proxy".to_string(),
+        ..rocketmq_observability::ObservabilityConfig::default()
+    };
+    observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
+
+    let mut logging = rocketmq_observability::LoggingConfig::default();
+    logging.file.file_name_prefix = "rocketmq-proxy".to_string();
+
+    rocketmq_observability::TelemetryBootstrapConfig { observability, logging }
+}
+
+fn log_telemetry_bootstrap(
+    config: &rocketmq_observability::TelemetryBootstrapConfig,
+    subscriber_install_status: rocketmq_observability::SubscriberInstallStatus,
+) {
+    info!(
+        metrics_exporter = ?config.observability.metrics.exporter,
+        trace_exporter = ?config.observability.traces.exporter,
+        log_exporter = ?config.observability.logs.exporter,
+        subscriber_installed = subscriber_install_status.installed,
+        file_log_enabled = config.logging.file.enabled,
+        "proxy telemetry bootstrap initialized"
+    );
 }
 
 struct Args {
@@ -198,4 +242,25 @@ fn print_config(config: &ProxyConfig) {
     println!("remoting.enabled = {}", config.remoting.enabled);
     println!("remoting.listenAddr = {}", config.remoting.listen_addr);
     println!("cluster.namesrvAddr = {:?}", config.cluster.namesrv_addr);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_telemetry_bootstrap_uses_required_logging_defaults() {
+        let config = build_proxy_telemetry_bootstrap_config(&ProxyConfig::default());
+
+        assert_eq!(config.observability.service_name, "rocketmq-proxy");
+        assert_eq!(
+            config.observability.subscriber_install_policy,
+            rocketmq_observability::SubscriberInstallPolicy::Required
+        );
+        assert!(!config.observability.enabled);
+        assert!(config.logging.enabled);
+        assert!(config.logging.console.enabled);
+        assert!(!config.logging.file.enabled);
+        assert_eq!(config.logging.file.file_name_prefix, "rocketmq-proxy");
+    }
 }
