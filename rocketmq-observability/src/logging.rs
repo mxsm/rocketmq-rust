@@ -13,13 +13,18 @@
 // limitations under the License.
 
 use tracing_appender::non_blocking::ErrorCounter;
+use tracing_appender::non_blocking::NonBlockingBuilder;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling::RollingFileAppender;
+use tracing_appender::rolling::Rotation;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
 
 use crate::config::ConsoleLogConfig;
+use crate::config::FileLogConfig;
 use crate::config::LogFormat;
+use crate::config::LogRotation;
 use crate::config::SubscriberInstallStatus;
 use crate::error::ObservabilityError;
 use crate::init::TelemetryGuard;
@@ -53,6 +58,25 @@ impl LoggingGuard {
     }
 }
 
+pub struct FileLogLayer {
+    layer: BoxedRegistryLayer,
+    logging_guard: LoggingGuard,
+}
+
+impl FileLogLayer {
+    fn new(layer: BoxedRegistryLayer, logging_guard: LoggingGuard) -> Self {
+        Self { layer, logging_guard }
+    }
+
+    pub fn logging_guard(&self) -> &LoggingGuard {
+        &self.logging_guard
+    }
+
+    pub fn into_parts(self) -> (BoxedRegistryLayer, LoggingGuard) {
+        (self.layer, self.logging_guard)
+    }
+}
+
 pub fn build_env_filter(filter: &str) -> Result<EnvFilter, ObservabilityError> {
     EnvFilter::try_new(filter).map_err(|error| ObservabilityError::invalid_log_filter(filter, error))
 }
@@ -74,6 +98,64 @@ pub fn build_console_layer(config: &ConsoleLogConfig) -> Option<BoxedRegistryLay
         LogFormat::Compact => Some(Box::new(layer.compact())),
         LogFormat::Pretty => Some(Box::new(layer.pretty())),
         LogFormat::Json => Some(Box::new(layer.json())),
+    }
+}
+
+pub fn build_file_layer(config: &FileLogConfig) -> Result<Option<FileLogLayer>, ObservabilityError> {
+    if !config.enabled {
+        return Ok(None);
+    }
+
+    if config.directory.trim().is_empty() {
+        return Err(ObservabilityError::logging_init("file log directory must not be empty"));
+    }
+
+    if config.file_name_prefix.trim().is_empty() {
+        return Err(ObservabilityError::logging_init(
+            "file log name prefix must not be empty",
+        ));
+    }
+
+    let appender = build_rolling_file_appender(config)?;
+    let (writer, worker_guard) = NonBlockingBuilder::default()
+        .buffered_lines_limit(config.non_blocking.buffered_lines_limit)
+        .lossy(config.non_blocking.lossy)
+        .finish(appender);
+    let error_counter = writer.error_counter();
+
+    let layer = tracing_subscriber::fmt::layer()
+        .with_writer(writer)
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_line_number(true);
+
+    let layer = match config.format {
+        LogFormat::Compact => Box::new(layer.compact()) as BoxedRegistryLayer,
+        LogFormat::Pretty => Box::new(layer.pretty()) as BoxedRegistryLayer,
+        LogFormat::Json => Box::new(layer.json()) as BoxedRegistryLayer,
+    };
+
+    Ok(Some(FileLogLayer::new(
+        layer,
+        LoggingGuard::new(vec![worker_guard], vec![error_counter]),
+    )))
+}
+
+fn build_rolling_file_appender(config: &FileLogConfig) -> Result<RollingFileAppender, ObservabilityError> {
+    RollingFileAppender::builder()
+        .rotation(to_tracing_rotation(config.rotation))
+        .filename_prefix(config.file_name_prefix.as_str())
+        .build(config.directory.as_str())
+        .map_err(ObservabilityError::logging_init)
+}
+
+fn to_tracing_rotation(rotation: LogRotation) -> Rotation {
+    match rotation {
+        LogRotation::Never => Rotation::NEVER,
+        LogRotation::Hourly => Rotation::HOURLY,
+        LogRotation::Daily => Rotation::DAILY,
     }
 }
 
@@ -125,6 +207,15 @@ impl TelemetryRuntimeGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+    use tracing_subscriber::prelude::*;
+
+    static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn noop_logging_guard_reports_zero_dropped_lines() {
@@ -185,6 +276,122 @@ mod tests {
     }
 
     #[test]
+    fn disabled_file_config_builds_no_layer_or_directory() {
+        let directory = unique_temp_log_dir("disabled_file_config_builds_no_layer_or_directory");
+        let config = FileLogConfig {
+            enabled: false,
+            directory: directory.to_string_lossy().into_owned(),
+            ..FileLogConfig::default()
+        };
+
+        let layer = build_file_layer(&config).expect("disabled file sink should not fail");
+
+        assert!(layer.is_none());
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn file_layer_creates_missing_directory_and_tracks_guard() {
+        let directory = unique_temp_log_dir("file_layer_creates_missing_directory_and_tracks_guard");
+        let config = FileLogConfig {
+            enabled: true,
+            directory: directory.to_string_lossy().into_owned(),
+            file_name_prefix: "rocketmq-test.log".to_string(),
+            rotation: LogRotation::Never,
+            ..FileLogConfig::default()
+        };
+
+        let layer = build_file_layer(&config)
+            .expect("file sink should build")
+            .expect("enabled file sink should return a layer");
+
+        assert!(directory.exists());
+        assert_eq!(layer.logging_guard().file_sink_count(), 1);
+        assert_eq!(layer.logging_guard().dropped_log_lines(), 0);
+        assert!(directory.join("rocketmq-test.log").exists());
+
+        drop(layer);
+        cleanup_temp_log_dir(directory);
+    }
+
+    #[test]
+    fn file_layer_supports_rotation_variants() {
+        for rotation in [LogRotation::Never, LogRotation::Hourly, LogRotation::Daily] {
+            let directory = unique_temp_log_dir("file_layer_supports_rotation_variants");
+            let config = FileLogConfig {
+                enabled: true,
+                directory: directory.to_string_lossy().into_owned(),
+                file_name_prefix: "rocketmq-rotation.log".to_string(),
+                rotation,
+                ..FileLogConfig::default()
+            };
+
+            let layer = build_file_layer(&config)
+                .expect("file sink should build")
+                .expect("enabled file sink should return a layer");
+
+            assert_eq!(layer.logging_guard().file_sink_count(), 1);
+            assert!(
+                fs::read_dir(&directory)
+                    .expect("log directory should be readable")
+                    .next()
+                    .is_some(),
+                "rotation {rotation:?} should create a log file"
+            );
+
+            drop(layer);
+            cleanup_temp_log_dir(directory);
+        }
+    }
+
+    #[test]
+    fn file_layer_writes_without_ansi_escape_codes() {
+        let directory = unique_temp_log_dir("file_layer_writes_without_ansi_escape_codes");
+        let config = FileLogConfig {
+            enabled: true,
+            directory: directory.to_string_lossy().into_owned(),
+            file_name_prefix: "ansi-free.log".to_string(),
+            rotation: LogRotation::Never,
+            format: LogFormat::Compact,
+            ..FileLogConfig::default()
+        };
+
+        let layer = build_file_layer(&config)
+            .expect("file sink should build")
+            .expect("enabled file sink should return a layer");
+        let (layer, logging_guard) = layer.into_parts();
+        let subscriber = Registry::default().with(layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "rocketmq_observability::logging::tests", "file sink event");
+        });
+        drop(logging_guard);
+
+        let contents =
+            fs::read_to_string(directory.join("ansi-free.log")).expect("file sink output should be readable");
+        assert!(contents.contains("file sink event"));
+        assert!(!contents.contains('\u{1b}'));
+
+        cleanup_temp_log_dir(directory);
+    }
+
+    #[test]
+    fn invalid_file_layer_config_returns_typed_error() {
+        let config = FileLogConfig {
+            enabled: true,
+            directory: String::new(),
+            ..FileLogConfig::default()
+        };
+
+        let error = match build_file_layer(&config) {
+            Ok(_) => panic!("empty directory should fail"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, ObservabilityError::LoggingInit(message) if message.contains("directory")));
+    }
+
+    #[test]
     fn noop_runtime_guard_exposes_zero_logging_and_subscriber_status() {
         let guard = TelemetryRuntimeGuard::noop();
 
@@ -203,5 +410,23 @@ mod tests {
         TelemetryRuntimeGuard::noop()
             .shutdown()
             .expect("noop runtime guard shutdown should succeed");
+    }
+
+    fn unique_temp_log_dir(test_name: &str) -> PathBuf {
+        let id = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "rocketmq-observability-{test_name}-{}-{id}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    fn cleanup_temp_log_dir(directory: PathBuf) {
+        if directory.exists() {
+            fs::remove_dir_all(&directory).expect("temporary log directory should be removable");
+        }
     }
 }
