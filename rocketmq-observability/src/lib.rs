@@ -47,6 +47,7 @@ pub use logging::install_global;
 pub use logging::FileLogLayer;
 pub use logging::LoggingGuard;
 pub use logging::TelemetryRuntimeGuard;
+pub use logging::TelemetryShutdownReport;
 
 #[cfg(feature = "prometheus")]
 #[doc(hidden)]

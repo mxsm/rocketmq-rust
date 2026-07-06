@@ -22,6 +22,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
 
+use serde::Serialize;
+
 use crate::config::ConsoleLogConfig;
 use crate::config::FileLogConfig;
 use crate::config::LogFormat;
@@ -31,6 +33,7 @@ use crate::config::SubscriberInstallStatus;
 use crate::config::TelemetryBootstrapConfig;
 use crate::error::ObservabilityError;
 use crate::init::TelemetryGuard;
+use crate::init::TelemetryProviderShutdownReport;
 
 pub type BoxedRegistryLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 
@@ -274,6 +277,61 @@ pub struct TelemetryRuntimeGuard {
     logging_guard: LoggingGuard,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TelemetryShutdownReport {
+    pub subscriber_installed: bool,
+    pub file_log_enabled: bool,
+    pub dropped_log_lines: usize,
+    pub logs_shutdown_ok: bool,
+    pub traces_shutdown_ok: bool,
+    pub metrics_shutdown_ok: bool,
+    pub logs_shutdown_error: Option<String>,
+    pub traces_shutdown_error: Option<String>,
+    pub metrics_shutdown_error: Option<String>,
+}
+
+impl TelemetryShutdownReport {
+    fn new(
+        subscriber_install_status: SubscriberInstallStatus,
+        file_log_enabled: bool,
+        dropped_log_lines: usize,
+        provider_report: TelemetryProviderShutdownReport,
+    ) -> Self {
+        Self {
+            subscriber_installed: subscriber_install_status.installed,
+            file_log_enabled,
+            dropped_log_lines,
+            logs_shutdown_ok: provider_report.logs_shutdown_ok,
+            traces_shutdown_ok: provider_report.traces_shutdown_ok,
+            metrics_shutdown_ok: provider_report.metrics_shutdown_ok,
+            logs_shutdown_error: provider_report.logs_shutdown_error,
+            traces_shutdown_error: provider_report.traces_shutdown_error,
+            metrics_shutdown_error: provider_report.metrics_shutdown_error,
+        }
+    }
+
+    pub fn is_healthy(&self) -> bool {
+        self.logs_shutdown_ok && self.traces_shutdown_ok && self.metrics_shutdown_ok
+    }
+
+    pub fn into_result(self) -> Result<Self, ObservabilityError> {
+        if let Some(error) = self.logs_shutdown_error.as_ref() {
+            return Err(ObservabilityError::logs_shutdown(error));
+        }
+        if let Some(error) = self.traces_shutdown_error.as_ref() {
+            return Err(ObservabilityError::traces_shutdown(error));
+        }
+        if let Some(error) = self.metrics_shutdown_error.as_ref() {
+            return Err(ObservabilityError::metrics_shutdown(error));
+        }
+        Ok(self)
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|error| format!("{{\"serialization_error\":\"{error}\"}}"))
+    }
+}
+
 impl TelemetryRuntimeGuard {
     pub fn new(telemetry_guard: TelemetryGuard, logging_guard: LoggingGuard) -> Self {
         Self {
@@ -302,15 +360,40 @@ impl TelemetryRuntimeGuard {
         self.logging_guard.dropped_log_lines()
     }
 
-    pub fn shutdown(self) -> Result<(), ObservabilityError> {
+    pub fn shutdown(self) -> TelemetryShutdownReport {
         let Self {
             telemetry_guard,
             logging_guard,
         } = self;
 
-        let shutdown_result = telemetry_guard.shutdown();
+        let subscriber_install_status = telemetry_guard.subscriber_install_status();
+        let file_log_enabled = logging_guard.file_sink_count() > 0;
+        let dropped_log_lines = logging_guard.dropped_log_lines();
+        if dropped_log_lines > 0 {
+            tracing::warn!(
+                dropped_log_lines,
+                "telemetry logging guard reported dropped log lines before shutdown"
+            );
+        }
+
+        // Drop local file logging guards before shutting down OpenTelemetry providers so
+        // non-blocking file writers are flushed and joined under explicit runtime ownership.
         drop(logging_guard);
-        shutdown_result
+        let provider_report = telemetry_guard.shutdown_with_report();
+        let provider_shutdown_healthy = provider_report.is_healthy();
+        let report = TelemetryShutdownReport::new(
+            subscriber_install_status,
+            file_log_enabled,
+            dropped_log_lines,
+            provider_report,
+        );
+        if !provider_shutdown_healthy {
+            tracing::warn!(
+                report = %report.to_json(),
+                "telemetry provider shutdown report is unhealthy"
+            );
+        }
+        report
     }
 }
 
@@ -516,9 +599,36 @@ mod tests {
 
     #[test]
     fn noop_runtime_guard_shutdown_succeeds() {
-        TelemetryRuntimeGuard::noop()
-            .shutdown()
+        let report = TelemetryRuntimeGuard::noop().shutdown();
+
+        assert!(report.is_healthy());
+        assert_eq!(report.dropped_log_lines, 0);
+        assert!(!report.file_log_enabled);
+        assert!(!report.subscriber_installed);
+        report
+            .into_result()
             .expect("noop runtime guard shutdown should succeed");
+    }
+
+    #[test]
+    fn runtime_shutdown_report_preserves_provider_failure() {
+        let report = TelemetryShutdownReport {
+            subscriber_installed: true,
+            file_log_enabled: true,
+            dropped_log_lines: 3,
+            logs_shutdown_ok: false,
+            traces_shutdown_ok: true,
+            metrics_shutdown_ok: true,
+            logs_shutdown_error: Some("logger provider failed".to_string()),
+            traces_shutdown_error: None,
+            metrics_shutdown_error: None,
+        };
+
+        assert!(!report.is_healthy());
+        assert!(matches!(
+            report.into_result(),
+            Err(ObservabilityError::LogsShutdown(message)) if message == "logger provider failed"
+        ));
     }
 
     fn unique_temp_log_dir(test_name: &str) -> PathBuf {

@@ -185,7 +185,10 @@ fn bootstrap_console_only() {
     );
     assert_eq!(guard.logging_guard().file_sink_count(), 0);
 
-    guard.shutdown().expect("console-only shutdown should succeed");
+    let report = guard.shutdown();
+    assert!(report.is_healthy());
+    assert!(!report.file_log_enabled);
+    report.into_result().expect("console-only shutdown should succeed");
 }
 
 fn bootstrap_file_only() {
@@ -209,7 +212,10 @@ fn bootstrap_file_only() {
     assert_eq!(guard.logging_guard().file_sink_count(), 1);
     assert!(directory.join("bootstrap.log").exists());
 
-    guard.shutdown().expect("file-only shutdown should succeed");
+    let report = guard.shutdown();
+    assert!(report.is_healthy());
+    assert!(report.file_log_enabled);
+    report.into_result().expect("file-only shutdown should succeed");
     cleanup_temp_log_dir(directory);
 }
 
@@ -232,7 +238,10 @@ fn bootstrap_metrics_only() {
         }
     );
 
-    guard.shutdown().expect("metrics-only shutdown should succeed");
+    guard
+        .shutdown()
+        .into_result()
+        .expect("metrics-only shutdown should succeed");
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -257,7 +266,10 @@ fn bootstrap_metrics_best_effort_conflict() {
         }
     );
 
-    guard.shutdown().expect("metrics conflict shutdown should succeed");
+    guard
+        .shutdown()
+        .into_result()
+        .expect("metrics conflict shutdown should succeed");
 }
 
 #[cfg(feature = "otel-traces")]
@@ -278,7 +290,10 @@ fn bootstrap_traces_enabled() {
         }
     );
 
-    guard.shutdown().expect("trace bootstrap shutdown should succeed");
+    guard
+        .shutdown()
+        .into_result()
+        .expect("trace bootstrap shutdown should succeed");
 }
 
 #[cfg(feature = "otel-logs")]
@@ -299,7 +314,10 @@ fn bootstrap_logs_enabled() {
         }
     );
 
-    guard.shutdown().expect("logs bootstrap shutdown should succeed");
+    guard
+        .shutdown()
+        .into_result()
+        .expect("logs bootstrap shutdown should succeed");
 }
 
 fn bootstrap_required_conflict() {

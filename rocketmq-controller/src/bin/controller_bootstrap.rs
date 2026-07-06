@@ -128,12 +128,13 @@ async fn run(service_context: ServiceContext) -> Result<()> {
     let controller_result = run_controller(config, service_context).await;
     let shutdown_result = telemetry_guard
         .shutdown()
+        .into_result()
         .context("failed to shutdown controller telemetry bootstrap");
 
     match (controller_result, shutdown_result) {
         (Err(error), _) => Err(error),
         (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Ok(_report)) => Ok(()),
     }
 }
 
