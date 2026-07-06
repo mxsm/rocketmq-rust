@@ -24,6 +24,12 @@
       "prompt": "Create ready-to-submit PR title/body for issue 8300. The source notes mention a local file C:\\repo\\target\\debug\\broker.log, but the public PR body must not expose local paths.",
       "expected_output": "Uses `[ISSUE #8300]` with an appropriate emoji, preserves the PR template headings, rewrites the local log path generically, and leaves no local absolute path in the title or body.",
       "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "Create a PR title for issue 8400. The branch name says phase-1-task-1-nightly-atomic-api, and the change fixes nightly atomic API warnings.",
+      "expected_output": "Returns title candidates matching `[ISSUE #8400]<emoji><summary>` where the summary describes fixing nightly atomic API warnings. The title must not include `task 1`, `stage 1`, `phase 1`, or similar sequencing markers.",
+      "files": []
     }
   ]
 }

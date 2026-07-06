@@ -47,6 +47,8 @@ Priority order: user request → branch name (`issue-7544`, `fix-7544`) → comm
 ```
 Do not put spaces between `]`, the emoji, and the summary. No extra prefixes (conventional commit, branch name). Keep the summary short and action-oriented.
 
+Generate the summary from the actual PR change: affected subsystem, behavior fixed, test coverage added, docs updated, or refactor performed. Do not use sequencing-marker wording such as `task 1`, `stage 1`, `phase 1`, `step 3`, or `part 4`, even if the branch name, issue text, or user draft contains those words.
+
 Write the title and commit-message summary in English only. The required emoji is allowed; Chinese or other non-English prose is not allowed.
 
 If creating a commit as part of the PR workflow, use the exact same compact format for the commit message:
@@ -92,6 +94,7 @@ Write all public body prose in English. Repository-relative paths, code identifi
 | Claiming unrun validation passed | State "validation not run" honestly in test section |
 | Writing PR prose in Chinese or mixed language | Rewrite the title/body in English and rerun validation |
 | Adding spaces or extra prefixes | Only `[ISSUE #id]<emoji><summary>` for PR titles and commit messages |
+| Using process labels like `task 1`, `stage 1`, or `phase 1` as the summary | Replace them with a concise summary of the actual code, docs, tests, or behavior change |
 | Wrong emoji for change type | Match to linked issue type; default to ✨ |
 
 ## Output Format
@@ -113,6 +116,7 @@ Body:
 
 - Title matches `[ISSUE #number]<emoji><summary>`
 - Commit message, when created, matches `[ISSUE #number]<emoji><summary>`
+- Title and commit summary describe the actual change and do not contain sequencing markers like `task 1`, `stage 1`, or `phase 1`.
 - Body includes three PR template headings in order with `- Fixes #number`
 - Title/body are English-only.
 - Test section doesn't claim unrun commands passed
