@@ -27,6 +27,8 @@ pub mod semantic;
 pub mod trace;
 
 pub use config::ObservabilityConfig;
+pub use config::SubscriberInstallPolicy;
+pub use config::SubscriberInstallStatus;
 pub use error::ObservabilityError;
 pub use init::init_observability;
 #[cfg(feature = "otel-metrics")]

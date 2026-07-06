@@ -37,6 +37,7 @@ pub struct ObservabilityConfig {
     pub logs: LogsConfig,
     pub otlp: OtlpConfig,
     pub prometheus: PrometheusConfig,
+    pub subscriber_install_policy: SubscriberInstallPolicy,
     pub resource_attributes: HashMap<String, String>,
 }
 
@@ -122,6 +123,29 @@ pub enum OtlpProtocol {
     HttpJson,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriberInstallPolicy {
+    Required,
+    #[default]
+    BestEffort,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SubscriberInstallStatus {
+    pub attempted: bool,
+    pub installed: bool,
+}
+
+impl SubscriberInstallStatus {
+    pub fn attempted(installed: bool) -> Self {
+        Self {
+            attempted: true,
+            installed,
+        }
+    }
+}
+
 impl Default for ObservabilityConfig {
     fn default() -> Self {
         Self {
@@ -139,6 +163,7 @@ impl Default for ObservabilityConfig {
             logs: LogsConfig::default(),
             otlp: OtlpConfig::default(),
             prometheus: PrometheusConfig::default(),
+            subscriber_install_policy: SubscriberInstallPolicy::default(),
             resource_attributes: HashMap::new(),
         }
     }
@@ -249,6 +274,19 @@ mod tests {
         assert_eq!(config.prometheus.host, "127.0.0.1");
         assert!(!config.traces.record_message_id);
         assert!(!config.traces.record_message_keys);
+        assert_eq!(config.subscriber_install_policy, SubscriberInstallPolicy::BestEffort);
+    }
+
+    #[test]
+    fn subscriber_install_policy_uses_snake_case_serde() {
+        let policy = serde_json::from_str::<SubscriberInstallPolicy>("\"required\"")
+            .expect("required policy should deserialize");
+
+        assert_eq!(policy, SubscriberInstallPolicy::Required);
+        assert_eq!(
+            serde_json::to_string(&SubscriberInstallPolicy::BestEffort).expect("policy should serialize"),
+            "\"best_effort\""
+        );
     }
 
     #[test]
