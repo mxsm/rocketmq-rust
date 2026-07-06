@@ -25,8 +25,18 @@ use rocketmq_rust::ArcMut;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
+    let config = rocketmq_observability::TelemetryBootstrapConfig::default();
+    let telemetry_guard = rocketmq_observability::install_global(&config)?;
 
+    let run_result = run().await;
+    let shutdown_result = telemetry_guard.shutdown().into_result();
+
+    run_result?;
+    shutdown_result?;
+    Ok(())
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== OpenRaft Single Node Example ===\n");
 
     let node_id = 1;
