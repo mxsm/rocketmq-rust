@@ -37,11 +37,19 @@ const TAG: &str = "TagA";
 const NAME_SERVER: &str = "127.0.0.1:9876";
 
 #[rocketmq::main]
-async fn main() -> RocketMQResult<()> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = rocketmq_observability::TelemetryBootstrapConfig::default();
+    let telemetry_guard = rocketmq_observability::install_global(&config)?;
 
+    let run_result = run().await;
+    let shutdown_result = telemetry_guard.shutdown().into_result();
+
+    run_result?;
+    shutdown_result?;
+    Ok(())
+}
+
+async fn run() -> RocketMQResult<()> {
     info!("=== SendCallback Examples ===\n");
 
     let mut producer = setup_producer().await?;
