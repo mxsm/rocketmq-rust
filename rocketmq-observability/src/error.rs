@@ -14,6 +14,8 @@
 
 use thiserror::Error;
 
+use crate::config::SubscriberInstallStatus;
+
 #[derive(Debug, Error)]
 pub enum ObservabilityError {
     #[error("observability feature '{0}' is not enabled")]
@@ -30,6 +32,9 @@ pub enum ObservabilityError {
 
     #[error("logs initialization failed: {0}")]
     LogsInit(String),
+
+    #[error("tracing subscriber installation failed: attempted={attempted}, installed={installed}")]
+    SubscriberInstallFailed { attempted: bool, installed: bool },
 
     #[error("metrics shutdown failed: {0}")]
     MetricsShutdown(String),
@@ -56,6 +61,13 @@ impl ObservabilityError {
 
     pub fn logs_init(error: impl ToString) -> Self {
         Self::LogsInit(error.to_string())
+    }
+
+    pub fn subscriber_install_failed(status: SubscriberInstallStatus) -> Self {
+        Self::SubscriberInstallFailed {
+            attempted: status.attempted,
+            installed: status.installed,
+        }
     }
 
     pub fn metrics_shutdown(error: impl ToString) -> Self {

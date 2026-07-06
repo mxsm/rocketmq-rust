@@ -16,10 +16,13 @@
 use crate::config::LogsExporter;
 use crate::config::MetricsExporter;
 use crate::config::ObservabilityConfig;
+use crate::config::SubscriberInstallPolicy;
+use crate::config::SubscriberInstallStatus;
 use crate::error::ObservabilityError;
 
 #[derive(Debug, Default)]
 pub struct TelemetryGuard {
+    subscriber_install_status: SubscriberInstallStatus,
     #[cfg(feature = "otel-metrics")]
     meter_provider: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
     #[cfg(feature = "prometheus")]
@@ -37,6 +40,10 @@ impl TelemetryGuard {
 
     pub fn shutdown(self) -> Result<(), ObservabilityError> {
         self.shutdown_inner()
+    }
+
+    pub fn subscriber_install_status(&self) -> SubscriberInstallStatus {
+        self.subscriber_install_status
     }
 
     #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
@@ -103,10 +110,7 @@ pub fn init_observability(config: &ObservabilityConfig) -> Result<TelemetryGuard
         return Ok(TelemetryGuard::noop());
     }
 
-    #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
     let mut guard = TelemetryGuard::noop();
-    #[cfg(not(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs")))]
-    let guard = TelemetryGuard::noop();
 
     if config.metrics.enabled {
         #[cfg(feature = "otel-metrics")]
@@ -153,16 +157,53 @@ pub fn init_observability(config: &ObservabilityConfig) -> Result<TelemetryGuard
     }
 
     #[cfg(all(feature = "otel-traces", feature = "otel-logs"))]
-    let _installed =
+    let subscriber_install_status =
         try_init_observability_subscriber(config, guard.tracer_provider.as_ref(), guard.logger_provider.as_ref());
 
     #[cfg(all(feature = "otel-traces", not(feature = "otel-logs")))]
-    let _installed = try_init_observability_subscriber(config, guard.tracer_provider.as_ref());
+    let subscriber_install_status = try_init_observability_subscriber(config, guard.tracer_provider.as_ref());
 
     #[cfg(all(not(feature = "otel-traces"), feature = "otel-logs"))]
-    let _installed = try_init_observability_subscriber(guard.logger_provider.as_ref());
+    let subscriber_install_status = try_init_observability_subscriber(guard.logger_provider.as_ref());
+
+    #[cfg(not(any(feature = "otel-traces", feature = "otel-logs")))]
+    let subscriber_install_status = SubscriberInstallStatus::default();
+
+    guard.subscriber_install_status = subscriber_install_status;
+    if let Err(error) = enforce_subscriber_install_policy(config, guard.subscriber_install_status) {
+        let _ = guard.shutdown();
+        return Err(error);
+    }
 
     Ok(guard)
+}
+
+fn enforce_subscriber_install_policy(
+    config: &ObservabilityConfig,
+    status: SubscriberInstallStatus,
+) -> Result<(), ObservabilityError> {
+    if !subscriber_install_required(config) || status.installed {
+        return Ok(());
+    }
+
+    match config.subscriber_install_policy {
+        SubscriberInstallPolicy::Required => Err(ObservabilityError::subscriber_install_failed(status)),
+        SubscriberInstallPolicy::BestEffort => {
+            if status.attempted {
+                tracing::warn!(
+                    target: "rocketmq_observability",
+                    attempted = status.attempted,
+                    installed = status.installed,
+                    "tracing subscriber was already initialized; OpenTelemetry trace/log layers were not installed"
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+fn subscriber_install_required(config: &ObservabilityConfig) -> bool {
+    config.traces.enabled || config.logs.enabled
 }
 
 fn validate_config(config: &ObservabilityConfig) -> Result<(), ObservabilityError> {
@@ -334,7 +375,7 @@ fn try_init_observability_subscriber(
     config: &ObservabilityConfig,
     tracer_provider: Option<&opentelemetry_sdk::trace::SdkTracerProvider>,
     logger_provider: Option<&opentelemetry_sdk::logs::SdkLoggerProvider>,
-) -> bool {
+) -> SubscriberInstallStatus {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
@@ -367,19 +408,19 @@ fn try_init_observability_subscriber(
                     .with_thread_names(true),
             )
             .try_init(),
-        (None, None) => return false,
+        (None, None) => return SubscriberInstallStatus::default(),
     };
 
-    log_subscriber_init_result(result)
+    SubscriberInstallStatus::attempted(log_subscriber_init_result(result))
 }
 
 #[cfg(all(feature = "otel-traces", not(feature = "otel-logs")))]
 fn try_init_observability_subscriber(
     config: &ObservabilityConfig,
     tracer_provider: Option<&opentelemetry_sdk::trace::SdkTracerProvider>,
-) -> bool {
+) -> SubscriberInstallStatus {
     let Some(tracer_provider) = tracer_provider else {
-        return false;
+        return SubscriberInstallStatus::default();
     };
 
     let installed = crate::trace::try_init_tracing_subscriber(config, tracer_provider);
@@ -389,16 +430,18 @@ fn try_init_observability_subscriber(
             "tracing subscriber already initialized; OpenTelemetry tracing layer was not installed"
         );
     }
-    installed
+    SubscriberInstallStatus::attempted(installed)
 }
 
 #[cfg(all(not(feature = "otel-traces"), feature = "otel-logs"))]
-fn try_init_observability_subscriber(logger_provider: Option<&opentelemetry_sdk::logs::SdkLoggerProvider>) -> bool {
+fn try_init_observability_subscriber(
+    logger_provider: Option<&opentelemetry_sdk::logs::SdkLoggerProvider>,
+) -> SubscriberInstallStatus {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
     let Some(logger_provider) = logger_provider else {
-        return false;
+        return SubscriberInstallStatus::default();
     };
 
     let fmt_layer = tracing_subscriber::fmt::layer()
@@ -406,12 +449,12 @@ fn try_init_observability_subscriber(logger_provider: Option<&opentelemetry_sdk:
         .with_thread_ids(true)
         .with_thread_names(true);
 
-    log_subscriber_init_result(
+    SubscriberInstallStatus::attempted(log_subscriber_init_result(
         tracing_subscriber::registry()
             .with(crate::logs::bridge::build_logs_layer(logger_provider))
             .with(fmt_layer)
             .try_init(),
-    )
+    ))
 }
 
 #[cfg(any(
@@ -443,6 +486,13 @@ mod tests {
     fn disabled_config_returns_noop_guard() {
         let guard = init_observability(&ObservabilityConfig::default()).expect("noop init should succeed");
 
+        assert_eq!(
+            guard.subscriber_install_status(),
+            SubscriberInstallStatus {
+                attempted: false,
+                installed: false,
+            }
+        );
         guard.shutdown().expect("noop shutdown should succeed");
     }
 
