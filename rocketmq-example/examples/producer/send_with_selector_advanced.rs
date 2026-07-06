@@ -171,15 +171,15 @@ async fn example_2_order_hash_selection(producer: &mut DefaultMQProducer) -> Roc
             )
             .await?;
 
-        if let Some(send_result) = result {
-            if let Some(queue) = &send_result.message_queue {
-                println!(
-                    "Order {} -> Queue {} (Broker: {})",
-                    order_id,
-                    queue.queue_id(),
-                    queue.broker_name()
-                );
-            }
+        if let Some(send_result) = result
+            && let Some(queue) = &send_result.message_queue
+        {
+            println!(
+                "Order {} -> Queue {} (Broker: {})",
+                order_id,
+                queue.queue_id(),
+                queue.broker_name()
+            );
         }
     }
     println!();
@@ -219,13 +219,13 @@ async fn example_3_property_based_selection(producer: &mut DefaultMQProducer) ->
                     }
 
                     // Route based on message key
-                    if let Some(keys) = msg.keys() {
-                        if let Some(first_key) = keys.first() {
-                            // Simple hash of key string
-                            let hash = first_key.as_bytes().iter().map(|&b| b as usize).sum::<usize>();
-                            let index = hash % queues.len();
-                            return queues.get(index).cloned();
-                        }
+                    if let Some(keys) = msg.keys()
+                        && let Some(first_key) = keys.first()
+                    {
+                        // Simple hash of key string
+                        let hash = first_key.as_bytes().iter().map(|&b| b as usize).sum::<usize>();
+                        let index = hash % queues.len();
+                        return queues.get(index).cloned();
                     }
 
                     // Fallback to first queue
@@ -235,10 +235,10 @@ async fn example_3_property_based_selection(producer: &mut DefaultMQProducer) ->
             )
             .await?;
 
-        if let Some(send_result) = result {
-            if let Some(queue) = &send_result.message_queue {
-                println!("User {} -> Queue {}", user_id, queue.queue_id());
-            }
+        if let Some(send_result) = result
+            && let Some(queue) = &send_result.message_queue
+        {
+            println!("User {} -> Queue {}", user_id, queue.queue_id());
         }
     }
     println!();
@@ -286,10 +286,10 @@ async fn example_4_round_robin_selection(producer: &mut DefaultMQProducer) -> Ro
             )
             .await?;
 
-        if let Some(send_result) = result {
-            if let Some(queue) = &send_result.message_queue {
-                println!("Message #{} -> Queue {}", i, queue.queue_id());
-            }
+        if let Some(send_result) = result
+            && let Some(queue) = &send_result.message_queue
+        {
+            println!("Message #{} -> Queue {}", i, queue.queue_id());
         }
     }
     println!();
@@ -332,10 +332,10 @@ async fn example_5_random_selection(producer: &mut DefaultMQProducer) -> RocketM
             )
             .await?;
 
-        if let Some(send_result) = result {
-            if let Some(queue) = &send_result.message_queue {
-                println!("Message #{} -> Queue {} (random)", i, queue.queue_id());
-            }
+        if let Some(send_result) = result
+            && let Some(queue) = &send_result.message_queue
+        {
+            println!("Message #{} -> Queue {} (random)", i, queue.queue_id());
         }
     }
     println!();
@@ -407,10 +407,10 @@ async fn example_6_weighted_selection(producer: &mut DefaultMQProducer) -> Rocke
             )
             .await?;
 
-        if let Some(send_result) = result {
-            if let Some(queue) = &send_result.message_queue {
-                println!("Message #{:2} -> Queue {}", i, queue.queue_id());
-            }
+        if let Some(send_result) = result
+            && let Some(queue) = &send_result.message_queue
+        {
+            println!("Message #{:2} -> Queue {}", i, queue.queue_id());
         }
     }
     println!();

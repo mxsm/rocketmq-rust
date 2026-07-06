@@ -189,7 +189,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
             .map(|store| store.now())
             .unwrap_or(0) as i64;
 
-        let need_retry = random_q % 5 == 0;
+        let need_retry = random_q.is_multiple_of(5);
 
         if need_retry {
             rest_num = self

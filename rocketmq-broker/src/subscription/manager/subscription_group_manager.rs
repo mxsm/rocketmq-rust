@@ -1470,7 +1470,7 @@ mod tests {
         let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
 
         // Create 10 groups
-        for i in 0..10 {
+        for i in 0_usize..10 {
             let group_name = CheetahString::from_string(format!("GROUP_{}", i));
             let config = SubscriptionGroupConfig::new(group_name.clone());
             table.insert(group_name, Arc::new(config));
@@ -1561,12 +1561,12 @@ mod tests {
         let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
 
         // Create mixed groups
-        for i in 0..10 {
+        for i in 0_usize..10 {
             let group_name = CheetahString::from_string(format!("GROUP_{}", i));
             let mut config = SubscriptionGroupConfig::new(group_name.clone());
 
             // Disable every other group
-            if i % 2 == 0 {
+            if i.is_multiple_of(2) {
                 config.set_consume_enable(false);
             }
 
@@ -1642,7 +1642,7 @@ mod tests {
                 let table = table.clone();
                 let ops = operations.clone();
                 thread::spawn(move || {
-                    for i in 0..ops_per_thread {
+                    for i in 0_usize..ops_per_thread {
                         let key = CheetahString::from_string(format!("STRESS_GROUP_{}_{}", thread_id, i));
 
                         // Insert
@@ -1657,7 +1657,7 @@ mod tests {
                         // Update - using Copy-on-Write
                         if let Some(mut entry) = table.get_mut(&key) {
                             let mut new_config = (**entry.value()).clone();
-                            new_config.set_consume_enable(i % 2 == 0);
+                            new_config.set_consume_enable(i.is_multiple_of(2));
                             *entry.value_mut() = Arc::new(new_config);
                             ops.fetch_add(1, Ordering::Relaxed);
                         }
@@ -1825,14 +1825,14 @@ mod tests {
         let mut handles = vec![];
 
         // Writers
-        for thread_id in 0..5 {
+        for thread_id in 0_usize..5 {
             let table = table.clone();
             handles.push(thread::spawn(move || {
                 for i in 0..100 {
                     let key = format!("RACE_GROUP_{}", i);
                     if let Some(mut entry) = table.get_mut(key.as_str()) {
                         let mut new_config = (**entry.value()).clone();
-                        new_config.set_consume_enable(thread_id % 2 == 0);
+                        new_config.set_consume_enable(thread_id.is_multiple_of(2));
                         *entry.value_mut() = Arc::new(new_config);
                     }
                 }

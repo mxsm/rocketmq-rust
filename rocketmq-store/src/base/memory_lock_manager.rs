@@ -271,7 +271,7 @@ impl MemoryLockManager {
     fn release_locked_bytes(&self, len: u64) {
         let _ = self
             .locked_bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 Some(current.saturating_sub(len))
             });
     }

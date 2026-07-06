@@ -184,7 +184,11 @@ pub fn get_disk_partition_space_used_percent(path: &str) -> f64 {
                         let usable_space = metadata2.len();
                         let used_space = total_space.saturating_sub(free_space);
                         let entire_space = used_space + usable_space;
-                        let round_num = if used_space * 100 % entire_space != 0 { 1 } else { 0 };
+                        let round_num = if !(used_space * 100).is_multiple_of(entire_space) {
+                            1
+                        } else {
+                            0
+                        };
                         let result = used_space * 100 / entire_space + round_num;
                         return result as f64 / 100.0;
                     }

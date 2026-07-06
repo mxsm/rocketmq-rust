@@ -4597,7 +4597,7 @@ impl ReputMessageService {
                                     // Decrement pending counter after successful send
                                     // Use saturating_sub to prevent underflow
                                     pending_messages
-                                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
+                                        .try_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
                                             if x > 0 { Some(x - 1) } else { Some(0) }
                                         })
                                         .ok();
@@ -5202,7 +5202,7 @@ impl CleanCommitLogService {
 
     fn consume_manual_delete_request(&self) -> bool {
         self.manual_delete_requests
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |requests| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |requests| {
                 (requests > 0).then_some(requests - 1)
             })
             .is_ok()

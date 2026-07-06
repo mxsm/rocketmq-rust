@@ -224,7 +224,7 @@ impl MappedBuffer {
 
         // For medium-sized reads, ensure proper alignment to avoid cache line splits
         // Check if the start address is aligned to 64-byte (typical cache line)
-        let is_aligned = (slice.as_ptr() as usize) % 64 == 0;
+        let is_aligned = (slice.as_ptr() as usize).is_multiple_of(64);
 
         if (8192..=65536).contains(&size) && is_aligned {
             // Medium to large aligned reads: Use optimized copy with hint

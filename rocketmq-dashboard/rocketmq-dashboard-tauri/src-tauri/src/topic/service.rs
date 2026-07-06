@@ -1800,14 +1800,14 @@ fn normalize_topic_message_body(body: &str) -> TopicResult<String> {
     }
 
     let normalized_numeric_keys = quote_numeric_object_keys(trimmed);
-    if normalized_numeric_keys != trimmed {
-        if let Ok(value) = json5::from_str::<serde_json::Value>(&normalized_numeric_keys) {
-            return serde_json::to_string(&value).map_err(|error| {
-                TopicError::Validation(format!(
-                    "Failed to serialize relaxed JSON message body after normalizing numeric keys: {error}"
-                ))
-            });
-        }
+    if normalized_numeric_keys != trimmed
+        && let Ok(value) = json5::from_str::<serde_json::Value>(&normalized_numeric_keys)
+    {
+        return serde_json::to_string(&value).map_err(|error| {
+            TopicError::Validation(format!(
+                "Failed to serialize relaxed JSON message body after normalizing numeric keys: {error}"
+            ))
+        });
     }
 
     Err(TopicError::Validation(

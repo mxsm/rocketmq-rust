@@ -95,14 +95,12 @@ impl UpdateStaticTopicSubCommand {
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> RocketMQResult<()> {
         let map_file_name = map_file_name.trim();
-        if let Ok(map_data) = file_to_string(map_file_name) {
-            if let Ok(wrapper) = serde_json::from_str::<TopicRemappingDetailWrapper>(&map_data) {
-                let request = self.mapping_file_request()?;
-                StaticTopicService::update_static_topic_from_mapping_by_request_with_rpc_hook(
-                    request, wrapper, rpc_hook,
-                )
+        if let Ok(map_data) = file_to_string(map_file_name)
+            && let Ok(wrapper) = serde_json::from_str::<TopicRemappingDetailWrapper>(&map_data)
+        {
+            let request = self.mapping_file_request()?;
+            StaticTopicService::update_static_topic_from_mapping_by_request_with_rpc_hook(request, wrapper, rpc_hook)
                 .await?;
-            }
         }
         Ok(())
     }

@@ -44,7 +44,7 @@ fn create_test_file(size: usize) -> (TempDir, DefaultMappedFile) {
 fn get_bytes_with_copy(mapped_file: &DefaultMappedFile, pos: usize, size: usize) -> Bytes {
     let mmap = mapped_file.get_mapped_file();
     let slice = &mmap[pos..pos + size];
-    let is_aligned = (slice.as_ptr() as usize) % 64 == 0;
+    let is_aligned = (slice.as_ptr() as usize).is_multiple_of(64);
 
     if (8192..=65536).contains(&size) && is_aligned {
         let mut vec = vec![0u8; size];

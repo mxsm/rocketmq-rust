@@ -47,7 +47,7 @@ fn run_spawn_shutdown(task_count: usize) -> ShutdownReport {
             service
                 .spawn_service(format!("short-task-{task_index}"), async {})
                 .expect("short benchmark task should spawn");
-            if task_index % 256 == 0 {
+            if task_index.is_multiple_of(256) {
                 tokio::task::yield_now().await;
             }
         }

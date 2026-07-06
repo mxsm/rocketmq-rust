@@ -288,7 +288,7 @@ where
             return Ok(Some(response));
         }
 
-        let random_q = rand::rng().random_range(0..100);
+        let random_q: i32 = rand::rng().random_range(0..100);
         let mut has_msg = false;
         let need_retry = random_q % 5 == 0;
         let broker_config = self.broker_runtime_inner.broker_config();

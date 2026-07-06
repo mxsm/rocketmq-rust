@@ -560,7 +560,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         let eclipse = start_time.elapsed().as_millis() as i64;
         if eclipse > self.broker_runtime_inner.broker_config().pop_ck_stay_buffer_time_out as i64 - 1000 {
             self.serving.store(false, Ordering::Release);
-        } else if self.scan_times % self.count_of_second1 == 0 {
+        } else if self.scan_times.is_multiple_of(self.count_of_second1) {
             info!(
                 "[PopBuffer]scan, PopBufferEclipse={}, PopBufferToStoreAck={}, PopBufferToStoreCk={}, \
                  PopBufferSize={}, PopBufferOffsetSize={}",
@@ -702,7 +702,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                             return;
                         }
                         service.mut_from_ref().scan().await;
-                        if service.scan_times % service.count_of_second30 == 0 {
+                        if service.scan_times.is_multiple_of(service.count_of_second30) {
                             service.mut_from_ref().scan_garbage();
                         }
                         tokio::time::sleep(tokio::time::Duration::from_millis(service.interval)).await;

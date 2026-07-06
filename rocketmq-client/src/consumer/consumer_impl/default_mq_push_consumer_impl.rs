@@ -1167,7 +1167,7 @@ impl DefaultMQPushConsumerImpl {
         let cached_message_count = pull_request.process_queue.msg_count();
         let cached_message_size_in_mib = pull_request.process_queue.msg_size() / _1MB;
         if cached_message_count > self.consumer_config.pull_threshold_for_queue as u64 {
-            if self.queue_flow_control_times % 1000 == 0 {
+            if self.queue_flow_control_times.is_multiple_of(1000) {
                 if let Some((min_offset, max_offset)) = pull_request.process_queue.get_offset_span().await {
                     warn!(
                         "the cached message count exceeds the threshold {}, so do flow control, minOffset={}, \
@@ -1189,7 +1189,7 @@ impl DefaultMQPushConsumerImpl {
         }
 
         if cached_message_size_in_mib > self.consumer_config.pull_threshold_size_for_queue as u64 {
-            if self.queue_flow_control_times % 1000 == 0 {
+            if self.queue_flow_control_times.is_multiple_of(1000) {
                 if let Some((min_offset, max_offset)) = pull_request.process_queue.get_offset_span().await {
                     warn!(
                         "the cached message size exceeds the threshold {} MiB, so do flow control, minOffset={}, \
@@ -1212,7 +1212,7 @@ impl DefaultMQPushConsumerImpl {
         if !self.consume_orderly {
             let max_span = pull_request.process_queue.get_max_span().await;
             if max_span > self.consumer_config.consume_concurrently_max_span as u64 {
-                if self.queue_max_span_flow_control_times % 1000 == 0 {
+                if self.queue_max_span_flow_control_times.is_multiple_of(1000) {
                     if let Some((min_offset, max_offset)) = pull_request.process_queue.get_offset_span().await {
                         warn!(
                             "the queue's messages, span too long, so do flow control, minOffset={}, maxOffset={}, \

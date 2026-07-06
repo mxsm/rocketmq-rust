@@ -230,12 +230,12 @@ fn benchmark_mixed_workload(c: &mut Criterion) {
     group.bench_function("mutex", |b| {
         let manager = Arc::new(setup_mutex_manager(size));
         b.iter(|| {
-            let handles: Vec<_> = (0..10)
+            let handles: Vec<_> = (0_usize..10)
                 .map(|thread_id| {
                     let mgr = manager.clone();
                     thread::spawn(move || {
-                        for i in 0..100 {
-                            if i % 3 == 0 {
+                        for i in 0_usize..100 {
+                            if i.is_multiple_of(3) {
                                 // Write operation
                                 let key = CheetahString::from_string(format!("NEW_GROUP_{}_{}", thread_id, i));
                                 let config = SubscriptionGroupConfig::new(key.clone());
@@ -259,12 +259,12 @@ fn benchmark_mixed_workload(c: &mut Criterion) {
     group.bench_function("dashmap", |b| {
         let manager = Arc::new(setup_dashmap_manager(size));
         b.iter(|| {
-            let handles: Vec<_> = (0..10)
+            let handles: Vec<_> = (0_usize..10)
                 .map(|thread_id| {
                     let mgr = manager.clone();
                     thread::spawn(move || {
-                        for i in 0..100 {
-                            if i % 3 == 0 {
+                        for i in 0_usize..100 {
+                            if i.is_multiple_of(3) {
                                 // Write operation
                                 let key = CheetahString::from_string(format!("NEW_GROUP_{}_{}", thread_id, i));
                                 let config = SubscriptionGroupConfig::new(key.clone());

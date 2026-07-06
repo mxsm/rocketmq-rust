@@ -284,7 +284,7 @@ where
 
             while thread_start.elapsed() < duration {
                 // 90% reads, 10% writes (typical production ratio)
-                if read_count % 10 != 0 {
+                if !read_count.is_multiple_of(10) {
                     let topic = format!("topic-{}", i % 10);
                     read_fn(&topic);
                     read_count += 1;

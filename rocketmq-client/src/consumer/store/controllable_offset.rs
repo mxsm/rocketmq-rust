@@ -47,7 +47,7 @@ impl ControllableOffset {
     pub fn update(&self, target: i64, increase_only: bool) {
         if self.allow_to_update.load(Ordering::SeqCst) {
             self.value
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |val| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |val| {
                     if self.allow_to_update.load(Ordering::SeqCst) {
                         if increase_only {
                             Some(std::cmp::max(target, val))
@@ -68,7 +68,7 @@ impl ControllableOffset {
 
     pub fn update_and_freeze(&self, target: i64) {
         self.value
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |val| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |_val| {
                 self.allow_to_update.store(false, Ordering::SeqCst);
                 Some(target)
             })

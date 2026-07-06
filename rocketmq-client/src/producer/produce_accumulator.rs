@@ -211,7 +211,7 @@ impl ProduceAccumulator {
             return true;
         }
         self.currently_hold_size
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 let next = current.checked_add(body_size)?;
                 (next <= self.total_hold_size as u64).then_some(next)
             })
@@ -646,7 +646,7 @@ fn release_hold_size(currently_hold_size: &AtomicU64, size: u64) {
     if size == 0 {
         return;
     }
-    let _ = currently_hold_size.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+    let _ = currently_hold_size.try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
         Some(current.saturating_sub(size))
     });
 }

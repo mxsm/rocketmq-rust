@@ -35,12 +35,12 @@ pub async fn replace_nameservers(
         .transpose()?
         .or_else(|| nameservers.first().cloned());
 
-    if let Some(current) = &current_namesrv {
-        if !nameservers.iter().any(|item| item == current) {
-            return Err(DashboardError::Validation(
-                "Current NameServer must exist in the NameServer list".to_string(),
-            ));
-        }
+    if let Some(current) = &current_namesrv
+        && !nameservers.iter().any(|item| item == current)
+    {
+        return Err(DashboardError::Validation(
+            "Current NameServer must exist in the NameServer list".to_string(),
+        ));
     }
 
     persist_config(state, |config| {

@@ -52,10 +52,10 @@ impl CommandExecute for ClusterListSubCommand {
         let print_interval = self.interval.map(|i| i * 1000);
         let mut iteration = 0u64;
         loop {
-            if iteration > 0 {
-                if let Some(interval_ms) = print_interval {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
-                }
+            if iteration > 0
+                && let Some(interval_ms) = print_interval
+            {
+                tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
             }
             iteration += 1;
 

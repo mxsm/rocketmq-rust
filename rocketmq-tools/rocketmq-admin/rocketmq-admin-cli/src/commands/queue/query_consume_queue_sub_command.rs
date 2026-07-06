@@ -83,12 +83,12 @@ fn print_query_consume_queue_response(response_body: &QueryConsumeQueueResponseB
         println!("======================================");
     }
 
-    if let Some(ref filter_data) = response_body.filter_data {
-        if !filter_data.is_empty() {
-            println!("Filter data:");
-            println!("{}", filter_data);
-            println!("======================================");
-        }
+    if let Some(ref filter_data) = response_body.filter_data
+        && !filter_data.is_empty()
+    {
+        println!("Filter data:");
+        println!("{}", filter_data);
+        println!("======================================");
     }
 
     println!("Queue data:");

@@ -530,7 +530,7 @@ async fn commit_bootstrap_write(node: &RaftNodeManager) {
 }
 
 async fn wait_for_stable_voters(nodes: &[(u64, Arc<RaftNodeManager>)], expected_voters: &BTreeSet<u64>) {
-    for attempt in 1..=80 {
+    for attempt in 1_usize..=80 {
         let metrics = snapshot_metrics(nodes);
         let leader_ids = metrics
             .iter()
@@ -551,7 +551,7 @@ async fn wait_for_stable_voters(nodes: &[(u64, Arc<RaftNodeManager>)], expected_
             return;
         }
 
-        if attempt % 10 == 0 {
+        if attempt.is_multiple_of(10) {
             println!(
                 "Waiting for stable voter membership {:?}, current snapshot: {:?}",
                 expected_voters,
@@ -576,7 +576,7 @@ async fn wait_for_stable_voters(nodes: &[(u64, Arc<RaftNodeManager>)], expected_
 }
 
 async fn wait_for_learner_readiness(nodes: &[(u64, Arc<RaftNodeManager>)], learner_id: u64, leader_id: u64) {
-    for attempt in 1..=100 {
+    for attempt in 1_usize..=100 {
         let metrics = snapshot_metrics(nodes);
         if let Some((_, metrics)) = metrics.iter().find(|(node_id, _)| *node_id == learner_id) {
             if metrics.state == ServerState::Learner
@@ -586,7 +586,7 @@ async fn wait_for_learner_readiness(nodes: &[(u64, Arc<RaftNodeManager>)], learn
                 return;
             }
         }
-        if attempt % 25 == 0 {
+        if attempt.is_multiple_of(25) {
             println!(
                 "Waiting for learner {} readiness (attempt {}), current snapshot: {:?}",
                 learner_id,
@@ -633,7 +633,7 @@ async fn wait_for_failover_leader(
     nodes: &[(u64, Arc<RaftNodeManager>)],
     excluded_node_id: u64,
 ) -> (u64, Arc<RaftNodeManager>) {
-    for attempt in 1..=80 {
+    for attempt in 1_usize..=80 {
         let metrics = snapshot_metrics(nodes);
         let leaders = metrics
             .iter()
@@ -660,7 +660,7 @@ async fn wait_for_failover_leader(
             }
         }
 
-        if attempt % 10 == 0 {
+        if attempt.is_multiple_of(10) {
             println!(
                 "Waiting for failover leader excluding node {}, current snapshot: {:?}",
                 excluded_node_id,

@@ -131,7 +131,7 @@ async fn bench_global_lock_mixed(concurrency: usize, operations: usize) {
         let lock = Arc::clone(&lock);
         let handle = tokio::spawn(async move {
             for i in 0..operations {
-                if i % 10 == 0 {
+                if i.is_multiple_of(10) {
                     let mut _guard = lock.write().await;
                     tokio::task::yield_now().await;
                 } else {
@@ -158,7 +158,7 @@ async fn bench_segmented_lock_mixed(concurrency: usize, operations: usize) {
         let handle = tokio::spawn(async move {
             for i in 0..operations {
                 let key = format!("key-{}", (task_id + i) % 100);
-                if i % 10 == 0 {
+                if i.is_multiple_of(10) {
                     let _guard = lock.write_lock(&key).await;
                     tokio::task::yield_now().await;
                 } else {

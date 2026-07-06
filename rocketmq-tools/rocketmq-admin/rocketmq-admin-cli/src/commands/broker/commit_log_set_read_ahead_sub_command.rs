@@ -209,10 +209,10 @@ fn resolve_size_entry(
     config: &HashMap<CheetahString, CheetahString>,
     preferred_size_key: Option<&str>,
 ) -> Option<(String, String)> {
-    if let Some(preferred_size_key) = preferred_size_key {
-        if let Some(value) = get_config_value(config, preferred_size_key) {
-            return Some((preferred_size_key.to_string(), value));
-        }
+    if let Some(preferred_size_key) = preferred_size_key
+        && let Some(value) = get_config_value(config, preferred_size_key)
+    {
+        return Some((preferred_size_key.to_string(), value));
     }
 
     for key in KNOWN_READ_AHEAD_SIZE_KEYS {

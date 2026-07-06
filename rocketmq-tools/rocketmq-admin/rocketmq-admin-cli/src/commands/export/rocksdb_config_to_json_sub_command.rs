@@ -152,13 +152,13 @@ impl RocksDBConfigToJsonSubCommand {
     }
 
     fn handle_local_result(result: &ExportMetadataInRocksDbResult, export_file: Option<&str>) -> RocketMQResult<()> {
-        if let Some(export_file) = export_file {
-            if let Some(json_value) = Self::local_result_json_value(result)? {
-                let request = ExportFileWriteRequest::try_new(export_file, ExportFileOverwritePolicy::Overwrite)?;
-                let write_result = ExportService::write_json_export_file(&request, &json_value)?;
-                println!("export {} success", write_result.output_path().display());
-                return Ok(());
-            }
+        if let Some(export_file) = export_file
+            && let Some(json_value) = Self::local_result_json_value(result)?
+        {
+            let request = ExportFileWriteRequest::try_new(export_file, ExportFileOverwritePolicy::Overwrite)?;
+            let write_result = ExportService::write_json_export_file(&request, &json_value)?;
+            println!("export {} success", write_result.output_path().display());
+            return Ok(());
         }
 
         Self::print_local_result(result)

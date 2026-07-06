@@ -2611,7 +2611,7 @@ pub fn run_heartbeat_route_index_probe(
 
     let lookup_addrs = (0..lookup_count)
         .map(|index| {
-            if index % 2 == 0 {
+            if index.is_multiple_of(2) {
                 CheetahString::from_string(format!("198.51.100.{}:10911", index % 256))
             } else {
                 let broker_index = (broker_count - 1).saturating_sub(index % broker_count);

@@ -275,7 +275,7 @@ async fn test_global_mixed(tasks: usize, duration: Duration) -> u64 {
             let mut count = 0u64;
             let start_inner = Instant::now();
             while start_inner.elapsed() < duration {
-                if count % 10 == 0 {
+                if count.is_multiple_of(10) {
                     let _guard = lock_clone.write().await;
                 } else {
                     let _guard = lock_clone.read().await;
@@ -307,7 +307,7 @@ async fn test_segmented_mixed(tasks: usize, duration: Duration) -> u64 {
             let start_inner = Instant::now();
             while start_inner.elapsed() < duration {
                 let key = format!("key-{}", (i as u64 + count) % 100);
-                if count % 10 == 0 {
+                if count.is_multiple_of(10) {
                     let _guard = lock_clone.write_lock(&key).await;
                 } else {
                     let _guard = lock_clone.read_lock(&key).await;

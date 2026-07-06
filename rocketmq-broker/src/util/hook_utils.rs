@@ -251,7 +251,7 @@ impl HookUtils {
             }
 
             let timer_precision_ms = message_store_config.timer_precision_ms;
-            let deliver_ms = if deliver_ms % timer_precision_ms == 0 {
+            let deliver_ms = if deliver_ms.is_multiple_of(timer_precision_ms) {
                 deliver_ms - timer_precision_ms
             } else {
                 (deliver_ms / timer_precision_ms) * timer_precision_ms
