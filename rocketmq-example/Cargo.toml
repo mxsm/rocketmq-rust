@@ -44,6 +44,7 @@ rand                 = "0.8"
 rocketmq-client-rust = { path = "../rocketmq-client" }
 rocketmq-common      = { path = "../rocketmq-common" }
 rocketmq-error       = { path = "../rocketmq-error" }
+rocketmq-observability = { path = "../rocketmq-observability" }
 rocketmq-remoting    = { path = "../rocketmq-remoting" }
 rocketmq-rust        = { path = "../rocketmq" }
 rocketmq-tools       = { path = "../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", package = "rocketmq-admin-core" }

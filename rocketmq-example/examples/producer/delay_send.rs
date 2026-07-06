@@ -28,11 +28,11 @@ pub const TOPIC: &str = "DelaySendTestTopic";
 pub const TAG: &str = "DelayTag";
 pub const TIMEOUT_MS: u64 = 3000;
 
-#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
-    rocketmq_common::log::init_logger()?;
-
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
+            .expect("telemetry logging bootstrap should initialize");
     let mut producer = DefaultMQProducer::builder()
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -46,6 +46,10 @@ pub async fn main() -> RocketMQResult<()> {
     send_deliver_time(&mut producer).await?;
 
     producer.shutdown().await;
+    telemetry_guard
+        .shutdown()
+        .expect("telemetry logging shutdown should succeed");
+
     Ok(())
 }
 

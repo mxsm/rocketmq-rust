@@ -39,11 +39,11 @@ pub const TOPIC: &str = "RequestSendTestTopic";
 pub const TAG: &str = "*";
 pub const REPLY_TIMEOUT_MS: u64 = 3000;
 
-#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
-    rocketmq_common::log::init_logger()?;
-
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
+            .expect("telemetry logging bootstrap should initialize");
     let mut reply_producer = DefaultMQProducer::builder()
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -72,6 +72,10 @@ pub async fn main() -> RocketMQResult<()> {
 
     consumer.shutdown().await;
     reply_producer.shutdown().await;
+    telemetry_guard
+        .shutdown()
+        .expect("telemetry logging shutdown should succeed");
+
     Ok(())
 }
 

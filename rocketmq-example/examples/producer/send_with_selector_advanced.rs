@@ -46,11 +46,11 @@ pub const PRODUCER_GROUP: &str = "producer_advanced_selector";
 pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "AdvancedSelectorTestTopic";
 
-#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
-    rocketmq_common::log::init_logger()?;
-
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
+            .expect("telemetry logging bootstrap should initialize");
     let mut producer = DefaultMQProducer::builder()
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -86,6 +86,10 @@ pub async fn main() -> RocketMQResult<()> {
     println!("  - Type safety: No runtime type casting required");
     println!("  - Performance: ~8-13ns improvement per selector call");
     println!("  - Clean API: Direct closure passing without Arc wrapping");
+
+    telemetry_guard
+        .shutdown()
+        .expect("telemetry logging shutdown should succeed");
 
     Ok(())
 }

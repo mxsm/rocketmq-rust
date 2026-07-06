@@ -2322,6 +2322,7 @@ dependencies = [
  "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-observability",
  "rocketmq-remoting",
  "rocketmq-rust",
  "tokio",

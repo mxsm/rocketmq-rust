@@ -31,11 +31,11 @@ pub const TOPIC: &str = "LitePullConsumerTestTopic";
 pub const TAG_EXPRESSION: &str = "LitePullTag";
 pub const POLL_TIMEOUT_MS: u64 = 1000;
 
-#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
-    rocketmq_common::log::init_logger()?;
-
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
+            .expect("telemetry logging bootstrap should initialize");
     let consumer = DefaultLitePullConsumer::builder()
         .consumer_group(CONSUMER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -76,6 +76,10 @@ pub async fn main() -> RocketMQResult<()> {
     }
 
     consumer.shutdown().await;
+    telemetry_guard
+        .shutdown()
+        .expect("telemetry logging shutdown should succeed");
+
     Ok(())
 }
 

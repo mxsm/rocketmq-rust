@@ -26,12 +26,11 @@ pub const TAG: &str = "TagA";
 // Send timeout in milliseconds
 pub const SEND_TIMEOUT_MS: u64 = 3000;
 
-#[allow(deprecated)]
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
-    // init logger
-    rocketmq_common::log::init_logger()?;
-
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
+            .expect("telemetry logging bootstrap should initialize");
     // create a producer builder with default configuration
     let mut producer = DefaultMQProducer::builder()
         .producer_group(PRODUCER_GROUP)
@@ -86,5 +85,9 @@ pub async fn main() -> RocketMQResult<()> {
     println!("send result with deliver time: {:?}", send_result);
 
     producer.shutdown().await;
+    telemetry_guard
+        .shutdown()
+        .expect("telemetry logging shutdown should succeed");
+
     Ok(())
 }
