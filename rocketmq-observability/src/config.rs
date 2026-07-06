@@ -41,6 +41,59 @@ pub struct ObservabilityConfig {
     pub resource_attributes: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelemetryBootstrapConfig {
+    pub observability: ObservabilityConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoggingConfig {
+    pub enabled: bool,
+    pub filter: String,
+    pub console: ConsoleLogConfig,
+    pub file: FileLogConfig,
+    pub reload: ReloadConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConsoleLogConfig {
+    pub enabled: bool,
+    pub format: LogFormat,
+    pub ansi: bool,
+    pub target: bool,
+    pub thread_ids: bool,
+    pub thread_names: bool,
+    pub line_number: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileLogConfig {
+    pub enabled: bool,
+    pub directory: String,
+    pub file_name_prefix: String,
+    pub rotation: LogRotation,
+    pub format: LogFormat,
+    pub non_blocking: NonBlockingLogConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NonBlockingLogConfig {
+    pub buffered_lines_limit: usize,
+    pub lossy: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReloadConfig {
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MetricsConfig {
@@ -125,6 +178,24 @@ pub enum OtlpProtocol {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum LogFormat {
+    #[default]
+    Compact,
+    Pretty,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LogRotation {
+    Never,
+    Hourly,
+    #[default]
+    Daily,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum SubscriberInstallPolicy {
     Required,
     #[default]
@@ -165,6 +236,54 @@ impl Default for ObservabilityConfig {
             prometheus: PrometheusConfig::default(),
             subscriber_install_policy: SubscriberInstallPolicy::default(),
             resource_attributes: HashMap::new(),
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            filter: "info".to_string(),
+            console: ConsoleLogConfig::default(),
+            file: FileLogConfig::default(),
+            reload: ReloadConfig::default(),
+        }
+    }
+}
+
+impl Default for ConsoleLogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            format: LogFormat::Compact,
+            ansi: true,
+            target: true,
+            thread_ids: true,
+            thread_names: true,
+            line_number: true,
+        }
+    }
+}
+
+impl Default for FileLogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory: "logs".to_string(),
+            file_name_prefix: "rocketmq-rust".to_string(),
+            rotation: LogRotation::Daily,
+            format: LogFormat::Json,
+            non_blocking: NonBlockingLogConfig::default(),
+        }
+    }
+}
+
+impl Default for NonBlockingLogConfig {
+    fn default() -> Self {
+        Self {
+            buffered_lines_limit: 65_536,
+            lossy: false,
         }
     }
 }
@@ -287,6 +406,74 @@ mod tests {
             serde_json::to_string(&SubscriberInstallPolicy::BestEffort).expect("policy should serialize"),
             "\"best_effort\""
         );
+    }
+
+    #[test]
+    fn logging_config_defaults_to_console_info_filter() {
+        let config = LoggingConfig::default();
+
+        assert!(config.enabled);
+        assert_eq!(config.filter, "info");
+        assert!(config.console.enabled);
+        assert_eq!(config.console.format, LogFormat::Compact);
+        assert!(config.console.ansi);
+        assert!(config.console.target);
+        assert!(config.console.thread_ids);
+        assert!(config.console.thread_names);
+        assert!(config.console.line_number);
+        assert!(!config.file.enabled);
+        assert_eq!(config.file.rotation, LogRotation::Daily);
+        assert_eq!(config.file.format, LogFormat::Json);
+        assert_eq!(config.file.non_blocking.buffered_lines_limit, 65_536);
+        assert!(!config.file.non_blocking.lossy);
+        assert!(!config.reload.enabled);
+    }
+
+    #[test]
+    fn logging_config_serde_roundtrip_preserves_enums() {
+        let config = LoggingConfig {
+            filter: "rocketmq_store=debug,rocketmq_remoting=warn".to_string(),
+            console: ConsoleLogConfig {
+                format: LogFormat::Pretty,
+                ..ConsoleLogConfig::default()
+            },
+            file: FileLogConfig {
+                enabled: true,
+                rotation: LogRotation::Hourly,
+                format: LogFormat::Json,
+                non_blocking: NonBlockingLogConfig {
+                    buffered_lines_limit: 4_096,
+                    lossy: true,
+                },
+                ..FileLogConfig::default()
+            },
+            reload: ReloadConfig { enabled: true },
+            ..LoggingConfig::default()
+        };
+
+        let payload = serde_json::to_string(&config).expect("logging config should serialize");
+        assert!(payload.contains("\"pretty\""));
+        assert!(payload.contains("\"hourly\""));
+
+        let decoded = serde_json::from_str::<LoggingConfig>(&payload).expect("logging config should deserialize");
+
+        assert_eq!(decoded, config);
+    }
+
+    #[test]
+    fn invalid_logging_enum_values_are_rejected() {
+        assert!(serde_json::from_str::<LogFormat>("\"camelCase\"").is_err());
+        assert!(serde_json::from_str::<LogRotation>("\"weekly\"").is_err());
+    }
+
+    #[test]
+    fn telemetry_bootstrap_default_keeps_observability_disabled_and_logging_ready() {
+        let config = TelemetryBootstrapConfig::default();
+
+        assert!(!config.observability.enabled);
+        assert!(config.logging.enabled);
+        assert!(config.logging.console.enabled);
+        assert!(!config.logging.file.enabled);
     }
 
     #[test]
