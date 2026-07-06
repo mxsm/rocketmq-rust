@@ -17,6 +17,7 @@ pub mod config;
 pub mod error;
 pub mod exporter;
 pub mod init;
+pub mod logging;
 pub mod logs;
 pub mod metrics;
 pub mod noop;
@@ -42,6 +43,8 @@ pub use init::init_observability;
 #[cfg(feature = "otel-metrics")]
 pub use init::meter;
 pub use init::TelemetryGuard;
+pub use logging::LoggingGuard;
+pub use logging::TelemetryRuntimeGuard;
 
 #[cfg(feature = "prometheus")]
 #[doc(hidden)]

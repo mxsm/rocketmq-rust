@@ -33,6 +33,12 @@ pub enum ObservabilityError {
     #[error("logs initialization failed: {0}")]
     LogsInit(String),
 
+    #[error("logging initialization failed: {0}")]
+    LoggingInit(String),
+
+    #[error("invalid log filter '{filter}': {error}")]
+    InvalidLogFilter { filter: String, error: String },
+
     #[error("tracing subscriber installation failed: attempted={attempted}, installed={installed}")]
     SubscriberInstallFailed { attempted: bool, installed: bool },
 
@@ -63,6 +69,17 @@ impl ObservabilityError {
         Self::LogsInit(error.to_string())
     }
 
+    pub fn logging_init(error: impl ToString) -> Self {
+        Self::LoggingInit(error.to_string())
+    }
+
+    pub fn invalid_log_filter(filter: impl Into<String>, error: impl ToString) -> Self {
+        Self::InvalidLogFilter {
+            filter: filter.into(),
+            error: error.to_string(),
+        }
+    }
+
     pub fn subscriber_install_failed(status: SubscriberInstallStatus) -> Self {
         Self::SubscriberInstallFailed {
             attempted: status.attempted,
@@ -80,5 +97,28 @@ impl ObservabilityError {
 
     pub fn logs_shutdown(error: impl ToString) -> Self {
         Self::LogsShutdown(error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_log_filter_error_preserves_filter_and_reason() {
+        let error = ObservabilityError::invalid_log_filter("rocketmq_store==debug", "invalid directive");
+
+        assert!(matches!(
+            error,
+            ObservabilityError::InvalidLogFilter { filter, error }
+                if filter == "rocketmq_store==debug" && error == "invalid directive"
+        ));
+    }
+
+    #[test]
+    fn logging_init_error_is_distinct_from_otel_logs_init() {
+        let error = ObservabilityError::logging_init("writer failed");
+
+        assert!(matches!(error, ObservabilityError::LoggingInit(message) if message == "writer failed"));
     }
 }
