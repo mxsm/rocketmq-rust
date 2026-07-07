@@ -312,19 +312,7 @@ accounts:
             rocketmq_error::RocketMQError::storage_write_failed(temp_file.display().to_string(), error.to_string())
         })?;
 
-        match fs::rename(&temp_file, path) {
-            Ok(()) => Ok(()),
-            Err(rename_error) => {
-                fs::copy(&temp_file, path).map_err(|error| {
-                    rocketmq_error::RocketMQError::storage_write_failed(
-                        path.display().to_string(),
-                        format!("{error}; rename failed first: {rename_error}"),
-                    )
-                })?;
-                let _ = fs::remove_file(&temp_file);
-                Ok(())
-            }
-        }
+        replace_acl_file(&temp_file, path)
     }
 
     fn temp_acl_file_path(path: &std::path::Path) -> PathBuf {
@@ -334,6 +322,22 @@ accounts:
             .unwrap_or("plain_acl.yml");
         let id = NEXT_ACL_WATCHER_PROBE_ID.fetch_add(1, Ordering::Relaxed);
         path.with_file_name(format!(".{file_name}.{id}.tmp"))
+    }
+
+    #[cfg(not(windows))]
+    fn replace_acl_file(temp_file: &std::path::Path, path: &std::path::Path) -> RocketMQResult<()> {
+        fs::rename(temp_file, path).map_err(|error| {
+            rocketmq_error::RocketMQError::storage_write_failed(path.display().to_string(), error.to_string())
+        })
+    }
+
+    #[cfg(windows)]
+    fn replace_acl_file(temp_file: &std::path::Path, path: &std::path::Path) -> RocketMQResult<()> {
+        fs::copy(temp_file, path).map_err(|error| {
+            rocketmq_error::RocketMQError::storage_write_failed(path.display().to_string(), error.to_string())
+        })?;
+        let _ = fs::remove_file(temp_file);
+        Ok(())
     }
 
     impl From<crate::runtime_bridge::AuthSyncBridgeSnapshot> for AuthSyncBridgeCounterSnapshot {
