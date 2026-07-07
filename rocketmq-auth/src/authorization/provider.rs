@@ -111,9 +111,7 @@ impl From<AuthorizationError> for RocketMQError {
     fn from(error: AuthorizationError) -> Self {
         let message = error.to_string();
         match error {
-            AuthorizationError::PermissionDenied { .. } => {
-                RocketMQError::Authentication(AuthError::AuthorizationFailed(message))
-            }
+            AuthorizationError::PermissionDenied { .. } => RocketMQError::BrokerPermissionDenied { operation: message },
             AuthorizationError::SubjectNotFound(_)
             | AuthorizationError::ResourceNotFound(_)
             | AuthorizationError::InvalidContext(_) => RocketMQError::illegal_argument(message),
@@ -693,10 +691,7 @@ mod tests {
             resource: "topic:test".to_string(),
             reason: "insufficient permissions".to_string(),
         });
-        assert!(matches!(
-            denied,
-            RocketMQError::Authentication(AuthError::AuthorizationFailed(_))
-        ));
+        assert!(matches!(denied, RocketMQError::BrokerPermissionDenied { .. }));
 
         let invalid = RocketMQError::from(AuthorizationError::InvalidContext("missing subject".to_string()));
         assert!(matches!(invalid, RocketMQError::IllegalArgument(_)));
