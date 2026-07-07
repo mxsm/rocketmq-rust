@@ -148,7 +148,7 @@ fn init_log_tracer() {
 
 fn build_subscriber_layers(
     config: &TelemetryBootstrapConfig,
-    telemetry_guard: &TelemetryGuard,
+    _telemetry_guard: &TelemetryGuard,
 ) -> Result<(Vec<BoxedRegistryLayer>, LoggingGuard), ObservabilityError> {
     let mut layers = Vec::new();
     let mut logging_guard = LoggingGuard::noop();
@@ -168,7 +168,7 @@ fn build_subscriber_layers(
     }
 
     #[cfg(feature = "otel-traces")]
-    if let Some(tracer_provider) = telemetry_guard.tracer_provider() {
+    if let Some(tracer_provider) = _telemetry_guard.tracer_provider() {
         layers.push(Box::new(crate::trace::build_tracing_layer(
             &config.observability,
             tracer_provider,
@@ -176,7 +176,7 @@ fn build_subscriber_layers(
     }
 
     #[cfg(feature = "otel-logs")]
-    if let Some(logger_provider) = telemetry_guard.logger_provider() {
+    if let Some(logger_provider) = _telemetry_guard.logger_provider() {
         layers.push(Box::new(crate::logs::bridge::build_logs_layer(logger_provider)));
     }
 

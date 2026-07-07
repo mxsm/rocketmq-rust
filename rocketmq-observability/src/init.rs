@@ -201,7 +201,10 @@ pub(crate) fn init_telemetry_providers(config: &ObservabilityConfig) -> Result<T
         return Ok(TelemetryGuard::noop());
     }
 
+    #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
     let mut guard = TelemetryGuard::noop();
+    #[cfg(not(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs")))]
+    let guard = TelemetryGuard::noop();
 
     if config.metrics.enabled {
         #[cfg(feature = "otel-metrics")]
