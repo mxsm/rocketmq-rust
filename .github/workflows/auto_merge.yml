@@ -20,7 +20,20 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - name: Check bot token
+        id: bot-token
+        env:
+          BOT_TOKEN: "${{ secrets.BOT_TOKEN }}"
+        run: |
+          if [ -z "$BOT_TOKEN" ]; then
+            echo "BOT_TOKEN unavailable; skipping automerge"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: automerge
+        if: steps.bot-token.outputs.available == 'true'
         uses: "pascalgn/automerge-action@v0.16.4"
         env:
           GITHUB_TOKEN: "${{ secrets.BOT_TOKEN }}"

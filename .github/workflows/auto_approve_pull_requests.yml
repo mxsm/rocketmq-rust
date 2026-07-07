@@ -16,11 +16,6 @@ jobs:
     if: github.event_name == 'pull_request_target' || (github.event_name == 'check_suite' && github.event.check_suite.pull_requests[0])
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-
       - name: Verify required status checks
         id: check-status
         uses: actions/github-script@v9
@@ -33,6 +28,7 @@ jobs:
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request || context.payload.check_suite.pull_requests[0];
             const sha = pr.head.sha;
+            core.setOutput('pull_request_number', pr.number);
             
             console.log(`Processing PR #${pr.number}, HEAD SHA: ${sha}`);
             
@@ -68,36 +64,40 @@ jobs:
               if (failedChecks.length > 0) {
                 const failedNames = failedChecks.map(f => f.name).join(', ');
                 console.log(`Failed checks: ${failedNames}`);
-                throw new Error('Some required status checks have failed');
+                return 'failed';
               }
 
               if (pendingChecks.length > 0) {
                 const pendingNames = pendingChecks.map(p => p.name).join(', ');
                 console.log(`Pending checks: ${pendingNames}`);
-                return false; // Still pending
+                return 'pending';
               }
 
               console.log('All required status checks have passed successfully');
-              return true; // All checks passed
+              return 'passed';
             }
             // Poll for status checks until they complete
             const maxRetries = 15;
             const retryInterval = 60 * 1000; // 30 seconds
             for (let i = 0; i < maxRetries; i++) {
-              const allChecksPassed = await checkRequiredStatusChecks();
-              if (allChecksPassed) {
+              const status = await checkRequiredStatusChecks();
+              if (status === 'passed') {
                 return true;
+              }
+              if (status === 'failed') {
+                return false;
               }
               console.log(`Retrying in ${retryInterval / 1000} seconds... (${i + 1}/${maxRetries})`);
               await new Promise(resolve => setTimeout(resolve, retryInterval));
             }
 
-            throw new Error('Timeout waiting for required status checks to complete');
+            console.log('Timeout waiting for required status checks to complete');
+            return false;
 
       - name: Auto approve PR
         if: steps.check-status.outputs.result == 'true'
         uses: hmarr/auto-approve-action@v4
         with:
           github-token: ${{ secrets.BOT_TOKEN }}
-          pull-request-number: ${{ github.event.pull_request.number }}
+          pull-request-number: ${{ steps.check-status.outputs.pull_request_number }}
           review-message: "LGTM - All CI checks passed ✅"
