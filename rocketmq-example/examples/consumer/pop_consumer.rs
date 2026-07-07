@@ -58,6 +58,7 @@ pub async fn main() -> RocketMQResult<()> {
     let _ = wait_for_signal().await;
     telemetry_guard
         .shutdown()
+        .into_result()
         .expect("telemetry logging shutdown should succeed");
 
     Ok(())
