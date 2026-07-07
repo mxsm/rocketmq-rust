@@ -142,9 +142,15 @@ pub mod bench_support {
 
         let deadline = Instant::now() + Duration::from_secs(2);
         let reload_success = loop {
-            let user = authn_provider.get_user("alice").await?;
-            if user.password().map(|value| value.as_str()) == Some("second") {
-                break true;
+            match authn_provider.get_user("alice").await {
+                Ok(user) if user.password().map(|value| value.as_str()) == Some("second") => {
+                    break true;
+                }
+                Ok(_) => {}
+                Err(rocketmq_error::RocketMQError::Authentication(rocketmq_error::AuthError::UserNotFound(
+                    username,
+                ))) if username == "alice" => {}
+                Err(error) => return Err(error),
             }
             if Instant::now() >= deadline {
                 break false;
@@ -294,19 +300,40 @@ pub mod bench_support {
     }
 
     fn write_acl_file(path: &std::path::Path, secret: &str) -> RocketMQResult<()> {
-        fs::write(
-            path,
-            format!(
-                r#"
+        let content = format!(
+            r#"
 accounts:
   - accessKey: alice
     secretKey: {secret}
 "#
-            ),
-        )
-        .map_err(|error| {
-            rocketmq_error::RocketMQError::storage_write_failed(path.display().to_string(), error.to_string())
-        })
+        );
+        let temp_file = temp_acl_file_path(path);
+        fs::write(&temp_file, content).map_err(|error| {
+            rocketmq_error::RocketMQError::storage_write_failed(temp_file.display().to_string(), error.to_string())
+        })?;
+
+        match fs::rename(&temp_file, path) {
+            Ok(()) => Ok(()),
+            Err(rename_error) => {
+                fs::copy(&temp_file, path).map_err(|error| {
+                    rocketmq_error::RocketMQError::storage_write_failed(
+                        path.display().to_string(),
+                        format!("{error}; rename failed first: {rename_error}"),
+                    )
+                })?;
+                let _ = fs::remove_file(&temp_file);
+                Ok(())
+            }
+        }
+    }
+
+    fn temp_acl_file_path(path: &std::path::Path) -> PathBuf {
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("plain_acl.yml");
+        let id = NEXT_ACL_WATCHER_PROBE_ID.fetch_add(1, Ordering::Relaxed);
+        path.with_file_name(format!(".{file_name}.{id}.tmp"))
     }
 
     impl From<crate::runtime_bridge::AuthSyncBridgeSnapshot> for AuthSyncBridgeCounterSnapshot {
