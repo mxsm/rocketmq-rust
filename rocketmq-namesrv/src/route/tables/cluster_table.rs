@@ -296,6 +296,7 @@ mod tests {
 
         // Remove cluster
         assert!(table.remove_cluster("DefaultCluster"));
+        assert!(!table.remove_cluster("UnknownCluster"));
         assert!(!table.contains_cluster("DefaultCluster"));
     }
 
@@ -365,6 +366,50 @@ mod tests {
         assert_eq!(removed, 1);
         assert!(!table.contains_cluster("EmptyCluster"));
         assert!(table.contains_cluster("NonEmptyCluster"));
+        assert!(table.contains_broker("NonEmptyCluster", "broker-b"));
+        assert_eq!(table.cleanup_empty_clusters(), 0);
+    }
+
+    #[test]
+    fn test_snapshot_returns_owned_public_names() {
+        let table = ClusterAddrTable::new();
+        let cluster: ClusterName = CheetahString::from_string("ClusterA".to_string());
+        let broker_a: BrokerName = CheetahString::from_string("broker-a".to_string());
+        let broker_b: BrokerName = CheetahString::from_string("broker-b".to_string());
+
+        table.add_broker(cluster.clone(), broker_a.clone());
+
+        let snapshot = table.snapshot();
+        let brokers = snapshot.get(&cluster).unwrap();
+        assert_eq!(brokers.len(), 1);
+        assert!(brokers.contains(&broker_a));
+
+        table.add_broker(cluster.clone(), broker_b.clone());
+
+        let brokers = snapshot.get(&cluster).unwrap();
+        assert_eq!(brokers.len(), 1);
+        assert!(brokers.contains(&broker_a));
+        assert!(!brokers.contains(&broker_b));
+    }
+
+    #[test]
+    fn test_append_cluster_and_broker_names_appends_to_existing_topic_list() {
+        let table = ClusterAddrTable::new();
+        let existing_topic = CheetahString::from_string("ExistingTopic".to_string());
+        let mut topic_list = vec![existing_topic.clone()];
+        let cluster: ClusterName = CheetahString::from_string("DefaultCluster".to_string());
+        let broker_a: BrokerName = CheetahString::from_string("broker-a".to_string());
+        let broker_b: BrokerName = CheetahString::from_string("broker-b".to_string());
+
+        table.add_broker(cluster.clone(), broker_a.clone());
+        table.add_broker(cluster.clone(), broker_b.clone());
+        table.append_cluster_and_broker_names(&mut topic_list);
+
+        assert_eq!(topic_list.len(), 4);
+        assert_eq!(topic_list[0], existing_topic);
+        assert!(topic_list.contains(&cluster));
+        assert!(topic_list.contains(&broker_a));
+        assert!(topic_list.contains(&broker_b));
     }
 
     #[test]
