@@ -6,33 +6,22 @@
 [![Documentation](https://docs.rs/rocketmq-error/badge.svg)](https://docs.rs/rocketmq-error)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE-APACHE)
 
-`rocketmq-error` is the shared error kernel for the RocketMQ Rust workspace. It
-provides one typed error surface, stable machine-readable error identity, and
-redaction-aware boundary views for crates that need to expose errors through
-remoting, gRPC, HTTP, CLI, logs, or metrics.
+`rocketmq-error` 是 RocketMQ Rust workspace 的共享错误内核。它提供统一的类型化错误接口、稳定的机器可读错误标识，以及支持脱敏的边界视图，供各 crate 通过 remoting、gRPC、HTTP、CLI、日志或 metrics 暴露错误。
 
-## What This Crate Owns
+## 本 crate 职责
 
-- `RocketMQError`: the primary error enum used by RocketMQ Rust crates.
-- `RocketMQResult<T>`: the standard result alias.
-- Domain-specific nested errors such as `NetworkError`, `SerializationError`,
-  `ProtocolError`, `RpcClientError`, `AuthError`, `ControllerError`,
-  `ToolsError`, `FilterError`, and `UnifiedServiceError`.
-- Stable taxonomy: `ErrorKind`, `ErrorCode`, `ErrorScope`, and
-  `ErrorCategory`.
-- Static metadata registry: `ErrorSpec` and `ALL_ERROR_SPECS`.
-- Boundary mappings for remoting, gRPC, HTTP, and CLI adapters.
-- Recovery and observability policy: `RetryClass`, `RecoverySpec`,
-  `ErrorSeverity`, and `ObserveSpec`.
-- Redaction-aware structured context: `ErrorContext`, `Sensitive<T>`, and
-  `BoundaryErrorView`.
+- `RocketMQError`：RocketMQ Rust 各 crate 使用的主错误枚举。
+- `RocketMQResult<T>`：标准 result 类型别名。
+- 领域专用的嵌套错误，例如 `NetworkError`、`SerializationError`、`ProtocolError`、`RpcClientError`、`AuthError`、`ControllerError`、`ToolsError`、`FilterError` 和 `UnifiedServiceError`。
+- 稳定分类体系：`ErrorKind`、`ErrorCode`、`ErrorScope` 和 `ErrorCategory`。
+- 静态元数据注册表：`ErrorSpec` 和 `ALL_ERROR_SPECS`。
+- 面向 remoting、gRPC、HTTP 和 CLI 适配器的边界映射。
+- 恢复与可观测性策略：`RetryClass`、`RecoverySpec`、`ErrorSeverity` 和 `ObserveSpec`。
+- 支持脱敏的结构化上下文：`ErrorContext`、`Sensitive<T>` 和 `BoundaryErrorView`。
 
-The crate intentionally avoids depending on transport crates such as
-`rocketmq-remoting` or generated protobuf bindings. Boundary-facing primitive
-types mirror the required wire/status values while keeping the error crate low
-in the dependency graph.
+该 crate 有意避免依赖 `rocketmq-remoting` 等传输 crate 或生成的 protobuf 绑定。面向边界的 primitive 类型会镜像所需的 wire/status 值，同时让错误 crate 保持在较低的依赖层级。
 
-## Quick Start
+## 快速开始
 
 ```toml
 [dependencies]
@@ -55,18 +44,13 @@ fn validate_broker_addr(addr: &str) -> RocketMQResult<()> {
 }
 ```
 
-`std::io::Error`, `std::str::Utf8Error`, and wrapped nested errors such as
-`NetworkError`, `SerializationError`, `ProtocolError`, `RpcClientError`,
-`AuthError`, `ControllerError`, `ToolsError`, `FilterError`, and
-`UnifiedServiceError` convert into `RocketMQError` through `From`, so the `?`
-operator can be used in normal code paths.
+`std::io::Error`、`std::str::Utf8Error`，以及 `NetworkError`、`SerializationError`、`ProtocolError`、`RpcClientError`、`AuthError`、`ControllerError`、`ToolsError`、`FilterError` 和 `UnifiedServiceError` 等被包裹的嵌套错误，都可以通过 `From` 转换为 `RocketMQError`，因此常规代码路径可以使用 `?` 运算符。
 
-## Architecture
+## 架构
 
-The current architecture has three layers:
+当前架构分为三层：
 
-Color coding highlights caller flow in blue, typed errors in purple, stable
-contracts in green, and boundary handoff points in orange.
+配色含义：蓝色表示调用方流程，紫色表示类型化错误，绿色表示稳定契约，橙色表示边界交接点。
 
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"background": "#FFFFFF", "primaryColor": "#E0F2FE", "primaryTextColor": "#0F172A", "primaryBorderColor": "#0284C7", "secondaryColor": "#F3E8FF", "secondaryTextColor": "#2E1065", "secondaryBorderColor": "#7C3AED", "tertiaryColor": "#DCFCE7", "tertiaryTextColor": "#052E16", "tertiaryBorderColor": "#16A34A", "lineColor": "#475569", "textColor": "#0F172A", "clusterBkg": "#F8FAFC", "clusterBorder": "#CBD5E1", "edgeLabelBackground": "#FFFFFF", "fontFamily": "Inter, ui-sans-serif, system-ui, sans-serif"}}}%%
@@ -119,43 +103,35 @@ flowchart TB
     class root,context,adapters,policy bridge
 ```
 
-### Typed Surface
+### 类型化接口
 
-`RocketMQError` is the top-level enum. Some variants wrap nested domain errors
-with `#[from]`, while other variants carry fields directly when the error is
-part of the shared broker, route, client, storage, configuration, system, or
-version contract.
+`RocketMQError` 是顶层枚举。部分变体通过 `#[from]` 包裹嵌套的领域错误；当错误属于共享的 broker、route、client、storage、configuration、system 或 version 契约时，其他变体会直接携带字段。
 
-Important wrapped families:
+重要的包裹型错误族：
 
-| Variant | Nested type | Typical producer |
+| 变体 | 嵌套类型 | 典型产生方 |
 | --- | --- | --- |
-| `RocketMQError::Network` | `NetworkError` | remoting clients, RPC clients |
-| `RocketMQError::Serialization` | `SerializationError` | codecs, metadata serializers |
-| `RocketMQError::Protocol` | `ProtocolError` | command/header/body validation |
-| `RocketMQError::Rpc` | `RpcClientError` | request dispatch and response handling |
-| `RocketMQError::Authentication` | `AuthError` | authentication and authorization |
-| `RocketMQError::Controller` | `ControllerError` | controller and Raft workflows |
-| `RocketMQError::Tools` | `ToolsError` | admin tools and CLI operations |
-| `RocketMQError::Filter` | `FilterError` | bloom filter and bit-array utilities |
+| `RocketMQError::Network` | `NetworkError` | remoting client、RPC client |
+| `RocketMQError::Serialization` | `SerializationError` | codec、元数据 serializer |
+| `RocketMQError::Protocol` | `ProtocolError` | command/header/body 校验 |
+| `RocketMQError::Rpc` | `RpcClientError` | 请求分发和响应处理 |
+| `RocketMQError::Authentication` | `AuthError` | 认证和授权 |
+| `RocketMQError::Controller` | `ControllerError` | controller 和 Raft 工作流 |
+| `RocketMQError::Tools` | `ToolsError` | admin tools 和 CLI 操作 |
+| `RocketMQError::Filter` | `FilterError` | Bloom Filter 和 bit-array 工具 |
 
-Important direct families:
+重要的直接变体族：
 
-- Broker and message errors: topic/queue lookup, broker operation failures,
-  message size and validation failures, transaction rejection, permissions.
-- Route errors: missing route data, inconsistent route data, route registration
-  conflict, route version conflict, missing cluster.
-- Client lifecycle errors: not started, already started, shutting down, invalid
-  state, producer/consumer unavailable.
-- Storage errors: read, write, corruption, out of space, lock failure.
-- Configuration and auth reload errors.
-- System errors: I/O, illegal argument, timeout, internal, service lifecycle,
-  initialization, version ordinal, required message property.
+- Broker 和消息错误：主题/队列查找、broker 操作失败、消息大小和校验失败、事务拒绝、权限。
+- Route 错误：路由数据缺失、路由数据不一致、路由注册冲突、路由版本冲突、cluster 缺失。
+- Client 生命周期错误：未启动、已启动、正在关闭、状态无效、producer/consumer 不可用。
+- Storage 错误：读、写、数据损坏、空间不足、锁失败。
+- Configuration 和 auth reload 错误。
+- System 错误：I/O、非法参数、超时、内部错误、服务生命周期、初始化、版本 ordinal、必需消息属性。
 
-### Stable Taxonomy
+### 稳定分类体系
 
-Display text is diagnostic and can contain local detail. Code that needs stable
-behavior should use the taxonomy:
+Display 文本是诊断接口，可能包含本地细节。需要稳定行为的代码应使用分类体系：
 
 ```rust
 use rocketmq_error::ErrorKind;
@@ -168,20 +144,15 @@ assert_eq!(error.kind().code().as_str(), "ROUTE_NOT_FOUND");
 assert_eq!(error.kind().category().as_str(), "route");
 ```
 
-`ErrorKind::ALL` lists every public logical kind. Each kind maps to:
+`ErrorKind::ALL` 列出所有公开的逻辑错误 kind。每个 kind 都映射到：
 
-- `ErrorCode`: stable machine-readable code, for example
-  `ROUTE_NOT_FOUND`.
-- `ErrorScope`: architectural owner such as `Route`, `Broker`, or `Storage`.
-- `ErrorCategory`: low-cardinality label for external adapters, metrics, and
-  dashboards.
+- `ErrorCode`：稳定的机器可读 code，例如 `ROUTE_NOT_FOUND`。
+- `ErrorScope`：架构归属方，例如 `Route`、`Broker` 或 `Storage`。
+- `ErrorCategory`：用于外部适配器、metrics 和 dashboard 的低基数标签。
 
-### ErrorSpec Registry
+### ErrorSpec 注册表
 
-`ALL_ERROR_SPECS` is the central registry for metadata attached to every
-`ErrorKind`. Tests assert that every kind has exactly one spec, that codes are
-unique, and that the protocol, recovery, observability, and redaction metadata
-is complete.
+`ALL_ERROR_SPECS` 是附加到每个 `ErrorKind` 的元数据中心注册表。测试会断言每个 kind 都恰好有一个 spec，code 唯一，并且 protocol、recovery、observability 和 redaction 元数据完整。
 
 ```rust
 use rocketmq_error::ErrorKind;
@@ -193,10 +164,9 @@ assert_eq!(spec.public_message, "Route information was not found");
 assert_eq!(spec.observe.metric_label, "ROUTE_NOT_FOUND");
 ```
 
-When adding a new `ErrorKind`, update all related mappings through the existing
-constructors:
+添加新的 `ErrorKind` 时，需要通过现有构造函数更新所有相关映射：
 
-- `ErrorKind::code`, `ErrorKind::scope`, and `ErrorKind::category`
+- `ErrorKind::code`、`ErrorKind::scope` 和 `ErrorKind::category`
 - `ALL_ERROR_SPECS`
 - `RemotingSpec::for_kind`
 - `GrpcSpec::for_kind`
@@ -204,14 +174,11 @@ constructors:
 - `CliSpec::for_kind`
 - `RecoverySpec::for_kind`
 - `RedactionPolicy::for_kind`
-- `RocketMQError::kind` and `RocketMQError::context`, if the new kind is backed
-  by a `RocketMQError` variant
+- 如果新的 kind 由某个 `RocketMQError` 变体支撑，还需更新 `RocketMQError::kind` 和 `RocketMQError::context`
 
-## Boundary Views
+## 边界视图
 
-Use `RocketMQError::boundary_view()` when adapting an error to a wire protocol,
-HTTP response, CLI output, UI model, log record, or metric event. It combines
-the stable spec with redaction-aware context.
+将错误适配为 wire protocol、HTTP response、CLI output、UI model、log record 或 metric event 时，应使用 `RocketMQError::boundary_view()`。它会将稳定 spec 与支持脱敏的上下文组合起来。
 
 ```rust
 use rocketmq_error::RocketMQError;
@@ -228,28 +195,24 @@ assert_eq!(view.message(), "Storage read failed");
 assert_eq!(view.context().to_string(), "path=<redacted>, reason=<redacted>");
 ```
 
-Boundary mappings are deliberately transport-neutral:
+边界映射有意保持传输无关：
 
-| Spec | Purpose |
+| Spec | 用途 |
 | --- | --- |
 | `RemotingSpec` | RocketMQ remoting response code |
-| `GrpcSpec` | gRPC payload code and transport status |
+| `GrpcSpec` | gRPC payload code 和 transport status |
 | `HttpSpec` | HTTP status code |
-| `CliSpec` | process exit code |
-| `RecoverySpec` | retry or recovery class |
-| `ObserveSpec` | severity and metric label |
+| `CliSpec` | 进程 exit code |
+| `RecoverySpec` | retry 或 recovery class |
+| `ObserveSpec` | severity 和 metric label |
 
-For CLI tools, `CliErrorView::from_error(&error).render_stderr()` renders a
-single redaction-aware line using the same registry.
+对于 CLI 工具，`CliErrorView::from_error(&error).render_stderr()` 会使用同一个注册表渲染一行支持脱敏的输出。
 
-## Redaction Model
+## 脱敏模型
 
-`Display` and `Debug` are diagnostic surfaces. They are useful inside trusted
-process boundaries, but external adapters should prefer `public_message()`,
-`context()`, or `boundary_view()`.
+`Display` 和 `Debug` 是诊断接口。它们适用于可信进程边界内部，但外部适配器应优先使用 `public_message()`、`context()` 或 `boundary_view()`。
 
-Sensitive values should be passed through `Sensitive<T>` or added with
-`ErrorContext::with_sensitive`. Sensitive fields render as `<redacted>`.
+敏感值应通过 `Sensitive<T>` 传递，或使用 `ErrorContext::with_sensitive` 添加。敏感字段会渲染为 `<redacted>`。
 
 ```rust
 use rocketmq_error::ErrorContext;
@@ -262,10 +225,9 @@ let context = ErrorContext::new()
 assert_eq!(context.to_string(), "topic=TopicA, token=<redacted>");
 ```
 
-## Recovery and Observability
+## 恢复与可观测性
 
-Retry and observability behavior is derived from `ErrorKind`, not from formatted
-messages:
+重试和可观测性行为来自 `ErrorKind`，而不是格式化消息：
 
 ```rust
 use rocketmq_error::ErrorKind;
@@ -286,7 +248,7 @@ assert_eq!(
 );
 ```
 
-Current retry classes are:
+当前 retry class 包括：
 
 - `Never`
 - `Immediate`
@@ -295,7 +257,7 @@ Current retry classes are:
 - `SwitchBroker`
 - `RefreshLeader`
 
-Current severities are:
+当前 severity 包括：
 
 - `Debug`
 - `Info`
@@ -305,21 +267,21 @@ Current severities are:
 
 ## Feature Flags
 
-The default feature set is empty.
+默认 feature 集为空。
 
-| Feature | Enables |
+| Feature | 启用内容 |
 | --- | --- |
-| `with_serde` | `serde_json` conversion into `SerializationError` and `RocketMQError` |
-| `with_config` | `config::ConfigError` conversion into `RocketMQError` |
+| `with_serde` | 将 `serde_json` 转换为 `SerializationError` 和 `RocketMQError` |
+| `with_config` | 将 `config::ConfigError` 转换为 `RocketMQError` |
 
 ```toml
 [dependencies]
 rocketmq-error = { version = "1.0.0", features = ["with_serde", "with_config"] }
 ```
 
-## Usage Patterns
+## 使用模式
 
-Prefer typed constructors for common cases:
+常见场景优先使用类型化构造函数：
 
 ```rust
 use rocketmq_error::RocketMQError;
@@ -333,7 +295,7 @@ let auth = RocketMQError::auth_config_invalid("auth.authorization", "provider no
 let controller = RocketMQError::controller_not_leader(Some(2));
 ```
 
-Match on the typed enum when local control flow needs exact detail:
+当本地控制流需要精确细节时，匹配类型化枚举：
 
 ```rust
 use rocketmq_error::NetworkError;
@@ -348,7 +310,7 @@ fn is_connection_problem(error: &RocketMQError) -> bool {
 }
 ```
 
-Use `ErrorKind` or `BoundaryErrorView` for public contracts:
+公开契约应使用 `ErrorKind` 或 `BoundaryErrorView`：
 
 ```rust
 use rocketmq_error::ErrorKind;
@@ -359,27 +321,23 @@ fn should_refresh_route(error: &RocketMQError) -> bool {
 }
 ```
 
-## Public API Notes
+## 公共 API 说明
 
-- The typed `RocketMQError` surface is the public error API.
-- Pre-typed compatibility aliases and legacy enum names are intentionally not
-  exposed.
-- Stable external integrations should not parse `Display` output. Use
-  `ErrorKind`, `ErrorCode`, `ErrorSpec`, or `BoundaryErrorView`.
-- The crate keeps transport mappings local and dependency-light by exposing
-  primitive remoting/gRPC/HTTP/CLI spec types instead of depending on the
-  transport implementations.
+- 类型化 `RocketMQError` 接口是公共错误 API。
+- 预类型化的兼容别名和 legacy enum 名称有意不再暴露。
+- 稳定的外部集成不应解析 `Display` 输出。请使用 `ErrorKind`、`ErrorCode`、`ErrorSpec` 或 `BoundaryErrorView`。
+- 该 crate 通过暴露 primitive remoting/gRPC/HTTP/CLI spec 类型，而不是依赖传输实现，保持传输映射本地化且依赖轻量。
 
-## Tests
+## 测试
 
-Run the crate tests from the workspace root:
+从 workspace 根目录运行 crate 测试：
 
 ```bash
 cargo test -p rocketmq-error
 cargo test -p rocketmq-error --all-features
 ```
 
-Useful focused suites:
+有用的聚焦测试套件：
 
 ```bash
 cargo test -p rocketmq-error --test error_kind_contract
@@ -389,24 +347,22 @@ cargo test -p rocketmq-error --test error_policy_specs
 cargo test -p rocketmq-error --test error_context_redaction
 ```
 
-For Rust code changes in this crate, also run the workspace validation required
-by the repository:
+如果该 crate 中有 Rust 代码变更，还需要运行仓库要求的 workspace 验证：
 
 ```bash
 cargo fmt --all
 cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 ```
 
-## Documentation
+## 文档
 
 - [API documentation](https://docs.rs/rocketmq-error)
-- Example: [`examples/controller_error_integration.rs`](examples/controller_error_integration.rs)
+- 示例：[`examples/controller_error_integration.rs`](examples/controller_error_integration.rs)
 
-## License
+## 许可证
 
-Licensed under [Apache License, Version 2.0](../LICENSE-APACHE).
+基于 [Apache License, Version 2.0](../LICENSE-APACHE) 授权。
 
-## Contributing
+## 贡献
 
-Contributions are welcome. Please read the workspace
-[Contributing Guide](../CONTRIBUTING.md) before submitting changes.
+欢迎贡献。提交变更前，请阅读 workspace 的 [Contributing Guide](../CONTRIBUTING.md)。
