@@ -371,6 +371,79 @@ mod tests {
     }
 
     #[test]
+    fn test_snapshot_returns_owned_broker_data() {
+        let table = BrokerAddrTable::new();
+        let broker_name: BrokerName = CheetahString::from_string("broker-a".to_string());
+        let broker_data = create_test_broker_data("DefaultCluster", "broker-a");
+
+        table.insert(broker_name.clone(), broker_data);
+
+        let snapshot = table.snapshot();
+        let snapshot_broker = snapshot.get(&broker_name).unwrap();
+        assert_eq!(
+            snapshot_broker.broker_addrs().get(&0).unwrap().as_str(),
+            "broker-a:10911"
+        );
+
+        assert!(table.update_broker_address("broker-a", 1, "slave1:10911"));
+
+        let snapshot_broker = snapshot.get(&broker_name).unwrap();
+        assert!(!snapshot_broker.broker_addrs().contains_key(&1));
+
+        let current_broker = table.get("broker-a").unwrap();
+        assert_eq!(current_broker.broker_addrs().get(&1).unwrap().as_str(), "slave1:10911");
+    }
+
+    #[test]
+    fn test_update_broker_address_returns_false_for_missing_broker() {
+        let table = BrokerAddrTable::new();
+
+        assert!(!table.update_broker_address("missing-broker", 0, "missing:10911"));
+    }
+
+    #[test]
+    fn test_remove_broker_address_returns_false_without_changing_missing_entries() {
+        let table = BrokerAddrTable::new();
+        let broker_name: BrokerName = CheetahString::from_string("broker-a".to_string());
+        let mut broker_data = create_test_broker_data("DefaultCluster", "broker-a");
+        broker_data.broker_addrs_mut().insert(1, "slave1:10911".into());
+
+        table.insert(broker_name, broker_data);
+
+        assert!(!table.remove_broker_address("missing-broker", 0));
+
+        let before = table.get("broker-a").unwrap().broker_addrs().clone();
+        assert!(!table.remove_broker_address("broker-a", 2));
+        let after = table.get("broker-a").unwrap().broker_addrs().clone();
+
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn test_get_all_broker_names_and_brokers_return_public_names() {
+        let table = BrokerAddrTable::new();
+        let broker_a: BrokerName = CheetahString::from_string("broker-a".to_string());
+        let broker_b: BrokerName = CheetahString::from_string("broker-b".to_string());
+
+        table.insert(broker_a.clone(), create_test_broker_data("ClusterA", "broker-a"));
+        table.insert(broker_b.clone(), create_test_broker_data("ClusterB", "broker-b"));
+
+        let broker_names = table.get_all_broker_names();
+        assert_eq!(broker_names.len(), 2);
+        assert!(broker_names.contains(&broker_a));
+        assert!(broker_names.contains(&broker_b));
+
+        let brokers = table.get_all_brokers();
+        assert_eq!(brokers.len(), 2);
+        assert!(brokers
+            .iter()
+            .any(|(name, data)| name == &broker_a && data.broker_name().as_str() == "broker-a"));
+        assert!(brokers
+            .iter()
+            .any(|(name, data)| name == &broker_b && data.broker_name().as_str() == "broker-b"));
+    }
+
+    #[test]
     fn test_find_broker_by_addr_helpers() {
         let table = BrokerAddrTable::new();
         let broker_name: BrokerName = CheetahString::from_string("broker-a".to_string());
