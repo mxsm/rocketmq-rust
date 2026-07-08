@@ -9,7 +9,7 @@ This file applies to `rocketmq-dashboard/rocketmq-dashboard-tauri/`.
 - Rust backend code is validated in `src-tauri/`.
 
 ## Frontend validation
-When changing frontend code, run from this directory:
+Before PR submission or final handoff for frontend changes, run from this directory:
 
 ```bash
 npm ci

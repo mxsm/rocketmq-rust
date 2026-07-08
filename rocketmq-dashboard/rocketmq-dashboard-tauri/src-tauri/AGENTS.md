@@ -8,7 +8,7 @@ This file applies to `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/`.
 - Do not rely on root workspace validation for this directory.
 
 ## Mandatory validation
-Run from `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` after every Rust code change:
+Run from `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` before PR submission or final handoff for Rust code changes:
 
 ```bash
 cargo fmt --all

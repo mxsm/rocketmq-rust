@@ -8,7 +8,7 @@ This file applies to `rocketmq-example/`.
 - Do not rely on root workspace validation for this directory.
 
 ## Mandatory validation
-Run from `rocketmq-example/` after every Rust code change:
+Run from `rocketmq-example/` before PR submission or final handoff for Rust code changes:
 
 ```bash
 cargo fmt --all

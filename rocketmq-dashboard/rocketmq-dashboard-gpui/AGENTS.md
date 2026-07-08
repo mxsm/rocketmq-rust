@@ -8,7 +8,7 @@ This file applies to `rocketmq-dashboard/rocketmq-dashboard-gpui/`.
 - Do not rely on root workspace validation for this directory.
 
 ## Mandatory validation
-Run from `rocketmq-dashboard/rocketmq-dashboard-gpui/` after every Rust code change:
+Run from `rocketmq-dashboard/rocketmq-dashboard-gpui/` before PR submission or final handoff for Rust code changes:
 
 ```bash
 cargo fmt --all
