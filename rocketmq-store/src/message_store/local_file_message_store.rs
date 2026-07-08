@@ -6232,6 +6232,7 @@ mod tests {
                     storage_level: TieredStorageLevel::Force,
                     backend_provider: "memory".to_string(),
                     store_path_root_dir: temp_dir.path().join("tieredstore"),
+                    delete_file_enable: false,
                     max_pending_tasks: 16,
                     ..TieredStoreConfig::default()
                 }),
