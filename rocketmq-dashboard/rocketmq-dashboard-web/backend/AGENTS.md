@@ -35,7 +35,7 @@ It overrides the Web Dashboard root instructions for backend files.
 - Prefer explicit error mapping through the local dashboard error and API response model.
 
 ## Validation
-Run from this directory after every Rust code change:
+Run from this directory before PR submission or final handoff for Rust code changes:
 
 ```bash
 cargo fmt --all

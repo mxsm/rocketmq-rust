@@ -46,7 +46,7 @@ D:\Github\Java\rocketmq-dashboard\frontend-new
 - Do not copy the old Java visual style directly.
 
 ## Validation
-Run from this directory after frontend changes:
+Run from this directory before PR submission or final handoff for frontend changes:
 
 ```bash
 npm ci

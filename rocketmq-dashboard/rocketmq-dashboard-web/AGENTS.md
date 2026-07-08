@@ -26,7 +26,7 @@ This file applies to `rocketmq-dashboard/rocketmq-dashboard-web/`.
 - Avoid `async-trait` unless there is no reasonable alternative.
 
 ## Backend validation
-Run from `rocketmq-dashboard/rocketmq-dashboard-web/backend/` after every Rust code change:
+Run from `rocketmq-dashboard/rocketmq-dashboard-web/backend/` before PR submission or final handoff for Rust code changes:
 
 ```bash
 cargo fmt --all
@@ -48,7 +48,7 @@ cargo build --all-targets --all-features
 - Message and detail inspection should use drawers or focused dialogs, not full page rewrites unless routing requires it.
 
 ## Frontend validation
-Run from `rocketmq-dashboard/rocketmq-dashboard-web/frontend/` after frontend changes:
+Run from `rocketmq-dashboard/rocketmq-dashboard-web/frontend/` before PR submission or final handoff for frontend changes:
 
 ```bash
 npm ci
