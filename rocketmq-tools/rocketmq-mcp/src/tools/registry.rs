@@ -21,6 +21,7 @@ use rmcp::model::ToolAnnotations;
 use crate::tools::broker_tools;
 use crate::tools::cluster_tools;
 use crate::tools::consumer_tools;
+use crate::tools::diagnosis_tools;
 use crate::tools::topic_tools;
 
 pub fn list_tools() -> ListToolsResult {
@@ -68,6 +69,11 @@ pub fn tool_definitions() -> Vec<Tool> {
             "RocketMQ broker description",
             "Describe broker rows for a broker name in the selected cluster.",
         ),
+        read_only_tool::<diagnosis_tools::DiagnoseConsumerLagArgs, crate::model::diagnosis::DiagnosisReport>(
+            diagnosis_tools::DIAGNOSE_CONSUMER_LAG_TOOL,
+            "RocketMQ consumer lag diagnosis",
+            "Diagnose consumer lag from read-only lag, topic route, and broker evidence.",
+        ),
     ]
 }
 
@@ -108,6 +114,7 @@ mod tests {
                 "mq_list_consumer_groups",
                 "mq_query_consumer_lag",
                 "mq_describe_broker",
+                "mq_diagnose_consumer_lag",
             ]
         );
         assert!(result.next_cursor.is_none());

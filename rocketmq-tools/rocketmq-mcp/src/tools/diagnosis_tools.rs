@@ -12,12 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Read-only MCP tools exposed by the RocketMQ MCP server.
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 
-pub mod broker_tools;
-pub mod cluster_tools;
-pub mod consumer_tools;
-pub mod diagnosis_tools;
-pub mod executor;
-pub mod registry;
-pub mod topic_tools;
+pub const DIAGNOSE_CONSUMER_LAG_TOOL: &str = "mq_diagnose_consumer_lag";
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct DiagnoseConsumerLagArgs {
+    pub cluster: String,
+    pub topic: String,
+    pub consumer_group: String,
+    #[serde(default)]
+    pub time_range: Option<String>,
+    #[serde(default)]
+    pub lag_threshold: Option<i64>,
+}
