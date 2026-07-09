@@ -14,6 +14,8 @@
 
 pub mod audit;
 pub mod confirmation;
+#[cfg(feature = "streamable-http")]
+pub mod http_auth;
 pub mod rate_limit;
 pub mod rbac;
 pub mod sanitizer;
@@ -190,6 +192,33 @@ impl Guard {
         }
 
         Ok(())
+    }
+
+    #[cfg(feature = "streamable-http")]
+    pub fn check_http_rate_limit(&self) -> Result<(), GuardError> {
+        self.rate_limiter
+            .check("http_request", self.security.rate_limit_per_minute)
+    }
+
+    #[cfg(feature = "streamable-http")]
+    pub fn record_http_rejection(&self, error: impl Into<String>) {
+        if !self.audit_config.enabled {
+            return;
+        }
+
+        let record = AuditRecord::new(
+            self.allocate_request_id(),
+            "http-client".to_string(),
+            None,
+            None,
+            "http_request".to_string(),
+            String::new(),
+            RiskLevel::ReadOnly,
+            AuditStatus::Failure,
+            0,
+            Some(error.into()),
+        );
+        self.audit_log.record(&self.audit_config, record);
     }
 }
 

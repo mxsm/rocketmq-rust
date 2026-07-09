@@ -62,7 +62,7 @@ sha2               = "0.11"
 thiserror          = { workspace = true }
 tokio              = { workspace = true }
 tokio-util         = { workspace = true }
-tower-http         = { version = "0.6", features = ["cors", "trace"], optional = true }
+tower-http         = { version = "0.6", features = ["cors", "limit", "timeout", "trace"], optional = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "std"] }
 validator          = { version = "0.20", features = ["derive"] }
