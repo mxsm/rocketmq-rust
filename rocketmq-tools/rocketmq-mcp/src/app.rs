@@ -22,10 +22,14 @@ pub struct McpApp {
 }
 
 impl McpApp {
+    pub fn new(config: McpConfig) -> Self {
+        Self { config }
+    }
+
     pub async fn bootstrap(args: Args) -> anyhow::Result<Self> {
         let config = McpConfig::load_with_overrides(&args)?;
         init_tracing(&config)?;
-        Ok(Self { config })
+        Ok(Self::new(config))
     }
 
     pub fn config(&self) -> &McpConfig {
