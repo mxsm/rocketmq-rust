@@ -34,6 +34,7 @@ members = [
   "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli",
   "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
   "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
+  "rocketmq-tools/rocketmq-mcp",
   "rocketmq-tools/rocketmq-store-inspect",
   "rocketmq-dashboard/rocketmq-dashboard-common",
 ]
