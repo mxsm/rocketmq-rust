@@ -14,6 +14,7 @@
 
 use crate::config::Args;
 use crate::config::McpConfig;
+use crate::config::TransportKind;
 
 #[derive(Debug, Clone)]
 pub struct McpApp {
@@ -22,11 +23,30 @@ pub struct McpApp {
 
 impl McpApp {
     pub async fn bootstrap(args: Args) -> anyhow::Result<Self> {
-        let config = McpConfig::load(&args.config)?;
+        let config = McpConfig::load_with_overrides(&args)?;
+        init_tracing(&config)?;
         Ok(Self { config })
     }
 
     pub fn config(&self) -> &McpConfig {
         &self.config
     }
+
+    pub fn transport(&self) -> TransportKind {
+        self.config.server.transport
+    }
+}
+
+pub fn init_tracing(config: &McpConfig) -> anyhow::Result<()> {
+    use tracing_subscriber::EnvFilter;
+
+    let env_filter = EnvFilter::try_new(&config.server.log_level)?;
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stderr)
+        .finish();
+
+    let _ = tracing::subscriber::set_global_default(subscriber);
+
+    Ok(())
 }

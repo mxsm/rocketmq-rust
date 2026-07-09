@@ -14,6 +14,12 @@
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpError {
+    #[error("configuration error: {0}")]
+    Config(#[from] config::ConfigError),
+
+    #[error("invalid configuration: {0}")]
+    InvalidConfig(String),
+
     #[error("unsupported transport: {0}")]
     UnsupportedTransport(String),
 }
