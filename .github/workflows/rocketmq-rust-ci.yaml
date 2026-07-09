@@ -114,6 +114,21 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
+      - name: Check AGENTS routing
+        run: bash ./scripts/check-agents-routing.sh
+
+      - name: Check rocketmq-mcp
+        run: cargo check -p rocketmq-mcp
+
+      - name: Test rocketmq-mcp
+        run: cargo test -p rocketmq-mcp
+
+      - name: Clippy rocketmq-mcp
+        run: cargo clippy --all-targets -p rocketmq-mcp --features streamable-http -- -D warnings
+
+      - name: Document rocketmq-mcp
+        run: cargo doc -p rocketmq-mcp --no-deps
+
       - name: Clippy (all features)
         run: cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 
