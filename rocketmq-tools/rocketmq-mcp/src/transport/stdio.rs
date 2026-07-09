@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Model Context Protocol server for RocketMQ-Rust diagnostics.
+use rmcp::ServiceExt;
 
-pub mod app;
-pub mod config;
-pub mod error;
-pub mod protocol;
-pub mod transport;
+use crate::app::McpApp;
+use crate::protocol::server::RocketmqMcpServer;
+
+pub async fn serve(app: McpApp) -> anyhow::Result<()> {
+    let server = RocketmqMcpServer::new(app);
+    let service = server.serve(rmcp::transport::stdio()).await?;
+    service.waiting().await?;
+    Ok(())
+}

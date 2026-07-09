@@ -15,6 +15,8 @@
 use clap::Parser;
 use rocketmq_mcp::app::McpApp;
 use rocketmq_mcp::config::Args;
+use rocketmq_mcp::config::TransportKind;
+use rocketmq_mcp::transport;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,6 +30,11 @@ async fn main() -> anyhow::Result<()> {
         "{} startup initialized",
         app.config().server.name,
     );
+
+    match app.transport() {
+        TransportKind::Stdio => transport::stdio::serve(app).await?,
+        TransportKind::StreamableHttp => anyhow::bail!("streamable-http transport is not implemented yet"),
+    }
 
     Ok(())
 }

@@ -12,10 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Model Context Protocol server for RocketMQ-Rust diagnostics.
-
-pub mod app;
-pub mod config;
-pub mod error;
-pub mod protocol;
-pub mod transport;
+pub mod server;
