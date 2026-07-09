@@ -58,6 +58,28 @@ fn error_kind_exposes_code_scope_and_category() {
 }
 
 #[test]
+fn observability_kinds_have_observability_scope_and_category() {
+    let cases = [
+        ErrorKind::ObservabilityFeatureDisabled,
+        ErrorKind::ObservabilityConfigInvalid,
+        ErrorKind::ObservabilityMetricsInitFailed,
+        ErrorKind::ObservabilityTracesInitFailed,
+        ErrorKind::ObservabilityLogsInitFailed,
+        ErrorKind::ObservabilityLoggingInitFailed,
+        ErrorKind::ObservabilityLogFilterInvalid,
+        ErrorKind::ObservabilitySubscriberInstallFailed,
+        ErrorKind::ObservabilityMetricsShutdownFailed,
+        ErrorKind::ObservabilityTracesShutdownFailed,
+        ErrorKind::ObservabilityLogsShutdownFailed,
+    ];
+
+    for kind in cases {
+        assert_eq!(kind.scope(), ErrorScope::Observability);
+        assert_eq!(kind.category(), ErrorCategory::Observability);
+    }
+}
+
+#[test]
 fn all_error_kinds_have_unique_codes() {
     let mut codes = HashSet::new();
 

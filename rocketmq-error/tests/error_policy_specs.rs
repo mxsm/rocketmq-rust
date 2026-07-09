@@ -32,6 +32,18 @@ fn selected_error_kinds_have_observability_policy() {
 }
 
 #[test]
+fn observability_errors_have_expected_policy() {
+    assert_eq!(
+        ErrorKind::ObservabilityConfigInvalid.spec().recovery.retry,
+        RetryClass::Never
+    );
+    assert_eq!(
+        ErrorKind::ObservabilityMetricsInitFailed.spec().observe.severity,
+        ErrorSeverity::Error
+    );
+}
+
+#[test]
 fn every_error_spec_has_low_cardinality_observability_labels() {
     for spec in ALL_ERROR_SPECS {
         assert_eq!(spec.observe.metric_label, spec.code.as_str());

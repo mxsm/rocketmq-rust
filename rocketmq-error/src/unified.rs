@@ -457,7 +457,7 @@ impl RocketMQError {
             Self::ConsumerNotAvailable => ErrorKind::ConsumerNotAvailable,
             Self::Tools(error) => error.kind(),
             Self::Filter(_) => ErrorKind::Filter,
-            Self::Observability(_) => ErrorKind::Internal,
+            Self::Observability(error) => error.kind(),
             Self::StorageReadFailed { .. } => ErrorKind::StorageReadFailed,
             Self::StorageWriteFailed { .. } => ErrorKind::StorageWriteFailed,
             Self::StorageCorrupted { .. } => ErrorKind::StorageCorrupted,
@@ -592,7 +592,7 @@ impl RocketMQError {
                 .with_field("actual", actual.as_str()),
             Self::Tools(error) => error.context(),
             Self::Filter(error) => ErrorContext::new().with_field("filter_error", error.to_string()),
-            Self::Observability(error) => redacted_context("observability_error", error.to_string()),
+            Self::Observability(error) => error.context(),
             Self::StorageReadFailed { path, reason } | Self::StorageWriteFailed { path, reason } => ErrorContext::new()
                 .with_sensitive("path", Sensitive::new(path.clone()))
                 .with_sensitive("reason", Sensitive::new(reason.clone())),

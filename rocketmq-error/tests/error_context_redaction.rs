@@ -1,4 +1,6 @@
 use rocketmq_error::ErrorContext;
+use rocketmq_error::ErrorKind;
+use rocketmq_error::ObservabilityError;
 use rocketmq_error::RedactionKind;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::Sensitive;
@@ -65,4 +67,33 @@ fn boundary_view_exposes_public_message_and_redacted_context() {
     assert_eq!(view.context().to_string(), "internal_error=<redacted>");
     assert!(!view.context().to_string().contains("plain-text"));
     assert!(!view.is_retryable());
+}
+
+#[test]
+fn observability_error_context_redacts_sensitive_details() {
+    let init = RocketMQError::from(ObservabilityError::metrics_init(
+        "endpoint=http://127.0.0.1:4317?token=secret",
+    ));
+
+    assert_eq!(init.kind(), ErrorKind::ObservabilityMetricsInitFailed);
+    let context = init.context();
+    assert_eq!(context.fields()[0].key, "reason");
+    assert_eq!(context.fields()[0].redaction, RedactionKind::Sensitive);
+    assert_eq!(context.to_string(), "reason=<redacted>");
+    assert!(!context.to_string().contains("secret"));
+
+    let filter = RocketMQError::from(ObservabilityError::invalid_log_filter(
+        "rocketmq_store=trace",
+        "invalid directive",
+    ));
+    let context = filter.context();
+
+    assert_eq!(filter.kind(), ErrorKind::ObservabilityLogFilterInvalid);
+    assert_eq!(context.len(), 2);
+    assert_eq!(context.fields()[0].key, "filter");
+    assert_eq!(context.fields()[0].redaction, RedactionKind::Sensitive);
+    assert_eq!(context.fields()[1].key, "error");
+    assert_eq!(context.fields()[1].redaction, RedactionKind::Sensitive);
+    assert!(!context.to_string().contains("rocketmq_store=trace"));
+    assert!(!context.to_string().contains("invalid directive"));
 }

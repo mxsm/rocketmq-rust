@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::context::ErrorContext;
+use crate::context::Sensitive;
+use crate::kind::ErrorKind;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -51,6 +54,44 @@ pub enum ObservabilityError {
 }
 
 impl ObservabilityError {
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::FeatureDisabled(_) => ErrorKind::ObservabilityFeatureDisabled,
+            Self::InvalidConfig(_) => ErrorKind::ObservabilityConfigInvalid,
+            Self::MetricsInit(_) => ErrorKind::ObservabilityMetricsInitFailed,
+            Self::TracesInit(_) => ErrorKind::ObservabilityTracesInitFailed,
+            Self::LogsInit(_) => ErrorKind::ObservabilityLogsInitFailed,
+            Self::LoggingInit(_) => ErrorKind::ObservabilityLoggingInitFailed,
+            Self::InvalidLogFilter { .. } => ErrorKind::ObservabilityLogFilterInvalid,
+            Self::SubscriberInstallFailed { .. } => ErrorKind::ObservabilitySubscriberInstallFailed,
+            Self::MetricsShutdown(_) => ErrorKind::ObservabilityMetricsShutdownFailed,
+            Self::TracesShutdown(_) => ErrorKind::ObservabilityTracesShutdownFailed,
+            Self::LogsShutdown(_) => ErrorKind::ObservabilityLogsShutdownFailed,
+        }
+    }
+
+    pub fn context(&self) -> ErrorContext {
+        match self {
+            Self::FeatureDisabled(feature) => ErrorContext::new().with_field("feature", *feature),
+            Self::InvalidConfig(reason)
+            | Self::MetricsInit(reason)
+            | Self::TracesInit(reason)
+            | Self::LogsInit(reason)
+            | Self::LoggingInit(reason)
+            | Self::MetricsShutdown(reason)
+            | Self::TracesShutdown(reason)
+            | Self::LogsShutdown(reason) => {
+                ErrorContext::new().with_sensitive("reason", Sensitive::new(reason.clone()))
+            }
+            Self::InvalidLogFilter { filter, error } => ErrorContext::new()
+                .with_sensitive("filter", Sensitive::new(filter.clone()))
+                .with_sensitive("error", Sensitive::new(error.clone())),
+            Self::SubscriberInstallFailed { attempted, installed } => ErrorContext::new()
+                .with_field("attempted", attempted.to_string())
+                .with_field("installed", installed.to_string()),
+        }
+    }
+
     pub fn invalid_config(message: impl Into<String>) -> Self {
         Self::InvalidConfig(message.into())
     }
