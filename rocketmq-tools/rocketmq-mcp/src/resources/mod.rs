@@ -12,11 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Model Context Protocol server for RocketMQ-Rust diagnostics.
+//! Static MCP resources exposed by the RocketMQ MCP server.
 
-pub mod app;
-pub mod config;
-pub mod error;
-pub mod protocol;
-pub mod resources;
-pub mod transport;
+pub mod reader;
+pub mod registry;
+pub mod uri;
