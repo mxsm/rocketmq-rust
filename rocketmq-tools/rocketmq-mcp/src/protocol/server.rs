@@ -14,7 +14,10 @@
 
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
+use rmcp::model::GetPromptRequestParams;
+use rmcp::model::GetPromptResult;
 use rmcp::model::Implementation;
+use rmcp::model::ListPromptsResult;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::ListToolsResult;
@@ -31,6 +34,7 @@ use rmcp::ServerHandler;
 
 use crate::adapter::admin_core_adapter::AdminCoreAdapter;
 use crate::app::McpApp;
+use crate::prompts;
 use crate::resources;
 use crate::tools;
 use crate::tools::executor::ToolExecutor;
@@ -88,6 +92,22 @@ impl ServerHandler for RocketmqMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
         resources::reader::read_resource(self.app.config(), &request.uri)
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        prompts::registry::list_prompts().map_err(|error| ErrorData::internal_error(error.to_string(), None))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResult, ErrorData> {
+        prompts::renderer::get_prompt(request)
     }
 
     async fn list_tools(
