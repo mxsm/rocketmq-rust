@@ -13,3 +13,6 @@
 // limitations under the License.
 
 pub mod stdio;
+
+#[cfg(feature = "streamable-http")]
+pub mod streamable_http;

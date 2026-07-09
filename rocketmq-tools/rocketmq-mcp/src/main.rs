@@ -35,8 +35,21 @@ async fn main() -> anyhow::Result<()> {
 
     match app.transport() {
         TransportKind::Stdio => transport::stdio::serve(app).await?,
-        TransportKind::StreamableHttp => anyhow::bail!("streamable-http transport is not implemented yet"),
+        TransportKind::StreamableHttp => serve_streamable_http(app).await?,
     }
 
     Ok(())
+}
+
+async fn serve_streamable_http(app: McpApp) -> anyhow::Result<()> {
+    #[cfg(feature = "streamable-http")]
+    {
+        transport::streamable_http::serve(app).await
+    }
+
+    #[cfg(not(feature = "streamable-http"))]
+    {
+        let _ = app;
+        anyhow::bail!("streamable-http transport requires the streamable-http feature")
+    }
 }
