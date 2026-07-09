@@ -69,6 +69,9 @@ pub mod controller_error;
 // Filter error module
 pub mod filter_error;
 
+// Observability error module
+pub mod observability_error;
+
 // Client error module
 pub mod client_error;
 
@@ -101,6 +104,7 @@ pub use kind::ErrorCategory;
 pub use kind::ErrorCode;
 pub use kind::ErrorKind;
 pub use kind::ErrorScope;
+pub use observability_error::ObservabilityError;
 pub use policy::ErrorSeverity;
 pub use policy::ObserveSpec;
 pub use policy::RecoverySpec;

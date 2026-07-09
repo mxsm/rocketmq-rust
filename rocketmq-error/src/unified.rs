@@ -28,6 +28,7 @@ use std::io;
 
 // Re-export filter error
 pub use crate::filter_error::FilterError;
+pub use crate::observability_error::ObservabilityError;
 
 use crate::boundary::BoundaryErrorView;
 use crate::context::ErrorContext;
@@ -295,6 +296,13 @@ pub enum RocketMQError {
     Filter(#[from] FilterError),
 
     // ============================================================================
+    // Observability Errors
+    // ============================================================================
+    /// Telemetry, logging, exporter, and provider lifecycle errors.
+    #[error(transparent)]
+    Observability(#[from] ObservabilityError),
+
+    // ============================================================================
     // Storage Errors
     // ============================================================================
     /// Storage read failed
@@ -449,6 +457,7 @@ impl RocketMQError {
             Self::ConsumerNotAvailable => ErrorKind::ConsumerNotAvailable,
             Self::Tools(error) => error.kind(),
             Self::Filter(_) => ErrorKind::Filter,
+            Self::Observability(_) => ErrorKind::Internal,
             Self::StorageReadFailed { .. } => ErrorKind::StorageReadFailed,
             Self::StorageWriteFailed { .. } => ErrorKind::StorageWriteFailed,
             Self::StorageCorrupted { .. } => ErrorKind::StorageCorrupted,
@@ -583,6 +592,7 @@ impl RocketMQError {
                 .with_field("actual", actual.as_str()),
             Self::Tools(error) => error.context(),
             Self::Filter(error) => ErrorContext::new().with_field("filter_error", error.to_string()),
+            Self::Observability(error) => redacted_context("observability_error", error.to_string()),
             Self::StorageReadFailed { path, reason } | Self::StorageWriteFailed { path, reason } => ErrorContext::new()
                 .with_sensitive("path", Sensitive::new(path.clone()))
                 .with_sensitive("reason", Sensitive::new(reason.clone())),
