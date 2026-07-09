@@ -1,0 +1,185 @@
+---
+source: rocketmq-tools/rocketmq-mcp/src/tools/registry.rs
+expression: contracts
+---
+[
+  {
+    "destructive": false,
+    "idempotent": true,
+    "input_required": [
+      "cluster"
+    ],
+    "input_type": "object",
+    "name": "mq_cluster_overview",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": true
+  },
+  {
+    "destructive": false,
+    "idempotent": true,
+    "input_required": null,
+    "input_type": "object",
+    "name": "mq_list_topics",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": true
+  },
+  {
+    "destructive": false,
+    "idempotent": true,
+    "input_required": [
+      "cluster",
+      "topic"
+    ],
+    "input_type": "object",
+    "name": "mq_describe_topic",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": true
+  },
+  {
+    "destructive": false,
+    "idempotent": true,
+    "input_required": [
+      "cluster",
+      "topic"
+    ],
+    "input_type": "object",
+    "name": "mq_query_topic_route",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": true
+  },
+  {
+    "destructive": false,
+    "idempotent": true,
+    "input_required": null,
+    "input_type": "object",
+    "name": "mq_list_consumer_groups",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": true
+  },
+  {
+    "destructive": false,
+    "idempotent": true,
+    "input_required": [
+      "cluster",
+      "topic",
+      "consumer_group"
+    ],
+    "input_type": "object",
+    "name": "mq_query_consumer_lag",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": true
+  },
+  {
+    "destructive": false,
+    "idempotent": true,
+    "input_required": [
+      "cluster",
+      "broker_name"
+    ],
+    "input_type": "object",
+    "name": "mq_describe_broker",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": true
+  },
+  {
+    "destructive": false,
+    "idempotent": true,
+    "input_required": [
+      "cluster",
+      "topic",
+      "consumer_group"
+    ],
+    "input_type": "object",
+    "name": "mq_diagnose_consumer_lag",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": true
+  },
+  {
+    "destructive": false,
+    "idempotent": false,
+    "input_required": [
+      "cluster",
+      "mode",
+      "operator",
+      "reason",
+      "payload"
+    ],
+    "input_type": "object",
+    "name": "mq_create_topic",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": false
+  },
+  {
+    "destructive": false,
+    "idempotent": false,
+    "input_required": [
+      "cluster",
+      "mode",
+      "operator",
+      "reason",
+      "payload"
+    ],
+    "input_type": "object",
+    "name": "mq_update_topic_config",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": false
+  },
+  {
+    "destructive": false,
+    "idempotent": false,
+    "input_required": [
+      "cluster",
+      "mode",
+      "operator",
+      "reason",
+      "payload"
+    ],
+    "input_type": "object",
+    "name": "mq_update_topic_perm",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": false
+  },
+  {
+    "destructive": false,
+    "idempotent": false,
+    "input_required": [
+      "cluster",
+      "mode",
+      "operator",
+      "reason",
+      "payload"
+    ],
+    "input_type": "object",
+    "name": "mq_update_broker_config",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": false
+  },
+  {
+    "destructive": false,
+    "idempotent": false,
+    "input_required": [
+      "cluster",
+      "mode",
+      "operator",
+      "reason",
+      "payload"
+    ],
+    "input_type": "object",
+    "name": "mq_reset_consumer_offset",
+    "open_world": true,
+    "output_type": "object",
+    "read_only": false
+  }
+]

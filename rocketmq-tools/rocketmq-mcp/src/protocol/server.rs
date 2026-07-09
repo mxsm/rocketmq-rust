@@ -202,15 +202,18 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        insta::assert_json_snapshot!(
-            "mcp_protocol_surface",
-            json!({
-                "tools": tools,
-                "resources": resources,
-                "resource_templates": resource_templates,
-                "prompts": prompts,
-            })
-        );
+        let surface = json!({
+            "tools": tools,
+            "resources": resources,
+            "resource_templates": resource_templates,
+            "prompts": prompts,
+        });
+
+        #[cfg(not(feature = "dangerous-tools"))]
+        insta::assert_json_snapshot!("mcp_protocol_surface", surface);
+
+        #[cfg(feature = "dangerous-tools")]
+        insta::assert_json_snapshot!("mcp_protocol_surface_with_dangerous_tools", surface);
     }
 
     fn example_config_path() -> std::path::PathBuf {
