@@ -1,0 +1,38 @@
+[server]
+name = "rocketmq-mcp"
+version = "1.0.0"
+transport = "stdio"
+log_level = "info"
+
+[server.stdio]
+log_to_stderr = true
+
+[server.http]
+bind = "127.0.0.1:8089"
+endpoint = "/mcp"
+validate_origin = true
+allowed_origins = ["http://127.0.0.1", "http://localhost"]
+require_auth = true
+
+[[clusters]]
+name = "local-dev"
+namesrv_addr = "127.0.0.1:9876"
+default = true
+
+[security]
+profile = "read_only"
+allow_dangerous_tools = false
+require_confirmation = true
+sanitize_output = true
+rate_limit_per_minute = 60
+
+[audit]
+enabled = true
+sink = "file"
+path = "./logs/rocketmq-mcp-audit.log"
+
+[cache]
+cluster_overview_ttl_ms = 3000
+topic_list_ttl_ms = 5000
+broker_metrics_ttl_ms = 2000
+consumer_lag_ttl_ms = 1000

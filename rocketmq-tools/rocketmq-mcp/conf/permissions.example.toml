@@ -1,0 +1,23 @@
+[roles.read_only]
+allow_tools = [
+  "mq_cluster_overview",
+  "mq_list_topics",
+  "mq_describe_topic",
+  "mq_query_topic_route",
+  "mq_list_consumer_groups",
+  "mq_query_consumer_lag",
+  "mq_describe_broker",
+]
+deny_tools = ["*"]
+
+[roles.diagnose]
+include = ["read_only"]
+allow_tools = [
+  "mq_diagnose_consumer_lag",
+]
+
+[roles.operator]
+include = ["diagnose"]
+allow_tools = []
+require_confirmation = true
+require_dry_run_first = true
