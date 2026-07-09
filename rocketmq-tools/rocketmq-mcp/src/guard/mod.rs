@@ -376,6 +376,24 @@ mod tests {
         assert_eq!(records[0].status, AuditStatus::Failure);
     }
 
+    #[test]
+    fn security_policy_denies_destructive_tools_even_for_operator() {
+        let guard = test_guard("operator", true, 60);
+        let arguments = serde_json::json!({ "cluster": "local-dev", "confirm_token": "yes" })
+            .as_object()
+            .unwrap()
+            .clone();
+
+        let err = guard
+            .begin_tool_call("mq_delete_topic", RiskLevel::Destructive, &arguments)
+            .unwrap_err();
+
+        assert!(err.to_string().to_ascii_lowercase().contains("destructive"));
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, AuditStatus::Failure);
+    }
+
     fn test_guard(profile: &str, allow_dangerous_tools: bool, rate_limit_per_minute: u32) -> Guard {
         Guard::new(
             SecurityConfig {

@@ -139,10 +139,14 @@ impl ServerHandler for RocketmqMcpServer {
 #[cfg(test)]
 mod tests {
     use rmcp::ServerHandler;
+    use serde_json::json;
 
     use super::*;
     use crate::app::McpApp;
     use crate::config::McpConfig;
+    use crate::prompts;
+    use crate::resources;
+    use crate::tools;
 
     #[test]
     fn server_info_declares_mvp_capabilities() {
@@ -156,6 +160,57 @@ mod tests {
         assert!(info.capabilities.tools.is_some());
         assert!(info.capabilities.resources.is_some());
         assert!(info.capabilities.prompts.is_some());
+    }
+
+    #[test]
+    fn mcp_protocol_surface_snapshot() {
+        let tools = tools::registry::list_tools()
+            .tools
+            .into_iter()
+            .map(|tool| {
+                let annotations = tool.annotations.expect("tool annotations");
+                json!({
+                    "name": tool.name.as_ref(),
+                    "has_input_schema": tool.input_schema.get("type").is_some(),
+                    "has_output_schema": tool.output_schema.is_some(),
+                    "read_only": annotations.read_only_hint,
+                    "destructive": annotations.destructive_hint,
+                })
+            })
+            .collect::<Vec<_>>();
+        let resources = resources::registry::list_resources()
+            .resources
+            .into_iter()
+            .map(|resource| {
+                json!({
+                    "uri": resource.uri,
+                    "name": resource.name,
+                    "mime_type": resource.mime_type,
+                })
+            })
+            .collect::<Vec<_>>();
+        let resource_templates = resources::registry::list_resource_templates().resource_templates;
+        let prompts = prompts::registry::list_prompts()
+            .unwrap()
+            .prompts
+            .into_iter()
+            .map(|prompt| {
+                json!({
+                    "name": prompt.name,
+                    "argument_count": prompt.arguments.as_ref().map(Vec::len).unwrap_or_default(),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        insta::assert_json_snapshot!(
+            "mcp_protocol_surface",
+            json!({
+                "tools": tools,
+                "resources": resources,
+                "resource_templates": resource_templates,
+                "prompts": prompts,
+            })
+        );
     }
 
     fn example_config_path() -> std::path::PathBuf {

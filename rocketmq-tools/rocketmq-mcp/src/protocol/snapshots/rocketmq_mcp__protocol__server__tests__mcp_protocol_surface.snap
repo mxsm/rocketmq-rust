@@ -1,0 +1,97 @@
+---
+source: rocketmq-tools/rocketmq-mcp/src/protocol/server.rs
+expression: "json!({\n    \"tools\": tools, \"resources\": resources, \"resource_templates\":\n    resource_templates, \"prompts\": prompts,\n})"
+---
+{
+  "prompts": [
+    {
+      "argument_count": 4,
+      "name": "diagnose_consumer_lag"
+    },
+    {
+      "argument_count": 3,
+      "name": "broker_health_check"
+    }
+  ],
+  "resource_templates": [],
+  "resources": [
+    {
+      "mime_type": "application/json",
+      "name": "cluster_overview",
+      "uri": "rocketmq://cluster/overview"
+    },
+    {
+      "mime_type": "application/json",
+      "name": "topics",
+      "uri": "rocketmq://topics"
+    },
+    {
+      "mime_type": "application/json",
+      "name": "brokers",
+      "uri": "rocketmq://brokers"
+    },
+    {
+      "mime_type": "application/json",
+      "name": "consumer_groups",
+      "uri": "rocketmq://consumer-groups"
+    }
+  ],
+  "tools": [
+    {
+      "destructive": false,
+      "has_input_schema": true,
+      "has_output_schema": true,
+      "name": "mq_cluster_overview",
+      "read_only": true
+    },
+    {
+      "destructive": false,
+      "has_input_schema": true,
+      "has_output_schema": true,
+      "name": "mq_list_topics",
+      "read_only": true
+    },
+    {
+      "destructive": false,
+      "has_input_schema": true,
+      "has_output_schema": true,
+      "name": "mq_describe_topic",
+      "read_only": true
+    },
+    {
+      "destructive": false,
+      "has_input_schema": true,
+      "has_output_schema": true,
+      "name": "mq_query_topic_route",
+      "read_only": true
+    },
+    {
+      "destructive": false,
+      "has_input_schema": true,
+      "has_output_schema": true,
+      "name": "mq_list_consumer_groups",
+      "read_only": true
+    },
+    {
+      "destructive": false,
+      "has_input_schema": true,
+      "has_output_schema": true,
+      "name": "mq_query_consumer_lag",
+      "read_only": true
+    },
+    {
+      "destructive": false,
+      "has_input_schema": true,
+      "has_output_schema": true,
+      "name": "mq_describe_broker",
+      "read_only": true
+    },
+    {
+      "destructive": false,
+      "has_input_schema": true,
+      "has_output_schema": true,
+      "name": "mq_diagnose_consumer_lag",
+      "read_only": true
+    }
+  ]
+}
