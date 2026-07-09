@@ -20,7 +20,7 @@ namesrv_addr = "127.0.0.1:9876"
 default = true
 
 [security]
-profile = "read_only"
+profile = "diagnose"
 allow_dangerous_tools = false
 require_confirmation = true
 sanitize_output = true

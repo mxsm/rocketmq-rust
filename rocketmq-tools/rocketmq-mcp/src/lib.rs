@@ -20,6 +20,7 @@ pub mod adapter;
 pub mod app;
 pub mod config;
 pub mod error;
+pub mod guard;
 pub mod model;
 pub mod prompts;
 pub mod protocol;

@@ -18,6 +18,7 @@ use rmcp::model::ListToolsResult;
 use rmcp::model::Tool;
 use rmcp::model::ToolAnnotations;
 
+use crate::guard::RiskLevel;
 use crate::tools::broker_tools;
 use crate::tools::cluster_tools;
 use crate::tools::consumer_tools;
@@ -30,6 +31,20 @@ pub fn list_tools() -> ListToolsResult {
 
 pub fn get_tool(name: &str) -> Option<Tool> {
     tool_definitions().into_iter().find(|tool| tool.name.as_ref() == name)
+}
+
+pub fn tool_risk_level(name: &str) -> Option<RiskLevel> {
+    match name {
+        cluster_tools::CLUSTER_OVERVIEW_TOOL
+        | topic_tools::LIST_TOPICS_TOOL
+        | topic_tools::DESCRIBE_TOPIC_TOOL
+        | topic_tools::QUERY_TOPIC_ROUTE_TOOL
+        | consumer_tools::LIST_CONSUMER_GROUPS_TOOL
+        | consumer_tools::QUERY_CONSUMER_LAG_TOOL
+        | broker_tools::DESCRIBE_BROKER_TOOL => Some(RiskLevel::ReadOnly),
+        diagnosis_tools::DIAGNOSE_CONSUMER_LAG_TOOL => Some(RiskLevel::Diagnose),
+        _ => None,
+    }
 }
 
 pub fn tool_definitions() -> Vec<Tool> {
@@ -132,5 +147,16 @@ mod tests {
             assert_eq!(annotations.read_only_hint, Some(true));
             assert_eq!(annotations.destructive_hint, Some(false));
         }
+    }
+
+    #[test]
+    fn each_registered_tool_has_a_guard_risk_level() {
+        for tool in tool_definitions() {
+            assert!(tool_risk_level(tool.name.as_ref()).is_some());
+        }
+        assert_eq!(
+            tool_risk_level(diagnosis_tools::DIAGNOSE_CONSUMER_LAG_TOOL),
+            Some(RiskLevel::Diagnose)
+        );
     }
 }
