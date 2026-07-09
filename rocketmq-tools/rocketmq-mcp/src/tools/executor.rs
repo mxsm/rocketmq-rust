@@ -24,11 +24,14 @@ use rmcp::model::JsonObject;
 use rmcp::ErrorData;
 
 use crate::adapter::admin_core_adapter::ReadOnlyAdminAdapter;
+use crate::guard::Guard;
+use crate::guard::GuardError;
 use crate::service::diagnosis_service;
 use crate::tools::broker_tools;
 use crate::tools::cluster_tools;
 use crate::tools::consumer_tools;
 use crate::tools::diagnosis_tools;
+use crate::tools::registry;
 use crate::tools::topic_tools;
 
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +41,18 @@ pub(crate) enum ToolExecutionError {
 
     #[error("backend error: {0}")]
     Backend(String),
+
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
+
+    #[error("rate limit exceeded: {0}")]
+    RateLimited(String),
+
+    #[error("dangerous tool disabled: {0}")]
+    DangerousToolDisabled(String),
+
+    #[error("confirmation required: {0}")]
+    ConfirmationRequired(String),
 }
 
 impl ToolExecutionError {
@@ -46,23 +61,51 @@ impl ToolExecutionError {
     }
 }
 
+impl From<GuardError> for ToolExecutionError {
+    fn from(error: GuardError) -> Self {
+        match error {
+            GuardError::InvalidArgument(message) => Self::InvalidArguments(message),
+            GuardError::PermissionDenied(message) => Self::PermissionDenied(message),
+            GuardError::RateLimited(message) => Self::RateLimited(message),
+            GuardError::DangerousToolDisabled(message) => Self::DangerousToolDisabled(message),
+            GuardError::ConfirmationRequired(message) => Self::ConfirmationRequired(message),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ToolExecutor<A> {
     adapter: A,
+    guard: Guard,
 }
 
 impl<A> ToolExecutor<A>
 where
     A: ReadOnlyAdminAdapter,
 {
-    pub(crate) fn new(adapter: A) -> Self {
-        Self { adapter }
+    pub(crate) fn new(adapter: A, guard: Guard) -> Self {
+        Self { adapter, guard }
     }
 
     pub(crate) async fn call(&self, request: CallToolRequestParams) -> Result<CallToolResult, ErrorData> {
-        match request.name.as_ref() {
+        let tool_name = request.name.to_string();
+        let risk_level = registry::tool_risk_level(&tool_name)
+            .ok_or_else(|| ErrorData::invalid_params(format!("unknown tool: {tool_name}"), None))?;
+        let arguments = request.arguments.unwrap_or_default();
+        let guarded_call = match self.guard.begin_tool_call(&tool_name, risk_level, &arguments) {
+            Ok(guarded_call) => guarded_call,
+            Err(error) => return Ok(error_result(&tool_name, error.into())),
+        };
+
+        let result = match tool_name.as_str() {
             cluster_tools::CLUSTER_OVERVIEW_TOOL => {
-                let args = decode_args::<cluster_tools::ClusterOverviewArgs>(request.arguments)?;
+                let args = match decode_args::<cluster_tools::ClusterOverviewArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
                 self.adapter
                     .cluster_overview(args)
                     .await
@@ -70,7 +113,13 @@ where
                     .unwrap_or_else(|error| Ok(error_result(cluster_tools::CLUSTER_OVERVIEW_TOOL, error)))
             }
             topic_tools::LIST_TOPICS_TOOL => {
-                let args = decode_args::<topic_tools::ListTopicsArgs>(request.arguments)?;
+                let args = match decode_args::<topic_tools::ListTopicsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
                 self.adapter
                     .list_topics(args)
                     .await
@@ -78,7 +127,13 @@ where
                     .unwrap_or_else(|error| Ok(error_result(topic_tools::LIST_TOPICS_TOOL, error)))
             }
             topic_tools::DESCRIBE_TOPIC_TOOL => {
-                let args = decode_args::<topic_tools::DescribeTopicArgs>(request.arguments)?;
+                let args = match decode_args::<topic_tools::DescribeTopicArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
                 self.adapter
                     .describe_topic(args)
                     .await
@@ -86,7 +141,13 @@ where
                     .unwrap_or_else(|error| Ok(error_result(topic_tools::DESCRIBE_TOPIC_TOOL, error)))
             }
             topic_tools::QUERY_TOPIC_ROUTE_TOOL => {
-                let args = decode_args::<topic_tools::QueryTopicRouteArgs>(request.arguments)?;
+                let args = match decode_args::<topic_tools::QueryTopicRouteArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
                 self.adapter
                     .query_topic_route(args)
                     .await
@@ -94,7 +155,13 @@ where
                     .unwrap_or_else(|error| Ok(error_result(topic_tools::QUERY_TOPIC_ROUTE_TOOL, error)))
             }
             consumer_tools::LIST_CONSUMER_GROUPS_TOOL => {
-                let args = decode_args::<consumer_tools::ListConsumerGroupsArgs>(request.arguments)?;
+                let args = match decode_args::<consumer_tools::ListConsumerGroupsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
                 self.adapter
                     .list_consumer_groups(args)
                     .await
@@ -102,7 +169,13 @@ where
                     .unwrap_or_else(|error| Ok(error_result(consumer_tools::LIST_CONSUMER_GROUPS_TOOL, error)))
             }
             consumer_tools::QUERY_CONSUMER_LAG_TOOL => {
-                let args = decode_args::<consumer_tools::QueryConsumerLagArgs>(request.arguments)?;
+                let args = match decode_args::<consumer_tools::QueryConsumerLagArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
                 self.adapter
                     .query_consumer_lag(args)
                     .await
@@ -110,7 +183,13 @@ where
                     .unwrap_or_else(|error| Ok(error_result(consumer_tools::QUERY_CONSUMER_LAG_TOOL, error)))
             }
             broker_tools::DESCRIBE_BROKER_TOOL => {
-                let args = decode_args::<broker_tools::DescribeBrokerArgs>(request.arguments)?;
+                let args = match decode_args::<broker_tools::DescribeBrokerArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
                 self.adapter
                     .describe_broker(args)
                     .await
@@ -118,22 +197,30 @@ where
                     .unwrap_or_else(|error| Ok(error_result(broker_tools::DESCRIBE_BROKER_TOOL, error)))
             }
             diagnosis_tools::DIAGNOSE_CONSUMER_LAG_TOOL => {
-                let args = decode_args::<diagnosis_tools::DiagnoseConsumerLagArgs>(request.arguments)?;
+                let args = match decode_args::<diagnosis_tools::DiagnoseConsumerLagArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
                 diagnosis_service::diagnose_consumer_lag(&self.adapter, args)
                     .await
                     .map(|output| success_result(output.summary.clone(), &output))
                     .unwrap_or_else(|error| Ok(error_result(diagnosis_tools::DIAGNOSE_CONSUMER_LAG_TOOL, error)))
             }
-            tool_name => Err(ErrorData::invalid_params(format!("unknown tool: {tool_name}"), None)),
-        }
+            _ => unreachable!("unknown tool was rejected before dispatch"),
+        }?;
+
+        Ok(guarded_call.finish_result(result))
     }
 }
 
-fn decode_args<T>(arguments: Option<JsonObject>) -> Result<T, ErrorData>
+fn decode_args<T>(arguments: JsonObject) -> Result<T, ErrorData>
 where
     T: DeserializeOwned,
 {
-    serde_json::from_value(Value::Object(arguments.unwrap_or_default()))
+    serde_json::from_value(Value::Object(arguments))
         .map_err(|error| ErrorData::invalid_params(format!("invalid tool arguments: {error}"), None))
 }
 
@@ -218,6 +305,12 @@ fn summary_describe_broker(output: &broker_tools::DescribeBrokerOutput) -> Strin
 
 #[cfg(test)]
 mod tests {
+    use crate::config::AuditConfig;
+    use crate::config::ClusterConfig;
+    use crate::config::SecurityConfig;
+    use crate::guard::audit::AuditStatus;
+    use crate::guard::Guard;
+
     use super::*;
 
     #[derive(Clone)]
@@ -231,7 +324,9 @@ mod tests {
             args: cluster_tools::ClusterOverviewArgs,
         ) -> Result<cluster_tools::ClusterOverviewOutput, ToolExecutionError> {
             if self.fail {
-                return Err(ToolExecutionError::backend("nameserver unavailable"));
+                return Err(ToolExecutionError::backend(
+                    "nameserver unavailable secret_key=super-secret",
+                ));
             }
             Ok(cluster_tools::ClusterOverviewOutput {
                 cluster: args.cluster,
@@ -288,7 +383,8 @@ mod tests {
 
     #[tokio::test]
     async fn call_returns_summary_and_structured_content() {
-        let result = ToolExecutor::new(FakeAdapter { fail: false })
+        let guard = test_guard("diagnose");
+        let result = ToolExecutor::new(FakeAdapter { fail: false }, guard.clone())
             .call(
                 CallToolRequestParams::new(cluster_tools::CLUSTER_OVERVIEW_TOOL).with_arguments(
                     serde_json::json!({
@@ -305,11 +401,17 @@ mod tests {
         assert_eq!(result.is_error, Some(false));
         assert_eq!(result.structured_content.as_ref().unwrap()["cluster"], "local-dev");
         assert!(!result.content.is_empty());
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].tool, cluster_tools::CLUSTER_OVERVIEW_TOOL);
+        assert_eq!(records[0].cluster.as_deref(), Some("local-dev"));
+        assert_eq!(records[0].status, AuditStatus::Success);
     }
 
     #[tokio::test]
     async fn backend_error_is_returned_as_tool_error() {
-        let result = ToolExecutor::new(FakeAdapter { fail: true })
+        let guard = test_guard("diagnose");
+        let result = ToolExecutor::new(FakeAdapter { fail: true }, guard.clone())
             .call(
                 CallToolRequestParams::new(cluster_tools::CLUSTER_OVERVIEW_TOOL).with_arguments(
                     serde_json::json!({
@@ -328,16 +430,86 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("nameserver unavailable"));
+        assert!(!result
+            .structured_content
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("super-secret"));
+        assert!(!content_text(&result).contains("super-secret"));
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, AuditStatus::Failure);
     }
 
     #[tokio::test]
     async fn unknown_tool_returns_protocol_error() {
-        let err = ToolExecutor::new(FakeAdapter { fail: false })
+        let err = ToolExecutor::new(FakeAdapter { fail: false }, test_guard("diagnose"))
             .call(CallToolRequestParams::new("unknown_tool"))
             .await
             .unwrap_err();
 
         assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn read_only_guard_denies_diagnosis_tool() {
+        let guard = test_guard("read_only");
+        let result = ToolExecutor::new(FakeAdapter { fail: false }, guard.clone())
+            .call(
+                CallToolRequestParams::new(diagnosis_tools::DIAGNOSE_CONSUMER_LAG_TOOL).with_arguments(
+                    serde_json::json!({
+                        "cluster": "local-dev",
+                        "topic": "orders",
+                        "consumer_group": "order-service",
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(content_text(&result).contains("permission denied"));
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, AuditStatus::Failure);
+    }
+
+    fn content_text(result: &CallToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn test_guard(profile: &str) -> Guard {
+        Guard::new(
+            SecurityConfig {
+                profile: profile.to_string(),
+                allow_dangerous_tools: false,
+                require_confirmation: true,
+                sanitize_output: true,
+                rate_limit_per_minute: 60,
+            },
+            AuditConfig {
+                enabled: true,
+                sink: "memory".to_string(),
+                path: String::new(),
+            },
+            &[ClusterConfig {
+                name: "local-dev".to_string(),
+                namesrv_addr: "127.0.0.1:9876".to_string(),
+                default: Some(true),
+            }],
+        )
     }
 
     fn broker_summary() -> cluster_tools::BrokerSummary {

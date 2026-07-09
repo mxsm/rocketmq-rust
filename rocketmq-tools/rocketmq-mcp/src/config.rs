@@ -120,6 +120,18 @@ impl McpConfig {
             ));
         }
 
+        validate_security_profile(&self.security.profile)?;
+        if self.security.rate_limit_per_minute == 0 {
+            return Err(McpError::InvalidConfig(
+                "security.rate_limit_per_minute must be greater than zero".to_string(),
+            ));
+        }
+
+        validate_audit_sink(&self.audit.sink)?;
+        if self.audit.enabled && self.audit.sink == "file" {
+            validate_non_empty("audit.path", &self.audit.path)?;
+        }
+
         Ok(())
     }
 }
@@ -225,6 +237,22 @@ fn validate_non_empty(field: &str, value: &str) -> Result<(), McpError> {
         return Err(McpError::InvalidConfig(format!("{field} must not be empty")));
     }
     Ok(())
+}
+
+fn validate_security_profile(profile: &str) -> Result<(), McpError> {
+    match profile.trim().to_ascii_lowercase().as_str() {
+        "read_only" | "readonly" | "read-only" | "diagnose" | "diagnostic" | "operator" => Ok(()),
+        other => Err(McpError::InvalidConfig(format!(
+            "unsupported security.profile `{other}`"
+        ))),
+    }
+}
+
+fn validate_audit_sink(sink: &str) -> Result<(), McpError> {
+    match sink.trim().to_ascii_lowercase().as_str() {
+        "memory" | "file" | "tracing" => Ok(()),
+        other => Err(McpError::InvalidConfig(format!("unsupported audit.sink `{other}`"))),
+    }
 }
 
 fn trimmed_override(field: &str, value: Option<&str>) -> Result<Option<String>, McpError> {

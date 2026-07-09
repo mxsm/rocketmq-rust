@@ -51,6 +51,8 @@ pub enum PromptTemplateError {
 
 impl PromptTemplate {
     pub fn parse(source: &str) -> Result<Self, PromptTemplateError> {
+        let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+        let source = source.replace("\r\n", "\n").replace('\r', "\n");
         let source = source
             .strip_prefix("---\n")
             .ok_or(PromptTemplateError::MissingFrontMatter)?;
@@ -91,5 +93,16 @@ Use {{cluster}}.
         assert_eq!(template.front_matter.arguments[0].name, "cluster");
         assert!(template.front_matter.arguments[0].required);
         assert!(template.body.contains("{{cluster}}"));
+    }
+
+    #[test]
+    fn parses_crlf_front_matter() {
+        let template = PromptTemplate::parse(
+            "---\r\nname: test_prompt\r\ntitle: Test Prompt\r\ndescription: Test description.\r\n---\r\nBody\r\n",
+        )
+        .unwrap();
+
+        assert_eq!(template.front_matter.name, "test_prompt");
+        assert_eq!(template.body, "Body\n");
     }
 }

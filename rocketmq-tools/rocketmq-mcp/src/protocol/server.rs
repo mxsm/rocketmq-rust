@@ -123,9 +123,12 @@ impl ServerHandler for RocketmqMcpServer {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        ToolExecutor::new(AdminCoreAdapter::new(self.app.config().clone()))
-            .call(request)
-            .await
+        ToolExecutor::new(
+            AdminCoreAdapter::new(self.app.config().clone()),
+            self.app.guard().clone(),
+        )
+        .call(request)
+        .await
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {

@@ -15,15 +15,18 @@
 use crate::config::Args;
 use crate::config::McpConfig;
 use crate::config::TransportKind;
+use crate::guard::Guard;
 
 #[derive(Debug, Clone)]
 pub struct McpApp {
     config: McpConfig,
+    guard: Guard,
 }
 
 impl McpApp {
     pub fn new(config: McpConfig) -> Self {
-        Self { config }
+        let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters);
+        Self { config, guard }
     }
 
     pub async fn bootstrap(args: Args) -> anyhow::Result<Self> {
@@ -34,6 +37,10 @@ impl McpApp {
 
     pub fn config(&self) -> &McpConfig {
         &self.config
+    }
+
+    pub fn guard(&self) -> &Guard {
+        &self.guard
     }
 
     pub fn transport(&self) -> TransportKind {
