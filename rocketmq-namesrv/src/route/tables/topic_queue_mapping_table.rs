@@ -306,6 +306,64 @@ mod tests {
     }
 
     #[test]
+    fn test_register_replaces_existing_broker_mapping() {
+        let table = TopicQueueMappingInfoTable::new();
+        let topic = CheetahString::from_static_str("test-topic");
+        let broker = CheetahString::from_static_str("broker-a");
+        let original = Arc::new(create_test_mapping_info());
+        let mut replacement_info = create_test_mapping_info();
+        replacement_info.epoch = 2;
+        let replacement = Arc::new(replacement_info);
+
+        assert!(table
+            .register(topic.clone(), broker.clone(), original.clone())
+            .is_none());
+        let previous = table
+            .register(topic.clone(), broker.clone(), replacement.clone())
+            .expect("re-registering a broker should return previous mapping");
+
+        assert!(Arc::ptr_eq(&previous, &original));
+        assert!(Arc::ptr_eq(
+            &table.get(&topic, &broker).expect("mapping should exist"),
+            &replacement
+        ));
+    }
+
+    #[test]
+    fn test_remove_broker_returns_none_for_unknown_topic_or_broker() {
+        let table = TopicQueueMappingInfoTable::new();
+        let topic = CheetahString::from_static_str("test-topic");
+        let broker = CheetahString::from_static_str("broker-a");
+        let mapping_info = Arc::new(create_test_mapping_info());
+
+        table.register(topic.clone(), broker.clone(), mapping_info.clone());
+
+        assert!(table.remove_broker("unknown-topic", &broker).is_none());
+        assert!(table.remove_broker(&topic, "unknown-broker").is_none());
+        assert!(Arc::ptr_eq(
+            &table.get(&topic, &broker).expect("mapping should remain"),
+            &mapping_info
+        ));
+    }
+
+    #[test]
+    fn test_remove_last_broker_leaves_topic_until_cleanup() {
+        let table = TopicQueueMappingInfoTable::new();
+        let topic = CheetahString::from_static_str("test-topic");
+        let broker = CheetahString::from_static_str("broker-a");
+        let mapping_info = Arc::new(create_test_mapping_info());
+
+        table.register(topic.clone(), broker.clone(), mapping_info);
+
+        assert!(table.remove_broker(&topic, &broker).is_some());
+        assert!(table.contains_topic(&topic));
+        assert_eq!(table.get_brokers_for_topic(&topic), Some(Vec::new()));
+
+        assert_eq!(table.cleanup_empty_topics(), 1);
+        assert!(!table.contains_topic(&topic));
+    }
+
+    #[test]
     fn test_topic_queue_mapping_info_table_multiple_brokers() {
         let table = TopicQueueMappingInfoTable::new();
 
@@ -366,6 +424,36 @@ mod tests {
         assert!(removed.is_some());
         assert!(!table.contains_topic(&topic));
         assert!(table.is_empty());
+    }
+
+    #[test]
+    fn test_remove_topic_returns_all_previous_broker_mappings() {
+        let table = TopicQueueMappingInfoTable::new();
+        let topic = CheetahString::from_static_str("test-topic");
+        let broker_a = CheetahString::from_static_str("broker-a");
+        let broker_b = CheetahString::from_static_str("broker-b");
+        let mut info_a = create_test_mapping_info();
+        info_a.bname = Some(broker_a.clone());
+        let mut info_b = create_test_mapping_info();
+        info_b.bname = Some(broker_b.clone());
+        let mapping_a = Arc::new(info_a);
+        let mapping_b = Arc::new(info_b);
+
+        table.register(topic.clone(), broker_a.clone(), mapping_a.clone());
+        table.register(topic.clone(), broker_b.clone(), mapping_b.clone());
+
+        let removed = table.remove_topic(&topic).expect("topic should be removed");
+
+        assert_eq!(removed.len(), 2);
+        assert!(Arc::ptr_eq(
+            removed.get(&broker_a).expect("broker-a mapping"),
+            &mapping_a
+        ));
+        assert!(Arc::ptr_eq(
+            removed.get(&broker_b).expect("broker-b mapping"),
+            &mapping_b
+        ));
+        assert!(!table.contains_topic(&topic));
     }
 
     #[test]
