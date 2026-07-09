@@ -12,15 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![recursion_limit = "256"]
+//! Read-only MCP tools exposed by the RocketMQ MCP server.
 
-//! Model Context Protocol server for RocketMQ-Rust diagnostics.
-
-pub mod adapter;
-pub mod app;
-pub mod config;
-pub mod error;
-pub mod protocol;
-pub mod resources;
-pub mod tools;
-pub mod transport;
+pub mod broker_tools;
+pub mod cluster_tools;
+pub mod consumer_tools;
+pub mod executor;
+pub mod registry;
+pub mod topic_tools;

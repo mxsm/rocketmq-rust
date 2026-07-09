@@ -12,21 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rmcp::model::CallToolRequestParams;
+use rmcp::model::CallToolResult;
 use rmcp::model::Implementation;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
+use rmcp::model::ListToolsResult;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
+use rmcp::model::Tool;
 use rmcp::service::RequestContext;
 use rmcp::ErrorData;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
 
+use crate::adapter::admin_core_adapter::AdminCoreAdapter;
 use crate::app::McpApp;
 use crate::resources;
+use crate::tools;
+use crate::tools::executor::ToolExecutor;
 
 #[derive(Debug, Clone)]
 pub struct RocketmqMcpServer {
@@ -81,6 +88,28 @@ impl ServerHandler for RocketmqMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
         resources::reader::read_resource(self.app.config(), &request.uri)
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        Ok(tools::registry::list_tools())
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        ToolExecutor::new(AdminCoreAdapter::new(self.app.config().clone()))
+            .call(request)
+            .await
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        tools::registry::get_tool(name)
     }
 }
 

@@ -12,15 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![recursion_limit = "256"]
+//! Adapters from MCP tool contracts to existing RocketMQ Rust admin services.
 
-//! Model Context Protocol server for RocketMQ-Rust diagnostics.
-
-pub mod adapter;
-pub mod app;
-pub mod config;
-pub mod error;
-pub mod protocol;
-pub mod resources;
-pub mod tools;
-pub mod transport;
+pub mod admin_core_adapter;
