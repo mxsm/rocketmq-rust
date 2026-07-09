@@ -207,6 +207,9 @@ impl RemotingSpec {
             | ErrorKind::ConfigMissing
             | ErrorKind::ConfigInvalidValue
             | ErrorKind::AuthConfigInvalid
+            | ErrorKind::ObservabilityFeatureDisabled
+            | ErrorKind::ObservabilityConfigInvalid
+            | ErrorKind::ObservabilityLogFilterInvalid
             | ErrorKind::MissingRequiredMessageProperty => RemotingResponseCode::InvalidParameter,
             ErrorKind::Protocol | ErrorKind::InvalidVersionOrdinal => RemotingResponseCode::RequestCodeNotSupported,
             ErrorKind::Network | ErrorKind::Timeout | ErrorKind::RetryLimitExceeded => RemotingResponseCode::SystemBusy,
@@ -300,6 +303,9 @@ impl GrpcSpec {
             | ErrorKind::ConfigMissing
             | ErrorKind::ConfigInvalidValue
             | ErrorKind::AuthConfigInvalid
+            | ErrorKind::ObservabilityFeatureDisabled
+            | ErrorKind::ObservabilityConfigInvalid
+            | ErrorKind::ObservabilityLogFilterInvalid
             | ErrorKind::MissingRequiredMessageProperty => {
                 Self::new(GrpcPayloadCode::BadRequest, GrpcStatusCode::InvalidArgument)
             }
@@ -387,6 +393,9 @@ impl HttpSpec {
             | ErrorKind::ConfigMissing
             | ErrorKind::ConfigInvalidValue
             | ErrorKind::AuthConfigInvalid
+            | ErrorKind::ObservabilityFeatureDisabled
+            | ErrorKind::ObservabilityConfigInvalid
+            | ErrorKind::ObservabilityLogFilterInvalid
             | ErrorKind::MissingRequiredMessageProperty
             | ErrorKind::Protocol
             | ErrorKind::InvalidVersionOrdinal => HttpStatusCode::BAD_REQUEST,
@@ -461,7 +470,10 @@ impl CliSpec {
             ErrorKind::ConfigParseFailed
             | ErrorKind::ConfigMissing
             | ErrorKind::ConfigInvalidValue
-            | ErrorKind::AuthConfigInvalid => CliExitCode::CONFIG,
+            | ErrorKind::AuthConfigInvalid
+            | ErrorKind::ObservabilityFeatureDisabled
+            | ErrorKind::ObservabilityConfigInvalid
+            | ErrorKind::ObservabilityLogFilterInvalid => CliExitCode::CONFIG,
             ErrorKind::Network | ErrorKind::Timeout | ErrorKind::RetryLimitExceeded => CliExitCode::TEMPORARY_FAILURE,
             ErrorKind::StorageCorrupted | ErrorKind::StorageOutOfSpace => CliExitCode::DATA,
             ErrorKind::Tools => CliExitCode::UNAVAILABLE,

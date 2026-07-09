@@ -55,7 +55,14 @@ impl RecoverySpec {
             | ErrorKind::Timeout
             | ErrorKind::RetryLimitExceeded
             | ErrorKind::StorageLockFailed
-            | ErrorKind::Tools => RetryClass::AfterBackoff,
+            | ErrorKind::Tools
+            | ErrorKind::ObservabilityMetricsInitFailed
+            | ErrorKind::ObservabilityTracesInitFailed
+            | ErrorKind::ObservabilityLogsInitFailed
+            | ErrorKind::ObservabilityLoggingInitFailed
+            | ErrorKind::ObservabilityMetricsShutdownFailed
+            | ErrorKind::ObservabilityTracesShutdownFailed
+            | ErrorKind::ObservabilityLogsShutdownFailed => RetryClass::AfterBackoff,
             ErrorKind::MessageLookupFailed | ErrorKind::QueryNotFound | ErrorKind::SubscriptionGroupNotExist => {
                 RetryClass::Immediate
             }
@@ -102,6 +109,9 @@ const fn observe_severity(kind: ErrorKind) -> ErrorSeverity {
         | ErrorKind::ResponseProcessFailed
         | ErrorKind::ConfigMissing
         | ErrorKind::ConfigInvalidValue
+        | ErrorKind::ObservabilityFeatureDisabled
+        | ErrorKind::ObservabilityConfigInvalid
+        | ErrorKind::ObservabilityLogFilterInvalid
         | ErrorKind::MissingRequiredMessageProperty => ErrorSeverity::Info,
         ErrorKind::RouteNotFound
         | ErrorKind::TopicNotExist

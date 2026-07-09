@@ -29,6 +29,23 @@ fn selected_error_kinds_have_protocol_primitives() {
 }
 
 #[test]
+fn observability_errors_have_conservative_boundary_primitives() {
+    let config = ErrorKind::ObservabilityConfigInvalid.spec();
+    assert_eq!(config.remoting.code, RemotingResponseCode::InvalidParameter);
+    assert_eq!(config.grpc.payload, GrpcPayloadCode::BadRequest);
+    assert_eq!(config.grpc.status, GrpcStatusCode::InvalidArgument);
+    assert_eq!(config.http.status, HttpStatusCode::BAD_REQUEST);
+    assert_eq!(config.cli.exit_code, CliExitCode::CONFIG);
+
+    let init = ErrorKind::ObservabilityMetricsInitFailed.spec();
+    assert_eq!(init.remoting.code, RemotingResponseCode::SystemError);
+    assert_eq!(init.grpc.payload, GrpcPayloadCode::InternalError);
+    assert_eq!(init.grpc.status, GrpcStatusCode::Internal);
+    assert_eq!(init.http.status, HttpStatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(init.cli.exit_code, CliExitCode::SOFTWARE);
+}
+
+#[test]
 fn protocol_primitives_are_complete_for_all_specs() {
     for spec in ALL_ERROR_SPECS {
         assert_ne!(spec.remoting.code.as_i32(), 0, "{:?}", spec.kind);

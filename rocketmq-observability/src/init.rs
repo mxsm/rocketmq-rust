@@ -262,7 +262,10 @@ pub(crate) fn enforce_subscriber_install_policy(
     }
 
     match config.subscriber_install_policy {
-        SubscriberInstallPolicy::Required => Err(ObservabilityError::subscriber_install_failed(status)),
+        SubscriberInstallPolicy::Required => Err(ObservabilityError::subscriber_install_failed(
+            status.attempted,
+            status.installed,
+        )),
         SubscriberInstallPolicy::BestEffort => {
             if status.attempted {
                 tracing::warn!(

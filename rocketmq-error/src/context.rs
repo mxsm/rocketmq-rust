@@ -110,6 +110,15 @@ impl RedactionPolicy {
             | ErrorKind::ConfigInvalidValue
             | ErrorKind::AuthConfigInvalid
             | ErrorKind::AuthHotReloadFailed
+            | ErrorKind::ObservabilityConfigInvalid
+            | ErrorKind::ObservabilityMetricsInitFailed
+            | ErrorKind::ObservabilityTracesInitFailed
+            | ErrorKind::ObservabilityLogsInitFailed
+            | ErrorKind::ObservabilityLoggingInitFailed
+            | ErrorKind::ObservabilityLogFilterInvalid
+            | ErrorKind::ObservabilityMetricsShutdownFailed
+            | ErrorKind::ObservabilityTracesShutdownFailed
+            | ErrorKind::ObservabilityLogsShutdownFailed
             | ErrorKind::Controller
             | ErrorKind::ControllerRaftError
             | ErrorKind::ControllerConsensusTimeout

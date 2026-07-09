@@ -18,6 +18,8 @@ remoting, gRPC, HTTP, CLI, logs, or metrics.
 - Domain-specific nested errors such as `NetworkError`, `SerializationError`,
   `ProtocolError`, `RpcClientError`, `AuthError`, `ControllerError`,
   `ToolsError`, `FilterError`, and `UnifiedServiceError`.
+- `ObservabilityError`: telemetry, logging, exporter initialization,
+  subscriber installation, and provider shutdown errors.
 - Stable taxonomy: `ErrorKind`, `ErrorCode`, `ErrorScope`, and
   `ErrorCategory`.
 - Static metadata registry: `ErrorSpec` and `ALL_ERROR_SPECS`.
@@ -57,9 +59,9 @@ fn validate_broker_addr(addr: &str) -> RocketMQResult<()> {
 
 `std::io::Error`, `std::str::Utf8Error`, and wrapped nested errors such as
 `NetworkError`, `SerializationError`, `ProtocolError`, `RpcClientError`,
-`AuthError`, `ControllerError`, `ToolsError`, `FilterError`, and
-`UnifiedServiceError` convert into `RocketMQError` through `From`, so the `?`
-operator can be used in normal code paths.
+`AuthError`, `ControllerError`, `ToolsError`, `FilterError`,
+`ObservabilityError`, and `UnifiedServiceError` convert into `RocketMQError`
+through `From`, so the `?` operator can be used in normal code paths.
 
 ## Architecture
 
@@ -82,7 +84,7 @@ flowchart TB
         result["RocketMQResult&lt;T&gt;"]
         root["RocketMQError"]
         wrapped["NetworkError / SerializationError / ProtocolError / RpcClientError"]
-        domain["AuthError / ControllerError / ToolsError / FilterError / UnifiedServiceError"]
+        domain["AuthError / ControllerError / ToolsError / FilterError / ObservabilityError / UnifiedServiceError"]
         direct["Broker / Route / Client / Storage / Configuration / System variants"]
         result --> root
         wrapped --> root
@@ -138,6 +140,7 @@ Important wrapped families:
 | `RocketMQError::Controller` | `ControllerError` | controller and Raft workflows |
 | `RocketMQError::Tools` | `ToolsError` | admin tools and CLI operations |
 | `RocketMQError::Filter` | `FilterError` | bloom filter and bit-array utilities |
+| `RocketMQError::Observability` | `ObservabilityError` | telemetry bootstrap, exporters, subscriber install, provider shutdown |
 
 Important direct families:
 

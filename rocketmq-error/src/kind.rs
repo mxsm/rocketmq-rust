@@ -57,6 +57,7 @@ pub enum ErrorScope {
     Client,
     Tools,
     Filter,
+    Observability,
     Storage,
     Configuration,
     System,
@@ -81,6 +82,7 @@ pub enum ErrorCategory {
     Client,
     Tools,
     Filter,
+    Observability,
     Storage,
     Configuration,
     System,
@@ -103,6 +105,7 @@ impl ErrorCategory {
             Self::Client => "client",
             Self::Tools => "tools",
             Self::Filter => "filter",
+            Self::Observability => "observability",
             Self::Storage => "storage",
             Self::Configuration => "configuration",
             Self::System => "system",
@@ -160,6 +163,17 @@ pub enum ErrorKind {
     ConsumerNotAvailable,
     Tools,
     Filter,
+    ObservabilityFeatureDisabled,
+    ObservabilityConfigInvalid,
+    ObservabilityMetricsInitFailed,
+    ObservabilityTracesInitFailed,
+    ObservabilityLogsInitFailed,
+    ObservabilityLoggingInitFailed,
+    ObservabilityLogFilterInvalid,
+    ObservabilitySubscriberInstallFailed,
+    ObservabilityMetricsShutdownFailed,
+    ObservabilityTracesShutdownFailed,
+    ObservabilityLogsShutdownFailed,
     StorageReadFailed,
     StorageWriteFailed,
     StorageCorrupted,
@@ -227,6 +241,17 @@ impl ErrorKind {
         Self::ConsumerNotAvailable,
         Self::Tools,
         Self::Filter,
+        Self::ObservabilityFeatureDisabled,
+        Self::ObservabilityConfigInvalid,
+        Self::ObservabilityMetricsInitFailed,
+        Self::ObservabilityTracesInitFailed,
+        Self::ObservabilityLogsInitFailed,
+        Self::ObservabilityLoggingInitFailed,
+        Self::ObservabilityLogFilterInvalid,
+        Self::ObservabilitySubscriberInstallFailed,
+        Self::ObservabilityMetricsShutdownFailed,
+        Self::ObservabilityTracesShutdownFailed,
+        Self::ObservabilityLogsShutdownFailed,
         Self::StorageReadFailed,
         Self::StorageWriteFailed,
         Self::StorageCorrupted,
@@ -295,6 +320,17 @@ impl ErrorKind {
             Self::ConsumerNotAvailable => "CONSUMER_NOT_AVAILABLE",
             Self::Tools => "TOOLS_ERROR",
             Self::Filter => "FILTER_ERROR",
+            Self::ObservabilityFeatureDisabled => "OBSERVABILITY_FEATURE_DISABLED",
+            Self::ObservabilityConfigInvalid => "OBSERVABILITY_CONFIG_INVALID",
+            Self::ObservabilityMetricsInitFailed => "OBSERVABILITY_METRICS_INIT_FAILED",
+            Self::ObservabilityTracesInitFailed => "OBSERVABILITY_TRACES_INIT_FAILED",
+            Self::ObservabilityLogsInitFailed => "OBSERVABILITY_LOGS_INIT_FAILED",
+            Self::ObservabilityLoggingInitFailed => "OBSERVABILITY_LOGGING_INIT_FAILED",
+            Self::ObservabilityLogFilterInvalid => "OBSERVABILITY_LOG_FILTER_INVALID",
+            Self::ObservabilitySubscriberInstallFailed => "OBSERVABILITY_SUBSCRIBER_INSTALL_FAILED",
+            Self::ObservabilityMetricsShutdownFailed => "OBSERVABILITY_METRICS_SHUTDOWN_FAILED",
+            Self::ObservabilityTracesShutdownFailed => "OBSERVABILITY_TRACES_SHUTDOWN_FAILED",
+            Self::ObservabilityLogsShutdownFailed => "OBSERVABILITY_LOGS_SHUTDOWN_FAILED",
             Self::StorageReadFailed => "STORAGE_READ_FAILED",
             Self::StorageWriteFailed => "STORAGE_WRITE_FAILED",
             Self::StorageCorrupted => "STORAGE_CORRUPTED",
@@ -366,6 +402,17 @@ impl ErrorKind {
             | Self::ConsumerNotAvailable => ErrorScope::Client,
             Self::Tools => ErrorScope::Tools,
             Self::Filter => ErrorScope::Filter,
+            Self::ObservabilityFeatureDisabled
+            | Self::ObservabilityConfigInvalid
+            | Self::ObservabilityMetricsInitFailed
+            | Self::ObservabilityTracesInitFailed
+            | Self::ObservabilityLogsInitFailed
+            | Self::ObservabilityLoggingInitFailed
+            | Self::ObservabilityLogFilterInvalid
+            | Self::ObservabilitySubscriberInstallFailed
+            | Self::ObservabilityMetricsShutdownFailed
+            | Self::ObservabilityTracesShutdownFailed
+            | Self::ObservabilityLogsShutdownFailed => ErrorScope::Observability,
             Self::StorageReadFailed
             | Self::StorageWriteFailed
             | Self::StorageCorrupted
@@ -436,6 +483,17 @@ impl ErrorKind {
             | Self::ConsumerNotAvailable => ErrorCategory::Client,
             Self::Tools => ErrorCategory::Tools,
             Self::Filter => ErrorCategory::Filter,
+            Self::ObservabilityFeatureDisabled
+            | Self::ObservabilityConfigInvalid
+            | Self::ObservabilityMetricsInitFailed
+            | Self::ObservabilityTracesInitFailed
+            | Self::ObservabilityLogsInitFailed
+            | Self::ObservabilityLoggingInitFailed
+            | Self::ObservabilityLogFilterInvalid
+            | Self::ObservabilitySubscriberInstallFailed
+            | Self::ObservabilityMetricsShutdownFailed
+            | Self::ObservabilityTracesShutdownFailed
+            | Self::ObservabilityLogsShutdownFailed => ErrorCategory::Observability,
             Self::StorageReadFailed
             | Self::StorageWriteFailed
             | Self::StorageCorrupted

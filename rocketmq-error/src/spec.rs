@@ -113,6 +113,35 @@ pub const ALL_ERROR_SPECS: &[ErrorSpec] = &[
     spec!(ConsumerNotAvailable, "Consumer is not available"),
     spec!(Tools, "Tools operation failed"),
     spec!(Filter, "Filter operation failed"),
+    spec!(ObservabilityFeatureDisabled, "Observability feature is disabled"),
+    spec!(ObservabilityConfigInvalid, "Observability configuration is invalid"),
+    spec!(
+        ObservabilityMetricsInitFailed,
+        "Observability metrics initialization failed"
+    ),
+    spec!(
+        ObservabilityTracesInitFailed,
+        "Observability traces initialization failed"
+    ),
+    spec!(ObservabilityLogsInitFailed, "Observability logs initialization failed"),
+    spec!(
+        ObservabilityLoggingInitFailed,
+        "Observability logging initialization failed"
+    ),
+    spec!(ObservabilityLogFilterInvalid, "Observability log filter is invalid"),
+    spec!(
+        ObservabilitySubscriberInstallFailed,
+        "Observability subscriber installation failed"
+    ),
+    spec!(
+        ObservabilityMetricsShutdownFailed,
+        "Observability metrics shutdown failed"
+    ),
+    spec!(
+        ObservabilityTracesShutdownFailed,
+        "Observability traces shutdown failed"
+    ),
+    spec!(ObservabilityLogsShutdownFailed, "Observability logs shutdown failed"),
     spec!(StorageReadFailed, "Storage read failed"),
     spec!(StorageWriteFailed, "Storage write failed"),
     spec!(StorageCorrupted, "Storage data is corrupted"),

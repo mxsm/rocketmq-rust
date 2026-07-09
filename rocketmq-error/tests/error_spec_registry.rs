@@ -48,6 +48,22 @@ fn rocketmq_error_reports_spec() {
 }
 
 #[test]
+fn observability_error_specs_are_registered() {
+    assert_eq!(
+        ErrorKind::ObservabilityFeatureDisabled.code().as_str(),
+        "OBSERVABILITY_FEATURE_DISABLED"
+    );
+    assert_eq!(
+        ErrorKind::from_code("OBSERVABILITY_SUBSCRIBER_INSTALL_FAILED"),
+        Some(ErrorKind::ObservabilitySubscriberInstallFailed)
+    );
+    assert!(ErrorKind::ObservabilityConfigInvalid
+        .spec()
+        .public_message
+        .contains("Observability"));
+}
+
+#[test]
 fn sensitive_error_specs_require_redaction() {
     assert_eq!(
         ErrorKind::Authentication.spec().redact,

@@ -201,7 +201,10 @@ fn enforce_bootstrap_subscriber_policy(
     }
 
     match config.observability.subscriber_install_policy {
-        SubscriberInstallPolicy::Required => Err(ObservabilityError::subscriber_install_failed(status)),
+        SubscriberInstallPolicy::Required => Err(ObservabilityError::subscriber_install_failed(
+            status.attempted,
+            status.installed,
+        )),
         SubscriberInstallPolicy::BestEffort => {
             tracing::warn!(
                 target: "rocketmq_observability",
