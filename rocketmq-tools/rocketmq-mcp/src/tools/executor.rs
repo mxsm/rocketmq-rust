@@ -24,9 +24,11 @@ use rmcp::model::JsonObject;
 use rmcp::ErrorData;
 
 use crate::adapter::admin_core_adapter::ReadOnlyAdminAdapter;
+use crate::service::diagnosis_service;
 use crate::tools::broker_tools;
 use crate::tools::cluster_tools;
 use crate::tools::consumer_tools;
+use crate::tools::diagnosis_tools;
 use crate::tools::topic_tools;
 
 #[derive(Debug, thiserror::Error)]
@@ -114,6 +116,13 @@ where
                     .await
                     .map(|output| success_result(summary_describe_broker(&output), &output))
                     .unwrap_or_else(|error| Ok(error_result(broker_tools::DESCRIBE_BROKER_TOOL, error)))
+            }
+            diagnosis_tools::DIAGNOSE_CONSUMER_LAG_TOOL => {
+                let args = decode_args::<diagnosis_tools::DiagnoseConsumerLagArgs>(request.arguments)?;
+                diagnosis_service::diagnose_consumer_lag(&self.adapter, args)
+                    .await
+                    .map(|output| success_result(output.summary.clone(), &output))
+                    .unwrap_or_else(|error| Ok(error_result(diagnosis_tools::DIAGNOSE_CONSUMER_LAG_TOOL, error)))
             }
             tool_name => Err(ErrorData::invalid_params(format!("unknown tool: {tool_name}"), None)),
         }
