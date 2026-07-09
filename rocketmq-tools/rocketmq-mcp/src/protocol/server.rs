@@ -13,11 +13,20 @@
 // limitations under the License.
 
 use rmcp::model::Implementation;
+use rmcp::model::ListResourceTemplatesResult;
+use rmcp::model::ListResourcesResult;
+use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ReadResourceRequestParams;
+use rmcp::model::ReadResourceResult;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
+use rmcp::service::RequestContext;
+use rmcp::ErrorData;
+use rmcp::RoleServer;
 use rmcp::ServerHandler;
 
 use crate::app::McpApp;
+use crate::resources;
 
 #[derive(Debug, Clone)]
 pub struct RocketmqMcpServer {
@@ -48,6 +57,30 @@ impl ServerHandler for RocketmqMcpServer {
             self.app.config().server.version.clone(),
         ))
         .with_instructions("RocketMQ-Rust MCP server for read-only context, diagnostics, and SRE runbooks.")
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        Ok(resources::registry::list_resources())
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        Ok(resources::registry::list_resource_templates())
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, ErrorData> {
+        resources::reader::read_resource(self.app.config(), &request.uri)
     }
 }
 
