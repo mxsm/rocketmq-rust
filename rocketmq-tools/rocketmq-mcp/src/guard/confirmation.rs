@@ -24,11 +24,19 @@ pub(crate) fn check_confirmation(
     risk_level: RiskLevel,
     arguments: &JsonObject,
 ) -> Result<(), GuardError> {
-    if !security.require_confirmation || !matches!(risk_level, RiskLevel::Change) {
+    if !matches!(risk_level, RiskLevel::Change) {
+        return Ok(());
+    }
+
+    if is_dry_run_change(arguments) {
         return Ok(());
     }
 
     if has_non_empty_string(arguments, "confirm_token") {
+        return Ok(());
+    }
+
+    if !security.require_confirmation && !is_apply_change(arguments) {
         return Ok(());
     }
 
@@ -42,4 +50,78 @@ fn has_non_empty_string(arguments: &JsonObject, key: &str) -> bool {
         .get(key)
         .and_then(Value::as_str)
         .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn is_dry_run_change(arguments: &JsonObject) -> bool {
+    arguments
+        .get("mode")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| matches!(value.as_str(), "dry_run" | "dry-run" | "dryrun"))
+}
+
+fn is_apply_change(arguments: &JsonObject) -> bool {
+    arguments
+        .get("mode")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| value == "apply")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn change_dry_run_does_not_require_confirm_token() {
+        let arguments = serde_json::json!({
+            "cluster": "local-dev",
+            "mode": "dry_run",
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        check_confirmation(&security(true), RiskLevel::Change, &arguments).unwrap();
+    }
+
+    #[test]
+    fn change_apply_requires_confirm_token() {
+        let arguments = serde_json::json!({
+            "cluster": "local-dev",
+            "mode": "apply",
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let err = check_confirmation(&security(true), RiskLevel::Change, &arguments).unwrap_err();
+
+        assert!(err.to_string().contains("confirm_token"));
+    }
+
+    #[test]
+    fn change_apply_requires_confirm_token_even_when_confirmation_is_disabled() {
+        let arguments = serde_json::json!({
+            "cluster": "local-dev",
+            "mode": "apply",
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let err = check_confirmation(&security(false), RiskLevel::Change, &arguments).unwrap_err();
+
+        assert!(err.to_string().contains("confirm_token"));
+    }
+
+    fn security(require_confirmation: bool) -> SecurityConfig {
+        SecurityConfig {
+            profile: "operator".to_string(),
+            allow_dangerous_tools: true,
+            require_confirmation,
+            sanitize_output: true,
+            rate_limit_per_minute: 60,
+        }
+    }
 }

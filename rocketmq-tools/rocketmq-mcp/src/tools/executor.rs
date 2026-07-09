@@ -28,6 +28,8 @@ use crate::guard::Guard;
 use crate::guard::GuardError;
 use crate::service::diagnosis_service;
 use crate::tools::broker_tools;
+#[cfg(feature = "dangerous-tools")]
+use crate::tools::change_tools;
 use crate::tools::cluster_tools;
 use crate::tools::consumer_tools;
 use crate::tools::diagnosis_tools;
@@ -209,6 +211,96 @@ where
                     .map(|output| success_result(output.summary.clone(), &output))
                     .unwrap_or_else(|error| Ok(error_result(diagnosis_tools::DIAGNOSE_CONSUMER_LAG_TOOL, error)))
             }
+            #[cfg(feature = "dangerous-tools")]
+            change_tools::CREATE_TOPIC_TOOL => {
+                let args = match decode_args::<change_tools::CreateTopicArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
+                change_tools::plan_create_topic(args)
+                    .map(|output| success_result(summary_change_plan(&output), &output))
+                    .unwrap_or_else(|error| {
+                        Ok(error_result(
+                            change_tools::CREATE_TOPIC_TOOL,
+                            ToolExecutionError::DangerousToolDisabled(error.to_string()),
+                        ))
+                    })
+            }
+            #[cfg(feature = "dangerous-tools")]
+            change_tools::UPDATE_TOPIC_CONFIG_TOOL => {
+                let args = match decode_args::<change_tools::UpdateTopicConfigArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
+                change_tools::plan_update_topic_config(args)
+                    .map(|output| success_result(summary_change_plan(&output), &output))
+                    .unwrap_or_else(|error| {
+                        Ok(error_result(
+                            change_tools::UPDATE_TOPIC_CONFIG_TOOL,
+                            ToolExecutionError::DangerousToolDisabled(error.to_string()),
+                        ))
+                    })
+            }
+            #[cfg(feature = "dangerous-tools")]
+            change_tools::UPDATE_TOPIC_PERM_TOOL => {
+                let args = match decode_args::<change_tools::UpdateTopicPermArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
+                change_tools::plan_update_topic_perm(args)
+                    .map(|output| success_result(summary_change_plan(&output), &output))
+                    .unwrap_or_else(|error| {
+                        Ok(error_result(
+                            change_tools::UPDATE_TOPIC_PERM_TOOL,
+                            ToolExecutionError::DangerousToolDisabled(error.to_string()),
+                        ))
+                    })
+            }
+            #[cfg(feature = "dangerous-tools")]
+            change_tools::UPDATE_BROKER_CONFIG_TOOL => {
+                let args = match decode_args::<change_tools::UpdateBrokerConfigArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
+                change_tools::plan_update_broker_config(args)
+                    .map(|output| success_result(summary_change_plan(&output), &output))
+                    .unwrap_or_else(|error| {
+                        Ok(error_result(
+                            change_tools::UPDATE_BROKER_CONFIG_TOOL,
+                            ToolExecutionError::DangerousToolDisabled(error.to_string()),
+                        ))
+                    })
+            }
+            #[cfg(feature = "dangerous-tools")]
+            change_tools::RESET_CONSUMER_OFFSET_TOOL => {
+                let args = match decode_args::<change_tools::ResetConsumerOffsetArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        guarded_call.record_protocol_error(error.message.to_string());
+                        return Err(error);
+                    }
+                };
+                change_tools::plan_reset_consumer_offset(args)
+                    .map(|output| success_result(summary_change_plan(&output), &output))
+                    .unwrap_or_else(|error| {
+                        Ok(error_result(
+                            change_tools::RESET_CONSUMER_OFFSET_TOOL,
+                            ToolExecutionError::DangerousToolDisabled(error.to_string()),
+                        ))
+                    })
+            }
             _ => unreachable!("unknown tool was rejected before dispatch"),
         }?;
 
@@ -300,6 +392,16 @@ fn summary_describe_broker(output: &broker_tools::DescribeBrokerOutput) -> Strin
         output.broker_name,
         output.cluster,
         output.brokers.len()
+    )
+}
+
+#[cfg(feature = "dangerous-tools")]
+fn summary_change_plan(output: &change_tools::ChangePlan) -> String {
+    format!(
+        "{} generated {} planned changes for cluster {}; no mutation was applied.",
+        output.tool,
+        output.planned_changes.len(),
+        output.cluster
     )
 }
 
@@ -478,6 +580,141 @@ mod tests {
         assert_eq!(records[0].status, AuditStatus::Failure);
     }
 
+    #[cfg(feature = "dangerous-tools")]
+    #[tokio::test]
+    async fn runtime_policy_denies_reserved_change_tool_by_default() {
+        let guard = test_guard_with_policy("operator", false);
+        let result = ToolExecutor::new(FakeAdapter { fail: false }, guard.clone())
+            .call(
+                CallToolRequestParams::new(change_tools::CREATE_TOPIC_TOOL).with_arguments(
+                    serde_json::json!({
+                        "cluster": "local-dev",
+                        "mode": "dry_run",
+                        "operator": "sre",
+                        "reason": "capacity preparation",
+                        "payload": {
+                            "topic": "orders"
+                        }
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(content_text(&result).contains("dangerous tool disabled"));
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, AuditStatus::Failure);
+    }
+
+    #[cfg(feature = "dangerous-tools")]
+    #[tokio::test]
+    async fn dry_run_change_plan_is_audited_without_confirm_token() {
+        let guard = test_guard_with_policy("operator", true);
+        let result = ToolExecutor::new(FakeAdapter { fail: false }, guard.clone())
+            .call(
+                CallToolRequestParams::new(change_tools::CREATE_TOPIC_TOOL).with_arguments(
+                    serde_json::json!({
+                        "cluster": "local-dev",
+                        "mode": "dry_run",
+                        "operator": "sre",
+                        "reason": "capacity preparation",
+                        "payload": {
+                            "topic": "orders",
+                            "read_queue_nums": 8,
+                            "write_queue_nums": 8,
+                            "perm": "read_write"
+                        }
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.is_error, Some(false));
+        let structured = result.structured_content.as_ref().unwrap();
+        assert_eq!(structured["tool"], change_tools::CREATE_TOPIC_TOOL);
+        assert_eq!(structured["applied"], false);
+        assert!(structured["confirm_challenge"].is_object());
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, AuditStatus::Success);
+    }
+
+    #[cfg(feature = "dangerous-tools")]
+    #[tokio::test]
+    async fn apply_change_without_confirm_token_is_denied() {
+        let guard = test_guard_with_policy("operator", true);
+        let result = ToolExecutor::new(FakeAdapter { fail: false }, guard.clone())
+            .call(
+                CallToolRequestParams::new(change_tools::RESET_CONSUMER_OFFSET_TOOL).with_arguments(
+                    serde_json::json!({
+                        "cluster": "local-dev",
+                        "mode": "apply",
+                        "operator": "sre",
+                        "reason": "lag mitigation",
+                        "payload": {
+                            "topic": "orders",
+                            "consumer_group": "order-service",
+                            "target_offset": 10
+                        }
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(content_text(&result).contains("confirm_token"));
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, AuditStatus::Failure);
+    }
+
+    #[cfg(feature = "dangerous-tools")]
+    #[tokio::test]
+    async fn apply_change_with_confirm_token_is_reserved() {
+        let guard = test_guard_with_policy("operator", true);
+        let result = ToolExecutor::new(FakeAdapter { fail: false }, guard.clone())
+            .call(
+                CallToolRequestParams::new(change_tools::RESET_CONSUMER_OFFSET_TOOL).with_arguments(
+                    serde_json::json!({
+                        "cluster": "local-dev",
+                        "mode": "apply",
+                        "operator": "sre",
+                        "reason": "lag mitigation",
+                        "confirm_token": "reviewed",
+                        "payload": {
+                            "topic": "orders",
+                            "consumer_group": "order-service",
+                            "target_offset": 10
+                        }
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(content_text(&result).contains("no mutation was executed"));
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, AuditStatus::Failure);
+    }
+
     fn content_text(result: &CallToolResult) -> String {
         result
             .content
@@ -491,10 +728,14 @@ mod tests {
     }
 
     fn test_guard(profile: &str) -> Guard {
+        test_guard_with_policy(profile, false)
+    }
+
+    fn test_guard_with_policy(profile: &str, allow_dangerous_tools: bool) -> Guard {
         Guard::new(
             SecurityConfig {
                 profile: profile.to_string(),
-                allow_dangerous_tools: false,
+                allow_dangerous_tools,
                 require_confirmation: true,
                 sanitize_output: true,
                 rate_limit_per_minute: 60,

@@ -24,7 +24,7 @@ Optional features:
 
 - `streamable-http`: enables the Streamable HTTP transport.
 - `observability`: reserves integration with the repository observability crate.
-- `dangerous-tools`: reserved for future controlled change tools and still requires runtime policy.
+- `dangerous-tools`: registers future controlled change tools as dry-run plan generators and still requires runtime policy.
 
 ## Safety Boundary
 
@@ -38,6 +38,8 @@ The default profile is diagnostics-oriented and read-only:
 - `server.stdio.log_to_stderr = true` keeps stdout reserved for MCP protocol frames.
 
 For HTTP deployments, keep `server.http.bind` on loopback unless there is a reviewed network boundary. When `server.http.require_auth = true`, the process requires `ROCKETMQ_MCP_HTTP_TOKEN` and clients must send `Authorization: Bearer <token>`.
+
+When `dangerous-tools` is compiled, change tools are still controlled by runtime policy. Dry-run requests return a change plan, impact analysis, rollback suggestions, and a confirmation challenge. Apply requests require `confirm_token` and are rejected by the current implementation; no mutation API is called.
 
 ## Build
 
@@ -200,6 +202,14 @@ For HTTP-capable clients, use the Streamable HTTP URL `http://127.0.0.1:8089/mcp
 - `mq_query_consumer_lag`: query consumer progress and lag.
 - `mq_describe_broker`: describe broker runtime information.
 - `mq_diagnose_consumer_lag`: aggregate read-only evidence and return a diagnosis report.
+
+Feature-gated controlled change tools, available only with `dangerous-tools`, are dry-run plan generators:
+
+- `mq_create_topic`: plan future topic creation.
+- `mq_update_topic_config`: plan future topic configuration updates.
+- `mq_update_topic_perm`: plan future topic permission updates.
+- `mq_update_broker_config`: plan future broker configuration updates.
+- `mq_reset_consumer_offset`: plan future consumer offset resets with impact analysis.
 
 ## Resources
 

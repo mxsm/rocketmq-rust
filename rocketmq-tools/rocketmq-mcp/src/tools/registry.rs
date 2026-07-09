@@ -20,6 +20,8 @@ use rmcp::model::ToolAnnotations;
 
 use crate::guard::RiskLevel;
 use crate::tools::broker_tools;
+#[cfg(feature = "dangerous-tools")]
+use crate::tools::change_tools;
 use crate::tools::cluster_tools;
 use crate::tools::consumer_tools;
 use crate::tools::diagnosis_tools;
@@ -43,12 +45,18 @@ pub fn tool_risk_level(name: &str) -> Option<RiskLevel> {
         | consumer_tools::QUERY_CONSUMER_LAG_TOOL
         | broker_tools::DESCRIBE_BROKER_TOOL => Some(RiskLevel::ReadOnly),
         diagnosis_tools::DIAGNOSE_CONSUMER_LAG_TOOL => Some(RiskLevel::Diagnose),
+        #[cfg(feature = "dangerous-tools")]
+        change_tools::CREATE_TOPIC_TOOL
+        | change_tools::UPDATE_TOPIC_CONFIG_TOOL
+        | change_tools::UPDATE_TOPIC_PERM_TOOL
+        | change_tools::UPDATE_BROKER_CONFIG_TOOL
+        | change_tools::RESET_CONSUMER_OFFSET_TOOL => Some(RiskLevel::Change),
         _ => None,
     }
 }
 
 pub fn tool_definitions() -> Vec<Tool> {
-    vec![
+    let tools = vec![
         read_only_tool::<cluster_tools::ClusterOverviewArgs, cluster_tools::ClusterOverviewOutput>(
             cluster_tools::CLUSTER_OVERVIEW_TOOL,
             "RocketMQ cluster overview",
@@ -89,7 +97,45 @@ pub fn tool_definitions() -> Vec<Tool> {
             "RocketMQ consumer lag diagnosis",
             "Diagnose consumer lag from read-only lag, topic route, and broker evidence.",
         ),
-    ]
+    ];
+
+    #[cfg(feature = "dangerous-tools")]
+    {
+        let mut tools = tools;
+        tools.extend([
+            change_tool::<change_tools::CreateTopicArgs, change_tools::ChangePlan>(
+                change_tools::CREATE_TOPIC_TOOL,
+                "RocketMQ create topic plan",
+                "Generate a dry-run change plan for future topic creation support.",
+            ),
+            change_tool::<change_tools::UpdateTopicConfigArgs, change_tools::ChangePlan>(
+                change_tools::UPDATE_TOPIC_CONFIG_TOOL,
+                "RocketMQ update topic config plan",
+                "Generate a dry-run change plan for future topic config updates.",
+            ),
+            change_tool::<change_tools::UpdateTopicPermArgs, change_tools::ChangePlan>(
+                change_tools::UPDATE_TOPIC_PERM_TOOL,
+                "RocketMQ update topic permission plan",
+                "Generate a dry-run change plan for future topic permission updates.",
+            ),
+            change_tool::<change_tools::UpdateBrokerConfigArgs, change_tools::ChangePlan>(
+                change_tools::UPDATE_BROKER_CONFIG_TOOL,
+                "RocketMQ update broker config plan",
+                "Generate a dry-run change plan for future broker config updates.",
+            ),
+            change_tool::<change_tools::ResetConsumerOffsetArgs, change_tools::ChangePlan>(
+                change_tools::RESET_CONSUMER_OFFSET_TOOL,
+                "RocketMQ reset consumer offset plan",
+                "Generate a dry-run impact plan for future consumer offset resets.",
+            ),
+        ]);
+        tools
+    }
+
+    #[cfg(not(feature = "dangerous-tools"))]
+    {
+        tools
+    }
 }
 
 fn read_only_tool<I, O>(name: &'static str, title: &'static str, description: &'static str) -> Tool
@@ -110,6 +156,25 @@ where
         )
 }
 
+#[cfg(feature = "dangerous-tools")]
+fn change_tool<I, O>(name: &'static str, title: &'static str, description: &'static str) -> Tool
+where
+    I: JsonSchema + 'static,
+    O: JsonSchema + 'static,
+{
+    Tool::new(name, description, std::sync::Arc::new(Default::default()))
+        .with_title(title)
+        .with_input_schema::<I>()
+        .with_output_schema::<O>()
+        .with_annotations(
+            ToolAnnotations::with_title(title)
+                .read_only(false)
+                .destructive(false)
+                .idempotent(false)
+                .open_world(true),
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,24 +184,16 @@ mod tests {
         let result = list_tools();
         let names = result.tools.iter().map(|tool| tool.name.as_ref()).collect::<Vec<_>>();
 
-        assert_eq!(
-            names,
-            [
-                "mq_cluster_overview",
-                "mq_list_topics",
-                "mq_describe_topic",
-                "mq_query_topic_route",
-                "mq_list_consumer_groups",
-                "mq_query_consumer_lag",
-                "mq_describe_broker",
-                "mq_diagnose_consumer_lag",
-            ]
-        );
+        assert!(names.starts_with(&mvp_tool_names()));
+        #[cfg(not(feature = "dangerous-tools"))]
+        assert_eq!(names, mvp_tool_names());
+        #[cfg(feature = "dangerous-tools")]
+        assert_eq!(names, all_tool_names());
         assert!(result.next_cursor.is_none());
     }
 
     #[test]
-    fn each_tool_has_input_schema_and_read_only_annotation() {
+    fn each_tool_has_input_schema_and_expected_annotation() {
         for tool in tool_definitions() {
             assert_eq!(
                 tool.input_schema.get("type").and_then(|value| value.as_str()),
@@ -144,8 +201,14 @@ mod tests {
             );
             assert!(tool.output_schema.is_some());
             let annotations = tool.annotations.as_ref().expect("tool annotations");
-            assert_eq!(annotations.read_only_hint, Some(true));
             assert_eq!(annotations.destructive_hint, Some(false));
+            if is_mvp_tool(tool.name.as_ref()) {
+                assert_eq!(annotations.read_only_hint, Some(true));
+                assert_eq!(annotations.idempotent_hint, Some(true));
+            } else {
+                assert_eq!(annotations.read_only_hint, Some(false));
+                assert_eq!(annotations.idempotent_hint, Some(false));
+            }
         }
     }
 
@@ -180,6 +243,40 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
+        #[cfg(not(feature = "dangerous-tools"))]
         insta::assert_json_snapshot!("tool_contract_schema_metadata", contracts);
+
+        #[cfg(feature = "dangerous-tools")]
+        insta::assert_json_snapshot!("tool_contract_schema_metadata_with_dangerous_tools", contracts);
+    }
+
+    fn mvp_tool_names() -> Vec<&'static str> {
+        vec![
+            "mq_cluster_overview",
+            "mq_list_topics",
+            "mq_describe_topic",
+            "mq_query_topic_route",
+            "mq_list_consumer_groups",
+            "mq_query_consumer_lag",
+            "mq_describe_broker",
+            "mq_diagnose_consumer_lag",
+        ]
+    }
+
+    #[cfg(feature = "dangerous-tools")]
+    fn all_tool_names() -> Vec<&'static str> {
+        let mut names = mvp_tool_names();
+        names.extend([
+            "mq_create_topic",
+            "mq_update_topic_config",
+            "mq_update_topic_perm",
+            "mq_update_broker_config",
+            "mq_reset_consumer_offset",
+        ]);
+        names
+    }
+
+    fn is_mvp_tool(name: &str) -> bool {
+        mvp_tool_names().contains(&name)
     }
 }
