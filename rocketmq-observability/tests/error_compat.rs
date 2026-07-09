@@ -12,4 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use rocketmq_error::ObservabilityError;
+use rocketmq_error::RocketMQError;
+
+#[test]
+fn observability_error_public_path_is_preserved() {
+    let error = rocketmq_observability::ObservabilityError::invalid_config("bad config");
+
+    assert!(matches!(
+        error,
+        rocketmq_observability::ObservabilityError::InvalidConfig(message)
+            if message == "bad config"
+    ));
+}
+
+#[test]
+fn observability_error_public_path_converts_to_rocketmq_error() {
+    let error = RocketMQError::from(rocketmq_observability::ObservabilityError::invalid_config("bad config"));
+
+    assert!(matches!(error, RocketMQError::Observability(_)));
+}
