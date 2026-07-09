@@ -124,6 +124,8 @@ The default feature set is empty.
 
 If runtime config requests an exporter whose feature is not enabled,
 `init_observability` returns `ObservabilityError::FeatureDisabled`.
+`ObservabilityError` is owned by `rocketmq-error` and re-exported by
+`rocketmq-observability` for compatibility.
 
 ## Module Map
 

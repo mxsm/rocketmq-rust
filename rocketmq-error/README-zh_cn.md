@@ -13,6 +13,7 @@
 - `RocketMQError`：RocketMQ Rust 各 crate 使用的主错误枚举。
 - `RocketMQResult<T>`：标准 result 类型别名。
 - 领域专用的嵌套错误，例如 `NetworkError`、`SerializationError`、`ProtocolError`、`RpcClientError`、`AuthError`、`ControllerError`、`ToolsError`、`FilterError` 和 `UnifiedServiceError`。
+- `ObservabilityError`：telemetry、logging、exporter 初始化、subscriber 安装和 provider 关闭错误。
 - 稳定分类体系：`ErrorKind`、`ErrorCode`、`ErrorScope` 和 `ErrorCategory`。
 - 静态元数据注册表：`ErrorSpec` 和 `ALL_ERROR_SPECS`。
 - 面向 remoting、gRPC、HTTP 和 CLI 适配器的边界映射。
@@ -44,7 +45,7 @@ fn validate_broker_addr(addr: &str) -> RocketMQResult<()> {
 }
 ```
 
-`std::io::Error`、`std::str::Utf8Error`，以及 `NetworkError`、`SerializationError`、`ProtocolError`、`RpcClientError`、`AuthError`、`ControllerError`、`ToolsError`、`FilterError` 和 `UnifiedServiceError` 等被包裹的嵌套错误，都可以通过 `From` 转换为 `RocketMQError`，因此常规代码路径可以使用 `?` 运算符。
+`std::io::Error`、`std::str::Utf8Error`，以及 `NetworkError`、`SerializationError`、`ProtocolError`、`RpcClientError`、`AuthError`、`ControllerError`、`ToolsError`、`FilterError`、`ObservabilityError` 和 `UnifiedServiceError` 等被包裹的嵌套错误，都可以通过 `From` 转换为 `RocketMQError`，因此常规代码路径可以使用 `?` 运算符。
 
 ## 架构
 
@@ -66,7 +67,7 @@ flowchart TB
         result["RocketMQResult&lt;T&gt;"]
         root["RocketMQError"]
         wrapped["NetworkError / SerializationError / ProtocolError / RpcClientError"]
-        domain["AuthError / ControllerError / ToolsError / FilterError / UnifiedServiceError"]
+        domain["AuthError / ControllerError / ToolsError / FilterError / ObservabilityError / UnifiedServiceError"]
         direct["Broker / Route / Client / Storage / Configuration / System variants"]
         result --> root
         wrapped --> root
@@ -119,6 +120,7 @@ flowchart TB
 | `RocketMQError::Controller` | `ControllerError` | controller 和 Raft 工作流 |
 | `RocketMQError::Tools` | `ToolsError` | admin tools 和 CLI 操作 |
 | `RocketMQError::Filter` | `FilterError` | Bloom Filter 和 bit-array 工具 |
+| `RocketMQError::Observability` | `ObservabilityError` | telemetry bootstrap、exporter、subscriber 安装、provider 关闭 |
 
 重要的直接变体族：
 

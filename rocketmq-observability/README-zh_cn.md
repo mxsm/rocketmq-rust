@@ -101,6 +101,7 @@ fn main() -> Result<(), rocketmq_observability::ObservabilityError> {
 | `stdout` | 兼容性 feature。运行时日志输出由 `MetricsExporter::Log`、`TraceExporter::Log` 或 `LogsExporter::Log` 选择。 |
 
 如果运行时配置请求了未启用 feature 的 exporter，`init_observability` 会返回 `ObservabilityError::FeatureDisabled`。
+`ObservabilityError` 由 `rocketmq-error` 托管，并由 `rocketmq-observability` 重新导出以保持兼容。
 
 ## 模块职责
 
