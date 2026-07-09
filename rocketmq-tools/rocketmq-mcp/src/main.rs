@@ -21,10 +21,12 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let app = McpApp::bootstrap(args).await?;
 
-    eprintln!(
-        "{} skeleton initialized with {} cluster(s)",
+    tracing::info!(
+        server = %app.config().server.name,
+        transport = app.transport().as_str(),
+        cluster_count = app.config().clusters.len(),
+        "{} startup initialized",
         app.config().server.name,
-        app.config().clusters.len()
     );
 
     Ok(())
