@@ -11,7 +11,7 @@ This file applies to `rocketmq-example/`.
 Run from `rocketmq-example/` before PR submission or final handoff for Rust code changes:
 
 ```bash
-cargo fmt --all
+cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 ```
 

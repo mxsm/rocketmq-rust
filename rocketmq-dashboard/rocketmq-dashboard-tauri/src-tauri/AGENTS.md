@@ -11,7 +11,7 @@ This file applies to `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/`.
 Run from `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` before PR submission or final handoff for Rust code changes:
 
 ```bash
-cargo fmt --all
+cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 

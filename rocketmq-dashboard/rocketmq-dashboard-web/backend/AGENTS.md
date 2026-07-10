@@ -38,7 +38,7 @@ It overrides the Web Dashboard root instructions for backend files.
 Run from this directory before PR submission or final handoff for Rust code changes:
 
 ```bash
-cargo fmt --all
+cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 

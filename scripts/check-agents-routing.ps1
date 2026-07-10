@@ -124,9 +124,16 @@ foreach ($routePath in $requiredRoutePaths) {
     Assert-TextContains -Text $rootAgentsText -Needle $routePath -Context "Root AGENTS.md"
 }
 
+$requiredMcpCommands = @(
+    "cargo check -p rocketmq-mcp",
+    "cargo test -p rocketmq-mcp",
+    "cargo clippy --all-targets -p rocketmq-mcp --features streamable-http -- -D warnings",
+    "cargo doc -p rocketmq-mcp --no-deps"
+)
+
 $requiredRootTerms = @(
     'root `Cargo.toml`',
-    "cargo fmt --all",
+    "cargo fmt --all -- --check",
     "cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings",
     "cargo clippy --all-targets --all-features -- -D warnings",
     "npm ci",
@@ -139,6 +146,9 @@ $requiredRootTerms = @(
     "python scripts/error_architecture_guard.py",
     "rocksdb_store",
     "otlp-metrics",
+    "Validation routes are cumulative",
+    "rocketmq-tools/rocketmq-mcp/"
+) + $requiredMcpCommands + @(
     "rocketmq-doc/en/agents-routing-validation-adr.md"
 )
 
@@ -218,15 +228,25 @@ $workflowRoutes = [ordered]@{
 
 foreach ($entry in $workflowRoutes.GetEnumerator()) {
     $workflowPath = Join-Path $script:RepoRoot $entry.Key
-    if (Test-Path -LiteralPath $workflowPath) {
-        Assert-TextContains -Text $rootAgentsText -Needle $entry.Value -Context "Root AGENTS.md workflow routing for $($entry.Key)"
+    if (-not (Test-Path -LiteralPath $workflowPath)) {
+        Add-Failure "Missing required workflow: $($entry.Key)"
+        continue
+    }
+    Assert-TextContains -Text $rootAgentsText -Needle $entry.Value -Context "Root AGENTS.md workflow routing for $($entry.Key)"
+}
+
+$rootWorkflowPath = Join-Path $script:RepoRoot ".github/workflows/rocketmq-rust-ci.yaml"
+if (Test-Path -LiteralPath $rootWorkflowPath) {
+    $rootWorkflowText = Get-Content -LiteralPath $rootWorkflowPath -Raw -Encoding UTF8
+    foreach ($command in $requiredMcpCommands) {
+        Assert-TextContains -Text $rootWorkflowText -Needle $command -Context "Root workspace CI rocketmq-mcp validation"
     }
 }
 
 $adrPath = Join-Path $script:RepoRoot "rocketmq-doc/en/agents-routing-validation-adr.md"
 if (Test-Path -LiteralPath $adrPath) {
     $adrText = Get-Content -LiteralPath $adrPath -Raw -Encoding UTF8
-    foreach ($term in @("AGENTS.md", "check-agents-routing.ps1", "check-agents-routing.sh", 'root `Cargo.toml`', "standalone")) {
+    foreach ($term in @("AGENTS.md", "check-agents-routing.ps1", "check-agents-routing.sh", 'root `Cargo.toml`', "standalone", "rocketmq-mcp", "cumulative")) {
         Assert-TextContains -Text $adrText -Needle $term -Context "AGENTS routing ADR"
     }
 }
