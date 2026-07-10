@@ -1,97 +1,1205 @@
 ---
 source: rocketmq-tools/rocketmq-mcp/src/protocol/server.rs
-expression: "json!({\n    \"tools\": tools, \"resources\": resources, \"resource_templates\":\n    resource_templates, \"prompts\": prompts,\n})"
+expression: surface
 ---
 {
   "prompts": [
     {
-      "argument_count": 4,
-      "name": "diagnose_consumer_lag"
+      "arguments": [
+        {
+          "description": "RocketMQ cluster name or configured connection name.",
+          "name": "cluster",
+          "required": true
+        },
+        {
+          "description": "Topic name.",
+          "name": "topic",
+          "required": true
+        },
+        {
+          "description": "Consumer group name.",
+          "name": "consumer_group",
+          "required": true
+        },
+        {
+          "description": "Optional investigation time range.",
+          "name": "time_range",
+          "required": false
+        }
+      ],
+      "description": "Diagnose consumer lag for a RocketMQ topic and consumer group.",
+      "name": "diagnose_consumer_lag",
+      "title": "Diagnose Consumer Lag"
     },
     {
-      "argument_count": 3,
-      "name": "broker_health_check"
+      "arguments": [
+        {
+          "description": "RocketMQ cluster name or configured connection name.",
+          "name": "cluster",
+          "required": true
+        },
+        {
+          "description": "Optional broker name. When omitted, inspect all brokers in the cluster.",
+          "name": "broker_name",
+          "required": false
+        },
+        {
+          "description": "Optional check level: quick, standard, or deep.",
+          "name": "check_level",
+          "required": false
+        }
+      ],
+      "description": "Check RocketMQ broker health from read-only broker, cluster, and topic evidence.",
+      "name": "broker_health_check",
+      "title": "Broker Health Check"
     }
   ],
   "resource_templates": [],
   "resources": [
     {
-      "mime_type": "application/json",
+      "description": "Configured RocketMQ clusters and nameserver endpoints.",
+      "mimeType": "application/json",
       "name": "cluster_overview",
+      "title": "RocketMQ cluster overview",
       "uri": "rocketmq://cluster/overview"
     },
     {
-      "mime_type": "application/json",
+      "description": "RocketMQ topic inventory resource.",
+      "mimeType": "application/json",
       "name": "topics",
+      "title": "RocketMQ topics",
       "uri": "rocketmq://topics"
     },
     {
-      "mime_type": "application/json",
+      "description": "RocketMQ broker inventory resource.",
+      "mimeType": "application/json",
       "name": "brokers",
+      "title": "RocketMQ brokers",
       "uri": "rocketmq://brokers"
     },
     {
-      "mime_type": "application/json",
+      "description": "RocketMQ consumer group inventory resource.",
+      "mimeType": "application/json",
       "name": "consumer_groups",
+      "title": "RocketMQ consumer groups",
       "uri": "rocketmq://consumer-groups"
     }
   ],
   "tools": [
     {
-      "destructive": false,
-      "has_input_schema": true,
-      "has_output_schema": true,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ cluster overview"
+      },
+      "description": "Summarize configured cluster brokers, topic count, and consumer group count.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cluster": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster"
+        ],
+        "type": "object"
+      },
       "name": "mq_cluster_overview",
-      "read_only": true
+      "outputSchema": {
+        "$defs": {
+          "BrokerSummary": {
+            "properties": {
+              "broker_active": {
+                "type": "boolean"
+              },
+              "broker_addr": {
+                "type": "string"
+              },
+              "broker_id": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "broker_name": {
+                "type": "string"
+              },
+              "cluster": {
+                "type": "string"
+              },
+              "hour": {
+                "type": "string"
+              },
+              "in_tps": {
+                "type": "string"
+              },
+              "out_tps": {
+                "type": "string"
+              },
+              "page_cache_lock_time_millis": {
+                "type": "string"
+              },
+              "space": {
+                "type": "string"
+              },
+              "timer_progress": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cluster",
+              "broker_name",
+              "broker_id",
+              "broker_addr",
+              "version",
+              "in_tps",
+              "out_tps",
+              "timer_progress",
+              "page_cache_lock_time_millis",
+              "hour",
+              "space",
+              "broker_active"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "brokers": {
+            "items": {
+              "$ref": "#/$defs/BrokerSummary"
+            },
+            "type": "array"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "consumer_group_count": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "namesrv_addr": {
+            "type": "string"
+          },
+          "topic_count": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cluster",
+          "namesrv_addr",
+          "brokers",
+          "topic_count",
+          "consumer_group_count",
+          "generated_at"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ cluster overview"
     },
     {
-      "destructive": false,
-      "has_input_schema": true,
-      "has_output_schema": true,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ topic list"
+      },
+      "description": "List topics visible from the selected RocketMQ cluster.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cluster": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "name": "mq_list_topics",
-      "read_only": true
+      "outputSchema": {
+        "$defs": {
+          "TopicListEntry": {
+            "properties": {
+              "cluster": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "consumer_group": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "topic": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "namesrv_addr": {
+            "type": "string"
+          },
+          "topic_count": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "topics": {
+            "items": {
+              "$ref": "#/$defs/TopicListEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cluster",
+          "namesrv_addr",
+          "topic_count",
+          "topics",
+          "generated_at"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ topic list"
     },
     {
-      "destructive": false,
-      "has_input_schema": true,
-      "has_output_schema": true,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ topic description"
+      },
+      "description": "Describe a topic with broker and queue route information.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "topic": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "topic"
+        ],
+        "type": "object"
+      },
       "name": "mq_describe_topic",
-      "read_only": true
+      "outputSchema": {
+        "$defs": {
+          "TopicRouteBroker": {
+            "properties": {
+              "broker_addrs": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "broker_name": {
+                "type": "string"
+              },
+              "cluster": {
+                "type": "string"
+              },
+              "enable_acting_master": {
+                "type": "boolean"
+              },
+              "zone_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "cluster",
+              "broker_name",
+              "broker_addrs",
+              "enable_acting_master"
+            ],
+            "type": "object"
+          },
+          "TopicRouteQueue": {
+            "properties": {
+              "broker_name": {
+                "type": "string"
+              },
+              "perm": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "read_queue_nums": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "topic_sys_flag": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "write_queue_nums": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "broker_name",
+              "read_queue_nums",
+              "write_queue_nums",
+              "perm",
+              "topic_sys_flag"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "broker_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "brokers": {
+            "items": {
+              "$ref": "#/$defs/TopicRouteBroker"
+            },
+            "type": "array"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "namesrv_addr": {
+            "type": "string"
+          },
+          "queues": {
+            "items": {
+              "$ref": "#/$defs/TopicRouteQueue"
+            },
+            "type": "array"
+          },
+          "read_queue_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "topic": {
+            "type": "string"
+          },
+          "write_queue_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cluster",
+          "namesrv_addr",
+          "topic",
+          "broker_names",
+          "read_queue_count",
+          "write_queue_count",
+          "brokers",
+          "queues",
+          "generated_at"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ topic description"
     },
     {
-      "destructive": false,
-      "has_input_schema": true,
-      "has_output_schema": true,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ topic route"
+      },
+      "description": "Query topic route data including broker addresses and queue distribution.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "topic": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "topic"
+        ],
+        "type": "object"
+      },
       "name": "mq_query_topic_route",
-      "read_only": true
+      "outputSchema": {
+        "$defs": {
+          "TopicRouteBroker": {
+            "properties": {
+              "broker_addrs": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "broker_name": {
+                "type": "string"
+              },
+              "cluster": {
+                "type": "string"
+              },
+              "enable_acting_master": {
+                "type": "boolean"
+              },
+              "zone_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "cluster",
+              "broker_name",
+              "broker_addrs",
+              "enable_acting_master"
+            ],
+            "type": "object"
+          },
+          "TopicRouteQueue": {
+            "properties": {
+              "broker_name": {
+                "type": "string"
+              },
+              "perm": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "read_queue_nums": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "topic_sys_flag": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "write_queue_nums": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "broker_name",
+              "read_queue_nums",
+              "write_queue_nums",
+              "perm",
+              "topic_sys_flag"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "brokers": {
+            "items": {
+              "$ref": "#/$defs/TopicRouteBroker"
+            },
+            "type": "array"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "namesrv_addr": {
+            "type": "string"
+          },
+          "queues": {
+            "items": {
+              "$ref": "#/$defs/TopicRouteQueue"
+            },
+            "type": "array"
+          },
+          "topic": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "namesrv_addr",
+          "topic",
+          "brokers",
+          "queues",
+          "generated_at"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ topic route"
     },
     {
-      "destructive": false,
-      "has_input_schema": true,
-      "has_output_schema": true,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ consumer groups"
+      },
+      "description": "List consumer groups and current consumption summary.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cluster": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "name": "mq_list_consumer_groups",
-      "read_only": true
+      "outputSchema": {
+        "$defs": {
+          "ConsumerGroupSummary": {
+            "properties": {
+              "client_count": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "consume_tps": {
+                "format": "double",
+                "type": "number"
+              },
+              "consume_type": {
+                "type": "string"
+              },
+              "diff_total": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "group": {
+                "type": "string"
+              },
+              "message_model": {
+                "type": "string"
+              },
+              "version": {
+                "format": "int32",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "group",
+              "version",
+              "client_count",
+              "consume_type",
+              "message_model",
+              "consume_tps",
+              "diff_total"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "consumer_group_count": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/$defs/ConsumerGroupSummary"
+            },
+            "type": "array"
+          },
+          "namesrv_addr": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "namesrv_addr",
+          "consumer_group_count",
+          "groups",
+          "generated_at"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ consumer groups"
     },
     {
-      "destructive": false,
-      "has_input_schema": true,
-      "has_output_schema": true,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ consumer lag"
+      },
+      "description": "Query per-queue consumer lag for a topic and consumer group.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "consumer_group": {
+            "type": "string"
+          },
+          "topic": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "topic",
+          "consumer_group"
+        ],
+        "type": "object"
+      },
       "name": "mq_query_consumer_lag",
-      "read_only": true
+      "outputSchema": {
+        "$defs": {
+          "QueueLag": {
+            "properties": {
+              "broker_name": {
+                "type": "string"
+              },
+              "broker_offset": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "client_ip": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "consumer_offset": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "inflight": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "lag": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "last_timestamp": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "queue_id": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "topic": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "broker_name",
+              "queue_id",
+              "broker_offset",
+              "consumer_offset",
+              "lag",
+              "inflight",
+              "last_timestamp"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "consume_tps": {
+            "format": "double",
+            "type": "number"
+          },
+          "consumer_group": {
+            "type": "string"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "inflight_total": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "max_queue_lag": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "namesrv_addr": {
+            "type": "string"
+          },
+          "queue_count": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "queues": {
+            "items": {
+              "$ref": "#/$defs/QueueLag"
+            },
+            "type": "array"
+          },
+          "topic": {
+            "type": "string"
+          },
+          "total_lag": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cluster",
+          "namesrv_addr",
+          "topic",
+          "consumer_group",
+          "total_lag",
+          "max_queue_lag",
+          "queue_count",
+          "consume_tps",
+          "inflight_total",
+          "queues",
+          "generated_at"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ consumer lag"
     },
     {
-      "destructive": false,
-      "has_input_schema": true,
-      "has_output_schema": true,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ broker description"
+      },
+      "description": "Describe broker rows for a broker name in the selected cluster.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "broker_name": {
+            "type": "string"
+          },
+          "cluster": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "broker_name"
+        ],
+        "type": "object"
+      },
       "name": "mq_describe_broker",
-      "read_only": true
+      "outputSchema": {
+        "$defs": {
+          "BrokerSummary": {
+            "properties": {
+              "broker_active": {
+                "type": "boolean"
+              },
+              "broker_addr": {
+                "type": "string"
+              },
+              "broker_id": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "broker_name": {
+                "type": "string"
+              },
+              "cluster": {
+                "type": "string"
+              },
+              "hour": {
+                "type": "string"
+              },
+              "in_tps": {
+                "type": "string"
+              },
+              "out_tps": {
+                "type": "string"
+              },
+              "page_cache_lock_time_millis": {
+                "type": "string"
+              },
+              "space": {
+                "type": "string"
+              },
+              "timer_progress": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cluster",
+              "broker_name",
+              "broker_id",
+              "broker_addr",
+              "version",
+              "in_tps",
+              "out_tps",
+              "timer_progress",
+              "page_cache_lock_time_millis",
+              "hour",
+              "space",
+              "broker_active"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "broker_name": {
+            "type": "string"
+          },
+          "brokers": {
+            "items": {
+              "$ref": "#/$defs/BrokerSummary"
+            },
+            "type": "array"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "namesrv_addr": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "namesrv_addr",
+          "broker_name",
+          "brokers",
+          "generated_at"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ broker description"
     },
     {
-      "destructive": false,
-      "has_input_schema": true,
-      "has_output_schema": true,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ consumer lag diagnosis"
+      },
+      "description": "Diagnose consumer lag from read-only lag, topic route, and broker evidence.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "consumer_group": {
+            "type": "string"
+          },
+          "lag_threshold": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "time_range": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "topic": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "topic",
+          "consumer_group"
+        ],
+        "type": "object"
+      },
       "name": "mq_diagnose_consumer_lag",
-      "read_only": true
+      "outputSchema": {
+        "$defs": {
+          "Evidence": {
+            "properties": {
+              "data": true,
+              "id": {
+                "type": "string"
+              },
+              "source_tool": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/EvidenceStatus"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "source_tool",
+              "status",
+              "summary",
+              "data"
+            ],
+            "type": "object"
+          },
+          "EvidenceStatus": {
+            "enum": [
+              "Present",
+              "Missing",
+              "Error"
+            ],
+            "type": "string"
+          },
+          "ImpactItem": {
+            "properties": {
+              "area": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/Severity"
+              }
+            },
+            "required": [
+              "area",
+              "description",
+              "severity"
+            ],
+            "type": "object"
+          },
+          "MetricWatchItem": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "target",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "Recommendation": {
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "string"
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "risk": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "priority",
+              "rationale",
+              "risk"
+            ],
+            "type": "object"
+          },
+          "RootCauseCandidate": {
+            "properties": {
+              "cause": {
+                "type": "string"
+              },
+              "confidence": {
+                "format": "float",
+                "type": "number"
+              },
+              "evidence_refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cause",
+              "confidence",
+              "evidence_refs",
+              "reasoning"
+            ],
+            "type": "object"
+          },
+          "Severity": {
+            "enum": [
+              "Healthy",
+              "Low",
+              "Medium",
+              "High",
+              "Critical",
+              "Unknown"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "confidence": {
+            "format": "float",
+            "type": "number"
+          },
+          "evidences": {
+            "items": {
+              "$ref": "#/$defs/Evidence"
+            },
+            "type": "array"
+          },
+          "follow_up_metrics": {
+            "items": {
+              "$ref": "#/$defs/MetricWatchItem"
+            },
+            "type": "array"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "impacts": {
+            "items": {
+              "$ref": "#/$defs/ImpactItem"
+            },
+            "type": "array"
+          },
+          "recommendations": {
+            "items": {
+              "$ref": "#/$defs/Recommendation"
+            },
+            "type": "array"
+          },
+          "report_type": {
+            "type": "string"
+          },
+          "risks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "root_causes": {
+            "items": {
+              "$ref": "#/$defs/RootCauseCandidate"
+            },
+            "type": "array"
+          },
+          "severity": {
+            "$ref": "#/$defs/Severity"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "target": true
+        },
+        "required": [
+          "report_type",
+          "cluster",
+          "target",
+          "severity",
+          "confidence",
+          "summary",
+          "impacts",
+          "evidences",
+          "root_causes",
+          "recommendations",
+          "risks",
+          "follow_up_metrics",
+          "generated_at"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ consumer lag diagnosis"
     }
   ]
 }

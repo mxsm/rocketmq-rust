@@ -52,6 +52,8 @@ rocketmq-doc/
 - Broker Naming Conventions
 - Error Architecture Redesign ADR
 - Error Architecture Inventory
+- [RocketMQ MCP Architecture ADR](en/07-rocketmq-mcp-architecture-adr.md)
+- [RocketMQ MCP Baseline Report](en/07-rocketmq-mcp-baseline-report.md)
 - Protocol Design
 - Storage Design
 - Network Architecture
