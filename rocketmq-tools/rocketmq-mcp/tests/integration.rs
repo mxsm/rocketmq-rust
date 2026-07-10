@@ -22,29 +22,35 @@ use serde_json::Value;
 #[test]
 fn mcp_inspector_stdio_surface_integration() {
     let output = run_stdio_server(
-        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"integration-inspector","version":"1.0.0"}}}
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"integration-inspector","version":"1.0.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
 {"jsonrpc":"2.0","id":3,"method":"resources/list","params":{}}
 {"jsonrpc":"2.0","id":4,"method":"resources/templates/list","params":{}}
 {"jsonrpc":"2.0","id":5,"method":"prompts/list","params":{}}
-{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"rocketmq://cluster/overview"}}
+{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"rocketmq://clusters/local-dev/overview"}}
 {"jsonrpc":"2.0","id":7,"method":"prompts/get","params":{"name":"broker_health_check","arguments":{"cluster":"local-dev"}}}
-{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"mq_cluster_overview","arguments":{"cluster":"missing-cluster"}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"rocketmq_get_cluster_overview","arguments":{"cluster":"missing-cluster"}}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"rocketmq_get_cluster_overview","arguments":{}}}
 "#,
     );
 
     assert!(output.status.success(), "server failed: {}", output.stderr);
     let responses = parse_stdout_json(&output.stdout);
 
+    assert_eq!(responses[&1]["result"]["protocolVersion"], "2025-11-25");
     assert!(responses[&1]["result"]["capabilities"]["tools"].is_object());
     assert!(responses[&1]["result"]["capabilities"]["resources"].is_object());
     assert!(responses[&1]["result"]["capabilities"]["prompts"].is_object());
-    assert_json_array_contains_field_value(&responses[&2]["result"]["tools"], "name", "mq_cluster_overview");
+    assert_json_array_contains_field_value(
+        &responses[&2]["result"]["tools"],
+        "name",
+        "rocketmq_get_cluster_overview",
+    );
     assert_json_array_contains_field_value(
         &responses[&3]["result"]["resources"],
         "uri",
-        "rocketmq://cluster/overview",
+        "rocketmq://clusters/local-dev/overview",
     );
     assert!(responses[&4]["result"]["resourceTemplates"].is_array());
     assert_json_array_contains_field_value(&responses[&5]["result"]["prompts"], "name", "diagnose_consumer_lag");
@@ -61,6 +67,29 @@ fn mcp_inspector_stdio_surface_integration() {
         .as_str()
         .unwrap()
         .contains("missing-cluster"));
+    assert_eq!(responses[&9]["result"]["isError"], true);
+    let tool_error: Value =
+        serde_json::from_str(responses[&9]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(tool_error["code"], "invalid_arguments");
+    assert_eq!(tool_error["request_id"], "9");
+    assert_eq!(tool_error["retryable"], false);
+    assert!(!tool_error["suggestions"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn unsupported_protocol_version_is_rejected_during_initialize() {
+    let output = run_stdio_server(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"old-client","version":"1.0.0"}}}
+"#,
+    );
+    let responses = parse_stdout_json(&output.stdout);
+
+    assert!(!output.status.success());
+    assert_eq!(responses[&1]["error"]["code"], -32602);
+    assert!(responses[&1]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("requires 2025-11-25"));
 }
 
 struct StdioOutput {

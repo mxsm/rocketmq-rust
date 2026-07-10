@@ -18,9 +18,8 @@ use serde::Serialize;
 
 use crate::tools::cluster_tools::BrokerSummary;
 
-pub const DESCRIBE_BROKER_TOOL: &str = "mq_describe_broker";
-
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DescribeBrokerArgs {
     pub cluster: String,
     pub broker_name: String,
@@ -29,6 +28,8 @@ pub struct DescribeBrokerArgs {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct DescribeBrokerOutput {
     pub cluster: String,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub namesrv_addr: String,
     pub broker_name: String,
     pub brokers: Vec<BrokerSummary>,

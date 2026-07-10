@@ -16,13 +16,18 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub const LIST_CONSUMER_GROUPS_TOOL: &str = "mq_list_consumer_groups";
-pub const QUERY_CONSUMER_LAG_TOOL: &str = "mq_query_consumer_lag";
+use crate::model::contract::Page;
+use crate::model::contract::PageRequest;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ListConsumerGroupsArgs {
     #[serde(default)]
     pub cluster: Option<String>,
+    #[serde(default)]
+    pub filter: Option<String>,
+    #[serde(flatten)]
+    pub page: PageRequest,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -39,17 +44,23 @@ pub struct ConsumerGroupSummary {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 pub struct ListConsumerGroupsOutput {
     pub cluster: String,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub namesrv_addr: String,
-    pub consumer_group_count: usize,
-    pub groups: Vec<ConsumerGroupSummary>,
+    #[serde(flatten)]
+    #[schemars(flatten)]
+    pub page: Page<ConsumerGroupSummary>,
     pub generated_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct QueryConsumerLagArgs {
     pub cluster: String,
     pub topic: String,
     pub consumer_group: String,
+    #[serde(flatten)]
+    pub page: PageRequest,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -61,21 +72,26 @@ pub struct QueueLag {
     pub consumer_offset: i64,
     pub lag: i64,
     pub inflight: i64,
-    pub last_timestamp: i64,
+    pub last_observed_at: Option<String>,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub client_ip: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 pub struct QueryConsumerLagOutput {
     pub cluster: String,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub namesrv_addr: String,
     pub topic: String,
     pub consumer_group: String,
     pub total_lag: i64,
     pub max_queue_lag: i64,
-    pub queue_count: usize,
     pub consume_tps: f64,
     pub inflight_total: i64,
-    pub queues: Vec<QueueLag>,
+    #[serde(flatten)]
+    #[schemars(flatten)]
+    pub page: Page<QueueLag>,
     pub generated_at: String,
 }

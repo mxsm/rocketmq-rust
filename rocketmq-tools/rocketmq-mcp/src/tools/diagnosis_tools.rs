@@ -16,9 +16,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub const DIAGNOSE_CONSUMER_LAG_TOOL: &str = "mq_diagnose_consumer_lag";
-
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DiagnoseConsumerLagArgs {
     pub cluster: String,
     pub topic: String,

@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Shared MCP domain models.
+//! Read-only MCP tools exposed by the RocketMQ MCP server.
 
-pub mod diagnosis;
+pub mod broker_tools;
+pub mod catalog;
+#[cfg(feature = "change-planning")]
+pub mod change_tools;
+pub mod cluster_tools;
+pub mod consumer_tools;
+pub mod diagnosis_tools;
+pub mod executor;
+pub mod output_policy;
+pub mod topic_tools;

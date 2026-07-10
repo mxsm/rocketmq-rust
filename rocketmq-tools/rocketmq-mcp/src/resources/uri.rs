@@ -13,49 +13,31 @@
 // limitations under the License.
 
 pub const JSON_MIME_TYPE: &str = "application/json";
+const URI_PREFIX: &str = "rocketmq://clusters/";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RocketmqResourceUri {
-    ClusterOverview,
+pub enum ResourceKind {
+    Overview,
     Topics,
     Brokers,
     ConsumerGroups,
 }
 
-impl RocketmqResourceUri {
-    pub const ALL: [Self; 4] = [Self::ClusterOverview, Self::Topics, Self::Brokers, Self::ConsumerGroups];
+impl ResourceKind {
+    pub const ALL: [Self; 4] = [Self::Overview, Self::Topics, Self::Brokers, Self::ConsumerGroups];
 
-    pub fn parse(uri: &str) -> Option<Self> {
-        match uri {
-            "rocketmq://cluster/overview" => Some(Self::ClusterOverview),
-            "rocketmq://topics" => Some(Self::Topics),
-            "rocketmq://brokers" => Some(Self::Brokers),
-            "rocketmq://consumer-groups" => Some(Self::ConsumerGroups),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
+    fn path(self) -> &'static str {
         match self {
-            Self::ClusterOverview => "rocketmq://cluster/overview",
-            Self::Topics => "rocketmq://topics",
-            Self::Brokers => "rocketmq://brokers",
-            Self::ConsumerGroups => "rocketmq://consumer-groups",
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::ClusterOverview => "cluster_overview",
+            Self::Overview => "overview",
             Self::Topics => "topics",
             Self::Brokers => "brokers",
-            Self::ConsumerGroups => "consumer_groups",
+            Self::ConsumerGroups => "consumer-groups",
         }
     }
 
     pub fn title(self) -> &'static str {
         match self {
-            Self::ClusterOverview => "RocketMQ cluster overview",
+            Self::Overview => "RocketMQ cluster overview",
             Self::Topics => "RocketMQ topics",
             Self::Brokers => "RocketMQ brokers",
             Self::ConsumerGroups => "RocketMQ consumer groups",
@@ -64,19 +46,50 @@ impl RocketmqResourceUri {
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::ClusterOverview => "Configured RocketMQ clusters and nameserver endpoints.",
-            Self::Topics => "RocketMQ topic inventory resource.",
-            Self::Brokers => "RocketMQ broker inventory resource.",
-            Self::ConsumerGroups => "RocketMQ consumer group inventory resource.",
+            Self::Overview => "Read-only overview for one configured RocketMQ cluster.",
+            Self::Topics => "Read-only topic inventory for one configured RocketMQ cluster.",
+            Self::Brokers => "Read-only broker inventory for one configured RocketMQ cluster.",
+            Self::ConsumerGroups => "Read-only consumer group inventory for one configured RocketMQ cluster.",
         }
     }
 }
 
-impl TryFrom<&str> for RocketmqResourceUri {
-    type Error = ();
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RocketmqResourceUri {
+    pub cluster: String,
+    pub kind: ResourceKind,
+}
 
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::parse(value).ok_or(())
+impl RocketmqResourceUri {
+    pub fn new(cluster: impl Into<String>, kind: ResourceKind) -> Self {
+        Self {
+            cluster: cluster.into(),
+            kind,
+        }
+    }
+
+    pub fn parse(uri: &str) -> Option<Self> {
+        let remainder = uri.strip_prefix(URI_PREFIX)?;
+        let (cluster, path) = remainder.split_once('/')?;
+        if cluster.is_empty() || cluster.contains(['?', '#']) || path.contains(['?', '#', '/']) {
+            return None;
+        }
+        let kind = match path {
+            "overview" => ResourceKind::Overview,
+            "topics" => ResourceKind::Topics,
+            "brokers" => ResourceKind::Brokers,
+            "consumer-groups" => ResourceKind::ConsumerGroups,
+            _ => return None,
+        };
+        Some(Self::new(cluster, kind))
+    }
+
+    pub fn as_string(&self) -> String {
+        format!("{URI_PREFIX}{}/{}", self.cluster, self.kind.path())
+    }
+
+    pub fn name(&self) -> String {
+        format!("{}_{}", self.cluster, self.kind.path().replace('-', "_"))
     }
 }
 
@@ -85,31 +98,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_resources_have_stable_uris() {
-        let uris = RocketmqResourceUri::ALL.map(RocketmqResourceUri::as_str);
+    fn parse_accepts_only_cluster_scoped_resource_uris() {
+        let parsed = RocketmqResourceUri::parse("rocketmq://clusters/local-dev/overview").unwrap();
+        assert_eq!(parsed.cluster, "local-dev");
+        assert_eq!(parsed.kind, ResourceKind::Overview);
+        assert_eq!(parsed.as_string(), "rocketmq://clusters/local-dev/overview");
 
-        assert_eq!(
-            uris,
-            [
-                "rocketmq://cluster/overview",
-                "rocketmq://topics",
-                "rocketmq://brokers",
-                "rocketmq://consumer-groups",
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_accepts_only_mvp_resource_uris() {
-        assert_eq!(
-            RocketmqResourceUri::parse("rocketmq://cluster/overview"),
-            Some(RocketmqResourceUri::ClusterOverview)
-        );
-        assert_eq!(
-            RocketmqResourceUri::parse("rocketmq://consumer-groups"),
-            Some(RocketmqResourceUri::ConsumerGroups)
-        );
-        assert_eq!(RocketmqResourceUri::parse("rocketmq://topics/foo"), None);
-        assert_eq!(RocketmqResourceUri::parse("file:///etc/passwd"), None);
+        assert!(RocketmqResourceUri::parse("rocketmq://clusters/local-dev/unknown").is_none());
+        assert!(RocketmqResourceUri::parse("rocketmq://clusters/local-dev/topics/orders").is_none());
+        assert!(RocketmqResourceUri::parse("file:///etc/passwd").is_none());
     }
 }

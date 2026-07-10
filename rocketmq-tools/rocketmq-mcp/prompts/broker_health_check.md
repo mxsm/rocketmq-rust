@@ -22,11 +22,11 @@ Check level: `{{check_level}}`
 
 ## Required Tools
 
-1. `mq_cluster_overview`
-2. `mq_describe_broker`
-3. `mq_list_topics`
+1. `rocketmq_get_cluster_overview`
+2. `rocketmq_describe_broker`
+3. `rocketmq_list_topics`
 
-If `mq_query_broker_metrics` is registered in this server, you may use it as extra read-only evidence. It is not required for the MVP runbook.
+If a future broker metrics Tool is registered in this server, you may use it as extra read-only evidence. It is not required for this runbook.
 
 ## Forbidden Actions
 

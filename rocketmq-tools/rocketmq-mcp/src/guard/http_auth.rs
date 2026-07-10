@@ -188,8 +188,7 @@ mod tests {
             Guard::new(
                 SecurityConfig {
                     profile: "diagnose".to_string(),
-                    allow_dangerous_tools: false,
-                    require_confirmation: true,
+                    allow_change_planning: false,
                     sanitize_output: true,
                     rate_limit_per_minute,
                 },

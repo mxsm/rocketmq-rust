@@ -106,7 +106,7 @@ mod tests {
 
         assert!(text.contains("orders"));
         assert!(text.contains("order-service"));
-        assert!(text.contains("mq_diagnose_consumer_lag"));
+        assert!(text.contains("rocketmq_diagnose_consumer_lag"));
         assert!(text.contains("Do not call mutation tools"));
     }
 

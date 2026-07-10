@@ -16,11 +16,23 @@ use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::Resource;
 
+use crate::config::McpConfig;
+use crate::resources::uri::ResourceKind;
 use crate::resources::uri::RocketmqResourceUri;
 use crate::resources::uri::JSON_MIME_TYPE;
 
-pub fn list_resources() -> ListResourcesResult {
-    ListResourcesResult::with_all_items(RocketmqResourceUri::ALL.into_iter().map(resource_descriptor).collect())
+pub fn list_resources(config: &McpConfig) -> ListResourcesResult {
+    let resources = config
+        .clusters
+        .iter()
+        .flat_map(|cluster| {
+            ResourceKind::ALL
+                .into_iter()
+                .map(|kind| RocketmqResourceUri::new(cluster.name.clone(), kind))
+        })
+        .map(resource_descriptor)
+        .collect();
+    ListResourcesResult::with_all_items(resources)
 }
 
 pub fn list_resource_templates() -> ListResourceTemplatesResult {
@@ -28,9 +40,9 @@ pub fn list_resource_templates() -> ListResourceTemplatesResult {
 }
 
 fn resource_descriptor(uri: RocketmqResourceUri) -> Resource {
-    Resource::new(uri.as_str(), uri.name())
-        .with_title(uri.title())
-        .with_description(uri.description())
+    Resource::new(uri.as_string(), uri.name())
+        .with_title(uri.kind.title())
+        .with_description(uri.kind.description())
         .with_mime_type(JSON_MIME_TYPE)
 }
 
@@ -39,8 +51,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mvp_registry_lists_static_resources() {
-        let result = list_resources();
+    fn registry_lists_cluster_scoped_resources() {
+        let config = McpConfig::load(example_config_path()).unwrap();
+        let result = list_resources(&config);
         let uris = result
             .resources
             .iter()
@@ -50,25 +63,18 @@ mod tests {
         assert_eq!(
             uris,
             [
-                "rocketmq://cluster/overview",
-                "rocketmq://topics",
-                "rocketmq://brokers",
-                "rocketmq://consumer-groups",
+                "rocketmq://clusters/local-dev/overview",
+                "rocketmq://clusters/local-dev/topics",
+                "rocketmq://clusters/local-dev/brokers",
+                "rocketmq://clusters/local-dev/consumer-groups",
             ]
         );
         assert!(result.next_cursor.is_none());
-        assert!(result.resources.iter().all(|resource| {
-            resource.mime_type.as_deref() == Some(JSON_MIME_TYPE)
-                && resource.title.is_some()
-                && resource.description.is_some()
-        }));
     }
 
-    #[test]
-    fn mvp_registry_has_no_resource_templates() {
-        let result = list_resource_templates();
-
-        assert!(result.resource_templates.is_empty());
-        assert!(result.next_cursor.is_none());
+    fn example_config_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("conf")
+            .join("mcp.example.toml")
     }
 }
