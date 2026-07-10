@@ -167,39 +167,21 @@ mod tests {
         let tools = tools::registry::list_tools()
             .tools
             .into_iter()
-            .map(|tool| {
-                let annotations = tool.annotations.expect("tool annotations");
-                json!({
-                    "name": tool.name.as_ref(),
-                    "has_input_schema": tool.input_schema.get("type").is_some(),
-                    "has_output_schema": tool.output_schema.is_some(),
-                    "read_only": annotations.read_only_hint,
-                    "destructive": annotations.destructive_hint,
-                })
-            })
+            .map(|tool| serde_json::to_value(tool).expect("tool descriptor serializes"))
             .collect::<Vec<_>>();
         let resources = resources::registry::list_resources()
             .resources
             .into_iter()
-            .map(|resource| {
-                json!({
-                    "uri": resource.uri,
-                    "name": resource.name,
-                    "mime_type": resource.mime_type,
-                })
-            })
+            .map(|resource| serde_json::to_value(resource).expect("resource descriptor serializes"))
             .collect::<Vec<_>>();
-        let resource_templates = resources::registry::list_resource_templates().resource_templates;
+        let resource_templates =
+            serde_json::to_value(resources::registry::list_resource_templates().resource_templates)
+                .expect("resource templates serialize");
         let prompts = prompts::registry::list_prompts()
             .unwrap()
             .prompts
             .into_iter()
-            .map(|prompt| {
-                json!({
-                    "name": prompt.name,
-                    "argument_count": prompt.arguments.as_ref().map(Vec::len).unwrap_or_default(),
-                })
-            })
+            .map(|prompt| serde_json::to_value(prompt).expect("prompt descriptor serializes"))
             .collect::<Vec<_>>();
 
         let surface = json!({

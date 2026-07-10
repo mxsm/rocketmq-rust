@@ -227,20 +227,7 @@ mod tests {
     fn tool_contract_schema_metadata_snapshot() {
         let contracts = tool_definitions()
             .into_iter()
-            .map(|tool| {
-                let annotations = tool.annotations.expect("tool annotations");
-                let output_schema = tool.output_schema.expect("output schema");
-                serde_json::json!({
-                    "name": tool.name.as_ref(),
-                    "input_type": tool.input_schema.get("type"),
-                    "input_required": tool.input_schema.get("required"),
-                    "output_type": output_schema.get("type"),
-                    "read_only": annotations.read_only_hint,
-                    "destructive": annotations.destructive_hint,
-                    "idempotent": annotations.idempotent_hint,
-                    "open_world": annotations.open_world_hint,
-                })
-            })
+            .map(|tool| serde_json::to_value(tool).expect("tool contract serializes"))
             .collect::<Vec<_>>();
 
         #[cfg(not(feature = "dangerous-tools"))]
