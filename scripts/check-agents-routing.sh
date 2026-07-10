@@ -98,9 +98,16 @@ for route_path in "${REQUIRED_ROUTE_PATHS[@]}"; do
   assert_text_contains "$ROOT_AGENTS_TEXT" "$route_path" "Root AGENTS.md"
 done
 
+REQUIRED_MCP_COMMANDS=(
+  "cargo check -p rocketmq-mcp"
+  "cargo test -p rocketmq-mcp"
+  "cargo clippy --all-targets -p rocketmq-mcp --features streamable-http -- -D warnings"
+  "cargo doc -p rocketmq-mcp --no-deps"
+)
+
 REQUIRED_ROOT_TERMS=(
   'root `Cargo.toml`'
-  "cargo fmt --all"
+  "cargo fmt --all -- --check"
   "cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings"
   "cargo clippy --all-targets --all-features -- -D warnings"
   "npm ci"
@@ -113,6 +120,9 @@ REQUIRED_ROOT_TERMS=(
   "python scripts/error_architecture_guard.py"
   "rocksdb_store"
   "otlp-metrics"
+  "Validation routes are cumulative"
+  "rocketmq-tools/rocketmq-mcp/"
+  "${REQUIRED_MCP_COMMANDS[@]}"
   "rocketmq-doc/en/agents-routing-validation-adr.md"
 )
 
@@ -191,15 +201,25 @@ WORKFLOW_PATHS=(
 for workflow_entry in "${WORKFLOW_PATHS[@]}"; do
   workflow_path="${workflow_entry%%|*}"
   route="${workflow_entry#*|}"
-  if [[ -f "$ROOT/$workflow_path" ]]; then
-    assert_text_contains "$ROOT_AGENTS_TEXT" "$route" "Root AGENTS.md workflow routing for $workflow_path"
+  if [[ ! -f "$ROOT/$workflow_path" ]]; then
+    add_failure "Missing required workflow: $workflow_path"
+    continue
   fi
+  assert_text_contains "$ROOT_AGENTS_TEXT" "$route" "Root AGENTS.md workflow routing for $workflow_path"
 done
+
+ROOT_WORKFLOW_PATH="$ROOT/.github/workflows/rocketmq-rust-ci.yaml"
+if [[ -f "$ROOT_WORKFLOW_PATH" ]]; then
+  ROOT_WORKFLOW_TEXT="$(cat "$ROOT_WORKFLOW_PATH")"
+  for command in "${REQUIRED_MCP_COMMANDS[@]}"; do
+    assert_text_contains "$ROOT_WORKFLOW_TEXT" "$command" "Root workspace CI rocketmq-mcp validation"
+  done
+fi
 
 ADR_PATH="$ROOT/rocketmq-doc/en/agents-routing-validation-adr.md"
 if [[ -f "$ADR_PATH" ]]; then
   ADR_TEXT="$(cat "$ADR_PATH")"
-  for term in "AGENTS.md" "check-agents-routing.ps1" "check-agents-routing.sh" 'root `Cargo.toml`' "standalone"; do
+  for term in "AGENTS.md" "check-agents-routing.ps1" "check-agents-routing.sh" 'root `Cargo.toml`' "standalone" "rocketmq-mcp" "cumulative"; do
     assert_text_contains "$ADR_TEXT" "$term" "AGENTS routing ADR"
   done
 else

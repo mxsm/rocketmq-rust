@@ -29,7 +29,7 @@ This file applies to `rocketmq-dashboard/rocketmq-dashboard-web/`.
 Run from `rocketmq-dashboard/rocketmq-dashboard-web/backend/` before PR submission or final handoff for Rust code changes:
 
 ```bash
-cargo fmt --all
+cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
