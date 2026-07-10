@@ -4765,6 +4765,7 @@ mod tests {
     use std::collections::HashSet;
     use std::future;
     use std::net::TcpListener;
+    use std::ops::RangeInclusive;
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicBool;
@@ -4895,6 +4896,7 @@ mod tests {
     const CONTROLLER_TEST_MIN_BASE_PORT: u16 = 20_000;
     const CONTROLLER_TEST_MAX_BASE_PORT: u16 = 60_000;
     const CONTROLLER_TEST_PORT_BLOCK_SIZE: u16 = 128;
+    const CONTROLLER_TEST_FALLBACK_EPHEMERAL_PORT_RANGE: RangeInclusive<u16> = 32_768..=60_999;
     static NEXT_CONTROLLER_TEST_PORT_BLOCK: AtomicU16 = AtomicU16::new(0);
     static NEXT_CONTROLLER_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -5473,6 +5475,15 @@ accounts:
         let block_count = (u32::from(CONTROLLER_TEST_MAX_BASE_PORT - CONTROLLER_TEST_MIN_BASE_PORT)
             / u32::from(CONTROLLER_TEST_PORT_BLOCK_SIZE)) as u16;
         let seed = ((u64::from(std::process::id()) ^ current_millis()) % u64::from(block_count)) as u16;
+        let ephemeral_port_range = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+            .ok()
+            .and_then(|contents| {
+                let mut ports = contents.split_whitespace();
+                let start = ports.next()?.parse::<u16>().ok()?;
+                let end = ports.next()?.parse::<u16>().ok()?;
+                (start <= end).then_some(start..=end)
+            })
+            .unwrap_or(CONTROLLER_TEST_FALLBACK_EPHEMERAL_PORT_RANGE);
 
         for _ in 0..block_count {
             let block = NEXT_CONTROLLER_TEST_PORT_BLOCK
@@ -5483,7 +5494,7 @@ accounts:
                 + u32::from(block) * u32::from(CONTROLLER_TEST_PORT_BLOCK_SIZE);
             let base_port = u16::try_from(base_port).expect("controller test base port should fit u16");
             let required_ports = controller_test_required_ports(base_port);
-            if controller_test_ports_available(&required_ports) {
+            if controller_test_ports_available(&required_ports, &ephemeral_port_range) {
                 return base_port;
             }
         }
@@ -5514,7 +5525,11 @@ accounts:
         ]
     }
 
-    fn controller_test_ports_available(required_ports: &[u16]) -> bool {
+    fn controller_test_ports_available(required_ports: &[u16], ephemeral_port_range: &RangeInclusive<u16>) -> bool {
+        if required_ports.iter().any(|port| ephemeral_port_range.contains(port)) {
+            return false;
+        }
+
         let mut listeners = Vec::with_capacity(required_ports.len());
         for port in required_ports {
             match TcpListener::bind(("0.0.0.0", *port)) {
@@ -5535,6 +5550,14 @@ accounts:
         assert!(required_ports.contains(&(base_port + 39)));
     }
 
+    #[test]
+    fn controller_test_ports_available_rejects_ephemeral_ports() {
+        assert!(!controller_test_ports_available(
+            &[32_768, 60_999],
+            &CONTROLLER_TEST_FALLBACK_EPHEMERAL_PORT_RANGE
+        ));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn controller_test_ports_available_rejects_non_primary_loopback_conflict() {
@@ -5550,7 +5573,7 @@ accounts:
         };
         drop(primary_loopback_listener);
 
-        assert!(!controller_test_ports_available(&[port]));
+        assert!(!controller_test_ports_available(&[port], &(0..=0)));
     }
 
     async fn create_test_channel() -> Channel {
