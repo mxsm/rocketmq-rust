@@ -46,6 +46,8 @@ The server targets MCP protocol version `2025-11-25`. Clients requesting another
 
 Successful Tool calls return a `rocketmq-mcp.v2` envelope with `request_id`, cluster, RFC 3339 observation time, freshness, cache status, partial status, warnings, and typed data. Correctable input and backend failures return Tool execution errors with a stable code, retryability, suggestions, and the request identifier.
 
+Read-only Tool calls also return a ResourceLink for the corresponding live Resource. Tool and Resource requests share the application-level `QueryFacade`, bounded TTL cache, and singleflight coordination, so an identical query can be replayed without starting a second admin session while its entry is fresh.
+
 ## Build
 
 Run commands from the repository root.
@@ -86,6 +88,11 @@ Important fields:
 - `clusters[].name`: logical cluster name used by tools, resources, and prompts.
 - `clusters[].namesrv_addr`: RocketMQ namesrv address for admin queries.
 - `audit.sink`: `memory`, `file`, or `tracing`.
+- `cache.enabled`: enables or bypasses the shared query cache.
+- `cache.max_entries`: maximum number of in-memory entries; it must be greater than zero when caching is enabled.
+- `cache.*_ttl_ms`: per-query-family freshness windows for overview, topic, broker, and consumer-lag data.
+
+Cache keys include the schema version, visibility class, query kind, resolved cluster, and normalized query parameters. Failures are not cached. Concurrent misses for the same key are coalesced, and `cache_status` reports `miss`, `hit`, or `bypass`. Embedders can call `McpApp::invalidate_cache()` to clear all entries explicitly. Cumulative hit, miss, bypass, eviction, invalidation, and coalesced-waiter counters are emitted at trace level after Tool and Resource requests.
 
 Command-line overrides:
 
@@ -220,8 +227,16 @@ Feature-gated planning Tools, available only with `change-planning`, never mutat
 
 - `rocketmq://clusters/{cluster}/overview`
 - `rocketmq://clusters/{cluster}/topics`
+- `rocketmq://clusters/{cluster}/topics/{topic}`
+- `rocketmq://clusters/{cluster}/topics/{topic}/route`
 - `rocketmq://clusters/{cluster}/brokers`
+- `rocketmq://clusters/{cluster}/brokers/{broker}`
 - `rocketmq://clusters/{cluster}/consumer-groups`
+- `rocketmq://clusters/{cluster}/consumer-groups/{group}`
+- `rocketmq://clusters/{cluster}/consumer-groups/{group}/lag?topic={topic}`
+
+`resources/list` returns cluster root Resources in cursor-paginated pages. `resources/templates/list` publishes the five parameterized forms. All accepted URIs are explicit cluster-scoped v2 URIs; unsupported or incomplete forms return Resource Not Found instead of a placeholder payload.
+Cluster and RocketMQ entity names are UTF-8 percent-encoded as URI path or query components, including retry topics and groups that contain `%RETRY%`.
 
 ## Prompts
 

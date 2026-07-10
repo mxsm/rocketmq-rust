@@ -21,6 +21,8 @@ use crate::adapter::query_facade::ReadOnlyQuery;
 use crate::model::contract::observed_at;
 #[cfg(test)]
 use crate::model::contract::PageRequest;
+#[cfg(test)]
+use crate::model::contract::QueryResult;
 use crate::model::diagnosis::DiagnosisReport;
 use crate::model::diagnosis::Evidence;
 use crate::model::diagnosis::EvidenceStatus;
@@ -61,21 +63,24 @@ where
             consumer_group: args.consumer_group.clone(),
             page: PageRequest::default(),
         })
-        .await;
+        .await
+        .map(|result| result.data);
     let topic_result = adapter
         .describe_topic(DescribeTopicArgs {
             cluster: args.cluster.clone(),
             topic: args.topic.clone(),
             page: PageRequest::default(),
         })
-        .await;
+        .await
+        .map(|result| result.data);
     let route_result = adapter
         .query_topic_route(QueryTopicRouteArgs {
             cluster: args.cluster.clone(),
             topic: args.topic.clone(),
             page: PageRequest::default(),
         })
-        .await;
+        .await
+        .map(|result| result.data);
     let broker_result = match top_lag_broker(lag_result.as_ref().ok()) {
         Some(broker_name) => Some(
             adapter
@@ -83,7 +88,8 @@ where
                     cluster: args.cluster.clone(),
                     broker_name,
                 })
-                .await,
+                .await
+                .map(|result| result.data),
         ),
         None => None,
     };
@@ -451,16 +457,22 @@ mod tests {
         async fn cluster_overview(
             &self,
             _args: ClusterOverviewArgs,
-        ) -> Result<ClusterOverviewOutput, ToolExecutionError> {
+        ) -> Result<QueryResult<ClusterOverviewOutput>, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
 
-        async fn list_topics(&self, _args: ListTopicsArgs) -> Result<ListTopicsOutput, ToolExecutionError> {
+        async fn list_topics(
+            &self,
+            _args: ListTopicsArgs,
+        ) -> Result<QueryResult<ListTopicsOutput>, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
 
-        async fn describe_topic(&self, args: DescribeTopicArgs) -> Result<DescribeTopicOutput, ToolExecutionError> {
-            Ok(DescribeTopicOutput {
+        async fn describe_topic(
+            &self,
+            args: DescribeTopicArgs,
+        ) -> Result<QueryResult<DescribeTopicOutput>, ToolExecutionError> {
+            Ok(QueryResult::bypass(DescribeTopicOutput {
                 cluster: args.cluster,
                 namesrv_addr: "127.0.0.1:9876".to_string(),
                 topic: args.topic,
@@ -476,14 +488,14 @@ mod tests {
                     next_cursor: None,
                 },
                 generated_at: "1".to_string(),
-            })
+            }))
         }
 
         async fn query_topic_route(
             &self,
             args: QueryTopicRouteArgs,
-        ) -> Result<QueryTopicRouteOutput, ToolExecutionError> {
-            Ok(QueryTopicRouteOutput {
+        ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError> {
+            Ok(QueryResult::bypass(QueryTopicRouteOutput {
                 cluster: args.cluster,
                 namesrv_addr: "127.0.0.1:9876".to_string(),
                 topic: args.topic,
@@ -498,24 +510,24 @@ mod tests {
                     next_cursor: None,
                 },
                 generated_at: "1".to_string(),
-            })
+            }))
         }
 
         async fn list_consumer_groups(
             &self,
             _args: ListConsumerGroupsArgs,
-        ) -> Result<ListConsumerGroupsOutput, ToolExecutionError> {
+        ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
 
         async fn query_consumer_lag(
             &self,
             args: QueryConsumerLagArgs,
-        ) -> Result<QueryConsumerLagOutput, ToolExecutionError> {
+        ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolExecutionError> {
             if self.missing_lag {
                 return Err(ToolExecutionError::backend("lag evidence unavailable"));
             }
-            Ok(QueryConsumerLagOutput {
+            Ok(QueryResult::bypass(QueryConsumerLagOutput {
                 cluster: args.cluster,
                 namesrv_addr: "127.0.0.1:9876".to_string(),
                 topic: args.topic,
@@ -555,23 +567,26 @@ mod tests {
                     next_cursor: None,
                 },
                 generated_at: "1".to_string(),
-            })
+            }))
         }
 
-        async fn describe_broker(&self, args: DescribeBrokerArgs) -> Result<DescribeBrokerOutput, ToolExecutionError> {
-            Ok(DescribeBrokerOutput {
+        async fn describe_broker(
+            &self,
+            args: DescribeBrokerArgs,
+        ) -> Result<QueryResult<DescribeBrokerOutput>, ToolExecutionError> {
+            Ok(QueryResult::bypass(DescribeBrokerOutput {
                 cluster: args.cluster,
                 namesrv_addr: "127.0.0.1:9876".to_string(),
                 broker_name: args.broker_name,
                 brokers: vec![broker_summary()],
                 generated_at: "1".to_string(),
-            })
+            }))
         }
 
         async fn diagnose_consumer_lag(
             &self,
             _args: DiagnoseConsumerLagArgs,
-        ) -> Result<DiagnosisReport, ToolExecutionError> {
+        ) -> Result<QueryResult<DiagnosisReport>, ToolExecutionError> {
             unimplemented!("the rule tests invoke the test-only composition helper")
         }
     }

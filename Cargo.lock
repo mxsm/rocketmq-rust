@@ -4598,6 +4598,7 @@ dependencies = [
  "jsonschema",
  "mockall",
  "once_cell",
+ "percent-encoding",
  "pretty_assertions",
  "regex",
  "rmcp",

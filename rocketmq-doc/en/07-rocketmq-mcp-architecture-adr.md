@@ -35,6 +35,7 @@ diagnosis efficient without creating a global connection pool prematurely.
 | ADR-007 | Version Evidence and Rules independently. Diagnosis output identifies the evidence and rule versions that produced it. |
 | ADR-008 | Target MCP `2025-11-25` only. The refactor does not promise a dual-version protocol bridge with MCP `2025-06-18`. |
 | ADR-009 | Replace the current implementation with a clean break because it is unused. Do not retain legacy Tool, URI, schema, configuration, or feature aliases. |
+| ADR-010 | Keep a bounded, process-local TTL cache inside the shared `QueryFacade`. Keys include schema version, visibility class, query kind, resolved cluster, and normalized parameters; failures are not cached, and identical concurrent misses use singleflight. |
 
 ## Frozen Public Contract
 
@@ -79,7 +80,7 @@ Tool, URI, schema, configuration, or feature alias is allowed.
 transport and protocol
         -> RequestContext identity and authorization
         -> Tool, Resource, and Prompt handlers
-        -> QueryFacade / planning workflows / diagnosis rules
+        -> QueryFacade / bounded cache / planning workflows / diagnosis rules
         -> workflow-scoped AdminSession
         -> rocketmq-admin-core
 ```
@@ -89,13 +90,21 @@ normalization, and read-model construction. Resources and Tools are different
 MCP presentations of the same query results. Diagnosis consumes the same
 facade, adds versioned evidence, and evaluates versioned rules.
 
+The cache stores normalized query results, not protocol envelopes. This keeps
+request identifiers and output policy request-specific while allowing Tools
+and Resources to reuse the same observed data. Visibility class is part of the
+key so later principal-aware authorization can isolate results without
+duplicating the query implementation.
+
 ## Consequences
 
 P0 records the baseline and freezes the destination contract. It deliberately
 does not change the production Tool names, resource URIs, protocol version,
 feature flags, or admin lifecycle. P1 introduces the clean-break module and
 protocol contract. P2 introduces `QueryFacade`, `AdminSession`, and measurable
-workflow lifecycle counters. Subsequent work may add planning and Apply only
+workflow lifecycle counters. P3 adds live parameterized Resources, bounded TTL
+caching, and singleflight without introducing a global admin-client pool.
+Subsequent work may add planning and Apply only
 through the Plan/Apply boundary defined here.
 
 The migration cost is intentional: existing integrations must move directly to

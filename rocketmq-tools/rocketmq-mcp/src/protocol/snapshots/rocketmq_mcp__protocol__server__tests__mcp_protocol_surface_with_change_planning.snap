@@ -54,7 +54,43 @@ expression: surface
       "title": "Broker Health Check"
     }
   ],
-  "resource_templates": [],
+  "resource_templates": [
+    {
+      "description": "Read-only details for one RocketMQ topic.",
+      "mimeType": "application/json",
+      "name": "rocketmq_topic",
+      "title": "RocketMQ topic",
+      "uriTemplate": "rocketmq://clusters/{cluster}/topics/{topic}"
+    },
+    {
+      "description": "Read-only routing information for one RocketMQ topic.",
+      "mimeType": "application/json",
+      "name": "rocketmq_topic_route",
+      "title": "RocketMQ topic route",
+      "uriTemplate": "rocketmq://clusters/{cluster}/topics/{topic}/route"
+    },
+    {
+      "description": "Read-only details for one RocketMQ consumer group.",
+      "mimeType": "application/json",
+      "name": "rocketmq_consumer_group",
+      "title": "RocketMQ consumer group",
+      "uriTemplate": "rocketmq://clusters/{cluster}/consumer-groups/{group}"
+    },
+    {
+      "description": "Read-only lag details for one consumer group and topic.",
+      "mimeType": "application/json",
+      "name": "rocketmq_consumer_lag",
+      "title": "RocketMQ consumer lag",
+      "uriTemplate": "rocketmq://clusters/{cluster}/consumer-groups/{group}/lag{?topic}"
+    },
+    {
+      "description": "Read-only details for one RocketMQ broker.",
+      "mimeType": "application/json",
+      "name": "rocketmq_broker",
+      "title": "RocketMQ broker",
+      "uriTemplate": "rocketmq://clusters/{cluster}/brokers/{broker}"
+    }
+  ],
   "resources": [
     {
       "description": "Read-only overview for one configured RocketMQ cluster.",

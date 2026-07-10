@@ -65,17 +65,18 @@ Successful Tool calls return `structuredContent` matching this envelope:
   "cluster": "prod-a",
   "observed_at": "2026-07-10T15:30:00.000Z",
   "freshness_ms": 0,
-  "cache_status": "bypass",
+  "cache_status": "miss",
   "partial": false,
   "warnings": [],
   "data": {}
 }
 ```
 
-`observed_at` is RFC 3339. `freshness_ms` and `cache_status` become meaningful
-when the shared query cache is introduced. `partial: true` requires at least
-one warning describing the unavailable source. A text summary and serialized
-JSON text block accompany `structuredContent` for client compatibility.
+`observed_at` is RFC 3339. `freshness_ms` is zero for a newly loaded value and
+increases for a cache hit. `cache_status` is `miss`, `hit`, or `bypass`.
+`partial: true` requires at least one warning describing the unavailable
+source. A text summary, serialized JSON text block, and a ResourceLink for the
+corresponding replayable read model accompany `structuredContent`.
 
 Before a response is returned, it is validated against the Tool output schema
 and limited to 1 MiB. The default output policy removes NameServer addresses,
@@ -142,6 +143,15 @@ The session is explicitly shut down and awaited after success, failure,
 timeout, or MCP request cancellation. There is no process-global admin-client
 pool.
 
+`McpApp` owns one shared `QueryFacade` and bounded in-memory TTL cache. Cache
+keys contain the schema version, visibility class, query kind, resolved
+cluster, and normalized parameters. Errors are not cached. Identical
+concurrent misses are coalesced by singleflight and start one `AdminSession`.
+Cache disablement or a zero TTL bypasses storage without changing query
+correctness. Trace-level cache metrics report cumulative hit, miss, bypass,
+eviction, invalidation, and coalesced-waiter counts. Embedders can explicitly
+clear all entries through `McpApp::invalidate_cache()`.
+
 Consumer-lag diagnosis results include independent provenance fields:
 
 ```json
@@ -157,13 +167,34 @@ Resources are always scoped to an explicit configured cluster:
 
 - `rocketmq://clusters/{cluster}/overview`
 - `rocketmq://clusters/{cluster}/topics`
+- `rocketmq://clusters/{cluster}/topics/{topic}`
+- `rocketmq://clusters/{cluster}/topics/{topic}/route`
 - `rocketmq://clusters/{cluster}/brokers`
+- `rocketmq://clusters/{cluster}/brokers/{broker}`
 - `rocketmq://clusters/{cluster}/consumer-groups`
+- `rocketmq://clusters/{cluster}/consumer-groups/{group}`
+- `rocketmq://clusters/{cluster}/consumer-groups/{group}/lag?topic={topic}`
 
 Resource readers execute live queries through `QueryFacade`. Successful
-payloads identify `source` as `live`, set `partial` to `false`, and include the
-same normalized read models used by Tools. A backend failure is returned as a
-Resource error rather than being represented as an empty inventory.
+payloads identify `source` as `live`, include `observed_at`, `freshness_ms`, and
+`cache_status`, set `partial` to `false`, and contain the same normalized read
+models used by Tools. A backend failure is returned as a Resource error rather
+than being represented as an empty inventory.
+
+Resource errors use Resource Not Found for invalid URIs, unknown clusters, and
+unknown entities. Other failures retain a non-sensitive machine-readable data
+code: `resource_permission_denied`, `resource_rate_limited`,
+`resource_query_timeout`, `resource_query_cancelled`, or
+`resource_backend_unavailable`.
+
+`resources/list` exposes only the four cluster root Resources and uses an
+opaque versioned MCP cursor when more than 50 descriptors exist.
+`resources/templates/list` publishes RFC 6570 templates for topic, topic
+route, consumer group, consumer lag, and broker Resources. Invalid cursors,
+legacy URIs, and incomplete parameterized URIs are rejected rather than
+silently mapped to another Resource.
+Cluster and entity substitutions use UTF-8 percent-encoding, so names such as
+`%RETRY%orders` round-trip without producing an invalid URI.
 
 ## Verification
 
