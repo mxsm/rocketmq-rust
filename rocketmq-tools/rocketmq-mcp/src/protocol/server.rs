@@ -36,7 +36,7 @@ use rmcp::RoleServer;
 use rmcp::ServerHandler;
 use serde_json::json;
 
-use crate::adapter::admin_core_adapter::AdminCoreAdapter;
+use crate::adapter::query_facade::QueryFacade;
 use crate::app::McpApp;
 use crate::prompts;
 use crate::resources;
@@ -115,9 +115,10 @@ impl ServerHandler for RocketmqMcpServer {
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
-        resources::reader::read_resource(self.app.config(), &request.uri)
+        let query = QueryFacade::new(self.app.config().clone()).with_cancellation(context.ct);
+        resources::reader::read_resource(&query, &request.uri).await
     }
 
     async fn list_prompts(
@@ -149,12 +150,10 @@ impl ServerHandler for RocketmqMcpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        ToolExecutor::new(
-            AdminCoreAdapter::new(self.app.config().clone()),
-            self.app.guard().clone(),
-        )
-        .call_with_request_id(request, &request_id_string(&context.id))
-        .await
+        let query = QueryFacade::new(self.app.config().clone()).with_cancellation(context.ct.clone());
+        ToolExecutor::new(query, self.app.guard().clone())
+            .call_with_request_id(request, &request_id_string(&context.id))
+            .await
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {

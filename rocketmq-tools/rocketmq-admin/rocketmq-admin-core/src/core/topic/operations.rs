@@ -442,7 +442,11 @@ impl TopicService {
         Ok(topic_list.topic_list.into_iter().collect())
     }
 
-    async fn query_topic_list_with_admin(
+    /// Query topics using an already started admin client.
+    ///
+    /// The caller owns the admin client lifecycle, allowing multiple read-only
+    /// operations to share one workflow-scoped session.
+    pub async fn query_topic_list_with_admin(
         admin: &mut DefaultMQAdminExt,
         request: &TopicListQueryRequest,
     ) -> RocketMQResult<TopicListResult> {

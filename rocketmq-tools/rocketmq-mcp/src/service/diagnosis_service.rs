@@ -16,8 +16,10 @@ use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
 
-use crate::adapter::admin_core_adapter::ReadOnlyAdminAdapter;
+#[cfg(test)]
+use crate::adapter::query_facade::ReadOnlyQuery;
 use crate::model::contract::observed_at;
+#[cfg(test)]
 use crate::model::contract::PageRequest;
 use crate::model::diagnosis::DiagnosisReport;
 use crate::model::diagnosis::Evidence;
@@ -27,23 +29,30 @@ use crate::model::diagnosis::MetricWatchItem;
 use crate::model::diagnosis::Recommendation;
 use crate::model::diagnosis::RootCauseCandidate;
 use crate::model::diagnosis::Severity;
+#[cfg(test)]
 use crate::tools::broker_tools::DescribeBrokerArgs;
+#[cfg(test)]
 use crate::tools::consumer_tools::QueryConsumerLagArgs;
 use crate::tools::consumer_tools::QueryConsumerLagOutput;
 use crate::tools::diagnosis_tools::DiagnoseConsumerLagArgs;
 use crate::tools::executor::ToolExecutionError;
+#[cfg(test)]
 use crate::tools::topic_tools::DescribeTopicArgs;
+#[cfg(test)]
 use crate::tools::topic_tools::QueryTopicRouteArgs;
 
 const DEFAULT_LAG_THRESHOLD: i64 = 1_000;
 const SKEW_RATIO_THRESHOLD: f64 = 0.70;
+pub(crate) const CONSUMER_LAG_EVIDENCE_VERSION: &str = "rocketmq-mcp.evidence.consumer-lag.v1";
+pub(crate) const CONSUMER_LAG_RULES_VERSION: &str = "rocketmq-mcp.rules.consumer-lag.v1";
 
+#[cfg(test)]
 pub(crate) async fn diagnose_consumer_lag<A>(
     adapter: &A,
     args: DiagnoseConsumerLagArgs,
 ) -> Result<DiagnosisReport, ToolExecutionError>
 where
-    A: ReadOnlyAdminAdapter,
+    A: ReadOnlyQuery,
 {
     let lag_result = adapter
         .query_consumer_lag(QueryConsumerLagArgs {
@@ -88,7 +97,7 @@ where
     ))
 }
 
-fn build_consumer_lag_report<Topic, Route, Broker>(
+pub(crate) fn build_consumer_lag_report<Topic, Route, Broker>(
     args: DiagnoseConsumerLagArgs,
     lag_result: Result<QueryConsumerLagOutput, ToolExecutionError>,
     topic_result: Result<Topic, ToolExecutionError>,
@@ -139,6 +148,8 @@ where
 
     DiagnosisReport {
         report_type: "consumer_lag".to_string(),
+        evidence_version: CONSUMER_LAG_EVIDENCE_VERSION.to_string(),
+        rules_version: CONSUMER_LAG_RULES_VERSION.to_string(),
         cluster: args.cluster.clone(),
         target: json!({
             "topic": args.topic,
@@ -392,6 +403,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn top_lag_broker(lag: Option<&QueryConsumerLagOutput>) -> Option<String> {
     lag.and_then(|lag| {
         lag.page
@@ -411,7 +423,7 @@ fn skew_ratio(lag: &QueryConsumerLagOutput) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::adapter::admin_core_adapter::ReadOnlyAdminAdapter;
+    use crate::adapter::query_facade::ReadOnlyQuery;
     use crate::model::contract::Page;
     use crate::tools::broker_tools::DescribeBrokerOutput;
     use crate::tools::cluster_tools::BrokerSummary;
@@ -434,7 +446,8 @@ mod tests {
         missing_lag: bool,
     }
 
-    impl ReadOnlyAdminAdapter for FakeDiagnosisAdapter {
+    #[async_trait::async_trait]
+    impl ReadOnlyQuery for FakeDiagnosisAdapter {
         async fn cluster_overview(
             &self,
             _args: ClusterOverviewArgs,
@@ -553,6 +566,13 @@ mod tests {
                 brokers: vec![broker_summary()],
                 generated_at: "1".to_string(),
             })
+        }
+
+        async fn diagnose_consumer_lag(
+            &self,
+            _args: DiagnoseConsumerLagArgs,
+        ) -> Result<DiagnosisReport, ToolExecutionError> {
+            unimplemented!("the rule tests invoke the test-only composition helper")
         }
     }
 

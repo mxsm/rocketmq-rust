@@ -1496,6 +1496,9 @@ expression: contracts
               "format": "float",
               "type": "number"
             },
+            "evidence_version": {
+              "type": "string"
+            },
             "evidences": {
               "items": {
                 "$ref": "#/$defs/Evidence"
@@ -1538,6 +1541,9 @@ expression: contracts
               },
               "type": "array"
             },
+            "rules_version": {
+              "type": "string"
+            },
             "severity": {
               "$ref": "#/$defs/Severity"
             },
@@ -1548,6 +1554,8 @@ expression: contracts
           },
           "required": [
             "report_type",
+            "evidence_version",
+            "rules_version",
             "cluster",
             "target",
             "severity",

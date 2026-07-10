@@ -1579,6 +1579,9 @@ expression: surface
                 "format": "float",
                 "type": "number"
               },
+              "evidence_version": {
+                "type": "string"
+              },
               "evidences": {
                 "items": {
                   "$ref": "#/$defs/Evidence"
@@ -1621,6 +1624,9 @@ expression: surface
                 },
                 "type": "array"
               },
+              "rules_version": {
+                "type": "string"
+              },
               "severity": {
                 "$ref": "#/$defs/Severity"
               },
@@ -1631,6 +1637,8 @@ expression: surface
             },
             "required": [
               "report_type",
+              "evidence_version",
+              "rules_version",
               "cluster",
               "target",
               "severity",
