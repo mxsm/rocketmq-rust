@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ops::Deref;
+
 use chrono::SecondsFormat;
 use chrono::Utc;
 use schemars::JsonSchema;
@@ -41,12 +43,40 @@ pub struct Page<T> {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheStatus {
     Bypass,
     Hit,
     Miss,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QueryResult<T> {
+    pub data: T,
+    pub observed_at: String,
+    pub freshness_ms: u64,
+    pub cache_status: CacheStatus,
+}
+
+impl<T> QueryResult<T> {
+    #[cfg(test)]
+    pub(crate) fn bypass(data: T) -> Self {
+        Self {
+            data,
+            observed_at: observed_at(),
+            freshness_ms: 0,
+            cache_status: CacheStatus::Bypass,
+        }
+    }
+}
+
+impl<T> Deref for QueryResult<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -74,6 +104,24 @@ impl<T> ToolResponse<T> {
             partial: false,
             warnings: Vec::new(),
             data,
+        }
+    }
+
+    pub(crate) fn from_query(
+        request_id: impl Into<String>,
+        cluster: impl Into<String>,
+        result: QueryResult<T>,
+    ) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION.to_string(),
+            request_id: request_id.into(),
+            cluster: cluster.into(),
+            observed_at: result.observed_at,
+            freshness_ms: result.freshness_ms,
+            cache_status: result.cache_status,
+            partial: false,
+            warnings: Vec::new(),
+            data: result.data,
         }
     }
 }

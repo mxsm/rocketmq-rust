@@ -20,12 +20,17 @@ use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
 use rmcp::model::ContentBlock;
 use rmcp::model::JsonObject;
+use rmcp::model::Resource;
 use rmcp::ErrorData;
 
 use crate::adapter::query_facade::ReadOnlyQuery;
 use crate::guard::Guard;
 use crate::guard::GuardError;
+use crate::model::contract::QueryResult;
 use crate::model::contract::ToolResponse;
+use crate::resources::uri::ResourceKind;
+use crate::resources::uri::RocketmqResourceUri;
+use crate::resources::uri::JSON_MIME_TYPE;
 use crate::tools::broker_tools;
 use crate::tools::catalog::ToolDescriptor;
 use crate::tools::catalog::ToolId;
@@ -184,7 +189,8 @@ where
                 self.adapter.cluster_overview(args).await.and_then(|output| {
                     let summary = summary_cluster_overview(&output);
                     let cluster = output.cluster.clone();
-                    success_result(descriptor, request_id, cluster, summary, output)
+                    let resource = RocketmqResourceUri::new(cluster.clone(), ResourceKind::Overview);
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::ListTopics => {
@@ -195,7 +201,8 @@ where
                 self.adapter.list_topics(args).await.and_then(|output| {
                     let summary = summary_list_topics(&output);
                     let cluster = output.cluster.clone();
-                    success_result(descriptor, request_id, cluster, summary, output)
+                    let resource = RocketmqResourceUri::new(cluster.clone(), ResourceKind::Topics);
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::DescribeTopic => {
@@ -206,7 +213,8 @@ where
                 self.adapter.describe_topic(args).await.and_then(|output| {
                     let summary = summary_describe_topic(&output);
                     let cluster = output.cluster.clone();
-                    success_result(descriptor, request_id, cluster, summary, output)
+                    let resource = RocketmqResourceUri::new(cluster.clone(), ResourceKind::Topic(output.topic.clone()));
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::GetTopicRoute => {
@@ -217,7 +225,9 @@ where
                 self.adapter.query_topic_route(args).await.and_then(|output| {
                     let summary = summary_topic_route(&output);
                     let cluster = output.cluster.clone();
-                    success_result(descriptor, request_id, cluster, summary, output)
+                    let resource =
+                        RocketmqResourceUri::new(cluster.clone(), ResourceKind::TopicRoute(output.topic.clone()));
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::ListConsumerGroups => {
@@ -228,7 +238,8 @@ where
                 self.adapter.list_consumer_groups(args).await.and_then(|output| {
                     let summary = summary_consumer_groups(&output);
                     let cluster = output.cluster.clone();
-                    success_result(descriptor, request_id, cluster, summary, output)
+                    let resource = RocketmqResourceUri::new(cluster.clone(), ResourceKind::ConsumerGroups);
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::GetConsumerLag => {
@@ -239,7 +250,14 @@ where
                 self.adapter.query_consumer_lag(args).await.and_then(|output| {
                     let summary = summary_consumer_lag(&output);
                     let cluster = output.cluster.clone();
-                    success_result(descriptor, request_id, cluster, summary, output)
+                    let resource = RocketmqResourceUri::new(
+                        cluster.clone(),
+                        ResourceKind::ConsumerLag {
+                            group: output.consumer_group.clone(),
+                            topic: output.topic.clone(),
+                        },
+                    );
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::DescribeBroker => {
@@ -250,7 +268,9 @@ where
                 self.adapter.describe_broker(args).await.and_then(|output| {
                     let summary = summary_describe_broker(&output);
                     let cluster = output.cluster.clone();
-                    success_result(descriptor, request_id, cluster, summary, output)
+                    let resource =
+                        RocketmqResourceUri::new(cluster.clone(), ResourceKind::Broker(output.broker_name.clone()));
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             ToolId::DiagnoseConsumerLag => {
@@ -259,9 +279,16 @@ where
                     Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
                 };
                 let cluster = args.cluster.clone();
+                let resource = RocketmqResourceUri::new(
+                    cluster.clone(),
+                    ResourceKind::ConsumerLag {
+                        group: args.consumer_group.clone(),
+                        topic: args.topic.clone(),
+                    },
+                );
                 self.adapter.diagnose_consumer_lag(args).await.and_then(|output| {
                     let summary = output.summary.clone();
-                    success_result(descriptor, request_id, cluster, summary, output)
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
             #[cfg(feature = "change-planning")]
@@ -273,7 +300,7 @@ where
                 let cluster = args.cluster.clone();
                 let output = change_tools::plan_create_topic(args);
                 let summary = summary_change_plan(&output);
-                success_result(descriptor, request_id, cluster, summary, output)
+                success_live_result(descriptor, request_id, cluster, summary, output)
             }
             #[cfg(feature = "change-planning")]
             ToolId::PlanUpdateTopicConfig => {
@@ -284,7 +311,7 @@ where
                 let cluster = args.cluster.clone();
                 let output = change_tools::plan_update_topic_config(args);
                 let summary = summary_change_plan(&output);
-                success_result(descriptor, request_id, cluster, summary, output)
+                success_live_result(descriptor, request_id, cluster, summary, output)
             }
             #[cfg(feature = "change-planning")]
             ToolId::PlanUpdateTopicPermissions => {
@@ -295,7 +322,7 @@ where
                 let cluster = args.cluster.clone();
                 let output = change_tools::plan_update_topic_perm(args);
                 let summary = summary_change_plan(&output);
-                success_result(descriptor, request_id, cluster, summary, output)
+                success_live_result(descriptor, request_id, cluster, summary, output)
             }
             #[cfg(feature = "change-planning")]
             ToolId::PlanUpdateBrokerConfig => {
@@ -306,7 +333,7 @@ where
                 let cluster = args.cluster.clone();
                 let output = change_tools::plan_update_broker_config(args);
                 let summary = summary_change_plan(&output);
-                success_result(descriptor, request_id, cluster, summary, output)
+                success_live_result(descriptor, request_id, cluster, summary, output)
             }
             #[cfg(feature = "change-planning")]
             ToolId::PlanResetConsumerOffset => {
@@ -317,7 +344,7 @@ where
                 let cluster = args.cluster.clone();
                 let output = change_tools::plan_reset_consumer_offset(args);
                 let summary = summary_change_plan(&output);
-                success_result(descriptor, request_id, cluster, summary, output)
+                success_live_result(descriptor, request_id, cluster, summary, output)
             }
         };
 
@@ -350,12 +377,44 @@ fn success_result<T>(
     request_id: &str,
     cluster: String,
     summary: String,
+    output: QueryResult<T>,
+    resource: RocketmqResourceUri,
+) -> Result<CallToolResult, ToolExecutionError>
+where
+    T: Serialize,
+{
+    let envelope = ToolResponse::from_query(request_id, cluster, output);
+    render_success(descriptor, summary, envelope, Some(resource))
+}
+
+#[cfg(feature = "change-planning")]
+fn success_live_result<T>(
+    descriptor: ToolDescriptor,
+    request_id: &str,
+    cluster: String,
+    summary: String,
     output: T,
 ) -> Result<CallToolResult, ToolExecutionError>
 where
     T: Serialize,
 {
-    let envelope = ToolResponse::live(request_id, cluster, output);
+    render_success(
+        descriptor,
+        summary,
+        ToolResponse::live(request_id, cluster, output),
+        None,
+    )
+}
+
+fn render_success<T>(
+    descriptor: ToolDescriptor,
+    summary: String,
+    envelope: ToolResponse<T>,
+    resource: Option<RocketmqResourceUri>,
+) -> Result<CallToolResult, ToolExecutionError>
+where
+    T: Serialize,
+{
     let structured = serde_json::to_value(envelope).map_err(ToolExecutionError::internal)?;
     let structured = output_policy::apply(structured)?;
     let definition = descriptor.id.definition();
@@ -365,9 +424,21 @@ where
         .ok_or_else(|| ToolExecutionError::Internal("Tool output schema is missing".to_string()))?;
     validate_schema(output_schema.as_ref(), &structured, "output").map_err(ToolExecutionError::internal)?;
     let json_text = serde_json::to_string(&structured).map_err(ToolExecutionError::internal)?;
-    let mut result = CallToolResult::success(vec![ContentBlock::text(summary), ContentBlock::text(json_text)]);
+    let mut content = vec![ContentBlock::text(summary), ContentBlock::text(json_text)];
+    if let Some(resource) = resource {
+        content.push(resource_link(resource));
+    }
+    let mut result = CallToolResult::success(content);
     result.structured_content = Some(structured);
     Ok(result)
+}
+
+fn resource_link(uri: RocketmqResourceUri) -> ContentBlock {
+    let resource = Resource::new(uri.as_string(), uri.name())
+        .with_title(uri.kind.title())
+        .with_description(uri.kind.description())
+        .with_mime_type(JSON_MIME_TYPE);
+    ContentBlock::resource_link(resource)
 }
 
 fn validate_schema(schema: &JsonObject, value: &Value, label: &str) -> Result<(), String> {
@@ -491,68 +562,68 @@ mod tests {
         async fn cluster_overview(
             &self,
             args: cluster_tools::ClusterOverviewArgs,
-        ) -> Result<cluster_tools::ClusterOverviewOutput, ToolExecutionError> {
+        ) -> Result<QueryResult<cluster_tools::ClusterOverviewOutput>, ToolExecutionError> {
             if self.fail {
                 return Err(ToolExecutionError::backend(
                     "nameserver unavailable secret_key=super-secret",
                 ));
             }
-            Ok(cluster_tools::ClusterOverviewOutput {
+            Ok(QueryResult::bypass(cluster_tools::ClusterOverviewOutput {
                 cluster: args.cluster,
                 namesrv_addr: "127.0.0.1:9876".to_string(),
                 brokers: vec![broker_summary()],
                 topic_count: 2,
                 consumer_group_count: 1,
                 generated_at: "1".to_string(),
-            })
+            }))
         }
 
         async fn list_topics(
             &self,
             _args: topic_tools::ListTopicsArgs,
-        ) -> Result<topic_tools::ListTopicsOutput, ToolExecutionError> {
+        ) -> Result<QueryResult<topic_tools::ListTopicsOutput>, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
 
         async fn describe_topic(
             &self,
             _args: topic_tools::DescribeTopicArgs,
-        ) -> Result<topic_tools::DescribeTopicOutput, ToolExecutionError> {
+        ) -> Result<QueryResult<topic_tools::DescribeTopicOutput>, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
 
         async fn query_topic_route(
             &self,
             _args: topic_tools::QueryTopicRouteArgs,
-        ) -> Result<topic_tools::QueryTopicRouteOutput, ToolExecutionError> {
+        ) -> Result<QueryResult<topic_tools::QueryTopicRouteOutput>, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
 
         async fn list_consumer_groups(
             &self,
             _args: consumer_tools::ListConsumerGroupsArgs,
-        ) -> Result<consumer_tools::ListConsumerGroupsOutput, ToolExecutionError> {
+        ) -> Result<QueryResult<consumer_tools::ListConsumerGroupsOutput>, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
 
         async fn query_consumer_lag(
             &self,
             _args: consumer_tools::QueryConsumerLagArgs,
-        ) -> Result<consumer_tools::QueryConsumerLagOutput, ToolExecutionError> {
+        ) -> Result<QueryResult<consumer_tools::QueryConsumerLagOutput>, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
 
         async fn describe_broker(
             &self,
             _args: broker_tools::DescribeBrokerArgs,
-        ) -> Result<broker_tools::DescribeBrokerOutput, ToolExecutionError> {
+        ) -> Result<QueryResult<broker_tools::DescribeBrokerOutput>, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
 
         async fn diagnose_consumer_lag(
             &self,
             _args: diagnosis_tools::DiagnoseConsumerLagArgs,
-        ) -> Result<crate::model::diagnosis::DiagnosisReport, ToolExecutionError> {
+        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
     }
@@ -583,6 +654,8 @@ mod tests {
         assert!(structured["data"].get("namesrv_addr").is_none());
         assert!(structured["data"]["brokers"][0].get("broker_addr").is_none());
         assert!(!result.content.is_empty());
+        let resource_link = result.content.iter().find_map(ContentBlock::as_resource_link).unwrap();
+        assert_eq!(resource_link.uri, "rocketmq://clusters/local-dev/overview");
         let records = guard.audit_log().records();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].tool, ToolId::GetClusterOverview.descriptor().name);

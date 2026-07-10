@@ -36,7 +36,6 @@ use rmcp::RoleServer;
 use rmcp::ServerHandler;
 use serde_json::json;
 
-use crate::adapter::query_facade::QueryFacade;
 use crate::app::McpApp;
 use crate::prompts;
 use crate::resources;
@@ -98,18 +97,18 @@ impl ServerHandler for RocketmqMcpServer {
 
     async fn list_resources(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        Ok(resources::registry::list_resources(self.app.config()))
+        resources::registry::list_resources(self.app.config(), request.as_ref())
     }
 
     async fn list_resource_templates(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
-        Ok(resources::registry::list_resource_templates())
+        resources::registry::list_resource_templates(request.as_ref())
     }
 
     async fn read_resource(
@@ -117,8 +116,10 @@ impl ServerHandler for RocketmqMcpServer {
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
-        let query = QueryFacade::new(self.app.config().clone()).with_cancellation(context.ct);
-        resources::reader::read_resource(&query, &request.uri).await
+        let query = self.app.query().as_ref().clone().with_cancellation(context.ct);
+        let result = resources::reader::read_resource(&query, &request.uri).await;
+        self.app.trace_cache_metrics();
+        result
     }
 
     async fn list_prompts(
@@ -150,10 +151,12 @@ impl ServerHandler for RocketmqMcpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let query = QueryFacade::new(self.app.config().clone()).with_cancellation(context.ct.clone());
-        ToolExecutor::new(query, self.app.guard().clone())
+        let query = self.app.query().as_ref().clone().with_cancellation(context.ct.clone());
+        let result = ToolExecutor::new(query, self.app.guard().clone())
             .call_with_request_id(request, &request_id_string(&context.id))
-            .await
+            .await;
+        self.app.trace_cache_metrics();
+        result
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -203,14 +206,18 @@ mod tests {
             .into_iter()
             .map(|tool| serde_json::to_value(tool).expect("tool descriptor serializes"))
             .collect::<Vec<_>>();
-        let resources = resources::registry::list_resources(&McpConfig::load(example_config_path()).unwrap())
+        let resources = resources::registry::list_resources(&McpConfig::load(example_config_path()).unwrap(), None)
+            .unwrap()
             .resources
             .into_iter()
             .map(|resource| serde_json::to_value(resource).expect("resource descriptor serializes"))
             .collect::<Vec<_>>();
-        let resource_templates =
-            serde_json::to_value(resources::registry::list_resource_templates().resource_templates)
-                .expect("resource templates serialize");
+        let resource_templates = serde_json::to_value(
+            resources::registry::list_resource_templates(None)
+                .unwrap()
+                .resource_templates,
+        )
+        .expect("resource templates serialize");
         let prompts = prompts::registry::list_prompts()
             .unwrap()
             .prompts

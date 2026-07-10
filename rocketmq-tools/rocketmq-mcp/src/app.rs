@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
+use crate::adapter::admin_session::AdminCoreSessionFactory;
+use crate::adapter::query_facade::QueryFacade;
 use crate::config::Args;
 use crate::config::McpConfig;
 use crate::config::TransportKind;
@@ -21,12 +25,14 @@ use crate::guard::Guard;
 pub struct McpApp {
     config: McpConfig,
     guard: Guard,
+    query: Arc<QueryFacade<AdminCoreSessionFactory>>,
 }
 
 impl McpApp {
     pub fn new(config: McpConfig) -> Self {
         let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters);
-        Self { config, guard }
+        let query = Arc::new(QueryFacade::new(config.clone()).with_visibility_class("local"));
+        Self { config, guard, query }
     }
 
     pub async fn bootstrap(args: Args) -> anyhow::Result<Self> {
@@ -41,6 +47,28 @@ impl McpApp {
 
     pub fn guard(&self) -> &Guard {
         &self.guard
+    }
+
+    pub(crate) fn query(&self) -> &Arc<QueryFacade<AdminCoreSessionFactory>> {
+        &self.query
+    }
+
+    pub(crate) fn trace_cache_metrics(&self) {
+        let metrics = self.query.cache_metrics();
+        tracing::trace!(
+            cache_hits = metrics.hits,
+            cache_misses = metrics.misses,
+            cache_bypasses = metrics.bypasses,
+            cache_evictions = metrics.evictions,
+            cache_invalidations = metrics.invalidations,
+            cache_coalesced_waiters = metrics.coalesced_waiters,
+            "rocketmq-mcp cache metrics"
+        );
+    }
+
+    /// Clears all cached RocketMQ query results and returns the number of removed entries.
+    pub async fn invalidate_cache(&self) -> usize {
+        self.query.invalidate_cache().await
     }
 
     pub fn transport(&self) -> TransportKind {

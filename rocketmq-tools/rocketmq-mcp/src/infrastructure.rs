@@ -12,20 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![recursion_limit = "256"]
-
-//! Model Context Protocol server for RocketMQ-Rust diagnostics.
-
-pub mod adapter;
-pub mod app;
-pub mod config;
-pub mod error;
-pub mod guard;
-pub(crate) mod infrastructure;
-pub mod model;
-pub mod prompts;
-pub mod protocol;
-pub mod resources;
-pub mod service;
-pub mod tools;
-pub mod transport;
+pub(crate) mod cache;

@@ -206,3 +206,39 @@ cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 
 These are deterministic local lifecycle and contract results. They do not
 claim live-cluster connection latency, request latency, or throughput.
+
+### P3 Resource and Cache Replacement
+
+P3 replaces placeholder Resource discovery with the final cluster-scoped URI
+surface and adds a shared bounded TTL cache inside `QueryFacade`. The cache is
+configured by `cache.enabled`, `cache.max_entries`, and the query-family TTL
+fields. Its normalized key includes schema version, visibility class, query
+kind, resolved cluster, filter, page limit, and cursor where applicable.
+
+| Target | Recorded deterministic evidence |
+| --- | --- |
+| Tool/Resource reuse | `query_facade_reuses_cached_results_across_tool_and_resource_queries`: first Tool result is `miss`, Resource replay is `hit`, start 1, shutdown 1, topic query 1. |
+| Singleflight | `query_facade_singleflight_coalesces_concurrent_identical_misses`: 8 concurrent calls produce 1 miss, 7 hits, 7 coalesced waiters, start 1, shutdown 1, topic query 1. |
+| Visibility isolation | `query_facade_cache_isolates_visibility_classes`: two visibility classes produce two misses and two independent admin sessions. |
+| Cache bounds | Cache unit tests cover hit, miss, expiry, FIFO eviction, explicit invalidation, disabled bypass, failed-load retry, and concurrent singleflight. |
+| URI contract | URI and reader tests cover all four roots and five parameterized forms, reject legacy/incomplete forms, and map unknown live entities to Resource Not Found. |
+| Discovery pagination | `registry_cursor_resumes_resource_discovery` returns 50 descriptors and resumes the remaining two with the opaque cursor; invalid cursors are rejected. |
+
+The default and `change-planning` protocol snapshots now contain five Resource
+templates. Read-only Tool results include a ResourceLink, and Resource payloads
+include `observed_at`, `freshness_ms`, and `cache_status`. Cache counters are
+emitted through trace-level events after Tool and Resource requests.
+
+Recorded validation:
+
+```bash
+cargo test -p rocketmq-mcp
+cargo test -p rocketmq-mcp --all-features
+cargo clippy -p rocketmq-mcp --all-targets --all-features -- -D warnings
+cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo doc -p rocketmq-mcp --no-deps --all-features
+```
+
+These tests use an injected session factory and do not claim live-cluster
+latency or throughput. Production cluster integration remains a P6 release
+gate.

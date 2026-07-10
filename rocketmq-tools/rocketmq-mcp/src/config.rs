@@ -132,6 +132,12 @@ impl McpConfig {
             validate_non_empty("audit.path", &self.audit.path)?;
         }
 
+        if self.cache.enabled && self.cache.max_entries == 0 {
+            return Err(McpError::InvalidConfig(
+                "cache.max_entries must be greater than zero when cache is enabled".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }
@@ -225,6 +231,8 @@ pub struct AuditConfig {
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct CacheConfig {
+    pub enabled: bool,
+    pub max_entries: usize,
     pub cluster_overview_ttl_ms: u64,
     pub topic_list_ttl_ms: u64,
     pub broker_metrics_ttl_ms: u64,
@@ -325,6 +333,8 @@ sink = "file"
 path = "./logs/rocketmq-mcp-audit.log"
 
 [cache]
+enabled = true
+max_entries = 256
 cluster_overview_ttl_ms = 3000
 topic_list_ttl_ms = 5000
 broker_metrics_ttl_ms = 2000
@@ -366,6 +376,16 @@ consumer_lag_ttl_ms = 1000
         let err = config.apply_overrides(&args).unwrap_err();
 
         assert!(err.to_string().contains("endpoint must start"));
+    }
+
+    #[test]
+    fn enabled_cache_requires_positive_capacity() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.cache.max_entries = 0;
+
+        let error = config.validate().unwrap_err();
+
+        assert!(error.to_string().contains("cache.max_entries"));
     }
 
     fn write_temp_config(contents: &str) -> std::path::PathBuf {

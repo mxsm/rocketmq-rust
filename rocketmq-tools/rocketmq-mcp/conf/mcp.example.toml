@@ -31,6 +31,8 @@ sink = "file"
 path = "./logs/rocketmq-mcp-audit.log"
 
 [cache]
+enabled = true
+max_entries = 256
 cluster_overview_ttl_ms = 3000
 topic_list_ttl_ms = 5000
 broker_metrics_ttl_ms = 2000

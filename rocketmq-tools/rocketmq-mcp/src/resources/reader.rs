@@ -24,10 +24,14 @@ use crate::model::contract::SCHEMA_VERSION;
 use crate::resources::uri::ResourceKind;
 use crate::resources::uri::RocketmqResourceUri;
 use crate::resources::uri::JSON_MIME_TYPE;
+use crate::tools::broker_tools::DescribeBrokerArgs;
 use crate::tools::cluster_tools::ClusterOverviewArgs;
 use crate::tools::consumer_tools::ListConsumerGroupsArgs;
+use crate::tools::consumer_tools::QueryConsumerLagArgs;
 use crate::tools::executor::ToolExecutionError;
+use crate::tools::topic_tools::DescribeTopicArgs;
 use crate::tools::topic_tools::ListTopicsArgs;
+use crate::tools::topic_tools::QueryTopicRouteArgs;
 
 pub(crate) async fn read_resource<Q>(query: &Q, uri: &str) -> Result<ReadResourceResult, ErrorData>
 where
@@ -50,7 +54,7 @@ async fn resource_payload<Q>(query: &Q, uri: &RocketmqResourceUri) -> Result<Val
 where
     Q: ReadOnlyQuery,
 {
-    match uri.kind {
+    match &uri.kind {
         ResourceKind::Overview => {
             let output = query
                 .cluster_overview(ClusterOverviewArgs {
@@ -60,8 +64,10 @@ where
             Ok(live_payload(
                 uri,
                 "overview",
-                output.generated_at.clone(),
-                json!(output),
+                output.observed_at,
+                output.freshness_ms,
+                output.cache_status,
+                json!(output.data),
             ))
         }
         ResourceKind::Topics => {
@@ -75,8 +81,44 @@ where
             Ok(live_payload(
                 uri,
                 "topics",
-                output.generated_at.clone(),
-                json!(output.page),
+                output.observed_at,
+                output.freshness_ms,
+                output.cache_status,
+                json!(output.data.page),
+            ))
+        }
+        ResourceKind::Topic(topic) => {
+            let output = query
+                .describe_topic(DescribeTopicArgs {
+                    cluster: uri.cluster.clone(),
+                    topic: topic.clone(),
+                    page: PageRequest::default(),
+                })
+                .await?;
+            Ok(live_payload(
+                uri,
+                "topic",
+                output.observed_at,
+                output.freshness_ms,
+                output.cache_status,
+                json!(output.data),
+            ))
+        }
+        ResourceKind::TopicRoute(topic) => {
+            let output = query
+                .query_topic_route(QueryTopicRouteArgs {
+                    cluster: uri.cluster.clone(),
+                    topic: topic.clone(),
+                    page: PageRequest::default(),
+                })
+                .await?;
+            Ok(live_payload(
+                uri,
+                "route",
+                output.observed_at,
+                output.freshness_ms,
+                output.cache_status,
+                json!(output.data),
             ))
         }
         ResourceKind::Brokers => {
@@ -88,8 +130,32 @@ where
             Ok(live_payload(
                 uri,
                 "brokers",
-                output.generated_at.clone(),
-                json!(output.brokers),
+                output.observed_at,
+                output.freshness_ms,
+                output.cache_status,
+                json!(output.data.brokers),
+            ))
+        }
+        ResourceKind::Broker(broker) => {
+            let output = query
+                .describe_broker(DescribeBrokerArgs {
+                    cluster: uri.cluster.clone(),
+                    broker_name: broker.clone(),
+                })
+                .await?;
+            if output.data.brokers.is_empty() {
+                return Err(ToolExecutionError::InvalidArguments(format!(
+                    "broker not found in cluster {}: {broker}",
+                    uri.cluster
+                )));
+            }
+            Ok(live_payload(
+                uri,
+                "broker",
+                output.observed_at,
+                output.freshness_ms,
+                output.cache_status,
+                json!(output.data),
             ))
         }
         ResourceKind::ConsumerGroups => {
@@ -103,19 +169,78 @@ where
             Ok(live_payload(
                 uri,
                 "consumer_groups",
-                output.generated_at.clone(),
-                json!(output.page),
+                output.observed_at,
+                output.freshness_ms,
+                output.cache_status,
+                json!(output.data.page),
+            ))
+        }
+        ResourceKind::ConsumerGroup(group) => {
+            let output = query
+                .list_consumer_groups(ListConsumerGroupsArgs {
+                    cluster: Some(uri.cluster.clone()),
+                    filter: Some(group.clone()),
+                    page: PageRequest::default(),
+                })
+                .await?;
+            let consumer_group = output
+                .data
+                .page
+                .items
+                .iter()
+                .find(|item| item.group == *group)
+                .cloned()
+                .ok_or_else(|| {
+                    ToolExecutionError::InvalidArguments(format!(
+                        "consumer group not found in cluster {}: {group}",
+                        uri.cluster
+                    ))
+                })?;
+            Ok(live_payload(
+                uri,
+                "consumer_group",
+                output.observed_at,
+                output.freshness_ms,
+                output.cache_status,
+                json!(consumer_group),
+            ))
+        }
+        ResourceKind::ConsumerLag { group, topic } => {
+            let output = query
+                .query_consumer_lag(QueryConsumerLagArgs {
+                    cluster: uri.cluster.clone(),
+                    topic: topic.clone(),
+                    consumer_group: group.clone(),
+                    page: PageRequest::default(),
+                })
+                .await?;
+            Ok(live_payload(
+                uri,
+                "consumer_lag",
+                output.observed_at,
+                output.freshness_ms,
+                output.cache_status,
+                json!(output.data),
             ))
         }
     }
 }
 
-fn live_payload(uri: &RocketmqResourceUri, field: &str, observed_at: String, data: Value) -> Value {
+fn live_payload(
+    uri: &RocketmqResourceUri,
+    field: &str,
+    observed_at: String,
+    freshness_ms: u64,
+    cache_status: crate::model::contract::CacheStatus,
+    data: Value,
+) -> Value {
     let mut payload = serde_json::Map::from_iter([
         ("schema_version".to_string(), json!(SCHEMA_VERSION)),
         ("resource".to_string(), json!(uri.as_string())),
         ("cluster".to_string(), json!(uri.cluster)),
         ("observed_at".to_string(), json!(observed_at)),
+        ("freshness_ms".to_string(), json!(freshness_ms)),
+        ("cache_status".to_string(), json!(cache_status)),
         ("source".to_string(), json!("live")),
         ("partial".to_string(), json!(false)),
         ("warnings".to_string(), json!([])),
@@ -127,9 +252,35 @@ fn live_payload(uri: &RocketmqResourceUri, field: &str, observed_at: String, dat
 fn resource_error(uri: &str, error: ToolExecutionError) -> ErrorData {
     match error {
         ToolExecutionError::InvalidArguments(message) => ErrorData::resource_not_found(message, None),
-        _ => ErrorData::internal_error(
+        ToolExecutionError::TimedOut { timeout_ms } => ErrorData::internal_error(
+            format!("live RocketMQ resource query timed out: {uri}"),
+            Some(json!({
+                "code": "resource_query_timeout",
+                "retryable": true,
+                "timeout_ms": timeout_ms,
+            })),
+        ),
+        ToolExecutionError::Cancelled => ErrorData::internal_error(
+            format!("live RocketMQ resource query was cancelled: {uri}"),
+            Some(json!({ "code": "resource_query_cancelled", "retryable": true })),
+        ),
+        ToolExecutionError::PermissionDenied(_) => ErrorData::internal_error(
+            format!("permission denied for RocketMQ resource: {uri}"),
+            Some(json!({ "code": "resource_permission_denied", "retryable": false })),
+        ),
+        ToolExecutionError::RateLimited(_) => ErrorData::internal_error(
+            format!("rate limit exceeded for RocketMQ resource: {uri}"),
+            Some(json!({ "code": "resource_rate_limited", "retryable": true })),
+        ),
+        ToolExecutionError::Backend(_) => ErrorData::internal_error(
             format!("live RocketMQ resource query failed: {uri}"),
-            Some(json!({ "code": "resource_query_failed" })),
+            Some(json!({ "code": "resource_backend_unavailable", "retryable": true })),
+        ),
+        ToolExecutionError::ChangePlanningDisabled(_)
+        | ToolExecutionError::Internal(_)
+        | ToolExecutionError::OutputTooLarge { .. } => ErrorData::internal_error(
+            format!("live RocketMQ resource query failed: {uri}"),
+            Some(json!({ "code": "resource_query_failed", "retryable": false })),
         ),
     }
 }
@@ -137,9 +288,12 @@ fn resource_error(uri: &str, error: ToolExecutionError) -> ErrorData {
 #[cfg(test)]
 mod tests {
     use crate::model::contract::Page;
+    use crate::model::contract::QueryResult;
     use crate::model::diagnosis::DiagnosisReport;
     use crate::tools::broker_tools::DescribeBrokerArgs;
     use crate::tools::broker_tools::DescribeBrokerOutput;
+    use crate::tools::cluster_tools::BrokerSummary;
+    use crate::tools::consumer_tools::ConsumerGroupSummary;
     use crate::tools::consumer_tools::ListConsumerGroupsOutput;
     use crate::tools::consumer_tools::QueryConsumerLagArgs;
     use crate::tools::consumer_tools::QueryConsumerLagOutput;
@@ -158,71 +312,141 @@ mod tests {
         async fn cluster_overview(
             &self,
             args: ClusterOverviewArgs,
-        ) -> Result<crate::tools::cluster_tools::ClusterOverviewOutput, ToolExecutionError> {
+        ) -> Result<QueryResult<crate::tools::cluster_tools::ClusterOverviewOutput>, ToolExecutionError> {
             if args.cluster != "local-dev" {
                 return Err(ToolExecutionError::InvalidArguments(format!(
                     "unknown cluster: {}",
                     args.cluster
                 )));
             }
-            Ok(crate::tools::cluster_tools::ClusterOverviewOutput {
+            Ok(QueryResult::bypass(
+                crate::tools::cluster_tools::ClusterOverviewOutput {
+                    cluster: args.cluster,
+                    namesrv_addr: "hidden".to_string(),
+                    brokers: Vec::new(),
+                    topic_count: 0,
+                    consumer_group_count: 0,
+                    generated_at: "2026-07-10T00:00:00.000Z".to_string(),
+                },
+            ))
+        }
+
+        async fn list_topics(
+            &self,
+            _args: ListTopicsArgs,
+        ) -> Result<QueryResult<ListTopicsOutput>, ToolExecutionError> {
+            unimplemented!("not needed by reader tests")
+        }
+
+        async fn describe_topic(
+            &self,
+            args: DescribeTopicArgs,
+        ) -> Result<QueryResult<DescribeTopicOutput>, ToolExecutionError> {
+            if args.topic != "orders" {
+                return Err(ToolExecutionError::InvalidArguments(format!(
+                    "topic not found: {}",
+                    args.topic
+                )));
+            }
+            Ok(QueryResult::bypass(DescribeTopicOutput {
                 cluster: args.cluster,
                 namesrv_addr: "hidden".to_string(),
+                topic: args.topic,
+                broker_names: vec!["broker-a".to_string()],
+                read_queue_count: 0,
+                write_queue_count: 0,
                 brokers: Vec::new(),
-                topic_count: 0,
-                consumer_group_count: 0,
+                page: empty_page(),
                 generated_at: "2026-07-10T00:00:00.000Z".to_string(),
-            })
-        }
-
-        async fn list_topics(&self, _args: ListTopicsArgs) -> Result<ListTopicsOutput, ToolExecutionError> {
-            unimplemented!("not needed by reader tests")
-        }
-
-        async fn describe_topic(&self, _args: DescribeTopicArgs) -> Result<DescribeTopicOutput, ToolExecutionError> {
-            unimplemented!("not needed by reader tests")
+            }))
         }
 
         async fn query_topic_route(
             &self,
-            _args: QueryTopicRouteArgs,
-        ) -> Result<QueryTopicRouteOutput, ToolExecutionError> {
-            unimplemented!("not needed by reader tests")
+            args: QueryTopicRouteArgs,
+        ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError> {
+            Ok(QueryResult::bypass(QueryTopicRouteOutput {
+                cluster: args.cluster,
+                namesrv_addr: "hidden".to_string(),
+                topic: args.topic,
+                brokers: Vec::new(),
+                read_queue_count: 0,
+                write_queue_count: 0,
+                page: empty_page(),
+                generated_at: "2026-07-10T00:00:00.000Z".to_string(),
+            }))
         }
 
         async fn list_consumer_groups(
             &self,
             args: ListConsumerGroupsArgs,
-        ) -> Result<ListConsumerGroupsOutput, ToolExecutionError> {
-            Ok(ListConsumerGroupsOutput {
+        ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolExecutionError> {
+            let items = (args.filter.as_deref().is_none() || args.filter.as_deref() == Some("order-service"))
+                .then(|| ConsumerGroupSummary {
+                    group: "order-service".to_string(),
+                    version: 1,
+                    client_count: 1,
+                    consume_type: "CONSUME_PASSIVELY".to_string(),
+                    message_model: "CLUSTERING".to_string(),
+                    consume_tps: 1.0,
+                    diff_total: 0,
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
+            let count = items.len();
+            Ok(QueryResult::bypass(ListConsumerGroupsOutput {
                 cluster: args.cluster.unwrap_or_else(|| "local-dev".to_string()),
                 namesrv_addr: "hidden".to_string(),
                 page: Page {
-                    items: Vec::new(),
-                    count: 0,
-                    total_count: 0,
+                    items,
+                    count,
+                    total_count: count,
                     has_more: false,
                     next_cursor: None,
                 },
                 generated_at: "2026-07-10T00:00:00.000Z".to_string(),
-            })
+            }))
         }
 
         async fn query_consumer_lag(
             &self,
-            _args: QueryConsumerLagArgs,
-        ) -> Result<QueryConsumerLagOutput, ToolExecutionError> {
-            unimplemented!("not needed by reader tests")
+            args: QueryConsumerLagArgs,
+        ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolExecutionError> {
+            Ok(QueryResult::bypass(QueryConsumerLagOutput {
+                cluster: args.cluster,
+                namesrv_addr: "hidden".to_string(),
+                topic: args.topic,
+                consumer_group: args.consumer_group,
+                total_lag: 0,
+                max_queue_lag: 0,
+                consume_tps: 1.0,
+                inflight_total: 0,
+                page: empty_page(),
+                generated_at: "2026-07-10T00:00:00.000Z".to_string(),
+            }))
         }
 
-        async fn describe_broker(&self, _args: DescribeBrokerArgs) -> Result<DescribeBrokerOutput, ToolExecutionError> {
-            unimplemented!("not needed by reader tests")
+        async fn describe_broker(
+            &self,
+            args: DescribeBrokerArgs,
+        ) -> Result<QueryResult<DescribeBrokerOutput>, ToolExecutionError> {
+            let brokers = (args.broker_name == "broker-a")
+                .then(|| broker_summary(&args.cluster, &args.broker_name))
+                .into_iter()
+                .collect();
+            Ok(QueryResult::bypass(DescribeBrokerOutput {
+                cluster: args.cluster,
+                namesrv_addr: "hidden".to_string(),
+                broker_name: args.broker_name,
+                brokers,
+                generated_at: "2026-07-10T00:00:00.000Z".to_string(),
+            }))
         }
 
         async fn diagnose_consumer_lag(
             &self,
             _args: DiagnoseConsumerLagArgs,
-        ) -> Result<DiagnosisReport, ToolExecutionError> {
+        ) -> Result<QueryResult<DiagnosisReport>, ToolExecutionError> {
             unimplemented!("not needed by reader tests")
         }
     }
@@ -252,7 +476,42 @@ mod tests {
         assert_eq!(payload["schema_version"], SCHEMA_VERSION);
         assert_eq!(payload["source"], "live");
         assert_eq!(payload["partial"], false);
-        assert_eq!(payload["consumer_groups"]["total_count"], 0);
+        assert_eq!(payload["consumer_groups"]["total_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn read_parameterized_resources_returns_live_data() {
+        let cases = [
+            ("rocketmq://clusters/local-dev/topics/orders", "topic"),
+            ("rocketmq://clusters/local-dev/topics/orders/route", "route"),
+            (
+                "rocketmq://clusters/local-dev/consumer-groups/order-service",
+                "consumer_group",
+            ),
+            (
+                "rocketmq://clusters/local-dev/consumer-groups/order-service/lag?topic=orders",
+                "consumer_lag",
+            ),
+            ("rocketmq://clusters/local-dev/brokers/broker-a", "broker"),
+        ];
+
+        for (uri, field) in cases {
+            let result = read_resource(&FakeQuery, uri).await.unwrap();
+            let payload = read_json_payload(&result);
+
+            assert_eq!(payload["resource"], uri);
+            assert_eq!(payload["source"], "live");
+            assert!(payload.get(field).is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn read_unknown_parameterized_resource_returns_not_found() {
+        let error = read_resource(&FakeQuery, "rocketmq://clusters/local-dev/brokers/missing")
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, rmcp::model::ErrorCode::RESOURCE_NOT_FOUND);
     }
 
     #[tokio::test]
@@ -268,6 +527,27 @@ mod tests {
         assert_eq!(unknown_cluster.code, rmcp::model::ErrorCode::RESOURCE_NOT_FOUND);
     }
 
+    #[test]
+    fn resource_errors_distinguish_permission_timeout_and_backend_failure() {
+        let permission = resource_error(
+            "rocketmq://clusters/local-dev/topics",
+            ToolExecutionError::PermissionDenied("missing scope".to_string()),
+        );
+        let timeout = resource_error(
+            "rocketmq://clusters/local-dev/topics",
+            ToolExecutionError::TimedOut { timeout_ms: 5000 },
+        );
+        let backend = resource_error(
+            "rocketmq://clusters/local-dev/topics",
+            ToolExecutionError::backend("nameserver unavailable secret_key=hidden"),
+        );
+
+        assert_eq!(permission.data.unwrap()["code"], "resource_permission_denied");
+        assert_eq!(timeout.data.unwrap()["code"], "resource_query_timeout");
+        assert_eq!(backend.data.unwrap()["code"], "resource_backend_unavailable");
+        assert!(!backend.message.contains("secret_key"));
+    }
+
     fn read_json_payload(result: &ReadResourceResult) -> Value {
         assert_eq!(result.contents.len(), 1);
         match &result.contents[0] {
@@ -277,6 +557,33 @@ mod tests {
             }
             ResourceContents::BlobResourceContents { .. } => panic!("resource should be returned as text"),
             _ => panic!("unsupported resource content variant"),
+        }
+    }
+
+    fn empty_page<T>() -> Page<T> {
+        Page {
+            items: Vec::new(),
+            count: 0,
+            total_count: 0,
+            has_more: false,
+            next_cursor: None,
+        }
+    }
+
+    fn broker_summary(cluster: &str, broker_name: &str) -> BrokerSummary {
+        BrokerSummary {
+            cluster: cluster.to_string(),
+            broker_name: broker_name.to_string(),
+            broker_id: 0,
+            broker_addr: "hidden".to_string(),
+            version: "test".to_string(),
+            in_tps: "0".to_string(),
+            out_tps: "0".to_string(),
+            timer_progress: "0".to_string(),
+            page_cache_lock_time_millis: "0".to_string(),
+            hour: "0".to_string(),
+            space: "0".to_string(),
+            broker_active: true,
         }
     }
 }
