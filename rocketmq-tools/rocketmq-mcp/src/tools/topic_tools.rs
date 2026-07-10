@@ -18,14 +18,18 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub const LIST_TOPICS_TOOL: &str = "mq_list_topics";
-pub const DESCRIBE_TOPIC_TOOL: &str = "mq_describe_topic";
-pub const QUERY_TOPIC_ROUTE_TOOL: &str = "mq_query_topic_route";
+use crate::model::contract::Page;
+use crate::model::contract::PageRequest;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ListTopicsArgs {
     #[serde(default)]
     pub cluster: Option<String>,
+    #[serde(default)]
+    pub filter: Option<String>,
+    #[serde(flatten)]
+    pub page: PageRequest,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -38,28 +42,39 @@ pub struct TopicListEntry {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct ListTopicsOutput {
     pub cluster: String,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub namesrv_addr: String,
-    pub topic_count: usize,
-    pub topics: Vec<TopicListEntry>,
+    #[serde(flatten)]
+    #[schemars(flatten)]
+    pub page: Page<TopicListEntry>,
     pub generated_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DescribeTopicArgs {
     pub cluster: String,
     pub topic: String,
+    #[serde(flatten)]
+    pub page: PageRequest,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct QueryTopicRouteArgs {
     pub cluster: String,
     pub topic: String,
+    #[serde(flatten)]
+    pub page: PageRequest,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct TopicRouteBroker {
     pub cluster: String,
     pub broker_name: String,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub broker_addrs: BTreeMap<String, String>,
     pub zone_name: Option<String>,
     pub enable_acting_master: bool,
@@ -77,22 +92,32 @@ pub struct TopicRouteQueue {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct QueryTopicRouteOutput {
     pub cluster: String,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub namesrv_addr: String,
     pub topic: String,
     pub brokers: Vec<TopicRouteBroker>,
-    pub queues: Vec<TopicRouteQueue>,
+    pub read_queue_count: u32,
+    pub write_queue_count: u32,
+    #[serde(flatten)]
+    #[schemars(flatten)]
+    pub page: Page<TopicRouteQueue>,
     pub generated_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct DescribeTopicOutput {
     pub cluster: String,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub namesrv_addr: String,
     pub topic: String,
     pub broker_names: Vec<String>,
     pub read_queue_count: u32,
     pub write_queue_count: u32,
     pub brokers: Vec<TopicRouteBroker>,
-    pub queues: Vec<TopicRouteQueue>,
+    #[serde(flatten)]
+    #[schemars(flatten)]
+    pub page: Page<TopicRouteQueue>,
     pub generated_at: String,
 }

@@ -2,6 +2,8 @@
 
 `rocketmq-mcp` is the Model Context Protocol server for RocketMQ-Rust AI SRE and diagnostics workflows. It exposes read-only RocketMQ context, diagnostic tools, and runbook prompts to MCP clients such as Claude Desktop, Cursor, Codex, and MCP Inspector.
 
+The frozen MCP 2025-11-25 contract is documented in `rocketmq-doc/en/07-rocketmq-mcp-contract-v2.md`.
+
 ## What It Is
 
 - A standalone MCP server binary named `rocketmq-mcp`.
@@ -13,7 +15,7 @@
 
 - It is not part of the RocketMQ broker or namesrv runtime path.
 - It is not a replacement for production access control, network policy, or operator review.
-- It does not enable mutation tools by default. Dangerous tools require future compile-time and runtime opt-in gates.
+- It does not expose an Apply path. Optional planning Tools produce reviewable, non-mutating plans only.
 - It does not hide all operational risk. Treat AI-generated recommendations as operator input, not an automatic execution plan.
 
 ## Capabilities
@@ -24,22 +26,25 @@ Optional features:
 
 - `streamable-http`: enables the Streamable HTTP transport.
 - `observability`: reserves integration with the repository observability crate.
-- `dangerous-tools`: registers future controlled change tools as dry-run plan generators and still requires runtime policy.
+- `change-planning`: registers non-mutating change planning Tools and still requires runtime policy.
 
 ## Safety Boundary
 
 The default profile is diagnostics-oriented and read-only:
 
 - `security.profile = "diagnose"` allows read-only and diagnosis tools.
-- `security.allow_dangerous_tools = false` blocks destructive or change-oriented tools.
-- `security.require_confirmation = true` keeps future change tools behind confirmation policy.
+- `security.allow_change_planning = false` blocks planning Tools unless explicitly enabled.
 - `security.sanitize_output = true` redacts configured sensitive output patterns.
 - `audit.enabled = true` records tool decisions and HTTP rejections.
 - `server.stdio.log_to_stderr = true` keeps stdout reserved for MCP protocol frames.
 
 For HTTP deployments, keep `server.http.bind` on loopback unless there is a reviewed network boundary. When `server.http.require_auth = true`, the process requires `ROCKETMQ_MCP_HTTP_TOKEN` and clients must send `Authorization: Bearer <token>`.
 
-When `dangerous-tools` is compiled, change tools are still controlled by runtime policy. Dry-run requests return a change plan, impact analysis, rollback suggestions, and a confirmation challenge. Apply requests require `confirm_token` and are rejected by the current implementation; no mutation API is called.
+When `change-planning` is compiled, planning Tools are still controlled by runtime policy. They return a plan, impact analysis, and rollback suggestions. Their schemas contain no Apply mode, operator identity, or confirmation token, and no mutation API is called.
+
+The server targets MCP protocol version `2025-11-25`. Clients requesting another protocol version are rejected during initialization.
+
+Successful Tool calls return a `rocketmq-mcp.v2` envelope with `request_id`, cluster, RFC 3339 observation time, freshness, cache status, partial status, warnings, and typed data. Correctable input and backend failures return Tool execution errors with a stable code, retryability, suggestions, and the request identifier.
 
 ## Build
 
@@ -194,29 +199,29 @@ For HTTP-capable clients, use the Streamable HTTP URL `http://127.0.0.1:8089/mcp
 
 ## Tools
 
-- `mq_cluster_overview`: summarize configured cluster metadata.
-- `mq_list_topics`: list topics for a cluster.
-- `mq_describe_topic`: describe a topic.
-- `mq_query_topic_route`: query topic route data.
-- `mq_list_consumer_groups`: list consumer groups.
-- `mq_query_consumer_lag`: query consumer progress and lag.
-- `mq_describe_broker`: describe broker runtime information.
-- `mq_diagnose_consumer_lag`: aggregate read-only evidence and return a diagnosis report.
+- `rocketmq_get_cluster_overview`: summarize one configured cluster.
+- `rocketmq_list_topics`: list a filtered, cursor-paginated topic page.
+- `rocketmq_describe_topic`: describe a topic with bounded queue data.
+- `rocketmq_get_topic_route`: get bounded topic route data.
+- `rocketmq_list_consumer_groups`: list a filtered, cursor-paginated consumer-group page.
+- `rocketmq_get_consumer_lag`: get bounded consumer progress and lag rows.
+- `rocketmq_describe_broker`: describe broker state.
+- `rocketmq_diagnose_consumer_lag`: aggregate read-only evidence and return a diagnosis report.
 
-Feature-gated controlled change tools, available only with `dangerous-tools`, are dry-run plan generators:
+Feature-gated planning Tools, available only with `change-planning`, never mutate the cluster:
 
-- `mq_create_topic`: plan future topic creation.
-- `mq_update_topic_config`: plan future topic configuration updates.
-- `mq_update_topic_perm`: plan future topic permission updates.
-- `mq_update_broker_config`: plan future broker configuration updates.
-- `mq_reset_consumer_offset`: plan future consumer offset resets with impact analysis.
+- `rocketmq_plan_create_topic`
+- `rocketmq_plan_update_topic_config`
+- `rocketmq_plan_update_topic_permissions`
+- `rocketmq_plan_update_broker_config`
+- `rocketmq_plan_reset_consumer_offset`
 
 ## Resources
 
-- `rocketmq://cluster/overview`
-- `rocketmq://topics`
-- `rocketmq://brokers`
-- `rocketmq://consumer-groups`
+- `rocketmq://clusters/{cluster}/overview`
+- `rocketmq://clusters/{cluster}/topics`
+- `rocketmq://clusters/{cluster}/brokers`
+- `rocketmq://clusters/{cluster}/consumer-groups`
 
 ## Prompts
 

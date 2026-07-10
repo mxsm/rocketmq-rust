@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod audit;
-pub mod confirmation;
 #[cfg(feature = "streamable-http")]
 pub mod http_auth;
 pub mod rate_limit;
@@ -45,13 +44,13 @@ use crate::guard::rate_limit::RateLimiter;
 pub enum RiskLevel {
     ReadOnly,
     Diagnose,
-    Change,
+    Plan,
     Destructive,
 }
 
 impl RiskLevel {
-    pub fn is_dangerous(self) -> bool {
-        matches!(self, Self::Change | Self::Destructive)
+    pub fn is_planning(self) -> bool {
+        matches!(self, Self::Plan)
     }
 }
 
@@ -60,7 +59,7 @@ impl std::fmt::Display for RiskLevel {
         match self {
             Self::ReadOnly => f.write_str("ReadOnly"),
             Self::Diagnose => f.write_str("Diagnose"),
-            Self::Change => f.write_str("Change"),
+            Self::Plan => f.write_str("Plan"),
             Self::Destructive => f.write_str("Destructive"),
         }
     }
@@ -77,11 +76,8 @@ pub enum GuardError {
     #[error("rate limit exceeded: {0}")]
     RateLimited(String),
 
-    #[error("dangerous tool disabled: {0}")]
-    DangerousToolDisabled(String),
-
-    #[error("confirmation required: {0}")]
-    ConfirmationRequired(String),
+    #[error("change planning disabled: {0}")]
+    ChangePlanningDisabled(String),
 }
 
 #[derive(Debug, Clone)]
@@ -141,12 +137,7 @@ impl Guard {
             return Err(error);
         }
 
-        if let Err(error) = self.check_dangerous_tool(tool_name, risk_level) {
-            guarded.record_failure(error.to_string());
-            return Err(error);
-        }
-
-        if let Err(error) = confirmation::check_confirmation(&self.security, risk_level, arguments) {
+        if let Err(error) = self.check_tool_availability(tool_name, risk_level) {
             guarded.record_failure(error.to_string());
             return Err(error);
         }
@@ -178,16 +169,16 @@ impl Guard {
         )))
     }
 
-    fn check_dangerous_tool(&self, tool_name: &str, risk_level: RiskLevel) -> Result<(), GuardError> {
+    fn check_tool_availability(&self, tool_name: &str, risk_level: RiskLevel) -> Result<(), GuardError> {
         if matches!(risk_level, RiskLevel::Destructive) {
-            return Err(GuardError::DangerousToolDisabled(format!(
+            return Err(GuardError::ChangePlanningDisabled(format!(
                 "{tool_name} is destructive and is not implemented"
             )));
         }
 
-        if risk_level.is_dangerous() && !self.security.allow_dangerous_tools {
-            return Err(GuardError::DangerousToolDisabled(format!(
-                "{tool_name} requires the dangerous-tools feature and runtime opt-in"
+        if risk_level.is_planning() && !self.security.allow_change_planning {
+            return Err(GuardError::ChangePlanningDisabled(format!(
+                "{tool_name} requires the change-planning feature and runtime opt-in"
             )));
         }
 
@@ -315,7 +306,7 @@ mod tests {
             .clone();
 
         let err = guard
-            .begin_tool_call("mq_diagnose_consumer_lag", RiskLevel::Diagnose, &arguments)
+            .begin_tool_call("rocketmq_diagnose_consumer_lag", RiskLevel::Diagnose, &arguments)
             .unwrap_err();
 
         assert!(err.to_string().contains("permission denied"));
@@ -333,26 +324,26 @@ mod tests {
             .clone();
 
         guard
-            .begin_tool_call("mq_cluster_overview", RiskLevel::ReadOnly, &arguments)
+            .begin_tool_call("rocketmq_get_cluster_overview", RiskLevel::ReadOnly, &arguments)
             .unwrap();
         guard
-            .begin_tool_call("mq_diagnose_consumer_lag", RiskLevel::Diagnose, &arguments)
+            .begin_tool_call("rocketmq_diagnose_consumer_lag", RiskLevel::Diagnose, &arguments)
             .unwrap();
     }
 
     #[test]
-    fn dangerous_tools_are_disabled_without_runtime_opt_in() {
+    fn change_planning_is_disabled_without_runtime_opt_in() {
         let guard = test_guard("operator", false, 60);
-        let arguments = serde_json::json!({ "cluster": "local-dev", "confirm_token": "yes" })
+        let arguments = serde_json::json!({ "cluster": "local-dev" })
             .as_object()
             .unwrap()
             .clone();
 
         let err = guard
-            .begin_tool_call("mq_reset_consumer_offset", RiskLevel::Change, &arguments)
+            .begin_tool_call("rocketmq_plan_reset_consumer_offset", RiskLevel::Plan, &arguments)
             .unwrap_err();
 
-        assert!(err.to_string().contains("dangerous tool disabled"));
+        assert!(err.to_string().contains("change planning disabled"));
     }
 
     #[test]
@@ -364,10 +355,10 @@ mod tests {
             .clone();
 
         guard
-            .begin_tool_call("mq_cluster_overview", RiskLevel::ReadOnly, &arguments)
+            .begin_tool_call("rocketmq_get_cluster_overview", RiskLevel::ReadOnly, &arguments)
             .unwrap();
         let err = guard
-            .begin_tool_call("mq_cluster_overview", RiskLevel::ReadOnly, &arguments)
+            .begin_tool_call("rocketmq_get_cluster_overview", RiskLevel::ReadOnly, &arguments)
             .unwrap_err();
 
         assert!(err.to_string().contains("rate limit exceeded"));
@@ -379,13 +370,13 @@ mod tests {
     #[test]
     fn security_policy_denies_destructive_tools_even_for_operator() {
         let guard = test_guard("operator", true, 60);
-        let arguments = serde_json::json!({ "cluster": "local-dev", "confirm_token": "yes" })
+        let arguments = serde_json::json!({ "cluster": "local-dev" })
             .as_object()
             .unwrap()
             .clone();
 
         let err = guard
-            .begin_tool_call("mq_delete_topic", RiskLevel::Destructive, &arguments)
+            .begin_tool_call("rocketmq_delete_topic", RiskLevel::Destructive, &arguments)
             .unwrap_err();
 
         assert!(err.to_string().to_ascii_lowercase().contains("destructive"));
@@ -394,12 +385,11 @@ mod tests {
         assert_eq!(records[0].status, AuditStatus::Failure);
     }
 
-    fn test_guard(profile: &str, allow_dangerous_tools: bool, rate_limit_per_minute: u32) -> Guard {
+    fn test_guard(profile: &str, allow_change_planning: bool, rate_limit_per_minute: u32) -> Guard {
         Guard::new(
             SecurityConfig {
                 profile: profile.to_string(),
-                allow_dangerous_tools,
-                require_confirmation: true,
+                allow_change_planning,
                 sanitize_output: true,
                 rate_limit_per_minute,
             },

@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use rocketmq_admin_core::core::broker::BrokerRuntimeStatsQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerService;
@@ -32,6 +30,10 @@ use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::config::ClusterConfig;
 use crate::config::McpConfig;
+use crate::model::contract::observed_at;
+use crate::model::contract::observed_at_from_millis;
+use crate::model::contract::paginate;
+use crate::model::contract::PageRequest;
 use crate::tools::broker_tools;
 use crate::tools::cluster_tools;
 use crate::tools::consumer_tools;
@@ -120,11 +122,15 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
         let topics = self
             .list_topics(topic_tools::ListTopicsArgs {
                 cluster: Some(cluster.name.clone()),
+                filter: None,
+                page: PageRequest::default(),
             })
             .await?;
         let consumer_groups = self
             .list_consumer_groups(consumer_tools::ListConsumerGroupsArgs {
                 cluster: Some(cluster.name.clone()),
+                filter: None,
+                page: PageRequest::default(),
             })
             .await?;
 
@@ -132,9 +138,9 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
             cluster: cluster.name,
             namesrv_addr: cluster.namesrv_addr,
             brokers: cluster_result.base_rows.iter().map(map_broker_summary).collect(),
-            topic_count: topics.topic_count,
-            consumer_group_count: consumer_groups.consumer_group_count,
-            generated_at: generated_at(),
+            topic_count: topics.page.total_count,
+            consumer_group_count: consumer_groups.page.total_count,
+            generated_at: observed_at(),
         })
     }
 
@@ -160,13 +166,16 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
             })
             .collect::<Vec<_>>();
         topics.sort_by(|left, right| left.topic.cmp(&right.topic));
+        if let Some(filter) = normalized_filter(args.filter.as_deref()) {
+            topics.retain(|entry| entry.topic.to_ascii_lowercase().contains(&filter));
+        }
+        let page = paginate(topics, &args.page).map_err(pagination_error)?;
 
         Ok(topic_tools::ListTopicsOutput {
             cluster: cluster.name,
             namesrv_addr: cluster.namesrv_addr,
-            topic_count: topics.len(),
-            topics,
-            generated_at: generated_at(),
+            page,
+            generated_at: observed_at(),
         })
     }
 
@@ -178,6 +187,7 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
             .query_topic_route(topic_tools::QueryTopicRouteArgs {
                 cluster: args.cluster,
                 topic: args.topic,
+                page: args.page,
             })
             .await?;
         let mut broker_names = route
@@ -192,11 +202,11 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
             cluster: route.cluster,
             namesrv_addr: route.namesrv_addr,
             topic: route.topic,
-            read_queue_count: route.queues.iter().map(|queue| queue.read_queue_nums).sum(),
-            write_queue_count: route.queues.iter().map(|queue| queue.write_queue_nums).sum(),
+            read_queue_count: route.read_queue_count,
+            write_queue_count: route.write_queue_count,
             broker_names,
             brokers: route.brokers,
-            queues: route.queues,
+            page: route.page,
             generated_at: route.generated_at,
         })
     }
@@ -215,7 +225,7 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
         .map_err(admin_error)?
         .ok_or_else(|| ToolExecutionError::Backend(format!("topic route not found: {}", args.topic)))?;
 
-        Ok(map_topic_route(cluster, args.topic, route))
+        map_topic_route(cluster, args.topic, route, &args.page)
     }
 
     async fn list_consumer_groups(
@@ -236,7 +246,7 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
         )
         .await
         .map_err(admin_error)?;
-        let groups = match result {
+        let mut groups = match result {
             ConsumerProgressResult::All(groups) => groups
                 .into_iter()
                 .map(|group| consumer_tools::ConsumerGroupSummary {
@@ -251,13 +261,17 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
                 .collect::<Vec<_>>(),
             ConsumerProgressResult::Group(_) => Vec::new(),
         };
+        groups.sort_by(|left, right| left.group.cmp(&right.group));
+        if let Some(filter) = normalized_filter(args.filter.as_deref()) {
+            groups.retain(|entry| entry.group.to_ascii_lowercase().contains(&filter));
+        }
+        let page = paginate(groups, &args.page).map_err(pagination_error)?;
 
         Ok(consumer_tools::ListConsumerGroupsOutput {
             cluster: cluster.name,
             namesrv_addr: cluster.namesrv_addr,
-            consumer_group_count: groups.len(),
-            groups,
-            generated_at: generated_at(),
+            page,
+            generated_at: observed_at(),
         })
     }
 
@@ -286,7 +300,7 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
             ));
         };
 
-        let queues = progress
+        let mut queues = progress
             .rows
             .iter()
             .map(|row| consumer_tools::QueueLag {
@@ -297,11 +311,17 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
                 consumer_offset: row.consumer_offset,
                 lag: row.diff,
                 inflight: row.inflight,
-                last_timestamp: row.last_timestamp,
+                last_observed_at: observed_at_from_millis(row.last_timestamp),
                 client_ip: row.client_ip.clone(),
             })
             .collect::<Vec<_>>();
+        queues.sort_by(|left, right| {
+            left.broker_name
+                .cmp(&right.broker_name)
+                .then(left.queue_id.cmp(&right.queue_id))
+        });
         let max_queue_lag = queues.iter().map(|queue| queue.lag).max().unwrap_or_default();
+        let page = paginate(queues, &args.page).map_err(pagination_error)?;
 
         Ok(consumer_tools::QueryConsumerLagOutput {
             cluster: cluster.name,
@@ -310,11 +330,10 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
             consumer_group: args.consumer_group,
             total_lag: progress.diff_total,
             max_queue_lag,
-            queue_count: queues.len(),
             consume_tps: progress.consume_tps,
             inflight_total: progress.inflight_total,
-            queues,
-            generated_at: generated_at(),
+            page,
+            generated_at: observed_at(),
         })
     }
 
@@ -354,7 +373,7 @@ impl ReadOnlyAdminAdapter for AdminCoreAdapter {
             namesrv_addr: cluster.namesrv_addr,
             broker_name: args.broker_name,
             brokers,
-            generated_at: generated_at(),
+            generated_at: observed_at(),
         })
     }
 }
@@ -377,11 +396,15 @@ fn admin_error(error: RocketMQError) -> ToolExecutionError {
     ToolExecutionError::backend(error)
 }
 
-fn generated_at() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().to_string())
-        .unwrap_or_else(|_| "0".to_string())
+fn normalized_filter(filter: Option<&str>) -> Option<String> {
+    filter
+        .map(str::trim)
+        .filter(|filter| !filter.is_empty())
+        .map(str::to_ascii_lowercase)
+}
+
+fn pagination_error(error: crate::model::contract::PaginationError) -> ToolExecutionError {
+    ToolExecutionError::InvalidArguments(error.to_string())
 }
 
 fn map_broker_summary(row: &ClusterBaseInfoRow) -> cluster_tools::BrokerSummary {
@@ -405,7 +428,8 @@ fn map_topic_route(
     cluster: ResolvedCluster,
     topic: String,
     route: TopicRouteData,
-) -> topic_tools::QueryTopicRouteOutput {
+    page_request: &PageRequest,
+) -> Result<topic_tools::QueryTopicRouteOutput, ToolExecutionError> {
     let mut brokers = route
         .broker_datas
         .iter()
@@ -438,13 +462,18 @@ fn map_topic_route(
         })
         .collect::<Vec<_>>();
     queues.sort_by(|left, right| left.broker_name.cmp(&right.broker_name));
+    let read_queue_count = queues.iter().map(|queue| queue.read_queue_nums).sum();
+    let write_queue_count = queues.iter().map(|queue| queue.write_queue_nums).sum();
+    let page = paginate(queues, page_request).map_err(pagination_error)?;
 
-    topic_tools::QueryTopicRouteOutput {
+    Ok(topic_tools::QueryTopicRouteOutput {
         cluster: cluster.name,
         namesrv_addr: cluster.namesrv_addr,
         topic,
         brokers,
-        queues,
-        generated_at: generated_at(),
-    }
+        read_queue_count,
+        write_queue_count,
+        page,
+        generated_at: observed_at(),
+    })
 }

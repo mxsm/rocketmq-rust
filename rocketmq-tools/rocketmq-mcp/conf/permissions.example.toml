@@ -1,23 +1,27 @@
 [roles.read_only]
 allow_tools = [
-  "mq_cluster_overview",
-  "mq_list_topics",
-  "mq_describe_topic",
-  "mq_query_topic_route",
-  "mq_list_consumer_groups",
-  "mq_query_consumer_lag",
-  "mq_describe_broker",
+  "rocketmq_get_cluster_overview",
+  "rocketmq_list_topics",
+  "rocketmq_describe_topic",
+  "rocketmq_get_topic_route",
+  "rocketmq_list_consumer_groups",
+  "rocketmq_get_consumer_lag",
+  "rocketmq_describe_broker",
 ]
 deny_tools = ["*"]
 
 [roles.diagnose]
 include = ["read_only"]
 allow_tools = [
-  "mq_diagnose_consumer_lag",
+  "rocketmq_diagnose_consumer_lag",
 ]
 
 [roles.operator]
 include = ["diagnose"]
-allow_tools = []
-require_confirmation = true
-require_dry_run_first = true
+allow_tools = [
+  "rocketmq_plan_create_topic",
+  "rocketmq_plan_update_topic_config",
+  "rocketmq_plan_update_topic_permissions",
+  "rocketmq_plan_update_broker_config",
+  "rocketmq_plan_reset_consumer_offset",
+]

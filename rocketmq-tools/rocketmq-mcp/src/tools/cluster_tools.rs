@@ -16,9 +16,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub const CLUSTER_OVERVIEW_TOOL: &str = "mq_cluster_overview";
-
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ClusterOverviewArgs {
     pub cluster: String,
 }
@@ -28,6 +27,8 @@ pub struct BrokerSummary {
     pub cluster: String,
     pub broker_name: String,
     pub broker_id: u64,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub broker_addr: String,
     pub version: String,
     pub in_tps: String,
@@ -42,6 +43,8 @@ pub struct BrokerSummary {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct ClusterOverviewOutput {
     pub cluster: String,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub namesrv_addr: String,
     pub brokers: Vec<BrokerSummary>,
     pub topic_count: usize,

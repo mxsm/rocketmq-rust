@@ -39,10 +39,7 @@ impl SecurityRole {
         match self {
             Self::ReadOnly => matches!(risk_level, RiskLevel::ReadOnly),
             Self::Diagnose => matches!(risk_level, RiskLevel::ReadOnly | RiskLevel::Diagnose),
-            Self::Operator => matches!(
-                risk_level,
-                RiskLevel::ReadOnly | RiskLevel::Diagnose | RiskLevel::Change
-            ),
+            Self::Operator => matches!(risk_level, RiskLevel::ReadOnly | RiskLevel::Diagnose | RiskLevel::Plan),
         }
     }
 }

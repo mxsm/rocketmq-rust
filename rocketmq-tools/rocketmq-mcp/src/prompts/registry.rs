@@ -87,6 +87,6 @@ mod tests {
         let template = get_template("diagnose_consumer_lag").unwrap().unwrap();
 
         assert_eq!(template.front_matter.title, "Diagnose Consumer Lag");
-        assert!(template.body.contains("mq_diagnose_consumer_lag"));
+        assert!(template.body.contains("rocketmq_diagnose_consumer_lag"));
     }
 }

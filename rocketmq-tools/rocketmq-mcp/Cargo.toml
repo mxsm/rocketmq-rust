@@ -35,7 +35,7 @@ stdio           = ["rmcp/transport-io"]
 observability   = ["dep:rocketmq-observability"]
 auth            = ["dep:rocketmq-auth"]
 streamable-http = ["rmcp/transport-streamable-http-server", "dep:axum", "dep:tower-http", "auth"]
-dangerous-tools = ["auth"]
+change-planning = []
 
 [dependencies]
 rocketmq-admin-core   = { version = "1.0.0", path = "../rocketmq-admin/rocketmq-admin-core" }
@@ -49,8 +49,10 @@ rocketmq-runtime      = { workspace = true }
 
 anyhow             = { workspace = true }
 axum               = { version = "0.8", optional = true }
+chrono             = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap               = { version = "4.6.1", features = ["derive"] }
 config             = { workspace = true }
+jsonschema         = { version = "0.47", default-features = false }
 once_cell          = "1.21"
 regex              = "1.12.4"
 rmcp               = { version = "2.2", features = ["server", "macros", "schemars"] }

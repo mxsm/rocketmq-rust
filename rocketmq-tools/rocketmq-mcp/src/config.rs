@@ -211,8 +211,7 @@ pub struct ClusterConfig {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct SecurityConfig {
     pub profile: String,
-    pub allow_dangerous_tools: bool,
-    pub require_confirmation: bool,
+    pub allow_change_planning: bool,
     pub sanitize_output: bool,
     pub rate_limit_per_minute: u32,
 }
@@ -316,8 +315,7 @@ require_auth = true
 
 [security]
 profile = "read_only"
-allow_dangerous_tools = false
-require_confirmation = true
+allow_change_planning = false
 sanitize_output = true
 rate_limit_per_minute = 60
 

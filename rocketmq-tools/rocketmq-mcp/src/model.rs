@@ -14,4 +14,5 @@
 
 //! Shared MCP domain models.
 
+pub mod contract;
 pub mod diagnosis;

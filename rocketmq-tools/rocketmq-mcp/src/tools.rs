@@ -15,11 +15,12 @@
 //! Read-only MCP tools exposed by the RocketMQ MCP server.
 
 pub mod broker_tools;
-#[cfg(feature = "dangerous-tools")]
+pub mod catalog;
+#[cfg(feature = "change-planning")]
 pub mod change_tools;
 pub mod cluster_tools;
 pub mod consumer_tools;
 pub mod diagnosis_tools;
 pub mod executor;
-pub mod registry;
+pub mod output_policy;
 pub mod topic_tools;

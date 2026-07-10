@@ -1828,6 +1828,906 @@ expression: surface
         "type": "object"
       },
       "title": "RocketMQ consumer lag diagnosis"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ create topic plan"
+      },
+      "description": "Generate a non-mutating topic creation plan.",
+      "execution": {
+        "taskSupport": "forbidden"
+      },
+      "inputSchema": {
+        "$defs": {
+          "CreateTopicDesiredState": {
+            "additionalProperties": false,
+            "properties": {
+              "perm": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "read_queue_nums": {
+                "default": null,
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "topic": {
+                "type": "string"
+              },
+              "write_queue_nums": {
+                "default": null,
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "topic"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "desired": {
+            "$ref": "#/$defs/CreateTopicDesiredState"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "reason",
+          "desired"
+        ],
+        "type": "object"
+      },
+      "name": "rocketmq_plan_create_topic",
+      "outputSchema": {
+        "$defs": {
+          "CacheStatus": {
+            "enum": [
+              "bypass",
+              "hit",
+              "miss"
+            ],
+            "type": "string"
+          },
+          "ChangePlan": {
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "impact_analysis": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "mutates_cluster": {
+                "type": "boolean"
+              },
+              "plan_type": {
+                "$ref": "#/$defs/ChangePlanType"
+              },
+              "planned_changes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "rollback_suggestions": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "plan_type",
+              "cluster",
+              "reason",
+              "summary",
+              "planned_changes",
+              "impact_analysis",
+              "rollback_suggestions",
+              "mutates_cluster"
+            ],
+            "type": "object"
+          },
+          "ChangePlanType": {
+            "enum": [
+              "create_topic",
+              "update_topic_config",
+              "update_topic_permissions",
+              "update_broker_config",
+              "reset_consumer_offset"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cache_status": {
+            "$ref": "#/$defs/CacheStatus"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/ChangePlan"
+          },
+          "freshness_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "cluster",
+          "observed_at",
+          "freshness_ms",
+          "cache_status",
+          "partial",
+          "warnings",
+          "data"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ create topic plan"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ topic configuration plan"
+      },
+      "description": "Generate a non-mutating topic configuration update plan.",
+      "execution": {
+        "taskSupport": "forbidden"
+      },
+      "inputSchema": {
+        "$defs": {
+          "UpdateTopicConfigDesiredState": {
+            "additionalProperties": false,
+            "properties": {
+              "config_key": {
+                "type": "string"
+              },
+              "config_value": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "config_key",
+              "config_value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "desired": {
+            "$ref": "#/$defs/UpdateTopicConfigDesiredState"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "reason",
+          "desired"
+        ],
+        "type": "object"
+      },
+      "name": "rocketmq_plan_update_topic_config",
+      "outputSchema": {
+        "$defs": {
+          "CacheStatus": {
+            "enum": [
+              "bypass",
+              "hit",
+              "miss"
+            ],
+            "type": "string"
+          },
+          "ChangePlan": {
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "impact_analysis": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "mutates_cluster": {
+                "type": "boolean"
+              },
+              "plan_type": {
+                "$ref": "#/$defs/ChangePlanType"
+              },
+              "planned_changes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "rollback_suggestions": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "plan_type",
+              "cluster",
+              "reason",
+              "summary",
+              "planned_changes",
+              "impact_analysis",
+              "rollback_suggestions",
+              "mutates_cluster"
+            ],
+            "type": "object"
+          },
+          "ChangePlanType": {
+            "enum": [
+              "create_topic",
+              "update_topic_config",
+              "update_topic_permissions",
+              "update_broker_config",
+              "reset_consumer_offset"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cache_status": {
+            "$ref": "#/$defs/CacheStatus"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/ChangePlan"
+          },
+          "freshness_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "cluster",
+          "observed_at",
+          "freshness_ms",
+          "cache_status",
+          "partial",
+          "warnings",
+          "data"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ topic configuration plan"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ topic permission plan"
+      },
+      "description": "Generate a non-mutating topic permission update plan.",
+      "execution": {
+        "taskSupport": "forbidden"
+      },
+      "inputSchema": {
+        "$defs": {
+          "UpdateTopicPermissionsDesiredState": {
+            "additionalProperties": false,
+            "properties": {
+              "perm": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "perm"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "desired": {
+            "$ref": "#/$defs/UpdateTopicPermissionsDesiredState"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "reason",
+          "desired"
+        ],
+        "type": "object"
+      },
+      "name": "rocketmq_plan_update_topic_permissions",
+      "outputSchema": {
+        "$defs": {
+          "CacheStatus": {
+            "enum": [
+              "bypass",
+              "hit",
+              "miss"
+            ],
+            "type": "string"
+          },
+          "ChangePlan": {
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "impact_analysis": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "mutates_cluster": {
+                "type": "boolean"
+              },
+              "plan_type": {
+                "$ref": "#/$defs/ChangePlanType"
+              },
+              "planned_changes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "rollback_suggestions": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "plan_type",
+              "cluster",
+              "reason",
+              "summary",
+              "planned_changes",
+              "impact_analysis",
+              "rollback_suggestions",
+              "mutates_cluster"
+            ],
+            "type": "object"
+          },
+          "ChangePlanType": {
+            "enum": [
+              "create_topic",
+              "update_topic_config",
+              "update_topic_permissions",
+              "update_broker_config",
+              "reset_consumer_offset"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cache_status": {
+            "$ref": "#/$defs/CacheStatus"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/ChangePlan"
+          },
+          "freshness_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "cluster",
+          "observed_at",
+          "freshness_ms",
+          "cache_status",
+          "partial",
+          "warnings",
+          "data"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ topic permission plan"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ broker configuration plan"
+      },
+      "description": "Generate a non-mutating broker configuration update plan.",
+      "execution": {
+        "taskSupport": "forbidden"
+      },
+      "inputSchema": {
+        "$defs": {
+          "UpdateBrokerConfigDesiredState": {
+            "additionalProperties": false,
+            "properties": {
+              "broker_name": {
+                "type": "string"
+              },
+              "config_key": {
+                "type": "string"
+              },
+              "config_value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "broker_name",
+              "config_key",
+              "config_value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "desired": {
+            "$ref": "#/$defs/UpdateBrokerConfigDesiredState"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "reason",
+          "desired"
+        ],
+        "type": "object"
+      },
+      "name": "rocketmq_plan_update_broker_config",
+      "outputSchema": {
+        "$defs": {
+          "CacheStatus": {
+            "enum": [
+              "bypass",
+              "hit",
+              "miss"
+            ],
+            "type": "string"
+          },
+          "ChangePlan": {
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "impact_analysis": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "mutates_cluster": {
+                "type": "boolean"
+              },
+              "plan_type": {
+                "$ref": "#/$defs/ChangePlanType"
+              },
+              "planned_changes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "rollback_suggestions": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "plan_type",
+              "cluster",
+              "reason",
+              "summary",
+              "planned_changes",
+              "impact_analysis",
+              "rollback_suggestions",
+              "mutates_cluster"
+            ],
+            "type": "object"
+          },
+          "ChangePlanType": {
+            "enum": [
+              "create_topic",
+              "update_topic_config",
+              "update_topic_permissions",
+              "update_broker_config",
+              "reset_consumer_offset"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cache_status": {
+            "$ref": "#/$defs/CacheStatus"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/ChangePlan"
+          },
+          "freshness_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "cluster",
+          "observed_at",
+          "freshness_ms",
+          "cache_status",
+          "partial",
+          "warnings",
+          "data"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ broker configuration plan"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ consumer offset reset plan"
+      },
+      "description": "Generate a non-mutating consumer offset reset plan.",
+      "execution": {
+        "taskSupport": "forbidden"
+      },
+      "inputSchema": {
+        "$defs": {
+          "ResetConsumerOffsetDesiredState": {
+            "additionalProperties": false,
+            "properties": {
+              "consumer_group": {
+                "type": "string"
+              },
+              "target_offset": {
+                "default": null,
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "timestamp_millis": {
+                "default": null,
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "topic": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "consumer_group"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "desired": {
+            "$ref": "#/$defs/ResetConsumerOffsetDesiredState"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "reason",
+          "desired"
+        ],
+        "type": "object"
+      },
+      "name": "rocketmq_plan_reset_consumer_offset",
+      "outputSchema": {
+        "$defs": {
+          "CacheStatus": {
+            "enum": [
+              "bypass",
+              "hit",
+              "miss"
+            ],
+            "type": "string"
+          },
+          "ChangePlan": {
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "impact_analysis": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "mutates_cluster": {
+                "type": "boolean"
+              },
+              "plan_type": {
+                "$ref": "#/$defs/ChangePlanType"
+              },
+              "planned_changes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "rollback_suggestions": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "plan_type",
+              "cluster",
+              "reason",
+              "summary",
+              "planned_changes",
+              "impact_analysis",
+              "rollback_suggestions",
+              "mutates_cluster"
+            ],
+            "type": "object"
+          },
+          "ChangePlanType": {
+            "enum": [
+              "create_topic",
+              "update_topic_config",
+              "update_topic_permissions",
+              "update_broker_config",
+              "reset_consumer_offset"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cache_status": {
+            "$ref": "#/$defs/CacheStatus"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/ChangePlan"
+          },
+          "freshness_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "cluster",
+          "observed_at",
+          "freshness_ms",
+          "cache_status",
+          "partial",
+          "warnings",
+          "data"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ consumer offset reset plan"
     }
   ]
 }

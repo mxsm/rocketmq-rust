@@ -17,11 +17,14 @@ use rmcp::model::CallToolResult;
 use rmcp::model::GetPromptRequestParams;
 use rmcp::model::GetPromptResult;
 use rmcp::model::Implementation;
+use rmcp::model::InitializeRequestParams;
+use rmcp::model::InitializeResult;
 use rmcp::model::ListPromptsResult;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::ListToolsResult;
 use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ProtocolVersion;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::ServerCapabilities;
@@ -31,6 +34,7 @@ use rmcp::service::RequestContext;
 use rmcp::ErrorData;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
+use serde_json::json;
 
 use crate::adapter::admin_core_adapter::AdminCoreAdapter;
 use crate::app::McpApp;
@@ -67,7 +71,29 @@ impl ServerHandler for RocketmqMcpServer {
             self.app.config().server.name.clone(),
             self.app.config().server.version.clone(),
         ))
+        .with_protocol_version(ProtocolVersion::V_2025_11_25)
         .with_instructions("RocketMQ-Rust MCP server for read-only context, diagnostics, and SRE runbooks.")
+    }
+
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        if request.protocol_version != ProtocolVersion::V_2025_11_25 {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "unsupported MCP protocol version {}; rocketmq-mcp requires 2025-11-25",
+                    request.protocol_version
+                ),
+                Some(json!({
+                    "requested": request.protocol_version,
+                    "supported": ["2025-11-25"],
+                })),
+            ));
+        }
+        context.peer.set_peer_info(request);
+        Ok(self.get_info())
     }
 
     async fn list_resources(
@@ -75,7 +101,7 @@ impl ServerHandler for RocketmqMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        Ok(resources::registry::list_resources())
+        Ok(resources::registry::list_resources(self.app.config()))
     }
 
     async fn list_resource_templates(
@@ -115,24 +141,32 @@ impl ServerHandler for RocketmqMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(tools::registry::list_tools())
+        Ok(tools::catalog::list_tools())
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         ToolExecutor::new(
             AdminCoreAdapter::new(self.app.config().clone()),
             self.app.guard().clone(),
         )
-        .call(request)
+        .call_with_request_id(request, &request_id_string(&context.id))
         .await
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        tools::registry::get_tool(name)
+        tools::catalog::get_tool(name)
+    }
+}
+
+fn request_id_string(request_id: &rmcp::model::RequestId) -> String {
+    match serde_json::to_value(request_id) {
+        Ok(serde_json::Value::String(value)) => value,
+        Ok(serde_json::Value::Number(value)) => value.to_string(),
+        _ => "unknown-request".to_string(),
     }
 }
 
@@ -157,6 +191,7 @@ mod tests {
 
         assert_eq!(info.server_info.name, "rocketmq-mcp");
         assert_eq!(info.server_info.version, "1.0.0");
+        assert_eq!(info.protocol_version, ProtocolVersion::V_2025_11_25);
         assert!(info.capabilities.tools.is_some());
         assert!(info.capabilities.resources.is_some());
         assert!(info.capabilities.prompts.is_some());
@@ -164,12 +199,12 @@ mod tests {
 
     #[test]
     fn mcp_protocol_surface_snapshot() {
-        let tools = tools::registry::list_tools()
+        let tools = tools::catalog::list_tools()
             .tools
             .into_iter()
             .map(|tool| serde_json::to_value(tool).expect("tool descriptor serializes"))
             .collect::<Vec<_>>();
-        let resources = resources::registry::list_resources()
+        let resources = resources::registry::list_resources(&McpConfig::load(example_config_path()).unwrap())
             .resources
             .into_iter()
             .map(|resource| serde_json::to_value(resource).expect("resource descriptor serializes"))
@@ -191,11 +226,11 @@ mod tests {
             "prompts": prompts,
         });
 
-        #[cfg(not(feature = "dangerous-tools"))]
+        #[cfg(not(feature = "change-planning"))]
         insta::assert_json_snapshot!("mcp_protocol_surface", surface);
 
-        #[cfg(feature = "dangerous-tools")]
-        insta::assert_json_snapshot!("mcp_protocol_surface_with_dangerous_tools", surface);
+        #[cfg(feature = "change-planning")]
+        insta::assert_json_snapshot!("mcp_protocol_surface_with_change_planning", surface);
     }
 
     fn example_config_path() -> std::path::PathBuf {

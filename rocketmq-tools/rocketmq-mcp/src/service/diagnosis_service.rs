@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
-
 use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
 
 use crate::adapter::admin_core_adapter::ReadOnlyAdminAdapter;
+use crate::model::contract::observed_at;
+use crate::model::contract::PageRequest;
 use crate::model::diagnosis::DiagnosisReport;
 use crate::model::diagnosis::Evidence;
 use crate::model::diagnosis::EvidenceStatus;
@@ -51,18 +50,21 @@ where
             cluster: args.cluster.clone(),
             topic: args.topic.clone(),
             consumer_group: args.consumer_group.clone(),
+            page: PageRequest::default(),
         })
         .await;
     let topic_result = adapter
         .describe_topic(DescribeTopicArgs {
             cluster: args.cluster.clone(),
             topic: args.topic.clone(),
+            page: PageRequest::default(),
         })
         .await;
     let route_result = adapter
         .query_topic_route(QueryTopicRouteArgs {
             cluster: args.cluster.clone(),
             topic: args.topic.clone(),
+            page: PageRequest::default(),
         })
         .await;
     let broker_result = match top_lag_broker(lag_result.as_ref().ok()) {
@@ -106,25 +108,29 @@ where
     let mut evidences = Vec::new();
     evidences.push(evidence_from_result(
         "consumer_lag",
-        "mq_query_consumer_lag",
+        "rocketmq_get_consumer_lag",
         &lag_result,
     ));
     evidences.push(evidence_from_result(
         "topic_description",
-        "mq_describe_topic",
+        "rocketmq_describe_topic",
         &topic_result,
     ));
     evidences.push(evidence_from_result(
         "topic_route",
-        "mq_query_topic_route",
+        "rocketmq_get_topic_route",
         &route_result,
     ));
     if let Some(result) = &broker_result {
-        evidences.push(evidence_from_result("broker_description", "mq_describe_broker", result));
+        evidences.push(evidence_from_result(
+            "broker_description",
+            "rocketmq_describe_broker",
+            result,
+        ));
     } else {
         evidences.push(Evidence {
             id: "broker_description".to_string(),
-            source_tool: "mq_describe_broker".to_string(),
+            source_tool: "rocketmq_describe_broker".to_string(),
             status: EvidenceStatus::Missing,
             summary: "No broker was selected because consumer lag evidence was unavailable.".to_string(),
             data: Value::Null,
@@ -149,7 +155,7 @@ where
         recommendations: recommendations_for_lag(lag, severity),
         risks: risks_for_lag(lag, severity),
         follow_up_metrics: follow_up_metrics(),
-        generated_at: generated_at(),
+        generated_at: observed_at(),
     }
 }
 
@@ -157,7 +163,7 @@ fn severity_for_lag(lag: Option<&QueryConsumerLagOutput>, threshold: i64) -> Sev
     let Some(lag) = lag else {
         return Severity::Unknown;
     };
-    if lag.queue_count == 0 {
+    if lag.page.total_count == 0 {
         return Severity::Unknown;
     }
     if lag.total_lag <= threshold {
@@ -187,7 +193,7 @@ fn confidence_for_evidence<Topic, Route>(
     if route.is_some() {
         confidence += 0.15;
     }
-    if lag.is_some_and(|lag| lag.queue_count > 0) {
+    if lag.is_some_and(|lag| lag.page.total_count > 0) {
         confidence += 0.10;
     }
     confidence
@@ -206,7 +212,7 @@ fn summary_for_lag(
         ),
         Some(lag) => format!(
             "Consumer group {} on topic {} has {} total lag across {} queues; severity is {:?}.",
-            args.consumer_group, args.topic, lag.total_lag, lag.queue_count, severity
+            args.consumer_group, args.topic, lag.total_lag, lag.page.total_count, severity
         ),
         None => format!(
             "Consumer lag diagnosis for group {} on topic {} is Unknown because primary lag evidence is missing.",
@@ -228,7 +234,7 @@ fn impacts_for_lag(lag: Option<&QueryConsumerLagOutput>, severity: Severity) -> 
         area: format!("{}:{}", lag.topic, lag.consumer_group),
         description: format!(
             "Total lag is {} across {} queues, with max queue lag {}.",
-            lag.total_lag, lag.queue_count, lag.max_queue_lag
+            lag.total_lag, lag.page.total_count, lag.max_queue_lag
         ),
         severity,
     }]
@@ -243,7 +249,7 @@ fn root_causes_for_lag(lag: Option<&QueryConsumerLagOutput>, threshold: i64) -> 
             reasoning: "Primary consumer lag evidence is unavailable.".to_string(),
         }];
     };
-    if lag.queue_count == 0 {
+    if lag.page.total_count == 0 {
         return vec![RootCauseCandidate {
             cause: "Unknown".to_string(),
             confidence: 0.30,
@@ -269,7 +275,7 @@ fn root_causes_for_lag(lag: Option<&QueryConsumerLagOutput>, threshold: i64) -> 
             reasoning: format!("consume_tps={} while total_lag={}.", lag.consume_tps, lag.total_lag),
         });
     }
-    if skew_ratio(lag) >= SKEW_RATIO_THRESHOLD && lag.queue_count > 1 {
+    if skew_ratio(lag) >= SKEW_RATIO_THRESHOLD && lag.page.total_count > 1 {
         causes.push(RootCauseCandidate {
             cause: "Lag is concentrated on a small subset of queues".to_string(),
             confidence: 0.68,
@@ -388,7 +394,8 @@ where
 
 fn top_lag_broker(lag: Option<&QueryConsumerLagOutput>) -> Option<String> {
     lag.and_then(|lag| {
-        lag.queues
+        lag.page
+            .items
             .iter()
             .max_by_key(|queue| queue.lag)
             .map(|queue| queue.broker_name.clone())
@@ -402,16 +409,10 @@ fn skew_ratio(lag: &QueryConsumerLagOutput) -> f64 {
     lag.max_queue_lag as f64 / lag.total_lag as f64
 }
 
-fn generated_at() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().to_string())
-        .unwrap_or_else(|_| "0".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::adapter::admin_core_adapter::ReadOnlyAdminAdapter;
+    use crate::model::contract::Page;
     use crate::tools::broker_tools::DescribeBrokerOutput;
     use crate::tools::cluster_tools::BrokerSummary;
     use crate::tools::cluster_tools::ClusterOverviewArgs;
@@ -454,7 +455,13 @@ mod tests {
                 read_queue_count: 4,
                 write_queue_count: 4,
                 brokers: vec![route_broker()],
-                queues: vec![route_queue()],
+                page: Page {
+                    items: vec![route_queue()],
+                    count: 1,
+                    total_count: 1,
+                    has_more: false,
+                    next_cursor: None,
+                },
                 generated_at: "1".to_string(),
             })
         }
@@ -468,7 +475,15 @@ mod tests {
                 namesrv_addr: "127.0.0.1:9876".to_string(),
                 topic: args.topic,
                 brokers: vec![route_broker()],
-                queues: vec![route_queue()],
+                read_queue_count: 4,
+                write_queue_count: 4,
+                page: Page {
+                    items: vec![route_queue()],
+                    count: 1,
+                    total_count: 1,
+                    has_more: false,
+                    next_cursor: None,
+                },
                 generated_at: "1".to_string(),
             })
         }
@@ -494,33 +509,38 @@ mod tests {
                 consumer_group: args.consumer_group,
                 total_lag: 10_000,
                 max_queue_lag: 8_500,
-                queue_count: 2,
                 consume_tps: 0.0,
                 inflight_total: 50,
-                queues: vec![
-                    QueueLag {
-                        topic: "orders".to_string(),
-                        broker_name: "broker-a".to_string(),
-                        queue_id: 0,
-                        broker_offset: 10_000,
-                        consumer_offset: 1_500,
-                        lag: 8_500,
-                        inflight: 50,
-                        last_timestamp: 1,
-                        client_ip: None,
-                    },
-                    QueueLag {
-                        topic: "orders".to_string(),
-                        broker_name: "broker-b".to_string(),
-                        queue_id: 1,
-                        broker_offset: 2_000,
-                        consumer_offset: 500,
-                        lag: 1_500,
-                        inflight: 0,
-                        last_timestamp: 1,
-                        client_ip: None,
-                    },
-                ],
+                page: Page {
+                    items: vec![
+                        QueueLag {
+                            topic: "orders".to_string(),
+                            broker_name: "broker-a".to_string(),
+                            queue_id: 0,
+                            broker_offset: 10_000,
+                            consumer_offset: 1_500,
+                            lag: 8_500,
+                            inflight: 50,
+                            last_observed_at: Some("1970-01-01T00:00:00.001Z".to_string()),
+                            client_ip: None,
+                        },
+                        QueueLag {
+                            topic: "orders".to_string(),
+                            broker_name: "broker-b".to_string(),
+                            queue_id: 1,
+                            broker_offset: 2_000,
+                            consumer_offset: 500,
+                            lag: 1_500,
+                            inflight: 0,
+                            last_observed_at: Some("1970-01-01T00:00:00.001Z".to_string()),
+                            client_ip: None,
+                        },
+                    ],
+                    count: 2,
+                    total_count: 2,
+                    has_more: false,
+                    next_cursor: None,
+                },
                 generated_at: "1".to_string(),
             })
         }
