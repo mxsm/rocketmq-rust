@@ -14,4 +14,5 @@
 
 //! Adapters from MCP tool contracts to existing RocketMQ Rust admin services.
 
-pub mod admin_core_adapter;
+pub(crate) mod admin_session;
+pub(crate) mod query_facade;

@@ -4589,6 +4589,7 @@ name = "rocketmq-mcp"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "chrono",
  "clap",

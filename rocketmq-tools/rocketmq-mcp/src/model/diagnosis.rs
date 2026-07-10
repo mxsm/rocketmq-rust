@@ -37,6 +37,8 @@ pub enum EvidenceStatus {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 pub struct DiagnosisReport {
     pub report_type: String,
+    pub evidence_version: String,
+    pub rules_version: String,
     pub cluster: String,
     pub target: Value,
     pub severity: Severity,

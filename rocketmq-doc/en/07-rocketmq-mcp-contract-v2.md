@@ -131,7 +131,25 @@ Correctable Tool failures set `isError: true`, omit success
 
 Stable codes include `invalid_arguments`, `backend_error`,
 `permission_denied`, `rate_limited`, `change_planning_disabled`,
-`internal_error`, and `output_too_large`.
+`internal_error`, `output_too_large`, `backend_timeout`, and `cancelled`.
+
+## Query Lifecycle and Diagnosis Provenance
+
+Tools, Resources, and Diagnosis use the same `QueryFacade`. A simple query
+owns one workflow-scoped `AdminSession`; composite cluster overview and
+consumer-lag diagnosis workflows reuse that session for all admin-core calls.
+The session is explicitly shut down and awaited after success, failure,
+timeout, or MCP request cancellation. There is no process-global admin-client
+pool.
+
+Consumer-lag diagnosis results include independent provenance fields:
+
+```json
+{
+  "evidence_version": "rocketmq-mcp.evidence.consumer-lag.v1",
+  "rules_version": "rocketmq-mcp.rules.consumer-lag.v1"
+}
+```
 
 ## Resource URIs
 
@@ -142,10 +160,10 @@ Resources are always scoped to an explicit configured cluster:
 - `rocketmq://clusters/{cluster}/brokers`
 - `rocketmq://clusters/{cluster}/consumer-groups`
 
-The current inventory readers identify placeholder results with
-`partial: true` and a warning. They do not present an unqueried inventory as a
-confirmed empty cluster. The QueryFacade stage replaces placeholders with live
-queries while preserving these URIs.
+Resource readers execute live queries through `QueryFacade`. Successful
+payloads identify `source` as `live`, set `partial` to `false`, and include the
+same normalized read models used by Tools. A backend failure is returned as a
+Resource error rather than being represented as an empty inventory.
 
 ## Verification
 

@@ -164,3 +164,45 @@ The P2 evidence command must run the focused counter tests, for example
 names, counter values, and source paths. It must still avoid claiming
 live-cluster latency unless a separately documented controlled measurement
 produces it.
+
+### P2 Recorded Evidence
+
+P2 replaces the static P0 lifecycle estimate with deterministic tests at the
+injected `AdminSessionFactory` boundary. The implementation is in
+`rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs` and
+`rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs`. Tool dispatch uses
+the `ReadOnlyQuery` contract in
+`rocketmq-tools/rocketmq-mcp/src/tools/executor.rs`; Resource reads use the
+same contract in `rocketmq-tools/rocketmq-mcp/src/resources/reader.rs`.
+
+| Test | Start | Shutdown | Additional counters |
+| --- | ---: | ---: | --- |
+| `query_facade_cluster_overview_starts_and_shuts_down_one_admin_session` | 1 | 1 | broker 1, topic 1, consumer-group 1 |
+| `query_facade_high_lag_diagnosis_reuses_one_session_and_one_route_query` | 1 | 1 | lag 1, route 1, broker 1, runtime fallback 0 |
+| `query_facade_missing_selected_broker_fallback_reuses_the_workflow_session` | 1 | 1 | lag 1, route 1, broker 1, runtime fallback 1 |
+| `query_facade_resource_read_uses_one_session_and_live_query_data` | 1 | 1 | topic 1 |
+| `query_facade_backend_failure_shuts_down_the_started_session_once` | 1 | 1 | failed topic query 1 |
+| `query_facade_timeout_shuts_down_the_started_session_once` | 1 | 1 | timed-out operation is dropped before awaited shutdown |
+| `query_facade_cancellation_shuts_down_the_started_session_once` | 1 | 1 | MCP cancellation token wins before awaited shutdown |
+
+The diagnosis tests also assert
+`rocketmq-mcp.evidence.consumer-lag.v1` and
+`rocketmq-mcp.rules.consumer-lag.v1`. The route counter remains 1 because the
+topic description is derived from the same normalized route read model.
+
+Recorded validation:
+
+```bash
+cargo test -p rocketmq-mcp query_facade
+cargo test -p rocketmq-mcp admin_session
+cargo test -p rocketmq-mcp --lib
+cargo test -p rocketmq-mcp --features change-planning --lib
+cargo test -p rocketmq-mcp --all-features
+cargo test -p rocketmq-admin-core --lib
+cargo clippy -p rocketmq-mcp --all-targets --all-features -- -D warnings
+cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+.\scripts\runtime-audit.ps1 -SkipBaseline
+```
+
+These are deterministic local lifecycle and contract results. They do not
+claim live-cluster connection latency, request latency, or throughput.

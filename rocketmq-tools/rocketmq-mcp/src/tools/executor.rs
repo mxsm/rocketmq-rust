@@ -22,11 +22,10 @@ use rmcp::model::ContentBlock;
 use rmcp::model::JsonObject;
 use rmcp::ErrorData;
 
-use crate::adapter::admin_core_adapter::ReadOnlyAdminAdapter;
+use crate::adapter::query_facade::ReadOnlyQuery;
 use crate::guard::Guard;
 use crate::guard::GuardError;
 use crate::model::contract::ToolResponse;
-use crate::service::diagnosis_service;
 use crate::tools::broker_tools;
 use crate::tools::catalog::ToolDescriptor;
 use crate::tools::catalog::ToolId;
@@ -60,6 +59,12 @@ pub(crate) enum ToolExecutionError {
 
     #[error("structured output is {actual_bytes} bytes; maximum is {max_bytes} bytes")]
     OutputTooLarge { actual_bytes: usize, max_bytes: usize },
+
+    #[error("query workflow timed out after {timeout_ms} ms")]
+    TimedOut { timeout_ms: u64 },
+
+    #[error("query workflow was cancelled")]
+    Cancelled,
 }
 
 impl ToolExecutionError {
@@ -80,11 +85,13 @@ impl ToolExecutionError {
             Self::ChangePlanningDisabled(_) => "change_planning_disabled",
             Self::Internal(_) => "internal_error",
             Self::OutputTooLarge { .. } => "output_too_large",
+            Self::TimedOut { .. } => "backend_timeout",
+            Self::Cancelled => "cancelled",
         }
     }
 
     fn retryable(&self) -> bool {
-        matches!(self, Self::Backend(_) | Self::RateLimited(_))
+        matches!(self, Self::Backend(_) | Self::RateLimited(_) | Self::TimedOut { .. })
     }
 
     fn suggestions(&self) -> Vec<&'static str> {
@@ -98,6 +105,8 @@ impl ToolExecutionError {
             }
             Self::Internal(_) => vec!["Report the request identifier to the server operator."],
             Self::OutputTooLarge { .. } => vec!["Reduce the page limit or narrow the query filter."],
+            Self::TimedOut { .. } => vec!["Retry after checking RocketMQ availability or narrow the workflow scope."],
+            Self::Cancelled => vec!["Retry the request if the cancellation was not intentional."],
         }
     }
 }
@@ -132,7 +141,7 @@ pub(crate) struct ToolExecutor<A> {
 
 impl<A> ToolExecutor<A>
 where
-    A: ReadOnlyAdminAdapter,
+    A: ReadOnlyQuery,
 {
     pub(crate) fn new(adapter: A, guard: Guard) -> Self {
         Self { adapter, guard }
@@ -250,12 +259,10 @@ where
                     Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
                 };
                 let cluster = args.cluster.clone();
-                diagnosis_service::diagnose_consumer_lag(&self.adapter, args)
-                    .await
-                    .and_then(|output| {
-                        let summary = output.summary.clone();
-                        success_result(descriptor, request_id, cluster, summary, output)
-                    })
+                self.adapter.diagnose_consumer_lag(args).await.and_then(|output| {
+                    let summary = output.summary.clone();
+                    success_result(descriptor, request_id, cluster, summary, output)
+                })
             }
             #[cfg(feature = "change-planning")]
             ToolId::PlanCreateTopic => {
@@ -479,7 +486,8 @@ mod tests {
         fail: bool,
     }
 
-    impl ReadOnlyAdminAdapter for FakeAdapter {
+    #[async_trait::async_trait]
+    impl ReadOnlyQuery for FakeAdapter {
         async fn cluster_overview(
             &self,
             args: cluster_tools::ClusterOverviewArgs,
@@ -538,6 +546,13 @@ mod tests {
             &self,
             _args: broker_tools::DescribeBrokerArgs,
         ) -> Result<broker_tools::DescribeBrokerOutput, ToolExecutionError> {
+            unimplemented!("not needed by this test")
+        }
+
+        async fn diagnose_consumer_lag(
+            &self,
+            _args: diagnosis_tools::DiagnoseConsumerLagArgs,
+        ) -> Result<crate::model::diagnosis::DiagnosisReport, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
     }

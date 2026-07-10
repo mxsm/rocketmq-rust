@@ -28,7 +28,6 @@ fn mcp_inspector_stdio_surface_integration() {
 {"jsonrpc":"2.0","id":3,"method":"resources/list","params":{}}
 {"jsonrpc":"2.0","id":4,"method":"resources/templates/list","params":{}}
 {"jsonrpc":"2.0","id":5,"method":"prompts/list","params":{}}
-{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"rocketmq://clusters/local-dev/overview"}}
 {"jsonrpc":"2.0","id":7,"method":"prompts/get","params":{"name":"broker_health_check","arguments":{"cluster":"local-dev"}}}
 {"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"rocketmq_get_cluster_overview","arguments":{"cluster":"missing-cluster"}}}
 {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"rocketmq_get_cluster_overview","arguments":{}}}
@@ -54,10 +53,6 @@ fn mcp_inspector_stdio_surface_integration() {
     );
     assert!(responses[&4]["result"]["resourceTemplates"].is_array());
     assert_json_array_contains_field_value(&responses[&5]["result"]["prompts"], "name", "diagnose_consumer_lag");
-    assert!(responses[&6]["result"]["contents"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("local-dev"));
     assert!(responses[&7]["result"]["messages"][0]["content"]["text"]
         .as_str()
         .unwrap()
