@@ -45,6 +45,45 @@ env:
 
 jobs:
   # =========================
+  # Architecture migration guards
+  # =========================
+  architecture-guards:
+    name: Architecture Guards (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Test architecture guards
+        run: python -m unittest discover -s scripts/tests -p "test_*guard.py" -v
+
+      - name: Check dependency policy fixtures
+        run: python scripts/architecture_dependency_guard.py --fixtures
+
+      - name: Check dependency baseline
+        run: python scripts/architecture_dependency_guard.py --mode baseline
+
+      - name: Check shared-mutation fixtures
+        run: python scripts/arc_mut_guard.py --fixtures
+
+      - name: Check shared-mutation baseline
+        run: python scripts/arc_mut_guard.py
+
+  # =========================
   # Format + Clippy + Shear
   # =========================
   check:

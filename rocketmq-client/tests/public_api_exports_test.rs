@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use std::collections::HashSet;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;

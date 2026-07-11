@@ -20,6 +20,7 @@ use openraft::storage::RaftStateMachine;
 use openraft::EntryPayload;
 use openraft::OptionalSend;
 use openraft::RaftSnapshotBuilder;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_rust::ArcMut;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -158,7 +159,9 @@ impl StateMachine {
     {
         let (events, header, body, response_code, remark) = result.into_parts();
         for event in events {
-            self.replicas_info_manager.apply_event(event.as_ref());
+            if let Err(error) = self.replicas_info_manager.try_apply_event(event.as_ref()) {
+                return ControllerResponse::new(ResponseCode::SystemError.into(), Some(error.to_string()), None, None);
+            }
         }
 
         ControllerResponse::new(
@@ -172,7 +175,9 @@ impl StateMachine {
     fn response_from_result_without_header(&self, result: ControllerResult<()>) -> ControllerResponse {
         let (events, _header, body, response_code, remark) = result.into_parts();
         for event in events {
-            self.replicas_info_manager.apply_event(event.as_ref());
+            if let Err(error) = self.replicas_info_manager.try_apply_event(event.as_ref()) {
+                return ControllerResponse::new(ResponseCode::SystemError.into(), Some(error.to_string()), None, None);
+            }
         }
 
         ControllerResponse::new(

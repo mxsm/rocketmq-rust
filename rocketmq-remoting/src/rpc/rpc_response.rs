@@ -38,24 +38,27 @@ impl RpcResponse {
         }
     }
 
-    pub fn get_header_mut_from_ref<T>(&self) -> Option<&mut T>
-    where
-        T: CommandCustomHeader + Send + Sync + 'static,
-    {
-        match self.header.as_ref() {
-            None => None,
-            Some(value) => value.mut_from_ref().as_any_mut().downcast_mut::<T>(),
-        }
-    }
-
     pub fn get_header_mut<T>(&mut self) -> Option<&mut T>
     where
         T: CommandCustomHeader + Send + Sync + 'static,
     {
         match self.header.as_mut() {
             None => None,
-            Some(value) => value.as_mut().as_any_mut().downcast_mut::<T>(),
+            Some(value) if value.strong_count() == 1 => value.as_mut().as_any_mut().downcast_mut::<T>(),
+            Some(_) => None,
         }
+    }
+
+    /// Compatibility facade for the removed shared-reference mutation escape.
+    ///
+    /// Returning a mutable reference from `&self` cannot be made sound. Callers
+    /// must migrate to [`Self::get_header_mut`], which requires exclusive access.
+    #[deprecated(note = "use get_header_mut; shared-reference mutation is no longer supported")]
+    pub fn get_header_mut_from_ref<T>(&self) -> Option<&mut T>
+    where
+        T: CommandCustomHeader + Send + Sync + 'static,
+    {
+        None
     }
 
     pub fn new_exception(exception: Option<RocketMQError>) -> Self {

@@ -12,5 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) use rocketmq_observability::trace::client::consumer_process_span;
+use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::MessageTrait;
+
 pub(crate) use rocketmq_observability::trace::client::record_process_event;
+
+pub(crate) fn consumer_process_span(
+    first_message: Option<&MessageExt>,
+    message_count: usize,
+    consumer_group: &str,
+    message_queue: &MessageQueue,
+    consume_mode: &'static str,
+) -> tracing::Span {
+    let first_message = first_message.map(|message| {
+        rocketmq_observability::trace::client::MessageSpanContext::new(
+            message.get_properties(),
+            message.get_body().map(|body| body.len()),
+        )
+    });
+    rocketmq_observability::trace::client::consumer_process_span(
+        first_message,
+        message_count,
+        consumer_group,
+        message_queue,
+        consume_mode,
+    )
+}

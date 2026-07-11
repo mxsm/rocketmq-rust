@@ -1146,6 +1146,15 @@ fn store_health_reject_remark(broker_config: &BrokerConfig, snapshot: StoreHealt
     if snapshot.shutdown {
         return Some("store_backpressure reason=store_shutdown".to_string());
     }
+    if !snapshot.writeable {
+        let error_kind = snapshot
+            .last_flush_error
+            .as_ref()
+            .map_or("unknown", |error| error.kind.as_str());
+        return Some(format!(
+            "store_backpressure reason=store_not_writeable, lastFlushErrorKind={error_kind}"
+        ));
+    }
     if snapshot.os_page_cache_busy {
         return Some("store_backpressure reason=page_cache_busy".to_string());
     }
@@ -1338,8 +1347,11 @@ where
         };
         #[cfg(feature = "otel-traces")]
         {
-            rocketmq_observability::propagation::set_current_span_parent_from_message(&msg_ext);
-            rocketmq_observability::trace::record_current_message_attributes(&msg_ext);
+            rocketmq_observability::propagation::set_current_span_parent_from_properties(msg_ext.get_properties());
+            rocketmq_observability::trace::record_current_message_properties(
+                msg_ext.get_properties(),
+                msg_ext.get_body().map(|body| body.len()),
+            );
         }
 
         let retry_topic = msg_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC));
@@ -1887,5 +1899,23 @@ mod tests {
 
         let remark = store_health_reject_remark(&BrokerConfig::default(), snapshot).expect("shutdown should reject");
         assert!(remark.contains("reason=store_shutdown"));
+    }
+
+    #[test]
+    fn store_health_reject_remark_reports_typed_flush_failure() {
+        let snapshot = StoreHealthSnapshot {
+            writeable: false,
+            last_flush_error: Some(rocketmq_store::base::message_store::StoreHealthError {
+                kind: rocketmq_store::store_error::StoreErrorKind::MappedFile,
+                detail: "injected failure detail".to_string(),
+            }),
+            ..StoreHealthSnapshot::default()
+        };
+
+        let remark =
+            store_health_reject_remark(&BrokerConfig::default(), snapshot).expect("flush failure should reject");
+        assert!(remark.contains("reason=store_not_writeable"));
+        assert!(remark.contains("lastFlushErrorKind=mapped_file"));
+        assert!(!remark.contains("injected failure detail"));
     }
 }

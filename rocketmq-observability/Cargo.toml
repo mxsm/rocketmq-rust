@@ -79,8 +79,8 @@ prometheus = [
 stdout = []
 
 [dependencies]
-rocketmq-common = { workspace = true }
 rocketmq-error = { workspace = true }
+rocketmq-model = { workspace = true }
 rocketmq-runtime = { workspace = true }
 
 anyhow.workspace = true

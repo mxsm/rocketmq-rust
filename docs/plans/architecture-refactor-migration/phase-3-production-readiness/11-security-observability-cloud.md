@@ -1,0 +1,212 @@
+# M11：安全、可观测性与云原生生产化
+
+## 元数据
+
+| 字段 | 值 |
+|---|---|
+| 阶段 | Phase 3：性能、耐久引擎与云原生 |
+| 状态 | 已批准，等待 M09；部分依赖 M10 SLI |
+| 预计周期 | 4–6 周 |
+| 工作包 | 延续 WP01、WP03、WP05、WP07、WP14–WP16 |
+| 前置条件 | 32-package Gate；secure dry-run、ServiceContext、semantic owner、durability SLI 可用 |
+| 可并行项 | semantic registry、安全 provider、镜像/Helm 可分泳道；安全默认切换和 E2E Gate 串行 |
+| 完成后解锁 | M12 |
+
+## 目标
+
+- 建立 versioned telemetry semantic registry、SLI/SLO、dashboard/runbook 和 collector 故障隔离。
+- 将 secure 作为新部署默认，提供 SecretProvider、bootstrap、rotation、原子 reload 和 fail-closed readiness。
+- 交付 Broker/NameServer/Controller/Proxy/MCP 独立镜像与 Helm/Kustomize，统一 drain/deadline。
+- 清除 production/public compatibility API 剩余 ArcMut 安全逃逸，默认 stable 构建通过。
+
+## 非目标
+
+- 不静默改变已有部署；compatibility 必须显式迁移并产生 telemetry。
+- 不记录 credential、TLS/ACL material、message body、token 或完整 config。
+- 不用端口存活冒充 readiness/liveness，不让 telemetry 故障阻塞数据面。
+- 当前 MCP manifest 只有 `change-planning` opt-in；本里程碑不假定或创建 `dangerous-tools`/Apply，它们属于 M12 经独立 Human Gate 后的未来交付物。
+
+## 入口条件
+
+- [ ] `[ARCH]` 冻结 semantic schema、安全 profile、bootstrap/rotation、探针/drain 和镜像边界。
+- [ ] `[TEST]` 准备 collector outage、secret/reload、audit overflow、kind/k3d upgrade/eviction/disk/leader 场景。
+- [ ] `[DEV]` 确认 auth/observability/distribution/docker 目标文件无用户修改重叠。
+- [ ] `[HUMAN]` 批准“新部署 secure 默认、已有部署显式迁移”的版本策略。
+
+## 交付物
+
+| 类型 | 交付物 |
+|---|---|
+| Observability | versioned semantic registry、cardinality/privacy guard、SLI/SLO、dashboard/runbook |
+| Security | development/compatibility/secure、SecretProvider、一次性 bootstrap、rotation/reload/audit |
+| MCP HTTP | HTTPS/JWKS/kid rotation/principal propagation/audit drain 的生产 Gate |
+| Cloud | 5 个镜像、Helm/Kustomize、PDB/NetworkPolicy/PodSecurity/Secret 引用、SBOM/签名 |
+| Lifecycle | readiness→drain→flush/replicate→telemetry，Kubernetes grace > internal deadline |
+| Soundness | ArcMut/public safe escape 清零或经 ADR 证明 sound，stable default CI |
+
+## PR 级开发步骤
+
+### PR-M11-01：Telemetry semantic registry
+
+- [ ] `[ARCH]` 为每个 metric/span/log 声明 owner、unit、stability、attributes、cardinality、privacy、deprecation。
+- [ ] `[DEV]` 实现计划中的 `telemetry_semantic_guard.py` 和违规 fixture，未登记/超预算字段拒绝。
+- [ ] `[DEV]` 登记 request、watermark/lag、connection/bytes、task、recovery/cache、auth/MCP、exporter 信号。
+- [ ] `[TEST]` 覆盖 collector outage：有界队列、可计量 drop、shutdown timeout，数据面不阻塞。
+- [ ] `[REV]` 检查字段低基数、采样明确、无敏感数据和每消息无限 span/event。
+- [ ] 回滚点：registry 可回到上一 version；不得关闭 privacy/cardinality 失败。
+
+### PR-M11-02：SecretProvider 基础合同与本地 Adapter
+
+- [ ] 入口：`[ARCH]` SecretProvider capability、secret wrapper、permission和redaction合同已冻结，不切换安全profile默认值。
+- [ ] `[DEV]` 实现provider contract、显式registry及开发用环境/受限文件adapter；生产provider只通过注入接入。
+- [ ] `[TEST]` focused test：owner-only permission、encrypted envelope、atomic read/write、redacted Debug、zeroize和provider缺失。
+- [ ] `[REV]` 检查secret不进入CLI/env dump/log/config snapshot，security-api不依赖provider实现。
+- [ ] 回滚点：停止注册新provider，保留dry-run与redaction；不得回滚为pretty JSON或宽松权限。
+
+### PR-M11-03：Secure Profile 与一次性 Bootstrap
+
+- [ ] 入口：`[HUMAN]` 已批准“新部署secure默认、已有部署显式迁移”，SecretProvider基础测试全绿。
+- [ ] `[DEV]` secure缺trust/provider/bootstrap、材料无效/过期或unknown配置时校验失败且readiness=false。
+- [ ] `[DEV]` 一次性token绑定cluster/listener/expiry，仅在已验证TLS通道创建首个admin，成功后原子消费并关闭endpoint。
+- [ ] `[TEST]` focused test：缺失材料、token重放/过期/跨cluster、unknown fail、compatibility migration report和匿名启动负测。
+- [ ] `[REV]` 检查secure不能自动降级，bootstrap token不进入命令行/日志/环境dump。
+- [ ] 回滚点：已有部署显式固定compatibility；新secure部署保持readiness=false并修复材料，不切宽松模式。
+
+### PR-M11-04：Credential/Certificate Rotation 与原子 Reload
+
+- [ ] 入口：`[ARCH]` overlap窗口、active identity、撤销、last-known-good和break-glass审计状态机已冻结。
+- [ ] `[DEV]` 实现新旧材料重叠验证→切active→撤销旧材料；reload先完整解析/验证再原子交换。
+- [ ] `[TEST]` focused test：kid/cert rotation、并发请求、reload partial/invalid、旧材料撤销、break-glass启停与审计。
+- [ ] `[REV]` 检查失败保留last-known-good或fail closed，不应用半份配置，不丢审计。
+- [ ] 回滚点：原子指回已验证的last-known-good credential version；已撤销材料不得静默复活。
+
+### PR-M11-05：MCP HTTPS、JWKS 与 Principal 传播
+
+- [ ] 入口：`[TEST]` 当前metadata/401/Origin/scope/cluster/RBAC和`change-planning`无副作用基线已冻结。
+- [ ] `[DEV]` 补公共HTTPS resource URI、TLS强制、JWKS/kid rotation、secure禁对称算法、principal到protocol handler端到端传播。
+- [ ] `[TEST]` focused test：HTTPS metadata/challenge、签名/issuer/audience/expiry/scope、kid rotation、缺认证上下文fail closed、stdio stdout/redaction。
+- [ ] `[REV]` 只验证当前`change-planning` opt-in仍生成`mutates_cluster: false`计划；不假定Apply或`dangerous-tools`存在。
+- [ ] 回滚点：关闭新HTTP exposure并保留stdio/人工CLI，不降低认证、TLS或principal传播要求。
+
+### PR-M11-06：MCP Audit Writer 与 Shutdown Drain
+
+- [ ] 入口：`[ARCH]` audit schema、count+byte上限、overflow policy、绝对deadline和flush报告已冻结。
+- [ ] `[DEV]` audit writer按count+bytes有界，记录稳定principal/action/outcome，shutdown在同一deadline内drain/flush并报告未完成项。
+- [ ] `[TEST]` focused test：overflow、sink timeout/failure、进程取消、deadline、redaction和audit ordering。
+- [ ] `[REV]` 检查audit故障不阻塞数据面、敏感字段不落盘、未完成记录可观测。
+- [ ] 回滚点：回到上一通过同一audit corpus的writer；否则关闭HTTP管理入口并保留核心stdio/人工运维。
+
+### PR-M11-07：容器镜像基础
+
+- [ ] 入口：`[ARCH]` runtime基础镜像、用户/文件系统、供应链和产物命名规则已冻结。
+- [ ] `[DEV]` 建统一多阶段构建、最小runtime、非root、read-only rootfs、SBOM、签名和漏洞扫描模板。
+- [ ] `[TEST]` focused test：image build、non-root/read-only启动、SBOM生成、签名验证和critical vulnerability policy。
+- [ ] `[REV]` 检查不包含构建工具、源码、secret或调试产物，镜像可按digest复现。
+- [ ] 回滚点：使用上一签名基础镜像digest；不回滚安全用户/文件系统约束。
+
+### PR-M11-08：五个服务镜像入口
+
+- [ ] 入口：`[TEST]` 镜像基础模板通过；Broker/NameServer/Controller/Proxy/MCP各自启动/配置/信号合同已记录。
+- [ ] `[DEV]` 为五个服务分别建立entrypoint、config mount、data path、port和signal接线，不把服务打进单一镜像。
+- [ ] `[TEST]` focused test：每个镜像独立启动、配置错误退出、SIGTERM、只读rootfs和必要volume权限。
+- [ ] `[REV]` 检查镜像边界与crate/binary owner一致，无secret命令行参数。
+- [ ] 回滚点：单个服务独立回到上一签名镜像，不回滚其他服务或共享持久数据。
+
+### PR-M11-09：Helm 与 Kustomize 资产
+
+- [ ] 入口：`[ARCH]` 五服务镜像digest、配置schema、PVC/topology/secret引用和资源预算已冻结。
+- [ ] `[DEV]` 在`distribution/helm`、`distribution/kubernetes`提供requests/limits、PVC、PDB、topology、NetworkPolicy、PodSecurity、OTel和Secret引用。
+- [ ] `[TEST]` focused test：helm lint/template、Kustomize build、schema validation、secure values和禁止inline secret。
+- [ ] `[REV]` 检查standalone/Stateful服务边界、Controller quorum和storage class语义。
+- [ ] 回滚点：Helm revision/Kustomize overlay回到上一签名版本，PVC和持久格式不降级。
+
+### PR-M11-10：Probe、PreStop 与统一 Drain
+
+- [ ] 入口：`[ARCH]` readiness/liveness语义、ShutdownCoordinator阶段和Kubernetes grace预算已冻结。
+- [ ] `[DEV]` readiness仅表示可接受新工作；liveness只检测失去进展；preStop/SIGTERM进入readiness→drain→flush/replicate→telemetry。
+- [ ] `[TEST]` focused test：挂起依赖/processor/telemetry、重复SIGTERM、grace边界、ShutdownReport和已确认消息。
+- [ ] `[REV]` 检查grace period大于内部绝对deadline，各层不重新分配完整超时。
+- [ ] 回滚点：单独回滚probe阈值/manifest接线到上一已验证配置；不得恢复端口存活假readiness或跳过drain。
+
+### PR-M11-11：Kind/K3d Fault Matrix Gate
+
+- [ ] 入口：`[TEST]` 五镜像、Helm/Kustomize和probe/drain focused test全部通过，测试集群profile已记录。
+- [ ] `[TEST]` 执行滚动升级、节点驱逐、collector中断、磁盘压力、Controller leader故障、secret rotation和已确认消息恢复。
+- [ ] `[DEV]` 实现计划中的`kind-architecture-refactor-e2e.ps1`，保存镜像digest、chart/overlay hash、事件和watermark证据。
+- [ ] `[REV]` 检查故障断言不是仅看Pod ready，而是覆盖durability、drain、SLO和回滚。
+- [ ] 回滚点：停止rollout并回到上一签名镜像/chart；保留PVC、WAL和故障证据，验证恢复后再继续。
+
+### PR-M11-12：ArcMut、Stable 与 SLO Phase 3 收口
+
+- [ ] 入口：`[TEST]` PR-M11-01至11证据对应同一候选快照，M10提供的durability SLI已接入。
+- [ ] `[DEV]` 清除production/public compatibility API中的ArcMut、mut_from_ref和clone-safe AsMut/DerefMut。
+- [ ] `[REV]` 保留项必须是唯一性可证明的sound wrapper，有局部SAFETY、Miri/Loom证据和Human ADR。
+- [ ] `[TEST]` 执行stable default、feature matrix、Miri/Loom可用切片、soak和SLO fault suite。
+- [ ] `[DEV]` 发布dashboard/runbook、告警、回滚和证据索引。
+- [ ] 回滚点：任一失败返回对应独立PR修复并冻结新快照，不扩大baseline或跳过Gate。
+- [ ] `[HUMAN]` 对同一冻结快照批准Phase 3 Gate。
+
+## 公共兼容面
+
+- development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
+- 安全 enum unknown始终失败；secret/provider实现不暴露到security-api合同。
+- telemetry schema版本化，删除/重命名走deprecation窗口。
+- 镜像入口、wire/storage和已确认消息语义保持；部署回滚不要求格式降级。
+
+## 验证命令
+
+### 当前即可执行
+
+```powershell
+cargo test -p rocketmq-observability
+cargo test -p rocketmq-auth
+cargo check -p rocketmq-mcp
+cargo test -p rocketmq-mcp
+cargo test -p rocketmq-mcp --all-features
+cargo clippy --all-targets -p rocketmq-mcp --features streamable-http -- -D warnings
+cargo doc -p rocketmq-mcp --no-deps
+.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline
+.\scripts\check-error-hygiene.ps1
+.\scripts\check-agents-routing.ps1
+cargo fmt --all -- --check
+cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+git diff --check
+```
+
+Observability 使用当前 CI 的精确 7 组适用 feature matrix，不以 all-features 替代。
+
+### 本里程碑新增后执行
+
+```powershell
+python scripts/telemetry_semantic_guard.py
+python scripts/arc_mut_guard.py
+python scripts/architecture_dependency_guard.py --mode target
+.\scripts\kind-architecture-refactor-e2e.ps1
+```
+
+kind E2E、semantic guard只在脚本和fixture实际交付后执行。
+
+## 回滚触发器
+
+- secure配置可匿名/宽松启动、secret泄漏、bootstrap可重放或reload应用半份配置。
+- collector/audit故障阻塞数据面或产生无界队列。
+- rolling/eviction/disk/leader演练丢失已确认消息，或deadline/drain顺序不一致。
+- ArcMut安全逃逸仍存在，stable default失败，或镜像无法回滚。
+
+安全失败保持readiness=false并停止发布；部署回滚上一签名版本，保留审计和持久数据。不得通过compatibility静默降级secure。
+
+## Exit Checklist
+
+- [ ] `[TEST]` semantic/cardinality/privacy guard正负fixture全绿。
+- [ ] `[TEST]` collector/audit outage有界且不阻塞数据面。
+- [ ] `[REV]` secure缺失/过期/unknown均fail closed，secret全链路脱敏。
+- [ ] `[TEST]` MCP HTTP认证、rotation、audit、Plan无副作用合同通过。
+- [ ] `[TEST]` 五服务镜像和kind/k3d故障/滚动场景通过。
+- [ ] `[REV]` drain顺序和绝对deadline统一。
+- [ ] `[REV]` ArcMut安全逃逸清零或仅有获批sound wrapper，stable default通过。
+- [ ] `[HUMAN]` 新旧部署策略和Phase 3 Gate已签署。
+
+## 交接物
+
+- 向 M12 交付 versioned telemetry、RequestContext/RBAC/audit、SLO、KG允许字段和云原生运维接口。
+- 向发布负责人交付 secure migration、镜像签名、Helm rollback和Phase 3 evidence。

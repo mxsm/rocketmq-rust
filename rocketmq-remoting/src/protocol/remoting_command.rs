@@ -92,7 +92,7 @@ pub struct RemotingCommand {
     #[serde(skip)]
     suspended: bool,
     #[serde(skip)]
-    command_custom_header: Option<ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
+    command_custom_header: Option<Arc<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
     #[serde(skip)]
     custom_header_to_net: bool,
     #[serde(rename = "serializeTypeCurrentRPC")]
@@ -101,6 +101,11 @@ pub struct RemotingCommand {
 
 impl Clone for RemotingCommand {
     fn clone(&self) -> Self {
+        let mut ext_fields = self.ext_fields.clone().unwrap_or_default();
+        if let Some(header_fields) = self.command_custom_header.as_ref().and_then(|header| header.to_map()) {
+            ext_fields.extend(header_fields);
+        }
+        let ext_fields = (!ext_fields.is_empty()).then_some(ext_fields);
         Self {
             code: self.code,
             language: self.language,
@@ -108,7 +113,7 @@ impl Clone for RemotingCommand {
             opaque: self.opaque,
             flag: self.flag,
             remark: self.remark.clone(),
-            ext_fields: self.ext_fields.clone(),
+            ext_fields,
             body: self.body.clone(),
             suspended: self.suspended,
             command_custom_header: self.command_custom_header.clone(),
@@ -212,7 +217,7 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        self.command_custom_header = Some(ArcMut::new(Box::new(command_custom_header)));
+        self.command_custom_header = Some(Arc::new(Box::new(command_custom_header)));
         self.custom_header_to_net = false;
         self
     }
@@ -221,8 +226,11 @@ impl RemotingCommand {
         mut self,
         command_custom_header: Option<ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
     ) -> Self {
-        self.command_custom_header = command_custom_header;
-        self.custom_header_to_net = false;
+        if let Some(header_fields) = command_custom_header.as_ref().and_then(|header| header.to_map()) {
+            self.ext_fields.get_or_insert_with(HashMap::new).extend(header_fields);
+        }
+        self.command_custom_header = None;
+        self.custom_header_to_net = true;
         self
     }
 
@@ -230,7 +238,7 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        self.command_custom_header = Some(ArcMut::new(Box::new(command_custom_header)));
+        self.command_custom_header = Some(Arc::new(Box::new(command_custom_header)));
         self.custom_header_to_net = false;
     }
 
@@ -915,19 +923,20 @@ impl RemotingCommand {
         self.custom_header_to_net = false;
         match self.command_custom_header.as_mut() {
             None => None,
-            Some(value) => value.as_mut().as_any_mut().downcast_mut::<T>(),
+            Some(value) => Arc::get_mut(value)?.as_mut().as_any_mut().downcast_mut::<T>(),
         }
     }
 
+    /// Compatibility name for the former shared-reference mutation escape.
+    ///
+    /// Mutation now requires exclusive access to this command and succeeds only
+    /// when the safely shared header is uniquely owned.
+    #[deprecated(note = "use read_custom_header_mut; shared-reference mutation is no longer supported")]
     pub fn read_custom_header_mut_from_ref<T>(&mut self) -> Option<&mut T>
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        self.custom_header_to_net = false;
-        match self.command_custom_header.as_ref() {
-            None => None,
-            Some(value) => value.mut_from_ref().as_any_mut().downcast_mut::<T>(),
-        }
+        self.read_custom_header_mut::<T>()
     }
 
     pub fn try_read_custom_header_mut<T>(&mut self) -> rocketmq_error::RocketMQResult<&mut T>
@@ -937,7 +946,8 @@ impl RemotingCommand {
         self.custom_header_to_net = false;
         match self.command_custom_header.as_mut() {
             None => Err(Self::custom_header_missing_error::<T>()),
-            Some(value) => value
+            Some(value) => Arc::get_mut(value)
+                .ok_or_else(Self::custom_header_shared_error)?
                 .as_mut()
                 .as_any_mut()
                 .downcast_mut::<T>()
@@ -963,7 +973,7 @@ impl RemotingCommand {
         self.custom_header_to_net = false;
         match self.command_custom_header.as_mut() {
             None => None,
-            Some(value) => Some(value.as_mut().as_mut()),
+            Some(value) => Arc::get_mut(value).map(|header| header.as_mut() as &mut dyn CommandCustomHeader),
         }
     }
 
@@ -1012,6 +1022,13 @@ impl RemotingCommand {
                 "Command custom header type mismatch; expected {}.",
                 std::any::type_name::<T>()
             ),
+        })
+    }
+
+    fn custom_header_shared_error() -> rocketmq_error::RocketMQError {
+        rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+            format: "header",
+            message: "Command custom header is shared by a cloned command and cannot be mutated safely.".to_string(),
         })
     }
 }
@@ -1163,6 +1180,34 @@ mod tests {
     }
 
     #[test]
+    fn clone_preserves_concrete_header_and_merges_all_extension_fields() {
+        let original =
+            RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 }).set_ext_fields(HashMap::from([
+                (CheetahString::from("hook-field"), CheetahString::from("preserved")),
+            ]));
+        let cloned = original.clone();
+
+        assert_eq!(
+            cloned.try_read_custom_header_ref::<TestCustomHeader>().unwrap().value,
+            7
+        );
+        assert_eq!(
+            cloned
+                .ext_fields()
+                .and_then(|fields| fields.get("hook-field"))
+                .map(CheetahString::as_str),
+            Some("preserved")
+        );
+        assert_eq!(
+            cloned
+                .ext_fields()
+                .and_then(|fields| fields.get("value"))
+                .map(CheetahString::as_str),
+            Some("7")
+        );
+    }
+
+    #[test]
     fn materialize_custom_header_to_ext_fields_keeps_header_decodable_and_header_object_visible() {
         let mut command = RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 });
 
@@ -1181,12 +1226,12 @@ mod tests {
     }
 
     #[test]
-    fn read_custom_header_mut_from_ref_invalidates_materialized_ext_fields() {
+    fn read_custom_header_mut_invalidates_materialized_ext_fields() {
         let mut command = RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 });
         command.materialize_custom_header_to_ext_fields();
 
         let header = command
-            .read_custom_header_mut_from_ref::<TestCustomHeader>()
+            .read_custom_header_mut::<TestCustomHeader>()
             .expect("test header should be available");
         header.value = 9;
         command.make_custom_header_to_net();

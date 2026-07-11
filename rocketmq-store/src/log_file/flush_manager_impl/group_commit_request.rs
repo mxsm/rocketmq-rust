@@ -17,17 +17,20 @@ use rocketmq_common::TimeUtils::current_nano;
 use tokio::sync::oneshot;
 
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::store_error::StoreError;
+
+pub(crate) type GroupCommitResult = Result<PutMessageStatus, Arc<StoreError>>;
 
 #[derive(Debug)]
 pub(crate) struct GroupCommitRequest {
     pub(crate) next_offset: i64,
-    flush_ok_sender: Option<oneshot::Sender<PutMessageStatus>>,
+    flush_ok_sender: Option<oneshot::Sender<GroupCommitResult>>,
     pub(crate) dead_line: u64,
     pub(crate) enqueue_time_millis: u64,
 }
 
 impl GroupCommitRequest {
-    pub(crate) fn new(next_offset: i64, timeout_millis: u64) -> (Self, oneshot::Receiver<PutMessageStatus>) {
+    pub(crate) fn new(next_offset: i64, timeout_millis: u64) -> (Self, oneshot::Receiver<GroupCommitResult>) {
         let dead_line = current_nano() + timeout_millis * 1_000_000;
         let (flush_ok_sender, flush_ok_receiver) = oneshot::channel();
         (
@@ -43,7 +46,13 @@ impl GroupCommitRequest {
 
     pub(crate) fn complete(mut self, status: PutMessageStatus) {
         if let Some(sender) = self.flush_ok_sender.take() {
-            let _ = sender.send(status);
+            let _ = sender.send(Ok(status));
+        }
+    }
+
+    pub(crate) fn complete_error(mut self, error: Arc<StoreError>) {
+        if let Some(sender) = self.flush_ok_sender.take() {
+            let _ = sender.send(Err(error));
         }
     }
 
@@ -51,3 +60,4 @@ impl GroupCommitRequest {
         current_nano() >= self.dead_line
     }
 }
+use std::sync::Arc;

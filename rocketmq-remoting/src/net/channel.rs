@@ -30,10 +30,12 @@ use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
-use tokio::time::timeout;
 use tracing::error;
 use uuid::Uuid;
 
+use crate::base::pending_request_table::PendingRequestOwner;
+use crate::base::pending_request_table::PendingRequestTable;
+use crate::base::pending_request_table::PendingRequestToken;
 use crate::base::response_future::ResponseFuture;
 use crate::connection::Connection;
 use crate::protocol::remoting_command::RemotingCommand;
@@ -236,6 +238,10 @@ impl Channel {
     pub fn channel_inner_mut(&mut self) -> &mut ChannelInner {
         self.inner.as_mut()
     }
+
+    pub(crate) fn pending_request_owner(&self) -> Option<&PendingRequestOwner> {
+        self.inner.pending_request_owner()
+    }
 }
 
 impl PartialEq for Channel {
@@ -279,11 +285,19 @@ impl Display for Channel {
 /// Internal message type for the send queue.
 ///
 /// Encapsulates a command to send along with optional response tracking.
-type ChannelMessage = (
-    RemotingCommand,                                                                       /* command */
-    Option<tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<RemotingCommand>>>, /* response_tx */
-    Option<u64>,                                                                           /* timeout_millis */
-);
+enum ResponseReservation {
+    Pending(PendingRequestToken),
+    Legacy {
+        opaque: i32,
+        timeout_millis: u64,
+        sender: tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<RemotingCommand>>,
+    },
+    LegacyRegistered {
+        opaque: i32,
+    },
+}
+
+type ChannelMessage = (RemotingCommand, Option<ResponseReservation>);
 
 /// Shared state for a `Channel` - handles I/O, async message queueing, and response tracking.
 ///
@@ -333,7 +347,13 @@ pub struct ChannelInner {
     /// Shared between:
     /// - Send task: Inserts entries when request is sent
     /// - Receive task: Removes and completes entries when response arrives
-    pub(crate) response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+    pub(crate) response_table: PendingRequestTable,
+
+    /// Correlation generation owned by this physical connection.
+    pending_request_owner: Option<PendingRequestOwner>,
+
+    /// Compatibility backend retained by the legacy constructors.
+    legacy_response_table: Option<ArcMut<HashMap<i32, ResponseFuture>>>,
 
     /// Tracks the outbound send task for shutdown diagnostics.
     send_task_group: TaskGroup,
@@ -364,10 +384,11 @@ pub struct ChannelInner {
 ///
 /// This would reduce per-message overhead and improve throughput by ~20-40%
 /// under high load, at the cost of slightly increased latency for small batches.
-pub(crate) async fn handle_send(
+async fn handle_send(
     mut connection: ArcMut<Connection>,
     rx: Receiver<ChannelMessage>,
-    mut response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+    response_table: PendingRequestTable,
+    mut legacy_response_table: Option<ArcMut<HashMap<i32, ResponseFuture>>>,
 ) {
     // Loop until channel is closed or connection fails
     loop {
@@ -380,34 +401,47 @@ pub(crate) async fn handle_send(
             }
         };
 
-        let (send, tx, timeout_millis) = msg;
-        let opaque = send.opaque();
+        let (send, mut reservation) = msg;
 
-        // Register response future if this is a request-response operation
-        if let Some(tx) = tx {
-            response_table.insert(
-                opaque,
-                ResponseFuture::new(opaque, timeout_millis.unwrap_or(0), true, tx),
-            );
+        if let Some(ResponseReservation::Legacy {
+            opaque,
+            timeout_millis,
+            sender,
+        }) = reservation.take()
+        {
+            let Some(table) = legacy_response_table.as_mut() else {
+                let _ = sender.send(Err(RocketMQError::network_connection_failed(
+                    "channel",
+                    "legacy response table is unavailable",
+                )));
+                continue;
+            };
+            table.insert(opaque, ResponseFuture::new(opaque, timeout_millis, true, sender));
+            reservation = Some(ResponseReservation::LegacyRegistered { opaque });
         }
 
         // Send command via connection
-        match connection.send_command(send).await {
-            Ok(_) => {}
-            Err(error) => match error {
-                rocketmq_error::RocketMQError::IO(error) => {
-                    // I/O error means connection is broken
-                    // Connection state is automatically marked as degraded by send_command()
-                    error!("send request failed: {}", error);
-                    response_table.remove(&opaque);
-                    return;
+        if let Err(error) = connection.send_command(send).await {
+            let connection_broken = matches!(error, rocketmq_error::RocketMQError::IO(_));
+            error!(error = %error, "send request failed");
+            match reservation {
+                Some(ResponseReservation::Pending(reservation)) => {
+                    response_table.complete_token(reservation, Err(error));
                 }
-                _ => {
-                    // Other errors: remove response future but continue
-                    response_table.remove(&opaque);
+                Some(ResponseReservation::LegacyRegistered { opaque }) => {
+                    if let Some(future) = legacy_response_table.as_mut().and_then(|table| table.remove(&opaque)) {
+                        let _ = future.tx.send(Err(error));
+                    }
                 }
-            },
-        };
+                Some(ResponseReservation::Legacy { sender, .. }) => {
+                    let _ = sender.send(Err(error));
+                }
+                None => {}
+            }
+            if connection_broken {
+                return;
+            }
+        }
     }
 }
 
@@ -451,7 +485,28 @@ impl ChannelInner {
             )
         })?;
         let task_group = TaskGroup::root("rocketmq-remoting.channel", RuntimeHandle::new(runtime));
-        Self::try_new_with_send_task_group(connection, response_table, task_group)
+        Self::try_new_with_send_task_group(
+            connection,
+            PendingRequestTable::new(),
+            None,
+            Some(response_table),
+            task_group,
+        )
+    }
+
+    pub fn try_new_with_pending_requests(
+        connection: Connection,
+        response_table: PendingRequestTable,
+    ) -> rocketmq_error::RocketMQResult<Self> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+            RocketMQError::network_connection_failed(
+                "channel",
+                format!("ChannelInner send task requires a Tokio runtime: {error}"),
+            )
+        })?;
+        let task_group = TaskGroup::root("rocketmq-remoting.channel", RuntimeHandle::new(runtime));
+        let owner = response_table.new_owner();
+        Self::try_new_with_send_task_group(connection, response_table, Some(owner), None, task_group)
     }
 
     /// Creates a new `ChannelInner` under the provided parent task group.
@@ -461,12 +516,30 @@ impl ChannelInner {
         parent_task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
         let task_group = parent_task_group.child("rocketmq-remoting.channel");
-        Self::try_new_with_send_task_group(connection, response_table, task_group)
+        Self::try_new_with_send_task_group(
+            connection,
+            PendingRequestTable::new(),
+            None,
+            Some(response_table),
+            task_group,
+        )
+    }
+
+    pub fn try_new_with_pending_requests_and_task_group(
+        connection: Connection,
+        response_table: PendingRequestTable,
+        parent_task_group: TaskGroup,
+    ) -> rocketmq_error::RocketMQResult<Self> {
+        let task_group = parent_task_group.child("rocketmq-remoting.channel");
+        let owner = response_table.new_owner();
+        Self::try_new_with_send_task_group(connection, response_table, Some(owner), None, task_group)
     }
 
     fn try_new_with_send_task_group(
         connection: Connection,
-        response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+        response_table: PendingRequestTable,
+        pending_request_owner: Option<PendingRequestOwner>,
+        legacy_response_table: Option<ArcMut<HashMap<i32, ResponseFuture>>>,
         task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
         const QUEUE_CAPACITY: usize = 1024;
@@ -479,7 +552,12 @@ impl ChannelInner {
         task_group
             .spawn_service(
                 "remoting.channel.send",
-                handle_send(connection.clone(), outbound_queue_rx, response_table.clone()),
+                handle_send(
+                    connection.clone(),
+                    outbound_queue_rx,
+                    response_table.clone(),
+                    legacy_response_table.clone(),
+                ),
             )
             .map_err(|error| {
                 RocketMQError::network_connection_failed(
@@ -491,6 +569,8 @@ impl ChannelInner {
             outbound_queue_tx,
             connection,
             response_table,
+            pending_request_owner,
+            legacy_response_table,
             send_task_group: task_group,
         })
     }
@@ -503,6 +583,12 @@ impl ChannelInner {
         drop(outbound_queue_tx);
 
         let report = self.send_task_group.shutdown(timeout).await;
+        if let Some(owner) = self.pending_request_owner.as_ref() {
+            self.response_table.close_owner(owner, || {
+                RocketMQError::network_connection_failed("channel", "connection closed")
+            });
+        }
+        self.close_legacy_requests("connection closed");
         report.log_if_unhealthy();
         report
     }
@@ -511,10 +597,31 @@ impl ChannelInner {
 impl Drop for ChannelInner {
     fn drop(&mut self) {
         self.send_task_group.cancel();
+        if let Some(owner) = self.pending_request_owner.as_ref() {
+            self.response_table.close_owner(owner, || {
+                RocketMQError::network_connection_failed("channel", "connection dropped")
+            });
+        }
+        self.close_legacy_requests("connection dropped");
     }
 }
 
 impl ChannelInner {
+    pub(crate) fn pending_request_owner(&self) -> Option<&PendingRequestOwner> {
+        self.pending_request_owner.as_ref()
+    }
+
+    fn close_legacy_requests(&mut self, reason: &'static str) {
+        let Some(table) = self.legacy_response_table.as_mut() else {
+            return;
+        };
+        for (_, future) in std::mem::take(table.as_mut()) {
+            let _ = future
+                .tx
+                .send(Err(RocketMQError::network_connection_failed("channel", reason)));
+        }
+    }
+
     // === Connection Accessors ===
 
     /// Gets a cloned `ArcMut` handle to the connection.
@@ -587,14 +694,28 @@ impl ChannelInner {
         let (response_tx, response_rx) =
             tokio::sync::oneshot::channel::<rocketmq_error::RocketMQResult<RemotingCommand>>();
         let opaque = request.opaque();
+        let (guard, deadline, reservation) = if let Some(owner) = self.pending_request_owner.as_ref() {
+            let guard = self
+                .response_table
+                .register_for_owner(owner, opaque, timeout_millis, response_tx)?;
+            let deadline = guard.deadline();
+            let reservation = ResponseReservation::Pending(guard.token());
+            (Some(guard), deadline, reservation)
+        } else {
+            (
+                None,
+                std::time::Instant::now() + Duration::from_millis(timeout_millis),
+                ResponseReservation::Legacy {
+                    opaque,
+                    timeout_millis,
+                    sender: response_tx,
+                },
+            )
+        };
 
         // Enqueue request with response tracking
         // flume sender: use send_async() for async context
-        if let Err(err) = self
-            .outbound_queue_tx
-            .send_async((request, Some(response_tx), Some(timeout_millis)))
-            .await
-        {
+        if let Err(err) = self.outbound_queue_tx.send_async((request, Some(reservation))).await {
             return Err(RocketMQError::network_connection_failed(
                 "channel",
                 format!("send failed: {}", err),
@@ -602,25 +723,34 @@ impl ChannelInner {
         }
 
         // Wait for response with timeout
-        match timeout(Duration::from_millis(timeout_millis), response_rx).await {
+        match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), response_rx).await {
             Ok(result) => match result {
                 Ok(response) => response,
-                Err(e) => {
-                    // Response channel closed without sending (connection dropped?)
-                    self.response_table.remove(&opaque);
-                    Err(RocketMQError::network_connection_failed(
-                        "channel",
-                        format!("connection dropped: {}", e),
-                    ))
-                }
+                Err(e) => Err(RocketMQError::network_connection_failed(
+                    "channel",
+                    format!("connection dropped: {}", e),
+                )),
             },
             Err(_) => {
                 // Timeout expired
-                self.response_table.remove(&opaque);
-                Err(RocketMQError::Timeout {
-                    operation: "channel_recv",
-                    timeout_ms: timeout_millis,
-                })
+                if let Some(guard) = guard {
+                    Err(guard.expire("channel_recv", timeout_millis))
+                } else {
+                    if let Some(future) = self
+                        .legacy_response_table
+                        .as_mut()
+                        .and_then(|table| table.remove(&opaque))
+                    {
+                        let _ = future.tx.send(Err(RocketMQError::Timeout {
+                            operation: "channel_recv",
+                            timeout_ms: timeout_millis,
+                        }));
+                    }
+                    Err(RocketMQError::Timeout {
+                        operation: "channel_recv",
+                        timeout_ms: timeout_millis,
+                    })
+                }
             }
         }
     }
@@ -646,16 +776,12 @@ impl ChannelInner {
     pub async fn send_oneway(
         &self,
         request: RemotingCommand,
-        timeout_millis: u64,
+        _timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
         let request = request.mark_oneway_rpc();
 
         // flume sender: use send_async() for async context
-        if let Err(err) = self
-            .outbound_queue_tx
-            .send_async((request, None, Some(timeout_millis)))
-            .await
-        {
+        if let Err(err) = self.outbound_queue_tx.send_async((request, None)).await {
             error!("send oneway request failed: {}", err);
             return Err(RocketMQError::network_connection_failed(
                 "channel",
@@ -685,7 +811,8 @@ impl ChannelInner {
         timeout_millis: Option<u64>,
     ) -> rocketmq_error::RocketMQResult<()> {
         // flume sender: use send_async() for async context
-        if let Err(err) = self.outbound_queue_tx.send_async((request, None, timeout_millis)).await {
+        let _ = timeout_millis;
+        if let Err(err) = self.outbound_queue_tx.send_async((request, None)).await {
             error!("send request failed: {}", err);
             return Err(RocketMQError::network_connection_failed(
                 "channel",
@@ -723,6 +850,7 @@ impl ChannelInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::base::pending_request_table::PendingRequestTable;
     use tokio::net::TcpListener;
     use tokio::net::TcpStream;
 
@@ -762,16 +890,39 @@ mod tests {
         let _client_stream = TcpStream::connect(addr).await.unwrap();
         let (socket, _) = listener.accept().await.unwrap();
 
-        let mut channel_inner = ChannelInner::try_new_with_task_group(
+        let mut response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
+        let channel_inner = ChannelInner::try_new_with_task_group(
             Connection::new(socket),
-            ArcMut::new(HashMap::<i32, ResponseFuture>::new()),
+            response_table.clone(),
             parent_group.clone(),
         )
         .unwrap();
         assert_eq!(channel_inner.send_task_group.parent_id(), Some(parent_group.id()));
         let send_group_name = channel_inner.send_task_group.name().to_string();
+        let request = RemotingCommand::create_remoting_command(1).set_opaque(73);
 
-        let report = channel_inner.close_with_report(Duration::from_secs(1)).await;
+        let response_task = tokio::spawn(async move {
+            let mut channel_inner = channel_inner;
+            let response = channel_inner.send_wait_response(request, 1_000).await;
+            let report = channel_inner.close_with_report(Duration::from_secs(1)).await;
+            (response, report)
+        });
+        tokio::time::timeout(Duration::from_millis(100), async {
+            while !response_table.contains_key(&73) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("legacy response table should receive the pending request");
+        let response = RemotingCommand::create_response_command_with_code(0).set_opaque(73);
+        assert!(response_table
+            .remove(&73)
+            .expect("legacy response future should remain registered")
+            .tx
+            .send(Ok(response))
+            .is_ok());
+        let (response, report) = response_task.await.unwrap();
+        assert_eq!(response.unwrap().opaque(), 73);
         assert!(report.is_healthy(), "{}", report.to_json());
         assert_eq!(report.name, send_group_name);
 
@@ -782,5 +933,67 @@ mod tests {
             "{}",
             parent_report.to_json()
         );
+    }
+
+    #[tokio::test]
+    async fn close_completes_pending_requests_without_waiting_for_request_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client_stream = TcpStream::connect(addr).await.unwrap();
+        let (socket, _) = listener.accept().await.unwrap();
+        let pending_requests = PendingRequestTable::new();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+
+        let mut channel_inner =
+            ChannelInner::try_new_with_pending_requests(Connection::new(socket), pending_requests.clone()).unwrap();
+        let guard = pending_requests
+            .register_for_owner(channel_inner.pending_request_owner().unwrap(), 91, 30_000, sender)
+            .unwrap();
+        let report = channel_inner.close_with_report(Duration::from_secs(1)).await;
+
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_millis(100), receiver)
+                .await
+                .expect("close must complete pending requests immediately")
+                .expect("close must send a typed result"),
+            Err(RocketMQError::Network(_))
+        ));
+        assert!(pending_requests.is_empty());
+        drop(guard);
+    }
+
+    #[tokio::test]
+    async fn closing_channel_only_completes_requests_owned_by_that_connection() {
+        let first_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let first_addr = first_listener.local_addr().unwrap();
+        let _first_client = TcpStream::connect(first_addr).await.unwrap();
+        let (first_socket, _) = first_listener.accept().await.unwrap();
+        let second_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second_addr = second_listener.local_addr().unwrap();
+        let _second_client = TcpStream::connect(second_addr).await.unwrap();
+        let (second_socket, _) = second_listener.accept().await.unwrap();
+        let pending_requests = PendingRequestTable::new();
+        let mut first =
+            ChannelInner::try_new_with_pending_requests(Connection::new(first_socket), pending_requests.clone())
+                .unwrap();
+        let second =
+            ChannelInner::try_new_with_pending_requests(Connection::new(second_socket), pending_requests.clone())
+                .unwrap();
+        let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
+        let (second_sender, mut second_receiver) = tokio::sync::oneshot::channel();
+        let first_guard = pending_requests
+            .register_for_owner(first.pending_request_owner().unwrap(), 51, 30_000, first_sender)
+            .unwrap();
+        let second_guard = pending_requests
+            .register_for_owner(second.pending_request_owner().unwrap(), 51, 30_000, second_sender)
+            .unwrap();
+
+        first.close_with_report(Duration::from_secs(1)).await;
+
+        assert!(matches!(first_receiver.await.unwrap(), Err(RocketMQError::Network(_))));
+        assert!(second_receiver.try_recv().is_err());
+        assert_eq!(pending_requests.len(), 1);
+        drop((first_guard, second_guard, second));
     }
 }

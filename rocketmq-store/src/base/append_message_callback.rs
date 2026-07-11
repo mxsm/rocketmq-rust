@@ -19,6 +19,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -28,7 +29,6 @@ use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::MessageDecoder::create_crc32;
 use rocketmq_common::MessageUtils::build_batch_message_id;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::SyncUnsafeCellWrapper;
 use tracing::error;
 
 use crate::base::message_result::AppendMessageResult;
@@ -113,7 +113,7 @@ pub trait AppendMessageCallback {
 const END_FILE_MIN_BLANK_LENGTH: i32 = 4 + 4;
 
 pub struct DefaultAppendMessageCallback {
-    msg_store_item_memory: SyncUnsafeCellWrapper<bytes::BytesMut>,
+    msg_store_item_memory: Mutex<bytes::BytesMut>,
     crc32_reserved_length: i32,
     message_store_config: Arc<MessageStoreConfig>,
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
@@ -130,9 +130,7 @@ impl DefaultAppendMessageCallback {
             0
         };
         Self {
-            msg_store_item_memory: SyncUnsafeCellWrapper::new(bytes::BytesMut::with_capacity(
-                END_FILE_MIN_BLANK_LENGTH as usize,
-            )),
+            msg_store_item_memory: Mutex::new(bytes::BytesMut::with_capacity(END_FILE_MIN_BLANK_LENGTH as usize)),
             crc32_reserved_length,
             message_store_config,
             topic_config_table,
@@ -168,7 +166,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
 
         // Determines whether there is sufficient free space
         if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
-            let bytes = self.msg_store_item_memory.mut_from_ref();
+            let mut bytes = self.msg_store_item_memory.lock();
             bytes.clear();
             bytes.put_i32(max_blank);
             bytes.put_i32(BLANK_MAGIC_CODE);
@@ -287,7 +285,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             );
             total_msg_len += msg_len;
             if total_msg_len + END_FILE_MIN_BLANK_LENGTH > max_blank {
-                let bytes = self.msg_store_item_memory.mut_from_ref();
+                let mut bytes = self.msg_store_item_memory.lock();
                 bytes.clear();
                 bytes.put_i32(max_blank);
                 bytes.put_i32(BLANK_MAGIC_CODE);
@@ -381,7 +379,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         // Check if we have enough space
         if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
             // Write end-of-file marker
-            let bytes = self.msg_store_item_memory.mut_from_ref();
+            let mut bytes = self.msg_store_item_memory.lock();
             bytes.clear();
             bytes.put_i32(max_blank);
             bytes.put_i32(BLANK_MAGIC_CODE);
@@ -479,6 +477,15 @@ mod tests {
 
     use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
     use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
+
+    #[test]
+    fn append_scratch_buffer_uses_synchronized_interior_mutability() {
+        let source = include_str!("append_message_callback.rs");
+
+        assert!(source.contains(concat!("Mutex<bytes::", "BytesMut>")));
+        assert!(!source.contains(concat!("SyncUnsafe", "CellWrapper")));
+        assert!(!source.contains(concat!("msg_store_item_memory.mut_", "from_ref()")));
+    }
 
     #[test]
     fn blank_marker_uses_file_local_position_for_nonzero_file_offset() {

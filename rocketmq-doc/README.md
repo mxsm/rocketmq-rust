@@ -55,6 +55,7 @@ rocketmq-doc/
 - [RocketMQ MCP Architecture ADR](en/07-rocketmq-mcp-architecture-adr.md)
 - [RocketMQ MCP Baseline Report](en/07-rocketmq-mcp-baseline-report.md)
 - [RocketMQ MCP v2 Contract](en/07-rocketmq-mcp-contract-v2.md)
+- [Architecture Refactor M01 Dependency Baseline](en/architecture-refactor-m01-baseline.md)
 - Protocol Design
 - Storage Design
 - Network Architecture
@@ -94,6 +95,7 @@ We welcome contributions to improve our documentation! Please:
 - [Error Architecture Inventory](en/07-error-inventory.md)
 - [Error Architecture Contribution Guide](en/19-error-contribution-guide.md)
 - [Error Architecture Runbooks](en/19-error-runbooks.md)
+- [Architecture Refactor M01 Dependency Baseline](en/architecture-refactor-m01-baseline.md)
 - [Running with Docker](en/01-run-rocketmq-rust-docker.md)
 - [Running on Kubernetes](en/01-run-rocketmq-rust-k8s.md)
 - [Contributing Guide](en/19-contribute-guide.md)

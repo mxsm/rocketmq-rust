@@ -17,6 +17,30 @@ use rocketmq_rust::ArcMut;
 
 use crate::consumer::pull_status::PullStatus;
 
+/// Owned, runtime-neutral pull result used across crate boundaries.
+pub type PullOutcome = rocketmq_model::result::PullOutcome<MessageExt>;
+
+/// Failure converting an owned pull outcome back into the legacy shared-mutable result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullOutcomeAdapterError {
+    /// A non-empty owned batch cannot become `ArcMut` messages without introducing new unsafe
+    /// aliasing.
+    SharedMutableMessagesUnsupported { message_count: usize },
+}
+
+impl std::fmt::Display for PullOutcomeAdapterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SharedMutableMessagesUnsupported { message_count } => write!(
+                f,
+                "cannot convert {message_count} owned messages into the legacy shared-mutable PullResult"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PullOutcomeAdapterError {}
+
 pub struct PullResult {
     pub(crate) pull_status: PullStatus,
     pub(crate) next_begin_offset: u64,
@@ -70,6 +94,49 @@ impl PullResult {
     #[inline]
     pub fn set_msg_found_list(&mut self, msg_found_list: Option<Vec<ArcMut<MessageExt>>>) {
         self.msg_found_list = msg_found_list;
+    }
+}
+
+impl From<&PullResult> for PullOutcome {
+    fn from(value: &PullResult) -> Self {
+        let messages = value
+            .msg_found_list
+            .as_ref()
+            .map(|messages| messages.iter().map(|message| (**message).clone()).collect());
+        Self::new(
+            value.pull_status,
+            value.next_begin_offset,
+            value.min_offset,
+            value.max_offset,
+            messages,
+        )
+    }
+}
+
+impl TryFrom<PullOutcome> for PullResult {
+    type Error = PullOutcomeAdapterError;
+
+    fn try_from(value: PullOutcome) -> Result<Self, Self::Error> {
+        let pull_status = value.pull_status();
+        let next_begin_offset = value.next_begin_offset();
+        let min_offset = value.min_offset();
+        let max_offset = value.max_offset();
+        let messages = match value.into_messages() {
+            None => None,
+            Some(messages) if messages.is_empty() => Some(Vec::new()),
+            Some(messages) => {
+                return Err(PullOutcomeAdapterError::SharedMutableMessagesUnsupported {
+                    message_count: messages.len(),
+                });
+            }
+        };
+        Ok(Self::new(
+            pull_status,
+            next_begin_offset,
+            min_offset,
+            max_offset,
+            messages,
+        ))
     }
 }
 

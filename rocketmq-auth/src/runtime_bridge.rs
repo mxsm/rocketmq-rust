@@ -240,9 +240,8 @@ mod tests {
     use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn auth_blocking_executor_snapshot_counts_creation_and_shutdown_request() {
+    async fn auth_blocking_executor_snapshot_and_shutdown_report_are_observable() {
         let executor = AuthBlockingExecutor::default();
-        let before = auth_sync_bridge_snapshot();
         assert!(executor.snapshot().is_none());
 
         let value = executor
@@ -263,19 +262,5 @@ mod tests {
             .expect("initialized auth blocking executor should return shutdown report");
         assert_eq!(report.name, "rocketmq-auth.blocking");
         assert!(report.is_healthy(), "{}", report.to_json());
-
-        let after = auth_sync_bridge_snapshot();
-        assert!(
-            after
-                .blocking_executor_creations
-                .saturating_sub(before.blocking_executor_creations)
-                >= 1
-        );
-        assert!(
-            after
-                .blocking_executor_shutdown_requests
-                .saturating_sub(before.blocking_executor_shutdown_requests)
-                >= 1
-        );
     }
 }

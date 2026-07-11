@@ -12,16 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
-use std::fmt::Debug;
-use std::fmt::Display;
-use std::str::FromStr;
-
 pub use faq::FAQUrl;
-use serde::Deserialize;
-use serde::Deserializer;
-use serde::Serialize;
-use serde::Serializer;
+pub use rocketmq_model::topic::TopicFilterType;
 pub mod chain;
 pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
 pub mod attribute;
@@ -66,99 +58,6 @@ pub mod thread;
 pub mod tls_config;
 pub mod tools;
 pub mod topic;
-
-#[derive(Clone, Default, Eq, PartialEq, Copy)]
-pub enum TopicFilterType {
-    #[default]
-    SingleTag,
-    MultiTag,
-}
-
-impl Display for TopicFilterType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl Debug for TopicFilterType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl TopicFilterType {
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            TopicFilterType::SingleTag => "SINGLE_TAG",
-            TopicFilterType::MultiTag => "MULTI_TAG",
-        }
-    }
-}
-
-impl From<&str> for TopicFilterType {
-    fn from(s: &str) -> TopicFilterType {
-        match s {
-            "SINGLE_TAG" => TopicFilterType::SingleTag,
-            "MULTI_TAG" => TopicFilterType::MultiTag,
-            _ => TopicFilterType::SingleTag,
-        }
-    }
-}
-
-impl From<String> for TopicFilterType {
-    fn from(s: String) -> TopicFilterType {
-        TopicFilterType::from(s.as_str())
-    }
-}
-
-impl From<i32> for TopicFilterType {
-    fn from(i: i32) -> TopicFilterType {
-        match i {
-            0 => TopicFilterType::SingleTag,
-            1 => TopicFilterType::MultiTag,
-            _ => TopicFilterType::SingleTag,
-        }
-    }
-}
-
-impl Serialize for TopicFilterType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for TopicFilterType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct TopicFilterTypeVisitor;
-
-        impl serde::de::Visitor<'_> for TopicFilterTypeVisitor {
-            type Value = TopicFilterType;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a string representing TopicFilterType")
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match value {
-                    "SINGLE_TAG" => Ok(TopicFilterType::SingleTag),
-                    "MULTI_TAG" => Ok(TopicFilterType::MultiTag),
-                    _ => Err(serde::de::Error::unknown_variant(value, &["SingleTag", "MultiTag"])),
-                }
-            }
-        }
-
-        deserializer.deserialize_str(TopicFilterTypeVisitor)
-    }
-}
 
 pub struct Pair<T, U> {
     pub left: T,

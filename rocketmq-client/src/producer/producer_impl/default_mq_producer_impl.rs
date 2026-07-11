@@ -1503,7 +1503,10 @@ impl DefaultMQProducerImpl {
             MessageClientIDSetter::set_uniq_id(msg);
         }
         #[cfg(feature = "observability")]
-        rocketmq_observability::trace::record_current_message_attributes(msg);
+        rocketmq_observability::trace::record_current_message_properties(
+            msg.get_properties(),
+            msg.get_body().map(|body| body.len()),
+        );
 
         let namespace = self.client_config.get_namespace();
         let mut topic_with_namespace = false;
@@ -1545,7 +1548,11 @@ impl DefaultMQProducerImpl {
 
         // Build send message request header
         #[cfg(feature = "observability")]
-        rocketmq_observability::propagation::inject_current_context_into_message(msg);
+        {
+            let mut properties = msg.get_properties().clone();
+            rocketmq_observability::propagation::inject_current_context(&mut properties);
+            msg.set_properties(properties);
+        }
 
         let producer_group = &self.send_config.producer_group;
         let topic = msg.topic();

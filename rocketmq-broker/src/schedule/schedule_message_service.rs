@@ -379,10 +379,23 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     pub async fn shutdown(&mut self) {
         info!("Shutting down ScheduleMessageService...");
 
-        // Signal shutdown
         self.shutdown_requested.store(true, Ordering::SeqCst);
         self.stop();
+        self.shutdown_tasks().await;
 
+        info!("ScheduleMessageService shutdown complete");
+    }
+
+    pub(crate) async fn shutdown_without_persist(&mut self) {
+        warn!("Shutting down ScheduleMessageService without persistence because no blocking executor is available");
+        self.shutdown_requested.store(true, Ordering::SeqCst);
+        self.started.store(false, Ordering::SeqCst);
+        self.shutdown_tasks().await;
+
+        info!("ScheduleMessageService shutdown complete without persistence");
+    }
+
+    async fn shutdown_tasks(&mut self) {
         self.scheduled_tasks.lock().take();
         let task_group = self.task_group.lock().take();
         let Some(task_group) = task_group else {
@@ -397,8 +410,6 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                 "ScheduleMessageService shutdown report is unhealthy"
             );
         }
-
-        info!("ScheduleMessageService shutdown complete");
     }
 
     pub fn stop(&self) -> bool {

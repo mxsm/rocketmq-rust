@@ -23,6 +23,7 @@ use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
 use crate::service_context::ServiceContext;
+use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_report::ShutdownReport;
 use crate::task_group::TaskGroup;
 
@@ -96,7 +97,11 @@ impl RuntimeContext {
     }
 
     pub async fn shutdown_tasks(&self, timeout: Duration) -> ShutdownReport {
-        let mut report = self.root_group.shutdown(timeout).await;
+        self.shutdown_tasks_until(ShutdownDeadline::after(timeout)).await
+    }
+
+    pub async fn shutdown_tasks_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
+        let mut report = self.root_group.shutdown_until(deadline).await;
         report.merge_blocking(self.blocking.snapshot());
         report
     }

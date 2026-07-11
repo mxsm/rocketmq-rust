@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicU8;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -36,6 +37,7 @@ use tokio_util::task::TaskTracker;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
+use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_report::ShutdownAnnotation;
 use crate::shutdown_report::ShutdownReport;
 use crate::shutdown_report::TaskSnapshot;
@@ -114,6 +116,24 @@ pub struct TaskGroup {
     inner: Arc<TaskGroupInner>,
 }
 
+/// A dynamically registered child group whose parent retains only a weak reference.
+///
+/// Dropping the lease releases the caller's group handle. The child remains visible to
+/// parent shutdown while tasks or other handles still own it, and is pruned after the
+/// final strong reference is released.
+#[derive(Debug)]
+pub struct TaskGroupChildLease {
+    group: TaskGroup,
+}
+
+/// Bounded lifecycle counters for dynamically registered child groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TaskGroupChildStats {
+    pub active: usize,
+    pub created: usize,
+    pub pruned: usize,
+}
+
 #[derive(Debug)]
 struct TaskGroupInner {
     id: TaskGroupId,
@@ -124,14 +144,18 @@ struct TaskGroupInner {
     tracker: TaskTracker,
     tasks: DashMap<TaskId, TaskMeta>,
     children: Mutex<Vec<TaskGroup>>,
+    dynamic_children: Mutex<Vec<Weak<TaskGroupInner>>>,
     next_group_id: Arc<AtomicU64>,
     next_task_id: AtomicU64,
+    dynamic_children_created: AtomicUsize,
+    dynamic_children_pruned: AtomicUsize,
     completed: AtomicUsize,
     cancelled: AtomicUsize,
     aborted: AtomicUsize,
     panicked: AtomicUsize,
     lifecycle: AtomicU8,
     spawn_gate: Mutex<()>,
+    shutdown_deadline: Mutex<Option<ShutdownDeadline>>,
     shutdown_report: tokio::sync::OnceCell<ShutdownReport>,
 }
 
@@ -189,6 +213,22 @@ impl TaskCompletion {
     }
 }
 
+impl std::ops::Deref for TaskGroupChildLease {
+    type Target = TaskGroup;
+
+    fn deref(&self) -> &Self::Target {
+        &self.group
+    }
+}
+
+impl TaskGroupChildLease {
+    pub fn group(&self) -> &TaskGroup {
+        &self.group
+    }
+
+    pub fn complete(self) {}
+}
+
 impl Drop for TaskCompletionGuard {
     fn drop(&mut self) {
         self.completion.mark_done();
@@ -230,6 +270,11 @@ impl TaskGroup {
         self.inner.cancellation_token.clone()
     }
 
+    /// Returns the earliest absolute deadline installed by a shutdown owner.
+    pub fn shutdown_deadline(&self) -> Option<ShutdownDeadline> {
+        *self.inner.shutdown_deadline.lock()
+    }
+
     pub fn lifecycle_state(&self) -> TaskGroupLifecycleState {
         self.inner.lifecycle_state()
     }
@@ -239,7 +284,16 @@ impl TaskGroup {
     }
 
     pub fn child_count(&self) -> usize {
-        self.inner.children.lock().len()
+        self.inner.children.lock().len() + self.live_dynamic_children().len()
+    }
+
+    pub fn child_stats(&self) -> TaskGroupChildStats {
+        let active = self.live_dynamic_children().len();
+        TaskGroupChildStats {
+            active,
+            created: self.inner.dynamic_children_created.load(Ordering::Relaxed),
+            pruned: self.inner.dynamic_children_pruned.load(Ordering::Relaxed),
+        }
     }
 
     pub fn contains_task(&self, task_id: TaskId) -> bool {
@@ -267,6 +321,22 @@ impl TaskGroup {
         Ok(child)
     }
 
+    pub fn try_child_lease(&self, name: impl Into<Arc<str>>) -> RuntimeResult<TaskGroupChildLease> {
+        let name = name.into();
+        let _spawn_guard = self.inner.spawn_gate.lock();
+        if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
+            return Err(RuntimeError::TaskGroupClosing {
+                group_id: self.inner.id,
+                group_name: self.inner.name.clone(),
+            });
+        }
+
+        let child = self.open_child(name);
+        self.inner.dynamic_children.lock().push(Arc::downgrade(&child.inner));
+        self.inner.dynamic_children_created.fetch_add(1, Ordering::Relaxed);
+        Ok(TaskGroupChildLease { group: child })
+    }
+
     fn open_child(&self, name: Arc<str>) -> Self {
         let child_id = TaskGroupId(self.inner.next_group_id.fetch_add(1, Ordering::Relaxed));
         Self {
@@ -287,6 +357,23 @@ impl TaskGroup {
         child.inner.cancellation_token.cancel();
         child.inner.lifecycle.store(STATE_SHUTDOWN_COMPLETED, Ordering::Release);
         child
+    }
+
+    fn live_dynamic_children(&self) -> Vec<TaskGroup> {
+        let mut registry = self.inner.dynamic_children.lock();
+        let before = registry.len();
+        let mut live = Vec::with_capacity(before);
+        registry.retain(|entry| {
+            let Some(inner) = entry.upgrade() else {
+                return false;
+            };
+            live.push(TaskGroup { inner });
+            true
+        });
+        self.inner
+            .dynamic_children_pruned
+            .fetch_add(before - registry.len(), Ordering::Relaxed);
+        live
     }
 
     pub fn spawn<F>(&self, name: impl Into<Arc<str>>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
@@ -387,10 +474,24 @@ impl TaskGroup {
     }
 
     pub fn shutdown(&self, timeout: Duration) -> BoxFuture<'_, ShutdownReport> {
+        self.shutdown_until(ShutdownDeadline::after(timeout))
+    }
+
+    pub fn shutdown_until(&self, deadline: ShutdownDeadline) -> BoxFuture<'_, ShutdownReport> {
+        let deadline = {
+            let mut installed = self.inner.shutdown_deadline.lock();
+            match *installed {
+                Some(existing) if existing.instant() <= deadline.instant() => existing,
+                Some(_) | None => {
+                    *installed = Some(deadline);
+                    deadline
+                }
+            }
+        };
         async move {
             self.inner
                 .shutdown_report
-                .get_or_init(|| async { self.shutdown_inner(timeout).await })
+                .get_or_init(|| async { self.shutdown_inner(deadline).await })
                 .await
                 .clone()
         }
@@ -511,7 +612,7 @@ impl TaskGroup {
         Some(meta.completion)
     }
 
-    async fn shutdown_inner(&self, timeout: Duration) -> ShutdownReport {
+    async fn shutdown_inner(&self, deadline: ShutdownDeadline) -> ShutdownReport {
         let started_at = Instant::now();
         let children = {
             let _spawn_guard = self.inner.spawn_gate.lock();
@@ -519,25 +620,28 @@ impl TaskGroup {
             self.inner.tracker.close();
             self.inner.cancellation_token.cancel();
             self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
-            self.inner.children.lock().clone()
+            let mut children = self.inner.children.lock().clone();
+            children.extend(self.live_dynamic_children());
+            children
         };
         self.abort_detached_abort_on_shutdown_tasks();
 
         let child_reports = async {
-            join_all(children.into_iter().map(|child| async move {
-                let remaining = timeout.checked_sub(started_at.elapsed()).unwrap_or(Duration::ZERO);
-                child.shutdown(remaining).await
-            }))
+            join_all(
+                children
+                    .into_iter()
+                    .map(|child| async move { child.shutdown_until(deadline).await }),
+            )
             .await
         };
         let tracked_shutdown = async {
-            let remaining = timeout.checked_sub(started_at.elapsed()).unwrap_or(Duration::ZERO);
+            let remaining = deadline.remaining();
             if tokio::time::timeout(remaining, self.inner.tracker.wait())
                 .await
                 .is_err()
             {
                 self.abort_tracked_tasks();
-                let drain_timeout = timeout.min(Duration::from_secs(1));
+                let drain_timeout = deadline.remaining().min(Duration::from_secs(1));
                 let _ = tokio::time::timeout(drain_timeout, self.inner.tracker.wait()).await;
                 true
             } else {
@@ -588,7 +692,9 @@ impl TaskGroup {
             self.inner.tracker.close();
             self.inner.cancellation_token.cancel();
             self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
-            self.inner.children.lock().clone()
+            let mut children = self.inner.children.lock().clone();
+            children.extend(self.live_dynamic_children());
+            children
         };
 
         let mut child_reports = Vec::with_capacity(children.len());
@@ -695,14 +801,18 @@ impl TaskGroupInner {
             tracker: TaskTracker::new(),
             tasks: DashMap::new(),
             children: Mutex::new(Vec::new()),
+            dynamic_children: Mutex::new(Vec::new()),
             next_group_id,
             next_task_id: AtomicU64::new(1),
+            dynamic_children_created: AtomicUsize::new(0),
+            dynamic_children_pruned: AtomicUsize::new(0),
             completed: AtomicUsize::new(0),
             cancelled: AtomicUsize::new(0),
             aborted: AtomicUsize::new(0),
             panicked: AtomicUsize::new(0),
             lifecycle: AtomicU8::new(STATE_OPEN),
             spawn_gate: Mutex::new(()),
+            shutdown_deadline: Mutex::new(None),
             shutdown_report: tokio::sync::OnceCell::new(),
         }
     }

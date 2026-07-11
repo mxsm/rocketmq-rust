@@ -36,6 +36,7 @@ otlp-traces = ["observability", "rocketmq-observability/otlp-traces"]
 [dependencies]
 rocketmq-rust            = { workspace = true }
 rocketmq-common          = { workspace = true }
+rocketmq-model           = { workspace = true }
 rocketmq-remoting        = { workspace = true }
 rocketmq-runtime         = { workspace = true }
 rocketmq-error.workspace = true

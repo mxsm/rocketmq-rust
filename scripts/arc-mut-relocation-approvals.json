@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "adr": "ADR-013",
+  "relocations": [
+    {"identity":"05fa6e11b73b578d790f0703","from":"d18b29a57c06468cfd6d11c3","to":"36ebcbd5dbe51b5bd2a7617d","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"05fa6e11b73b578d790f0703","from":"3e14bca02550763012525f52","to":"8f665bb0d12d826483fa7234","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"2195951d60e6e7239b36b1cc","from":"325bf511193d52a3814b3224","to":"159edd577ca779c3c2632b4e","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"2210e3dd7d037f8c073d86ab","from":"a86ce611da52082baf181808","to":"6eafab06005797a7d0f33a37","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"289677e5277b1be880babccc","from":"5c17933e2b15775814ba9c07","to":"1604ac7bc5dab4b798c477b7","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"2f676e16d188ac440f60e25c","from":"9070d0e642e1a6adae606dc1","to":"183dcfa5ab478ef3abf0e3a5","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"337395b423881aff711d111c","from":"3ad27d875924d644e79c6eed","to":"0ceeb3f30ff14e9b5fdcf192","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"34c7415d040dc61f9d871d26","from":"85ec0116a9bfc692ba63b4f2","to":"f690cbc0f44092dfdcbb8728","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"484ce9188db690a29a8dd9fc","from":"55b845fd7282bcda6f0b43d0","to":"9db5e6bef8105170c9a87aa8","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"527ebe3ad5a4c0369200bcb4","from":"3d22b2864dd22aba760dab00","to":"7df959ac2647d4593e2fedc5","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"58a8c8a392c65dcc4a215809","from":"74300c86e924f1db7b6cf959","to":"5dc990d9d1813ed60df70b21","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"5bab164849082c936e48f196","from":"dca8853c1454f4485c00a1ae","to":"111903170d6ce3ea494acca4","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"6004e8fd9d75ccd2988dbd7b","from":"f3d8a3b6c6902f2d1d4bee17","to":"e16ee07973ba7025dd68bee4","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"6bb36e9332ac56841c8d4c14","from":"a066113d8646b89b3c84e5d0","to":"d9fd5dd6d0b99df09c9cc3e4","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"8ead81500e4d25ce05d9e661","from":"ace11a53affaa941d17c73ae","to":"17a4b299437350470b84c84b","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"9ce470ff2f4fd79f9140e438","from":"9d244bca7a83c1d01bf33bc0","to":"e5de1d30498bcd3056a2825a","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"a1a435ef91dc94baa807c11b","from":"1b74ce1e52f10fb523fc8233","to":"4bf23a968822296ff21ff60e","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"a1a435ef91dc94baa807c11b","from":"124ecf3a1477ca6988a9d9c6","to":"c15e173fe24d400d56bee1f6","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"cffe31f4512ad4f5c8f1883d","from":"9c1b8816b6d94fcee2f2cf2c","to":"1139b85010b31866c0dbc3fc","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"d4c4e5e28e0b5c5f6ecfb909","from":"ec192c8460c78d9758bcaa97","to":"106870531b5c1402286dd4a3","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"e5e127a7d56e200750909767","from":"833874b7cb75680325c4071e","to":"fd17813402da039ea469e610","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"e7724c6c7c28796537a239b2","from":"bacb2409dbdafee3a2ef1428","to":"a6a97b05edeeb6bd64a91fd7","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"fd8bf02db8c33c02483d0baa","from":"cfa3b02c947aef617be3da4c","to":"2615aa74938e8071bc22c87e","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"fd8bf02db8c33c02483d0baa","from":"7eac1ce5f64e2e4605458516","to":"4573c3e08086e1bf29f57e58","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"fd8bf02db8c33c02483d0baa","from":"4f80a0527ec266e6ee9d9ebb","to":"7551dd5d5e3fec3a39df0e47","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"fd8bf02db8c33c02483d0baa","from":"89f33dfd31251b8438c2e173","to":"75e75201891a929af799a3cf","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"},
+    {"identity":"fd8bf02db8c33c02483d0baa","from":"84098b47f2617071b3016adb","to":"a6bbcc4c2292b75a7f9d374f","reason":"Adjacent owned-state migration changed token context while the governed item remained unchanged"}
+  ]
+}

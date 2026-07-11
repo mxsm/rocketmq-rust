@@ -70,6 +70,7 @@ pub mod simple_scheduler {
     use rocketmq_runtime::TaskId as RuntimeTaskId;
     use rocketmq_runtime::TaskKind;
     use tokio::sync::oneshot;
+    use tokio::sync::Mutex;
     use tokio::sync::Semaphore;
     use tokio::time::Duration;
     use tokio::time::Instant;
@@ -77,8 +78,6 @@ pub mod simple_scheduler {
     use tokio_util::sync::CancellationToken;
     use tracing::error;
     use tracing::info;
-
-    use crate::ArcMut;
 
     type Result<T> = RocketMQResult<T>;
 
@@ -350,7 +349,7 @@ pub mod simple_scheduler {
             let token_child = token.clone();
             let task_group = self.task_group("ScheduledTaskManager::add_scheduled_task")?;
 
-            let task_fn = ArcMut::new(task_fn);
+            let task_fn = Arc::new(Mutex::new(task_fn));
 
             let (done_tx, done) = oneshot::channel();
             let driver_group = task_group.clone();
@@ -360,7 +359,7 @@ pub mod simple_scheduler {
                 "ScheduledTaskManager::add_scheduled_task",
                 format!("scheduled-task-manager.driver.{id}"),
                 {
-                    let mut task_fn = task_fn;
+                    let task_fn = task_fn;
                     async move {
                         match mode {
                             ScheduleMode::FixedRate => {
@@ -375,17 +374,16 @@ pub mod simple_scheduler {
                                         }
                                         _ = ticker.tick() => {
                                             // Allow concurrent execution: One subtask per tick
-                                            let mut task_fn = task_fn.clone();
+                                            let task_fn = Arc::clone(&task_fn);
                                             let child = token_child.clone();
                                             if let Err(error) = run_group.spawn(
                                                 format!("scheduled-task-manager.run.{id}"),
                                                 TaskKind::ScheduledRun,
                                                 async move {
-                                                // 1) Lock out &mut F, call once to get a future
                                                 let fut = {
+                                                    let mut task_fn = task_fn.lock().await;
                                                     (task_fn)(child)
                                                 };
-                                                // The lock has been released. Awaiting here ensures the lock doesn't cross await boundaries.
                                                 if let Err(e) = fut.await {
                                                     error!("FixedRate task {} failed: {:?}", id, e);
                                                 }
@@ -414,7 +412,10 @@ pub mod simple_scheduler {
                                         break;
                                     }
 
-                                    let fut = { (task_fn)(token_child.clone()) };
+                                    let fut = {
+                                        let mut task_fn = task_fn.lock().await;
+                                        (task_fn)(token_child.clone())
+                                    };
                                     if let Err(e) = fut.await {
                                         error!("FixedDelay task {} failed: {:?}", id, e);
                                     }
@@ -445,14 +446,14 @@ pub mod simple_scheduler {
                                         _ = ticker.tick() => {
                                             // Try to acquire permission. If unable to acquire, skip the current tick.
                                             if let Ok(permit) = gate.clone().try_acquire_owned() {
-                                                let mut task_fn = task_fn.clone();
+                                                let task_fn = Arc::clone(&task_fn);
                                                 let child = token_child.clone();
                                                 if let Err(error) = run_group.spawn(
                                                     format!("scheduled-task-manager.no-overlap-run.{id}"),
                                                     TaskKind::ScheduledRun,
                                                     async move {
-                                                    // Release the lock immediately after generating the future
                                                     let fut = {
+                                                        let mut task_fn = task_fn.lock().await;
                                                         (task_fn)(child)
                                                     };
                                                     if let Err(e) = fut.await {
@@ -738,7 +739,7 @@ pub mod simple_scheduler {
             let token_child = token.clone();
             let task_group = self.task_group("ScheduledTaskManager::add_scheduled_task_async")?;
 
-            let task_fn = ArcMut::new(task_fn);
+            let task_fn = Arc::new(Mutex::new(task_fn));
 
             let (done_tx, done) = oneshot::channel();
             let driver_group = task_group.clone();
@@ -748,7 +749,7 @@ pub mod simple_scheduler {
                 "ScheduledTaskManager::add_scheduled_task_async",
                 format!("scheduled-task-manager.async-driver.{id}"),
                 {
-                    let mut task_fn = task_fn;
+                    let task_fn = task_fn;
                     async move {
                         match mode {
                             ScheduleMode::FixedRate => {
@@ -763,18 +764,14 @@ pub mod simple_scheduler {
                                         }
                                         _ = ticker.tick() => {
                                             // Allow concurrent execution: One subtask per tick
-                                            let mut task_fn = task_fn.clone();
+                                            let task_fn = Arc::clone(&task_fn);
                                             let child = token_child.clone();
                                             if let Err(error) = run_group.spawn(
                                                 format!("scheduled-task-manager.async-run.{id}"),
                                                 TaskKind::ScheduledRun,
                                                 async move {
-                                                // 1) Lock out &mut F, call once to get a future
-                                                let fut = {
-                                                    task_fn(child)
-                                                };
-                                                // The lock has been released. Awaiting here ensures the lock doesn't cross await boundaries.
-                                                if let Err(e) = fut.await {
+                                                let mut task_fn = task_fn.lock().await;
+                                                if let Err(e) = task_fn(child).await {
                                                     error!("FixedRate task {} failed: {:?}", id, e);
                                                 }
                                             }) {
@@ -802,10 +799,11 @@ pub mod simple_scheduler {
                                         break;
                                     }
 
-                                    let fut = { (task_fn)(token_child.clone()) };
-                                    if let Err(e) = fut.await {
+                                    let mut task_fn = task_fn.lock().await;
+                                    if let Err(e) = task_fn(token_child.clone()).await {
                                         error!("FixedDelay task {} failed: {:?}", id, e);
                                     }
+                                    drop(task_fn);
 
                                     tokio::select! {
                                         _ = token_child.cancelled() => {
@@ -833,17 +831,14 @@ pub mod simple_scheduler {
                                         _ = ticker.tick() => {
                                             // Try to acquire permission. If unable to acquire, skip the current tick.
                                             if let Ok(permit) = gate.clone().try_acquire_owned() {
-                                                let mut task_fn = task_fn.clone();
+                                                let task_fn = Arc::clone(&task_fn);
                                                 let child = token_child.clone();
                                                 if let Err(error) = run_group.spawn(
                                                     format!("scheduled-task-manager.async-no-overlap-run.{id}"),
                                                     TaskKind::ScheduledRun,
                                                     async move {
-                                                    // Release the lock immediately after generating the future
-                                                    let fut = {
-                                                        (task_fn)(child)
-                                                    };
-                                                    if let Err(e) = fut.await {
+                                                    let mut task_fn = task_fn.lock().await;
+                                                    if let Err(e) = task_fn(child).await {
                                                         error!("FixedRateNoOverlap task {} failed: {:?}", id, e);
                                                     }
                                                     drop(permit); // Release the permit after completion
@@ -1272,6 +1267,40 @@ mod tests {
         time::sleep(Duration::from_millis(400)).await;
         manager.cancel_task(task_id);
         assert_eq!(manager.task_count(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn async_fn_mut_invocations_are_serialized() {
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum_active = Arc::new(AtomicUsize::new(0));
+        let active_for_task = Arc::clone(&active);
+        let maximum_for_task = Arc::clone(&maximum_active);
+
+        manager
+            .add_scheduled_task_async(
+                ScheduleMode::FixedRate,
+                Duration::ZERO,
+                Duration::from_millis(5),
+                async move |_token| {
+                    let current = active_for_task.fetch_add(1, Ordering::AcqRel) + 1;
+                    maximum_for_task.fetch_max(current, Ordering::AcqRel);
+                    time::sleep(Duration::from_millis(40)).await;
+                    active_for_task.fetch_sub(1, Ordering::AcqRel);
+                    Ok(())
+                },
+            )
+            .expect("fixed-rate async task should start");
+
+        time::sleep(Duration::from_millis(100)).await;
+        let report = manager.shutdown_all(Duration::from_secs(1)).await;
+
+        assert!(report.is_healthy(), "{report:?}");
+        assert_eq!(
+            maximum_active.load(Ordering::Acquire),
+            1,
+            "AsyncFnMut requires exclusive access while its borrowed future is running"
+        );
     }
 
     fn new_manager() -> ScheduledTaskManager {

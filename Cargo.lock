@@ -4389,6 +4389,7 @@ dependencies = [
  "rocketmq-observability",
  "rocketmq-remoting",
  "rocketmq-runtime",
+ "rocketmq-security-api",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -4427,6 +4428,7 @@ dependencies = [
  "rocketmq-controller",
  "rocketmq-error",
  "rocketmq-filter",
+ "rocketmq-model",
  "rocketmq-namesrv",
  "rocketmq-observability",
  "rocketmq-remoting",
@@ -4459,6 +4461,7 @@ dependencies = [
  "rocketmq-auth",
  "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-model",
  "rocketmq-observability",
  "rocketmq-remoting",
  "rocketmq-runtime",
@@ -4502,8 +4505,10 @@ dependencies = [
  "regex",
  "reqwest",
  "rocketmq-error",
+ "rocketmq-model",
  "rocketmq-runtime",
  "rocketmq-rust",
+ "rocketmq-security-api",
  "serde",
  "serde_json",
  "simd-json",
@@ -4642,6 +4647,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-model"
+version = "1.0.0"
+dependencies = [
+ "cheetah-string",
+ "md-5 0.10.6",
+ "rocketmq-error",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "rocketmq-namesrv"
 version = "1.0.0"
 dependencies = [
@@ -4684,8 +4701,8 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "prometheus",
- "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-model",
  "rocketmq-runtime",
  "serde",
  "serde_json",
@@ -4814,6 +4831,14 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "rocketmq-security-api"
+version = "1.0.0"
+dependencies = [
+ "cheetah-string",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

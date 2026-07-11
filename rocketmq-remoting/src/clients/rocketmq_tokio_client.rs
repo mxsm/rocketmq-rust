@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
@@ -24,6 +23,7 @@ use parking_lot::Mutex;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
@@ -39,6 +39,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::connection_net_event::ConnectionNetEvent;
+use crate::base::pending_request_table::PendingRequestTable;
 use crate::clients::connection_pool::ConnectionPool;
 use crate::clients::connection_pool::ConnectionPoolCleanupTask;
 use crate::clients::nameserver_selector::LatencyTracker;
@@ -281,7 +282,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         let handler = RemotingGeneralHandler {
             request_processor: processor,
             rpc_hooks: vec![],
-            response_table: ArcMut::new(HashMap::with_capacity(512)),
+            response_table: PendingRequestTable::with_capacity(512),
         };
         Self {
             tokio_client_config,
@@ -990,17 +991,18 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     }
 
     pub async fn shutdown_with_report(&mut self, timeout: Duration) -> RemotingClientShutdownReport {
+        let deadline = ShutdownDeadline::after(timeout);
         self.shutdown_token.cancel();
 
         let background_task_group = { self.background_task_group.lock().take() };
         let worker_task_group = { self.worker_task_group.lock().take() };
 
         let background = match background_task_group {
-            Some(task_group) => Some(task_group.shutdown(timeout).await),
+            Some(task_group) => Some(task_group.shutdown_until(deadline).await),
             None => None,
         };
         let workers = match worker_task_group {
-            Some(task_group) => Some(task_group.shutdown(timeout).await),
+            Some(task_group) => Some(task_group.shutdown_until(deadline).await),
             None => None,
         };
 
@@ -1018,7 +1020,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
         let mut connections = Vec::with_capacity(clients.len());
         for (addr, client) in clients {
-            let report = client.close_with_report(timeout).await;
+            let report = client.close_with_report(deadline.remaining()).await;
             connections.push(RemotingClientConnectionShutdownReport { addr, report });
         }
 

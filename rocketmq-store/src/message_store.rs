@@ -43,6 +43,7 @@ use crate::base::message_arriving_listener::MessageArrivingListener;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_store::MessageStore;
+use crate::base::message_store::MessageStoreShutdownReport;
 use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
@@ -173,8 +174,14 @@ impl MessageStore for GenericMessageStore {
         delegate_store_async!(self, init())
     }
 
+    async fn shutdown_gracefully(&mut self) -> Result<MessageStoreShutdownReport, StoreError> {
+        delegate_store_async!(self, shutdown_gracefully())
+    }
+
     async fn shutdown(&mut self) {
-        delegate_store_async!(self, shutdown());
+        if let Err(error) = self.shutdown_gracefully().await {
+            tracing::warn!(error = %error, "message store shutdown failed");
+        }
     }
 
     fn destroy(&mut self) {
@@ -445,6 +452,10 @@ impl MessageStore for GenericMessageStore {
 
     fn flush(&self) -> i64 {
         delegate_store!(self, flush())
+    }
+
+    fn try_flush(&self) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
+        delegate_store!(self, try_flush())
     }
 
     fn get_flushed_where(&self) -> i64 {

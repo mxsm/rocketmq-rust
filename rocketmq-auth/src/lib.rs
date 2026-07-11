@@ -21,6 +21,10 @@ pub mod config;
 pub mod migration;
 pub mod permission;
 pub mod runtime;
+/// Runtime-neutral contracts implemented by authentication and authorization providers.
+pub mod security_api {
+    pub use rocketmq_security_api::*;
+}
 pub(crate) mod runtime_bridge;
 
 // Re-export commonly used authentication types

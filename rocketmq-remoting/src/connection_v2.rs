@@ -30,6 +30,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskGroupChildLease;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -202,6 +203,9 @@ pub struct ConcurrentConnection {
 
     /// Writer task group (for graceful shutdown)
     writer_group: TaskGroup,
+
+    /// Dynamic child lease keeping the writer visible to its parent without retaining history.
+    _writer_group_lease: Option<TaskGroupChildLease>,
 
     /// Connection ID
     connection_id: CheetahString,
@@ -586,7 +590,15 @@ impl ConcurrentConnection {
     /// Try to create a concurrent connection using a parent task group.
     pub fn try_new_with_task_group(stream: TcpStream, parent_task_group: TaskGroup) -> RocketMQResult<Self> {
         Self::try_with_channel_capacity_and_writer_group(stream, 1024, |connection_id| {
-            parent_task_group.child(format!("rocketmq-remoting.connection.{connection_id}"))
+            let lease = parent_task_group
+                .try_child_lease(format!("rocketmq-remoting.connection.{connection_id}"))
+                .map_err(|error| {
+                    RocketMQError::network_connection_failed(
+                        "connection",
+                        format!("failed to register ConcurrentConnection child task group: {error}"),
+                    )
+                })?;
+            Ok((lease.group().clone(), Some(lease)))
         })
     }
 
@@ -609,17 +621,20 @@ impl ConcurrentConnection {
             )
         })?;
         Self::try_with_channel_capacity_and_writer_group(stream, channel_capacity, |connection_id| {
-            TaskGroup::root(
-                format!("rocketmq-remoting.connection.{connection_id}"),
-                RuntimeHandle::new(runtime_handle),
-            )
+            Ok((
+                TaskGroup::root(
+                    format!("rocketmq-remoting.connection.{connection_id}"),
+                    RuntimeHandle::new(runtime_handle),
+                ),
+                None,
+            ))
         })
     }
 
     fn try_with_channel_capacity_and_writer_group(
         stream: TcpStream,
         channel_capacity: usize,
-        writer_group: impl FnOnce(&CheetahString) -> TaskGroup,
+        writer_group: impl FnOnce(&CheetahString) -> RocketMQResult<(TaskGroup, Option<TaskGroupChildLease>)>,
     ) -> RocketMQResult<Self> {
         let (read_half, write_half) = stream.into_split();
 
@@ -630,7 +645,7 @@ impl ConcurrentConnection {
         let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
 
         let connection_id = CheetahString::from_string(format!("concurrent-{}", uuid::Uuid::new_v4()));
-        let writer_group = writer_group(&connection_id);
+        let (writer_group, writer_group_lease) = writer_group(&connection_id)?;
         writer_group
             .spawn_service(
                 "remoting.connection.writer",
@@ -648,6 +663,7 @@ impl ConcurrentConnection {
             write_tx,
             state_rx,
             writer_group,
+            _writer_group_lease: writer_group_lease,
             connection_id,
         })
     }
@@ -1316,7 +1332,7 @@ mod concurrent_tests {
     }
 
     #[tokio::test]
-    async fn try_new_with_task_group_parents_writer_and_close_returns_report() {
+    async fn try_new_with_task_group_parents_writer_and_prunes_completed_connection() {
         let context = rocketmq_runtime::RuntimeContext::from_current("concurrent-connection-parent-test");
         let service = context.service_context("concurrent-connection-service");
         let parent_group = service.task_group().child("concurrent-connection-parent");
@@ -1332,11 +1348,15 @@ mod concurrent_tests {
         let report = conn.close_with_report(Duration::from_secs(1)).await.unwrap();
         assert!(report.is_healthy(), "{}", report.to_json());
         assert_eq!(report.name, writer_group_name);
+        let stats = parent_group.child_stats();
+        assert_eq!(stats.active, 0);
+        assert_eq!(stats.created, 1);
+        assert_eq!(stats.pruned, 1);
 
         let parent_report = parent_group.shutdown(Duration::from_secs(1)).await;
         assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
         assert!(
-            parent_report
+            !parent_report
                 .children
                 .iter()
                 .any(|child| child.name == writer_group_name),
