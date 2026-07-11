@@ -35,7 +35,6 @@ use crate::protocol::RemotingDeserializable;
 use crate::protocol::RemotingSerializable;
 
 macro_rules! error { ($($tokens:tt)*) => { let _ = format_args!($($tokens)*); }; }
-macro_rules! info { ($($tokens:tt)*) => { let _ = format_args!($($tokens)*); }; }
 macro_rules! debug { ($($tokens:tt)*) => { let _ = format_args!($($tokens)*); }; }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -66,8 +65,6 @@ impl RegisterBrokerBody {
     }
 
     pub fn encode(&self, compress: bool) -> Vec<u8> {
-        use std::time::Instant;
-
         // Fast path: non-compressed data
         if !compress {
             return <Self as RemotingSerializable>::encode(self).unwrap_or_else(|e| {
@@ -75,8 +72,6 @@ impl RegisterBrokerBody {
                 Vec::new()
             });
         }
-
-        let start = Instant::now();
 
         // Get DataVersion from topic_config_serialize_wrapper (align with Java)
         let data_version = &self
@@ -176,26 +171,16 @@ impl RegisterBrokerBody {
             }
         };
 
-        let elapsed = start.elapsed().as_millis();
-        if elapsed > Self::MINIMUM_TAKE_TIME_MILLISECOND {
-            info!("Compressing RegisterBrokerBody takes {}ms", elapsed);
-        }
-
         compressed
     }
 }
 
 impl RegisterBrokerBody {
-    /// Minimum time threshold (in milliseconds) for logging decompression performance
-    const MINIMUM_TAKE_TIME_MILLISECOND: u128 = 100;
-
     pub fn decode(
         bytes: &Bytes,
         compressed: bool,
         broker_version: RocketMqVersion,
     ) -> rocketmq_error::RocketMQResult<RegisterBrokerBody> {
-        use std::time::Instant;
-
         // Fast path: non-compressed data
         if !compressed {
             return serde_json::from_slice::<RegisterBrokerBody>(bytes.as_ref()).map_err(|e| {
@@ -207,7 +192,6 @@ impl RegisterBrokerBody {
             });
         }
 
-        let start = Instant::now();
         let mut register_broker_body = RegisterBrokerBody::default();
 
         // Decompress data
@@ -389,11 +373,6 @@ impl RegisterBrokerBody {
             register_broker_body
                 .topic_config_serialize_wrapper
                 .topic_queue_mapping_info_map = topic_queue_mapping_info_map;
-        }
-
-        let elapsed = start.elapsed().as_millis();
-        if elapsed > Self::MINIMUM_TAKE_TIME_MILLISECOND {
-            info!("Decompressing RegisterBrokerBody takes {}ms", elapsed);
         }
 
         Ok(register_broker_body)

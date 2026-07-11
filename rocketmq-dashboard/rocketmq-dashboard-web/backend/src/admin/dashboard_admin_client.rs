@@ -74,6 +74,7 @@ use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -1536,8 +1537,8 @@ impl DashboardAdminClient {
                 .get_all_subscription_group(CheetahString::from(address.as_str()), 5_000)
                 .await
             {
-                for group in wrapper.get_subscription_group_table().keys() {
-                    groups.insert(group.to_string());
+                for entry in wrapper.get_subscription_group_table().iter() {
+                    groups.insert(entry.key().to_string());
                 }
             }
         }

@@ -45,6 +45,7 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
+use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_runtime::ScheduledTaskConfig;
@@ -160,7 +161,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             started: AtomicBool::new(false),
             shutdown_requested: Arc::new(AtomicBool::new(false)),
             max_delay_level: AtomicI32::new(0),
-            data_version: ArcMut::new(DataVersion::new()),
+            data_version: ArcMut::new(rocketmq_remoting::protocol::data_version_facade::new_data_version()),
             enable_async_deliver,
             deliver_pending_table: Arc::new(DashMap::new()),
             broker_controller,

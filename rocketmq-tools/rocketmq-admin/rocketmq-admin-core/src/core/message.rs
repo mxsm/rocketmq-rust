@@ -39,6 +39,7 @@ use rocketmq_common::MessageDecoder::decode_message_id;
 use rocketmq_common::MessageDecoder::validate_message_id;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use serde::Deserialize;

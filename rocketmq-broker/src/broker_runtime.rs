@@ -29,6 +29,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_auth::authentication::AclClientRpcHook;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::AuthMetricsSnapshot;
@@ -3156,7 +3157,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             );
         }
         serialize_wrapper.topic_config_serialize_wrapper.topic_config_table = topic_config_table;
-        let mut topic_queue_mapping_info_map = HashMap::new();
+        let topic_queue_mapping_info_map = DashMap::new();
         for topic_config in topic_config_list {
             if let Some(ref value) = this
                 .topic_queue_mapping_manager
@@ -3164,7 +3165,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             {
                 topic_queue_mapping_info_map.insert(
                     topic_config.topic_name.as_ref().unwrap().clone(),
-                    TopicQueueMappingDetail::clone_as_mapping_info(value.as_ref()),
+                    ArcMut::new(TopicQueueMappingDetail::clone_as_mapping_info(value.as_ref())),
                 );
             }
         }

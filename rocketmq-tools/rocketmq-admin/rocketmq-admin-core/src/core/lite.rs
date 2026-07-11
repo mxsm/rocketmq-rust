@@ -11,6 +11,7 @@ use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLit
 use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::lite_lag_info::LiteLagInfo;
+use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 use rocketmq_remoting::runtime::RPCHook;
 use serde::Deserialize;
 use serde::Serialize;

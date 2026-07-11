@@ -19,7 +19,7 @@
 | Phase | 里程碑 | 状态 | 负责人 | 计划窗口 | 完成日期 | Evidence Index |
 |---|---|---|---|---|---|---|
 | Phase 1 | M01–M03 | 已完成 | Codex 多代理执行组 | 6–8 周 | 2026-07-11 | [`PHASE-1-DELIVERY.md`](phase-1-safety-foundation/PHASE-1-DELIVERY.md) |
-| Phase 2 | M04–M09 | 未开始 | 待分配 | 12–16 周 | — | — |
+| Phase 2 | M04–M09 | 进行中 | 待分配 | 12–16 周 | — | — |
 | Phase 3 | M10–M11 | 未开始 | 待分配 | 8–12 周 | — | — |
 | Phase 4 | M12 | 未开始 | 待分配 | 8–12 周 | — | — |
 
@@ -81,12 +81,12 @@
 任务文档：[`04-protocol-extraction.md`](phase-2-core-boundaries/04-protocol-extraction.md)
 
 - [x] PR-M04-01：创建 crate 与单 request-code spike
-- [ ] PR-M04-02：迁移 model 前置的 wire primitives
-- [ ] PR-M04-03：分批迁移声明式 schema
-- [ ] PR-M04-04：拆分 static-topic、route 与 RPC 纯逻辑
-- [ ] PR-M04-05：迁移 Trace record 与 message codec
-- [ ] PR-M04-06：完成 feature/facade 与全量收口
-- [ ] 对应任务文档的 Exit Checklist 全部通过
+- [x] PR-M04-02：迁移 model 前置的 wire primitives
+- [x] PR-M04-03：分批迁移声明式 schema
+- [x] PR-M04-04：拆分 static-topic、route 与 RPC 纯逻辑
+- [x] PR-M04-05：迁移 Trace record 与 message codec
+- [x] PR-M04-06：完成 feature/facade 与全量收口
+- [x] 对应任务文档的 Exit Checklist 全部通过
 
 ### M05 Transport 提取
 

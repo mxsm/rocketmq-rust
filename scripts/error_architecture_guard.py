@@ -799,7 +799,7 @@ def check_redaction_guards() -> list[Finding]:
             "session_credentials_debug_redacts_sensitive_fields",
             "session_credentials_display",
         ],
-        ROOT / "rocketmq-remoting" / "src" / "protocol" / "body" / "user_info.rs": [
+        ROOT / "rocketmq-protocol" / "src" / "protocol" / "body" / "user_info.rs": [
             "debug_user_info_redacts_password",
             "password=<redacted>",
         ],

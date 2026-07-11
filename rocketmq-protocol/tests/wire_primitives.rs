@@ -60,3 +60,19 @@ fn sys_flag_and_version_ordinals_remain_wire_compatible() {
     assert_eq!(RocketMqVersion::V3_0_0_SNAPSHOT.ordinal(), 0);
     assert_eq!(RocketMqVersion::V5_3_1_SNAPSHOT.name(), "V5_3_1_SNAPSHOT");
 }
+
+#[test]
+fn protocol_version_is_an_exact_model_reexport_without_a_reverse_dependency() {
+    fn protocol(value: rocketmq_protocol::version::RocketMqVersion) -> rocketmq_protocol::version::RocketMqVersion {
+        value
+    }
+    fn model(value: rocketmq_model::version::RocketMqVersion) -> rocketmq_model::version::RocketMqVersion {
+        value
+    }
+
+    let value = rocketmq_protocol::version::RocketMqVersion::V5_3_1_SNAPSHOT;
+    assert_eq!(
+        model(protocol(value)).ordinal(),
+        rocketmq_model::version::CURRENT_VERSION.ordinal()
+    );
+}

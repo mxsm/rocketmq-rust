@@ -19,12 +19,12 @@ use rocketmq_rust::ArcMut;
 type LegacyHeader = ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>;
 
 #[test]
+#[allow(deprecated)]
 fn legacy_origin_method_keeps_concrete_function_item_and_none_inference() {
     let method: fn(RemotingCommand, Option<LegacyHeader>) -> RemotingCommand =
-        RemotingCommand::set_command_custom_header_origin;
+        rocketmq_remoting::protocol::remoting_command_facade::set_command_custom_header_origin;
 
     let command = method(RemotingCommand::create_response_command(), None);
-    let command = command.set_command_custom_header_origin(None);
 
     assert!(command.ext_fields().is_none());
 }

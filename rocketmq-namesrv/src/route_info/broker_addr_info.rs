@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn broker_live_info_properties() {
-        let data_version = DataVersion::new();
+        let data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
         let broker_live_info = BrokerLiveInfo::new(
             1000,
             2000,

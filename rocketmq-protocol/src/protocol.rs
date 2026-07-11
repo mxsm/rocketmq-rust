@@ -125,15 +125,11 @@ impl Ord for DataVersion {
 
 impl Default for DataVersion {
     fn default() -> Self {
-        Self::new()
+        Self::with_values(0, 0, 0)
     }
 }
 
 impl DataVersion {
-    pub const fn new() -> Self {
-        Self::with_values(0, 0, 0)
-    }
-
     pub const fn with_values(state_version: i64, timestamp: i64, counter: i64) -> Self {
         Self {
             state_version,
@@ -177,12 +173,6 @@ impl DataVersion {
     }
     pub fn counter(&self) -> i64 {
         self.get_counter()
-    }
-    pub fn next_version(&mut self) {
-        self.next_version_with_timestamp(0, self.timestamp);
-    }
-    pub fn next_version_with(&mut self, state_version: i64) {
-        self.next_version_with_timestamp(state_version, self.timestamp);
     }
     pub fn next_version_with_timestamp(&mut self, state_version: i64, timestamp: i64) {
         self.timestamp = timestamp;

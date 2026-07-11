@@ -56,6 +56,7 @@ use rocketmq_remoting::protocol::heartbeat::producer_data::ProducerData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;

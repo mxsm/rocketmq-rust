@@ -14,7 +14,6 @@
 
 use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
 use rocketmq_remoting::protocol::SerializeType;
-use rocketmq_remoting::RemotingCommand;
 
 #[test]
 fn legacy_environment_defaults_are_resolved_before_command_construction() {
@@ -25,7 +24,10 @@ fn legacy_environment_defaults_are_resolved_before_command_construction() {
         std::env::set_var("rocketmq.serialize.type", "ROCKETMQ");
     }
 
-    let command = RemotingCommand::create_request_command(31, GetMinOffsetRequestHeader::default());
+    let command = rocketmq_remoting::protocol::remoting_command_facade::create_request_command(
+        31,
+        GetMinOffsetRequestHeader::default(),
+    );
 
     assert_eq!(command.version(), 4242);
     assert_eq!(command.serialize_type(), SerializeType::ROCKETMQ);

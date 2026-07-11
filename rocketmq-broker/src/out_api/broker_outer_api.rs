@@ -1699,7 +1699,7 @@ fn build_register_broker_request_parts(
     compressed: bool,
 ) -> RegisterBrokerRequestParts {
     let request_body = RegisterBrokerBody {
-        topic_config_serialize_wrapper: topic_config_wrapper,
+        topic_config_serialize_wrapper: (&topic_config_wrapper).into(),
         filter_server_list,
     };
     let body = request_body.encode(compressed);

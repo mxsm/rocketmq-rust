@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::FileUtils::string_to_file;
@@ -320,7 +318,7 @@ where
                                 // Clear and update subscription table using DashMap
                                 subscription_table.clear();
                                 for (key, value) in new_subscription_table {
-                                    subscription_table.insert(key, Arc::new(value));
+                                    subscription_table.insert(key, value);
                                 }
                                 subscription_group_manager.persist();
                             }

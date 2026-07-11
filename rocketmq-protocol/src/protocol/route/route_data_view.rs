@@ -132,16 +132,16 @@ impl BrokerData {
         self.enable_acting_master
     }
 
-    pub fn select_broker_addr(&self) -> Option<CheetahString> {
-        let master_address = self.broker_addrs.get(&MASTER_ID).cloned();
-        if master_address.is_none() {
-            return self
-                .broker_addrs
-                .iter()
-                .min_by_key(|(id, _)| *id)
-                .map(|(_, value)| value.clone());
+    pub fn select_broker_addr_with_index(&self, index: usize) -> Option<CheetahString> {
+        if let Some(master_address) = self.broker_addrs.get(&MASTER_ID) {
+            return Some(master_address.clone());
         }
-        master_address
+        let mut slaves = self.broker_addrs.iter().collect::<Vec<_>>();
+        slaves.sort_unstable_by_key(|(id, _)| **id);
+        if slaves.is_empty() {
+            return None;
+        }
+        slaves.get(index % slaves.len()).map(|(_, value)| (*value).clone())
     }
 }
 
@@ -283,7 +283,7 @@ mod tests {
             None,
         );
 
-        let selected_addr = broker_data.select_broker_addr();
+        let selected_addr = broker_data.select_broker_addr_with_index(0);
         assert_eq!(selected_addr.unwrap(), CheetahString::from("127.0.0.1"));
     }
 
@@ -296,7 +296,7 @@ mod tests {
             None,
         );
 
-        let selected_addr = broker_data.select_broker_addr();
+        let selected_addr = broker_data.select_broker_addr_with_index(0);
         assert_eq!(selected_addr.unwrap(), CheetahString::from("127.0.0.2"));
     }
 

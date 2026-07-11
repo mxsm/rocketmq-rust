@@ -259,7 +259,7 @@ pub fn decode(
 ) -> Option<MessageExt> {
     let frame = rocketmq_protocol::protocol::body::message_codec::decode_message_frame(byte_buffer).ok()?;
 
-    if check_crc && crc32(&frame.body) != frame.body_crc {
+    if read_body && !frame.body.is_empty() && check_crc && crc32(&frame.body) != frame.body_crc {
         return None;
     }
 

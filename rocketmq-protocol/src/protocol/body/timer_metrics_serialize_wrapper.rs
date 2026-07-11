@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_timer_metrics_wrapper_with_data_version_field() {
-        let mut data_version = DataVersion::new();
+        let mut data_version = DataVersion::default();
         data_version.set_state_version(7);
         data_version.set_timestamp(12345);
         data_version.set_counter(3);

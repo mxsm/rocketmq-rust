@@ -21,6 +21,7 @@ use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::DataVersion;
 use serde::Deserialize;
 use serde::Serialize;
@@ -127,7 +128,7 @@ impl TimerMetrics {
             timing_count: RwLock::new(HashMap::new()),
             timing_distribution: RwLock::new(HashMap::new()),
             timer_dist: RwLock::new(default_timer_dist()),
-            data_version: Mutex::new(DataVersion::new()),
+            data_version: Mutex::new(rocketmq_remoting::protocol::data_version_facade::new_data_version()),
         }
     }
 

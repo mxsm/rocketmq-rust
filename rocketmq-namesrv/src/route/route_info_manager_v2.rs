@@ -688,8 +688,9 @@ impl RouteInfoManagerV2 {
             topic_config_wrapper.topic_config_serialize_wrapper().data_version(),
         ) || register_first
         {
-            for (topic, mapping_info) in topic_queue_mapping_info_map.iter() {
-                let topic = topic.clone();
+            for entry in topic_queue_mapping_info_map.iter() {
+                let topic = entry.key().clone();
+                let mapping_info = entry.value();
 
                 // Extract broker name from mapping info (bname is a field, not a method)
                 let broker_name_mapping = mapping_info.bname.clone().unwrap_or_else(|| broker_name.clone());
@@ -697,7 +698,7 @@ impl RouteInfoManagerV2 {
                 self.topic_queue_mapping_info_table.register(
                     topic,
                     broker_name_mapping,
-                    Arc::new(mapping_info.clone()),
+                    Arc::new((**mapping_info).clone()),
                 );
             }
         }

@@ -34,6 +34,7 @@ use rocketmq_common::common::mix_all::get_retry_topic;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use serde::Deserialize;

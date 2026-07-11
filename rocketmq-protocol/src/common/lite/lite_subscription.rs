@@ -29,21 +29,21 @@ pub struct LiteSubscription {
 impl LiteSubscription {
     #[must_use]
     #[inline]
-    pub fn new(group: CheetahString, topic: CheetahString) -> Self {
+    pub fn new(group: CheetahString, topic: CheetahString, update_time: i64) -> Self {
         Self {
             group,
             topic,
             lite_topic_set: HashSet::new(),
-            update_time: Self::current_time_millis(),
+            update_time,
             version: 0,
         }
     }
 
     #[must_use]
     #[inline]
-    pub fn with_lite_topic_set(mut self, lite_topic_set: HashSet<CheetahString>) -> Self {
+    pub fn with_lite_topic_set(mut self, lite_topic_set: HashSet<CheetahString>, update_time: i64) -> Self {
         self.lite_topic_set = lite_topic_set;
-        self.update_time = Self::current_time_millis();
+        self.update_time = update_time;
         self
     }
 
@@ -62,26 +62,26 @@ impl LiteSubscription {
     }
 
     #[inline]
-    pub fn add_lite_topic(&mut self, lite_topic: CheetahString) -> bool {
-        self.refresh_update_time();
+    pub fn add_lite_topic(&mut self, lite_topic: CheetahString, update_time: i64) -> bool {
+        self.update_time = update_time;
         self.lite_topic_set.insert(lite_topic)
     }
 
     #[inline]
-    pub fn add_lite_topic_set(&mut self, set: &HashSet<CheetahString>) {
-        self.refresh_update_time();
+    pub fn add_lite_topic_set(&mut self, set: &HashSet<CheetahString>, update_time: i64) {
+        self.update_time = update_time;
         self.lite_topic_set.extend(set.iter().cloned());
     }
 
     #[inline]
-    pub fn remove_lite_topic(&mut self, lite_topic: &CheetahString) -> bool {
-        self.refresh_update_time();
+    pub fn remove_lite_topic(&mut self, lite_topic: &CheetahString, update_time: i64) -> bool {
+        self.update_time = update_time;
         self.lite_topic_set.remove(lite_topic)
     }
 
     #[inline]
-    pub fn remove_lite_topic_set(&mut self, set: &HashSet<CheetahString>) {
-        self.refresh_update_time();
+    pub fn remove_lite_topic_set(&mut self, set: &HashSet<CheetahString>, update_time: i64) {
+        self.update_time = update_time;
         for topic in set {
             self.lite_topic_set.remove(topic);
         }
@@ -116,9 +116,9 @@ impl LiteSubscription {
     }
 
     #[inline]
-    pub fn set_lite_topic_set(&mut self, lite_topic_set: HashSet<CheetahString>) {
+    pub fn set_lite_topic_set(&mut self, lite_topic_set: HashSet<CheetahString>, update_time: i64) {
         self.lite_topic_set = lite_topic_set;
-        self.refresh_update_time();
+        self.update_time = update_time;
     }
 
     #[must_use]
@@ -142,20 +142,6 @@ impl LiteSubscription {
     pub fn set_version(&mut self, version: i64) {
         self.version = version;
     }
-
-    #[inline]
-    fn refresh_update_time(&mut self) {
-        self.update_time = Self::current_time_millis();
-    }
-
-    #[inline]
-    fn current_time_millis() -> i64 {
-        use std::time::SystemTime;
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0)
-    }
 }
 
 impl fmt::Display for LiteSubscription {
@@ -176,8 +162,8 @@ mod tests {
     fn lite_subscription_new_with_methods() {
         let mut set = HashSet::new();
         set.insert("lite_topic".into());
-        let subscription = LiteSubscription::new("group".into(), "topic".into())
-            .with_lite_topic_set(set.clone())
+        let subscription = LiteSubscription::new("group".into(), "topic".into(), 1)
+            .with_lite_topic_set(set.clone(), 2)
             .with_update_time(100)
             .with_version(2);
 
@@ -190,31 +176,31 @@ mod tests {
 
     #[test]
     fn lite_subscription_topic_operations() {
-        let mut subscription = LiteSubscription::new("group".into(), "topic".into());
+        let mut subscription = LiteSubscription::new("group".into(), "topic".into(), 1);
 
-        subscription.add_lite_topic("topic1".into());
+        subscription.add_lite_topic("topic1".into(), 2);
         assert!(subscription.lite_topic_set().contains(&CheetahString::from("topic1")));
 
         let mut set = HashSet::new();
         set.insert(CheetahString::from("topic2"));
-        subscription.add_lite_topic_set(&set);
+        subscription.add_lite_topic_set(&set, 3);
         assert!(subscription.lite_topic_set().contains(&CheetahString::from("topic2")));
 
-        subscription.remove_lite_topic(&CheetahString::from("topic1"));
+        subscription.remove_lite_topic(&CheetahString::from("topic1"), 4);
         assert!(!subscription.lite_topic_set().contains(&CheetahString::from("topic1")));
 
-        subscription.remove_lite_topic_set(&set);
+        subscription.remove_lite_topic_set(&set, 5);
         assert!(!subscription.lite_topic_set().contains(&CheetahString::from("topic2")));
     }
 
     #[test]
     fn lite_subscription_setters() {
-        let mut subscription = LiteSubscription::new("group".into(), "topic".into());
+        let mut subscription = LiteSubscription::new("group".into(), "topic".into(), 1);
         subscription.set_group("new_group".into());
         subscription.set_topic("new_topic".into());
         let mut set = HashSet::new();
         set.insert("topic1".into());
-        subscription.set_lite_topic_set(set.clone());
+        subscription.set_lite_topic_set(set.clone(), 2);
         subscription.set_update_time(200);
         subscription.set_version(3);
 
@@ -227,7 +213,7 @@ mod tests {
 
     #[test]
     fn lite_subscription_display() {
-        let subscription = LiteSubscription::new("group".into(), "topic".into());
+        let subscription = LiteSubscription::new("group".into(), "topic".into(), 1);
         let display = format!("{}", subscription);
         assert!(display.contains("group: group"));
         assert!(display.contains("topic: topic"));

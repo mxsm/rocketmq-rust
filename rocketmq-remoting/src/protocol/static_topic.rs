@@ -14,3 +14,17 @@
 
 pub use rocketmq_protocol::protocol::static_topic::*;
 pub mod topic_queue_mapping_utils;
+
+use rocketmq_rust::ArcMut;
+
+use self::logic_queue_mapping_item::LogicQueueMappingItem;
+use self::topic_queue_mapping_detail::TopicQueueMappingDetail;
+
+#[deprecated(note = "use TopicQueueMappingDetail::put_mapping_info with an exclusive mutable reference")]
+pub fn put_mapping_info(
+    mut mapping_detail: ArcMut<TopicQueueMappingDetail>,
+    global_id: i32,
+    mapping_info: Vec<LogicQueueMappingItem>,
+) {
+    TopicQueueMappingDetail::put_mapping_info(&mut mapping_detail, global_id, mapping_info);
+}

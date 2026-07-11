@@ -519,7 +519,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 .topic_queue_mapping_manager()
                 .topic_queue_mapping_table
                 .iter()
-                .map(|entry| (entry.key().clone(), (**entry.value()).clone()))
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
                 .collect(),
             mapping_data_version: self
                 .broker_runtime_inner

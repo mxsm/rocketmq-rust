@@ -1385,7 +1385,8 @@ async fn collect_export_metrics_client_info(
     subscription_group_wrapper: &SubscriptionGroupWrapper,
 ) -> Vec<String> {
     let mut client_info = BTreeSet::new();
-    for group in subscription_group_wrapper.get_subscription_group_table().values() {
+    for group in subscription_group_wrapper.get_subscription_group_table() {
+        let group = group.value();
         let group_name = group.group_name().clone();
         let Ok(connection) = admin.examine_consumer_connection_info(group_name, None).await else {
             continue;
@@ -1507,14 +1508,15 @@ fn merge_subscription_groups(
     target: &mut HashMap<CheetahString, SubscriptionGroupConfig>,
     source: &SubscriptionGroupWrapper,
 ) {
-    for (key, value) in source.get_subscription_group_table().iter() {
-        let key = key.clone();
+    for entry in source.get_subscription_group_table().iter() {
+        let key = entry.key().clone();
+        let value = entry.value();
         if let Some(existing) = target.get(&key) {
-            let mut merged = value.clone();
+            let mut merged = (**value).clone();
             merged.set_retry_queue_nums(existing.retry_queue_nums() + value.retry_queue_nums());
             target.insert(key, merged);
         } else {
-            target.insert(key, value.clone());
+            target.insert(key, (**value).clone());
         }
     }
 }
