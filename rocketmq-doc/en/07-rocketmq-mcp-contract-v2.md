@@ -161,6 +161,14 @@ Consumer-lag diagnosis results include independent provenance fields:
 }
 ```
 
+Consumer-lag diagnosis v2 returns a replayable `evidence_snapshot`, a
+server-owned `policy_profile`, `confidence_band`, `partial`,
+`missing_evidence`, and `evidence_refs`. Evidence status is one of `present`,
+`missing`, `unavailable`, `timeout`, `unauthorized`, or `invalid`. Root causes
+may reference only `present` evidence. The Tool schema accepts cluster, topic,
+and consumer group only; historical time-range analysis and caller-controlled
+lag thresholds are unavailable until a historical metrics source is introduced.
+
 ## Resource URIs
 
 Resources are always scoped to an explicit configured cluster:

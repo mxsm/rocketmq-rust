@@ -81,7 +81,7 @@ impl ToolExecutionError {
         Self::Internal(error.to_string())
     }
 
-    fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::InvalidArguments(_) => "invalid_arguments",
             Self::Backend(_) => "backend_error",

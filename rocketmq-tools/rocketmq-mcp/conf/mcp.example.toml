@@ -37,3 +37,7 @@ cluster_overview_ttl_ms = 3000
 topic_list_ttl_ms = 5000
 broker_metrics_ttl_ms = 2000
 consumer_lag_ttl_ms = 1000
+
+[diagnosis]
+consumer_lag_policy_profile = "production-default"
+consumer_lag_threshold = 1000

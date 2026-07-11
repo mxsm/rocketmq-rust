@@ -14,4 +14,6 @@
 
 //! Higher-level MCP services built from read-only evidence tools.
 
+pub mod diagnosis_collector;
+pub mod diagnosis_rules;
 pub mod diagnosis_service;

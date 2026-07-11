@@ -22,8 +22,4 @@ pub struct DiagnoseConsumerLagArgs {
     pub cluster: String,
     pub topic: String,
     pub consumer_group: String,
-    #[serde(default)]
-    pub time_range: Option<String>,
-    #[serde(default)]
-    pub lag_threshold: Option<i64>,
 }
