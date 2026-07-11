@@ -15,11 +15,23 @@
 pub use super::span_names::CONSUMER_PROCESS;
 pub use super::span_names::PRODUCER_SEND;
 
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::message::MessageQueue;
+
+use crate::propagation::MessagePropertiesLike;
+
+pub struct MessageSpanContext<'a> {
+    properties: &'a dyn MessagePropertiesLike,
+    body_size: Option<usize>,
+}
+
+impl<'a> MessageSpanContext<'a> {
+    pub fn new(properties: &'a dyn MessagePropertiesLike, body_size: Option<usize>) -> Self {
+        Self { properties, body_size }
+    }
+}
 
 pub fn consumer_process_span(
-    first_message: Option<&MessageExt>,
+    first_message: Option<MessageSpanContext<'_>>,
     message_count: usize,
     consumer_group: &str,
     message_queue: &MessageQueue,
@@ -42,21 +54,18 @@ pub fn consumer_process_span(
             messaging.rocketmq.message.keys = tracing::field::Empty,
         );
         if let Some(message) = first_message {
-            crate::propagation::set_span_parent_from_message(&span, message);
-            super::record_message_attributes(&span, message);
+            crate::propagation::set_span_parent_from_properties(&span, message.properties);
+            super::record_message_properties(&span, message.properties, message.body_size);
         }
         span
     }
 
     #[cfg(not(feature = "otel-traces"))]
     {
-        let _ = (
-            first_message,
-            message_count,
-            consumer_group,
-            message_queue,
-            consume_mode,
-        );
+        if let Some(message) = first_message {
+            let _ = (message.properties, message.body_size);
+        }
+        let _ = (message_count, consumer_group, message_queue, consume_mode);
         tracing::Span::none()
     }
 }

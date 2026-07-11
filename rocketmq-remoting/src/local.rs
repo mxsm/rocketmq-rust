@@ -12,13 +12,12 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
 
-use crate::base::response_future::ResponseFuture;
+use crate::base::pending_request_table::PendingRequestTable;
 use crate::connection::Connection;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
@@ -47,9 +46,9 @@ impl LocalRequestHarness {
         debug_assert_eq!(local_address, peer_remote_address);
         debug_assert_eq!(remote_address, peer_local_address);
 
-        let channel_inner = ArcMut::new(ChannelInner::try_new(
+        let channel_inner = ArcMut::new(ChannelInner::try_new_with_pending_requests(
             Connection::new(server_stream),
-            ArcMut::new(HashMap::<i32, ResponseFuture>::new()),
+            PendingRequestTable::new(),
         )?);
         let channel = Channel::new(channel_inner, local_address, remote_address);
         let context = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));

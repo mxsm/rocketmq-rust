@@ -69,6 +69,7 @@ use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::message_store::MessageStore;
+use crate::base::message_store::StoreHealthRecorder;
 use crate::base::put_message_context::PutMessageContext;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -408,6 +409,10 @@ impl CommitLog {
         }
     }
 
+    pub(crate) fn set_store_health_recorder(&mut self, store_health_recorder: StoreHealthRecorder) {
+        self.flush_manager.set_store_health_recorder(store_health_recorder);
+    }
+
     #[cfg(test)]
     pub(crate) fn has_allocate_mapped_file_service(&self) -> bool {
         self.mapped_file_queue.allocate_mapped_file_service.is_some()
@@ -676,7 +681,6 @@ impl CommitLog {
     }
 
     pub fn shutdown(&mut self) {
-        self.flush();
         self.flush_manager.shutdown();
     }
 
@@ -702,10 +706,11 @@ impl CommitLog {
         elapsed_time_in_lock
     }
 
-    pub async fn shutdown_gracefully(&mut self) {
-        self.flush();
+    pub async fn shutdown_gracefully(
+        &mut self,
+    ) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
         let mut flush_manager = self.flush_manager.clone();
-        flush_manager.shutdown_gracefully().await;
+        flush_manager.shutdown_gracefully().await
     }
 
     pub fn destroy(&mut self) {
@@ -840,7 +845,10 @@ impl CommitLog {
     )]
     pub async fn put_messages(&mut self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
-        rocketmq_observability::trace::record_current_message_attributes(&msg_batch.message_ext_broker_inner);
+        rocketmq_observability::trace::record_current_message_properties(
+            msg_batch.message_ext_broker_inner.get_properties(),
+            msg_batch.message_ext_broker_inner.get_body().map(|body| body.len()),
+        );
         msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = current_millis() as i64;
         let tran_type = MessageSysFlag::get_transaction_value(msg_batch.message_ext_broker_inner.sys_flag());
         if MessageSysFlag::TRANSACTION_NOT_TYPE != tran_type {
@@ -1047,7 +1055,10 @@ impl CommitLog {
     )]
     pub async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
-        rocketmq_observability::trace::record_current_message_attributes(&msg);
+        rocketmq_observability::trace::record_current_message_properties(
+            msg.get_properties(),
+            msg.get_body().map(|body| body.len()),
+        );
         // Set the message body CRC (consider the most appropriate setting on the client)
         msg.message_ext_inner.body_crc = crc32_bytes(msg.message_ext_inner.message.get_body());
         if self.enabled_append_prop_crc {
@@ -2093,8 +2104,18 @@ impl CommitLog {
 
     #[inline]
     pub fn flush(&self) -> i64 {
-        self.mapped_file_queue.flush(0);
-        self.mapped_file_queue.get_flushed_where()
+        match self.try_flush() {
+            Ok(progress) => progress.durable,
+            Err(error) => {
+                warn!(error = %error, "commit log flush failed; returning last durable watermark");
+                self.mapped_file_queue.get_flushed_where()
+            }
+        }
+    }
+
+    /// Flushes the commit log and reports appended and durable watermarks.
+    pub fn try_flush(&self) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
+        self.mapped_file_queue.try_flush(0).map_err(StoreError::mapped_file)
     }
 
     pub fn get_min_offset(&self) -> i64 {
@@ -2435,7 +2456,7 @@ pub fn check_message_and_return_size(
                 msg_size: -1,
                 success: false,
                 ..Default::default()
-            }
+            };
         }
     };
     let body_crc = bytes.get_i32();
@@ -3217,7 +3238,11 @@ mod tests {
         assert_eq!(store.get_commit_log().get_flushed_where(), 0);
         assert_eq!(store.get_commit_log().get_max_offset(), 4);
 
-        store.get_commit_log_mut().shutdown_gracefully().await;
+        store
+            .get_commit_log_mut()
+            .shutdown_gracefully()
+            .await
+            .expect("commitlog shutdown flush should succeed");
 
         assert_eq!(store.get_commit_log().get_flushed_where(), 4);
         assert_eq!(

@@ -34,11 +34,14 @@ use crate::base::flush_manager::FlushManager;
 use crate::base::flush_manager::SyncFlushRuntimeInfo;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::message_store::StoreHealthRecorder;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::consume_queue::mapped_file_queue::FlushProgress;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
+use crate::store_error::StoreError;
 
 #[derive(Clone, Default)]
 struct SyncFlushStats {
@@ -119,6 +122,7 @@ pub struct DefaultFlushManager {
     message_store_config: Arc<MessageStoreConfig>,
     mapped_file_queue: Option<ArcMut<MappedFileQueue>>,
     sync_flush_stats: SyncFlushStats,
+    store_health_recorder: StoreHealthRecorder,
 }
 
 impl DefaultFlushManager {
@@ -127,6 +131,8 @@ impl DefaultFlushManager {
         mapped_file_queue: ArcMut<MappedFileQueue>,
         store_checkpoint: Arc<StoreCheckpoint>,
     ) -> Self {
+        let store_health_recorder =
+            StoreHealthRecorder::new(Arc::new(crate::store::running_flags::RunningFlags::new()));
         let sync_flush_stats = SyncFlushStats::default();
         let (group_commit_service, flush_real_time_service) = match message_store_config.flush_disk_type {
             FlushDiskType::SyncFlush => (
@@ -137,6 +143,8 @@ impl DefaultFlushManager {
                     shutdown_token: CancellationToken::new(),
                     worker_group: None,
                     sync_flush_stats: sync_flush_stats.clone(),
+                    store_health_recorder: store_health_recorder.clone(),
+                    forced_flush_error: None,
                 }),
                 None,
             ),
@@ -148,6 +156,7 @@ impl DefaultFlushManager {
                     notified: Arc::new(Notify::new()),
                     shutdown_token: CancellationToken::new(),
                     worker_group: None,
+                    store_health_recorder: store_health_recorder.clone(),
                 }),
             ),
         };
@@ -172,7 +181,18 @@ impl DefaultFlushManager {
             commit_real_time_service,
             mapped_file_queue: Some(mapped_file_queue),
             sync_flush_stats,
+            store_health_recorder,
         }
+    }
+
+    pub(crate) fn set_store_health_recorder(&mut self, store_health_recorder: StoreHealthRecorder) {
+        if let Some(group_commit_service) = self.group_commit_service.as_mut() {
+            group_commit_service.store_health_recorder = store_health_recorder.clone();
+        }
+        if let Some(flush_real_time_service) = self.flush_real_time_service.as_mut() {
+            flush_real_time_service.store_health_recorder = store_health_recorder.clone();
+        }
+        self.store_health_recorder = store_health_recorder;
     }
 }
 
@@ -189,9 +209,7 @@ impl DefaultFlushManager {
         self.commit_real_time_service.as_mut()
     }
 
-    pub(crate) async fn shutdown_gracefully(&mut self) {
-        self.flush_before_shutdown();
-
+    pub(crate) async fn shutdown_gracefully(&mut self) -> Result<FlushProgress, StoreError> {
         if let Some(ref mut group_commit_service) = self.group_commit_service {
             group_commit_service.shutdown_gracefully().await;
         }
@@ -201,15 +219,24 @@ impl DefaultFlushManager {
         if let Some(ref mut commit_real_time_service) = self.commit_real_time_service {
             commit_real_time_service.shutdown_gracefully().await;
         }
+
+        self.try_flush_before_shutdown()
     }
 
-    fn flush_before_shutdown(&self) {
-        if let Some(mapped_file_queue) = self.mapped_file_queue.as_ref() {
-            if self.message_store_config.transient_store_pool_enable {
-                mapped_file_queue.commit(0);
-            }
-            mapped_file_queue.flush(0);
+    fn try_flush_before_shutdown(&self) -> Result<FlushProgress, StoreError> {
+        let Some(mapped_file_queue) = self.mapped_file_queue.as_ref() else {
+            let error = StoreError::InvalidState(String::from("flush manager mapped file queue is not initialized"));
+            self.store_health_recorder.record_flush_failure(&error);
+            return Err(error);
+        };
+        if self.message_store_config.transient_store_pool_enable {
+            mapped_file_queue.commit(0);
         }
+        mapped_file_queue.try_flush(0).map_err(|error| {
+            let error = StoreError::mapped_file(error);
+            self.store_health_recorder.record_flush_failure(&error);
+            error
+        })
     }
 }
 
@@ -235,7 +262,9 @@ impl FlushManager for DefaultFlushManager {
     }
 
     fn shutdown(&mut self) {
-        self.flush_before_shutdown();
+        if let Err(error) = self.try_flush_before_shutdown() {
+            warn!(error = %error, "commitlog flush failed during legacy shutdown");
+        }
 
         if let Some(ref mut group_commit_service) = self.group_commit_service {
             group_commit_service.shutdown();
@@ -285,7 +314,14 @@ impl FlushManager for DefaultFlushManager {
                             if !group_commit_service.put_request(commit_request).await {
                                 return PutMessageStatus::FlushDiskTimeout;
                             }
-                            flush_ok_receiver.await.unwrap_or(PutMessageStatus::FlushDiskTimeout)
+                            match flush_ok_receiver.await {
+                                Ok(Ok(status)) => status,
+                                Ok(Err(error)) => {
+                                    warn!(error = %error, "sync flush failed");
+                                    PutMessageStatus::FlushDiskTimeout
+                                }
+                                Err(_) => PutMessageStatus::FlushDiskTimeout,
+                            }
                         },
                     )
                     .await
@@ -326,9 +362,15 @@ struct GroupCommitService {
     shutdown_token: CancellationToken,
     worker_group: Option<TaskGroup>,
     sync_flush_stats: SyncFlushStats,
+    store_health_recorder: StoreHealthRecorder,
+    forced_flush_error: Option<Arc<StoreError>>,
 }
 
 impl GroupCommitService {
+    fn configured_flush_error(&self) -> Option<Arc<StoreError>> {
+        self.forced_flush_error.clone()
+    }
+
     pub async fn put_request(&mut self, request: GroupCommitRequest) -> bool {
         if self.shutdown_token.is_cancelled() {
             return false;
@@ -369,6 +411,8 @@ impl GroupCommitService {
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = Arc::clone(&self.notified);
         let sync_flush_stats = self.sync_flush_stats.clone();
+        let store_health_recorder = self.store_health_recorder.clone();
+        let forced_flush_error = self.configured_flush_error();
         if let Err(error) = worker_group.spawn_service("commit-log-group-commit", async move {
             loop {
                 tokio::select! {
@@ -378,16 +422,29 @@ impl GroupCommitService {
                             remaining.push(request);
                         }
                         if !remaining.is_empty() {
-                            let flushed_where = flush_mapped_file_queue(mapped_file_queue.clone(), 0)
-                                .await
-                                .map_or_else(|| mapped_file_queue.get_flushed_where(), |result| result.flushed_where);
-                            complete_group_commit_batch(remaining, flushed_where, &sync_flush_stats);
+                            match flush_mapped_file_queue(mapped_file_queue.clone(), 0).await {
+                                Ok(result) => {
+                                    complete_group_commit_batch(remaining, result.flushed_where, &sync_flush_stats);
+                                }
+                                Err(error) => {
+                                    complete_group_commit_batch_error(
+                                        remaining,
+                                        error,
+                                        &sync_flush_stats,
+                                        &store_health_recorder,
+                                    );
+                                }
+                            }
                         }
                         break;
                     }
                     _ = notified.notified() => {
-                        let Some(flush_result) = flush_mapped_file_queue(mapped_file_queue.clone(), 0).await else {
-                            continue;
+                        let flush_result = match flush_mapped_file_queue(mapped_file_queue.clone(), 0).await {
+                            Ok(result) => result,
+                            Err(error) => {
+                                store_health_recorder.record_flush_failure(error.as_ref());
+                                continue;
+                            }
                         };
                         if flush_result.store_timestamp > 0 {
                             store_checkpoint.set_physic_msg_timestamp(flush_result.store_timestamp);
@@ -403,18 +460,37 @@ impl GroupCommitService {
 
                         let target_offset = requests.iter().map(|request| request.next_offset).max().unwrap_or(0);
                         let mut flush_ok = mapped_file_queue.get_flushed_where() >= target_offset;
+                        let mut flush_error = None;
+                        if let Some(error) = forced_flush_error.clone() {
+                            flush_error = Some(error);
+                        }
                         for _ in 0..1000 {
-                            if flush_ok || requests.iter().all(GroupCommitRequest::is_expired) {
+                            if flush_ok || flush_error.is_some() || requests.iter().all(GroupCommitRequest::is_expired) {
                                 break;
                             }
-                            let Some(flush_result) = flush_mapped_file_queue(mapped_file_queue.clone(), 0).await else {
-                                break;
-                            };
-                            flush_ok = flush_result.flushed_where >= target_offset;
+                            match flush_mapped_file_queue(mapped_file_queue.clone(), 0).await {
+                                Ok(flush_result) => {
+                                    flush_ok = flush_result.flushed_where >= target_offset;
+                                }
+                                Err(error) => {
+                                    flush_error = Some(error);
+                                    break;
+                                }
+                            }
                             if flush_ok || requests.iter().all(GroupCommitRequest::is_expired) {
                                 break;
                             }
                             time::sleep(time::Duration::from_millis(1)).await;
+                        }
+
+                        if let Some(error) = flush_error {
+                            complete_group_commit_batch_error(
+                                requests,
+                                error,
+                                &sync_flush_stats,
+                                &store_health_recorder,
+                            );
+                            continue;
                         }
 
                         let flushed_where = mapped_file_queue.get_flushed_where();
@@ -468,12 +544,26 @@ fn complete_group_commit_batch(
     }
 }
 
+fn complete_group_commit_batch_error(
+    requests: Vec<GroupCommitRequest>,
+    error: Arc<StoreError>,
+    sync_flush_stats: &SyncFlushStats,
+    store_health_recorder: &StoreHealthRecorder,
+) {
+    store_health_recorder.record_flush_failure(error.as_ref());
+    for request in requests {
+        sync_flush_stats.record_completion(&request, PutMessageStatus::FlushDiskTimeout);
+        request.complete_error(error.clone());
+    }
+}
+
 struct FlushRealTimeService {
     message_store_config: Arc<MessageStoreConfig>,
     store_checkpoint: Arc<StoreCheckpoint>,
     notified: Arc<Notify>,
     shutdown_token: CancellationToken,
     worker_group: Option<TaskGroup>,
+    store_health_recorder: StoreHealthRecorder,
 }
 
 impl FlushRealTimeService {
@@ -494,6 +584,7 @@ impl FlushRealTimeService {
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = self.notified.clone();
         let shutdown_token = self.shutdown_token.clone();
+        let store_health_recorder = self.store_health_recorder.clone();
         if let Err(error) = worker_group.spawn_service("commit-log-flush-real-time", async move {
             let mut last_flush_timestamp = 0;
             loop {
@@ -525,20 +616,30 @@ impl FlushRealTimeService {
                     }
                 }
 
-                let Some(flush_result) =
-                    flush_mapped_file_queue(mapped_file_queue.clone(), flush_physic_queue_least_pages).await
-                else {
-                    break;
-                };
+                let flush_result =
+                    match flush_mapped_file_queue(mapped_file_queue.clone(), flush_physic_queue_least_pages).await {
+                        Ok(result) => result,
+                        Err(error) => {
+                            store_health_recorder.record_flush_failure(error.as_ref());
+                            warn!(error = %error, "asynchronous commitlog flush failed");
+                            break;
+                        }
+                    };
                 let store_timestamp = flush_result.store_timestamp;
                 if store_timestamp > 0 {
                     store_checkpoint.set_physic_msg_timestamp(store_timestamp);
                 }
             }
-            if let Some(flush_result) = flush_mapped_file_queue(mapped_file_queue, 0).await {
-                let store_timestamp = flush_result.store_timestamp;
-                if store_timestamp > 0 {
-                    store_checkpoint.set_physic_msg_timestamp(store_timestamp);
+            match flush_mapped_file_queue(mapped_file_queue, 0).await {
+                Ok(flush_result) => {
+                    let store_timestamp = flush_result.store_timestamp;
+                    if store_timestamp > 0 {
+                        store_checkpoint.set_physic_msg_timestamp(store_timestamp);
+                    }
+                }
+                Err(error) => {
+                    store_health_recorder.record_flush_failure(error.as_ref());
+                    warn!(error = %error, "final asynchronous commitlog flush failed");
                 }
             }
         }) {
@@ -688,31 +789,32 @@ async fn shutdown_worker_gracefully(service_name: &'static str, worker_group: &m
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FlushMappedFileQueueResult {
+pub(crate) struct FlushMappedFileQueueResult {
     flush_ok: bool,
     flushed_where: i64,
     store_timestamp: u64,
 }
 
-async fn flush_mapped_file_queue(
+pub(crate) async fn flush_mapped_file_queue(
     mapped_file_queue: ArcMut<MappedFileQueue>,
     flush_least_pages: i32,
-) -> Option<FlushMappedFileQueueResult> {
+) -> Result<FlushMappedFileQueueResult, Arc<StoreError>> {
     match crate::runtime::spawn_io("commitlog-flush", move || {
-        let flush_ok = mapped_file_queue.flush(flush_least_pages);
-        FlushMappedFileQueueResult {
-            flush_ok,
-            flushed_where: mapped_file_queue.get_flushed_where(),
-            store_timestamp: mapped_file_queue.get_store_timestamp(),
-        }
+        mapped_file_queue
+            .try_flush(flush_least_pages)
+            .map(|progress| FlushMappedFileQueueResult {
+                flush_ok: progress.durable == progress.durable_before,
+                flushed_where: progress.durable,
+                store_timestamp: progress.store_timestamp,
+            })
     })
     .await
     {
-        Ok(result) => Some(result),
-        Err(error) => {
-            tracing::error!("commitlog flush task failed: {error}");
-            None
-        }
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(error)) => Err(Arc::new(StoreError::mapped_file(error))),
+        Err(error) => Err(Arc::new(StoreError::InvalidState(format!(
+            "commitlog flush task failed: {error}"
+        )))),
     }
 }
 
@@ -749,6 +851,13 @@ mod tests {
 
     use tempfile::tempdir;
 
+    use crate::log_file::mapped_file::MappedFileError;
+    use crate::store::running_flags::RunningFlags;
+
+    fn health_recorder() -> StoreHealthRecorder {
+        StoreHealthRecorder::new(Arc::new(RunningFlags::new()))
+    }
+
     #[test]
     fn complete_group_commit_batch_marks_each_request_by_final_flushed_offset() {
         let sync_flush_stats = SyncFlushStats::default();
@@ -760,14 +869,46 @@ mod tests {
 
         complete_group_commit_batch(requests, 80, &sync_flush_stats);
 
-        assert_eq!(response_64.try_recv(), Ok(PutMessageStatus::PutOk));
-        assert_eq!(response_96.try_recv(), Ok(PutMessageStatus::FlushDiskTimeout));
+        assert!(matches!(response_64.try_recv(), Ok(Ok(PutMessageStatus::PutOk))));
+        assert!(matches!(
+            response_96.try_recv(),
+            Ok(Ok(PutMessageStatus::FlushDiskTimeout))
+        ));
 
         let runtime_info = sync_flush_stats.snapshot();
         assert_eq!(runtime_info.queue_depth, 0);
         assert_eq!(runtime_info.enqueue_total, 2);
         assert_eq!(runtime_info.completed_total, 2);
         assert_eq!(runtime_info.timeout_total, 1);
+    }
+
+    #[test]
+    fn group_commit_batch_propagates_one_typed_flush_error_to_every_waiter() {
+        let sync_flush_stats = SyncFlushStats::default();
+        let store_health_recorder = health_recorder();
+        let (first, mut first_response) = GroupCommitRequest::new(64, 5_000);
+        let (second, mut second_response) = GroupCommitRequest::new(96, 5_000);
+        let error = Arc::new(StoreError::InvalidState("injected flush failure".to_string()));
+
+        complete_group_commit_batch_error(
+            vec![first, second],
+            error.clone(),
+            &sync_flush_stats,
+            &store_health_recorder,
+        );
+
+        let first_error = first_response.try_recv().unwrap().unwrap_err();
+        let second_error = second_response.try_recv().unwrap().unwrap_err();
+        assert!(Arc::ptr_eq(&first_error, &error));
+        assert!(Arc::ptr_eq(&second_error, &error));
+        assert!(!store_health_recorder.writeable());
+        assert_eq!(
+            store_health_recorder
+                .last_flush_error()
+                .as_ref()
+                .map(|error| error.kind),
+            Some(crate::store_error::StoreErrorKind::InvalidState)
+        );
     }
 
     #[test]
@@ -789,14 +930,14 @@ mod tests {
     async fn flush_and_commit_helpers_run_empty_queue_on_blocking_pool() {
         let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
 
-        assert_eq!(
+        assert!(matches!(
             flush_mapped_file_queue(mapped_file_queue.clone(), 0).await,
-            Some(FlushMappedFileQueueResult {
+            Ok(FlushMappedFileQueueResult {
                 flush_ok: true,
                 flushed_where: 0,
                 store_timestamp: 0,
             })
-        );
+        ));
         assert_eq!(
             commit_mapped_file_queue(mapped_file_queue, 0).await,
             Some(CommitMappedFileQueueResult {
@@ -877,19 +1018,39 @@ mod tests {
             shutdown_token: CancellationToken::new(),
             worker_group: None,
             sync_flush_stats: SyncFlushStats::default(),
+            store_health_recorder: health_recorder(),
+            forced_flush_error: Some(Arc::new(StoreError::mapped_file(MappedFileError::ReferenceUnavailable))),
         };
+        let store_health_recorder = service.store_health_recorder.clone();
+        let forced_error = service.forced_flush_error.as_ref().unwrap().clone();
         service.start(mapped_file_queue);
 
-        let (request, response) = GroupCommitRequest::new(1, 0);
-        assert!(service.put_request(request).await);
+        let (failed_request, failed_response) = GroupCommitRequest::new(1, 5_000);
+        assert!(service.put_request(failed_request).await);
+        let error = time::timeout(time::Duration::from_secs(1), failed_response)
+            .await
+            .expect("group commit worker should complete the failed waiter")
+            .expect("group commit worker should send a result")
+            .expect_err("unavailable mapped file must return a typed flush failure");
+
+        assert!(Arc::ptr_eq(&error, &forced_error));
+        assert!(!store_health_recorder.writeable());
+        assert_eq!(
+            store_health_recorder
+                .last_flush_error()
+                .as_ref()
+                .map(|error| error.kind),
+            Some(crate::store_error::StoreErrorKind::MappedFile)
+        );
+
+        let (pending_request, pending_response) = GroupCommitRequest::new(2, 0);
+        assert!(service.put_request(pending_request).await);
         service.shutdown_gracefully().await;
         assert!(service.worker_group.is_none());
-
-        let status = time::timeout(time::Duration::from_secs(1), response)
+        let _completion = time::timeout(time::Duration::from_secs(1), pending_response)
             .await
             .expect("shutdown should complete pending group commit request")
-            .expect("group commit worker should send a completion status");
-        assert_eq!(status, PutMessageStatus::FlushDiskTimeout);
+            .expect("group commit worker should send a completion result");
     }
 
     #[tokio::test]
@@ -906,6 +1067,7 @@ mod tests {
             notified: Arc::new(Notify::new()),
             shutdown_token: CancellationToken::new(),
             worker_group: None,
+            store_health_recorder: health_recorder(),
         };
 
         service.start(mapped_file_queue);

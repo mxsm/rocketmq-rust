@@ -38,26 +38,26 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
 
-#[cfg(feature = "otel-metrics")]
-use crate::config::ObservabilityConfig;
-use crate::metrics::noop_instruments::NopLongCounter;
-use crate::metrics::noop_instruments::NopLongHistogram;
-#[cfg(feature = "otel-metrics")]
-use crate::TelemetryGuard;
-use opentelemetry::metrics::Counter;
-use opentelemetry::metrics::Histogram;
-use opentelemetry::metrics::Meter;
-use opentelemetry::metrics::MeterProvider;
-use opentelemetry::metrics::UpDownCounter;
-use opentelemetry::KeyValue;
-use opentelemetry_sdk::metrics::SdkMeterProvider;
-use rocketmq_common::common::metrics::metrics_exporter_type::MetricsExporterType;
+use rocketmq_observability::config::MetricsExporter;
+#[cfg(feature = "metrics")]
+use rocketmq_observability::config::ObservabilityConfig;
+use rocketmq_observability::metrics::noop_instruments::NopLongCounter;
+use rocketmq_observability::metrics::noop_instruments::NopLongHistogram;
+use rocketmq_observability::metrics::owner_instruments::Counter;
+use rocketmq_observability::metrics::owner_instruments::Histogram;
+use rocketmq_observability::metrics::owner_instruments::KeyValue;
+use rocketmq_observability::metrics::owner_instruments::Meter;
+use rocketmq_observability::metrics::owner_instruments::MeterProvider;
+use rocketmq_observability::metrics::owner_instruments::SdkMeterProvider;
+use rocketmq_observability::metrics::owner_instruments::UpDownCounter;
+#[cfg(feature = "metrics")]
+use rocketmq_observability::TelemetryGuard;
 use tracing::error;
-#[cfg(feature = "otel-metrics")]
+#[cfg(feature = "metrics")]
 use tracing::info;
 use tracing::warn;
 
-use super::controller_constants::*;
+use rocketmq_observability::metrics::controller_constants::*;
 
 // ============================================================================
 // Constants
@@ -75,7 +75,7 @@ static LABEL_MAP: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
 
 const CONTROLLER_ROLE_LEADER: i64 = 3;
 
-#[cfg(not(feature = "otel-metrics"))]
+#[cfg(not(feature = "metrics"))]
 #[derive(Debug)]
 struct ControllerTelemetryGuard;
 
@@ -84,7 +84,7 @@ pub struct ControllerMetricsConfig {
     pub listen_addr: String,
     pub controller_type: String,
     pub node_id: String,
-    pub metrics_exporter_type: MetricsExporterType,
+    pub metrics_exporter_type: MetricsExporter,
     pub metric_logging_exporter_interval_in_mills: u64,
     pub metric_grpc_exporter_interval_in_mills: u64,
     pub metric_grpc_exporter_time_out_in_mills: u64,
@@ -103,7 +103,7 @@ impl Default for ControllerMetricsConfig {
             listen_addr: "0.0.0.0:9878".to_owned(),
             controller_type: "controller".to_owned(),
             node_id: "0".to_owned(),
-            metrics_exporter_type: MetricsExporterType::Disable,
+            metrics_exporter_type: MetricsExporter::Disable,
             metric_logging_exporter_interval_in_mills: 10_000,
             metric_grpc_exporter_interval_in_mills: 60_000,
             metric_grpc_exporter_time_out_in_mills: 3_000,
@@ -229,7 +229,7 @@ pub struct ControllerMetricsManager {
     _telemetry_guard: Option<ControllerTelemetryGuard>,
 }
 
-#[cfg(feature = "otel-metrics")]
+#[cfg(feature = "metrics")]
 type ControllerTelemetryGuard = TelemetryGuard;
 
 impl ControllerMetricsManager {
@@ -280,10 +280,10 @@ impl ControllerMetricsManager {
             return Self::create_noop_manager(config, active_broker_source);
         }
 
-        #[cfg(feature = "otel-metrics")]
+        #[cfg(feature = "metrics")]
         {
             let telemetry_config = Self::build_observability_config(&config, metrics_type);
-            let telemetry_guard = match crate::init_observability(&telemetry_config) {
+            let telemetry_guard = match rocketmq_observability::init_observability(&telemetry_config) {
                 Ok(guard) => guard,
                 Err(error) => {
                     error!(
@@ -300,7 +300,7 @@ impl ControllerMetricsManager {
             };
 
             let meter = meter_provider.meter(OPEN_TELEMETRY_METER_NAME);
-            let _ = crate::metrics::controller::init_global(&meter);
+            let _ = rocketmq_observability::metrics::controller::init_global(&meter);
 
             let manager = Self::init_metrics(
                 meter.clone(),
@@ -316,7 +316,7 @@ impl ControllerMetricsManager {
             manager
         }
 
-        #[cfg(not(feature = "otel-metrics"))]
+        #[cfg(not(feature = "metrics"))]
         {
             warn!("Controller metrics require the 'metrics' feature");
             Self::create_noop_manager(config, active_broker_source)
@@ -334,23 +334,23 @@ impl ControllerMetricsManager {
     }
 
     /// Check if metrics configuration is valid
-    fn check_config(_config: &ControllerMetricsConfig, metrics_type: MetricsExporterType) -> bool {
-        if !metrics_type.is_enable() {
+    fn check_config(_config: &ControllerMetricsConfig, metrics_type: MetricsExporter) -> bool {
+        if !metrics_type.is_enabled() {
             return false;
         }
 
         match metrics_type {
-            MetricsExporterType::OtlpGrpc => true,
-            MetricsExporterType::Prom => true,
-            MetricsExporterType::Log => true,
-            MetricsExporterType::Disable => false,
+            MetricsExporter::OtlpGrpc => true,
+            MetricsExporter::Prometheus => true,
+            MetricsExporter::Log => true,
+            MetricsExporter::Disable => false,
         }
     }
 
-    #[cfg(feature = "otel-metrics")]
+    #[cfg(feature = "metrics")]
     fn build_observability_config(
         config: &ControllerMetricsConfig,
-        metrics_type: MetricsExporterType,
+        metrics_type: MetricsExporter,
     ) -> ObservabilityConfig {
         let mut observability_config = ObservabilityConfig {
             enabled: true,
@@ -362,9 +362,9 @@ impl ControllerMetricsManager {
         };
 
         observability_config.metrics.enabled = true;
-        observability_config.metrics.exporter = metrics_type.into();
+        observability_config.metrics.exporter = metrics_type;
         observability_config.metrics.export_interval_millis = match metrics_type {
-            MetricsExporterType::Log => config.metric_logging_exporter_interval_in_mills,
+            MetricsExporter::Log => config.metric_logging_exporter_interval_in_mills,
             _ => config.metric_grpc_exporter_interval_in_mills,
         };
         observability_config.metrics.export_timeout_millis = config.metric_grpc_exporter_time_out_in_mills;
@@ -648,14 +648,14 @@ fn is_leader_role_transition(new_role: i64, old_role: i64) -> bool {
 
 #[inline]
 fn record_observability_election() {
-    #[cfg(feature = "otel-metrics")]
-    crate::metrics::controller::record_election_total(1);
+    #[cfg(feature = "metrics")]
+    rocketmq_observability::metrics::controller::record_election_total(1);
 }
 
 #[inline]
 fn record_observability_leader_change() {
-    #[cfg(feature = "otel-metrics")]
-    crate::metrics::controller::record_leader_changes_total(1);
+    #[cfg(feature = "metrics")]
+    rocketmq_observability::metrics::controller::record_leader_changes_total(1);
 }
 
 fn controller_storage_path(config: &ControllerMetricsConfig) -> PathBuf {
@@ -808,12 +808,12 @@ mod tests {
         assert_eq!(active_broker_count_from_snapshot(&snapshot), 6);
     }
 
-    #[cfg(feature = "otel-metrics")]
+    #[cfg(feature = "metrics")]
     #[test]
     fn maps_controller_config_to_observability_config() {
         let config = ControllerMetricsConfig {
             node_id: "7".to_owned(),
-            metrics_exporter_type: MetricsExporterType::OtlpGrpc,
+            metrics_exporter_type: MetricsExporter::OtlpGrpc,
             metrics_grpc_exporter_target: "http://127.0.0.1:4317".to_owned(),
             metrics_grpc_exporter_header: "tenant:rocketmq".to_owned(),
             metrics_label: "instance_id:controller-a".to_owned(),
@@ -821,7 +821,7 @@ mod tests {
         };
 
         let observability_config =
-            ControllerMetricsManager::build_observability_config(&config, MetricsExporterType::OtlpGrpc);
+            ControllerMetricsManager::build_observability_config(&config, MetricsExporter::OtlpGrpc);
 
         assert!(observability_config.enabled);
         assert!(observability_config.metrics.enabled);

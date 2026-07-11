@@ -932,35 +932,59 @@ impl ReplicasInfoManager {
     /// # Thread Safety
     ///
     /// This method is thread-safe and can be called concurrently.
+    /// Applies an event through the legacy infallible facade.
+    ///
+    /// New internal callers should use [`Self::try_apply_event`] so an event-type/payload mismatch
+    /// is not lost.
     pub fn apply_event(&self, event: &dyn EventMessage) {
+        if let Err(error) = self.try_apply_event(event) {
+            warn!(error = %error, "controller event rejected by legacy apply_event facade");
+        }
+    }
+
+    /// Applies an event and reports an event-type/payload mismatch as a typed error.
+    pub fn try_apply_event(&self, event: &dyn EventMessage) -> Result<()> {
         match event.get_event_type() {
             EventType::AlterSyncStateSet => {
-                if let Some(e) = event.as_any().downcast_ref::<AlterSyncStateSetEvent>() {
-                    self.handle_alter_sync_state_set(e);
-                }
+                let event = event
+                    .as_any()
+                    .downcast_ref::<AlterSyncStateSetEvent>()
+                    .ok_or_else(|| event_payload_mismatch(EventType::AlterSyncStateSet, "AlterSyncStateSetEvent"))?;
+                self.handle_alter_sync_state_set(event);
             }
             EventType::ApplyBrokerId => {
-                if let Some(e) = event.as_any().downcast_ref::<ApplyBrokerIdEvent>() {
-                    self.handle_apply_broker_id(e);
-                }
+                let event = event
+                    .as_any()
+                    .downcast_ref::<ApplyBrokerIdEvent>()
+                    .ok_or_else(|| event_payload_mismatch(EventType::ApplyBrokerId, "ApplyBrokerIdEvent"))?;
+                self.handle_apply_broker_id(event);
             }
             EventType::ElectMaster => {
-                if let Some(e) = event.as_any().downcast_ref::<ElectMasterEvent>() {
-                    self.handle_elect_master(e);
-                }
+                let event = event
+                    .as_any()
+                    .downcast_ref::<ElectMasterEvent>()
+                    .ok_or_else(|| event_payload_mismatch(EventType::ElectMaster, "ElectMasterEvent"))?;
+                self.handle_elect_master(event);
             }
             EventType::CleanBrokerData => {
-                if let Some(e) = event.as_any().downcast_ref::<CleanBrokerDataEvent>() {
-                    self.handle_clean_broker_data(e);
-                }
+                let event = event
+                    .as_any()
+                    .downcast_ref::<CleanBrokerDataEvent>()
+                    .ok_or_else(|| event_payload_mismatch(EventType::CleanBrokerData, "CleanBrokerDataEvent"))?;
+                self.handle_clean_broker_data(event);
             }
             EventType::UpdateBrokerAddress => {
-                if let Some(e) = event.as_any().downcast_ref::<UpdateBrokerAddressEvent>() {
-                    self.handle_update_broker_address(e);
-                }
+                let event = event
+                    .as_any()
+                    .downcast_ref::<UpdateBrokerAddressEvent>()
+                    .ok_or_else(|| {
+                        event_payload_mismatch(EventType::UpdateBrokerAddress, "UpdateBrokerAddressEvent")
+                    })?;
+                self.handle_update_broker_address(event);
             }
-            _ => {}
+            EventType::ReadEvent => {}
         }
+        Ok(())
     }
 
     /// Serialize the state machine to bytes
@@ -1227,6 +1251,12 @@ impl ReplicasInfoManager {
     }
 }
 
+fn event_payload_mismatch(event_type: EventType, expected: &'static str) -> ControllerError {
+    ControllerError::InvalidRequest(format!(
+        "event type {event_type} does not contain the expected {expected} payload"
+    ))
+}
+
 impl ElectPolicy for ReplicasInfoManager {
     fn elect(
         &self,
@@ -1248,11 +1278,33 @@ impl ElectPolicy for ReplicasInfoManager {
 mod tests {
     use super::*;
 
+    struct MismatchedEvent;
+
+    impl EventMessage for MismatchedEvent {
+        fn get_event_type(&self) -> EventType {
+            EventType::ApplyBrokerId
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
     #[test]
     fn test_replicas_info_manager_creation() {
         let config = ArcMut::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
         let manager = ReplicasInfoManager::new(config);
         assert_eq!(manager.replica_info_table.len(), 0);
         assert_eq!(manager.sync_state_set_info_table.len(), 0);
+
+        let error = manager
+            .try_apply_event(&MismatchedEvent)
+            .expect_err("mismatched event payload must not be ignored");
+
+        assert!(matches!(
+            error,
+            ControllerError::InvalidRequest(message)
+                if message.contains("ApplyBrokerId") && message.contains("ApplyBrokerIdEvent")
+        ));
     }
 }

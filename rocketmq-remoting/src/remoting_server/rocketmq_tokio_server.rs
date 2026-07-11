@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -23,6 +22,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
@@ -41,6 +41,7 @@ use tracing::warn;
 
 use crate::base::channel_event_listener::ChannelEventListener;
 use crate::base::connection_net_event::ConnectionNetEvent;
+use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::tokio_event::TokioEvent;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
@@ -370,12 +371,22 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             let shutdown_complete_tx = self.shutdown_complete_tx.clone();
             let conn_disconnect_notify = self.conn_disconnect_notify.clone();
             let event_tx_clone = event_tx.clone();
-            let connection_task_group = self.task_group.child("rocketmq.remoting.connection");
+            let connection_lease = match self.task_group.try_child_lease("rocketmq.remoting.connection") {
+                Ok(lease) => lease,
+                Err(error) => {
+                    warn!(%error, "Failed to register connection task group");
+                    drop(permit);
+                    continue;
+                }
+            };
+            let connection_task_group = connection_lease.group().clone();
             let handler_task_group = connection_task_group.clone();
+            let connection_shutdown_group = connection_task_group.clone();
 
             // Spawn dedicated task for this connection
             if let Err(error) =
                 connection_task_group.spawn("rocketmq.remoting.connection", TaskKind::Worker, async move {
+                    let _connection_lease = connection_lease;
                     let mut shutdown = Shutdown::new(notify_shutdown);
                     let connection = tokio::select! {
                         connection = tls_runtime.into_connection(socket, remote_addr) => connection,
@@ -390,7 +401,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                     };
 
                     // Create connection channel wrapper
-                    let channel_inner = match ChannelInner::try_new_with_task_group(
+                    let channel_inner = match ChannelInner::try_new_with_pending_requests_and_task_group(
                         connection,
                         cmd_handler.response_table.clone(),
                         handler_task_group.clone(),
@@ -444,7 +455,13 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                         .connection_handler_context
                         .channel_mut()
                         .channel_inner_mut()
-                        .close_with_report(Duration::from_secs(3))
+                        .close_with_report(
+                            connection_shutdown_group
+                                .shutdown_deadline()
+                                .map_or(Duration::from_secs(3), |deadline| {
+                                    deadline.remaining().min(Duration::from_secs(3))
+                                }),
+                        )
                         .await;
                     channel_report.log_if_unhealthy();
 
@@ -735,7 +752,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         request_processor,
         //shutdown: Shutdown::new(notify_shutdown.subscribe()),
         rpc_hooks,
-        response_table: ArcMut::new(HashMap::with_capacity(512)),
+        response_table: PendingRequestTable::with_capacity(512),
     };
     let mut listener = ConnectionListener {
         listener,
@@ -772,15 +789,20 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         tls_runtime,
         ..
     } = listener;
-    let tls_report = tls_runtime.shutdown_gracefully(Duration::from_secs(3)).await;
+    let deadline = task_group
+        .shutdown_deadline()
+        .unwrap_or_else(|| ShutdownDeadline::after(Duration::from_secs(30)));
+    let tls_report = tls_runtime
+        .shutdown_gracefully(deadline.remaining().min(Duration::from_secs(3)))
+        .await;
     if let Some(report) = tls_report.as_ref() {
         report.log_if_unhealthy();
     }
     drop(notify_shutdown);
     drop(shutdown_complete_tx);
 
-    let _ = shutdown_complete_rx.recv().await;
-    let mut report = task_group.shutdown(Duration::from_secs(30)).await;
+    let _ = tokio::time::timeout(deadline.remaining(), shutdown_complete_rx.recv()).await;
+    let mut report = task_group.shutdown_until(deadline).await;
     if let Some(tls_report) = tls_report {
         report.children.push(tls_report);
     }
@@ -1059,7 +1081,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_shutdown_report_includes_channel_send_task_child() {
+    async fn run_shutdown_report_is_healthy_after_dynamic_connection_child_prunes() {
         let context = RuntimeContext::from_current("remoting-server-channel-report-test");
         let service = context.service_context("remoting-server-channel-report");
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -1101,19 +1123,9 @@ mod tests {
         drop(client);
 
         assert!(report.is_healthy(), "{}", report.to_json());
-        let connection_report = report
-            .children
-            .iter()
-            .find(|child| child.name == "rocketmq.remoting.connection")
-            .expect("remoting report should include connection child group");
-        assert!(
-            connection_report
-                .children
-                .iter()
-                .any(|child| child.name == "rocketmq-remoting.channel"),
-            "{}",
-            report.to_json()
-        );
+        assert_eq!(report.leaked, 0, "{}", report.to_json());
+        assert_eq!(report.detached_still_running, 0, "{}", report.to_json());
+        assert!(report.remaining_tasks.is_empty(), "{}", report.to_json());
     }
 
     #[cfg(feature = "tls")]

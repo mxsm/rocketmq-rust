@@ -61,5 +61,9 @@ pub use crate::utils::util_all as UtilAll;
 pub mod common;
 pub mod error;
 pub mod log;
+/// Compatibility exports for runtime-neutral security contracts.
+pub mod security {
+    pub use rocketmq_security_api::*;
+}
 mod thread_pool;
 pub mod utils;

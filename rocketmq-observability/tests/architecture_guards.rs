@@ -137,6 +137,33 @@ fn business_crates_do_not_add_direct_opentelemetry_usage() {
 }
 
 #[test]
+fn observability_dependency_closure_excludes_common_and_transport_crates() {
+    let workspace_root = workspace_root();
+    let manifest = fs::read_to_string(workspace_root.join("rocketmq-observability/Cargo.toml"))
+        .expect("observability manifest should be readable");
+    for forbidden in ["rocketmq-common", "rocketmq-remoting", "rocketmq-rust"] {
+        assert!(
+            !manifest.lines().any(|line| line.trim_start().starts_with(forbidden)),
+            "observability manifest must not depend on {forbidden}"
+        );
+    }
+
+    let mut forbidden_sources = BTreeSet::new();
+    for file in workspace_src_files(&workspace_root, &["rocketmq-observability"]) {
+        let source =
+            fs::read_to_string(&file).unwrap_or_else(|error| panic!("failed to read {}: {error}", file.display()));
+        if source.contains("rocketmq_common::") || source.contains("rocketmq_remoting::") {
+            forbidden_sources.insert(relative_slash_path(&workspace_root, &file));
+        }
+    }
+    assert!(
+        forbidden_sources.is_empty(),
+        "observability source closure must use model or owner adapters:\n{}",
+        format_paths(&forbidden_sources)
+    );
+}
+
+#[test]
 fn subscriber_installation_sites_are_tracked() {
     let workspace_root = workspace_root();
     let mut allowed_files = path_set(SUBSCRIBER_INSTALL_ALLOWLIST);

@@ -141,7 +141,9 @@ async fn test_snapshot_install() {
     let apply_result =
         replicas_info_manager.apply_broker_id("test-cluster", "broker-a", "127.0.0.1:10911", 1, "check-code");
     for event in apply_result.events() {
-        replicas_info_manager.apply_event(event.as_ref());
+        replicas_info_manager
+            .try_apply_event(event.as_ref())
+            .expect("generated broker id event should apply");
     }
 
     let snapshot = source.build_snapshot().await.unwrap();

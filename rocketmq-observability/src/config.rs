@@ -14,9 +14,6 @@
 
 use std::collections::HashMap;
 
-use rocketmq_common::common::metrics::LogExporterType;
-use rocketmq_common::common::metrics::MetricsExporterType;
-use rocketmq_common::common::metrics::TraceExporterType;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -150,6 +147,12 @@ pub enum MetricsExporter {
     OtlpGrpc,
     Prometheus,
     Log,
+}
+
+impl MetricsExporter {
+    pub const fn is_enabled(self) -> bool {
+        !matches!(self, Self::Disable)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -347,37 +350,6 @@ impl Default for PrometheusConfig {
     }
 }
 
-impl From<MetricsExporterType> for MetricsExporter {
-    fn from(value: MetricsExporterType) -> Self {
-        match value {
-            MetricsExporterType::Disable => Self::Disable,
-            MetricsExporterType::OtlpGrpc => Self::OtlpGrpc,
-            MetricsExporterType::Prom => Self::Prometheus,
-            MetricsExporterType::Log => Self::Log,
-        }
-    }
-}
-
-impl From<TraceExporterType> for TraceExporter {
-    fn from(value: TraceExporterType) -> Self {
-        match value {
-            TraceExporterType::Disable => Self::Disable,
-            TraceExporterType::OtlpGrpc => Self::OtlpGrpc,
-            TraceExporterType::Log => Self::Log,
-        }
-    }
-}
-
-impl From<LogExporterType> for LogsExporter {
-    fn from(value: LogExporterType) -> Self {
-        match value {
-            LogExporterType::Disable => Self::Disable,
-            LogExporterType::OtlpGrpc => Self::OtlpGrpc,
-            LogExporterType::Log => Self::Log,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,39 +446,5 @@ mod tests {
         assert!(config.logging.enabled);
         assert!(config.logging.console.enabled);
         assert!(!config.logging.file.enabled);
-    }
-
-    #[test]
-    fn maps_existing_metrics_exporter_type() {
-        assert_eq!(
-            MetricsExporter::from(MetricsExporterType::Disable),
-            MetricsExporter::Disable
-        );
-        assert_eq!(
-            MetricsExporter::from(MetricsExporterType::OtlpGrpc),
-            MetricsExporter::OtlpGrpc
-        );
-        assert_eq!(
-            MetricsExporter::from(MetricsExporterType::Prom),
-            MetricsExporter::Prometheus
-        );
-        assert_eq!(MetricsExporter::from(MetricsExporterType::Log), MetricsExporter::Log);
-    }
-
-    #[test]
-    fn maps_existing_trace_exporter_type() {
-        assert_eq!(TraceExporter::from(TraceExporterType::Disable), TraceExporter::Disable);
-        assert_eq!(
-            TraceExporter::from(TraceExporterType::OtlpGrpc),
-            TraceExporter::OtlpGrpc
-        );
-        assert_eq!(TraceExporter::from(TraceExporterType::Log), TraceExporter::Log);
-    }
-
-    #[test]
-    fn maps_existing_log_exporter_type() {
-        assert_eq!(LogsExporter::from(LogExporterType::Disable), LogsExporter::Disable);
-        assert_eq!(LogsExporter::from(LogExporterType::OtlpGrpc), LogsExporter::OtlpGrpc);
-        assert_eq!(LogsExporter::from(LogExporterType::Log), LogsExporter::Log);
     }
 }

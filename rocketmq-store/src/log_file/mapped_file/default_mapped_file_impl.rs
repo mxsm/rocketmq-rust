@@ -62,6 +62,8 @@ use crate::config::flush_disk_type::FlushDiskType;
 use crate::log_file::mapped_file::reference_resource::ReferenceResource;
 use crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceCounter;
 use crate::log_file::mapped_file::MappedFile;
+use crate::log_file::mapped_file::MappedFileError;
+use crate::log_file::mapped_file::MappedFileResult;
 use crate::platform::preallocate_file;
 use crate::platform::FilePreallocateOutcome;
 use crate::utils::ffi::get_page_size;
@@ -472,6 +474,40 @@ impl DefaultMappedFile {
         let file_size = self.file_size as usize;
         position < file_size && position.checked_add(size).is_some_and(|end| end <= file_size)
     }
+
+    fn try_flush_with<F>(&self, flush_least_pages: i32, flush: F) -> MappedFileResult<i32>
+    where
+        F: FnOnce(&Self, i32, i32) -> io::Result<()>,
+    {
+        if !self.is_able_to_flush(flush_least_pages) {
+            return Ok(self.get_flushed_position());
+        }
+        if !MappedFile::hold(self) {
+            return Err(MappedFileError::ReferenceUnavailable);
+        }
+
+        let value = self.get_read_position();
+        self.mapped_byte_buffer_access_count_since_last_swap
+            .fetch_add(1, Ordering::AcqRel);
+        let should_flush = !matches!(self.flush_strategy, FlushStrategy::Never);
+        if !should_flush {
+            MappedFile::release(self);
+            return Ok(self.get_flushed_position());
+        }
+
+        let flush_started = Instant::now();
+        let flushed_position = self.flushed_position.load(Ordering::Acquire);
+        let result = flush(self, flushed_position, value);
+        MappedFile::release(self);
+        result.map_err(MappedFileError::FlushFailed)?;
+
+        self.flushed_position.store(value, Ordering::Release);
+        self.last_flush_time.store(current_millis(), Ordering::Relaxed);
+        if let Some(metrics) = &self.metrics {
+            metrics.record_flush(flush_started.elapsed());
+        }
+        Ok(value)
+    }
 }
 
 #[allow(unused_variables)]
@@ -745,59 +781,26 @@ impl MappedFile for DefaultMappedFile {
     }
 
     fn flush(&self, flush_least_pages: i32) -> i32 {
-        if self.is_able_to_flush(flush_least_pages) {
-            if MappedFile::hold(self) {
-                let value = self.get_read_position();
-                self.mapped_byte_buffer_access_count_since_last_swap
-                    .fetch_add(1, Ordering::AcqRel);
-                use crate::log_file::mapped_file::FlushStrategy;
-                let should_flush = match &self.flush_strategy {
-                    FlushStrategy::Sync => true,
-                    FlushStrategy::Async => flush_least_pages >= 0,
-                    FlushStrategy::EveryNPages(_) => true,
-                    FlushStrategy::Periodic(_) => true,
-                    FlushStrategy::Hybrid { .. } => true,
-                    FlushStrategy::Never => false,
-                };
-
-                if should_flush {
-                    let flush_start = std::time::Instant::now();
-
-                    let flushed_pos = self.flushed_position.load(Ordering::Acquire);
-                    let flush_size = value - flushed_pos;
-
-                    let flush_result = if flush_size > 0 && flush_size < (self.file_size as i32) / 2 {
-                        self.flush_range(flushed_pos as usize, value as usize)
-                    } else {
-                        if let Err(e) = self.get_mapped_file().flush() {
-                            error!("Error occurred when force data to disk: {:?}", e);
-                            0
-                        } else {
-                            value - flushed_pos
-                        }
-                    };
-
-                    if flush_result > 0 {
-                        self.last_flush_time.store(current_millis(), Ordering::Relaxed);
-
-                        if let Some(metrics) = &self.metrics {
-                            let flush_duration = flush_start.elapsed();
-                            metrics.record_flush(flush_duration);
-                        }
-                    }
-                }
-
-                MappedFile::release(self);
-                self.flushed_position.store(value, Ordering::Release);
-            } else {
-                warn!(
-                    "in flush, hold failed, flush offset = {}",
-                    self.flushed_position.load(Ordering::Relaxed)
-                );
-                self.flushed_position.store(self.get_read_position(), Ordering::Release);
+        match self.try_flush(flush_least_pages) {
+            Ok(position) => position,
+            Err(error) => {
+                error!(error = %error, "failed to flush mapped file");
+                self.get_flushed_position()
             }
         }
-        self.get_flushed_position()
+    }
+
+    fn try_flush(&self, flush_least_pages: i32) -> MappedFileResult<i32> {
+        self.try_flush_with(flush_least_pages, |mapped_file, flushed_position, value| {
+            let flush_size = value - flushed_position;
+            if flush_size > 0 && flush_size < (mapped_file.file_size as i32) / 2 {
+                mapped_file
+                    .get_mapped_file()
+                    .flush_range(flushed_position as usize, flush_size as usize)
+            } else {
+                mapped_file.get_mapped_file().flush()
+            }
+        })
     }
 
     #[inline]
@@ -1840,7 +1843,6 @@ mod tests {
     use crate::base::compaction_append_msg_callback::CompactionAppendMsgCallback;
     use crate::base::memory_lock_manager::MemoryLockCategory;
     use crate::base::memory_lock_manager::MemoryLockManager;
-
     fn create_test_file() -> (TempDir, DefaultMappedFile) {
         let temp_dir = TempDir::new().unwrap();
         // Use numeric filename format expected by DefaultMappedFile
@@ -2066,6 +2068,21 @@ mod tests {
             mapped_file.get_bytes_readable_checked(0, 15).unwrap(),
             Bytes::from_static(b"hello transient")
         );
+    }
+
+    #[test]
+    fn failed_flush_keeps_the_last_durable_position_and_preserves_io_cause() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        assert!(mapped_file.append_message_bytes(b"not-yet-durable"));
+        let durable_before = mapped_file.get_flushed_position();
+
+        let error = mapped_file
+            .try_flush_with(0, |_, _, _| Err(io::Error::from_raw_os_error(5)))
+            .expect_err("injected fsync failure must be returned");
+
+        assert!(matches!(error, MappedFileError::FlushFailed(source) if source.raw_os_error() == Some(5)));
+        assert_eq!(mapped_file.get_flushed_position(), durable_before);
+        assert!(mapped_file.get_wrote_position() > durable_before);
     }
 
     #[test]

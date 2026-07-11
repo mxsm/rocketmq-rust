@@ -23,9 +23,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_property::MessageProperties;
-#[cfg(feature = "otel-traces")]
-use rocketmq_common::common::message::MessageTrait;
 
 #[cfg(feature = "otel-traces")]
 static CONTEXT_PROPAGATION_ENABLED: AtomicBool = AtomicBool::new(true);
@@ -76,19 +73,6 @@ impl MessagePropertiesLike for HashMap<CheetahString, CheetahString> {
     }
 }
 
-impl MessagePropertiesLike for MessageProperties {
-    fn get_property(&self, key: &str) -> Option<&str> {
-        self.as_map().get(key).map(|value| value.as_str())
-    }
-
-    fn put_property(&mut self, key: &str, value: String) {
-        self.as_map_mut().insert(
-            CheetahString::from_string(key.to_owned()),
-            CheetahString::from_string(value),
-        );
-    }
-}
-
 #[cfg(feature = "otel-traces")]
 pub struct MessagePropertyInjector<'a, T> {
     inner: &'a mut T,
@@ -112,19 +96,19 @@ where
 }
 
 #[cfg(feature = "otel-traces")]
-pub struct MessagePropertyExtractor<'a, T> {
+pub struct MessagePropertyExtractor<'a, T: ?Sized> {
     inner: &'a T,
 }
 
 #[cfg(feature = "otel-traces")]
-impl<'a, T> MessagePropertyExtractor<'a, T> {
+impl<'a, T: ?Sized> MessagePropertyExtractor<'a, T> {
     pub fn new(inner: &'a T) -> Self {
         Self { inner }
     }
 }
 
 #[cfg(feature = "otel-traces")]
-impl<T> opentelemetry::propagation::Extractor for MessagePropertyExtractor<'_, T>
+impl<T: ?Sized> opentelemetry::propagation::Extractor for MessagePropertyExtractor<'_, T>
 where
     T: MessagePropertiesLike,
 {
@@ -153,23 +137,10 @@ where
 }
 
 #[cfg(feature = "otel-traces")]
-pub fn inject_current_context_into_message<T>(message: &mut T)
-where
-    T: MessageTrait,
-{
-    if !is_context_propagation_enabled() {
-        return;
-    }
-
-    let mut properties = message.get_properties().clone();
-    inject_current_context(&mut properties);
-    message.set_properties(properties);
-}
-
 #[cfg(feature = "otel-traces")]
 pub fn extract_context<T>(properties: &T) -> opentelemetry::Context
 where
-    T: MessagePropertiesLike,
+    T: MessagePropertiesLike + ?Sized,
 {
     if !is_context_propagation_enabled() {
         return opentelemetry::Context::new();
@@ -183,7 +154,7 @@ where
 #[cfg(feature = "otel-traces")]
 pub fn set_span_parent_from_properties<T>(span: &tracing::Span, properties: &T)
 where
-    T: MessagePropertiesLike,
+    T: MessagePropertiesLike + ?Sized,
 {
     if !is_context_propagation_enabled() {
         return;
@@ -196,13 +167,6 @@ where
 }
 
 #[cfg(feature = "otel-traces")]
-pub fn set_span_parent_from_message<T>(span: &tracing::Span, message: &T)
-where
-    T: MessageTrait,
-{
-    set_span_parent_from_properties(span, message.get_properties());
-}
-
 #[cfg(feature = "otel-traces")]
 pub fn set_current_span_parent_from_properties<T>(properties: &T)
 where
@@ -212,13 +176,6 @@ where
 }
 
 #[cfg(feature = "otel-traces")]
-pub fn set_current_span_parent_from_message<T>(message: &T)
-where
-    T: MessageTrait,
-{
-    set_current_span_parent_from_properties(message.get_properties());
-}
-
 #[cfg(feature = "otel-traces")]
 pub fn add_current_span_event(name: &'static str, attributes: Vec<opentelemetry::KeyValue>) {
     use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -254,15 +211,6 @@ mod tests {
             properties.get_property(TRACEPARENT),
             Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
         );
-    }
-
-    #[test]
-    fn message_properties_like_reads_and_writes_standard_headers() {
-        let mut properties = MessageProperties::new();
-
-        properties.put_property(TRACESTATE, "rojo=00f067aa0ba902b7".to_owned());
-
-        assert_eq!(properties.get_property(TRACESTATE), Some("rojo=00f067aa0ba902b7"));
     }
 
     #[cfg(feature = "otel-traces")]

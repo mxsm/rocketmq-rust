@@ -19,6 +19,32 @@ async fn task_group_concurrency_model_covers_spawn_shutdown_races() {
     run_task_group_concurrency_model(group).await;
 }
 
+#[tokio::test]
+async fn dynamic_child_churn_prunes_inactive_groups_without_retaining_history() {
+    const CHILDREN: usize = 100_000;
+
+    let context = RuntimeContext::from_current("task-group-dynamic-child-churn");
+    let group = context.root_group().child("dynamic-child-parent");
+
+    for child_index in 0..CHILDREN {
+        let child = group
+            .try_child_lease(format!("dynamic-child-{child_index}"))
+            .expect("dynamic child should be created while the parent is open");
+        assert_eq!(child.parent_id(), Some(group.id()));
+        drop(child);
+    }
+
+    let stats = group.child_stats();
+    assert_eq!(stats.active, 0, "inactive dynamic children must be pruned");
+    assert_eq!(stats.created, CHILDREN);
+    assert_eq!(stats.pruned, CHILDREN);
+    assert_eq!(group.child_count(), 0);
+
+    let report = group.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert!(report.children.is_empty(), "{}", report.to_json());
+}
+
 async fn run_task_group_concurrency_model(group: TaskGroup) {
     deep_child_creation_does_not_overflow(group.child("deep-child-id"));
     child_creation_racing_with_shutdown_rejects_late_children(group.child("child-race")).await;

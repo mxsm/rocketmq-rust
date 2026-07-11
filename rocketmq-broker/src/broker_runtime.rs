@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
 use std::net::SocketAddr;
 #[cfg(feature = "rocksdb_store")]
 use std::path::Path;
@@ -23,6 +24,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -60,12 +62,14 @@ use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::base::message_store::MessageStoreShutdownReport;
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::ha::ha_service::HAService;
@@ -75,6 +79,7 @@ use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
 use rocketmq_store::message_store::GenericMessageStore;
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_store::store_error::StoreError;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
@@ -167,6 +172,76 @@ type FasterServerProcessor =
 
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const BROKER_OUTER_API_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const BROKER_BASIC_SERVICE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(35);
+
+async fn await_shutdown_deadline<T, F>(deadline: ShutdownDeadline, future: F) -> Result<T, Duration>
+where
+    F: Future<Output = T>,
+{
+    let started = Instant::now();
+    tokio::time::timeout(deadline.remaining(), future)
+        .await
+        .map_err(|_| started.elapsed())
+}
+
+#[derive(Debug)]
+enum BrokerBlockingShutdownError {
+    MissingServiceContext,
+    Spawn(rocketmq_runtime::RuntimeError),
+    Execution(rocketmq_runtime::RuntimeError),
+    ResultChannelClosed,
+    TimedOut,
+}
+
+impl BrokerBlockingShutdownError {
+    fn is_timed_out(&self) -> bool {
+        matches!(self, Self::TimedOut)
+    }
+
+    fn detail(&self) -> String {
+        match self {
+            Self::MissingServiceContext => "missing shutdown service context".to_string(),
+            Self::Spawn(error) => format!("failed to spawn owned shutdown task: {error}"),
+            Self::Execution(error) => format!("blocking shutdown operation failed: {error}"),
+            Self::ResultChannelClosed => "owned shutdown task closed without a result".to_string(),
+            Self::TimedOut => "timed out".to_string(),
+        }
+    }
+}
+
+async fn run_shutdown_blocking_operation<T, F>(
+    service_context: &ServiceContext,
+    deadline: ShutdownDeadline,
+    name: &'static str,
+    operation: F,
+) -> Result<T, BrokerBlockingShutdownError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let blocking = service_context.blocking().clone();
+    let (result_tx, result_rx) = oneshot::channel();
+    service_context
+        .spawn_service(format!("{name}.owner"), async move {
+            let result = blocking.spawn_io(name, operation).await;
+            let _ = result_tx.send(result);
+        })
+        .map_err(BrokerBlockingShutdownError::Spawn)?;
+
+    match tokio::time::timeout(deadline.remaining(), result_rx).await {
+        Ok(Ok(Ok(value))) => Ok(value),
+        Ok(Ok(Err(error))) => Err(BrokerBlockingShutdownError::Execution(error)),
+        Ok(Err(_closed)) => Err(BrokerBlockingShutdownError::ResultChannelClosed),
+        Err(_elapsed) => Err(BrokerBlockingShutdownError::TimedOut),
+    }
+}
+
+enum MessageStoreShutdownOutcome {
+    Absent,
+    Completed(MessageStoreShutdownReport),
+    Failed(StoreError),
+    TimedOut,
+}
 
 fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
     AuthConfig {
@@ -236,7 +311,20 @@ fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_o
     config.service_instance_id = broker_config.observability_service_instance_id.to_string();
     config.resource_attributes = parse_observability_key_values(&broker_config.observability_resource_attributes);
     config.metrics.enabled = metrics_enabled;
-    config.metrics.exporter = broker_config.metrics_exporter_type.into();
+    config.metrics.exporter = match broker_config.metrics_exporter_type {
+        rocketmq_common::common::metrics::MetricsExporterType::Disable => {
+            rocketmq_observability::config::MetricsExporter::Disable
+        }
+        rocketmq_common::common::metrics::MetricsExporterType::OtlpGrpc => {
+            rocketmq_observability::config::MetricsExporter::OtlpGrpc
+        }
+        rocketmq_common::common::metrics::MetricsExporterType::Prom => {
+            rocketmq_observability::config::MetricsExporter::Prometheus
+        }
+        rocketmq_common::common::metrics::MetricsExporterType::Log => {
+            rocketmq_observability::config::MetricsExporter::Log
+        }
+    };
     config.metrics.export_interval_millis = broker_config.metrics_export_interval_millis;
     config.metrics.export_timeout_millis = broker_config.otlp_exporter_timeout_millis;
     config.metrics.cardinality_limit = broker_config.metrics_cardinality_limit;
@@ -250,14 +338,30 @@ fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_o
     config.prometheus.port = broker_config.metrics_prom_exporter_port;
     config.prometheus.path = broker_config.metrics_prom_exporter_path.to_string();
     config.traces.enabled = traces_enabled;
-    config.traces.exporter = broker_config.trace_exporter_type.into();
+    config.traces.exporter = match broker_config.trace_exporter_type {
+        rocketmq_common::common::metrics::TraceExporterType::Disable => {
+            rocketmq_observability::config::TraceExporter::Disable
+        }
+        rocketmq_common::common::metrics::TraceExporterType::OtlpGrpc => {
+            rocketmq_observability::config::TraceExporter::OtlpGrpc
+        }
+        rocketmq_common::common::metrics::TraceExporterType::Log => rocketmq_observability::config::TraceExporter::Log,
+    };
     config.traces.sample_ratio = broker_config.trace_sample_ratio;
     config.traces.propagate_context = broker_config.trace_propagate_context;
     config.traces.record_message_id = broker_config.trace_record_message_id;
     config.traces.record_message_keys = broker_config.trace_record_message_keys;
     config.traces.record_body_size = broker_config.trace_record_body_size;
     config.logs.enabled = logs_enabled;
-    config.logs.exporter = broker_config.log_exporter_type.into();
+    config.logs.exporter = match broker_config.log_exporter_type {
+        rocketmq_common::common::metrics::LogExporterType::Disable => {
+            rocketmq_observability::config::LogsExporter::Disable
+        }
+        rocketmq_common::common::metrics::LogExporterType::OtlpGrpc => {
+            rocketmq_observability::config::LogsExporter::OtlpGrpc
+        }
+        rocketmq_common::common::metrics::LogExporterType::Log => rocketmq_observability::config::LogsExporter::Log,
+    };
     config
 }
 
@@ -479,6 +583,53 @@ pub(crate) struct BrokerBasicServiceShutdownReport {
     pub(crate) topic_route: BrokerShutdownComponentReport,
     pub(crate) consumer_offset: BrokerShutdownComponentReport,
     pub(crate) subscription_group: BrokerShutdownComponentReport,
+    pub(crate) deadline: BrokerShutdownComponentReport,
+    pub(crate) unfinished_components: Vec<&'static str>,
+}
+
+#[derive(Clone)]
+struct BrokerShutdownProgress {
+    unfinished: Arc<StdMutex<Vec<&'static str>>>,
+    message_store_report: Arc<StdMutex<Option<BrokerShutdownComponentReport>>>,
+}
+
+impl BrokerShutdownProgress {
+    fn new() -> Self {
+        Self {
+            unfinished: Arc::new(StdMutex::new(
+                BrokerBasicServiceShutdownReport::COMPONENT_NAMES[..15].to_vec(),
+            )),
+            message_store_report: Arc::new(StdMutex::new(None)),
+        }
+    }
+
+    fn complete(&self, name: &'static str) {
+        self.unfinished
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|component| *component != name);
+    }
+
+    fn unfinished(&self) -> Vec<&'static str> {
+        self.unfinished
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn record_message_store_report(&self, report: BrokerShutdownComponentReport) {
+        *self
+            .message_store_report
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(report);
+    }
+
+    fn message_store_report(&self) -> Option<BrokerShutdownComponentReport> {
+        self.message_store_report
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -488,6 +639,7 @@ pub(crate) struct BrokerShutdownComponentReport {
     pub(crate) healthy: bool,
     pub(crate) timed_out: bool,
     pub(crate) elapsed: Duration,
+    pub(crate) error_kind: Option<&'static str>,
     pub(crate) detail: Option<String>,
 }
 
@@ -505,6 +657,7 @@ impl BrokerShutdownComponentReport {
             healthy: true,
             timed_out: false,
             elapsed: Duration::ZERO,
+            error_kind: None,
             detail: None,
         }
     }
@@ -516,6 +669,7 @@ impl BrokerShutdownComponentReport {
             healthy: true,
             timed_out: false,
             elapsed,
+            error_kind: None,
             detail: None,
         }
     }
@@ -527,6 +681,7 @@ impl BrokerShutdownComponentReport {
             healthy: true,
             timed_out: false,
             elapsed,
+            error_kind: None,
             detail: Some(detail.into()),
         }
     }
@@ -538,6 +693,7 @@ impl BrokerShutdownComponentReport {
             healthy: false,
             timed_out: false,
             elapsed,
+            error_kind: None,
             detail: Some(detail.into()),
         }
     }
@@ -549,6 +705,7 @@ impl BrokerShutdownComponentReport {
             healthy: false,
             timed_out: true,
             elapsed,
+            error_kind: None,
             detail: Some("timed out".to_string()),
         }
     }
@@ -580,8 +737,48 @@ impl BrokerShutdownComponentReport {
     }
 }
 
+fn record_message_store_shutdown_outcome(
+    shutdown_report: &mut BrokerBasicServiceShutdownReport,
+    progress: &BrokerShutdownProgress,
+    outcome: MessageStoreShutdownOutcome,
+    elapsed: Duration,
+) {
+    match outcome {
+        MessageStoreShutdownOutcome::Absent => {
+            shutdown_report.message_store = BrokerShutdownComponentReport::skipped("message_store");
+            progress.complete("message_store");
+        }
+        MessageStoreShutdownOutcome::Completed(store_report) => {
+            shutdown_report.message_store = BrokerShutdownComponentReport::completed_with_detail(
+                "message_store",
+                elapsed,
+                format!("{store_report:?}"),
+            );
+            progress.complete("message_store");
+        }
+        MessageStoreShutdownOutcome::Failed(error) => {
+            let error_kind = error.kind().as_str();
+            warn!(error_kind, error = %error, "Failed to shutdown message store durably");
+            shutdown_report.message_store = BrokerShutdownComponentReport {
+                name: "message_store",
+                present: true,
+                healthy: false,
+                timed_out: false,
+                elapsed,
+                error_kind: Some(error_kind),
+                detail: Some(error.to_string()),
+            };
+        }
+        MessageStoreShutdownOutcome::TimedOut => {
+            warn!("Timed out shutting down message store durably");
+            shutdown_report.message_store = BrokerShutdownComponentReport::timed_out("message_store", elapsed);
+        }
+    }
+    progress.record_message_store_report(shutdown_report.message_store.clone());
+}
+
 impl BrokerBasicServiceShutdownReport {
-    const COMPONENT_NAMES: [&'static str; 15] = [
+    const COMPONENT_NAMES: [&'static str; 16] = [
         "remoting",
         "request_processor",
         "broker_outer_api",
@@ -597,12 +794,15 @@ impl BrokerBasicServiceShutdownReport {
         "topic_route",
         "consumer_offset",
         "subscription_group",
+        "shutdown_deadline",
     ];
 
     pub(crate) fn is_healthy(&self) -> bool {
-        self.remoting
-            .as_ref()
-            .is_none_or(BrokerRemotingServerShutdownReport::is_healthy)
+        self.unfinished_components.is_empty()
+            && self
+                .remoting
+                .as_ref()
+                .is_none_or(BrokerRemotingServerShutdownReport::is_healthy)
             && self.request_processor.as_ref().is_none_or(ShutdownReport::is_healthy)
             && self.component_reports().into_iter().all(|component| component.healthy)
     }
@@ -633,6 +833,11 @@ impl BrokerBasicServiceShutdownReport {
                 .filter(|component| component.present && !component.healthy)
                 .map(|component| component.name),
         );
+        for component in &self.unfinished_components {
+            if !names.contains(component) {
+                names.push(component);
+            }
+        }
         names
     }
 
@@ -676,6 +881,7 @@ impl BrokerBasicServiceShutdownReport {
             &self.topic_route,
             &self.consumer_offset,
             &self.subscription_group,
+            &self.deadline,
         ]
     }
 }
@@ -966,17 +1172,82 @@ impl BrokerRuntime {
     }
 
     pub(crate) async fn shutdown_basic_service_with_report(&mut self) -> BrokerBasicServiceShutdownReport {
+        self.shutdown_basic_service_until(ShutdownDeadline::after(BROKER_BASIC_SERVICE_SHUTDOWN_TIMEOUT))
+            .await
+    }
+
+    pub(crate) async fn shutdown_basic_service_until(
+        &mut self,
+        deadline: ShutdownDeadline,
+    ) -> BrokerBasicServiceShutdownReport {
+        let progress = BrokerShutdownProgress::new();
+        match await_shutdown_deadline(deadline, self.shutdown_basic_service_inner(deadline, progress.clone())).await {
+            Ok(report) => report,
+            Err(elapsed) => {
+                warn!(
+                    elapsed_ms = elapsed.as_millis(),
+                    "Broker shutdown exhausted its absolute deadline"
+                );
+                BrokerBasicServiceShutdownReport {
+                    message_store: progress
+                        .message_store_report()
+                        .unwrap_or_else(|| BrokerShutdownComponentReport::skipped("message_store")),
+                    deadline: BrokerShutdownComponentReport::timed_out("shutdown_deadline", elapsed),
+                    unfinished_components: progress.unfinished(),
+                    ..Default::default()
+                }
+            }
+        }
+    }
+
+    async fn shutdown_basic_service_inner(
+        &mut self,
+        deadline: ShutdownDeadline,
+        progress: BrokerShutdownProgress,
+    ) -> BrokerBasicServiceShutdownReport {
         self.inner.shutdown.store(true, Ordering::SeqCst);
         let mut shutdown_report = BrokerBasicServiceShutdownReport::default();
 
         self.unregister_broker().await;
 
-        if let Some(hook) = self.shutdown_hook.as_ref() {
-            hook.before_shutdown();
-        }
+        shutdown_report.remoting = self.shutdown_remoting_servers(deadline).await;
+        progress.complete("remoting");
+        shutdown_report.request_processor = self.shutdown_request_processor_tasks(deadline).await;
+        progress.complete("request_processor");
 
-        shutdown_report.remoting = self.shutdown_remoting_servers().await;
-        shutdown_report.request_processor = self.shutdown_request_processor_tasks().await;
+        // Shutdown uses one absolute deadline and this fixed phase order:
+        // reject/drain requests -> flush/replicate the store -> stop background work -> telemetry.
+        // Store durability therefore cannot be starved by a slow background component.
+        let started = Instant::now();
+        let message_store_outcome = if let Some(message_store) = self.inner.message_store.as_mut() {
+            match await_shutdown_deadline(deadline, message_store.shutdown_gracefully()).await {
+                Ok(Ok(report)) => MessageStoreShutdownOutcome::Completed(report),
+                Ok(Err(error)) => MessageStoreShutdownOutcome::Failed(error),
+                Err(_elapsed) => MessageStoreShutdownOutcome::TimedOut,
+            }
+        } else {
+            MessageStoreShutdownOutcome::Absent
+        };
+        record_message_store_shutdown_outcome(
+            &mut shutdown_report,
+            &progress,
+            message_store_outcome,
+            started.elapsed(),
+        );
+
+        if let Some(hook) = self.shutdown_hook.clone() {
+            let hook_result = if let Some(service_context) = self.inner.service_context.as_ref() {
+                run_shutdown_blocking_operation(service_context, deadline, "broker.shutdown-hook", move || {
+                    hook.before_shutdown();
+                })
+                .await
+            } else {
+                Err(BrokerBlockingShutdownError::MissingServiceContext)
+            };
+            if let Err(error) = hook_result {
+                warn!(error = %error.detail(), "Broker shutdown hook did not complete cleanly");
+            }
+        }
 
         let started = Instant::now();
         if let Some(auth_runtime) = self.inner.auth_runtime.take() {
@@ -990,26 +1261,10 @@ impl BrokerRuntime {
         } else {
             shutdown_report.auth = BrokerShutdownComponentReport::skipped("auth");
         }
-
-        {
-            let started = Instant::now();
-            if let Some(guard) = self.inner.observability_guard.take() {
-                let telemetry_report = guard.shutdown();
-                if !telemetry_report.is_healthy() {
-                    warn!(
-                        report = %telemetry_report.to_json(),
-                        "Failed to shutdown observability runtime cleanly"
-                    );
-                }
-                shutdown_report.observability =
-                    BrokerShutdownComponentReport::from_telemetry_shutdown_report(&telemetry_report, started.elapsed());
-            } else {
-                shutdown_report.observability = BrokerShutdownComponentReport::skipped("observability");
-            }
-        }
+        progress.complete("auth");
         let started = Instant::now();
         let scheduled_report = self
-            .shutdown_scheduled_tasks_with_timeout(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
+            .shutdown_scheduled_tasks_with_timeout(deadline.remaining().min(SCHEDULED_TASK_SHUTDOWN_TIMEOUT))
             .await;
         shutdown_report.scheduled_tasks = if scheduled_report.is_healthy() {
             BrokerShutdownComponentReport::completed("scheduled_tasks", started.elapsed())
@@ -1027,6 +1282,7 @@ impl BrokerRuntime {
                 ),
             )
         };
+        progress.complete("scheduled_tasks");
 
         if let Some(broker_stats_manager) = self.inner.broker_stats_manager.as_ref() {
             broker_stats_manager.shutdown().await;
@@ -1043,6 +1299,7 @@ impl BrokerRuntime {
         } else {
             BrokerShutdownComponentReport::skipped("pull_request_hold")
         };
+        progress.complete("pull_request_hold");
 
         let pop_started = Instant::now();
         let mut pop_services_present = false;
@@ -1077,6 +1334,7 @@ impl BrokerRuntime {
         } else {
             BrokerShutdownComponentReport::skipped("pop_services")
         };
+        progress.complete("pop_services");
         self.consumer_ids_change_listener.shutdown();
         if let Some(topic_queue_mapping_clean_service) = self.inner.topic_queue_mapping_clean_service.as_ref() {
             topic_queue_mapping_clean_service.shutdown().await;
@@ -1095,17 +1353,64 @@ impl BrokerRuntime {
             fast_failure_report.as_ref(),
             started.elapsed(),
         );
+        progress.complete("fast_failure");
 
-        if let Some(consumer_filter_manager) = self.inner.consumer_filter_manager.as_ref() {
-            consumer_filter_manager.persist();
+        if let Some(consumer_filter_manager) = self.inner.consumer_filter_manager.take() {
+            let result = if let Some(service_context) = self.inner.service_context.as_ref() {
+                run_shutdown_blocking_operation(
+                    service_context,
+                    deadline,
+                    "broker.consumer-filter.persist",
+                    move || consumer_filter_manager.persist(),
+                )
+                .await
+            } else {
+                Err(BrokerBlockingShutdownError::MissingServiceContext)
+            };
+            if let Err(error) = result {
+                warn!(error = %error.detail(), "Failed to persist consumer filters during shutdown");
+            }
         }
-        if let Some(consumer_order_info_manager) = self.inner.consumer_order_info_manager.as_ref() {
-            consumer_order_info_manager.persist();
+        if let Some(consumer_order_info_manager) = self.inner.consumer_order_info_manager.take() {
+            let result = if let Some(service_context) = self.inner.service_context.as_ref() {
+                run_shutdown_blocking_operation(
+                    service_context,
+                    deadline,
+                    "broker.consumer-order-info.persist",
+                    move || consumer_order_info_manager.persist(),
+                )
+                .await
+            } else {
+                Err(BrokerBlockingShutdownError::MissingServiceContext)
+            };
+            if let Err(error) = result {
+                warn!(error = %error.detail(), "Failed to persist consumer order info during shutdown");
+            }
         }
 
-        if let Some(schedule_message_service) = self.inner.schedule_message_service.as_mut() {
-            schedule_message_service.persist();
-            schedule_message_service.shutdown().await;
+        if let Some(mut schedule_message_service) = self.inner.schedule_message_service.take() {
+            let persist_service = schedule_message_service.clone();
+            let persist_result = if let Some(service_context) = self.inner.service_context.as_ref() {
+                run_shutdown_blocking_operation(
+                    service_context,
+                    deadline,
+                    "broker.schedule-message.persist",
+                    move || {
+                        persist_service.persist();
+                        persist_service.stop();
+                    },
+                )
+                .await
+            } else {
+                Err(BrokerBlockingShutdownError::MissingServiceContext)
+            };
+            match persist_result {
+                Ok(()) => schedule_message_service.shutdown().await,
+                Err(error) => {
+                    warn!(error = %error.detail(), "Failed to persist schedule message state during shutdown");
+                    schedule_message_service.shutdown_without_persist().await;
+                }
+            }
         }
         if let Some(transactional_message_check_service) = self.inner.transactional_message_check_service.as_mut() {
             transaction_services_present = true;
@@ -1124,6 +1429,7 @@ impl BrokerRuntime {
         } else {
             BrokerShutdownComponentReport::skipped("transaction_services")
         };
+        progress.complete("transaction_services");
         if let Some(escape_bridge) = self.inner.escape_bridge.as_mut() {
             escape_bridge.shutdown();
         }
@@ -1138,6 +1444,7 @@ impl BrokerRuntime {
         } else {
             BrokerShutdownComponentReport::skipped("topic_route")
         };
+        progress.complete("topic_route");
 
         if let Some(broker_pre_online_service) = self.inner.broker_pre_online_service.as_mut() {
             broker_pre_online_service.shutdown().await;
@@ -1152,18 +1459,56 @@ impl BrokerRuntime {
         }
 
         if let Some(mut topic_config_manager) = self.inner.topic_config_manager.take() {
-            topic_config_manager.persist();
-            topic_config_manager.stop();
+            let result = if let Some(service_context) = self.inner.service_context.as_ref() {
+                run_shutdown_blocking_operation(
+                    service_context,
+                    deadline,
+                    "broker.topic-config.persist-stop",
+                    move || {
+                        topic_config_manager.persist();
+                        topic_config_manager.stop();
+                    },
+                )
+                .await
+            } else {
+                Err(BrokerBlockingShutdownError::MissingServiceContext)
+            };
+            if let Err(error) = result {
+                warn!(error = %error.detail(), "Failed to persist topic configuration during shutdown");
+            }
         }
 
         let started = Instant::now();
         if let Some(mut subscription_group_manager) = self.inner.subscription_group_manager.take() {
-            subscription_group_manager.persist();
-            subscription_group_manager.stop();
-            shutdown_report.subscription_group =
-                BrokerShutdownComponentReport::completed("subscription_group", started.elapsed());
+            let result = if let Some(service_context) = self.inner.service_context.as_ref() {
+                run_shutdown_blocking_operation(
+                    service_context,
+                    deadline,
+                    "broker.subscription-group.persist-stop",
+                    move || {
+                        subscription_group_manager.persist();
+                        subscription_group_manager.stop();
+                    },
+                )
+                .await
+            } else {
+                Err(BrokerBlockingShutdownError::MissingServiceContext)
+            };
+            shutdown_report.subscription_group = match result {
+                Ok(()) => {
+                    progress.complete("subscription_group");
+                    BrokerShutdownComponentReport::completed("subscription_group", started.elapsed())
+                }
+                Err(error) if error.is_timed_out() => {
+                    BrokerShutdownComponentReport::timed_out("subscription_group", started.elapsed())
+                }
+                Err(error) => {
+                    BrokerShutdownComponentReport::unhealthy("subscription_group", started.elapsed(), error.detail())
+                }
+            };
         } else {
             shutdown_report.subscription_group = BrokerShutdownComponentReport::skipped("subscription_group");
+            progress.complete("subscription_group");
         }
 
         let started = Instant::now();
@@ -1173,33 +1518,38 @@ impl BrokerRuntime {
             None,
         );
         std::mem::swap(&mut self.inner.consumer_offset_manager, &mut consumer_offset_manager);
-        consumer_offset_manager.persist();
-        consumer_offset_manager.stop();
-        shutdown_report.consumer_offset =
-            BrokerShutdownComponentReport::completed("consumer_offset", started.elapsed());
-
-        let started = Instant::now();
-        if let Some(message_store) = self.inner.message_store.as_mut() {
-            if tokio::time::timeout(Duration::from_secs(15), message_store.shutdown())
-                .await
-                .is_err()
-            {
-                warn!("Timed out shutting down message store");
-                shutdown_report.message_store =
-                    BrokerShutdownComponentReport::timed_out("message_store", started.elapsed());
-            } else {
-                shutdown_report.message_store =
-                    BrokerShutdownComponentReport::completed("message_store", started.elapsed());
-            }
+        let result = if let Some(service_context) = self.inner.service_context.as_ref() {
+            run_shutdown_blocking_operation(
+                service_context,
+                deadline,
+                "broker.consumer-offset.persist-stop",
+                move || {
+                    consumer_offset_manager.persist();
+                    consumer_offset_manager.stop();
+                },
+            )
+            .await
         } else {
-            shutdown_report.message_store = BrokerShutdownComponentReport::skipped("message_store");
-        }
+            Err(BrokerBlockingShutdownError::MissingServiceContext)
+        };
+        shutdown_report.consumer_offset = match result {
+            Ok(()) => {
+                progress.complete("consumer_offset");
+                BrokerShutdownComponentReport::completed("consumer_offset", started.elapsed())
+            }
+            Err(error) if error.is_timed_out() => {
+                BrokerShutdownComponentReport::timed_out("consumer_offset", started.elapsed())
+            }
+            Err(error) => {
+                BrokerShutdownComponentReport::unhealthy("consumer_offset", started.elapsed(), error.detail())
+            }
+        };
 
         let started = Instant::now();
         let broker_outer_api_report = self
             .inner
             .broker_outer_api
-            .shutdown_with_report(BROKER_OUTER_API_SHUTDOWN_TIMEOUT)
+            .shutdown_with_report(deadline.remaining().min(BROKER_OUTER_API_SHUTDOWN_TIMEOUT))
             .await;
         shutdown_report.broker_outer_api = if broker_outer_api_report.is_healthy() {
             BrokerShutdownComponentReport::completed("broker_outer_api", started.elapsed())
@@ -1210,6 +1560,7 @@ impl BrokerRuntime {
                 format!("{broker_outer_api_report:?}"),
             )
         };
+        progress.complete("broker_outer_api");
 
         let started = Instant::now();
         shutdown_report.client_housekeeping =
@@ -1223,7 +1574,41 @@ impl BrokerRuntime {
             } else {
                 BrokerShutdownComponentReport::skipped("client_housekeeping")
             };
+        progress.complete("client_housekeeping");
 
+        let started = Instant::now();
+        if let Some(guard) = self.inner.observability_guard.take() {
+            let telemetry_result = if let Some(service_context) = self.inner.service_context.as_ref() {
+                run_shutdown_blocking_operation(service_context, deadline, "broker.telemetry-shutdown", move || {
+                    guard.shutdown()
+                })
+                .await
+            } else {
+                Err(BrokerBlockingShutdownError::MissingServiceContext)
+            };
+            shutdown_report.observability = match telemetry_result {
+                Ok(telemetry_report) => {
+                    if !telemetry_report.is_healthy() {
+                        warn!(
+                            report = %telemetry_report.to_json(),
+                            "Failed to shutdown observability runtime cleanly"
+                        );
+                    }
+                    BrokerShutdownComponentReport::from_telemetry_shutdown_report(&telemetry_report, started.elapsed())
+                }
+                Err(error) if error.is_timed_out() => {
+                    BrokerShutdownComponentReport::timed_out("observability", started.elapsed())
+                }
+                Err(error) => {
+                    BrokerShutdownComponentReport::unhealthy("observability", started.elapsed(), error.detail())
+                }
+            };
+        } else {
+            shutdown_report.observability = BrokerShutdownComponentReport::skipped("observability");
+        }
+        progress.complete("observability");
+
+        shutdown_report.unfinished_components = progress.unfinished();
         shutdown_report
     }
 
@@ -1246,15 +1631,16 @@ impl BrokerRuntime {
         report
     }
 
-    pub(crate) async fn shutdown_remoting_servers(&mut self) -> Option<BrokerRemotingServerShutdownReport> {
+    pub(crate) async fn shutdown_remoting_servers(
+        &mut self,
+        deadline: ShutdownDeadline,
+    ) -> Option<BrokerRemotingServerShutdownReport> {
         let task_group = self.remoting_server_task_group.take()?;
 
-        let report = task_group.shutdown(Duration::from_secs(35)).await;
-        let server_reports = Self::collect_remoting_server_reports(
-            std::mem::take(&mut self.remoting_server_report_receivers),
-            Duration::from_secs(1),
-        )
-        .await;
+        let report = task_group.shutdown_until(deadline).await;
+        let server_reports =
+            Self::collect_remoting_server_reports(std::mem::take(&mut self.remoting_server_report_receivers), deadline)
+                .await;
         let shutdown_report = BrokerRemotingServerShutdownReport {
             task_group: report,
             server_reports,
@@ -1270,10 +1656,11 @@ impl BrokerRuntime {
 
     async fn collect_remoting_server_reports(
         receivers: Vec<BrokerRemotingServerReportReceiver>,
-        timeout: Duration,
+        deadline: ShutdownDeadline,
     ) -> Vec<BrokerRemotingServerReport> {
         let mut reports = Vec::with_capacity(receivers.len());
         for receiver in receivers {
+            let timeout = deadline.remaining().min(Duration::from_secs(1));
             let report = match tokio::time::timeout(timeout, receiver.receiver).await {
                 Ok(Ok(report)) => report,
                 Ok(Err(_closed)) => {
@@ -1357,10 +1744,10 @@ impl BrokerRuntime {
         self.inner.broker_task_group_or_current(name, no_runtime_warning)
     }
 
-    async fn shutdown_request_processor_tasks(&mut self) -> Option<ShutdownReport> {
+    async fn shutdown_request_processor_tasks(&mut self, deadline: ShutdownDeadline) -> Option<ShutdownReport> {
         let task_group = self.request_processor_task_group.take()?;
 
-        let report = task_group.shutdown(Duration::from_secs(35)).await;
+        let report = task_group.shutdown_until(deadline).await;
         if !report.is_healthy() {
             warn!(
                 report = %report.to_json(),
@@ -4773,6 +5160,7 @@ mod tests {
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::sync::Condvar;
     use std::time::Duration;
 
     use crate::controller::replicas_manager::RegisterState;
@@ -5148,6 +5536,7 @@ mod tests {
                 "topic_route",
                 "consumer_offset",
                 "subscription_group",
+                "shutdown_deadline",
             ]
         );
     }
@@ -5172,6 +5561,149 @@ mod tests {
             vec!["message_store", "fast_failure"]
         );
         assert_eq!(report.timed_out_component_names(), vec!["message_store"]);
+    }
+
+    #[tokio::test]
+    async fn expired_broker_shutdown_deadline_does_not_poll_forever() {
+        let deadline = ShutdownDeadline::at(Instant::now());
+
+        let result = await_shutdown_deadline(deadline, std::future::pending::<()>()).await;
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn broker_shutdown_timeout_report_preserves_unfinished_components() {
+        let progress = BrokerShutdownProgress::new();
+        progress.complete("remoting");
+        progress.complete("request_processor");
+        let report = BrokerBasicServiceShutdownReport {
+            deadline: BrokerShutdownComponentReport::timed_out("shutdown_deadline", Duration::from_millis(1)),
+            unfinished_components: progress.unfinished(),
+            ..Default::default()
+        };
+
+        assert!(!report.is_healthy());
+        assert!(!report.unhealthy_component_names().contains(&"remoting"));
+        assert!(!report.unhealthy_component_names().contains(&"request_processor"));
+        assert!(report.unhealthy_component_names().contains(&"message_store"));
+        assert!(report.unhealthy_component_names().contains(&"observability"));
+        assert_eq!(report.timed_out_component_names(), vec!["shutdown_deadline"]);
+    }
+
+    #[test]
+    fn broker_store_shutdown_failure_preserves_typed_cause_and_remains_unfinished() {
+        let progress = BrokerShutdownProgress::new();
+        let mut report = BrokerBasicServiceShutdownReport::default();
+        let error = rocketmq_store::store_error::StoreError::Storage("injected final flush failure".to_string());
+
+        record_message_store_shutdown_outcome(
+            &mut report,
+            &progress,
+            MessageStoreShutdownOutcome::Failed(error),
+            Duration::from_millis(3),
+        );
+
+        assert!(!report.message_store.healthy);
+        assert_eq!(report.message_store.error_kind, Some("storage"));
+        assert!(report
+            .message_store
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("injected final flush failure")));
+        assert!(progress.unfinished().contains(&"message_store"));
+        let recorded = progress
+            .message_store_report()
+            .expect("store failure should remain available if a later phase reaches the deadline");
+        assert_eq!(recorded.error_kind, Some("storage"));
+        assert!(recorded
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("injected final flush failure")));
+        assert!(!report.is_healthy());
+    }
+
+    #[tokio::test]
+    async fn timed_out_shutdown_blocking_operation_remains_owned_until_completion() {
+        let context = RuntimeContext::from_current("broker-blocking-shutdown-test");
+        let service = context.service_context("broker-blocking-shutdown-service");
+        let release = Arc::new((StdMutex::new(false), Condvar::new()));
+        let operation_release = Arc::clone(&release);
+
+        let result = run_shutdown_blocking_operation(
+            &service,
+            ShutdownDeadline::after(Duration::from_millis(10)),
+            "broker.test-blocking-shutdown",
+            move || {
+                let (released, signal) = &*operation_release;
+                let mut released = released.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                while !*released {
+                    released = signal.wait(released).unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(BrokerBlockingShutdownError::TimedOut)));
+        assert_eq!(service.blocking().blocking_still_running(), 1);
+        assert!(service.task_group().task_count() > 0);
+
+        let (released, signal) = &*release;
+        *released.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        signal.notify_all();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while service.blocking().blocking_still_running() != 0 || service.task_group().task_count() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("owned shutdown blocking task should finish after release");
+    }
+
+    #[tokio::test]
+    async fn blocking_shutdown_hook_cannot_extend_the_absolute_deadline() {
+        struct BlockingHook {
+            release: Arc<(StdMutex<bool>, Condvar)>,
+        }
+
+        impl crate::broker::broker_hook::ShutdownHook for BlockingHook {
+            fn before_shutdown(&self) {
+                let (released, signal) = &*self.release;
+                let mut released = released.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                while !*released {
+                    released = signal.wait(released).unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+            }
+        }
+
+        let context = RuntimeContext::from_current("broker-blocking-hook-test");
+        let service = context.service_context("broker-blocking-hook-service");
+        let mut runtime = BrokerRuntime::new_with_service_context(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+            service,
+        );
+        let release = Arc::new((StdMutex::new(false), Condvar::new()));
+        runtime.shutdown_hook = Some(Arc::new(BlockingHook {
+            release: Arc::clone(&release),
+        }));
+        let release_after_test = Arc::clone(&release);
+        let release_thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            let (released, signal) = &*release_after_test;
+            *released.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+            signal.notify_all();
+        });
+
+        let started = Instant::now();
+        let report = runtime
+            .shutdown_basic_service_until(ShutdownDeadline::after(Duration::from_millis(20)))
+            .await;
+
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert!(report.deadline.timed_out);
+        release_thread.join().expect("release blocking shutdown hook");
+        let _ = context.shutdown_tasks(Duration::from_secs(1)).await;
     }
 
     #[test]

@@ -23,11 +23,11 @@ pub mod store;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-
 use crate::config::TracesConfig;
 use crate::propagation::MessagePropertiesLike;
+
+const PROPERTY_MESSAGE_ID: &str = "UNIQ_KEY";
+const PROPERTY_MESSAGE_KEYS: &str = "KEYS";
 
 static RECORD_MESSAGE_ID: AtomicBool = AtomicBool::new(false);
 static RECORD_MESSAGE_KEYS: AtomicBool = AtomicBool::new(false);
@@ -54,42 +54,27 @@ pub fn message_span_recording_config() -> MessageSpanRecordingConfig {
     }
 }
 
-pub fn record_current_message_attributes<T>(message: &T)
-where
-    T: MessageTrait,
-{
-    record_message_attributes(&tracing::Span::current(), message);
-}
-
-pub fn record_message_attributes<T>(span: &tracing::Span, message: &T)
-where
-    T: MessageTrait,
-{
-    let body_size = message.get_body().map(|body| body.len());
-    record_message_properties(span, message.get_properties(), body_size);
-}
-
 pub fn record_current_message_properties<T>(properties: &T, body_size: Option<usize>)
 where
-    T: MessagePropertiesLike,
+    T: MessagePropertiesLike + ?Sized,
 {
     record_message_properties(&tracing::Span::current(), properties, body_size);
 }
 
 pub fn record_message_properties<T>(span: &tracing::Span, properties: &T, body_size: Option<usize>)
 where
-    T: MessagePropertiesLike,
+    T: MessagePropertiesLike + ?Sized,
 {
     let config = message_span_recording_config();
 
     if config.record_message_id {
-        if let Some(message_id) = properties.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX) {
+        if let Some(message_id) = properties.get_property(PROPERTY_MESSAGE_ID) {
             span.record(crate::semantic::trace::MESSAGING_MESSAGE_ID, message_id);
         }
     }
 
     if config.record_message_keys {
-        if let Some(message_keys) = properties.get_property(MessageConst::PROPERTY_KEYS) {
+        if let Some(message_keys) = properties.get_property(PROPERTY_MESSAGE_KEYS) {
             span.record(crate::semantic::trace::MESSAGING_ROCKETMQ_MESSAGE_KEYS, message_keys);
         }
     }

@@ -19,6 +19,7 @@ use crate::context::RuntimeContext;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
+use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_report::ShutdownReport;
 use crate::task_group::TaskGroupLifecycleState;
 
@@ -80,7 +81,9 @@ impl RuntimeOwner {
     }
 
     pub async fn shutdown_tasks(&self) -> ShutdownReport {
-        self.context.shutdown_tasks(self.config.shutdown_timeout).await
+        self.context
+            .shutdown_tasks_until(ShutdownDeadline::after(self.config.shutdown_timeout))
+            .await
     }
 
     pub fn shutdown_runtime_blocking(self) -> RuntimeResult<ShutdownReport> {
@@ -105,10 +108,11 @@ impl RuntimeOwner {
             return Err(RuntimeError::InsideTokioRuntime("shutdown_runtime_blocking"));
         }
 
+        let deadline = ShutdownDeadline::after(timeout);
         let runtime = self.runtime.take().expect("runtime owner must still own the runtime");
-        let report = runtime.block_on(self.context.shutdown_tasks(timeout));
+        let report = runtime.block_on(self.context.shutdown_tasks_until(deadline));
         report.log_if_unhealthy();
-        runtime.shutdown_timeout(timeout);
+        runtime.shutdown_timeout(deadline.remaining());
         Ok(report)
     }
 }

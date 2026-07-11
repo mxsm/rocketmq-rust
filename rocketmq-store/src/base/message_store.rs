@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -44,6 +45,7 @@ use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::consume_queue::mapped_file_queue::FlushProgress;
 use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
@@ -56,12 +58,15 @@ use crate::queue::ArcConsumeQueue;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
+use crate::store_error::StoreErrorKind;
 use crate::timer::timer_message_store::TimerMessageStore;
 
 type AsyncResult<T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send>>;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreHealthSnapshot {
+    pub writeable: bool,
+    pub last_flush_error: Option<StoreHealthError>,
     pub os_page_cache_busy: bool,
     pub transient_store_pool_deficient: bool,
     pub sync_flush: SyncFlushRuntimeInfo,
@@ -69,6 +74,79 @@ pub struct StoreHealthSnapshot {
     pub shutdown: bool,
     pub ha_pending_request_count: u64,
     pub ha_pending_oldest_wait_millis: u64,
+}
+
+impl Default for StoreHealthSnapshot {
+    fn default() -> Self {
+        Self {
+            writeable: true,
+            last_flush_error: None,
+            os_page_cache_busy: false,
+            transient_store_pool_deficient: false,
+            sync_flush: SyncFlushRuntimeInfo::default(),
+            dispatch_behind_bytes: 0,
+            shutdown: false,
+            ha_pending_request_count: 0,
+            ha_pending_oldest_wait_millis: 0,
+        }
+    }
+}
+
+/// Typed, cloneable projection of the most recent canonical flush failure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoreHealthError {
+    pub kind: StoreErrorKind,
+    pub detail: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct StoreHealthRecorder {
+    running_flags: Arc<RunningFlags>,
+    last_flush_error: Arc<StdMutex<Option<StoreHealthError>>>,
+}
+
+impl StoreHealthRecorder {
+    pub(crate) fn new(running_flags: Arc<RunningFlags>) -> Self {
+        Self {
+            running_flags,
+            last_flush_error: Arc::new(StdMutex::new(None)),
+        }
+    }
+
+    pub(crate) fn record_flush_failure(&self, error: &StoreError) {
+        self.running_flags.get_and_make_not_writeable();
+        *self
+            .last_flush_error
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(StoreHealthError::from(error));
+    }
+
+    pub(crate) fn writeable(&self) -> bool {
+        self.running_flags.is_writeable()
+    }
+
+    pub(crate) fn last_flush_error(&self) -> Option<StoreHealthError> {
+        self.last_flush_error
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// Result of an orderly message-store shutdown.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MessageStoreShutdownReport {
+    /// Progress from the canonical final commit-log flush, when the store reached that phase.
+    pub final_flush: Option<FlushProgress>,
+}
+
+impl From<&StoreError> for StoreHealthError {
+    fn from(error: &StoreError) -> Self {
+        Self {
+            kind: error.kind(),
+            detail: error.to_string(),
+        }
+    }
 }
 
 #[trait_variant::make(MessageStore: Send)]
@@ -84,7 +162,15 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Initialize this message store.
     async fn init(&mut self) -> Result<(), StoreError>;
 
-    /// Shutdown this message store.
+    /// Shut down this message store and report the canonical final flush progress.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed storage failure when the final durable flush or another shutdown phase
+    /// fails.
+    async fn shutdown_gracefully(&mut self) -> Result<MessageStoreShutdownReport, StoreError>;
+
+    /// Shut down this message store through the legacy unit-returning compatibility adapter.
     async fn shutdown(&mut self);
 
     /// Destroy this message store.
@@ -368,6 +454,9 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Flush the message store to persist all data.
     fn flush(&self) -> i64;
 
+    /// Flush the message store without discarding the typed failure cause.
+    fn try_flush(&self) -> Result<FlushProgress, StoreError>;
+
     /// Get the current flushed offset.
     fn get_flushed_where(&self) -> i64;
 
@@ -390,6 +479,8 @@ pub trait MessageStoreInner: Sync + 'static {
     fn health_snapshot(&self) -> StoreHealthSnapshot {
         let ha_runtime_info = self.get_ha_runtime_info();
         StoreHealthSnapshot {
+            writeable: self.get_running_flags().is_writeable(),
+            last_flush_error: None,
             os_page_cache_busy: self.is_os_page_cache_busy(),
             transient_store_pool_deficient: self.is_transient_store_pool_deficient(),
             sync_flush: self.sync_flush_runtime_info(),

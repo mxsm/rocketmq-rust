@@ -12,51 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
+//! Compatibility path for the canonical pull status.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PullStatus {
-    /// Founded
-    #[default]
-    Found,
-    /// No new message can be pulled
-    NoNewMsg,
-    /// Filtering results do not match
-    NoMatchedMsg,
-    /// Illegal offset, may be too big or too small
-    OffsetIllegal,
-}
-
-impl From<i32> for PullStatus {
-    fn from(i: i32) -> Self {
-        match i {
-            0 => PullStatus::Found,
-            1 => PullStatus::NoNewMsg,
-            2 => PullStatus::NoMatchedMsg,
-            3 => PullStatus::OffsetIllegal,
-            _ => PullStatus::Found,
-        }
-    }
-}
-
-impl From<PullStatus> for i32 {
-    fn from(p: PullStatus) -> Self {
-        match p {
-            PullStatus::Found => 0,
-            PullStatus::NoNewMsg => 1,
-            PullStatus::NoMatchedMsg => 2,
-            PullStatus::OffsetIllegal => 3,
-        }
-    }
-}
-
-impl Display for PullStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PullStatus::Found => write!(f, "FOUND"),
-            PullStatus::NoNewMsg => write!(f, "NO_NEW_MSG"),
-            PullStatus::NoMatchedMsg => write!(f, "NO_MATCHED_MSG"),
-            PullStatus::OffsetIllegal => write!(f, "OFFSET_ILLEGAL"),
-        }
-    }
-}
+pub use rocketmq_model::result::PullStatus;

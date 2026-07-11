@@ -419,6 +419,15 @@ pub trait MappedFile {
     /// The number of pages flushed as an `i32`.
     fn flush(&self, flush_least_pages: i32) -> i32;
 
+    /// Persist eligible bytes and return the last durable position.
+    ///
+    /// The default implementation preserves compatibility for mapped-file implementations that
+    /// cannot yet expose a typed flush error. Implementations with an I/O boundary should
+    /// override this method and must not advance their durable position on failure.
+    fn try_flush(&self, flush_least_pages: i32) -> MappedFileResult<i32> {
+        Ok(self.flush(flush_least_pages))
+    }
+
     /// Commits the data to the mapped file.
     ///
     /// This method ensures that the changes made to the mapped file are committed to storage,

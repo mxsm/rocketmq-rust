@@ -2350,6 +2350,7 @@ dependencies = [
  "rocketmq-observability",
  "rocketmq-remoting",
  "rocketmq-runtime",
+ "rocketmq-security-api",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2374,6 +2375,7 @@ dependencies = [
  "rocketmq-auth",
  "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-model",
  "rocketmq-observability",
  "rocketmq-remoting",
  "rocketmq-runtime",
@@ -2415,8 +2417,10 @@ dependencies = [
  "regex",
  "reqwest",
  "rocketmq-error",
+ "rocketmq-model",
  "rocketmq-runtime",
  "rocketmq-rust",
+ "rocketmq-security-api",
  "serde",
  "serde_json",
  "tempfile",
@@ -2485,14 +2489,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-model"
+version = "1.0.0"
+dependencies = [
+ "cheetah-string",
+ "md-5 0.10.6",
+ "rocketmq-error",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "rocketmq-observability"
 version = "1.0.0"
 dependencies = [
  "anyhow",
  "cheetah-string",
  "dashmap",
- "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-model",
  "rocketmq-runtime",
  "serde",
  "serde_json",
@@ -2571,6 +2587,14 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "rocketmq-security-api"
+version = "1.0.0"
+dependencies = [
+ "cheetah-string",
+ "thiserror",
 ]
 
 [[package]]

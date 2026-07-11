@@ -37,26 +37,27 @@ use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::time::Duration;
 
-use opentelemetry::metrics::Counter;
-use opentelemetry::metrics::Histogram;
-use opentelemetry::metrics::Meter;
-use opentelemetry::metrics::MeterProvider;
-use opentelemetry::KeyValue;
-use opentelemetry_sdk::metrics::SdkMeterProvider;
-use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
-use rocketmq_common::common::metrics::metrics_exporter_type::MetricsExporterType;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_model::topic::is_system_topic;
+use rocketmq_model::topic::TopicMessageType;
+use rocketmq_model::topic::DLQ_GROUP_TOPIC_PREFIX;
+use rocketmq_model::topic::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_model::version::RocketMqVersion;
 use tracing::warn;
 
-use super::auth::AuthMetricsSnapshot;
-use super::broker::BrokerMetrics;
-use super::broker_constants::BrokerMetricsConstant;
-use super::labels::LabelGuard;
-use super::noop_instruments::NopLongCounter;
-use super::noop_instruments::NopLongHistogram;
-use crate::sampling::SamplingGate;
+use rocketmq_observability::config::MetricsExporter;
+use rocketmq_observability::metrics::auth::AuthMetricsSnapshot;
+use rocketmq_observability::metrics::broker::BrokerMetrics;
+use rocketmq_observability::metrics::broker_constants::BrokerMetricsConstant;
+use rocketmq_observability::metrics::labels::LabelGuard;
+use rocketmq_observability::metrics::noop_instruments::NopLongCounter;
+use rocketmq_observability::metrics::noop_instruments::NopLongHistogram;
+use rocketmq_observability::metrics::owner_instruments::Counter;
+use rocketmq_observability::metrics::owner_instruments::Histogram;
+use rocketmq_observability::metrics::owner_instruments::KeyValue;
+use rocketmq_observability::metrics::owner_instruments::Meter;
+use rocketmq_observability::metrics::owner_instruments::MeterProvider;
+use rocketmq_observability::metrics::owner_instruments::SdkMeterProvider;
+use rocketmq_observability::sampling::SamplingGate;
 
 // ============================================================================
 // Constants
@@ -1096,7 +1097,7 @@ pub fn is_retry_or_dlq_topic(topic: &str) -> bool {
     if topic.is_empty() {
         return false;
     }
-    topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) || topic.starts_with(mix_all::DLQ_GROUP_TOPIC_PREFIX)
+    topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) || topic.starts_with(DLQ_GROUP_TOPIC_PREFIX)
 }
 
 /// Check if consumer group is a system group
@@ -1115,7 +1116,7 @@ pub fn is_system_group(group: &str) -> bool {
 
 /// Check if topic/group combination is system
 pub fn is_system(topic: &str, group: &str) -> bool {
-    TopicValidator::is_system_topic(topic) || is_system_group(group)
+    is_system_topic(topic) || is_system_group(group)
 }
 
 // ============================================================================
@@ -1125,7 +1126,7 @@ pub fn is_system(topic: &str, group: &str) -> bool {
 /// Configuration for metrics exporter
 #[derive(Debug, Clone)]
 pub struct MetricsConfig {
-    pub exporter_type: MetricsExporterType,
+    pub exporter_type: MetricsExporter,
     pub grpc_exporter_target: Option<String>,
     pub grpc_exporter_header: Option<String>,
     pub grpc_exporter_timeout_mills: u64,
@@ -1141,7 +1142,7 @@ pub struct MetricsConfig {
 impl Default for MetricsConfig {
     fn default() -> Self {
         Self {
-            exporter_type: MetricsExporterType::Disable,
+            exporter_type: MetricsExporter::Disable,
             grpc_exporter_target: None,
             grpc_exporter_header: None,
             grpc_exporter_timeout_mills: 3000,
@@ -1159,15 +1160,15 @@ impl Default for MetricsConfig {
 impl MetricsConfig {
     /// Check if metrics configuration is valid
     pub fn check_config(&self) -> bool {
-        if !self.exporter_type.is_enable() {
+        if !self.exporter_type.is_enabled() {
             return false;
         }
 
         match self.exporter_type {
-            MetricsExporterType::OtlpGrpc => self.grpc_exporter_target.is_some(),
-            MetricsExporterType::Prom => true,
-            MetricsExporterType::Log => true,
-            MetricsExporterType::Disable => false,
+            MetricsExporter::OtlpGrpc => self.grpc_exporter_target.is_some(),
+            MetricsExporter::Prometheus => true,
+            MetricsExporter::Log => true,
+            MetricsExporter::Disable => false,
         }
     }
 
@@ -1248,7 +1249,7 @@ mod tests {
     #[test]
     fn test_metrics_config_default() {
         let config = MetricsConfig::default();
-        assert_eq!(config.exporter_type, MetricsExporterType::Disable);
+        assert_eq!(config.exporter_type, MetricsExporter::Disable);
         assert!(!config.check_config());
     }
 
@@ -1279,7 +1280,7 @@ mod tests {
 
     #[test]
     fn connection_version_label_uses_java_version_description() {
-        let version = rocketmq_common::common::mq_version::RocketMqVersion::V5_0_0.ordinal() as i32;
+        let version = RocketMqVersion::V5_0_0.ordinal() as i32;
 
         assert_eq!(connection_version_label_value(version), "v5_0_0");
     }

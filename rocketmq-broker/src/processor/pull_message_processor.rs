@@ -288,7 +288,7 @@ where
             .rpc_client()
             .invoke(rpc_request, self.broker_runtime_inner.broker_config().forward_timeout)
             .await;
-        let rpc_response = match rpc_response {
+        let mut rpc_response = match rpc_response {
             Ok(value) => value,
             Err(err) => {
                 return Some(RemotingCommand::create_response_command_with_code_remark(
@@ -297,13 +297,10 @@ where
                 ));
             }
         };
-        let response_header = rpc_response.get_header_mut_from_ref::<PullMessageResponseHeader>();
-        let rewrite_result = rewrite_response_for_static_topic(
-            request_header,
-            response_header?,
-            mapping_context,
-            ResponseCode::from(rpc_response.code),
-        );
+        let response_code = ResponseCode::from(rpc_response.code);
+        let response_header = rpc_response.get_header_mut::<PullMessageResponseHeader>();
+        let rewrite_result =
+            rewrite_response_for_static_topic(request_header, response_header?, mapping_context, response_code);
         if rewrite_result.is_some() {
             return rewrite_result;
         }

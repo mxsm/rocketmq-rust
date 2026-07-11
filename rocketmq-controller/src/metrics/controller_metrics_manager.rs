@@ -21,9 +21,14 @@ use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_rust::ArcMut;
 
 #[cfg(feature = "metrics")]
-pub use rocketmq_observability::metrics::controller_manager::ControllerMetricsConfig;
+use rocketmq_observability::config::MetricsExporter;
 #[cfg(feature = "metrics")]
-use rocketmq_observability::metrics::controller_manager::ControllerMetricsManager as ObservabilityControllerMetricsManager;
+#[path = "controller_metrics_manager_impl.rs"]
+mod owner_manager;
+#[cfg(feature = "metrics")]
+pub use owner_manager::ControllerMetricsConfig;
+#[cfg(feature = "metrics")]
+use owner_manager::ControllerMetricsManager as ObservabilityControllerMetricsManager;
 
 #[cfg(feature = "metrics")]
 pub struct ControllerMetricsManager {
@@ -39,7 +44,12 @@ pub(crate) fn controller_metrics_config(config: &ControllerConfig) -> Controller
         listen_addr: config.listen_addr.to_string(),
         controller_type: config.controller_type.clone(),
         node_id: config.node_id.to_string(),
-        metrics_exporter_type: config.metrics_exporter_type,
+        metrics_exporter_type: match config.metrics_exporter_type {
+            rocketmq_common::common::metrics::MetricsExporterType::Disable => MetricsExporter::Disable,
+            rocketmq_common::common::metrics::MetricsExporterType::OtlpGrpc => MetricsExporter::OtlpGrpc,
+            rocketmq_common::common::metrics::MetricsExporterType::Prom => MetricsExporter::Prometheus,
+            rocketmq_common::common::metrics::MetricsExporterType::Log => MetricsExporter::Log,
+        },
         metric_logging_exporter_interval_in_mills: config.metric_logging_exporter_interval_in_mills,
         metric_grpc_exporter_interval_in_mills: config.metric_grpc_exporter_interval_in_mills,
         metric_grpc_exporter_time_out_in_mills: config.metric_grpc_exporter_time_out_in_mills,

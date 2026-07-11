@@ -16,6 +16,7 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskControl;
 use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_runtime::TaskKind;
@@ -524,6 +525,54 @@ async fn task_group_shutdown_starts_children_concurrently() {
         "{}",
         report.to_json()
     );
+}
+
+#[tokio::test]
+async fn shared_shutdown_deadline_bounds_sequential_group_shutdown() {
+    let context = RuntimeContext::from_current("shared-shutdown-deadline");
+    let first = context.root_group().child("first-hung-group");
+    let second = context.root_group().child("second-hung-group");
+    first
+        .spawn_service("first-hung-task", std::future::pending())
+        .expect("first task should spawn");
+    second
+        .spawn_service("second-hung-task", std::future::pending())
+        .expect("second task should spawn");
+    let deadline = ShutdownDeadline::after(Duration::from_millis(50));
+    let started = std::time::Instant::now();
+
+    let first_report = first.shutdown_until(deadline).await;
+    let second_report = second.shutdown_until(deadline).await;
+
+    assert!(
+        first_report.timed_out > 0 || first_report.aborted > 0,
+        "{}",
+        first_report.to_json()
+    );
+    assert!(
+        second_report.timed_out > 0 || second_report.aborted > 0,
+        "{}",
+        second_report.to_json()
+    );
+    assert!(started.elapsed() < Duration::from_millis(200));
+}
+
+#[tokio::test]
+async fn task_group_exposes_the_earliest_installed_shutdown_deadline() {
+    let context = RuntimeContext::from_current("installed-shutdown-deadline");
+    let group = context.root_group().child("service");
+    let later = ShutdownDeadline::after(Duration::from_secs(5));
+    let earlier = ShutdownDeadline::after(Duration::from_secs(1));
+
+    drop(group.shutdown_until(later));
+    assert_eq!(group.shutdown_deadline(), Some(later));
+    drop(group.shutdown_until(earlier));
+    assert_eq!(group.shutdown_deadline(), Some(earlier));
+    drop(group.shutdown_until(later));
+    assert_eq!(group.shutdown_deadline(), Some(earlier));
+
+    let report = group.shutdown_now();
+    assert!(report.is_healthy(), "{}", report.to_json());
 }
 
 #[tokio::test]

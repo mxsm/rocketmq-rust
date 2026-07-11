@@ -46,6 +46,7 @@ use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_store::MessageStore;
+use crate::base::message_store::MessageStoreShutdownReport;
 use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
@@ -629,15 +630,22 @@ impl MessageStore for RocksDBMessageStore {
         self.local_file_store.init().await
     }
 
-    async fn shutdown(&mut self) {
-        if let Err(error) = self.rocksdb_maintenance_service.shutdown_gracefully().await {
-            warn!(error = %error, "failed to shutdown RocksDB consume queue maintenance service");
-        }
-        if let Err(error) = self.message_rocksdb_maintenance_service.shutdown_gracefully().await {
-            warn!(error = %error, "failed to shutdown RocksDB message maintenance service");
-        }
-        self.local_file_store.shutdown().await;
+    async fn shutdown_gracefully(&mut self) -> Result<MessageStoreShutdownReport, StoreError> {
+        let consume_queue_maintenance_result = self.rocksdb_maintenance_service.shutdown_gracefully().await;
+        let message_maintenance_result = self.message_rocksdb_maintenance_service.shutdown_gracefully().await;
+        let local_file_result = self.local_file_store.shutdown_gracefully().await;
         self.close_rocksdb();
+
+        let report = local_file_result?;
+        consume_queue_maintenance_result.map_err(StoreError::rocksdb)?;
+        message_maintenance_result.map_err(StoreError::rocksdb)?;
+        Ok(report)
+    }
+
+    async fn shutdown(&mut self) {
+        if let Err(error) = self.shutdown_gracefully().await {
+            warn!(error = %error, "RocksDB message store shutdown failed");
+        }
     }
 
     fn destroy(&mut self) {
@@ -930,16 +938,32 @@ impl MessageStore for RocksDBMessageStore {
     }
 
     fn flush(&self) -> i64 {
+        match self.try_flush() {
+            Ok(progress) => progress.durable,
+            Err(error) => {
+                warn!(error = %error, "RocksDB message store flush failed; returning last durable watermark");
+                self.local_file_store.get_flushed_where()
+            }
+        }
+    }
+
+    fn try_flush(&self) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
         if let Err(error) = self.rocksdb_index_service.flush_pending() {
-            warn!(error = %error, "failed to flush pending RocksDB index records");
+            let error = StoreError::rocksdb(error);
+            self.local_file_store.record_flush_failure(&error);
+            return Err(error);
         }
         if let Err(error) = self.rocksdb_store.flush() {
-            warn!(error = %error, "failed to flush RocksDB message store");
+            let error = StoreError::rocksdb(error);
+            self.local_file_store.record_flush_failure(&error);
+            return Err(error);
         }
         if let Err(error) = self.message_rocksdb_storage.store().flush() {
-            warn!(error = %error, "failed to flush RocksDB index/timer/trans store");
+            let error = StoreError::rocksdb(error);
+            self.local_file_store.record_flush_failure(&error);
+            return Err(error);
         }
-        self.local_file_store.flush()
+        self.local_file_store.try_flush()
     }
 
     fn get_flushed_where(&self) -> i64 {

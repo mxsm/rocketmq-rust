@@ -112,6 +112,8 @@ use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::message_store::MessageStore;
+use crate::base::message_store::MessageStoreShutdownReport;
+use crate::base::message_store::StoreHealthRecorder;
 use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 #[cfg(feature = "tieredstore")]
@@ -338,6 +340,7 @@ pub struct LocalFileMessageStore {
     background_index_query_degradation_total: Arc<AtomicU64>,
     store_lock_guard: Option<StoreLockGuard>,
     running_flags: Arc<RunningFlags>,
+    store_health_recorder: StoreHealthRecorder,
     reput_message_service: ReputMessageService,
     background_index_rebuild_service: BackgroundIndexRebuildService,
     clean_commit_log_service: Arc<CleanCommitLogService>,
@@ -457,6 +460,7 @@ impl LocalFileMessageStore {
     ) -> Result<Self, StoreError> {
         let (delay_level_table, max_delay_level) = parse_delay_level(message_store_config.message_delay_level.as_str());
         let running_flags = Arc::new(RunningFlags::new());
+        let store_health_recorder = StoreHealthRecorder::new(running_flags.clone());
         let store_checkpoint = Arc::new(
             StoreCheckpoint::new(get_store_checkpoint(message_store_config.store_path_root_dir.as_str())).map_err(
                 |error| {
@@ -500,7 +504,7 @@ impl LocalFileMessageStore {
             message_store_config.as_ref(),
         ));
 
-        let commit_log = ArcMut::new(CommitLog::new(
+        let mut commit_log = CommitLog::new(
             message_store_config.clone(),
             broker_config.clone(),
             dispatcher.clone(),
@@ -508,7 +512,9 @@ impl LocalFileMessageStore {
             topic_config_table.clone(),
             consume_queue_store.clone(),
             (*allocate_mapped_file_service).clone(),
-        ));
+        );
+        commit_log.set_store_health_recorder(store_health_recorder.clone());
+        let commit_log = ArcMut::new(commit_log);
         let compaction_store = Arc::new(CompactionStore::new());
         if message_store_config.enable_compaction {
             dispatcher.add_dispatcher(Arc::new(CommitLogDispatcherCompaction::new(
@@ -557,6 +563,7 @@ impl LocalFileMessageStore {
             background_index_query_degradation_total: Arc::new(AtomicU64::new(0)),
             store_lock_guard: None,
             running_flags: running_flags.clone(),
+            store_health_recorder,
             reput_message_service: ReputMessageService {
                 shutdown_token: CancellationToken::new(),
                 new_message_notify: Arc::new(Notify::new()),
@@ -1757,6 +1764,10 @@ impl LocalFileMessageStore {
         self.background_index_rebuild_service.resume();
     }
 
+    pub(crate) fn record_flush_failure(&self, error: &StoreError) {
+        self.store_health_recorder.record_flush_failure(error);
+    }
+
     pub async fn reput_once(&mut self) {
         if self.reput_message_service.reput_from_offset.is_none() {
             let start_offset = self.get_dispatch_recovery_offset().max(0);
@@ -2070,7 +2081,9 @@ impl MessageStore for LocalFileMessageStore {
         Ok(())
     }
 
-    async fn shutdown(&mut self) {
+    async fn shutdown_gracefully(&mut self) -> Result<MessageStoreShutdownReport, StoreError> {
+        let mut report = MessageStoreShutdownReport::default();
+        let mut shutdown_error = None;
         let previous_state = self.lifecycle_state();
         if !self.shutdown.load(Ordering::Acquire) {
             self.shutdown.store(true, Ordering::Release);
@@ -2082,7 +2095,7 @@ impl MessageStore for LocalFileMessageStore {
             ) {
                 self.release_store_lock();
                 let _ = self.transient_store_pool.destroy();
-                return;
+                return Ok(report);
             }
 
             if let Some(ha_service) = self.ha_service.as_ref() {
@@ -2093,7 +2106,13 @@ impl MessageStore for LocalFileMessageStore {
             self.shutdown_schedule_tasks().await;
             self.store_stats_service.shutdown_gracefully().await;
             self.background_index_rebuild_service.shutdown().await;
-            self.commit_log.shutdown_gracefully().await;
+            match self.commit_log.shutdown_gracefully().await {
+                Ok(final_flush) => report.final_flush = Some(final_flush),
+                Err(error) => {
+                    self.record_flush_failure(&error);
+                    shutdown_error = Some(error);
+                }
+            }
 
             self.reput_message_service.shutdown().await;
             #[cfg(feature = "tieredstore")]
@@ -2130,6 +2149,16 @@ impl MessageStore for LocalFileMessageStore {
 
         self.release_store_lock();
         let _ = self.transient_store_pool.destroy();
+        match shutdown_error {
+            Some(error) => Err(error),
+            None => Ok(report),
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        if let Err(error) = self.shutdown_gracefully().await {
+            warn!(error = %error, "message store shutdown failed");
+        }
     }
 
     fn destroy(&mut self) {
@@ -3455,7 +3484,21 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn flush(&self) -> i64 {
-        self.commit_log.flush()
+        match self.try_flush() {
+            Ok(progress) => progress.durable,
+            Err(error) => {
+                warn!(error = %error, "message store flush failed; store is no longer writeable");
+                self.get_flushed_where()
+            }
+        }
+    }
+
+    fn try_flush(&self) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
+        let result = self.commit_log.try_flush();
+        if let Err(error) = &result {
+            self.record_flush_failure(error);
+        }
+        result
     }
 
     fn get_flushed_where(&self) -> i64 {
@@ -3490,6 +3533,8 @@ impl MessageStore for LocalFileMessageStore {
             .as_ref()
             .map_or_else(Default::default, GeneralHAService::group_transfer_runtime_info);
         StoreHealthSnapshot {
+            writeable: self.store_health_recorder.writeable(),
+            last_flush_error: self.store_health_recorder.last_flush_error(),
             os_page_cache_busy: self.is_os_page_cache_busy(),
             transient_store_pool_deficient: self.is_transient_store_pool_deficient(),
             sync_flush: self.sync_flush_runtime_info(),
@@ -5645,6 +5690,7 @@ mod tests {
     use crate::hook::send_message_back_hook::SendMessageBackHook;
     use crate::kv::compaction_service::CompactionService;
     use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
+    use crate::log_file::mapped_file::MappedFile;
     use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
     use crate::message_store::recovery::RecoveryCrcPolicy;
     use crate::message_store::recovery::RecoveryExit;
@@ -7532,6 +7578,74 @@ mod tests {
         let mut remaining = BytesMut::new();
         assert!(store.get_data(0, 2, &mut remaining));
         assert_eq!(remaining.as_ref(), &payload[..2]);
+    }
+
+    #[test]
+    fn failed_canonical_flush_marks_store_unwriteable_and_legacy_flush_keeps_watermark() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_test_store(&temp_dir);
+        let payload = b"pending-durable-message";
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert!(runtime
+            .block_on(store.append_to_commit_log(0, payload, 0, payload.len() as i32))
+            .unwrap());
+        let durable_before = store.get_flushed_where();
+        let mapped_file = store
+            .get_commit_log()
+            .last_mapped_file_for_testing()
+            .expect("append should create a mapped file");
+        MappedFile::shutdown(mapped_file.as_ref(), 0);
+
+        let error = store
+            .try_flush()
+            .expect_err("unavailable mapped file must fail canonical flush");
+
+        assert!(matches!(error, StoreError::MappedFile { .. }));
+        let health = store.health_snapshot();
+        assert!(!health.writeable);
+        assert_eq!(
+            health.last_flush_error.as_ref().map(|error| error.kind),
+            Some(crate::store_error::StoreErrorKind::MappedFile)
+        );
+        assert!(health
+            .last_flush_error
+            .as_ref()
+            .is_some_and(|error| error.detail.contains("Mapped file error")));
+        assert_eq!(store.flush(), durable_before);
+        assert_eq!(store.get_flushed_where(), durable_before);
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_reports_typed_final_flush_failure() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_test_store(&temp_dir);
+        store.init().await.expect("initialize message store");
+        let payload = b"pending-shutdown-message";
+        assert!(store
+            .append_to_commit_log(0, payload, 0, payload.len() as i32)
+            .await
+            .expect("append pending message"));
+        let mapped_file = store
+            .get_commit_log()
+            .last_mapped_file_for_testing()
+            .expect("append should create a mapped file");
+        MappedFile::shutdown(mapped_file.as_ref(), 0);
+
+        let error = store
+            .shutdown_gracefully()
+            .await
+            .expect_err("final fsync failure must be exposed to the shutdown caller");
+
+        assert!(matches!(error, StoreError::MappedFile { .. }));
+        let health = store.health_snapshot();
+        assert!(!health.writeable);
+        assert_eq!(
+            health.last_flush_error.as_ref().map(|error| error.kind),
+            Some(crate::store_error::StoreErrorKind::MappedFile)
+        );
     }
 
     #[test]

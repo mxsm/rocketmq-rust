@@ -34,6 +34,7 @@ use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
+use crate::log_file::mapped_file::MappedFileResult;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
 pub struct MappedFileQueue {
@@ -54,6 +55,14 @@ pub struct MappedFileQueue {
 
     /// Commit lock for thread safety (matches Java's synchronized)
     commit_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FlushProgress {
+    pub appended: i64,
+    pub durable_before: i64,
+    pub durable: i64,
+    pub store_timestamp: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1151,19 +1160,35 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn flush(&self, flush_least_pages: i32) -> bool {
-        let mut result = true;
-        let flushed_where = self.get_flushed_where();
-        if let Some(mapped_file) = self.find_mapped_file_by_offset(flushed_where, flushed_where == 0) {
-            let tmp_time_stamp = mapped_file.get_store_timestamp();
-            let offset = mapped_file.flush(flush_least_pages);
-            let whered = mapped_file.get_file_from_offset() + offset as u64;
-            result = whered == self.get_flushed_where() as u64;
-            self.set_flushed_where(whered as i64);
-            if flush_least_pages == 0 {
-                self.set_store_timestamp(tmp_time_stamp);
+        match self.try_flush(flush_least_pages) {
+            Ok(progress) => progress.durable == progress.durable_before,
+            Err(error) => {
+                error!(error = %error, "failed to flush mapped file queue");
+                true
             }
         }
-        result
+    }
+
+    pub fn try_flush(&self, flush_least_pages: i32) -> MappedFileResult<FlushProgress> {
+        let durable_before = self.get_flushed_where();
+        let appended = self.get_max_offset();
+        let mut durable = durable_before;
+        let mut store_timestamp = self.get_store_timestamp();
+        if let Some(mapped_file) = self.find_mapped_file_by_offset(durable_before, durable_before == 0) {
+            let mapped_file_position = mapped_file.try_flush(flush_least_pages)?;
+            durable = (mapped_file.get_file_from_offset() + mapped_file_position as u64) as i64;
+            self.set_flushed_where(durable);
+            if flush_least_pages == 0 {
+                store_timestamp = mapped_file.get_store_timestamp();
+                self.set_store_timestamp(store_timestamp);
+            }
+        }
+        Ok(FlushProgress {
+            appended,
+            durable_before,
+            durable,
+            store_timestamp,
+        })
     }
 
     #[inline]
@@ -1417,5 +1442,17 @@ mod tests {
         assert!(service.has_request(next_file_path.to_string_lossy().as_ref()));
 
         service.shutdown().await;
+    }
+
+    #[test]
+    fn try_flush_reports_appended_and_durable_watermarks_for_empty_queue() {
+        let queue = MappedFileQueue::default();
+
+        let progress = queue.try_flush(0).expect("empty queue flush should succeed");
+
+        assert_eq!(progress.appended, 0);
+        assert_eq!(progress.durable_before, 0);
+        assert_eq!(progress.durable, 0);
+        assert_eq!(progress.store_timestamp, 0);
     }
 }

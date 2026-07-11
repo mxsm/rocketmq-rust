@@ -19,7 +19,10 @@ use rocketmq_common::common::message::message_decoder;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 
 #[cfg(feature = "otel-metrics")]
-pub(crate) use rocketmq_observability::metrics::broker_manager::*;
+#[path = "broker_metrics_manager_impl.rs"]
+mod owner_manager;
+#[cfg(feature = "otel-metrics")]
+pub(crate) use owner_manager::*;
 
 /// Get message type from send message request header.
 pub(crate) fn get_message_type(request_header: &SendMessageRequestHeader) -> TopicMessageType {

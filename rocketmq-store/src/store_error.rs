@@ -16,8 +16,52 @@ use thiserror::Error;
 
 use rocketmq_error::RocketMQError;
 
+use crate::log_file::mapped_file::MappedFileError;
+
+/// Stable low-cardinality classification for store health and telemetry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreErrorKind {
+    MappedFile,
+    RocksDb,
+    NotStarted,
+    MessageNotFound,
+    Config,
+    Unsupported,
+    InvalidState,
+    Storage,
+    TieredStore,
+    Ha,
+    DLedger,
+    MappedFileNotFound,
+}
+
+impl StoreErrorKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MappedFile => "mapped_file",
+            Self::RocksDb => "rocksdb",
+            Self::NotStarted => "not_started",
+            Self::MessageNotFound => "message_not_found",
+            Self::Config => "config",
+            Self::Unsupported => "unsupported",
+            Self::InvalidState => "invalid_state",
+            Self::Storage => "storage",
+            Self::TieredStore => "tiered_store",
+            Self::Ha => "ha",
+            Self::DLedger => "dledger",
+            Self::MappedFileNotFound => "mapped_file_not_found",
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error("Mapped file error: {source}")]
+    MappedFile {
+        #[source]
+        source: Box<MappedFileError>,
+    },
+
     #[error("RocksDB error: {source}")]
     RocksDb {
         #[source]
@@ -56,6 +100,30 @@ pub enum StoreError {
 }
 
 impl StoreError {
+    pub const fn kind(&self) -> StoreErrorKind {
+        match self {
+            Self::MappedFile { .. } => StoreErrorKind::MappedFile,
+            Self::RocksDb { .. } => StoreErrorKind::RocksDb,
+            Self::NotStarted => StoreErrorKind::NotStarted,
+            Self::MessageNotFound => StoreErrorKind::MessageNotFound,
+            Self::Config(_) => StoreErrorKind::Config,
+            Self::Unsupported(_) => StoreErrorKind::Unsupported,
+            Self::InvalidState(_) => StoreErrorKind::InvalidState,
+            Self::Storage(_) => StoreErrorKind::Storage,
+            Self::TieredStore(_) => StoreErrorKind::TieredStore,
+            Self::Ha(_) => StoreErrorKind::Ha,
+            Self::DLedger(_) => StoreErrorKind::DLedger,
+            Self::MappedFileNotFound => StoreErrorKind::MappedFileNotFound,
+        }
+    }
+
+    #[inline]
+    pub fn mapped_file(source: MappedFileError) -> Self {
+        Self::MappedFile {
+            source: Box::new(source),
+        }
+    }
+
     #[inline]
     pub fn rocksdb(source: RocketMQError) -> Self {
         Self::RocksDb {

@@ -70,17 +70,15 @@ pub trait InvokeCallback {
 
 #[allow(unused_variables)]
 pub(crate) mod inner {
-    use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::sync::Arc;
 
     use rocketmq_error::RocketMQError;
     use rocketmq_error::RocketMQResult;
-    use rocketmq_rust::ArcMut;
     use tracing::error;
     use tracing::warn;
 
-    use crate::base::response_future::ResponseFuture;
+    use crate::base::pending_request_table::PendingRequestTable;
     use crate::code::request_code::RequestCode;
     use crate::code::response_code::ResponseCode;
     use crate::net::channel::Channel;
@@ -93,7 +91,7 @@ pub(crate) mod inner {
     pub(crate) struct RemotingGeneralHandler<RP> {
         pub(crate) request_processor: RP,
         pub(crate) rpc_hooks: Vec<Arc<dyn RPCHook>>,
-        pub(crate) response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+        pub(crate) response_table: PendingRequestTable,
     }
 
     impl<RP> RemotingGeneralHandler<RP>
@@ -242,19 +240,19 @@ pub(crate) mod inner {
         }
 
         fn process_response_command(&mut self, ctx: &mut ConnectionHandlerContext, cmd: RemotingCommand) {
-            if let Some(future) = self.response_table.remove(&cmd.opaque()) {
-                match future.tx.send(Ok(cmd)) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!("send response to future failed, maybe timeout");
-                    }
-                }
-            } else {
+            let opaque = cmd.opaque();
+            let code = cmd.code();
+            let completed = match ctx.channel().pending_request_owner() {
+                Some(owner) => self.response_table.complete_response_for_owner(owner, opaque, cmd),
+                None => self.response_table.complete_response(opaque, cmd),
+            };
+            if !completed {
                 warn!(
-                    "receive response, cmd={}, but not matched any request, address={}, channelId={}",
-                    cmd,
-                    ctx.channel().remote_address(),
-                    ctx.channel().channel_id(),
+                    opaque,
+                    code,
+                    address = %ctx.channel().remote_address(),
+                    channel_id = %ctx.channel().channel_id(),
+                    "received response without a matching pending request",
                 );
             }
         }

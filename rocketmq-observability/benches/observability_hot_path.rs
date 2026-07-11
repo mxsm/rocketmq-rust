@@ -28,7 +28,6 @@ use criterion::BatchSize;
 #[cfg(feature = "otel-traces")]
 use criterion::BenchmarkId;
 use criterion::Criterion;
-use rocketmq_common::common::message::MessageConst;
 use rocketmq_observability::config::TracesConfig;
 use rocketmq_observability::metrics::labels::LabelGuard;
 use rocketmq_observability::sampling::SamplingGate;
@@ -115,11 +114,11 @@ fn bench_sampling_gate(c: &mut Criterion) {
 fn build_message_properties() -> HashMap<CheetahString, CheetahString> {
     HashMap::from([
         (
-            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from_static_str("UNIQ_KEY"),
             CheetahString::from_static_str("msg-123"),
         ),
         (
-            CheetahString::from_static_str(MessageConst::PROPERTY_KEYS),
+            CheetahString::from_static_str("KEYS"),
             CheetahString::from_static_str("key-a"),
         ),
     ])

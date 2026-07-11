@@ -236,7 +236,7 @@ async fn read_users_snapshot(path: &Path) -> RocketMQResult<HashMap<String, User
             return Err(RocketMQError::storage_read_failed(
                 path.display().to_string(),
                 error.to_string(),
-            ))
+            ));
         }
     };
     decode_users_snapshot(path, &bytes)
@@ -250,7 +250,7 @@ fn read_users_snapshot_blocking(path: &Path) -> RocketMQResult<HashMap<String, U
             return Err(RocketMQError::storage_read_failed(
                 path.display().to_string(),
                 error.to_string(),
-            ))
+            ));
         }
     };
     decode_users_snapshot(path, &bytes)
