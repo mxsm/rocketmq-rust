@@ -3,6 +3,8 @@
 `rocketmq-mcp` is the Model Context Protocol server for RocketMQ-Rust AI SRE and diagnostics workflows. It exposes read-only RocketMQ context, diagnostic tools, and runbook prompts to MCP clients such as Claude Desktop, Cursor, Codex, and MCP Inspector.
 
 The frozen MCP 2025-11-25 contract is documented in `rocketmq-doc/en/07-rocketmq-mcp-contract-v2.md`.
+Production release gates, external-cluster expectations, and rollback guidance are documented in
+`docs/production-validation.md`.
 
 ## What It Is
 

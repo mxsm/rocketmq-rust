@@ -91,6 +91,41 @@ fn unsupported_protocol_version_is_rejected_during_initialize() {
         .contains("requires 2025-11-25"));
 }
 
+#[test]
+#[ignore = "requires ROCKETMQ_MCP_E2E_NAMESRV_ADDR, TOPIC, CONSUMER_GROUP, and BROKER"]
+fn external_cluster_exercises_mvp_tools_and_resources() {
+    let namesrv_addr = required_e2e_environment("ROCKETMQ_MCP_E2E_NAMESRV_ADDR");
+    let topic = required_e2e_environment("ROCKETMQ_MCP_E2E_TOPIC");
+    let consumer_group = required_e2e_environment("ROCKETMQ_MCP_E2E_CONSUMER_GROUP");
+    let broker = required_e2e_environment("ROCKETMQ_MCP_E2E_BROKER");
+    let input = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-11-25","capabilities":{{}},"clientInfo":{{"name":"external-cluster-e2e","version":"1.0.0"}}}}}}
+{{"jsonrpc":"2.0","method":"notifications/initialized","params":{{}}}}
+{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"rocketmq_get_cluster_overview","arguments":{{"cluster":"local-dev"}}}}}}
+{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"rocketmq_list_topics","arguments":{{"cluster":"local-dev"}}}}}}
+{{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{{"name":"rocketmq_describe_topic","arguments":{{"cluster":"local-dev","topic":"{topic}"}}}}}}
+{{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{{"name":"rocketmq_get_topic_route","arguments":{{"cluster":"local-dev","topic":"{topic}"}}}}}}
+{{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{{"name":"rocketmq_list_consumer_groups","arguments":{{"cluster":"local-dev"}}}}}}
+{{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{{"name":"rocketmq_get_consumer_lag","arguments":{{"cluster":"local-dev","topic":"{topic}","consumer_group":"{consumer_group}"}}}}}}
+{{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{{"name":"rocketmq_describe_broker","arguments":{{"cluster":"local-dev","broker_name":"{broker}"}}}}}}
+{{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{{"name":"rocketmq_diagnose_consumer_lag","arguments":{{"cluster":"local-dev","topic":"{topic}","consumer_group":"{consumer_group}"}}}}}}
+{{"jsonrpc":"2.0","id":10,"method":"resources/read","params":{{"uri":"rocketmq://clusters/local-dev/topics/{topic}"}}}}
+"#
+    );
+    let output = run_stdio_server_with_namesrv(&input, &namesrv_addr);
+
+    assert!(output.status.success(), "server failed: {}", output.stderr);
+    let responses = parse_stdout_json(&output.stdout);
+    for request_id in 2..=9 {
+        assert_eq!(
+            responses[&request_id]["result"]["isError"], false,
+            "request {request_id} failed: {}",
+            responses[&request_id]
+        );
+    }
+    assert!(responses[&10]["result"]["contents"].is_array());
+}
+
 struct StdioOutput {
     status: std::process::ExitStatus,
     stdout: String,
@@ -98,8 +133,12 @@ struct StdioOutput {
 }
 
 fn run_stdio_server(input: &str) -> StdioOutput {
+    run_stdio_server_with_namesrv(input, "127.0.0.1:9876")
+}
+
+fn run_stdio_server_with_namesrv(input: &str, namesrv_addr: &str) -> StdioOutput {
     let binary = env!("CARGO_BIN_EXE_rocketmq-mcp");
-    let config = temporary_memory_audit_config();
+    let config = temporary_memory_audit_config(namesrv_addr);
     let mut child = Command::new(binary)
         .arg("--config")
         .arg(&config)
@@ -129,7 +168,7 @@ fn run_stdio_server(input: &str) -> StdioOutput {
     }
 }
 
-fn temporary_memory_audit_config() -> std::path::PathBuf {
+fn temporary_memory_audit_config(namesrv_addr: &str) -> std::path::PathBuf {
     let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("conf")
         .join("mcp.example.toml");
@@ -139,7 +178,11 @@ fn temporary_memory_audit_config() -> std::path::PathBuf {
     let config = std::fs::read_to_string(example).expect("read example config");
     let config = config
         .replace("sink = \"file\"", "sink = \"memory\"")
-        .replace("path = \"./logs/rocketmq-mcp-audit.log\"", "path = \"\"");
+        .replace("path = \"./logs/rocketmq-mcp-audit.log\"", "path = \"\"")
+        .replace(
+            "namesrv_addr = \"127.0.0.1:9876\"",
+            &format!("namesrv_addr = \"{namesrv_addr}\""),
+        );
     let suffix = NEXT_TEMP_CONFIG_ID.fetch_add(1, Ordering::Relaxed);
     let directory = std::env::temp_dir().join(format!("rocketmq-mcp-integration-{}-{suffix}", std::process::id()));
     std::fs::create_dir_all(&directory).expect("create temp config directory");
@@ -147,6 +190,10 @@ fn temporary_memory_audit_config() -> std::path::PathBuf {
     std::fs::write(&path, config).expect("write temp config");
     std::fs::copy(permissions, path.with_file_name("permissions.example.toml")).expect("copy permissions config");
     path
+}
+
+fn required_e2e_environment(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set for external-cluster E2E"))
 }
 
 fn parse_stdout_json(stdout: &str) -> HashMap<i64, Value> {

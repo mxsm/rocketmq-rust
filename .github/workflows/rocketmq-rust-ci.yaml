@@ -123,6 +123,9 @@ jobs:
       - name: Test rocketmq-mcp
         run: cargo test -p rocketmq-mcp
 
+      - name: Test rocketmq-mcp all features
+        run: cargo test -p rocketmq-mcp --all-features
+
       - name: Clippy rocketmq-mcp
         run: cargo clippy --all-targets -p rocketmq-mcp --features streamable-http -- -D warnings
 
