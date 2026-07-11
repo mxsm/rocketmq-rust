@@ -1536,8 +1536,8 @@ impl DashboardAdminClient {
                 .get_all_subscription_group(CheetahString::from(address.as_str()), 5_000)
                 .await
             {
-                for entry in wrapper.get_subscription_group_table().iter() {
-                    groups.insert(entry.key().to_string());
+                for group in wrapper.get_subscription_group_table().keys() {
+                    groups.insert(group.to_string());
                 }
             }
         }

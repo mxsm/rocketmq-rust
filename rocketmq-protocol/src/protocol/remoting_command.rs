@@ -24,7 +24,6 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_model::version::RocketMqVersion;
-use rocketmq_model::version::CURRENT_VERSION;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -42,15 +41,6 @@ pub const SERIALIZE_TYPE_ENV: &str = "ROCKETMQ_SERIALIZE_TYPE";
 pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
 
 static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> = std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
-
-static CONFIG_VERSION: std::sync::LazyLock<i32> = std::sync::LazyLock::new(|| CURRENT_VERSION as i32);
-
-pub static SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: std::sync::LazyLock<SerializeType> =
-    std::sync::LazyLock::new(|| SerializeType::JSON);
-
-fn set_cmd_version(cmd: &mut RemotingCommand) {
-    cmd.set_version_ref(*CONFIG_VERSION);
-}
 
 #[derive(Serialize, Deserialize)]
 pub struct RemotingCommand {
@@ -126,11 +116,21 @@ impl fmt::Display for RemotingCommand {
 
 impl Default for RemotingCommand {
     fn default() -> Self {
+        Self::with_resolved_defaults(0, SerializeType::JSON)
+    }
+}
+
+impl RemotingCommand {
+    /// Constructs a command from defaults resolved by the owning facade.
+    ///
+    /// The protocol crate deliberately does not read process environment or configuration files.
+    /// Legacy facades resolve those sources and pass the resulting wire values here.
+    pub fn with_resolved_defaults(version: i32, serialize_type: SerializeType) -> Self {
         let opaque = REQUEST_ID.fetch_add(1, Ordering::AcqRel);
         RemotingCommand {
             code: 0,
             language: LanguageCode::RUST, // Replace with your actual enum variant
-            version: 0,
+            version,
             opaque,
             flag: 0,
             remark: None,
@@ -139,7 +139,7 @@ impl Default for RemotingCommand {
             suspended: false,
             command_custom_header: None,
             custom_header_to_net: false,
-            serialize_type: *SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER,
+            serialize_type,
         }
     }
 }
@@ -158,9 +158,27 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        let mut command = Self::default().set_code(code.into()).set_command_custom_header(header);
-        set_cmd_version(&mut command);
-        command
+        Self::create_request_command_with_defaults(
+            code,
+            header,
+            rocketmq_model::version::CURRENT_VERSION as i32,
+            SerializeType::JSON,
+        )
+    }
+
+    /// Creates a request using defaults resolved by the transport/facade owner.
+    pub fn create_request_command_with_defaults<T>(
+        code: impl Into<i32>,
+        header: T,
+        version: i32,
+        serialize_type: SerializeType,
+    ) -> Self
+    where
+        T: CommandCustomHeader + Sync + Send + 'static,
+    {
+        Self::with_resolved_defaults(version, serialize_type)
+            .set_code(code.into())
+            .set_command_custom_header(header)
     }
 
     pub fn create_remoting_command(code: impl Into<i32>) -> Self {
@@ -201,6 +219,15 @@ impl RemotingCommand {
         T: CommandCustomHeader + Sync + Send + 'static,
     {
         self.command_custom_header = Some(Arc::new(Box::new(command_custom_header)));
+        self.custom_header_to_net = false;
+        self
+    }
+
+    pub fn set_command_custom_header_boxed(
+        mut self,
+        command_custom_header: Box<dyn CommandCustomHeader + Send + Sync + 'static>,
+    ) -> Self {
+        self.command_custom_header = Some(Arc::new(command_custom_header));
         self.custom_header_to_net = false;
         self
     }

@@ -329,7 +329,10 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 topic_config_table,
                 data_version: self.data_version.as_ref().clone(),
             },
-            topic_queue_mapping_info_map,
+            topic_queue_mapping_info_map: topic_queue_mapping_info_map
+                .iter()
+                .map(|entry| (entry.key().clone(), (**entry.value()).clone()))
+                .collect(),
             ..TopicConfigAndMappingSerializeWrapper::default()
         }
     }

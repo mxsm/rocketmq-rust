@@ -3088,10 +3088,10 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
-        let subscription_group_wrapper = self.get_all_subscription_group(broker_addr, timeout_millis).await?;
+        let mut subscription_group_wrapper = self.get_all_subscription_group(broker_addr, timeout_millis).await?;
 
         let system_group_set = get_system_group_set();
-        let table = subscription_group_wrapper.get_subscription_group_table();
+        let table = subscription_group_wrapper.get_subscription_group_table_mut();
         // Remove system consumer groups
         table.retain(|key, _| !mix_all::is_sys_consumer_group(key.as_str()) && !system_group_set.contains(key));
 

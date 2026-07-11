@@ -25,7 +25,6 @@ use rocketmq_common::FileUtils::string_to_file;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_rust::ArcMut;
 
 use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use crate::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
@@ -124,7 +123,7 @@ impl TopicQueueMappingUtils {
         let mut detail_list = vec![];
         for config_mapping in &configs {
             if let Some(detail) = &config_mapping.topic_queue_mapping_detail {
-                detail_list.push((**detail).clone());
+                detail_list.push(detail.clone());
             }
         }
         Ok(detail_list)
@@ -538,7 +537,7 @@ impl TopicQueueMappingUtils {
             if !broker_config_map.contains_key(broker) {
                 config_mapping = TopicConfigAndQueueMapping::new(
                     TopicConfig::new(topic),
-                    Some(ArcMut::new(TopicQueueMappingDetail {
+                    Some(TopicQueueMappingDetail {
                         topic_queue_mapping_info: TopicQueueMappingInfo::new(
                             topic.into(),
                             0,
@@ -546,7 +545,7 @@ impl TopicQueueMappingUtils {
                             current_millis() as i64,
                         ),
                         hosted_queues: None,
-                    })),
+                    }),
                 );
                 config_mapping.topic_config.write_queue_nums = 1;
                 config_mapping.topic_config.read_queue_nums = 1;
@@ -566,9 +565,10 @@ impl TopicQueueMappingUtils {
                 time_of_start: -1,
                 time_of_end: -1,
             };
-            if let Some(detail) = config_mapping.topic_queue_mapping_detail {
-                TopicQueueMappingDetail::put_mapping_info(detail.clone(), *queue_id, vec![mapping_item]);
+            if let Some(detail) = config_mapping.topic_queue_mapping_detail.as_mut() {
+                TopicQueueMappingDetail::put_mapping_info(detail, *queue_id, vec![mapping_item]);
             }
+            broker_config_map.insert(broker.clone(), config_mapping);
         }
 
         // set the topic config
@@ -810,7 +810,7 @@ impl TopicQueueMappingUtils {
             let map_in_config = broker_config_map.entry(map_in_broker.clone()).or_insert_with(|| {
                 TopicConfigAndQueueMapping::new(
                     TopicConfig::with_queues(topic, 0, 0),
-                    Some(ArcMut::new(TopicQueueMappingDetail {
+                    Some(TopicQueueMappingDetail {
                         topic_queue_mapping_info: TopicQueueMappingInfo::new(
                             topic.into(),
                             max_num,
@@ -818,7 +818,7 @@ impl TopicQueueMappingUtils {
                             new_epoch,
                         ),
                         hosted_queues: Some(HashMap::new()),
-                    })),
+                    }),
                 )
             });
             map_in_config.topic_config.write_queue_nums += 1;

@@ -33,7 +33,7 @@ mod faq;
 pub mod filter;
 pub mod future;
 pub mod hasher;
-pub mod key_builder;
+pub use rocketmq_protocol::common::key_builder;
 pub mod macros;
 pub mod message;
 pub mod mix_all;

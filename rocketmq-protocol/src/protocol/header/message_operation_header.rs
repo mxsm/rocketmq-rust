@@ -14,6 +14,10 @@
 
 use cheetah_string::CheetahString;
 
+pub mod send_message_request_header;
+pub mod send_message_request_header_v2;
+pub mod send_message_response_header;
+
 pub trait TopicRequestHeaderTrait: Sync + Send {
     fn set_lo(&mut self, lo: Option<bool>);
     fn lo(&self) -> Option<bool>;

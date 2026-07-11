@@ -30,13 +30,20 @@ simd = ["dep:simd-json"]
 
 [dependencies]
 bytes.workspace = true
+bitvec = "1.0.1"
 cheetah-string.workspace = true
-rocketmq-error.workspace = true
+flate2 = { version = "1.1.9", features = ["zlib"], default-features = false }
+lz4_flex = { version = "0.13", default-features = false }
+rocketmq-error = { workspace = true, features = ["with_serde"] }
+bytemuck = "1.25.0"
+chrono = "0.4.45"
 rocketmq-macros.workspace = true
 rocketmq-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_json_any_key.workspace = true
 simd-json = { version = "0.17", optional = true }
+zstd = "0.13"
 
 [dev-dependencies]
 serde_json.workspace = true

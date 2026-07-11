@@ -55,7 +55,7 @@ impl RpcClientUtils {
     pub fn create_command_for_rpc_response(mut rpc_response: RpcResponse) -> RemotingCommand {
         let mut cmd = match rpc_response.header.take() {
             None => RemotingCommand::create_response_command_with_code(rpc_response.code),
-            Some(value) => RemotingCommand::create_response_command().set_command_custom_header_origin(Some(value)),
+            Some(value) => RemotingCommand::create_response_command().set_command_custom_header_boxed(value),
         };
         match rpc_response.exception {
             None => {}

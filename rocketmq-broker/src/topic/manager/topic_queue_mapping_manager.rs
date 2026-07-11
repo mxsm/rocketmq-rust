@@ -141,7 +141,7 @@ impl TopicQueueMappingManager {
             return TopicQueueMappingContext {
                 topic: topic.clone(),
                 global_id: Some(global_id),
-                mapping_detail: Some(mapping_detail.clone()),
+                mapping_detail: Some(mapping_detail.as_ref().clone()),
                 mapping_item_list: vec![],
                 leader_item: None,
                 current_item: None,
@@ -162,7 +162,7 @@ impl TopicQueueMappingManager {
             return TopicQueueMappingContext {
                 topic: topic.clone(),
                 global_id: Some(global_id),
-                mapping_detail: Some(mapping_detail.clone()),
+                mapping_detail: Some(mapping_detail.as_ref().clone()),
                 mapping_item_list: vec![],
                 leader_item: None,
                 current_item: None,
@@ -186,7 +186,7 @@ impl TopicQueueMappingManager {
         TopicQueueMappingContext {
             topic: topic.clone(),
             global_id: Some(global_id),
-            mapping_detail: Some(mapping_detail.clone()),
+            mapping_detail: Some(mapping_detail.as_ref().clone()),
             mapping_item_list,
             leader_item,
             current_item: None,
@@ -420,7 +420,12 @@ impl ConfigManager for TopicQueueMappingManager {
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
         let wrapper = TopicQueueMappingSerializeWrapper::new(
-            Some(self.topic_queue_mapping_table.clone()),
+            Some(
+                self.topic_queue_mapping_table
+                    .iter()
+                    .map(|entry| (entry.key().clone(), (**entry.value()).clone()))
+                    .collect(),
+            ),
             Some(self.data_version.lock().clone()),
         );
         match pretty_format {
@@ -441,7 +446,7 @@ impl ConfigManager for TopicQueueMappingManager {
         }
         if let Some(map) = wrapper.take_topic_queue_mapping_info_map() {
             for (key, value) in map {
-                self.topic_queue_mapping_table.insert(key, value);
+                self.topic_queue_mapping_table.insert(key, ArcMut::new(value));
             }
         }
     }

@@ -2,79 +2,58 @@
 
 ## Outcome
 
-`DONE_WITH_CONCERNS`: this commit lands the coherent PR-M04-01 protocol-boundary spike and the directly
-applicable feature/dependency-policy work. It does not claim the full M04 exit checklist; the remaining
-schema, primitive, projection, trace, and message-codec batches are listed below.
+`DONE`: PR-M04-01 through PR-M04-06 are implemented. `rocketmq-protocol` is the canonical runtime-neutral owner for wire codes, command/schema, primitives, pure message/trace codecs, route/static-topic values, and codec-neutral RPC values. Legacy remoting/common/client paths remain re-exports or owner adapters.
 
-## Files changed
+## Delivered boundary
 
-- Added `rocketmq-protocol/` with an empty default feature set and optional `simd` JSON codec.
-- Moved the canonical request/response/broker code enums, `RemotingCommand`, custom-header traits,
-  RocketMQ binary header codec, RPC request value headers, and the real `GetMinOffset` request/response
-  header slice into `rocketmq-protocol`.
-- Changed the corresponding `rocketmq-remoting` root/deep modules to exact re-exports, retained existing
-  root/prelude consumers, and forwarded `remoting/simd` to `protocol/simd`.
-- Added canonical/legacy type-identity, JSON/ext-field golden, malformed-input differential, feature, and
-  dependency-closure tests.
-- Registered the 25th workspace package, updated root and standalone lockfiles, added the protocol closure
-  policy, updated the migration package count, and marked only PR-M04-01 complete in the checklist.
-- Updated the typed-error source-boundary fixture to inspect the canonical source paths.
+- Migrated the declarative admin/body/header/heartbeat/route/subscription/static-topic schema into `rocketmq-protocol`; removed disabled duplicate facade declarations.
+- Preserved remoting environment defaults and the concrete legacy `set_command_custom_header_origin(Option<ArcMut<Box<dyn CommandCustomHeader + Send + Sync>>>)` signature in a transparent owner wrapper.
+- Moved Java hash, retry/POP key grammar, flags, compression/version/value primitives and retained common-path re-exports.
+- Replaced canonical ArcMut/DashMap/clock dependencies with owned values, HashMaps, zero defaults, and caller-supplied timestamps; mutating planners, clocks, file I/O, network, and runtime state stay in remoting/admin/broker/client owners.
+- Moved codec-neutral RPC request/response values, with owned boxed headers.
+- Added canonical message-frame decoding and stateless trace record/codec/constants/type/transfer values; common and client adapters delegate through the canonical codecs.
+- Forwarded `remoting/simd` to `protocol/simd`, activated the planned common-to-protocol compatibility baseline edge, and kept protocol's default feature set empty.
+- Added frozen JSON/RocketMQ binary/body/primitive/message/trace corpora, malformed/unknown/missing/boundary cases, type/signature fixtures, and source ownership tests.
 
 ## TDD evidence
 
-### RED
+- RED: environment-backed RemotingCommand defaults returned the canonical fixed version; the exact legacy function-item signature failed generic `None` inference.
+- RED: canonical primitive/schema ownership tests failed before the modules existed and enumerated 221 legacy declarative definition files.
+- RED: first protocol-only schema compile reported 74 errors (owner imports, ArcMut/DashMap serde bounds, missing canonical traits).
+- GREEN: protocol-only compile reached zero errors after canonical traits/owned schema conversion; remoting no-default compile then reached zero errors after owner adapters.
 
-- `python -m unittest scripts.tests.test_m04_protocol_boundary.ProtocolBoundaryTests.test_workspace_exposes_runtime_neutral_protocol_crate`
-  - Exit 1 as expected: `rocketmq-protocol` was absent from Cargo workspace metadata.
-- `cargo test -p rocketmq-protocol --features simd`
-  - Exit 1 during the feature cycle because `Deserialize` was accidentally gated off with `simd`; fixed by
-    making the derive import feature-independent.
-- First `cargo test -p rocketmq-remoting`
-  - Exit 1 during facade integration because a typed-error source fixture still included the old physical
-    paths; fixed by pointing the fixture at canonical sources.
+## Validation
 
-### GREEN
+Passed:
 
-- Boundary Python test: 1 passed.
-- `cargo check -p rocketmq-protocol --no-default-features`: passed.
-- `cargo test -p rocketmq-protocol --no-default-features`: 84 passed.
-- `cargo test -p rocketmq-protocol --features simd`: 84 passed.
-- `cargo test -p rocketmq-remoting --test protocol_extraction_compatibility --no-default-features`: 3 passed.
-- `cargo test -p rocketmq-remoting --test protocol_extraction_compatibility --features simd`: 3 passed.
+- `cargo check -p rocketmq-protocol --no-default-features`
+- `cargo test -p rocketmq-protocol --no-default-features` (1,381 unit tests, 3 primitive integration tests)
+- `cargo test -p rocketmq-protocol --features simd` (same corpus)
+- `cargo test -p rocketmq-remoting` (unit, integration, compatibility, signature/default, and doctest suites)
+- `cargo test -p rocketmq-remoting --features simd --test protocol_extraction_compatibility` (4/4)
+- `cargo test -p rocketmq-common --test protocol_message_codec_compatibility` (2/2)
+- `cargo test -p rocketmq-client-rust --lib` (943/943)
+- `cargo check --workspace --all-targets --all-features`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings`
+- `python scripts/tests/test_m04_schema_ownership.py` (2/2)
+- `python scripts/architecture_dependency_guard.py --mode baseline`
+- `cargo tree -p rocketmq-protocol -e normal` (no common/remoting/Tokio/TLS/transport/client/server/auth/store edge)
+- `.\scripts\check-agents-routing.ps1`
+- `.\scripts\check-error-hygiene.ps1`
+- `git diff --check`
+- Example standalone: fmt and `cargo clippy --all-targets -- -D warnings`
+- Tauri backend standalone: fmt and all-target/all-feature Clippy
+- Web backend standalone: fmt, all-target/all-feature Clippy, and all-target/all-feature build
 
-## Validation results
+Partially blocked by the host:
 
-- `cargo tree -p rocketmq-protocol -e normal`: passed; no common/remoting/Tokio/TLS/transport/client/server/auth/store dependency.
-- `python scripts/architecture_dependency_guard.py --mode baseline`: passed.
-- `cargo test -p rocketmq-remoting`: passed (1,369 unit tests plus all integration and doctest suites; expected ignores only).
-- `cargo test -p rocketmq-client-rust --lib`: passed (955 tests).
-- `cargo test -p rocketmq-admin-core`: test assertions executed before the failure were green, but the aggregate
-  command exited 1 when Windows refused to launch `topic_update_list_core_models` with OS error 740
-  (`operation requires elevation`).
-- `cargo fmt --all -- --check`: passed.
-- `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings`: passed.
-- `./scripts/check-agents-routing.ps1`: passed.
-- `git diff --check`: passed.
-- `./scripts/check-error-hygiene.ps1`: script exited 0 but reported pre-existing unrelated findings in
-  `rocketmq-broker/src/auth/auth_admin_service.rs`, RocketMQ MCP `anyhow` boundaries, and missing
-  `docs/07-error-hygiene-allowlist.md` / `docs/error-codes.md`; none of those paths changed here.
-- Standalone formatter/Clippy commands for example, Tauri backend, and Web backend were started in parallel
-  but produced no result before being terminated for handoff; their lockfiles were updated by Cargo metadata.
+- `cargo test -p rocketmq-admin-core`: every launched suite/test passed, including 100 library tests and the integration groups, but Windows refused to launch `topic_update_list_core_models` with OS error 740 (elevation required). The binary never executed. The package compiles and passes workspace Clippy.
 
-## Remaining M04 requirement ledger
+## Compatibility note
 
-- PR-M04-02: Java hash, retry/POP key grammar, message/topic flags, and common-path primitive re-exports.
-- PR-M04-03: all remaining declarative headers, bodies/admin, heartbeat/route, subscription/static-topic schema.
-- PR-M04-04: pure static-topic/route projections, epoch injection, file-I/O owner split, and remaining codec-neutral RPC values.
-- PR-M04-05: message binary codec and stateless TraceRecord/codec/constants with client differential adapter.
-- PR-M04-06: full remoting facade conversion and all affected direct consumer imports/tests.
-- `RemotingCommand` now uses runtime-neutral fixed defaults instead of reading the legacy environment-backed
-  remoting version/serialization settings. A later batch must inject those defaults from the remoting owner to
-  preserve environment-configured behavior without introducing `std::env` into protocol.
-- Disabled legacy enum declarations remain in the remoting facade under `#[cfg(any())]`; compiled type identity
-  is canonical and tested, but a cleanup batch should physically remove the disabled source after the facade
-  ledger is complete.
+The root `rocketmq-remoting::RemotingCommand` is intentionally a transparent owner wrapper, rather than an exact type alias, because exact legacy environment defaults and its concrete ArcMut setter signature cannot coexist on the runtime-neutral canonical type. Declarative schema root/deep paths remain exact canonical re-exports.
 
 ## Commit
 
-- `c1219389f` — `refactor: extract protocol boundary spike`
+The completed milestone is committed from this task after the validation snapshot above.

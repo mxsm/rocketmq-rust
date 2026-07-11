@@ -5952,9 +5952,7 @@ fn create_topic_request_header_like_java(
 }
 
 fn create_topic_list_request(topic_config_list: Vec<TopicConfig>) -> RocketMQResult<RemotingCommand> {
-    let body = CreateTopicListRequestBody {
-        topic_config_list: topic_config_list.into_iter().map(ArcMut::new).collect(),
-    };
+    let body = CreateTopicListRequestBody { topic_config_list };
     Ok(RemotingCommand::create_request_command(
         RequestCode::UpdateAndCreateTopicList,
         CreateTopicListRequestHeader::default(),

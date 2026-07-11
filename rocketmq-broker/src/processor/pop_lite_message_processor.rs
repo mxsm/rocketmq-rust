@@ -137,7 +137,7 @@ impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
                 CheetahString::from_static_str("topic is blank."),
             ));
         }
-        if request_header.is_timeout_too_much() {
+        if request_header.is_timeout_too_much_at(rocketmq_common::TimeUtils::current_millis() as i64) {
             return Some((
                 ResponseCode::PollingTimeout,
                 CheetahString::from_string(format!(

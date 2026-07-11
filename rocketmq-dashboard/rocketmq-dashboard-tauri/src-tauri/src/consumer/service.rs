@@ -674,9 +674,8 @@ async fn collect_consumer_group_meta(
                 continue;
             }
         };
-        for entry in wrapper.get_subscription_group_table().iter() {
-            let group_name = entry.key().to_string();
-            let config = entry.value();
+        for (group_name, config) in wrapper.get_subscription_group_table().iter() {
+            let group_name = group_name.to_string();
             let meta = group_map.entry(group_name).or_insert_with(ConsumerGroupMeta::default);
             meta.broker_names.insert(broker_name.clone());
             meta.broker_addresses.insert(broker_addr.to_string());

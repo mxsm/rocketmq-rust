@@ -15,8 +15,12 @@
 //! Runtime-neutral RocketMQ wire protocol contracts.
 
 pub mod code;
+pub mod common;
 pub mod protocol;
 pub mod rpc;
+pub mod trace;
+
+pub use rocketmq_model::version;
 
 pub use code::request_code::RequestCode;
 pub use code::response_code::RemotingSysResponseCode;

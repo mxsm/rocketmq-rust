@@ -38,6 +38,7 @@ rocketmq-rust            = { workspace = true }
 rocketmq-common          = { workspace = true }
 rocketmq-model           = { workspace = true }
 rocketmq-remoting        = { workspace = true }
+rocketmq-protocol        = { workspace = true }
 rocketmq-runtime         = { workspace = true }
 rocketmq-error.workspace = true
 rocketmq-auth.workspace  = true

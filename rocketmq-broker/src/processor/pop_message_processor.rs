@@ -264,7 +264,7 @@ where
                 MessageModel::Clustering,
             );
 
-        if request_header.is_timeout_too_much() {
+        if request_header.is_timeout_too_much_at(rocketmq_common::TimeUtils::current_millis() as i64) {
             return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::PollingTimeout,
                 format!(

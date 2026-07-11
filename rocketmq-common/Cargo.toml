@@ -35,6 +35,7 @@ simd     = ["simd-json"]
 rocketmq-rust  = { workspace = true }
 rocketmq-error = { workspace = true, features = ["with_serde", "with_config"] }
 rocketmq-model = { workspace = true }
+rocketmq-protocol = { workspace = true }
 rocketmq-runtime = { workspace = true }
 rocketmq-security-api = { workspace = true }
 

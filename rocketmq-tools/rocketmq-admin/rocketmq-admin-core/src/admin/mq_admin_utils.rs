@@ -25,7 +25,6 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::Topic
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
-use rocketmq_rust::ArcMut;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::errors;
@@ -78,7 +77,7 @@ impl MQAdminUtils {
                             broker_config_map.entry(broker.clone()).or_insert_with(|| {
                                 TopicConfigAndQueueMapping::new(
                                     TopicConfig::new(topic.clone()),
-                                    Some(ArcMut::new(TopicQueueMappingDetail {
+                                    Some(TopicQueueMappingDetail {
                                         topic_queue_mapping_info: TopicQueueMappingInfo::new(
                                             topic.clone(),
                                             queue_num,
@@ -86,7 +85,7 @@ impl MQAdminUtils {
                                             new_epoch,
                                         ),
                                         hosted_queues: None,
-                                    })),
+                                    }),
                                 )
                             });
                         }
@@ -141,7 +140,7 @@ impl MQAdminUtils {
                                 addr.clone(),
                                 topic.clone(),
                                 config_mapping.topic_config.clone(),
-                                (**mapping_detail).clone(),
+                                mapping_detail.clone(),
                                 force,
                             )
                             .await?;
@@ -205,7 +204,7 @@ impl MQAdminUtils {
                                 addr,
                                 topic.clone(),
                                 config_mapping.topic_config.clone(),
-                                (**mapping_detail).clone(),
+                                mapping_detail.clone(),
                                 force,
                             )
                             .await?;
@@ -224,7 +223,7 @@ impl MQAdminUtils {
                                 addr,
                                 topic.clone(),
                                 config_mapping.topic_config.clone(),
-                                (**mapping_detail).clone(),
+                                mapping_detail.clone(),
                                 force,
                             )
                             .await?;
@@ -331,7 +330,7 @@ impl MQAdminUtils {
                                 addr,
                                 topic.clone(),
                                 config_mapping.topic_config.clone(),
-                                (**mapping_detail).clone(),
+                                mapping_detail.clone(),
                                 force,
                             )
                             .await?;
@@ -353,7 +352,7 @@ impl MQAdminUtils {
                             addr,
                             topic.clone(),
                             config_mapping.topic_config.clone(),
-                            (**mapping_detail).clone(),
+                            mapping_detail.clone(),
                             force,
                         )
                         .await?;

@@ -878,15 +878,21 @@ impl ConsumerService {
             None
         } else {
             Some(
-                ConsumerRunningInfo::analyze_subscription(cri_table.clone())
-                    .await
-                    .is_ok(),
+                ConsumerRunningInfo::analyze_subscription_at(
+                    cri_table.clone(),
+                    rocketmq_common::TimeUtils::current_millis(),
+                )
+                .is_ok(),
             )
         };
         let mut process_queue_analysis = Vec::new();
         if subscription_consistent == Some(true) {
             for (client_id, running_info) in cri_table {
-                if let Ok(result) = ConsumerRunningInfo::analyze_process_queue(client_id, running_info).await {
+                if let Ok(result) = ConsumerRunningInfo::analyze_process_queue_at(
+                    client_id,
+                    running_info,
+                    rocketmq_common::TimeUtils::current_millis(),
+                ) {
                     if !result.is_empty() {
                         process_queue_analysis.push(result);
                     }

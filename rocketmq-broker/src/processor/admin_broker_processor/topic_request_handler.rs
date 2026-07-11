@@ -353,7 +353,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut request_body = CreateTopicListRequestBody::decode(request.body().as_ref().unwrap().as_ref()).unwrap();
+        let request_body = CreateTopicListRequestBody::decode(request.body().as_ref().unwrap().as_ref()).unwrap();
         let mut topic_names = String::new();
         for topic_config in request_body.topic_config_list.iter() {
             topic_names.push_str(topic_config.topic_name.as_ref().unwrap().as_str());
@@ -397,7 +397,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 ));
             }
             let topic_config_origin = self.broker_runtime_inner.topic_config_manager().get_topic_config(topic);
-            if topic_config_origin.is_some() && topic_config.clone() == topic_config_origin.unwrap() {
+            if topic_config_origin.is_some() && topic_config.clone() == *topic_config_origin.unwrap() {
                 info!(
                     "Broker receive request to update or create topic={}, but topicConfig has  no changes , so \
                      idempotent, caller address={}",
@@ -408,11 +408,16 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             }
         }
 
+        let mut topic_config_list = request_body
+            .topic_config_list
+            .into_iter()
+            .map(ArcMut::new)
+            .collect::<Vec<_>>();
         self.broker_runtime_inner
             .topic_config_manager_mut()
-            .update_topic_config_list(request_body.topic_config_list.as_mut_slice());
+            .update_topic_config_list(topic_config_list.as_mut_slice());
         if self.broker_runtime_inner.broker_config().enable_single_topic_register {
-            for topic_config in request_body.topic_config_list.iter() {
+            for topic_config in topic_config_list.iter() {
                 self.broker_runtime_inner
                     .topic_config_manager()
                     .broker_runtime_inner()
@@ -422,7 +427,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         } else {
             BrokerRuntimeInner::<MS>::register_increment_broker_data(
                 self.broker_runtime_inner.clone(),
-                request_body.topic_config_list,
+                topic_config_list,
                 self.broker_runtime_inner
                     .topic_config_manager()
                     .data_version()
@@ -513,7 +518,9 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 .broker_runtime_inner
                 .topic_queue_mapping_manager()
                 .topic_queue_mapping_table
-                .clone(),
+                .iter()
+                .map(|entry| (entry.key().clone(), (**entry.value()).clone()))
+                .collect(),
             mapping_data_version: self
                 .broker_runtime_inner
                 .topic_queue_mapping_manager()
@@ -646,7 +653,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                     .set_remark(format!("No topic in this broker. topic: {topic}")),
             ));
         }
-        let mut topic_queue_mapping_detail: Option<ArcMut<TopicQueueMappingDetail>> = None;
+        let mut topic_queue_mapping_detail: Option<TopicQueueMappingDetail> = None;
         if let Some(value) = request_header.topic_request_header.as_ref() {
             if let Some(lo) = value.get_lo() {
                 if *lo {
@@ -655,8 +662,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                         .topic_queue_mapping_manager()
                         .topic_queue_mapping_table
                         .get(topic)
-                        .as_deref()
-                        .cloned();
+                        .map(|entry| (**entry.value()).clone());
                 }
             }
         }
