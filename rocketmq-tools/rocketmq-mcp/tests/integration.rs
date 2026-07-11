@@ -16,8 +16,12 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use serde_json::Value;
+
+static NEXT_TEMP_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
 
 #[test]
 fn mcp_inspector_stdio_surface_integration() {
@@ -116,7 +120,8 @@ fn run_stdio_server(input: &str) -> StdioOutput {
     drop(child.stdin.take());
 
     let output = child.wait_with_output().expect("wait for rocketmq-mcp");
-    let _ = std::fs::remove_file(config);
+    let config_dir = config.parent().expect("temporary config directory").to_path_buf();
+    let _ = std::fs::remove_dir_all(config_dir);
     StdioOutput {
         status: output.status,
         stdout: String::from_utf8(output.stdout).expect("stdout utf8"),
@@ -128,12 +133,19 @@ fn temporary_memory_audit_config() -> std::path::PathBuf {
     let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("conf")
         .join("mcp.example.toml");
+    let permissions = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("conf")
+        .join("permissions.example.toml");
     let config = std::fs::read_to_string(example).expect("read example config");
     let config = config
         .replace("sink = \"file\"", "sink = \"memory\"")
         .replace("path = \"./logs/rocketmq-mcp-audit.log\"", "path = \"\"");
-    let path = std::env::temp_dir().join(format!("rocketmq-mcp-integration-{}.toml", std::process::id()));
+    let suffix = NEXT_TEMP_CONFIG_ID.fetch_add(1, Ordering::Relaxed);
+    let directory = std::env::temp_dir().join(format!("rocketmq-mcp-integration-{}-{suffix}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("create temp config directory");
+    let path = directory.join("mcp.toml");
     std::fs::write(&path, config).expect("write temp config");
+    std::fs::copy(permissions, path.with_file_name("permissions.example.toml")).expect("copy permissions config");
     path
 }
 

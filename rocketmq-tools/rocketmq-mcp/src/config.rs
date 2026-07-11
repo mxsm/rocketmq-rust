@@ -49,10 +49,10 @@ pub struct McpConfig {
 
 impl McpConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, McpError> {
-        let config = config::Config::builder()
-            .add_source(config::File::from(path.as_ref()))
-            .build()?;
-        let config = config.try_deserialize::<Self>()?;
+        let path = path.as_ref();
+        let config = config::Config::builder().add_source(config::File::from(path)).build()?;
+        let mut config = config.try_deserialize::<Self>()?;
+        config.resolve_permissions_path(path)?;
         config.validate()?;
         Ok(config)
     }
@@ -128,11 +128,28 @@ impl McpConfig {
                 "security.rate_limit_per_minute must be greater than zero".to_string(),
             ));
         }
+        if self.security.max_concurrent_requests_per_cluster == 0 {
+            return Err(McpError::InvalidConfig(
+                "security.max_concurrent_requests_per_cluster must be greater than zero".to_string(),
+            ));
+        }
+        if self.security.permissions_file.trim().is_empty() {
+            return Err(McpError::InvalidConfig(
+                "security.permissions_file must not be empty".to_string(),
+            ));
+        }
 
         validate_audit_sink(&self.audit.sink)?;
         if self.audit.enabled && self.audit.sink == "file" {
             validate_non_empty("audit.path", &self.audit.path)?;
         }
+        if self.audit.queue_capacity == 0 {
+            return Err(McpError::InvalidConfig(
+                "audit.queue_capacity must be greater than zero".to_string(),
+            ));
+        }
+
+        self.server.http.auth.validate()?;
 
         if self.cache.enabled && self.cache.max_entries == 0 {
             return Err(McpError::InvalidConfig(
@@ -149,6 +166,26 @@ impl McpConfig {
             ));
         }
 
+        Ok(())
+    }
+
+    fn resolve_permissions_path(&mut self, config_path: &Path) -> Result<(), McpError> {
+        let permissions_path = Path::new(&self.security.permissions_file);
+        let resolved = if permissions_path.is_absolute() {
+            permissions_path.to_path_buf()
+        } else {
+            config_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(permissions_path)
+        };
+        let canonical = resolved.canonicalize().map_err(|error| {
+            McpError::InvalidConfig(format!(
+                "security.permissions_file `{}` cannot be resolved: {error}",
+                resolved.display()
+            ))
+        })?;
+        self.security.permissions_file = canonical.to_string_lossy().into_owned();
         Ok(())
     }
 }
@@ -215,7 +252,59 @@ pub struct HttpConfig {
     pub endpoint: String,
     pub validate_origin: bool,
     pub allowed_origins: Vec<String>,
-    pub require_auth: bool,
+    pub auth: HttpAuthConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct HttpAuthConfig {
+    pub mode: HttpAuthMode,
+    pub development_token_env: String,
+    pub issuer: String,
+    pub audience: String,
+    pub required_scopes: Vec<String>,
+    pub jwt_algorithm: JwtAlgorithm,
+    pub jwt_key_env: String,
+    pub protected_resource_metadata_path: String,
+}
+
+impl HttpAuthConfig {
+    fn validate(&self) -> Result<(), McpError> {
+        validate_non_empty("server.http.auth.development_token_env", &self.development_token_env)?;
+        validate_non_empty(
+            "server.http.auth.protected_resource_metadata_path",
+            &self.protected_resource_metadata_path,
+        )?;
+        if !self.protected_resource_metadata_path.starts_with('/') {
+            return Err(McpError::InvalidConfig(
+                "server.http.auth.protected_resource_metadata_path must start with '/'".to_string(),
+            ));
+        }
+        if self.required_scopes.iter().any(|scope| scope.trim().is_empty()) {
+            return Err(McpError::InvalidConfig(
+                "server.http.auth.required_scopes must not contain empty values".to_string(),
+            ));
+        }
+        if self.mode == HttpAuthMode::OAuthJwt {
+            validate_non_empty("server.http.auth.issuer", &self.issuer)?;
+            validate_non_empty("server.http.auth.audience", &self.audience)?;
+            validate_non_empty("server.http.auth.jwt_key_env", &self.jwt_key_env)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum HttpAuthMode {
+    DevelopmentToken,
+    OAuthJwt,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum JwtAlgorithm {
+    Hs256,
+    Rs256,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -231,6 +320,8 @@ pub struct SecurityConfig {
     pub allow_change_planning: bool,
     pub sanitize_output: bool,
     pub rate_limit_per_minute: u32,
+    pub permissions_file: String,
+    pub max_concurrent_requests_per_cluster: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -238,6 +329,7 @@ pub struct AuditConfig {
     pub enabled: bool,
     pub sink: String,
     pub path: String,
+    pub queue_capacity: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -298,10 +390,6 @@ fn trimmed_override(field: &str, value: Option<&str>) -> Result<Option<String>, 
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::time::SystemTime;
-    use std::time::UNIX_EPOCH;
-
     use super::*;
 
     #[test]
@@ -329,50 +417,10 @@ mod tests {
 
     #[test]
     fn load_rejects_empty_cluster_list() {
-        let path = write_temp_config(
-            r#"
-clusters = []
-
-[server]
-name = "rocketmq-mcp"
-version = "1.0.0"
-transport = "stdio"
-log_level = "info"
-
-[server.stdio]
-log_to_stderr = true
-
-[server.http]
-bind = "127.0.0.1:8089"
-endpoint = "/mcp"
-validate_origin = true
-allowed_origins = ["http://localhost"]
-require_auth = true
-
-[security]
-profile = "read_only"
-allow_change_planning = false
-sanitize_output = true
-rate_limit_per_minute = 60
-
-[audit]
-enabled = true
-sink = "file"
-path = "./logs/rocketmq-mcp-audit.log"
-
-[cache]
-enabled = true
-max_entries = 256
-cluster_overview_ttl_ms = 3000
-topic_list_ttl_ms = 5000
-broker_metrics_ttl_ms = 2000
-consumer_lag_ttl_ms = 1000
-"#,
-        );
-
-        let err = McpConfig::load(&path).unwrap_err();
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.clusters.clear();
+        let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("at least one cluster"));
-        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -414,13 +462,6 @@ consumer_lag_ttl_ms = 1000
         let error = config.validate().unwrap_err();
 
         assert!(error.to_string().contains("cache.max_entries"));
-    }
-
-    fn write_temp_config(contents: &str) -> std::path::PathBuf {
-        let suffix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("rocketmq-mcp-config-{suffix}.toml"));
-        fs::write(&path, contents).unwrap();
-        path
     }
 
     fn example_config_path() -> std::path::PathBuf {

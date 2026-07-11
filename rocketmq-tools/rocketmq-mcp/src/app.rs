@@ -26,19 +26,28 @@ pub struct McpApp {
     config: McpConfig,
     guard: Guard,
     query: Arc<QueryFacade<AdminCoreSessionFactory>>,
+    runtime_context: Option<rocketmq_runtime::RuntimeContext>,
 }
 
 impl McpApp {
-    pub fn new(config: McpConfig) -> Self {
-        let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters);
+    pub fn new(config: McpConfig) -> Result<Self, crate::error::McpError> {
+        let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)
+            .map_err(|error| crate::error::McpError::InvalidConfig(error.to_string()))?;
         let query = Arc::new(QueryFacade::new(config.clone()).with_visibility_class("local"));
-        Self { config, guard, query }
+        Ok(Self {
+            config,
+            guard,
+            query,
+            runtime_context: None,
+        })
     }
 
     pub async fn bootstrap(args: Args) -> anyhow::Result<Self> {
         let config = McpConfig::load_with_overrides(&args)?;
         init_tracing(&config)?;
-        Ok(Self::new(config))
+        let mut app = Self::new(config)?;
+        app.start_background_services()?;
+        Ok(app)
     }
 
     pub fn config(&self) -> &McpConfig {
@@ -55,6 +64,7 @@ impl McpApp {
 
     pub(crate) fn trace_cache_metrics(&self) {
         let metrics = self.query.cache_metrics();
+        let audit = self.guard.audit_metrics();
         tracing::trace!(
             cache_hits = metrics.hits,
             cache_misses = metrics.misses,
@@ -62,6 +72,9 @@ impl McpApp {
             cache_evictions = metrics.evictions,
             cache_invalidations = metrics.invalidations,
             cache_coalesced_waiters = metrics.coalesced_waiters,
+            audit_queued = audit.queued,
+            audit_dropped = audit.dropped,
+            audit_sink_failures = audit.sink_failures,
             "rocketmq-mcp cache metrics"
         );
     }
@@ -73,6 +86,26 @@ impl McpApp {
 
     pub fn transport(&self) -> TransportKind {
         self.config.server.transport
+    }
+
+    pub async fn shutdown(&self) {
+        if let Some(runtime_context) = &self.runtime_context {
+            let report = runtime_context.shutdown_tasks(std::time::Duration::from_secs(10)).await;
+            report.log_if_unhealthy();
+        }
+    }
+
+    fn start_background_services(&mut self) -> Result<(), crate::error::McpError> {
+        let runtime_context = rocketmq_runtime::RuntimeContext::try_from_current("rocketmq-mcp").map_err(|error| {
+            crate::error::McpError::InvalidConfig(format!("runtime initialization failed: {error}"))
+        })?;
+        let audit_service = runtime_context.service_context("rocketmq-mcp-audit");
+        self.guard
+            .audit_log()
+            .start(&self.config.audit, &audit_service)
+            .map_err(|error| crate::error::McpError::InvalidConfig(error.to_string()))?;
+        self.runtime_context = Some(runtime_context);
+        Ok(())
     }
 }
 

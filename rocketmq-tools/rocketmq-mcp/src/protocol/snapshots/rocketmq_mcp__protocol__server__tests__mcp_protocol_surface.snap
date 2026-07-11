@@ -1,6 +1,6 @@
 ---
 source: rocketmq-tools/rocketmq-mcp/src/protocol/server.rs
-assertion_line: 236
+assertion_line: 279
 expression: surface
 ---
 {
@@ -1885,12 +1885,12 @@ expression: surface
           },
           "EvidenceStatus": {
             "enum": [
-              "Present",
-              "Missing",
-              "Unavailable",
-              "Timeout",
-              "Unauthorized",
-              "Invalid"
+              "present",
+              "missing",
+              "unavailable",
+              "timeout",
+              "unauthorized",
+              "invalid"
             ],
             "type": "string"
           },
@@ -1988,12 +1988,12 @@ expression: surface
           },
           "Severity": {
             "enum": [
-              "Healthy",
-              "Low",
-              "Medium",
-              "High",
-              "Critical",
-              "Unknown"
+              "healthy",
+              "low",
+              "medium",
+              "high",
+              "critical",
+              "unknown"
             ],
             "type": "string"
           }

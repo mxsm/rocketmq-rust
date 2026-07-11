@@ -29,10 +29,17 @@ pub(crate) struct RateLimiter {
 }
 
 impl RateLimiter {
-    pub(crate) fn check(&self, tool_name: &str, limit_per_minute: u32) -> Result<(), GuardError> {
+    pub(crate) fn check(
+        &self,
+        principal_id: &str,
+        cluster: Option<&str>,
+        operation: &str,
+        limit_per_minute: u32,
+    ) -> Result<(), GuardError> {
+        let key = format!("{principal_id}|{}|{operation}", cluster.unwrap_or("_"));
         if limit_per_minute == 0 {
             return Err(GuardError::RateLimited(format!(
-                "{tool_name} is disabled by zero rate limit"
+                "{operation} is disabled by zero rate limit"
             )));
         }
 
@@ -40,7 +47,7 @@ impl RateLimiter {
             return Err(GuardError::RateLimited("rate limiter state is unavailable".to_string()));
         };
         let now = Instant::now();
-        let entries = calls.entry(tool_name.to_string()).or_default();
+        let entries = calls.entry(key).or_default();
 
         while entries
             .front()
@@ -51,7 +58,7 @@ impl RateLimiter {
 
         if entries.len() >= limit_per_minute as usize {
             return Err(GuardError::RateLimited(format!(
-                "{tool_name} exceeded {limit_per_minute} calls per minute"
+                "{operation} exceeded {limit_per_minute} calls per minute for principal `{principal_id}`"
             )));
         }
 

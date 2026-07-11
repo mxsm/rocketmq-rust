@@ -35,10 +35,10 @@ The default profile is diagnostics-oriented and read-only:
 - `security.profile = "diagnose"` allows read-only and diagnosis tools.
 - `security.allow_change_planning = false` blocks planning Tools unless explicitly enabled.
 - `security.sanitize_output = true` redacts configured sensitive output patterns.
-- `audit.enabled = true` records tool decisions and HTTP rejections.
+- `audit.enabled = true` records tool decisions and HTTP rejections through a bounded asynchronous writer.
 - `server.stdio.log_to_stderr = true` keeps stdout reserved for MCP protocol frames.
 
-For HTTP deployments, keep `server.http.bind` on loopback unless there is a reviewed network boundary. When `server.http.require_auth = true`, the process requires `ROCKETMQ_MCP_HTTP_TOKEN` and clients must send `Authorization: Bearer <token>`.
+For HTTP deployments, keep `server.http.bind` on loopback unless there is a reviewed network boundary. `server.http.auth.mode = "development-token"` is explicitly for loopback development. Production deployments must use `oauth-jwt`, validate signed issuer/audience-bound access tokens, and configure the public key through the declared environment variable. The server never forwards an incoming bearer token to RocketMQ.
 
 When `change-planning` is compiled, planning Tools are still controlled by runtime policy. They return a plan, impact analysis, and rollback suggestions. Their schemas contain no Apply mode, operator identity, or confirmation token, and no mutation API is called.
 
@@ -85,9 +85,16 @@ Important fields:
 - `server.http.bind`: socket address for HTTP transport, default `127.0.0.1:8089`.
 - `server.http.endpoint`: MCP endpoint path, default `/mcp`.
 - `server.http.allowed_origins`: allowed browser origins when origin validation is enabled.
+- `server.http.auth.mode`: `development-token` for loopback development or `oauth-jwt` for production JWT access tokens.
+- `server.http.auth.issuer`, `audience`, `required_scopes`, `jwt_algorithm`, and `jwt_key_env`: OAuth resource-server validation settings. `rs256` expects a PEM public key.
+- `server.http.auth.protected_resource_metadata_path`: unauthenticated OAuth protected-resource metadata endpoint.
 - `clusters[].name`: logical cluster name used by tools, resources, and prompts.
 - `clusters[].namesrv_addr`: RocketMQ namesrv address for admin queries.
+- `security.permissions_file`: executable role, tool, and cluster policy. Claims roles and `rocketmq_clusters` are intersected with this policy.
+- `security.max_concurrent_requests_per_cluster`: bounded concurrent Tool and Resource work per configured cluster.
+- `security.rate_limit_per_minute`: per-principal, per-cluster, per-operation limit.
 - `audit.sink`: `memory`, `file`, or `tracing`.
+- `audit.queue_capacity`: bounded audit writer queue. Queue drops and sink failures are emitted as trace metrics.
 - `cache.enabled`: enables or bypasses the shared query cache.
 - `cache.max_entries`: maximum number of in-memory entries; it must be greater than zero when caching is enabled.
 - `cache.*_ttl_ms`: per-query-family freshness windows for overview, topic, broker, and consumer-lag data.
@@ -123,7 +130,7 @@ target/release/rocketmq-mcp \
 
 ## Streamable HTTP Usage
 
-Streamable HTTP requires the `streamable-http` feature and, when auth is enabled, a bearer token.
+Streamable HTTP requires the `streamable-http` feature. Use a static token only for reviewed loopback development; use OAuth JWT validation in production.
 
 PowerShell:
 
@@ -153,6 +160,10 @@ Clients connect to `http://127.0.0.1:8089/mcp` and send:
 Authorization: Bearer replace-with-a-long-random-token
 Accept: application/json, text/event-stream
 ```
+
+For production, set `mode = "oauth-jwt"`, configure `issuer`, `audience`, `required_scopes`, and `jwt_key_env`, then provide the configured PEM public key through that environment variable. Clients must send an access token whose signature, issuer, audience, expiry, and required scope are valid. The server publishes OAuth protected-resource metadata at the configured `protected_resource_metadata_path`; this endpoint remains available without a bearer token for client discovery.
+
+`permissions.example.toml` is loaded at startup. A principal needs a configured role, the scope appropriate to the requested risk level, and access to the requested cluster. Tool, Resource, and Prompt discovery are filtered by this policy; Resource reads and Tool calls are enforced again at execution time. Audit records contain the verified principal and client identifier but never store the bearer token.
 
 ## Claude Desktop
 
@@ -250,10 +261,10 @@ Cluster and RocketMQ entity names are UTF-8 percent-encoded as URI path or query
 ## Troubleshooting
 
 - `streamable-http transport requires the streamable-http feature`: rebuild or run with `--features streamable-http`.
-- `ROCKETMQ_MCP_HTTP_TOKEN must be set when HTTP auth is required`: set the environment variable or disable auth only for a reviewed local test.
-- HTTP `401`: check the `Authorization: Bearer <token>` header.
-- HTTP `403` or rejected browser requests: check `server.http.allowed_origins` and `server.http.validate_origin`.
+- HTTP token configuration error: set the selected development-token or OAuth JWT key environment variable. Production mode must not use `ROCKETMQ_MCP_HTTP_TOKEN`.
+- HTTP `401`: check the access-token signature, expiry, issuer, audience, and `Authorization: Bearer <token>` header.
+- HTTP `403`: check token scopes, role claims, `rocketmq_clusters`, `permissions.example.toml`, and browser origin policy.
 - HTTP `429`: raise `security.rate_limit_per_minute` only after reviewing client retry behavior.
 - Empty or invalid stdio responses: ensure no wrapper script writes logs or banners to stdout.
 - No cluster data: verify `clusters[].namesrv_addr`, local network access, and RocketMQ namesrv availability.
-- Audit file errors: create the audit directory or use `audit.sink = "memory"` for local tests.
+- Audit file errors: create the audit directory or use `audit.sink = "memory"` for local tests. Check `audit_sink_failures` and `audit_dropped` trace metrics before increasing queue capacity.

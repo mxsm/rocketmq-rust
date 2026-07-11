@@ -33,10 +33,12 @@ async fn main() -> anyhow::Result<()> {
         app.config().server.name,
     );
 
-    match app.transport() {
-        TransportKind::Stdio => transport::stdio::serve(app).await?,
-        TransportKind::StreamableHttp => serve_streamable_http(app).await?,
-    }
+    let result = match app.transport() {
+        TransportKind::Stdio => transport::stdio::serve(app.clone()).await,
+        TransportKind::StreamableHttp => serve_streamable_http(app.clone()).await,
+    };
+    app.shutdown().await;
+    result?;
 
     Ok(())
 }
