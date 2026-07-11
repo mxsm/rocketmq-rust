@@ -311,9 +311,19 @@ where
                     Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
                 };
                 let cluster = args.cluster.clone();
-                let output = change_tools::plan_create_topic(args);
-                let summary = summary_change_plan(&output);
-                success_live_result(descriptor, request_id, cluster, summary, output)
+                self.adapter
+                    .list_topics(topic_tools::ListTopicsArgs {
+                        cluster: Some(cluster.clone()),
+                        filter: None,
+                        page: crate::model::contract::PageRequest::default(),
+                    })
+                    .await
+                    .and_then(|current| {
+                        let current = canonical_current_state(&current)?;
+                        let output = change_tools::plan_create_topic_with_current_state(args, current);
+                        let summary = summary_change_plan(&output);
+                        success_live_result(descriptor, request_id, cluster, summary, output)
+                    })
             }
             #[cfg(feature = "change-planning")]
             ToolId::PlanUpdateTopicConfig => {
@@ -322,9 +332,19 @@ where
                     Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
                 };
                 let cluster = args.cluster.clone();
-                let output = change_tools::plan_update_topic_config(args);
-                let summary = summary_change_plan(&output);
-                success_live_result(descriptor, request_id, cluster, summary, output)
+                self.adapter
+                    .describe_topic(topic_tools::DescribeTopicArgs {
+                        cluster: cluster.clone(),
+                        topic: args.desired.topic.clone(),
+                        page: crate::model::contract::PageRequest::default(),
+                    })
+                    .await
+                    .and_then(|current| {
+                        let current = canonical_current_state(&current)?;
+                        let output = change_tools::plan_update_topic_config_with_current_state(args, current);
+                        let summary = summary_change_plan(&output);
+                        success_live_result(descriptor, request_id, cluster, summary, output)
+                    })
             }
             #[cfg(feature = "change-planning")]
             ToolId::PlanUpdateTopicPermissions => {
@@ -333,9 +353,19 @@ where
                     Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
                 };
                 let cluster = args.cluster.clone();
-                let output = change_tools::plan_update_topic_perm(args);
-                let summary = summary_change_plan(&output);
-                success_live_result(descriptor, request_id, cluster, summary, output)
+                self.adapter
+                    .describe_topic(topic_tools::DescribeTopicArgs {
+                        cluster: cluster.clone(),
+                        topic: args.desired.topic.clone(),
+                        page: crate::model::contract::PageRequest::default(),
+                    })
+                    .await
+                    .and_then(|current| {
+                        let current = canonical_current_state(&current)?;
+                        let output = change_tools::plan_update_topic_perm_with_current_state(args, current);
+                        let summary = summary_change_plan(&output);
+                        success_live_result(descriptor, request_id, cluster, summary, output)
+                    })
             }
             #[cfg(feature = "change-planning")]
             ToolId::PlanUpdateBrokerConfig => {
@@ -344,9 +374,18 @@ where
                     Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
                 };
                 let cluster = args.cluster.clone();
-                let output = change_tools::plan_update_broker_config(args);
-                let summary = summary_change_plan(&output);
-                success_live_result(descriptor, request_id, cluster, summary, output)
+                self.adapter
+                    .describe_broker(broker_tools::DescribeBrokerArgs {
+                        cluster: cluster.clone(),
+                        broker_name: args.desired.broker_name.clone(),
+                    })
+                    .await
+                    .and_then(|current| {
+                        let current = canonical_current_state(&current)?;
+                        let output = change_tools::plan_update_broker_config_with_current_state(args, current);
+                        let summary = summary_change_plan(&output);
+                        success_live_result(descriptor, request_id, cluster, summary, output)
+                    })
             }
             #[cfg(feature = "change-planning")]
             ToolId::PlanResetConsumerOffset => {
@@ -355,9 +394,20 @@ where
                     Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
                 };
                 let cluster = args.cluster.clone();
-                let output = change_tools::plan_reset_consumer_offset(args);
-                let summary = summary_change_plan(&output);
-                success_live_result(descriptor, request_id, cluster, summary, output)
+                self.adapter
+                    .query_consumer_lag(consumer_tools::QueryConsumerLagArgs {
+                        cluster: cluster.clone(),
+                        topic: args.desired.topic.clone(),
+                        consumer_group: args.desired.consumer_group.clone(),
+                        page: crate::model::contract::PageRequest::default(),
+                    })
+                    .await
+                    .and_then(|current| {
+                        let current = canonical_current_state(&current)?;
+                        let output = change_tools::plan_reset_consumer_offset_with_current_state(args, current);
+                        let summary = summary_change_plan(&output);
+                        success_live_result(descriptor, request_id, cluster, summary, output)
+                    })
             }
         };
 
@@ -555,6 +605,25 @@ fn summary_change_plan(output: &change_tools::ChangePlan) -> String {
     )
 }
 
+#[cfg(feature = "change-planning")]
+fn canonical_current_state<T: Serialize>(current: &QueryResult<T>) -> Result<Value, ToolExecutionError> {
+    let mut state = serde_json::to_value(&current.data).map_err(ToolExecutionError::internal)?;
+    remove_transient_state_fields(&mut state);
+    Ok(state)
+}
+
+#[cfg(feature = "change-planning")]
+fn remove_transient_state_fields(value: &mut Value) {
+    match value {
+        Value::Array(values) => values.iter_mut().for_each(remove_transient_state_fields),
+        Value::Object(values) => {
+            values.remove("generated_at");
+            values.values_mut().for_each(remove_transient_state_fields);
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::config::AuditConfig;
@@ -593,9 +662,20 @@ mod tests {
 
         async fn list_topics(
             &self,
-            _args: topic_tools::ListTopicsArgs,
+            args: topic_tools::ListTopicsArgs,
         ) -> Result<QueryResult<topic_tools::ListTopicsOutput>, ToolExecutionError> {
-            unimplemented!("not needed by this test")
+            Ok(QueryResult::bypass(topic_tools::ListTopicsOutput {
+                cluster: args.cluster.unwrap_or_else(|| "local-dev".to_string()),
+                namesrv_addr: "127.0.0.1:9876".to_string(),
+                page: crate::model::contract::Page {
+                    items: Vec::new(),
+                    count: 0,
+                    total_count: 0,
+                    has_more: false,
+                    next_cursor: None,
+                },
+                generated_at: "transient-test-time".to_string(),
+            }))
         }
 
         async fn describe_topic(
@@ -785,7 +865,41 @@ mod tests {
         let structured = result.structured_content.as_ref().unwrap();
         assert_eq!(structured["data"]["plan_type"], "create_topic");
         assert_eq!(structured["data"]["mutates_cluster"], false);
+        assert_eq!(structured["data"]["ephemeral"], true);
+        assert_eq!(structured["data"]["immutable"], true);
+        assert!(structured["data"]["current_state"].get("generated_at").is_none());
         assert_eq!(guard.audit_log().records()[0].status, AuditStatus::Success);
+    }
+
+    #[cfg(feature = "change-planning")]
+    #[test]
+    fn current_state_snapshot_excludes_transient_fields() {
+        let first = QueryResult {
+            data: serde_json::json!({
+                "value": "unchanged",
+                "nested": { "generated_at": "first" },
+                "generated_at": "first",
+            }),
+            observed_at: "first".to_string(),
+            freshness_ms: 0,
+            cache_status: crate::model::contract::CacheStatus::Bypass,
+        };
+        let second = QueryResult {
+            data: serde_json::json!({
+                "value": "unchanged",
+                "nested": { "generated_at": "second" },
+                "generated_at": "second",
+            }),
+            observed_at: "second".to_string(),
+            freshness_ms: 100,
+            cache_status: crate::model::contract::CacheStatus::Hit,
+        };
+
+        let first = canonical_current_state(&first).unwrap();
+        let second = canonical_current_state(&second).unwrap();
+
+        assert_eq!(first, serde_json::json!({ "value": "unchanged", "nested": {} }));
+        assert_eq!(first, second);
     }
 
     #[cfg(feature = "change-planning")]
