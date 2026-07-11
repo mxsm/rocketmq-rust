@@ -197,8 +197,9 @@ where
     let (completion_tx, completion_rx) = std_mpsc::channel();
     task_group
         .spawn_service(task_name, async move {
-            let _fallback_lease = fallback_lease;
+            // Notify waiters only after the fallback lease is released.
             let _completion = ClientTrackedTaskCompletion::new(completion_tx);
+            let _fallback_lease = fallback_lease;
             task.await;
         })
         .map_err(io::Error::other)?;
@@ -435,8 +436,9 @@ where
     let (completion_tx, completion_rx) = std_mpsc::channel();
     let task_id = task_group
         .spawn_service(task_name, async move {
-            let _fallback_guard = fallback_guard;
+            // Notify waiters only after fallback bookkeeping is released.
             let _completion = ClientTrackedTaskCompletion::new(completion_tx);
+            let _fallback_guard = fallback_guard;
             task.await;
         })
         .map_err(io::Error::other)?;
