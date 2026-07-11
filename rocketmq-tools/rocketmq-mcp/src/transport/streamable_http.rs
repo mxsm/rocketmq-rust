@@ -156,7 +156,15 @@ fn allowed_hosts(bind: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use axum::body::Body;
+    use axum::http::header::AUTHORIZATION;
+    use axum::http::header::HOST;
+    use axum::http::header::ORIGIN;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
     use super::*;
+    use crate::app::McpApp;
     use crate::config::McpConfig;
 
     #[test]
@@ -194,6 +202,63 @@ mod tests {
 
         assert_eq!(metadata["resource"], "http://127.0.0.1:8089/mcp");
         assert_eq!(metadata["scopes_supported"], serde_json::json!(["rocketmq:read"]));
+    }
+
+    #[tokio::test]
+    async fn router_exposes_metadata_and_enforces_http_security_boundaries() {
+        let _environment = development_token_environment_lock().lock().await;
+        std::env::set_var("ROCKETMQ_MCP_HTTP_TOKEN", "router-test-token");
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.audit.enabled = false;
+        let app = McpApp::new(config).unwrap();
+        let router = build_router(app, CancellationToken::new()).unwrap();
+
+        let metadata = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/.well-known/oauth-protected-resource")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(metadata.status(), StatusCode::OK);
+
+        let unauthorized = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let forbidden_origin = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header(AUTHORIZATION, "Bearer router-test-token")
+                    .header(HOST, "localhost")
+                    .header(ORIGIN, "https://untrusted.example.test")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forbidden_origin.status(), StatusCode::FORBIDDEN);
+
+        std::env::remove_var("ROCKETMQ_MCP_HTTP_TOKEN");
+    }
+
+    fn development_token_environment_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(tokio::sync::Mutex::default)
     }
 
     fn example_config_path() -> std::path::PathBuf {

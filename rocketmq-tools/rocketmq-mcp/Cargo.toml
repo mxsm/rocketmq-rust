@@ -76,6 +76,7 @@ validator          = { version = "0.20", features = ["derive"] }
 insta             = { version = "1.43", features = ["json"] }
 mockall           = { workspace = true }
 pretty_assertions = "1.4"
+tower             = { version = "0.5", features = ["util"] }
 
 [[bin]]
 name = "rocketmq-mcp"
