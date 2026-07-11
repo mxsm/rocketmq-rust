@@ -459,6 +459,130 @@ mod tests {
     }
 
     #[test]
+    fn test_update_queue_data_perm_updates_only_target() {
+        let table = TopicQueueTable::new();
+
+        table.insert(
+            CheetahString::from_static_str("topic-a"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data(8, 8),
+        );
+        table.insert(
+            CheetahString::from_static_str("topic-a"),
+            CheetahString::from_static_str("broker-b"),
+            create_test_queue_data(16, 16),
+        );
+        table.insert(
+            CheetahString::from_static_str("topic-b"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data(32, 32),
+        );
+
+        assert!(table.update_queue_data_perm("topic-a", "broker-a", 4));
+
+        let updated = table.get("topic-a", "broker-a").expect("updated queue data");
+        assert_eq!(updated.read_queue_nums(), 8);
+        assert_eq!(updated.write_queue_nums(), 8);
+        assert_eq!(updated.perm(), 4);
+        assert_eq!(table.get("topic-a", "broker-b").expect("broker-b queue data").perm(), 6);
+        assert_eq!(table.get("topic-b", "broker-a").expect("topic-b queue data").perm(), 6);
+    }
+
+    #[test]
+    fn test_update_queue_data_perm_returns_false_for_missing_entry() {
+        let table = TopicQueueTable::new();
+        table.insert(
+            CheetahString::from_static_str("topic-a"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data(8, 8),
+        );
+
+        assert!(!table.update_queue_data_perm("missing-topic", "broker-a", 4));
+        assert!(!table.update_queue_data_perm("topic-a", "missing-broker", 4));
+        assert_eq!(table.get("topic-a", "broker-a").expect("queue data").perm(), 6);
+    }
+
+    #[test]
+    fn test_get_topic_queues_map_returns_public_snapshot() {
+        let table = TopicQueueTable::new();
+        let broker_a = CheetahString::from_static_str("broker-a");
+        let broker_b = CheetahString::from_static_str("broker-b");
+
+        table.insert(
+            CheetahString::from_static_str("topic-a"),
+            broker_a.clone(),
+            create_test_queue_data(8, 8),
+        );
+        table.insert(
+            CheetahString::from_static_str("topic-a"),
+            broker_b.clone(),
+            create_test_queue_data(16, 16),
+        );
+        table.insert(
+            CheetahString::from_static_str("topic-b"),
+            CheetahString::from_static_str("broker-c"),
+            create_test_queue_data(32, 32),
+        );
+        let queue_a = table.get("topic-a", "broker-a").expect("broker-a queue data");
+        let queue_b = table.get("topic-a", "broker-b").expect("broker-b queue data");
+
+        let queues = table.get_topic_queues_map("topic-a").expect("topic snapshot");
+
+        assert_eq!(queues.len(), 2);
+        assert!(Arc::ptr_eq(
+            queues.get(&broker_a).expect("public broker-a key"),
+            &queue_a
+        ));
+        assert!(Arc::ptr_eq(
+            queues.get(&broker_b).expect("public broker-b key"),
+            &queue_b
+        ));
+    }
+
+    #[test]
+    fn test_iter_all_with_data_returns_all_entries() {
+        let table = TopicQueueTable::new();
+
+        table.insert(
+            CheetahString::from_static_str("topic-a"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data(8, 8),
+        );
+        table.insert(
+            CheetahString::from_static_str("topic-a"),
+            CheetahString::from_static_str("broker-b"),
+            create_test_queue_data(16, 16),
+        );
+        table.insert(
+            CheetahString::from_static_str("topic-b"),
+            CheetahString::from_static_str("broker-c"),
+            create_test_queue_data(32, 32),
+        );
+
+        let all_entries = table.iter_all_with_data();
+
+        assert_eq!(all_entries.len(), 2);
+        let topic_a = all_entries
+            .iter()
+            .find(|(topic, _)| topic == "topic-a")
+            .expect("topic-a entries");
+        assert_eq!(
+            topic_a
+                .1
+                .iter()
+                .map(|queue_data| queue_data.read_queue_nums())
+                .collect::<HashSet<_>>(),
+            HashSet::from([8, 16])
+        );
+        let topic_b = all_entries
+            .iter()
+            .find(|(topic, _)| topic == "topic-b")
+            .expect("topic-b entries");
+        assert_eq!(topic_b.1.len(), 1);
+        assert_eq!(topic_b.1[0].read_queue_nums(), 32);
+    }
+
+    #[test]
     fn test_remove_broker() {
         let table = TopicQueueTable::new();
         let topic: TopicName = CheetahString::from_string("TestTopic".to_string());
