@@ -1,5 +1,6 @@
 ---
 source: rocketmq-tools/rocketmq-mcp/src/protocol/server.rs
+assertion_line: 239
 expression: surface
 ---
 {
@@ -20,11 +21,6 @@ expression: surface
           "description": "Consumer group name.",
           "name": "consumer_group",
           "required": true
-        },
-        {
-          "description": "Optional investigation time range.",
-          "name": "time_range",
-          "required": false
         }
       ],
       "description": "Diagnose consumer lag for a RocketMQ topic and consumer group.",
@@ -1569,21 +1565,6 @@ expression: surface
           "consumer_group": {
             "type": "string"
           },
-          "lag_threshold": {
-            "default": null,
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "time_range": {
-            "default": null,
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "topic": {
             "type": "string"
           }
@@ -1606,6 +1587,14 @@ expression: surface
             ],
             "type": "string"
           },
+          "ConfidenceBand": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "type": "string"
+          },
           "DiagnosisReport": {
             "properties": {
               "cluster": {
@@ -1614,6 +1603,25 @@ expression: surface
               "confidence": {
                 "format": "float",
                 "type": "number"
+              },
+              "confidence_band": {
+                "$ref": "#/$defs/ConfidenceBand"
+              },
+              "evidence_refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "evidence_snapshot": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidenceSnapshot"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "evidence_version": {
                 "type": "string"
@@ -1638,6 +1646,18 @@ expression: surface
                   "$ref": "#/$defs/ImpactItem"
                 },
                 "type": "array"
+              },
+              "missing_evidence": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "partial": {
+                "type": "boolean"
+              },
+              "policy_profile": {
+                "type": "string"
               },
               "recommendations": {
                 "items": {
@@ -1679,6 +1699,11 @@ expression: surface
               "target",
               "severity",
               "confidence",
+              "confidence_band",
+              "policy_profile",
+              "partial",
+              "missing_evidence",
+              "evidence_refs",
               "summary",
               "impacts",
               "evidences",
@@ -1715,11 +1740,157 @@ expression: surface
             ],
             "type": "object"
           },
+          "EvidenceItem": {
+            "properties": {
+              "error_code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "freshness_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/EvidenceKind"
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "payload": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidencePayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "query_hash": {
+                "type": "string"
+              },
+              "source_tool": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/EvidenceStatus"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "source_tool",
+              "observed_at",
+              "freshness_ms",
+              "status",
+              "query_hash",
+              "summary"
+            ],
+            "type": "object"
+          },
+          "EvidenceKind": {
+            "enum": [
+              "consumer_lag",
+              "topic_route",
+              "broker_summary"
+            ],
+            "type": "string"
+          },
+          "EvidencePayload": {
+            "oneOf": [
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_lag",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_route",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_summary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "EvidenceSnapshot": {
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "evidence_version": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/EvidenceItem"
+                },
+                "type": "array"
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "query_hash": {
+                "type": "string"
+              },
+              "target": true
+            },
+            "required": [
+              "evidence_version",
+              "query_hash",
+              "cluster",
+              "target",
+              "observed_at",
+              "items"
+            ],
+            "type": "object"
+          },
           "EvidenceStatus": {
             "enum": [
-              "Present",
-              "Missing",
-              "Error"
+              "present",
+              "missing",
+              "unavailable",
+              "timeout",
+              "unauthorized",
+              "invalid"
             ],
             "type": "string"
           },
@@ -1774,13 +1945,17 @@ expression: surface
               },
               "risk": {
                 "type": "string"
+              },
+              "verification": {
+                "type": "string"
               }
             },
             "required": [
               "action",
               "priority",
               "rationale",
-              "risk"
+              "risk",
+              "verification"
             ],
             "type": "object"
           },
@@ -1813,12 +1988,12 @@ expression: surface
           },
           "Severity": {
             "enum": [
-              "Healthy",
-              "Low",
-              "Medium",
-              "High",
-              "Critical",
-              "Unknown"
+              "healthy",
+              "low",
+              "medium",
+              "high",
+              "critical",
+              "unknown"
             ],
             "type": "string"
           }

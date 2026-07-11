@@ -91,6 +91,8 @@ Important fields:
 - `cache.enabled`: enables or bypasses the shared query cache.
 - `cache.max_entries`: maximum number of in-memory entries; it must be greater than zero when caching is enabled.
 - `cache.*_ttl_ms`: per-query-family freshness windows for overview, topic, broker, and consumer-lag data.
+- `diagnosis.consumer_lag_policy_profile`: server-owned policy identifier reported with each diagnosis.
+- `diagnosis.consumer_lag_threshold`: server-owned threshold used by consumer-lag rules.
 
 Cache keys include the schema version, visibility class, query kind, resolved cluster, and normalized query parameters. Failures are not cached. Concurrent misses for the same key are coalesced, and `cache_status` reports `miss`, `hit`, or `bypass`. Embedders can call `McpApp::invalidate_cache()` to clear all entries explicitly. Cumulative hit, miss, bypass, eviction, invalidation, and coalesced-waiter counters are emitted at trace level after Tool and Resource requests.
 
@@ -214,6 +216,8 @@ For HTTP-capable clients, use the Streamable HTTP URL `http://127.0.0.1:8089/mcp
 - `rocketmq_get_consumer_lag`: get bounded consumer progress and lag rows.
 - `rocketmq_describe_broker`: describe broker state.
 - `rocketmq_diagnose_consumer_lag`: aggregate read-only evidence and return a diagnosis report.
+
+Consumer-lag diagnoses use versioned Evidence Snapshots and a server-side rule policy. The Tool accepts only cluster, topic, and consumer group; historical `time_range` and caller-controlled thresholds are intentionally unavailable until a historical metrics source exists.
 
 Feature-gated planning Tools, available only with `change-planning`, never mutate the cluster:
 

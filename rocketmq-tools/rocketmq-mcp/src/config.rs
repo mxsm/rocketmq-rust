@@ -43,6 +43,8 @@ pub struct McpConfig {
     pub security: SecurityConfig,
     pub audit: AuditConfig,
     pub cache: CacheConfig,
+    #[serde(default)]
+    pub diagnosis: DiagnosisConfig,
 }
 
 impl McpConfig {
@@ -135,6 +137,15 @@ impl McpConfig {
         if self.cache.enabled && self.cache.max_entries == 0 {
             return Err(McpError::InvalidConfig(
                 "cache.max_entries must be greater than zero when cache is enabled".to_string(),
+            ));
+        }
+        validate_non_empty(
+            "diagnosis.consumer_lag_policy_profile",
+            &self.diagnosis.consumer_lag_policy_profile,
+        )?;
+        if self.diagnosis.consumer_lag_threshold < 0 {
+            return Err(McpError::InvalidConfig(
+                "diagnosis.consumer_lag_threshold must not be negative".to_string(),
             ));
         }
 
@@ -239,6 +250,21 @@ pub struct CacheConfig {
     pub consumer_lag_ttl_ms: u64,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct DiagnosisConfig {
+    pub consumer_lag_policy_profile: String,
+    pub consumer_lag_threshold: i64,
+}
+
+impl Default for DiagnosisConfig {
+    fn default() -> Self {
+        Self {
+            consumer_lag_policy_profile: "production-default".to_string(),
+            consumer_lag_threshold: 1_000,
+        }
+    }
+}
+
 fn validate_non_empty(field: &str, value: &str) -> Result<(), McpError> {
     if value.trim().is_empty() {
         return Err(McpError::InvalidConfig(format!("{field} must not be empty")));
@@ -297,6 +323,8 @@ mod tests {
         assert_eq!(config.server.transport, TransportKind::Stdio);
         assert_eq!(config.clusters.len(), 1);
         assert_eq!(config.clusters[0].namesrv_addr, "127.0.0.1:9876");
+        assert_eq!(config.diagnosis.consumer_lag_policy_profile, "production-default");
+        assert_eq!(config.diagnosis.consumer_lag_threshold, 1_000);
     }
 
     #[test]

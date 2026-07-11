@@ -242,3 +242,15 @@ cargo doc -p rocketmq-mcp --no-deps --all-features
 These tests use an injected session factory and do not claim live-cluster
 latency or throughput. Production cluster integration remains a P6 release
 gate.
+
+### P4 Evidence and Rules Replacement
+
+P4 separates consumer-lag evidence collection from deterministic rule
+evaluation. `EvidenceSnapshot` records a stable query hash, per-item status,
+freshness, payload or error code, and the observation time. The report carries
+the snapshot together with v2 rule/evidence versions, policy profile,
+confidence band, partial state, missing evidence, and evidence references.
+
+The consumer-lag threshold is now a server configuration value under
+`diagnosis`; `time_range` and caller-supplied thresholds were removed from the
+MCP Tool schema because the server has no historical metrics source.

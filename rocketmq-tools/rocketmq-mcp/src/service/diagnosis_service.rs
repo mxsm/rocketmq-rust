@@ -23,6 +23,7 @@ use crate::model::contract::observed_at;
 use crate::model::contract::PageRequest;
 #[cfg(test)]
 use crate::model::contract::QueryResult;
+use crate::model::diagnosis::ConfidenceBand;
 use crate::model::diagnosis::DiagnosisReport;
 use crate::model::diagnosis::Evidence;
 use crate::model::diagnosis::EvidenceStatus;
@@ -43,6 +44,7 @@ use crate::tools::topic_tools::DescribeTopicArgs;
 #[cfg(test)]
 use crate::tools::topic_tools::QueryTopicRouteArgs;
 
+#[cfg(test)]
 const DEFAULT_LAG_THRESHOLD: i64 = 1_000;
 const SKEW_RATIO_THRESHOLD: f64 = 0.70;
 pub(crate) const CONSUMER_LAG_EVIDENCE_VERSION: &str = "rocketmq-mcp.evidence.consumer-lag.v1";
@@ -103,6 +105,7 @@ where
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn build_consumer_lag_report<Topic, Route, Broker>(
     args: DiagnoseConsumerLagArgs,
     lag_result: Result<QueryConsumerLagOutput, ToolExecutionError>,
@@ -115,7 +118,30 @@ where
     Route: Serialize,
     Broker: Serialize,
 {
-    let threshold = args.lag_threshold.unwrap_or(DEFAULT_LAG_THRESHOLD).max(0);
+    build_consumer_lag_report_with_threshold(
+        args,
+        DEFAULT_LAG_THRESHOLD,
+        lag_result,
+        topic_result,
+        route_result,
+        broker_result,
+    )
+}
+
+pub(crate) fn build_consumer_lag_report_with_threshold<Topic, Route, Broker>(
+    args: DiagnoseConsumerLagArgs,
+    threshold: i64,
+    lag_result: Result<QueryConsumerLagOutput, ToolExecutionError>,
+    topic_result: Result<Topic, ToolExecutionError>,
+    route_result: Result<Route, ToolExecutionError>,
+    broker_result: Option<Result<Broker, ToolExecutionError>>,
+) -> DiagnosisReport
+where
+    Topic: Serialize,
+    Route: Serialize,
+    Broker: Serialize,
+{
+    let threshold = threshold.max(0);
     let lag = lag_result.as_ref().ok();
     let severity = severity_for_lag(lag, threshold);
     let confidence = confidence_for_evidence(lag, topic_result.as_ref().ok(), route_result.as_ref().ok());
@@ -151,6 +177,19 @@ where
             data: Value::Null,
         });
     }
+    let partial = evidences
+        .iter()
+        .any(|evidence| evidence.status != EvidenceStatus::Present);
+    let missing_evidence = evidences
+        .iter()
+        .filter(|evidence| evidence.status != EvidenceStatus::Present)
+        .map(|evidence| evidence.id.clone())
+        .collect();
+    let evidence_refs = evidences
+        .iter()
+        .filter(|evidence| evidence.status == EvidenceStatus::Present)
+        .map(|evidence| evidence.id.clone())
+        .collect();
 
     DiagnosisReport {
         report_type: "consumer_lag".to_string(),
@@ -160,11 +199,16 @@ where
         target: json!({
             "topic": args.topic,
             "consumer_group": args.consumer_group,
-            "time_range": args.time_range,
             "lag_threshold": threshold,
         }),
         severity,
         confidence,
+        confidence_band: confidence_band(confidence),
+        policy_profile: "default".to_string(),
+        partial,
+        missing_evidence,
+        evidence_refs,
+        evidence_snapshot: None,
         summary,
         impacts: impacts_for_lag(lag, severity),
         evidences,
@@ -173,6 +217,16 @@ where
         risks: risks_for_lag(lag, severity),
         follow_up_metrics: follow_up_metrics(),
         generated_at: observed_at(),
+    }
+}
+
+fn confidence_band(confidence: f32) -> ConfidenceBand {
+    if confidence >= 0.8 {
+        ConfidenceBand::High
+    } else if confidence >= 0.5 {
+        ConfidenceBand::Medium
+    } else {
+        ConfidenceBand::Low
     }
 }
 
@@ -324,12 +378,14 @@ fn recommendations_for_lag(lag: Option<&QueryConsumerLagOutput>, severity: Sever
             priority: "high".to_string(),
             rationale: "The report is Unknown because required evidence is missing or empty.".to_string(),
             risk: "Do not change offsets or topic configuration without evidence.".to_string(),
+            verification: "Re-run the diagnosis after all required evidence is available.".to_string(),
         }],
         (Some(_), Severity::Healthy) => vec![Recommendation {
             action: "Continue monitoring consumer lag.".to_string(),
             priority: "low".to_string(),
             rationale: "Lag is within the configured threshold.".to_string(),
             risk: "No immediate operational change is recommended.".to_string(),
+            verification: "Confirm total_lag remains within the policy threshold.".to_string(),
         }],
         (Some(lag), _) => vec![
             Recommendation {
@@ -337,6 +393,7 @@ fn recommendations_for_lag(lag: Option<&QueryConsumerLagOutput>, severity: Sever
                 priority: "high".to_string(),
                 rationale: format!("total_lag={} is above the configured threshold.", lag.total_lag),
                 risk: "Scaling consumers can increase broker fetch pressure; watch broker latency.".to_string(),
+                verification: "Confirm consume_tps rises and total_lag declines after scaling.".to_string(),
             },
             Recommendation {
                 action: "Inspect queues with the highest lag and their broker placement.".to_string(),
@@ -346,6 +403,7 @@ fn recommendations_for_lag(lag: Option<&QueryConsumerLagOutput>, severity: Sever
                     lag.max_queue_lag
                 ),
                 risk: "Queue-level findings require route evidence before rebalancing decisions.".to_string(),
+                verification: "Confirm max_queue_lag converges after the placement review.".to_string(),
             },
         ],
     }
@@ -402,7 +460,7 @@ where
         Err(error) => Evidence {
             id: id.to_string(),
             source_tool: source_tool.to_string(),
-            status: EvidenceStatus::Error,
+            status: EvidenceStatus::Unavailable,
             summary: error.to_string(),
             data: Value::Null,
         },
@@ -626,7 +684,7 @@ mod tests {
         assert!(report
             .evidences
             .iter()
-            .any(|evidence| evidence.id == "consumer_lag" && evidence.status == EvidenceStatus::Error));
+            .any(|evidence| evidence.id == "consumer_lag" && evidence.status == EvidenceStatus::Unavailable));
     }
 
     fn request() -> DiagnoseConsumerLagArgs {
@@ -634,8 +692,6 @@ mod tests {
             cluster: "local-dev".to_string(),
             topic: "orders".to_string(),
             consumer_group: "order-service".to_string(),
-            time_range: None,
-            lag_threshold: Some(1_000),
         }
     }
 

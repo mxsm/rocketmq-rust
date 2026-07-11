@@ -35,7 +35,8 @@ use crate::model::contract::QueryResult;
 use crate::model::contract::DEFAULT_PAGE_LIMIT;
 use crate::model::contract::SCHEMA_VERSION;
 use crate::model::diagnosis::DiagnosisReport;
-use crate::service::diagnosis_service;
+use crate::service::diagnosis_collector::ConsumerLagEvidence;
+use crate::service::diagnosis_rules;
 use crate::tools::broker_tools::DescribeBrokerArgs;
 use crate::tools::broker_tools::DescribeBrokerOutput;
 use crate::tools::cluster_tools::ClusterOverviewArgs;
@@ -329,7 +330,7 @@ where
                 ttl,
                 &self.control.cancellation,
                 || ToolExecutionError::Cancelled,
-                || async {
+                move || async {
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
                             let mut groups = session.consumer_groups().await?;
@@ -377,7 +378,7 @@ where
                 ttl,
                 &self.control.cancellation,
                 || ToolExecutionError::Cancelled,
-                || async {
+                move || async {
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
                             let lag = session.consumer_lag(&args.topic, &args.consumer_group).await?;
@@ -428,19 +429,17 @@ where
         let key = self.cache_key(
             "diagnose_consumer_lag",
             &cluster.name,
-            &format!(
-                "topic={}|group={}|threshold={:?}|time_range={:?}",
-                args.topic, args.consumer_group, args.lag_threshold, args.time_range
-            ),
+            &format!("topic={}|group={}", args.topic, args.consumer_group),
         );
         let ttl = Duration::from_millis(self.config.cache.consumer_lag_ttl_ms);
+        let policy = diagnosis_rules::ConsumerLagPolicy::from(&self.config.diagnosis);
         self.cache
             .get_or_try_init_cancellable(
                 key,
                 ttl,
                 &self.control.cancellation,
                 || ToolExecutionError::Cancelled,
-                || async {
+                move || async {
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
                             let lag_result =
@@ -474,12 +473,15 @@ where
                                 None => None,
                             };
 
-                            Ok(diagnosis_service::build_consumer_lag_report(
-                                args,
-                                lag_result,
-                                topic_result,
-                                route_result,
-                                broker_result,
+                            Ok(diagnosis_rules::evaluate(
+                                &args,
+                                ConsumerLagEvidence {
+                                    lag: lag_result,
+                                    topic: topic_result,
+                                    route: route_result,
+                                    broker: broker_result,
+                                },
+                                &policy,
                             ))
                         })
                     })
@@ -941,14 +943,15 @@ mod tests {
                 cluster: "local-dev".to_string(),
                 topic: "orders".to_string(),
                 consumer_group: "order-service".to_string(),
-                time_range: None,
-                lag_threshold: Some(1_000),
             })
             .await
             .unwrap();
 
-        assert_eq!(report.evidence_version, "rocketmq-mcp.evidence.consumer-lag.v1");
-        assert_eq!(report.rules_version, "rocketmq-mcp.rules.consumer-lag.v1");
+        assert_eq!(report.evidence_version, "rocketmq-mcp.evidence.consumer-lag.v2");
+        assert_eq!(report.rules_version, "rocketmq-mcp.rules.consumer-lag.v2");
+        assert_eq!(report.policy_profile, "production-default");
+        assert!(!report.partial);
+        assert!(report.evidence_snapshot.is_some());
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
         assert_eq!(counters.consumer_lag_queries.load(Ordering::SeqCst), 1);
@@ -972,7 +975,7 @@ mod tests {
             .evidences
             .iter()
             .any(|evidence| evidence.id == "broker_description"
-                && evidence.status == crate::model::diagnosis::EvidenceStatus::Error));
+                && evidence.status == crate::model::diagnosis::EvidenceStatus::Unavailable));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
         assert_eq!(counters.route_queries.load(Ordering::SeqCst), 1);
@@ -1256,8 +1259,6 @@ mod tests {
             cluster: "local-dev".to_string(),
             topic: "orders".to_string(),
             consumer_group: "order-service".to_string(),
-            time_range: None,
-            lag_threshold: Some(1_000),
         }
     }
 

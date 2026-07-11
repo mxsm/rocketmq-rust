@@ -12,9 +12,6 @@ arguments:
   - name: consumer_group
     required: true
     description: Consumer group name.
-  - name: time_range
-    required: false
-    description: Optional investigation time range.
 ---
 # Consumer Lag Diagnosis Task
 
@@ -28,10 +25,11 @@ You are the rocketmq-rust AI SRE. Diagnose consumer lag for topic `{{topic}}` in
 4. `rocketmq_get_topic_route`
 5. `rocketmq_describe_broker`
 
-## Optional Context
+## Evidence Constraints
 
-- Time range: `{{time_range}}`
 - Use `rocketmq://clusters/{{cluster}}/consumer-groups` and `rocketmq://clusters/{{cluster}}/topics` only as read-only context if useful.
+- Treat `partial=true` or `missing_evidence` as an incomplete diagnosis and do not infer a root cause from unavailable evidence.
+- The server does not provide historical metrics; do not describe this diagnosis as a time-range analysis.
 
 ## Forbidden Actions
 
@@ -51,3 +49,4 @@ You are the rocketmq-rust AI SRE. Diagnose consumer lag for topic `{{topic}}` in
 ## 5. Recommendations
 ## 6. Risks
 ## 7. Follow-up Metrics
+## 8. Missing Evidence and Verification Steps
