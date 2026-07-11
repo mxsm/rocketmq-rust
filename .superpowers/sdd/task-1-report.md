@@ -77,4 +77,4 @@ schema, primitive, projection, trace, and message-codec batches are listed below
 
 ## Commit
 
-- Recorded after commit below.
+- `c1219389f` — `refactor: extract protocol boundary spike`
