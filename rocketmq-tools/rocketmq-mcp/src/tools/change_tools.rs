@@ -15,6 +15,10 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use sha2::Digest;
+use sha2::Sha256;
+
+const PLAN_TTL_SECONDS: u64 = 300;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -88,6 +92,14 @@ pub enum ChangePlanType {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct ChangePlan {
+    pub schema_version: String,
+    pub plan_id: String,
+    pub plan_hash: String,
+    pub precondition_hash: String,
+    pub current_state: serde_json::Value,
+    pub expires_in_seconds: u64,
+    pub ephemeral: bool,
+    pub immutable: bool,
     pub plan_type: ChangePlanType,
     pub cluster: String,
     pub reason: String,
@@ -99,9 +111,14 @@ pub struct ChangePlan {
 }
 
 pub fn plan_create_topic(request: CreateTopicArgs) -> ChangePlan {
+    plan_create_topic_with_current_state(request, serde_json::Value::Null)
+}
+
+pub fn plan_create_topic_with_current_state(request: CreateTopicArgs, current_state: serde_json::Value) -> ChangePlan {
     planned_change(
         ChangePlanType::CreateTopic,
         request,
+        current_state,
         |desired| {
             vec![format!(
                 "Create topic `{}` with read_queue_nums={:?}, write_queue_nums={:?}, perm={:?}.",
@@ -124,9 +141,17 @@ pub fn plan_create_topic(request: CreateTopicArgs) -> ChangePlan {
 }
 
 pub fn plan_update_topic_config(request: UpdateTopicConfigArgs) -> ChangePlan {
+    plan_update_topic_config_with_current_state(request, serde_json::Value::Null)
+}
+
+pub fn plan_update_topic_config_with_current_state(
+    request: UpdateTopicConfigArgs,
+    current_state: serde_json::Value,
+) -> ChangePlan {
     planned_change(
         ChangePlanType::UpdateTopicConfig,
         request,
+        current_state,
         |desired| {
             vec![format!(
                 "Update topic `{}` config `{}` to `{}`.",
@@ -149,9 +174,17 @@ pub fn plan_update_topic_config(request: UpdateTopicConfigArgs) -> ChangePlan {
 }
 
 pub fn plan_update_topic_perm(request: UpdateTopicPermArgs) -> ChangePlan {
+    plan_update_topic_perm_with_current_state(request, serde_json::Value::Null)
+}
+
+pub fn plan_update_topic_perm_with_current_state(
+    request: UpdateTopicPermArgs,
+    current_state: serde_json::Value,
+) -> ChangePlan {
     planned_change(
         ChangePlanType::UpdateTopicPermissions,
         request,
+        current_state,
         |desired| {
             vec![format!(
                 "Update topic `{}` permission to `{}`.",
@@ -174,9 +207,17 @@ pub fn plan_update_topic_perm(request: UpdateTopicPermArgs) -> ChangePlan {
 }
 
 pub fn plan_update_broker_config(request: UpdateBrokerConfigArgs) -> ChangePlan {
+    plan_update_broker_config_with_current_state(request, serde_json::Value::Null)
+}
+
+pub fn plan_update_broker_config_with_current_state(
+    request: UpdateBrokerConfigArgs,
+    current_state: serde_json::Value,
+) -> ChangePlan {
     planned_change(
         ChangePlanType::UpdateBrokerConfig,
         request,
+        current_state,
         |desired| {
             vec![format!(
                 "Update broker `{}` config `{}` to `{}`.",
@@ -199,9 +240,17 @@ pub fn plan_update_broker_config(request: UpdateBrokerConfigArgs) -> ChangePlan 
 }
 
 pub fn plan_reset_consumer_offset(request: ResetConsumerOffsetArgs) -> ChangePlan {
+    plan_reset_consumer_offset_with_current_state(request, serde_json::Value::Null)
+}
+
+pub fn plan_reset_consumer_offset_with_current_state(
+    request: ResetConsumerOffsetArgs,
+    current_state: serde_json::Value,
+) -> ChangePlan {
     planned_change(
         ChangePlanType::ResetConsumerOffset,
         request,
+        current_state,
         |desired| {
             vec![format!(
                 "Reset consumer group `{}` offset for topic `{}` to offset {:?} or timestamp {:?}.",
@@ -226,25 +275,56 @@ pub fn plan_reset_consumer_offset(request: ResetConsumerOffsetArgs) -> ChangePla
 fn planned_change<T, P, I, R>(
     plan_type: ChangePlanType,
     request: PlanRequest<T>,
+    current_state: serde_json::Value,
     planned_changes: P,
     impact_analysis: I,
     rollback_suggestions: R,
 ) -> ChangePlan
 where
+    T: Serialize,
     P: FnOnce(&T) -> Vec<String>,
     I: FnOnce(&T) -> Vec<String>,
     R: FnOnce(&T) -> Vec<String>,
 {
+    let planned_changes = planned_changes(&request.desired);
+    let impact_analysis = impact_analysis(&request.desired);
+    let rollback_suggestions = rollback_suggestions(&request.desired);
+    let precondition_hash = stable_hash(&serde_json::json!({
+        "cluster": request.cluster.clone(),
+        "plan_type": plan_type,
+        "desired": &request.desired,
+        "current_state": &current_state,
+    }));
+    let plan_hash = stable_hash(&serde_json::json!({
+        "precondition_hash": precondition_hash,
+        "reason": request.reason.clone(),
+        "planned_changes": &planned_changes,
+        "impact_analysis": &impact_analysis,
+        "rollback_suggestions": &rollback_suggestions,
+    }));
     ChangePlan {
+        schema_version: "rocketmq-change-plan.v2".to_string(),
+        plan_id: format!("plan-{}", &plan_hash[..24]),
+        plan_hash,
+        precondition_hash,
+        current_state,
+        expires_in_seconds: PLAN_TTL_SECONDS,
+        ephemeral: true,
+        immutable: true,
         plan_type,
         cluster: request.cluster,
         reason: request.reason,
         summary: format!("Generated a non-mutating {:?} plan.", plan_type),
-        planned_changes: planned_changes(&request.desired),
-        impact_analysis: impact_analysis(&request.desired),
-        rollback_suggestions: rollback_suggestions(&request.desired),
+        planned_changes,
+        impact_analysis,
+        rollback_suggestions,
         mutates_cluster: false,
     }
+}
+
+fn stable_hash(value: &serde_json::Value) -> String {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -266,6 +346,68 @@ mod tests {
 
         assert_eq!(plan.plan_type, ChangePlanType::CreateTopic);
         assert!(!plan.mutates_cluster);
+        assert!(plan.ephemeral && plan.immutable);
+        assert_eq!(plan.plan_id, format!("plan-{}", &plan.plan_hash[..24]));
         assert!(!plan.planned_changes.is_empty());
+    }
+
+    #[test]
+    fn identical_requests_produce_deterministic_immutable_plans() {
+        let request = PlanRequest {
+            cluster: "local-dev".to_string(),
+            reason: "capacity preparation".to_string(),
+            desired: CreateTopicDesiredState {
+                topic: "orders".to_string(),
+                read_queue_nums: Some(8),
+                write_queue_nums: Some(8),
+                perm: Some("read_write".to_string()),
+            },
+        };
+        let first = plan_create_topic(request.clone());
+        let second = plan_create_topic(request);
+
+        assert_eq!(first.plan_hash, second.plan_hash);
+        assert_eq!(first.precondition_hash, second.precondition_hash);
+        assert_eq!(first.plan_id, second.plan_id);
+        assert_eq!(first.expires_in_seconds, PLAN_TTL_SECONDS);
+    }
+
+    #[test]
+    fn changing_current_state_changes_precondition_and_plan_hash() {
+        let request = PlanRequest {
+            cluster: "local-dev".to_string(),
+            reason: "capacity preparation".to_string(),
+            desired: CreateTopicDesiredState {
+                topic: "orders".to_string(),
+                read_queue_nums: Some(8),
+                write_queue_nums: Some(8),
+                perm: Some("read_write".to_string()),
+            },
+        };
+        let absent = plan_create_topic_with_current_state(request.clone(), serde_json::json!({"exists": false}));
+        let present = plan_create_topic_with_current_state(request, serde_json::json!({"exists": true}));
+
+        assert_ne!(absent.precondition_hash, present.precondition_hash);
+        assert_ne!(absent.plan_hash, present.plan_hash);
+        assert_ne!(absent.plan_id, present.plan_id);
+    }
+
+    #[test]
+    fn plan_requests_reject_legacy_execution_fields() {
+        let request = serde_json::json!({
+            "cluster": "local-dev",
+            "reason": "capacity preparation",
+            "desired": { "topic": "orders" },
+            "mode": "apply",
+        });
+        assert!(serde_json::from_value::<CreateTopicArgs>(request).is_err());
+
+        let request = serde_json::json!({
+            "cluster": "local-dev",
+            "reason": "capacity preparation",
+            "desired": { "topic": "orders" },
+            "operator": "alice",
+        });
+        assert!(serde_json::from_value::<CreateTopicArgs>(request).is_err());
     }
 }

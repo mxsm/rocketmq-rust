@@ -363,4 +363,31 @@ mod tests {
         #[cfg(feature = "change-planning")]
         insta::assert_json_snapshot!("tool_contract_schema_metadata_with_change_planning", contracts);
     }
+
+    #[cfg(feature = "change-planning")]
+    #[test]
+    fn change_planning_catalog_is_read_only_and_uses_only_canonical_names() {
+        let planning = ToolId::ALL
+            .iter()
+            .map(|tool_id| tool_id.descriptor())
+            .filter(|descriptor| descriptor.risk_level == RiskLevel::Plan)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            planning.iter().map(|descriptor| descriptor.name).collect::<Vec<_>>(),
+            vec![
+                "rocketmq_plan_create_topic",
+                "rocketmq_plan_update_topic_config",
+                "rocketmq_plan_update_topic_permissions",
+                "rocketmq_plan_update_broker_config",
+                "rocketmq_plan_reset_consumer_offset",
+            ]
+        );
+        assert!(planning.iter().all(|descriptor| {
+            descriptor.annotations.read_only
+                && !descriptor.annotations.destructive
+                && descriptor.annotations.idempotent
+                && !descriptor.name.starts_with("mq_")
+        }));
+    }
 }

@@ -1,6 +1,6 @@
 ---
 source: rocketmq-tools/rocketmq-mcp/src/protocol/server.rs
-assertion_line: 239
+assertion_line: 283
 expression: surface
 ---
 {
@@ -2136,6 +2136,18 @@ expression: surface
               "cluster": {
                 "type": "string"
               },
+              "current_state": true,
+              "ephemeral": {
+                "type": "boolean"
+              },
+              "expires_in_seconds": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "immutable": {
+                "type": "boolean"
+              },
               "impact_analysis": {
                 "items": {
                   "type": "string"
@@ -2144,6 +2156,12 @@ expression: surface
               },
               "mutates_cluster": {
                 "type": "boolean"
+              },
+              "plan_hash": {
+                "type": "string"
+              },
+              "plan_id": {
+                "type": "string"
               },
               "plan_type": {
                 "$ref": "#/$defs/ChangePlanType"
@@ -2154,6 +2172,9 @@ expression: surface
                 },
                 "type": "array"
               },
+              "precondition_hash": {
+                "type": "string"
+              },
               "reason": {
                 "type": "string"
               },
@@ -2163,11 +2184,22 @@ expression: surface
                 },
                 "type": "array"
               },
+              "schema_version": {
+                "type": "string"
+              },
               "summary": {
                 "type": "string"
               }
             },
             "required": [
+              "schema_version",
+              "plan_id",
+              "plan_hash",
+              "precondition_hash",
+              "current_state",
+              "expires_in_seconds",
+              "ephemeral",
+              "immutable",
               "plan_type",
               "cluster",
               "reason",
@@ -2311,6 +2343,18 @@ expression: surface
               "cluster": {
                 "type": "string"
               },
+              "current_state": true,
+              "ephemeral": {
+                "type": "boolean"
+              },
+              "expires_in_seconds": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "immutable": {
+                "type": "boolean"
+              },
               "impact_analysis": {
                 "items": {
                   "type": "string"
@@ -2319,6 +2363,12 @@ expression: surface
               },
               "mutates_cluster": {
                 "type": "boolean"
+              },
+              "plan_hash": {
+                "type": "string"
+              },
+              "plan_id": {
+                "type": "string"
               },
               "plan_type": {
                 "$ref": "#/$defs/ChangePlanType"
@@ -2329,6 +2379,9 @@ expression: surface
                 },
                 "type": "array"
               },
+              "precondition_hash": {
+                "type": "string"
+              },
               "reason": {
                 "type": "string"
               },
@@ -2338,11 +2391,22 @@ expression: surface
                 },
                 "type": "array"
               },
+              "schema_version": {
+                "type": "string"
+              },
               "summary": {
                 "type": "string"
               }
             },
             "required": [
+              "schema_version",
+              "plan_id",
+              "plan_hash",
+              "precondition_hash",
+              "current_state",
+              "expires_in_seconds",
+              "ephemeral",
+              "immutable",
               "plan_type",
               "cluster",
               "reason",
@@ -2482,6 +2546,18 @@ expression: surface
               "cluster": {
                 "type": "string"
               },
+              "current_state": true,
+              "ephemeral": {
+                "type": "boolean"
+              },
+              "expires_in_seconds": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "immutable": {
+                "type": "boolean"
+              },
               "impact_analysis": {
                 "items": {
                   "type": "string"
@@ -2490,6 +2566,12 @@ expression: surface
               },
               "mutates_cluster": {
                 "type": "boolean"
+              },
+              "plan_hash": {
+                "type": "string"
+              },
+              "plan_id": {
+                "type": "string"
               },
               "plan_type": {
                 "$ref": "#/$defs/ChangePlanType"
@@ -2500,6 +2582,9 @@ expression: surface
                 },
                 "type": "array"
               },
+              "precondition_hash": {
+                "type": "string"
+              },
               "reason": {
                 "type": "string"
               },
@@ -2509,11 +2594,22 @@ expression: surface
                 },
                 "type": "array"
               },
+              "schema_version": {
+                "type": "string"
+              },
               "summary": {
                 "type": "string"
               }
             },
             "required": [
+              "schema_version",
+              "plan_id",
+              "plan_hash",
+              "precondition_hash",
+              "current_state",
+              "expires_in_seconds",
+              "ephemeral",
+              "immutable",
               "plan_type",
               "cluster",
               "reason",
@@ -2657,6 +2753,18 @@ expression: surface
               "cluster": {
                 "type": "string"
               },
+              "current_state": true,
+              "ephemeral": {
+                "type": "boolean"
+              },
+              "expires_in_seconds": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "immutable": {
+                "type": "boolean"
+              },
               "impact_analysis": {
                 "items": {
                   "type": "string"
@@ -2665,6 +2773,12 @@ expression: surface
               },
               "mutates_cluster": {
                 "type": "boolean"
+              },
+              "plan_hash": {
+                "type": "string"
+              },
+              "plan_id": {
+                "type": "string"
               },
               "plan_type": {
                 "$ref": "#/$defs/ChangePlanType"
@@ -2675,6 +2789,9 @@ expression: surface
                 },
                 "type": "array"
               },
+              "precondition_hash": {
+                "type": "string"
+              },
               "reason": {
                 "type": "string"
               },
@@ -2684,11 +2801,22 @@ expression: surface
                 },
                 "type": "array"
               },
+              "schema_version": {
+                "type": "string"
+              },
               "summary": {
                 "type": "string"
               }
             },
             "required": [
+              "schema_version",
+              "plan_id",
+              "plan_hash",
+              "precondition_hash",
+              "current_state",
+              "expires_in_seconds",
+              "ephemeral",
+              "immutable",
               "plan_type",
               "cluster",
               "reason",
@@ -2844,6 +2972,18 @@ expression: surface
               "cluster": {
                 "type": "string"
               },
+              "current_state": true,
+              "ephemeral": {
+                "type": "boolean"
+              },
+              "expires_in_seconds": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "immutable": {
+                "type": "boolean"
+              },
               "impact_analysis": {
                 "items": {
                   "type": "string"
@@ -2852,6 +2992,12 @@ expression: surface
               },
               "mutates_cluster": {
                 "type": "boolean"
+              },
+              "plan_hash": {
+                "type": "string"
+              },
+              "plan_id": {
+                "type": "string"
               },
               "plan_type": {
                 "$ref": "#/$defs/ChangePlanType"
@@ -2862,6 +3008,9 @@ expression: surface
                 },
                 "type": "array"
               },
+              "precondition_hash": {
+                "type": "string"
+              },
               "reason": {
                 "type": "string"
               },
@@ -2871,11 +3020,22 @@ expression: surface
                 },
                 "type": "array"
               },
+              "schema_version": {
+                "type": "string"
+              },
               "summary": {
                 "type": "string"
               }
             },
             "required": [
+              "schema_version",
+              "plan_id",
+              "plan_hash",
+              "precondition_hash",
+              "current_state",
+              "expires_in_seconds",
+              "ephemeral",
+              "immutable",
               "plan_type",
               "cluster",
               "reason",
