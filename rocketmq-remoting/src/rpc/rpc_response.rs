@@ -40,6 +40,18 @@ impl RpcResponse {
         }
     }
 
+    /// Compatibility facade for the removed shared-reference mutation escape.
+    ///
+    /// Returning a mutable reference from `&self` cannot be made sound. Callers
+    /// must migrate to [`Self::get_header_mut`], which requires exclusive access.
+    #[deprecated(note = "use get_header_mut; shared-reference mutation is no longer supported")]
+    pub fn get_header_mut_from_ref<T>(&self) -> Option<&mut T>
+    where
+        T: CommandCustomHeader + Send + Sync + 'static,
+    {
+        None
+    }
+
     pub fn new_exception(exception: Option<RocketMQError>) -> Self {
         Self {
             code: exception.as_ref().map_or(0, |error| match error {

@@ -29,9 +29,15 @@ pub struct SubscriptionGroupWrapper {
 
 impl Default for SubscriptionGroupWrapper {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SubscriptionGroupWrapper {
+    pub fn new() -> Self {
         Self {
-            subscription_group_table: DashMap::new(),
-            forbidden_table: DashMap::new(),
+            subscription_group_table: DashMap::with_capacity(1024),
+            forbidden_table: DashMap::with_capacity(1024),
             data_version: DataVersion::default(),
         }
     }
@@ -96,7 +102,23 @@ impl SubscriptionGroupWrapper {
         &self.subscription_group_table
     }
 
+    pub fn set_subscription_group_table(&mut self, table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>>) {
+        self.subscription_group_table = table;
+    }
+
+    pub fn forbidden_table(&self) -> &DashMap<CheetahString, HashMap<CheetahString, i32>> {
+        &self.forbidden_table
+    }
+
+    pub fn set_forbidden_table(&mut self, table: DashMap<CheetahString, HashMap<CheetahString, i32>>) {
+        self.forbidden_table = table;
+    }
+
     pub fn data_version(&self) -> &DataVersion {
         &self.data_version
+    }
+
+    pub fn set_data_version(&mut self, version: DataVersion) {
+        self.data_version = version;
     }
 }

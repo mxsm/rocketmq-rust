@@ -20,6 +20,7 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand as DeepRemotingCommand;
 use rocketmq_remoting::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
@@ -28,6 +29,9 @@ use rocketmq_remoting::protocol::SerializeType;
 use rocketmq_remoting::rpc::rpc_response::RpcResponse;
 use rocketmq_remoting::RemotingCommand;
 use rocketmq_rust::ArcMut;
+
+type LegacySubscriptionGroupTable = DashMap<CheetahString, Arc<SubscriptionGroupConfig>>;
+type LegacyForbiddenTable = DashMap<CheetahString, HashMap<CheetahString, i32>>;
 
 fn accepts_deep(command: DeepRemotingCommand) -> DeepRemotingCommand {
     command
@@ -61,19 +65,38 @@ fn owner_factories_return_the_canonical_command_type() {
 
 #[test]
 fn legacy_subscription_wrapper_keeps_dashmap_arc_mutation_semantics() {
-    let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
+    let _: fn() -> SubscriptionGroupWrapper = SubscriptionGroupWrapper::new;
+    let _: fn(&mut SubscriptionGroupWrapper, LegacySubscriptionGroupTable) =
+        SubscriptionGroupWrapper::set_subscription_group_table;
+    let _: for<'a> fn(&'a SubscriptionGroupWrapper) -> &'a LegacyForbiddenTable =
+        SubscriptionGroupWrapper::forbidden_table;
+    let _: fn(&mut SubscriptionGroupWrapper, LegacyForbiddenTable) = SubscriptionGroupWrapper::set_forbidden_table;
+    let _: fn(&mut SubscriptionGroupWrapper, rocketmq_remoting::protocol::DataVersion) =
+        SubscriptionGroupWrapper::set_data_version;
+
+    let table: LegacySubscriptionGroupTable = DashMap::new();
     table.insert("group".into(), Arc::new(SubscriptionGroupConfig::default()));
-    let wrapper = SubscriptionGroupWrapper {
-        subscription_group_table: table,
-        forbidden_table: DashMap::new(),
-        data_version: Default::default(),
-    };
+    let forbidden_table: LegacyForbiddenTable = DashMap::new();
+    forbidden_table.insert("group".into(), HashMap::from([("topic".into(), 1)]));
+    let data_version = rocketmq_remoting::protocol::DataVersion::with_values(11, 22, 33);
+
+    let mut wrapper = SubscriptionGroupWrapper::new();
+    wrapper.set_subscription_group_table(table);
+    wrapper.set_forbidden_table(forbidden_table);
+    wrapper.set_data_version(data_version.clone());
 
     assert!(wrapper.subscription_group_table.get("group").is_some());
+    assert_eq!(wrapper.forbidden_table().get("group").unwrap().get("topic"), Some(&1));
+    assert_eq!(wrapper.data_version(), &data_version);
     let canonical: rocketmq_protocol::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper =
         (&wrapper).into();
     let round_trip = SubscriptionGroupWrapper::from(canonical);
     assert!(round_trip.subscription_group_table.get("group").is_some());
+    assert_eq!(
+        round_trip.forbidden_table().get("group").unwrap().get("topic"),
+        Some(&1)
+    );
+    assert_eq!(round_trip.data_version(), &data_version);
 }
 
 #[test]
@@ -112,6 +135,17 @@ fn legacy_rpc_response_keeps_arcmut_header_storage_and_converts() {
         Err(_) => panic!("unshared legacy response should convert"),
     };
     let _legacy = RpcResponse::from(canonical);
+}
+
+#[test]
+#[allow(deprecated)]
+fn legacy_rpc_shared_reference_mutation_facade_has_exact_safe_signature() {
+    let _: for<'a> fn(&'a RpcResponse) -> Option<&'a mut AckMessageRequestHeader> =
+        RpcResponse::get_header_mut_from_ref::<AckMessageRequestHeader>;
+
+    assert!(RpcResponse::default()
+        .get_header_mut_from_ref::<AckMessageRequestHeader>()
+        .is_none());
 }
 
 #[test]

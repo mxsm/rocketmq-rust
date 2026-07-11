@@ -58,3 +58,12 @@ The standalone gates also caught two consumers that still assumed the canonical 
 ## Compatibility note
 
 The root and deep `rocketmq-remoting::RemotingCommand` paths are exact canonical re-exports. Environment defaults live in remoting factories. Rust cannot add an inherent `ArcMut` method to a type defined in another crate, so the exact legacy setter signature is preserved as a deprecated remoting free function and explicitly recorded in the compatibility ledger.
+
+## Final review compatibility follow-up
+
+The final review identified two omitted source-compatibility surfaces. Both were restored test-first:
+
+- `SubscriptionGroupWrapper` again exposes the exact legacy `new`, `set_subscription_group_table`, `forbidden_table`, `set_forbidden_table`, and `set_data_version` APIs. `new` preserves the prior preallocated DashMap behavior, setters replace the complete legacy values, and canonical round trips retain both tables and the data version.
+- `RpcResponse::get_header_mut_from_ref<T>(&self) -> Option<&mut T>` is restored as a deprecated signature-compatible facade. It safely returns `None` because mutable access through a shared reference cannot be implemented soundly; exclusive mutation remains available through `get_header_mut`.
+
+RED compilation reported every missing function item. GREEN validation passed the 11-test M04 compatibility fixture and the focused remoting RPC test filter.
