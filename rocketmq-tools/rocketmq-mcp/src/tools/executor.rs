@@ -24,6 +24,7 @@ use rmcp::model::Resource;
 use rmcp::ErrorData;
 
 use crate::adapter::query_facade::ReadOnlyQuery;
+use crate::guard::context::RequestContext;
 use crate::guard::Guard;
 use crate::guard::GuardError;
 use crate::model::contract::QueryResult;
@@ -142,6 +143,7 @@ impl From<GuardError> for ToolExecutionError {
 pub(crate) struct ToolExecutor<A> {
     adapter: A,
     guard: Guard,
+    context: RequestContext,
 }
 
 impl<A> ToolExecutor<A>
@@ -149,7 +151,17 @@ where
     A: ReadOnlyQuery,
 {
     pub(crate) fn new(adapter: A, guard: Guard) -> Self {
-        Self { adapter, guard }
+        let context = guard.local_request_context();
+        Self {
+            adapter,
+            guard,
+            context,
+        }
+    }
+
+    pub(crate) fn with_request_context(mut self, context: RequestContext) -> Self {
+        self.context = context;
+        self
     }
 
     #[cfg(test)]
@@ -167,13 +179,14 @@ where
             .ok_or_else(|| ErrorData::invalid_params(format!("unknown tool: {tool_name}"), None))?;
         let descriptor = tool_id.descriptor();
         let arguments = request.arguments.unwrap_or_default();
-        let guarded_call = match self
-            .guard
-            .begin_tool_call(&tool_name, descriptor.risk_level, &arguments)
-        {
-            Ok(guarded_call) => guarded_call,
-            Err(error) => return Ok(error_result(&tool_name, request_id, error.into())),
-        };
+        let guarded_call =
+            match self
+                .guard
+                .begin_tool_call(&self.context, &tool_name, descriptor.risk_level, &arguments)
+            {
+                Ok(guarded_call) => guarded_call,
+                Err(error) => return Ok(error_result(&tool_name, request_id, error.into())),
+            };
 
         if let Err(error) = validate_input(&descriptor, &arguments) {
             return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error)));
@@ -817,11 +830,14 @@ mod tests {
                 allow_change_planning,
                 sanitize_output: true,
                 rate_limit_per_minute: 60,
+                permissions_file: permission_path(),
+                max_concurrent_requests_per_cluster: 8,
             },
             AuditConfig {
                 enabled: true,
                 sink: "memory".to_string(),
                 path: String::new(),
+                queue_capacity: 16,
             },
             &[ClusterConfig {
                 name: "local-dev".to_string(),
@@ -829,6 +845,15 @@ mod tests {
                 default: Some(true),
             }],
         )
+        .unwrap()
+    }
+
+    fn permission_path() -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("conf")
+            .join("permissions.example.toml")
+            .to_string_lossy()
+            .into_owned()
     }
 
     fn broker_summary() -> cluster_tools::BrokerSummary {

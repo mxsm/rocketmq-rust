@@ -1,6 +1,6 @@
 ---
 source: rocketmq-tools/rocketmq-mcp/src/tools/catalog.rs
-assertion_line: 351
+assertion_line: 361
 expression: contracts
 ---
 [
@@ -1771,12 +1771,12 @@ expression: contracts
         },
         "EvidenceStatus": {
           "enum": [
-            "Present",
-            "Missing",
-            "Unavailable",
-            "Timeout",
-            "Unauthorized",
-            "Invalid"
+            "present",
+            "missing",
+            "unavailable",
+            "timeout",
+            "unauthorized",
+            "invalid"
           ],
           "type": "string"
         },
@@ -1874,12 +1874,12 @@ expression: contracts
         },
         "Severity": {
           "enum": [
-            "Healthy",
-            "Low",
-            "Medium",
-            "High",
-            "Critical",
-            "Unknown"
+            "healthy",
+            "low",
+            "medium",
+            "high",
+            "critical",
+            "unknown"
           ],
           "type": "string"
         }

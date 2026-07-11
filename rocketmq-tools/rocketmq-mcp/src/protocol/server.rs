@@ -37,6 +37,7 @@ use rmcp::ServerHandler;
 use serde_json::json;
 
 use crate::app::McpApp;
+use crate::guard::context::RequestContext as AccessContext;
 use crate::prompts;
 use crate::resources;
 use crate::tools;
@@ -98,16 +99,22 @@ impl ServerHandler for RocketmqMcpServer {
     async fn list_resources(
         &self,
         request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        resources::registry::list_resources(self.app.config(), request.as_ref())
+        let access = self.access_context(&context);
+        resources::registry::list_resources_for(self.app.config(), request.as_ref(), |cluster| {
+            self.app.guard().authorize_resource(&access, cluster).is_ok()
+        })
     }
 
     async fn list_resource_templates(
         &self,
         request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        if !self.app.guard().allows_resources(&self.access_context(&context)) {
+            return Ok(ListResourceTemplatesResult::with_all_items(Vec::new()));
+        }
         resources::registry::list_resource_templates(request.as_ref())
     }
 
@@ -116,6 +123,14 @@ impl ServerHandler for RocketmqMcpServer {
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
+        let access = self.access_context(&context);
+        let resource = crate::resources::uri::RocketmqResourceUri::parse(&request.uri)
+            .ok_or_else(|| ErrorData::invalid_params("invalid RocketMQ resource URI", None))?;
+        let _guarded_resource = self
+            .app
+            .guard()
+            .begin_resource_read(&access, &resource.cluster)
+            .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
         let query = self.app.query().as_ref().clone().with_cancellation(context.ct);
         let result = resources::reader::read_resource(&query, &request.uri).await;
         self.app.trace_cache_metrics();
@@ -125,25 +140,36 @@ impl ServerHandler for RocketmqMcpServer {
     async fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
+        if !self.app.guard().allows_resources(&self.access_context(&context)) {
+            return Ok(ListPromptsResult::with_all_items(Vec::new()));
+        }
         prompts::registry::list_prompts().map_err(|error| ErrorData::internal_error(error.to_string(), None))
     }
 
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResult, ErrorData> {
+        if !self.app.guard().allows_resources(&self.access_context(&context)) {
+            return Err(ErrorData::invalid_params("prompt access is denied", None));
+        }
         prompts::renderer::get_prompt(request)
     }
 
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(tools::catalog::list_tools())
+        let access = self.access_context(&context);
+        Ok(tools::catalog::list_tools_for(|descriptor| {
+            self.app
+                .guard()
+                .allows_tool(&access, descriptor.name, descriptor.risk_level)
+        }))
     }
 
     async fn call_tool(
@@ -152,7 +178,9 @@ impl ServerHandler for RocketmqMcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let query = self.app.query().as_ref().clone().with_cancellation(context.ct.clone());
+        let access = self.access_context(&context);
         let result = ToolExecutor::new(query, self.app.guard().clone())
+            .with_request_context(access)
             .call_with_request_id(request, &request_id_string(&context.id))
             .await;
         self.app.trace_cache_metrics();
@@ -161,6 +189,22 @@ impl ServerHandler for RocketmqMcpServer {
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
         tools::catalog::get_tool(name)
+    }
+}
+
+impl RocketmqMcpServer {
+    fn access_context(&self, context: &RequestContext<RoleServer>) -> AccessContext {
+        #[cfg(feature = "streamable-http")]
+        if let Some(access) = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(|parts| parts.extensions.get::<AccessContext>())
+        {
+            return access.clone();
+        }
+        #[cfg(not(feature = "streamable-http"))]
+        let _ = context;
+        self.app.guard().local_request_context()
     }
 }
 
@@ -186,7 +230,7 @@ mod tests {
 
     #[test]
     fn server_info_declares_mvp_capabilities() {
-        let app = McpApp::new(McpConfig::load(example_config_path()).unwrap());
+        let app = McpApp::new(McpConfig::load(example_config_path()).unwrap()).unwrap();
         let server = RocketmqMcpServer::new(app);
 
         let info = server.get_info();

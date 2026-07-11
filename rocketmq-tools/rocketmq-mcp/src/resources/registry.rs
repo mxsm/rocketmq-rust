@@ -32,9 +32,18 @@ pub fn list_resources(
     config: &McpConfig,
     request: Option<&PaginatedRequestParams>,
 ) -> Result<ListResourcesResult, ErrorData> {
+    list_resources_for(config, request, |_| true)
+}
+
+pub fn list_resources_for(
+    config: &McpConfig,
+    request: Option<&PaginatedRequestParams>,
+    mut allows_cluster: impl FnMut(&str) -> bool,
+) -> Result<ListResourcesResult, ErrorData> {
     let resources = config
         .clusters
         .iter()
+        .filter(|cluster| allows_cluster(&cluster.name))
         .flat_map(|cluster| {
             ResourceKind::ROOTS
                 .into_iter()

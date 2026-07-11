@@ -18,10 +18,13 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use axum::middleware;
+use axum::response::IntoResponse;
+use axum::routing::get;
 use axum::Router;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::StreamableHttpService;
 use rmcp::transport::StreamableHttpServerConfig;
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -61,17 +64,42 @@ pub async fn serve(app: McpApp) -> anyhow::Result<()> {
 pub fn build_router(app: McpApp, cancellation_token: CancellationToken) -> anyhow::Result<Router> {
     let endpoint = app.config().server.http.endpoint.clone();
     let service = streamable_service(app.clone(), cancellation_token);
-    let auth_state = HttpAuthState::from_env(app.config().server.http.require_auth, app.guard().clone())?;
+    let auth_state = HttpAuthState::from_config(&app.config().server.http.auth, app.guard().clone())?;
+    let metadata_path = app.config().server.http.auth.protected_resource_metadata_path.clone();
+    let metadata = protected_resource_metadata(&app.config().server.http);
+    let mcp_router = Router::new()
+        .nest_service(&endpoint, service)
+        .layer(middleware::from_fn_with_state(auth_state, http_auth_middleware));
 
     Ok(Router::new()
-        .nest_service(&endpoint, service)
+        .route(
+            &metadata_path,
+            get(move || {
+                let metadata = metadata.clone();
+                async move { axum::Json(metadata).into_response() }
+            }),
+        )
+        .merge(mcp_router)
         .layer(TraceLayer::new_for_http())
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             HTTP_REQUEST_TIMEOUT,
         ))
-        .layer(RequestBodyLimitLayer::new(MAX_HTTP_BODY_BYTES))
-        .layer(middleware::from_fn_with_state(auth_state, http_auth_middleware)))
+        .layer(RequestBodyLimitLayer::new(MAX_HTTP_BODY_BYTES)))
+}
+
+fn protected_resource_metadata(http_config: &HttpConfig) -> serde_json::Value {
+    let resource = format!("http://{}{}", http_config.bind, http_config.endpoint);
+    let authorization_servers = if !http_config.auth.issuer.trim().is_empty() {
+        vec![http_config.auth.issuer.clone()]
+    } else {
+        Vec::new()
+    };
+    json!({
+        "resource": resource,
+        "authorization_servers": authorization_servers,
+        "scopes_supported": http_config.auth.required_scopes,
+    })
 }
 
 fn streamable_service(
@@ -157,6 +185,15 @@ mod tests {
         assert!(server_config.allowed_origins.contains(&"http://localhost".to_string()));
         assert!(server_config.json_response);
         assert!(!server_config.stateful_mode);
+    }
+
+    #[test]
+    fn protected_resource_metadata_advertises_resource_and_scopes() {
+        let config = McpConfig::load(example_config_path()).unwrap();
+        let metadata = protected_resource_metadata(&config.server.http);
+
+        assert_eq!(metadata["resource"], "http://127.0.0.1:8089/mcp");
+        assert_eq!(metadata["scopes_supported"], serde_json::json!(["rocketmq:read"]));
     }
 
     fn example_config_path() -> std::path::PathBuf {

@@ -1,4 +1,5 @@
 [roles.read_only]
+allowed_clusters = ["*"]
 allow_tools = [
   "rocketmq_get_cluster_overview",
   "rocketmq_list_topics",
@@ -12,12 +13,14 @@ deny_tools = ["*"]
 
 [roles.diagnose]
 include = ["read_only"]
+allowed_clusters = ["*"]
 allow_tools = [
   "rocketmq_diagnose_consumer_lag",
 ]
 
 [roles.operator]
 include = ["diagnose"]
+allowed_clusters = ["*"]
 allow_tools = [
   "rocketmq_plan_create_topic",
   "rocketmq_plan_update_topic_config",

@@ -293,6 +293,16 @@ pub fn list_tools() -> ListToolsResult {
     ListToolsResult::with_all_items(ToolId::ALL.iter().map(|tool_id| tool_id.definition()).collect())
 }
 
+pub fn list_tools_for(mut allows: impl FnMut(&ToolDescriptor) -> bool) -> ListToolsResult {
+    ListToolsResult::with_all_items(
+        ToolId::ALL
+            .iter()
+            .filter(|tool_id| allows(&tool_id.descriptor()))
+            .map(|tool_id| tool_id.definition())
+            .collect(),
+    )
+}
+
 pub fn get_tool(name: &str) -> Option<Tool> {
     ToolId::resolve(name).map(ToolId::definition)
 }

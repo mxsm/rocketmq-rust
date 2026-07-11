@@ -12,7 +12,18 @@ bind = "127.0.0.1:8089"
 endpoint = "/mcp"
 validate_origin = true
 allowed_origins = ["http://127.0.0.1", "http://localhost"]
-require_auth = true
+
+[server.http.auth]
+# `development-token` is only for loopback development. Production deployments
+# must use `oauth-jwt` and validate issuer, audience, signature, and scope.
+mode = "development-token"
+development_token_env = "ROCKETMQ_MCP_HTTP_TOKEN"
+issuer = ""
+audience = ""
+required_scopes = ["rocketmq:read"]
+jwt_algorithm = "rs256"
+jwt_key_env = "ROCKETMQ_MCP_OAUTH_PUBLIC_KEY_PEM"
+protected_resource_metadata_path = "/.well-known/oauth-protected-resource"
 
 [[clusters]]
 name = "local-dev"
@@ -24,11 +35,14 @@ profile = "diagnose"
 allow_change_planning = false
 sanitize_output = true
 rate_limit_per_minute = 60
+permissions_file = "permissions.example.toml"
+max_concurrent_requests_per_cluster = 8
 
 [audit]
 enabled = true
 sink = "file"
 path = "./logs/rocketmq-mcp-audit.log"
+queue_capacity = 1024
 
 [cache]
 enabled = true
