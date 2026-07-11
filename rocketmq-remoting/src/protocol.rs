@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::sync::atomic::AtomicI64;
@@ -33,7 +32,7 @@ pub mod admin;
 pub mod bodies;
 pub mod body;
 pub mod broker_sync_info;
-pub mod command_custom_header;
+pub use rocketmq_protocol::protocol::command_custom_header;
 pub mod filter;
 pub mod forbidden_type;
 pub mod header;
@@ -41,10 +40,10 @@ pub mod headers;
 pub mod heartbeat;
 pub mod namespace_util;
 pub mod namesrv;
-pub mod remoting_command;
+pub use rocketmq_protocol::protocol::remoting_command;
 pub mod request_source;
 pub mod request_type;
-pub mod rocketmq_serializable;
+pub use rocketmq_protocol::protocol::rocketmq_serializable;
 pub mod route;
 pub mod static_topic;
 pub mod subscription;
@@ -54,7 +53,11 @@ pub mod topic;
 pub use self::command_custom_header::CommandCustomHeader;
 pub use self::command_custom_header::FromMap;
 pub use self::remoting_command::RemotingCommand;
+pub use rocketmq_protocol::protocol::LanguageCode;
+pub use rocketmq_protocol::protocol::RemotingCommandType;
+pub use rocketmq_protocol::protocol::SerializeType;
 
+#[cfg(any())]
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq)]
 pub enum RemotingCommandType {
@@ -62,6 +65,7 @@ pub enum RemotingCommandType {
     RESPONSE,
 }
 
+#[cfg(any())]
 impl RemotingCommandType {
     pub fn value_of(code: u8) -> Option<Self> {
         match code {
@@ -87,6 +91,7 @@ impl RemotingCommandType {
     }
 }
 
+#[cfg(any())]
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Default, Hash, Copy)]
 pub enum LanguageCode {
@@ -106,6 +111,7 @@ pub enum LanguageCode {
     RUST,
 }
 
+#[cfg(any())]
 impl fmt::Display for LanguageCode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
@@ -126,18 +132,21 @@ impl fmt::Display for LanguageCode {
     }
 }
 
+#[cfg(any())]
 impl From<LanguageCode> for u8 {
     fn from(code: LanguageCode) -> Self {
         code.get_code()
     }
 }
 
+#[cfg(any())]
 impl From<LanguageCode> for i32 {
     fn from(code: LanguageCode) -> Self {
         code.get_code() as i32
     }
 }
 
+#[cfg(any())]
 impl From<u32> for LanguageCode {
     fn from(code: u32) -> Self {
         if let Ok(c) = u8::try_from(code) {
@@ -148,6 +157,7 @@ impl From<u32> for LanguageCode {
     }
 }
 
+#[cfg(any())]
 impl From<i32> for LanguageCode {
     fn from(code: i32) -> Self {
         if let Ok(c) = u8::try_from(code) {
@@ -158,12 +168,14 @@ impl From<i32> for LanguageCode {
     }
 }
 
+#[cfg(any())]
 impl From<u8> for LanguageCode {
     fn from(code: u8) -> Self {
         LanguageCode::value_of(code).unwrap_or(LanguageCode::OTHER)
     }
 }
 
+#[cfg(any())]
 impl LanguageCode {
     pub fn value_of(code: u8) -> Option<Self> {
         match code {
@@ -222,6 +234,7 @@ impl LanguageCode {
     }
 }
 
+#[cfg(any())]
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
 pub enum SerializeType {
@@ -229,6 +242,7 @@ pub enum SerializeType {
     ROCKETMQ,
 }
 
+#[cfg(any())]
 impl fmt::Display for SerializeType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
@@ -238,6 +252,7 @@ impl fmt::Display for SerializeType {
     }
 }
 
+#[cfg(any())]
 impl SerializeType {
     pub fn value_of(code: u8) -> Option<Self> {
         match code {

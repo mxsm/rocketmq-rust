@@ -80,7 +80,7 @@
 
 任务文档：[`04-protocol-extraction.md`](phase-2-core-boundaries/04-protocol-extraction.md)
 
-- [ ] PR-M04-01：创建 crate 与单 request-code spike
+- [x] PR-M04-01：创建 crate 与单 request-code spike
 - [ ] PR-M04-02：迁移 model 前置的 wire primitives
 - [ ] PR-M04-03：分批迁移声明式 schema
 - [ ] PR-M04-04：拆分 static-topic、route 与 RPC 纯逻辑

@@ -18,6 +18,6 @@ pub mod rpc_client_hook;
 pub mod rpc_client_impl;
 pub mod rpc_client_utils;
 pub mod rpc_request;
-pub mod rpc_request_header;
+pub use rocketmq_protocol::rpc::rpc_request_header;
 pub mod rpc_response;
-pub mod topic_request_header;
+pub use rocketmq_protocol::rpc::topic_request_header;

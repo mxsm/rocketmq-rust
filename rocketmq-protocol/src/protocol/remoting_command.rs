@@ -23,15 +23,10 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_common::common::mq_version::CURRENT_VERSION;
-#[cfg(not(feature = "simd"))]
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::EnvUtils::EnvUtils;
-use rocketmq_rust::ArcMut;
+use rocketmq_model::version::RocketMqVersion;
+use rocketmq_model::version::CURRENT_VERSION;
 use serde::Deserialize;
 use serde::Serialize;
-use tracing::error;
 
 use super::RemotingCommandType;
 use super::SerializeType;
@@ -48,22 +43,10 @@ pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
 
 static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> = std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
 
-static CONFIG_VERSION: std::sync::LazyLock<i32> = std::sync::LazyLock::new(|| {
-    EnvUtils::get_property(REMOTING_VERSION_KEY)
-        .unwrap_or_else(|| (CURRENT_VERSION as i32).to_string())
-        .parse::<i32>()
-        .unwrap_or(CURRENT_VERSION as i32)
-});
+static CONFIG_VERSION: std::sync::LazyLock<i32> = std::sync::LazyLock::new(|| CURRENT_VERSION as i32);
 
-pub static SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: std::sync::LazyLock<SerializeType> = std::sync::LazyLock::new(|| {
-    let protocol = std::env::var(SERIALIZE_TYPE_PROPERTY)
-        .unwrap_or_else(|_| std::env::var(SERIALIZE_TYPE_ENV).unwrap_or_else(|_| "".to_string()));
-    match protocol.as_str() {
-        "JSON" => SerializeType::JSON,
-        "ROCKETMQ" => SerializeType::ROCKETMQ,
-        _ => SerializeType::JSON,
-    }
-});
+pub static SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: std::sync::LazyLock<SerializeType> =
+    std::sync::LazyLock::new(|| SerializeType::JSON);
 
 fn set_cmd_version(cmd: &mut RemotingCommand) {
     cmd.set_version_ref(*CONFIG_VERSION);
@@ -222,10 +205,10 @@ impl RemotingCommand {
         self
     }
 
-    pub fn set_command_custom_header_origin(
-        mut self,
-        command_custom_header: Option<ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
-    ) -> Self {
+    pub fn set_command_custom_header_origin<T>(mut self, command_custom_header: Option<T>) -> Self
+    where
+        T: std::ops::Deref<Target = Box<dyn CommandCustomHeader + Send + Sync + 'static>>,
+    {
         if let Some(header_fields) = command_custom_header.as_ref().and_then(|header| header.to_map()) {
             self.ext_fields.get_or_insert_with(HashMap::new).extend(header_fields);
         }
@@ -386,20 +369,14 @@ impl RemotingCommand {
                 {
                     match simd_json::to_vec(self) {
                         Ok(value) => Some(Bytes::from(value)),
-                        Err(e) => {
-                            error!("Failed to encode JSON header with simd-json: {}", e);
-                            None
-                        }
+                        Err(_) => None,
                     }
                 }
                 #[cfg(not(feature = "simd"))]
                 {
                     match serde_json::to_vec(self) {
                         Ok(value) => Some(Bytes::from(value)),
-                        Err(e) => {
-                            error!("Failed to encode JSON header: {}", e);
-                            None
-                        }
+                        Err(_) => None,
                     }
                 }
             }
@@ -513,8 +490,7 @@ impl RemotingCommand {
                 // Write header bytes (zero-copy from Vec)
                 dst.put_slice(&header_bytes);
             }
-            Err(e) => {
-                error!("Failed to encode JSON header: {}", e);
+            Err(_) => {
                 // Write minimal error frame
                 dst.put_i32(4); // total_length: just the serialize_type field
                 dst.put_i32(RemotingCommand::mark_serialize_type(0, SerializeType::JSON));
@@ -695,7 +671,7 @@ impl RemotingCommand {
                 };
 
                 #[cfg(not(feature = "simd"))]
-                let cmd = SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
+                let cmd = serde_json::from_slice::<RemotingCommand>(src).map_err(|error| {
                     rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                         format: "json",
                         message: format!("JSON deserialization error: {error}"),

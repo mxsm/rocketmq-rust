@@ -21,9 +21,15 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 
-use crate::error_helpers::decoding_error;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::LanguageCode;
+
+fn decoding_error(required: usize, available: usize) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+        format: "binary",
+        message: format!("required {required} bytes, got {available}"),
+    })
+}
 
 pub struct RocketMQSerializable;
 

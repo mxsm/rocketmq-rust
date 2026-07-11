@@ -35,6 +35,7 @@ rocketmq-rust   = { workspace = true }
 rocketmq-error  = { workspace = true }
 rocketmq-runtime = { workspace = true }
 rocketmq-observability = { workspace = true, optional = true }
+rocketmq-protocol = { workspace = true }
 
 anyhow.workspace = true
 bytes.workspace  = true
@@ -87,7 +88,7 @@ tokio-rustls        = { version = "0.26", optional = true }
 
 [features]
 default = ["tls"]
-simd    = ["simd-json"]
+simd    = ["simd-json", "rocketmq-protocol/simd"]
 tls     = ["arc-swap", "rcgen", "rustls-native-certs", "rustls-pemfile", "tokio-rustls"]
 observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
 

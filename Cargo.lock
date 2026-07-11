@@ -4718,6 +4718,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-protocol"
+version = "1.0.0"
+dependencies = [
+ "bytes",
+ "cheetah-string",
+ "rocketmq-error",
+ "rocketmq-macros",
+ "rocketmq-model",
+ "serde",
+ "serde_json",
+ "simd-json",
+]
+
+[[package]]
 name = "rocketmq-proxy"
 version = "1.0.0"
 dependencies = [
@@ -4780,6 +4794,7 @@ dependencies = [
  "rocketmq-error",
  "rocketmq-macros",
  "rocketmq-observability",
+ "rocketmq-protocol",
  "rocketmq-runtime",
  "rocketmq-rust",
  "rustls-native-certs",

@@ -75,7 +75,7 @@ macro_rules! define_response_code {
 
 define_response_code! {
     #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
-    pub enum RemotingSysResponseCode {
+pub enum RemotingSysResponseCode {
         Success = 0,
         SystemError = 1,
         SystemBusy = 2,

@@ -12,4 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use rocketmq_protocol::code::*;
+pub mod get_min_offset_request_header;
+pub mod get_min_offset_response_header;
+pub mod message_operation_header;

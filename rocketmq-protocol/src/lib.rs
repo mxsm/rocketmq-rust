@@ -12,4 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use rocketmq_protocol::code::*;
+//! Runtime-neutral RocketMQ wire protocol contracts.
+
+pub mod code;
+pub mod protocol;
+pub mod rpc;
+
+pub use code::request_code::RequestCode;
+pub use code::response_code::RemotingSysResponseCode;
+pub use protocol::command_custom_header::CommandCustomHeader;
+pub use protocol::command_custom_header::FromMap;
+pub use protocol::remoting_command::RemotingCommand;
+pub use protocol::rocketmq_serializable;
+pub use rpc::rpc_request_header::RpcRequestHeader;
+pub use rpc::topic_request_header::TopicRequestHeader;

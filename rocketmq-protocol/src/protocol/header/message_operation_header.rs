@@ -12,39 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use cheetah_string::CheetahString;
 
-pub mod send_message_request_header;
-pub mod send_message_request_header_v2;
-pub mod send_message_response_header;
-
-#[cfg(any())]
 pub trait TopicRequestHeaderTrait: Sync + Send {
     fn set_lo(&mut self, lo: Option<bool>);
-
     fn lo(&self) -> Option<bool>;
-
     fn set_topic(&mut self, topic: CheetahString);
-
     fn topic(&self) -> &CheetahString;
-
     fn broker_name(&self) -> Option<&CheetahString>;
-
     fn set_broker_name(&mut self, broker_name: CheetahString);
-
     fn namespace(&self) -> Option<&str>;
-
     fn set_namespace(&mut self, namespace: CheetahString);
-
     fn namespaced(&self) -> Option<bool>;
-
     fn set_namespaced(&mut self, namespaced: bool);
-
     fn oneway(&self) -> Option<bool>;
-
     fn set_oneway(&mut self, oneway: bool);
-
     fn queue_id(&self) -> i32;
-
     fn set_queue_id(&mut self, queue_id: i32);
 }

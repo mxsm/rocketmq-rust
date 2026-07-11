@@ -336,6 +336,22 @@
   },
   "closure_rules": [
     {
+      "callers": ["rocketmq-protocol"],
+      "forbidden_targets": [
+        "rocketmq-common",
+        "rocketmq-remoting",
+        "rocketmq-runtime",
+        "rocketmq-rust",
+        "rocketmq-auth",
+        "rocketmq-client-rust",
+        "rocketmq-broker",
+        "rocketmq-namesrv",
+        "rocketmq-controller",
+        "rocketmq-store",
+        "rocketmq-proxy"
+      ]
+    },
+    {
       "callers": ["rocketmq-transport"],
       "forbidden_targets": [
         "rocketmq-common",

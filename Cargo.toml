@@ -27,6 +27,7 @@ members = [
   "rocketmq-model",
   "rocketmq-namesrv",
   "rocketmq-observability",
+  "rocketmq-protocol",
   "rocketmq-proxy",
   "rocketmq-remoting",
   "rocketmq-runtime",
@@ -78,6 +79,7 @@ rocketmq-controller  = { version = "1.0.0", path = "./rocketmq-controller" }
 rocketmq-namesrv     = { version = "1.0.0", path = "./rocketmq-namesrv" }
 rocketmq-observability = { version = "1.0.0", path = "./rocketmq-observability" }
 rocketmq-model       = { version = "1.0.0", path = "./rocketmq-model" }
+rocketmq-protocol    = { version = "1.0.0", path = "./rocketmq-protocol" }
 rocketmq-security-api = { version = "1.0.0", path = "./rocketmq-security-api" }
 
 tokio        = { version = "1.52", features = ["full"] }
