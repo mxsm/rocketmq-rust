@@ -7,10 +7,10 @@
 | 里程碑 | M01–M03 |
 | 状态 | 已完成，待 GitHub squash merge |
 | Issue | [#8180](https://github.com/mxsm/rocketmq-rust/issues/8180) |
-| PR | 创建后补录 |
+| PR | [#8181](https://github.com/mxsm/rocketmq-rust/pull/8181) |
 | 分支 | `mxsm/architecture-refactor-safety-foundation` |
 | 基线提交 | `70ec1a177b17be3dfa61af50e29337711a0c58e1` |
-| 候选提交 | 提交后补录 |
+| 候选提交 | `cd5ff453` |
 | 完成日期 | 2026-07-11 |
 | Developer | Codex 主代理与实现子代理 |
 | Reviewer | 独立代码审查子代理 |
