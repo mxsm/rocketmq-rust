@@ -33,6 +33,10 @@ use rayon::prelude::*;
 use tracing::info;
 use tracing::warn;
 
+pub use rocketmq_store_local::commit_log::load::LoadStatistics;
+pub use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
+pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
+
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 #[cfg(windows)]
@@ -46,98 +50,6 @@ struct FileMetadata {
     file_name: String,
 }
 
-/// Statistics for load operation
-#[derive(Debug, Clone, Default)]
-pub struct LoadStatistics {
-    pub total_files: usize,
-    pub total_size_bytes: u64,
-    pub files_removed: usize,
-    pub parallel_load_time_ms: u128,
-    pub total_load_time_ms: u128,
-    pub recovery_mmap_advice: RecoveryMmapAdvice,
-    pub mmap_advice_attempts: u64,
-    pub mmap_advice_successes: u64,
-    pub mmap_advice_failures: u64,
-    pub mmap_advice_elapsed_ms: u64,
-    pub recovery_file_prefetch: RecoveryFilePrefetch,
-    pub file_prefetch_attempts: u64,
-    pub file_prefetch_successes: u64,
-    pub file_prefetch_failures: u64,
-    pub file_prefetch_elapsed_ms: u64,
-}
-
-impl LoadStatistics {
-    pub fn log_summary(&self) {
-        info!(
-            "CommitLog load completed: {} files ({:.2} GB), {} removed, parallel: {}ms, total: {}ms, mmapAdvice={}, \
-             mmapAdviceAttempts={}, mmapAdviceSuccesses={}, mmapAdviceFailures={}, mmapAdviceElapsedMs={}, \
-             filePrefetch={}, filePrefetchAttempts={}, filePrefetchSuccesses={}, filePrefetchFailures={}, \
-             filePrefetchElapsedMs={}",
-            self.total_files,
-            self.total_size_bytes as f64 / 1024.0 / 1024.0 / 1024.0,
-            self.files_removed,
-            self.parallel_load_time_ms,
-            self.total_load_time_ms,
-            self.recovery_mmap_advice.as_str(),
-            self.mmap_advice_attempts,
-            self.mmap_advice_successes,
-            self.mmap_advice_failures,
-            self.mmap_advice_elapsed_ms,
-            self.recovery_file_prefetch.as_str(),
-            self.file_prefetch_attempts,
-            self.file_prefetch_successes,
-            self.file_prefetch_failures,
-            self.file_prefetch_elapsed_ms
-        );
-    }
-
-    fn record_mmap_advice(&mut self, result: HintResult) {
-        if !result.attempted {
-            return;
-        }
-        self.mmap_advice_attempts = self.mmap_advice_attempts.saturating_add(1);
-        if result.succeeded {
-            self.mmap_advice_successes = self.mmap_advice_successes.saturating_add(1);
-        } else {
-            self.mmap_advice_failures = self.mmap_advice_failures.saturating_add(1);
-        }
-        self.mmap_advice_elapsed_ms = self
-            .mmap_advice_elapsed_ms
-            .saturating_add(duration_to_millis(result.elapsed));
-    }
-
-    fn record_file_prefetch(&mut self, result: HintResult) {
-        if !result.attempted {
-            return;
-        }
-        self.file_prefetch_attempts = self.file_prefetch_attempts.saturating_add(1);
-        if result.succeeded {
-            self.file_prefetch_successes = self.file_prefetch_successes.saturating_add(1);
-        } else {
-            self.file_prefetch_failures = self.file_prefetch_failures.saturating_add(1);
-        }
-        self.file_prefetch_elapsed_ms = self
-            .file_prefetch_elapsed_ms
-            .saturating_add(duration_to_millis(result.elapsed));
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum RecoveryMmapAdvice {
-    #[default]
-    Disabled,
-    Sequential,
-}
-
-impl RecoveryMmapAdvice {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Sequential => "sequential",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 struct HintResult {
     attempted: bool,
@@ -145,24 +57,38 @@ struct HintResult {
     elapsed: Duration,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum RecoveryFilePrefetch {
-    #[default]
-    Disabled,
-    Sequential,
-}
-
-impl RecoveryFilePrefetch {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Sequential => "sequential",
-        }
-    }
-}
-
 fn duration_to_millis(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn record_mmap_advice(stats: &mut LoadStatistics, result: HintResult) {
+    if !result.attempted {
+        return;
+    }
+    stats.mmap_advice_attempts = stats.mmap_advice_attempts.saturating_add(1);
+    if result.succeeded {
+        stats.mmap_advice_successes = stats.mmap_advice_successes.saturating_add(1);
+    } else {
+        stats.mmap_advice_failures = stats.mmap_advice_failures.saturating_add(1);
+    }
+    stats.mmap_advice_elapsed_ms = stats
+        .mmap_advice_elapsed_ms
+        .saturating_add(duration_to_millis(result.elapsed));
+}
+
+fn record_file_prefetch(stats: &mut LoadStatistics, result: HintResult) {
+    if !result.attempted {
+        return;
+    }
+    stats.file_prefetch_attempts = stats.file_prefetch_attempts.saturating_add(1);
+    if result.succeeded {
+        stats.file_prefetch_successes = stats.file_prefetch_successes.saturating_add(1);
+    } else {
+        stats.file_prefetch_failures = stats.file_prefetch_failures.saturating_add(1);
+    }
+    stats.file_prefetch_elapsed_ms = stats
+        .file_prefetch_elapsed_ms
+        .saturating_add(duration_to_millis(result.elapsed));
 }
 
 /// Optimized loader for CommitLog files
@@ -431,8 +357,8 @@ impl CommitLogLoader {
         };
         let mut mapped_files = Vec::with_capacity(results.len());
         for (mapped_file, mmap_advice_result, file_prefetch_result) in results {
-            mmap_advice_stats.record_mmap_advice(mmap_advice_result);
-            mmap_advice_stats.record_file_prefetch(file_prefetch_result);
+            record_mmap_advice(&mut mmap_advice_stats, mmap_advice_result);
+            record_file_prefetch(&mut mmap_advice_stats, file_prefetch_result);
             mapped_files.push(mapped_file);
         }
         Ok((mapped_files, mmap_advice_stats))
@@ -455,8 +381,8 @@ impl CommitLogLoader {
             let mapped_file = self.create_mapped_file(meta, idx, file_count)?;
 
             let (mmap_advice_result, file_prefetch_result) = self.apply_memory_hints(&mapped_file);
-            mmap_advice_stats.record_mmap_advice(mmap_advice_result);
-            mmap_advice_stats.record_file_prefetch(file_prefetch_result);
+            record_mmap_advice(&mut mmap_advice_stats, mmap_advice_result);
+            record_file_prefetch(&mut mmap_advice_stats, file_prefetch_result);
 
             mapped_file.set_wrote_position(self.mapped_file_size as i32);
             mapped_file.set_flushed_position(self.mapped_file_size as i32);
@@ -590,6 +516,36 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    fn canonical_load_statistics(value: LoadStatistics) -> rocketmq_store_local::commit_log::load::LoadStatistics {
+        value
+    }
+
+    fn canonical_mmap_advice(value: RecoveryMmapAdvice) -> rocketmq_store_local::commit_log::load::RecoveryMmapAdvice {
+        value
+    }
+
+    fn canonical_file_prefetch(
+        value: RecoveryFilePrefetch,
+    ) -> rocketmq_store_local::commit_log::load::RecoveryFilePrefetch {
+        value
+    }
+
+    #[test]
+    fn m06_load_type_identity_preserves_defaults_and_vocabulary() {
+        let stats = canonical_load_statistics(LoadStatistics::default());
+        assert_eq!(stats.total_files, 0);
+        assert_eq!(
+            canonical_mmap_advice(RecoveryMmapAdvice::Sequential),
+            rocketmq_store_local::commit_log::load::RecoveryMmapAdvice::Sequential
+        );
+        assert_eq!(RecoveryMmapAdvice::Sequential.as_str(), "sequential");
+        assert_eq!(
+            canonical_file_prefetch(RecoveryFilePrefetch::Sequential),
+            rocketmq_store_local::commit_log::load::RecoveryFilePrefetch::Sequential
+        );
+        assert_eq!(RecoveryFilePrefetch::Disabled.as_str(), "disabled");
+    }
 
     #[test]
     fn test_load_empty_directory() {

@@ -25,6 +25,18 @@
       "from": "4e9b4d9782e8d81b77acf884",
       "to": "2cca52fb4a35709c5bdecac5",
       "reason": "Extending the same send processor test module with exhaustive review-fix fixtures changed adjacent tokens around the existing test glob import without adding an occurrence"
+    },
+    {
+      "identity": "a1c162204ef2f0dd0e426646",
+      "from": "98917e0742460a0b5bc9ff2e",
+      "to": "f33a68d64527a7522e952920",
+      "reason": "Adding the M06-03b load identity fixture changed adjacent tokens around the existing CommitLog loader test glob import without adding an occurrence"
+    },
+    {
+      "identity": "b4ef5272b75fe61fd822816e",
+      "from": "e2bdce57ebe0e4ed417580be",
+      "to": "ded036bc867beefc6db3270a",
+      "reason": "Replacing facade load definitions with canonical Local re-exports changed adjacent tokens around the existing DefaultMappedFile import without adding an occurrence"
     }
   ]
 }

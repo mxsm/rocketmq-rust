@@ -48,6 +48,28 @@ CANONICAL_ITEMS = {
     "MappedFileResult": ("type", "mapped_file_error.rs"),
     "io_uring_backend_status": ("fn", "io_uring_impl.rs"),
 }
+COMMIT_LOG_CANONICAL_ITEMS = {
+    "LoadStatistics": ("struct", "load.rs"),
+    "RecoveryMmapAdvice": ("enum", "load.rs"),
+    "RecoveryFilePrefetch": ("enum", "load.rs"),
+    "RecoveryStatistics": ("struct", "recovery.rs"),
+    "AbnormalRecoveryFileRange": ("struct", "recovery.rs"),
+    "AbnormalRecoveryWindow": ("struct", "recovery.rs"),
+    "plan_abnormal_recovery_window_from_ranges": ("fn", "recovery.rs"),
+}
+COMMIT_LOG_FACADE_ITEMS = {
+    "commit_log_loader.rs": {
+        "LoadStatistics": "load",
+        "RecoveryMmapAdvice": "load",
+        "RecoveryFilePrefetch": "load",
+    },
+    "commit_log_recovery.rs": {
+        "RecoveryStatistics": "recovery",
+        "AbnormalRecoveryFileRange": "recovery",
+        "AbnormalRecoveryWindow": "recovery",
+        "plan_abnormal_recovery_window_from_ranges": "recovery",
+    },
+}
 FACADE_ROOT_ITEMS = {
     "DirectIoBuffer",
     "DirectIoRequest",
@@ -100,6 +122,17 @@ def dependency_tables(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 def active_facade_reexports(source: str) -> set[str]:
     source = active_rust_source(source)
     return set(re.findall(r"pub\s+use\s+rocketmq_store_local::mapped_file::([A-Za-z_][A-Za-z0-9_]*)\s*;", source))
+
+
+def active_commit_log_facade_reexports(source: str) -> dict[str, str]:
+    source = active_rust_source(source)
+    return {
+        item: module
+        for module, item in re.findall(
+            r"pub\s+use\s+rocketmq_store_local::commit_log::(load|recovery)::([A-Za-z_][A-Za-z0-9_]*)\s*;",
+            source,
+        )
+    }
 
 
 def active_rust_source(source: str) -> str:
@@ -212,6 +245,18 @@ pub use rocketmq_store_local::mapped_file::MappedFileMetrics;
 '''
         self.assertEqual({"MappedFileMetrics"}, active_facade_reexports(source))
 
+    def test_commit_log_reexport_scanner_ignores_comments_and_strings(self) -> None:
+        source = '''
+// pub use rocketmq_store_local::commit_log::load::LoadStatistics;
+/* pub use rocketmq_store_local::commit_log::recovery::RecoveryStatistics; */
+const TEXT: &str = "pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;";
+pub use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryWindow;
+'''
+        self.assertEqual(
+            {"AbnormalRecoveryWindow": "recovery"},
+            active_commit_log_facade_reexports(source),
+        )
+
     def test_tokio_uring_dependency_must_not_also_be_top_level(self) -> None:
         manifest = {
             "dependencies": {"tokio-uring": {"version": "0.5", "optional": True}},
@@ -320,6 +365,28 @@ pub use rocketmq_store_local::mapped_file::MappedFileMetrics;
         reexports = active_facade_reexports(facade)
         self.assertTrue(FACADE_ROOT_ITEMS.issubset(reexports), FACADE_ROOT_ITEMS - reexports)
         self.assertIn("io_uring_impl", reexports)
+
+    def test_commit_log_planning_items_have_one_canonical_definition_and_exact_facade_reexports(self) -> None:
+        self.assert_local_crate_exists()
+        canonical_dir = LOCAL_CRATE / "src" / "commit_log"
+        self.assertEqual({"load.rs", "recovery.rs"}, {path.name for path in canonical_dir.glob("*.rs")})
+
+        log_file_root = (STORE_CRATE / "src" / "log_file.rs").read_text(encoding="utf-8")
+        self.assertIn("pub(crate) mod commit_log_loader;", active_rust_source(log_file_root))
+        self.assertIn("pub mod commit_log_recovery;", active_rust_source(log_file_root))
+
+        rust_sources = {
+            path: path.read_text(encoding="utf-8")
+            for path in ROOT.glob("rocketmq-*/src/**/*.rs")
+        }
+        for item, (item_kind, expected_file) in COMMIT_LOG_CANONICAL_ITEMS.items():
+            definitions = canonical_definition_paths(rust_sources, item, item_kind)
+            self.assertEqual([canonical_dir / expected_file], definitions, item)
+
+        facade_dir = STORE_CRATE / "src" / "log_file"
+        for facade_file, expected_items in COMMIT_LOG_FACADE_ITEMS.items():
+            facade = (facade_dir / facade_file).read_text(encoding="utf-8")
+            self.assertEqual(expected_items, active_commit_log_facade_reexports(facade), facade_file)
 
 
 if __name__ == "__main__":

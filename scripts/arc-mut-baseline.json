@@ -30967,8 +30967,8 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "98917e0742460a0b5bc9ff2e",
-          "fingerprint": "c13cb670865c58b0d0ef1bd8",
+          "id": "f33a68d64527a7522e952920",
+          "fingerprint": "d0079f1ac8ed5babdb310b2b",
           "item": "mod tests",
           "line": 592
         }
@@ -30986,8 +30986,8 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "e2bdce57ebe0e4ed417580be",
-          "fingerprint": "fcfd89f3a100e80e2137c624",
+          "id": "ded036bc867beefc6db3270a",
+          "fingerprint": "05e309834b7c9f89161edf6c",
           "item": "<module>",
           "line": 36
         }
@@ -31061,25 +31061,6 @@
       ],
       "owner": "store",
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "34d72e0a5a31d12447dd63aa",
-      "path": "rocketmq-store/src/log_file/commit_log_recovery.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "1e490b64732a687635c88c93",
-          "fingerprint": "e48fd23b0d35a4751e8edc49",
-          "item": "mod tests",
-          "line": 574
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
       "remove_by": "M11",
       "adr": "ADR-013"
     },

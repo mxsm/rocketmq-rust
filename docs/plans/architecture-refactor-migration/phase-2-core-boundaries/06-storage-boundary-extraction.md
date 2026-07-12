@@ -290,3 +290,18 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` 本切片未迁移 `MappedFile`/`DefaultMappedFile`、CommitLog、load/recovery、flush、
   CQ/Index、HA 或 Local composition，未改变持久格式或 runtime ownership。PR-M06-03 顶层条目与
   M06 Exit Checklist 保持未完成。
+
+## M06-03b recovery/load neutral planning evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::{load,recovery}` is now the single canonical owner of
+  `LoadStatistics`, both recovery hint enums, `RecoveryStatistics`, both abnormal-recovery range/window values,
+  and the deterministic range planner with its private pure helpers.
+- [x] `[COMPAT]` The existing Store loader/recovery modules exact re-export the canonical items. The loader's
+  private `HintResult` orchestration remains facade-owned through private free recording helpers; the mapped-file,
+  checkpoint, config, message parsing, and CommitLog owners did not move.
+- [x] `[TEST]` RED/GREEN identity fixtures and the mutation-resistant source contract prove one definition per
+  item, unchanged legacy module visibility/path behavior, exact facade re-exports, and seven fixed recovery-window
+  outcomes. Local unit tests, CommitLog recovery integration, the exact feature matrix, package/workspace Clippy,
+  architecture dependency gates, and ArcMut gates pass.
+- [x] `[SCOPE]` This slice does not move mmap/prefetch execution, `DefaultMappedFile`, flush/group commit, CQ/Index,
+  HA, runtime ownership, or persisted formats. The PR-M06-03 checklist and the M06 Exit Checklist remain open.
