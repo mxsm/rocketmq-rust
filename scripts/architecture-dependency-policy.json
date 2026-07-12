@@ -232,7 +232,8 @@
       "rocketmq-security-api",
       "rocketmq-runtime",
       "rocketmq-error",
-      "rocketmq-protocol"
+      "rocketmq-protocol",
+      "rocketmq-transport"
     ],
     "rocketmq-remoting": ["rocketmq-protocol", "rocketmq-transport"],
     "rocketmq-store": [

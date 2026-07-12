@@ -12,19 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_remoting::CommandCustomHeader;
 use rocketmq_remoting::RemotingCommand;
-use rocketmq_rust::ArcMut;
-
-type LegacyHeader = ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>;
 
 #[test]
 #[allow(deprecated)]
 fn legacy_origin_method_keeps_concrete_function_item_and_none_inference() {
-    let method: fn(RemotingCommand, Option<LegacyHeader>) -> RemotingCommand =
-        rocketmq_remoting::protocol::remoting_command_facade::set_command_custom_header_origin;
-
-    let command = method(RemotingCommand::create_response_command(), None);
+    let command = rocketmq_remoting::protocol::remoting_command_facade::set_command_custom_header_origin(
+        RemotingCommand::create_response_command(),
+        None,
+    );
 
     assert!(command.ext_fields().is_none());
 }

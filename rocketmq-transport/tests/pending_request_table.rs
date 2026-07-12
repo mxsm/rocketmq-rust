@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::base::pending_request_table::PendingRequestTable;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_transport::base::pending_request_table::PendingRequestLimits;
+use rocketmq_transport::base::pending_request_table::PendingRequestTable;
+use std::sync::Arc;
+use std::sync::Barrier;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -228,4 +231,86 @@ async fn timed_out_owner_rejects_reuse_but_rotated_owner_is_safe_from_late_respo
         ResponseCode::Success.to_i32()
     );
     drop(rotated);
+}
+
+#[tokio::test]
+async fn count_and_byte_admission_are_observable_and_released_on_every_completion_path() {
+    let table = PendingRequestTable::with_limits(PendingRequestLimits {
+        max_count: 2,
+        max_bytes: 8,
+    });
+    let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
+    let first = table
+        .register_with_bytes(1, 3_000, 6, first_sender)
+        .expect("first request fits both budgets");
+    assert_eq!(table.usage().count, 1);
+    assert_eq!(table.usage().bytes, 6);
+
+    let (byte_blocked_sender, _byte_blocked_receiver) = tokio::sync::oneshot::channel();
+    assert!(table.register_with_bytes(2, 3_000, 3, byte_blocked_sender).is_err());
+    assert_eq!(table.usage().rejected_bytes, 1);
+
+    assert!(first.complete(Err(RocketMQError::network_connection_failed("test", "send failed",))));
+    assert!(first_receiver.await.unwrap().is_err());
+    assert_eq!(table.usage().count, 0);
+    assert_eq!(table.usage().bytes, 0);
+
+    let (next_sender, next_receiver) = tokio::sync::oneshot::channel();
+    let next = table.register_with_bytes(2, 3_000, 8, next_sender).unwrap();
+    assert_eq!(
+        table.close_all(|| { RocketMQError::network_connection_failed("test", "connection closed") }),
+        1
+    );
+    assert!(next_receiver.await.unwrap().is_err());
+    drop(next);
+    assert_eq!(table.usage().count, 0);
+    assert_eq!(table.usage().bytes, 0);
+}
+
+#[test]
+fn close_and_registration_are_one_atomic_owner_epoch() {
+    const REGISTRATIONS: usize = 64;
+
+    let table = PendingRequestTable::with_capacity(REGISTRATIONS);
+    let owner = table.new_owner();
+    let barrier = Arc::new(Barrier::new(REGISTRATIONS + 2));
+    let mut registrations = Vec::with_capacity(REGISTRATIONS);
+    for opaque in 0..REGISTRATIONS as i32 {
+        let table = table.clone();
+        let owner = owner.clone();
+        let barrier = barrier.clone();
+        registrations.push(std::thread::spawn(move || {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            barrier.wait();
+            (table.register_for_owner(&owner, opaque, 30_000, sender), receiver)
+        }));
+    }
+    let close_table = table.clone();
+    let close_owner = owner.clone();
+    let close_barrier = barrier.clone();
+    let closing = std::thread::spawn(move || {
+        close_barrier.wait();
+        close_table.close_owner(&close_owner, || {
+            RocketMQError::network_connection_failed("race", "owner closed")
+        })
+    });
+
+    barrier.wait();
+    let _ = closing.join().unwrap();
+    let successful = registrations
+        .into_iter()
+        .filter_map(|registration| {
+            let (result, receiver) = registration.join().unwrap();
+            result.ok().map(|guard| (guard, receiver))
+        })
+        .collect::<Vec<_>>();
+
+    assert!(table.is_empty(), "no registration may appear after the close snapshot");
+    for (guard, mut receiver) in successful {
+        assert!(
+            receiver.try_recv().is_ok(),
+            "every accepted registration must be completed by close"
+        );
+        drop(guard);
+    }
 }

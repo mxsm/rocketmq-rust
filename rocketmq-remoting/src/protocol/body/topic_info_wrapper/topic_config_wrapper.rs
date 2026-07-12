@@ -67,20 +67,20 @@ impl From<&TopicConfigAndMappingSerializeWrapper> for Canonical {
 
 impl From<Canonical> for TopicConfigAndMappingSerializeWrapper {
     fn from(value: Canonical) -> Self {
-        Self {
-            topic_queue_mapping_info_map: value
-                .topic_queue_mapping_info_map
-                .into_iter()
-                .map(|(key, info)| (key, ArcMut::new(info)))
-                .collect(),
-            topic_queue_mapping_detail_map: value
-                .topic_queue_mapping_detail_map
-                .into_iter()
-                .map(|(key, detail)| (key, ArcMut::new(detail)))
-                .collect(),
+        let result = Self {
             mapping_data_version: value.mapping_data_version,
             topic_config_serialize_wrapper: value.topic_config_serialize_wrapper,
+            ..Default::default()
+        };
+        for (key, info) in value.topic_queue_mapping_info_map {
+            let mut shared = result.topic_queue_mapping_info_map.entry(key).or_default();
+            **shared = info;
         }
+        for (key, detail) in value.topic_queue_mapping_detail_map {
+            let mut shared = result.topic_queue_mapping_detail_map.entry(key).or_default();
+            **shared = detail;
+        }
+        result
     }
 }
 

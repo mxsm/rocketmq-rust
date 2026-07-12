@@ -23,7 +23,6 @@ use std::sync::LazyLock;
 use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::SerializeType;
-use rocketmq_rust::ArcMut;
 
 use super::remoting_command::REMOTING_VERSION_KEY;
 use super::remoting_command::SERIALIZE_TYPE_ENV;
@@ -76,14 +75,5 @@ pub fn create_response_command() -> RemotingCommand {
         .mark_response_type()
 }
 
-/// Preserves the concrete historical `ArcMut` parameter outside the canonical owner.
-///
-/// This cannot remain an inherent method because Rust only permits inherent
-/// implementations in the crate that defines the canonical command type.
-#[deprecated(note = "use set_command_custom_header or set_command_custom_header_boxed on RemotingCommand")]
-pub fn set_command_custom_header_origin(
-    command: RemotingCommand,
-    header: Option<ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
-) -> RemotingCommand {
-    command.set_command_custom_header_origin(header)
-}
+#[allow(deprecated)]
+pub use super::remoting_command::set_command_custom_header_origin;

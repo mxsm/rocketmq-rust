@@ -37,8 +37,15 @@ hid it.
    occurrence to disappear; a retained ID may approve only a reviewed fingerprint change. Every approval must be
    consumed.
 4. Twenty-seven Phase 1 fingerprint relocations or retained-ID context changes are recorded in
-   `scripts/arc-mut-relocation-approvals.json`. Additional governed occurrences found during review were removed
-   or folded into their existing governed test items instead of being approved.
+   the Phase 1 promotion history. Additional governed occurrences found during review were removed or folded into
+   their existing governed test items instead of being approved.
+5. The initial M05 review-fix promotion consumed sixteen one-to-one fingerprint relocations while the client and
+   server connection loops moved to canonical Transport session callbacks. The final review replaces that
+   consumable approval file with two strict one-to-one relocations. Creating a request-local remoting session
+   snapshot moves the existing context constructor within the same `fn run` item; adding the private per-instance
+   interceptor wrapper changes the fingerprint of the existing `ConnectionHandlerContext` field within the same
+   `ConnectionHandler` struct. Neither change adds an identity or occurrence. Both approvals name the exact
+   old/new IDs and are consumed during monotonic promotion.
 
 ## Consequences
 
@@ -46,6 +53,9 @@ hid it.
 - Phase 1 can close at M03 while preserving R0 public compatibility.
 - M05, M06, and M11 retain measurable ArcMut burn-down obligations; M11 fails if any corrected entry remains.
 - Future fingerprint churn requires explicit review rather than automatic baseline regeneration.
+- The reviewed M05 baseline contains 1,233 identities and 3,378 occurrences, a reduction of 33 identities and 52
+  occurrences from the Phase 1 closeout baseline. The canonical `rocketmq-transport` boundary contains no ArcMut
+  occurrence.
 
 ## Rejected alternatives
 

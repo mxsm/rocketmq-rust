@@ -20,7 +20,16 @@ use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
 use crate::error_helpers::encoder_error;
-use crate::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+
+/// A decoded command together with the complete frame size retained while processing it.
+///
+/// The sideband size deliberately lives in the transport layer so it cannot affect the
+/// protocol command's wire shape, equality, debug output, or public data model.
+pub(crate) struct DecodedCommand {
+    pub(crate) command: RemotingCommand,
+    pub(crate) retained_frame_bytes: usize,
+}
 
 /// Encodes a `RemotingCommand` into a `BytesMut` buffer.
 ///
@@ -43,7 +52,41 @@ use crate::protocol::remoting_command::RemotingCommand;
 ///
 /// This function will return an error if the encoding process fails.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct RemotingCommandCodec(());
+pub struct RemotingCommandCodec {
+    limits: FrameLimits,
+}
+
+/// Allocation limits applied before a complete frame is handed to protocol decoding.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct FrameLimits {
+    pub max_frame_bytes: usize,
+    pub max_header_bytes: usize,
+    pub max_body_bytes: usize,
+    pub initial_read_bytes: usize,
+}
+
+impl Default for FrameLimits {
+    fn default() -> Self {
+        Self {
+            max_frame_bytes: 4 * 1024 * 1024,
+            max_header_bytes: 1024 * 1024,
+            max_body_bytes: 4 * 1024 * 1024,
+            initial_read_bytes: 8 * 1024,
+        }
+    }
+}
+
+impl FrameLimits {
+    /// Compatibility envelope selected explicitly by the Remoting owner.
+    pub const fn legacy_compatibility() -> Self {
+        Self {
+            max_frame_bytes: 16 * 1024 * 1024,
+            max_header_bytes: 4 * 1024 * 1024,
+            max_body_bytes: 16 * 1024 * 1024,
+            initial_read_bytes: 8 * 1024,
+        }
+    }
+}
 
 impl Default for RemotingCommandCodec {
     fn default() -> Self {
@@ -53,7 +96,28 @@ impl Default for RemotingCommandCodec {
 
 impl RemotingCommandCodec {
     pub fn new() -> Self {
-        RemotingCommandCodec(())
+        Self::with_limits(FrameLimits::default())
+    }
+
+    pub fn with_limits(limits: FrameLimits) -> Self {
+        Self { limits }
+    }
+
+    fn decode_with_metadata(
+        &mut self,
+        src: &mut BytesMut,
+    ) -> Result<Option<DecodedCommand>, rocketmq_error::RocketMQError> {
+        self.validate_announced_frame(src)?;
+        let retained_frame_bytes = if src.len() >= 4 {
+            let total = i32::from_be_bytes(src[..4].try_into().expect("four bytes checked"));
+            (total > 0).then_some(total as usize + 4)
+        } else {
+            None
+        };
+        Ok(RemotingCommand::decode(src)?.map(|command| DecodedCommand {
+            command,
+            retained_frame_bytes: retained_frame_bytes.unwrap_or_default(),
+        }))
     }
 }
 
@@ -88,7 +152,43 @@ impl Decoder for RemotingCommandCodec {
     ///
     /// This function will return an error if the decoding process fails.
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, rocketmq_error::RocketMQError> {
-        RemotingCommand::decode(src)
+        self.decode_with_metadata(src)
+            .map(|decoded| decoded.map(|decoded| decoded.command))
+    }
+}
+
+impl RemotingCommandCodec {
+    fn validate_announced_frame(&self, src: &BytesMut) -> Result<(), rocketmq_error::RocketMQError> {
+        if src.len() < 4 {
+            return Ok(());
+        }
+        let total = i32::from_be_bytes(src[..4].try_into().expect("four bytes checked"));
+        if total > 0 && total as usize > self.limits.max_frame_bytes {
+            return Err(crate::error_helpers::decoding_error(
+                total.max(0) as usize,
+                self.limits.max_frame_bytes,
+            ));
+        }
+        if src.len() < 8 {
+            return Ok(());
+        }
+        if total < 4 {
+            return Err(crate::error_helpers::decoding_error(total.max(0) as usize, 4));
+        }
+        let header_marker = u32::from_be_bytes(src[4..8].try_into().expect("eight bytes checked"));
+        let header = (header_marker & 0x00ff_ffff) as usize;
+        let payload = total as usize - 4;
+        if header > payload || header > self.limits.max_header_bytes {
+            return Err(crate::error_helpers::decoding_error(
+                header,
+                self.limits.max_header_bytes,
+            ));
+        }
+        let body = payload - header;
+        if body > self.limits.max_body_bytes {
+            return Err(crate::error_helpers::decoding_error(body, self.limits.max_body_bytes));
+        }
+        Ok(())
     }
 }
 
@@ -139,6 +239,13 @@ impl CompositeCodec {
             remoting_command_codec: RemotingCommandCodec::new(),
         }
     }
+
+    pub fn with_limits(limits: FrameLimits) -> Self {
+        Self {
+            bytes_codec: BytesCodec::new(),
+            remoting_command_codec: RemotingCommandCodec::with_limits(limits),
+        }
+    }
 }
 
 impl Decoder for CompositeCodec {
@@ -147,6 +254,34 @@ impl Decoder for CompositeCodec {
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, rocketmq_error::RocketMQError> {
         self.remoting_command_codec.decode(src)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Default)]
+pub(crate) struct SessionCodec {
+    inner: CompositeCodec,
+}
+
+impl From<CompositeCodec> for SessionCodec {
+    fn from(inner: CompositeCodec) -> Self {
+        Self { inner }
+    }
+}
+
+impl Decoder for SessionCodec {
+    type Error = rocketmq_error::RocketMQError;
+    type Item = DecodedCommand;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        self.inner.remoting_command_codec.decode_with_metadata(src)
+    }
+}
+
+impl Encoder<Bytes> for SessionCodec {
+    type Error = rocketmq_error::RocketMQError;
+
+    fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        self.inner.encode(item, dst)
     }
 }
 
@@ -165,8 +300,8 @@ mod tests {
     use bytes::Bytes;
 
     use super::*;
-    use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
-    use crate::protocol::LanguageCode;
+    use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+    use rocketmq_protocol::protocol::LanguageCode;
 
     #[tokio::test]
     async fn decode_handles_insufficient_data() {

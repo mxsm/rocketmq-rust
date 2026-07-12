@@ -4511,6 +4511,7 @@ dependencies = [
  "rocketmq-runtime",
  "rocketmq-rust",
  "rocketmq-security-api",
+ "rocketmq-transport",
  "serde",
  "serde_json",
  "simd-json",
@@ -4784,7 +4785,6 @@ name = "rocketmq-remoting"
 version = "1.0.0"
 dependencies = [
  "anyhow",
- "arc-swap",
  "bitvec",
  "bytemuck",
  "bytes",
@@ -4798,23 +4798,18 @@ dependencies = [
  "num_cpus",
  "parking_lot",
  "rand 0.10.2",
- "rcgen",
  "rocketmq-common",
  "rocketmq-error",
  "rocketmq-macros",
- "rocketmq-observability",
  "rocketmq-protocol",
  "rocketmq-runtime",
  "rocketmq-rust",
- "rustls-native-certs",
- "rustls-pemfile",
+ "rocketmq-transport",
  "serde",
  "serde_json",
  "serde_json_any_key",
- "simd-json",
  "tempfile",
  "tokio",
- "tokio-rustls",
  "tokio-util",
  "tracing",
  "trait-variant",
@@ -4939,6 +4934,34 @@ dependencies = [
  "tokio-util",
  "tracing",
  "trait-variant",
+]
+
+[[package]]
+name = "rocketmq-transport"
+version = "1.0.0"
+dependencies = [
+ "arc-swap",
+ "bytes",
+ "cheetah-string",
+ "dashmap",
+ "futures-util",
+ "parking_lot",
+ "rcgen",
+ "rocketmq-error",
+ "rocketmq-observability",
+ "rocketmq-protocol",
+ "rocketmq-runtime",
+ "rocketmq-security-api",
+ "rustls-native-certs",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

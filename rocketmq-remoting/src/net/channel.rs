@@ -491,6 +491,7 @@ impl ChannelInner {
             None,
             Some(response_table),
             task_group,
+            true,
         )
     }
 
@@ -506,7 +507,7 @@ impl ChannelInner {
         })?;
         let task_group = TaskGroup::root("rocketmq-remoting.channel", RuntimeHandle::new(runtime));
         let owner = response_table.new_owner();
-        Self::try_new_with_send_task_group(connection, response_table, Some(owner), None, task_group)
+        Self::try_new_with_send_task_group(connection, response_table, Some(owner), None, task_group, true)
     }
 
     /// Creates a new `ChannelInner` under the provided parent task group.
@@ -522,6 +523,7 @@ impl ChannelInner {
             None,
             Some(response_table),
             task_group,
+            true,
         )
     }
 
@@ -532,7 +534,40 @@ impl ChannelInner {
     ) -> rocketmq_error::RocketMQResult<Self> {
         let task_group = parent_task_group.child("rocketmq-remoting.channel");
         let owner = response_table.new_owner();
-        Self::try_new_with_send_task_group(connection, response_table, Some(owner), None, task_group)
+        Self::try_new_with_send_task_group(connection, response_table, Some(owner), None, task_group, true)
+    }
+
+    pub(crate) fn new_transport_session(
+        connection: Connection,
+        response_table: PendingRequestTable,
+        parent_task_group: TaskGroup,
+    ) -> rocketmq_error::RocketMQResult<Self> {
+        Self::new_transport_session_with_task_group(
+            connection,
+            response_table,
+            parent_task_group.child("rocketmq-remoting.channel"),
+        )
+    }
+
+    /// Creates a transport-backed channel snapshot under an already-owned task group.
+    ///
+    /// Unlike `new_transport_session`, this does not register another fixed child. The caller
+    /// chooses the registration lifetime and the returned `ChannelInner` keeps the supplied
+    /// group alive for exactly as long as the snapshot remains reachable.
+    pub(crate) fn new_transport_session_with_task_group(
+        connection: Connection,
+        response_table: PendingRequestTable,
+        task_group: TaskGroup,
+    ) -> rocketmq_error::RocketMQResult<Self> {
+        let pending_request_owner = Some(response_table.new_owner());
+        Self::try_new_with_send_task_group(
+            connection,
+            response_table,
+            pending_request_owner,
+            None,
+            task_group,
+            false,
+        )
     }
 
     fn try_new_with_send_task_group(
@@ -541,30 +576,35 @@ impl ChannelInner {
         pending_request_owner: Option<PendingRequestOwner>,
         legacy_response_table: Option<ArcMut<HashMap<i32, ResponseFuture>>>,
         task_group: TaskGroup,
+        start_send_task: bool,
     ) -> rocketmq_error::RocketMQResult<Self> {
         const QUEUE_CAPACITY: usize = 1024;
 
         // Use flume bounded channel for better performance
         // flume provides lock-free operations and better throughput than tokio::mpsc
-        let (outbound_queue_tx, outbound_queue_rx) = flume::bounded(QUEUE_CAPACITY);
+        let (outbound_queue_tx, outbound_queue_rx) = flume::bounded(if start_send_task { QUEUE_CAPACITY } else { 0 });
 
         let connection = ArcMut::new(connection);
-        task_group
-            .spawn_service(
-                "remoting.channel.send",
-                handle_send(
-                    connection.clone(),
-                    outbound_queue_rx,
-                    response_table.clone(),
-                    legacy_response_table.clone(),
-                ),
-            )
-            .map_err(|error| {
-                RocketMQError::network_connection_failed(
-                    "channel",
-                    format!("failed to spawn ChannelInner send task: {error}"),
+        if start_send_task {
+            task_group
+                .spawn_service(
+                    "remoting.channel.send",
+                    handle_send(
+                        connection.clone(),
+                        outbound_queue_rx,
+                        response_table.clone(),
+                        legacy_response_table.clone(),
+                    ),
                 )
-            })?;
+                .map_err(|error| {
+                    RocketMQError::network_connection_failed(
+                        "channel",
+                        format!("failed to spawn ChannelInner send task: {error}"),
+                    )
+                })?;
+        } else {
+            drop(outbound_queue_rx);
+        }
         Ok(Self {
             outbound_queue_tx,
             connection,
@@ -695,9 +735,14 @@ impl ChannelInner {
             tokio::sync::oneshot::channel::<rocketmq_error::RocketMQResult<RemotingCommand>>();
         let opaque = request.opaque();
         let (guard, deadline, reservation) = if let Some(owner) = self.pending_request_owner.as_ref() {
-            let guard = self
-                .response_table
-                .register_for_owner(owner, opaque, timeout_millis, response_tx)?;
+            let retained_bytes = request.body().map_or(0, bytes::Bytes::len);
+            let guard = self.response_table.register_for_owner_with_bytes(
+                owner,
+                opaque,
+                timeout_millis,
+                retained_bytes,
+                response_tx,
+            )?;
             let deadline = guard.deadline();
             let reservation = ResponseReservation::Pending(guard.token());
             (Some(guard), deadline, reservation)

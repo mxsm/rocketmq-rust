@@ -30,7 +30,7 @@ fn extra_info_boundaries_return_typed_illegal_argument_error() {
 fn remoting_boundary_files_do_not_use_legacy_error_enum() {
     let files = [
         include_str!("../../rocketmq-protocol/src/code/broker_request_code.rs"),
-        include_str!("../src/codec/remoting_command_codec.rs"),
+        include_str!("../../rocketmq-transport/src/codec/remoting_command_codec.rs"),
         include_str!("../src/protocol/header/extra_info_util.rs"),
         include_str!("../../rocketmq-protocol/src/protocol/rocketmq_serializable.rs"),
     ];

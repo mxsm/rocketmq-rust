@@ -114,15 +114,20 @@ impl RpcResponse {
             exception,
         })
     }
-}
 
-impl From<CanonicalRpcResponse> for RpcResponse {
-    fn from(value: CanonicalRpcResponse) -> Self {
-        Self {
-            code: value.code,
-            header: value.header.map(ArcMut::new),
-            body: value.body,
-            exception: value.exception,
+    pub fn from_canonical(value: CanonicalRpcResponse) -> Self {
+        match value.header {
+            Some(header) => {
+                let mut response = Self::new(value.code, header, value.body);
+                response.exception = value.exception;
+                response
+            }
+            None => Self {
+                code: value.code,
+                header: None,
+                body: value.body,
+                exception: value.exception,
+            },
         }
     }
 }

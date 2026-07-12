@@ -54,6 +54,7 @@ use crate::runtime::config::client_config::TokioClientConfig;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::tls::TlsConfig;
+use rocketmq_transport::security::TransportSecurity;
 
 /// High-performance async RocketMQ client with connection pooling and auto-reconnection.
 ///
@@ -199,6 +200,9 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     ///
     /// Used for monitoring and metrics collection
     tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+
+    /// Optional signer applied by each canonical transport session before sending.
+    transport_security: Option<Arc<TransportSecurity>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -239,6 +243,7 @@ impl<PR> Clone for RocketmqDefaultClient<PR> {
             service_context: self.service_context.clone(),
             cmd_handler: self.cmd_handler.clone(),
             tx: self.tx.clone(),
+            transport_security: self.transport_security.clone(),
         }
     }
 }
@@ -299,7 +304,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             service_context,
             cmd_handler: ArcMut::new(handler),
             tx,
+            transport_security: None,
         }
+    }
+
+    /// Installs an optional transport signer for newly created outbound sessions.
+    pub fn with_transport_security(mut self, transport_security: Arc<TransportSecurity>) -> Self {
+        self.transport_security = Some(transport_security);
+        self
     }
 
     /// Returns whether newly created outbound connections use TLS.
@@ -723,8 +735,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         tls_config.enable = self.tokio_client_config.use_tls;
 
         let service_context = self.service_context.clone();
+        let transport_security = self.transport_security.clone();
         let connect_result = time::timeout(duration, async move {
-            if let Some(service_context) = service_context.as_ref() {
+            let result = if let Some(service_context) = service_context.as_ref() {
                 Client::connect_with_service_context(
                     service_context,
                     addr_inner,
@@ -735,6 +748,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                 .await
             } else {
                 Client::connect(addr_inner, self.cmd_handler.clone(), self.tx.as_ref(), tls_config).await
+            };
+            match transport_security {
+                Some(transport_security) => result.map(|client| client.with_transport_security(transport_security)),
+                None => result,
             }
         })
         .await;
@@ -1278,6 +1295,15 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 Ok(response)
             }
             Ok(Err(err)) => {
+                if matches!(err, rocketmq_error::RocketMQError::Timeout { .. }) {
+                    client.retire_after_timeout().await;
+                    if let Some(ref addr) = target_addr {
+                        self.connection_tables.remove(addr);
+                        if let Some(ref pool) = self.connection_pool {
+                            pool.remove(addr);
+                        }
+                    }
+                }
                 if let Some(ref addr) = target_addr {
                     self.latency_tracker.record_error(addr);
 
@@ -1295,7 +1321,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 Err(err)
             }
             Err(_) => {
+                client.retire_after_timeout().await;
                 if let Some(ref addr) = target_addr {
+                    self.connection_tables.remove(addr);
+                    if let Some(ref pool) = self.connection_pool {
+                        pool.remove(addr);
+                    }
                     self.latency_tracker.record_error(addr);
 
                     if let Some(ref pool) = self.connection_pool {
@@ -1634,6 +1665,64 @@ mod tests {
                 .map(|value| value.as_str()),
             Some("true")
         );
+
+        server.await.expect("server task");
+        client.shutdown();
+    }
+
+    #[tokio::test]
+    async fn timed_out_request_retires_the_pooled_connection_before_the_next_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let (first_socket, _) = listener.accept().await.expect("accept first client");
+            let mut first = Connection::new(first_socket);
+            let _ = first
+                .receive_command()
+                .await
+                .expect("first request frame")
+                .expect("first request");
+
+            let (second_socket, _) = time::timeout(Duration::from_secs(1), listener.accept())
+                .await
+                .expect("timeout must force a reconnect")
+                .expect("accept replacement client");
+            let mut second = Connection::new(second_socket);
+            let request = second
+                .receive_command()
+                .await
+                .expect("replacement request frame")
+                .expect("replacement request");
+            second
+                .send_command(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                        .set_opaque(request.opaque()),
+                )
+                .await
+                .expect("send replacement response");
+        });
+
+        let mut client =
+            RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
+        let target = CheetahString::from_string(addr.to_string());
+        assert!(client
+            .invoke_request(
+                Some(&target),
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                30,
+            )
+            .await
+            .is_err());
+
+        let response = client
+            .invoke_request(
+                Some(&target),
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                500,
+            )
+            .await
+            .expect("next request must use a new owner and connection");
+        assert_eq!(response.code(), ResponseCode::Success.to_i32());
 
         server.await.expect("server task");
         client.shutdown();

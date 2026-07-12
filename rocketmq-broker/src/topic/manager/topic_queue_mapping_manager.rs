@@ -447,7 +447,8 @@ impl ConfigManager for TopicQueueMappingManager {
         }
         if let Some(map) = wrapper.take_topic_queue_mapping_info_map() {
             for (key, value) in map {
-                self.topic_queue_mapping_table.insert(key, ArcMut::new(value));
+                let mut shared = self.topic_queue_mapping_table.entry(key).or_default();
+                **shared = value;
             }
         }
     }
