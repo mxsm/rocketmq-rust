@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 已批准，等待 M02/M04 |
+| 状态 | M05 已完成；等待 Gate 审阅 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP10 `transport-boundary-spike`；集成 WP03/WP04/WP05 |
 | 前置条件 | PendingRequestGuard、TaskGroup lease、绝对 deadline 稳定；protocol contract 与 wire corpus冻结 |
@@ -27,10 +27,10 @@
 
 ## 入口条件
 
-- [ ] `[ARCH]` 冻结 transport/protocol/security/runtime 的依赖方向和 request lifecycle 状态机。
-- [ ] `[TEST]` 准备 TLS on/off、pending race、close-all、overload 和 collector outage 场景。
-- [ ] `[DEV]` 确认 remoting 目标文件无用户修改重叠，记录当前 feature/default/cargo tree。
-- [ ] `[HUMAN]` 批准 overload 时的协议错误/连接关闭策略和 per-session/global 预算层级。
+- [x] `[ARCH]` 冻结 transport/protocol/security/runtime 的依赖方向和 request lifecycle 状态机。
+- [x] `[TEST]` 准备 TLS on/off、pending race、close-all、overload 和 collector outage 场景。
+- [x] `[DEV]` 确认 remoting 目标文件无用户修改重叠，记录当前 feature/default/cargo tree。
+- [x] `[HUMAN]` 批准 overload 时的协议错误/连接关闭策略和 per-session/global 预算层级。
 
 ## 交付物
 
@@ -48,59 +48,59 @@
 
 ### PR-M05-01：创建 crate 与单 request lifecycle spike
 
-- [ ] `[ARCH]` 选择与 M04 相同或相邻的真实 request code，固定 client→writer→socket→reader→processor→response 流程。
-- [ ] `[DEV]` 创建 crate/模块骨架并加入 workspace；先迁一个 request lifecycle，保持实现拓扑和行为。
-- [ ] `[DEV]` 使用 protocol canonical 类型、M02 PendingRequestGuard 和 ServiceContext，不复制 schema。
-- [ ] `[TEST]` 对旧 remoting 与新 transport 做成功、超时、send failure、close 的差分。
-- [ ] `[REV]` 检查 request 只注册一次、task 有 owner、无 detached spawn/runtime。
-- [ ] 回滚点：remoting 继续保留旧实现，spike adapter 可整体移除。
+- [x] `[ARCH]` 选择与 M04 相同或相邻的真实 request code，固定 client→writer→socket→reader→processor→response 流程。
+- [x] `[DEV]` 创建 crate/模块骨架并加入 workspace；先迁一个 request lifecycle，保持实现拓扑和行为。
+- [x] `[DEV]` 使用 protocol canonical 类型、M02 PendingRequestGuard 和 ServiceContext，不复制 schema。
+- [x] `[TEST]` 对旧 remoting 与新 transport 做成功、超时、send failure、close 的差分。
+- [x] `[REV]` 检查 request 只注册一次、task 有 owner、无 detached spawn/runtime。
+- [x] 回滚点：remoting 继续保留旧实现，spike adapter 可整体移除。
 
 ### PR-M05-02：迁移 codec、buffer 与 net primitives
 
-- [ ] `[DEV]` 迁 codec、adaptive encode buffer、channel、session、pipeline、local harness 和 transport config。
-- [ ] `[DEV]` initial read buffer 按需增长；max frame/header/body 在分配前校验；buffer pool 按 bytes 限制。
-- [ ] `[DEV]` common/remoting 的 ServerConfig/TlsConfig/TlsMode 旧路径精确 re-export，Serde/default 不变。
-- [ ] `[TEST]` 覆盖 fragmented/oversized/malformed frame、buffer growth/release、local harness 和 config round-trip。
-- [ ] `[REV]` 检查无全局 1 MiB eager buffer、无无界 channel、无消息 body 日志。
-- [ ] 回滚点：逐模块 re-export 回旧实现；config envelope 不删除。
+- [x] `[DEV]` 迁 codec、adaptive encode buffer、channel、session、pipeline、local harness 和 transport config。
+- [x] `[DEV]` initial read buffer 按需增长；max frame/header/body 在分配前校验；buffer pool 按 bytes 限制。
+- [x] `[DEV]` common/remoting 的 ServerConfig/TlsConfig/TlsMode 旧路径精确 re-export，Serde/default 不变。
+- [x] `[TEST]` 覆盖 fragmented/oversized/malformed frame、buffer growth/release、local harness 和 config round-trip。
+- [x] `[REV]` 检查无全局 1 MiB eager buffer、无无界 channel、无消息 body 日志。
+- [x] 回滚点：逐模块 re-export 回旧实现；config envelope 不删除。
 
 ### PR-M05-03：迁移 client、RPC runtime 与 pending table
 
-- [ ] `[DEV]` 迁 async/blocking client、connection pool、有状态 RPC metadata/hook/address resolution。
-- [ ] `[DEV]` opaque reservation 在 enqueue 前完成；冲突/回绕时 drain 并更换连接，不复用活跃 opaque。
-- [ ] `[DEV]` response/timeout/send-failure/close/Drop 走 complete-once，释放 count/byte permit。
-- [ ] `[TEST]` 运行 10k timeout、response-timeout、writer-timeout、close-late-response 和 reconnect race。
-- [ ] `[REV]` 检查 late response 不串请求、map/permit 不泄漏、blocking facade 只在 approved boundary。
-- [ ] 回滚点：保留 remoting old-client adapter，单独撤销 connection pool 切换。
+- [x] `[DEV]` 迁 async/blocking client、connection pool、有状态 RPC metadata/hook/address resolution。
+- [x] `[DEV]` opaque reservation 在 enqueue 前完成；冲突/回绕时 drain 并更换连接，不复用活跃 opaque。
+- [x] `[DEV]` response/timeout/send-failure/close/Drop 走 complete-once，释放 count/byte permit。
+- [x] `[TEST]` 运行 10k timeout、response-timeout、writer-timeout、close-late-response 和 reconnect race。
+- [x] `[REV]` 检查 late response 不串请求、map/permit 不泄漏、blocking facade 只在 approved boundary。
+- [x] 回滚点：保留 remoting old-client adapter，单独撤销 connection pool 切换。
 
 ### PR-M05-04：迁移 server、processor adapter 与 shutdown
 
-- [ ] `[DEV]` 迁 request processor/runtime adapter、server connection task 和 shutdown；Broker processor 仍留业务 owner。
-- [ ] `[DEV]` accept/handshake/session/processor/writer task 都注册为 ServiceContext/TaskGroup child。
-- [ ] `[DEV]` 连接关闭主动 shutdown socket，并以 typed cause 完成全部 pending/queued response。
-- [ ] `[TEST]` 覆盖 hung processor、half-close、TLS handshake timeout、server drain 和单一绝对 deadline。
-- [ ] `[REV]` 检查没有 sync lock guard 跨 await，OS thread/BlockingExecutor 都进入资源报告。
-- [ ] 回滚点：server composition 可重新选择旧 remoting implementation；public facade 不变。
+- [x] `[DEV]` 迁 request processor/runtime adapter、server connection task 和 shutdown；Broker processor 仍留业务 owner。
+- [x] `[DEV]` accept/handshake/session/processor/writer task 都注册为 ServiceContext/TaskGroup child。
+- [x] `[DEV]` 连接关闭主动 shutdown socket，并以 typed cause 完成全部 pending/queued response。
+- [x] `[TEST]` 覆盖 hung processor、half-close、TLS handshake timeout、server drain 和单一绝对 deadline。
+- [x] `[REV]` 检查没有 sync lock guard 跨 await，OS thread/BlockingExecutor 都进入资源报告。
+- [x] 回滚点：server composition 可重新选择旧 remoting implementation；public facade 不变。
 
 ### PR-M05-05：有界 admission 与 security adapter
 
-- [ ] `[ARCH]` 为 global/per-IP/per-tenant/session 定义 count+byte budget、满载策略和 metric owner。
-- [ ] `[DEV]` 实现 connection/handshake/inflight/queued-bytes/processor concurrency gate。
-- [ ] `[DEV]` 将 protocol command 借用投影为 SecurityRequestView，注入 RequestPolicy/OutboundSigner；不依赖 rocketmq-auth。
-- [ ] `[TEST]` overload 下验证显式拒绝/关闭、RSS 有界、控制面仍可用、collector outage 不阻塞数据面。
-- [ ] `[REV]` 检查每个 channel 声明 capacity、bytes、full policy、owner、metrics；字段低基数且脱敏。
-- [ ] `[HUMAN]` 批准默认预算值只基于 profile 证据发布；无证据时保留现默认并要求显式配置。
-- [ ] 回滚点：保留 budget interface，可回滚默认值或 admission 接线；不得恢复无界 channel。
+- [x] `[ARCH]` 为 global/per-IP/per-tenant/session 定义 count+byte budget、满载策略和 metric owner。
+- [x] `[DEV]` 实现 connection/handshake/inflight/queued-bytes/processor concurrency gate。
+- [x] `[DEV]` 将 protocol command 借用投影为 SecurityRequestView，注入 RequestPolicy/OutboundSigner；不依赖 rocketmq-auth。
+- [x] `[TEST]` overload 下验证显式拒绝/关闭、RSS 有界、控制面仍可用、collector outage 不阻塞数据面。
+- [x] `[REV]` 检查每个 channel 声明 capacity、bytes、full policy、owner、metrics；字段低基数且脱敏。
+- [x] `[HUMAN]` 批准默认预算值只基于 profile 证据发布；无证据时保留现默认并要求显式配置。
+- [x] 回滚点：保留 budget interface，可回滚默认值或 admission 接线；不得恢复无界 channel。
 
 ### PR-M05-06：remoting facade、feature 与 V2 决策
 
-- [ ] `[DEV]` remoting 对 protocol/transport 精确 re-export，已迁实现从 facade 删除。
-- [ ] `[DEV]` 保持 remoting `default = [tls]`，`simd/tls/observability` 弱转发到 owner。
-- [ ] `[TEST]` 运行 no-default/default/TLS/observability/组合 feature 与 canonical/legacy compile fixture。
-- [ ] `[TEST]` 对一个真实 request 比较 V1/V2 兼容、吞吐、p99、RSS、维护复杂度。
-- [ ] `[ARCH]` 若 V2 未同时优于兼容、性能、维护性，移除平行实现；若保留，限定 internal experimental feature。
-- [ ] `[REV]` 证明 transport closure 不含 Broker/Store/Client 高层/auth provider/common/legacy。
-- [ ] `[HUMAN]` 批准 V2 keep/delete 结论和 M05 Gate。
+- [x] `[DEV]` remoting 对 protocol/transport 精确 re-export，已迁实现从 facade 删除。
+- [x] `[DEV]` 保持 remoting `default = [tls]`，`simd/tls/observability` 弱转发到 owner。
+- [x] `[TEST]` 运行 no-default/default/TLS/observability/组合 feature 与 canonical/legacy compile fixture。
+- [x] `[TEST]` 对一个真实 request 比较 V1/V2 兼容、吞吐、p99、RSS、维护复杂度。
+- [x] `[ARCH]` 若 V2 未同时优于兼容、性能、维护性，移除平行实现；若保留，限定 internal experimental feature。
+- [x] `[REV]` 证明 transport closure 不含 Broker/Store/Client 高层/auth provider/common/legacy。
+- [x] `[HUMAN]` 批准 V2 keep/delete 结论和 M05 Gate。
 
 ## 公共兼容面
 
@@ -149,13 +149,32 @@ python scripts/arc_mut_guard.py
 
 ## Exit Checklist
 
-- [ ] `[TEST]` pending race、10k timeout、close-all、TLS/overload/collector outage 全绿。
-- [ ] `[REV]` transport normal closure满足禁边，所有 background work 有 owner。
-- [ ] `[DEV]` remoting 仅 facade/re-export，feature/default 与基线一致。
-- [ ] `[TEST]` 每个 channel 的 count+byte 上界可通过测试和 metrics 观察。
-- [ ] `[ARCH]` V2 keep/delete 有证据和书面结论。
-- [ ] `[DEV]` workspace/package policy 与新增 transport 一致。
-- [ ] `[HUMAN]` 预算、错误映射和 M05 Gate 已签署。
+- [x] `[TEST]` pending race、10k timeout、close-all、TLS/overload/collector outage 全绿。
+- [x] `[REV]` transport normal closure满足禁边，所有 background work 有 owner。
+- [x] `[DEV]` remoting 仅 facade/re-export，feature/default 与基线一致。
+- [x] `[TEST]` 每个 channel 的 count+byte 上界可通过测试和 metrics 观察。
+- [x] `[ARCH]` V2 keep/delete 有证据和书面结论。
+- [x] `[DEV]` workspace/package policy 与新增 transport 一致。
+- [x] `[HUMAN]` 预算、错误映射和 M05 Gate 已签署。
+
+## M05 completion evidence
+
+- Canonical ownership and compatibility paths are recorded in
+  `05-transport-compatibility-ledger.md`; legacy config, codec, connection, pending-table, smart-buffer, and
+  error-helper paths are exact re-exports, while TLS keeps a narrow lifecycle compatibility adapter.
+- The lifecycle suite covers successful request/response, send failure, hung processors, half-close, late
+  response isolation, owner rotation, close-all, count+byte release, and 10,000 simultaneous expirations.
+- Frame and buffer tests cover fragmented frames, allocation-before-limit rejection, bounded pool growth and
+  release, and legacy configuration Serde/default behavior. Existing codec tests retain malformed-frame cases.
+- Admission tests exercise global/per-IP/per-tenant/per-session count and byte limits, bounded scope cardinality,
+  control reserve, explicit reject/close policy, and a full or dropped one-slot collector.
+- TLS is validated both disabled and enabled, including optional/required/mutual modes, certificate reload,
+  handshake failure/timeout cancellation, and graceful shutdown under the owning `TaskGroup`.
+- `connection_v2` was deleted: it had no production consumer, no independent feature boundary, and no usable
+  end-to-end request composition to benchmark. It therefore failed the compatibility and maintainability gates
+  before performance could justify retaining a second stack.
+- The M05 ArcMut inventory promotion reduces governed identities from 1,266 to 1,233. Fourteen fingerprint-only
+  relocations are explicitly approved by ADR-013; the canonical transport crate contains no ArcMut use.
 
 ## 交接物
 

@@ -14,6 +14,7 @@
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -27,7 +28,7 @@ use rocketmq_error::RocketMQResult;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 
-use crate::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 static NEXT_TABLE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -37,8 +38,9 @@ struct PendingRequestKey {
     opaque: i32,
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PendingRequestToken {
+pub struct PendingRequestToken {
     key: PendingRequestKey,
     reservation: u64,
 }
@@ -81,6 +83,7 @@ struct PendingRequest {
     deadline: Instant,
     timeout_millis: u64,
     _permit: OwnedSemaphorePermit,
+    _byte_permit: PendingBytePermit,
     completion: Box<dyn PendingCompletion>,
 }
 
@@ -112,6 +115,55 @@ struct PendingRequestTableInner {
     next_reservation: AtomicU64,
     default_owner: PendingRequestOwner,
     permits: Arc<Semaphore>,
+    max_count: usize,
+    byte_budget: Arc<PendingByteBudget>,
+    rejected_count: AtomicUsize,
+    rejected_bytes: AtomicUsize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingRequestLimits {
+    pub max_count: usize,
+    pub max_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PendingRequestUsage {
+    pub count: usize,
+    pub bytes: usize,
+    pub rejected_count: usize,
+    pub rejected_bytes: usize,
+}
+
+struct PendingByteBudget {
+    max_bytes: usize,
+    used_bytes: AtomicUsize,
+}
+
+struct PendingBytePermit {
+    budget: Arc<PendingByteBudget>,
+    bytes: usize,
+}
+
+impl PendingByteBudget {
+    fn try_acquire(self: &Arc<Self>, bytes: usize) -> Option<PendingBytePermit> {
+        let acquired = self
+            .used_bytes
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(bytes).filter(|next| *next <= self.max_bytes)
+            })
+            .is_ok();
+        acquired.then(|| PendingBytePermit {
+            budget: self.clone(),
+            bytes,
+        })
+    }
+}
+
+impl Drop for PendingBytePermit {
+    fn drop(&mut self) {
+        self.budget.used_bytes.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
 }
 
 /// Concurrent pending request registry with connection-aware, exactly-once completion.
@@ -135,22 +187,41 @@ impl Default for PendingRequestTable {
 
 impl PendingRequestTable {
     const DEFAULT_CAPACITY: usize = 65_536;
+    const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
 
     pub fn new() -> Self {
-        Self::with_capacity(Self::DEFAULT_CAPACITY)
+        Self::with_limits(PendingRequestLimits {
+            max_count: Self::DEFAULT_CAPACITY,
+            max_bytes: Self::DEFAULT_MAX_BYTES,
+        })
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
-        let capacity = capacity.max(1);
+        Self::with_limits(PendingRequestLimits {
+            max_count: capacity,
+            max_bytes: Self::DEFAULT_MAX_BYTES,
+        })
+    }
+
+    pub fn with_limits(limits: PendingRequestLimits) -> Self {
+        let max_count = limits.max_count.max(1);
+        let max_bytes = limits.max_bytes.max(1);
         let table_id = NEXT_TABLE_ID.fetch_add(1, Ordering::Relaxed);
         Self {
             inner: Arc::new(PendingRequestTableInner {
                 table_id,
-                entries: DashMap::with_capacity(capacity),
+                entries: DashMap::with_capacity(max_count),
                 next_owner: AtomicU64::new(2),
                 next_reservation: AtomicU64::new(1),
                 default_owner: PendingRequestOwner::new(table_id, 1),
-                permits: Arc::new(Semaphore::new(capacity)),
+                permits: Arc::new(Semaphore::new(max_count)),
+                max_count,
+                byte_budget: Arc::new(PendingByteBudget {
+                    max_bytes,
+                    used_bytes: AtomicUsize::new(0),
+                }),
+                rejected_count: AtomicUsize::new(0),
+                rejected_bytes: AtomicUsize::new(0),
             }),
         }
     }
@@ -170,7 +241,23 @@ impl PendingRequestTable {
         timeout_millis: u64,
         sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
     ) -> RocketMQResult<PendingRequestGuard> {
-        self.register_for_owner(&self.inner.default_owner, opaque, timeout_millis, sender)
+        self.register_with_bytes(opaque, timeout_millis, 0, sender)
+    }
+
+    pub fn register_with_bytes(
+        &self,
+        opaque: i32,
+        timeout_millis: u64,
+        retained_bytes: usize,
+        sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
+    ) -> RocketMQResult<PendingRequestGuard> {
+        self.register_for_owner_with_bytes(
+            &self.inner.default_owner,
+            opaque,
+            timeout_millis,
+            retained_bytes,
+            sender,
+        )
     }
 
     pub fn register_for_owner(
@@ -178,6 +265,17 @@ impl PendingRequestTable {
         owner: &PendingRequestOwner,
         opaque: i32,
         timeout_millis: u64,
+        sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
+    ) -> RocketMQResult<PendingRequestGuard> {
+        self.register_for_owner_with_bytes(owner, opaque, timeout_millis, 0, sender)
+    }
+
+    pub fn register_for_owner_with_bytes(
+        &self,
+        owner: &PendingRequestOwner,
+        opaque: i32,
+        timeout_millis: u64,
+        retained_bytes: usize,
         sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
     ) -> RocketMQResult<PendingRequestGuard> {
         self.validate_owner(owner)?;
@@ -188,7 +286,12 @@ impl PendingRequestTable {
             ));
         }
         let permit = self.inner.permits.clone().try_acquire_owned().map_err(|_| {
-            RocketMQError::network_connection_failed("pending_request", "pending request admission capacity exhausted")
+            self.inner.rejected_count.fetch_add(1, Ordering::Relaxed);
+            RocketMQError::network_connection_failed("pending_request", "pending request count capacity exhausted")
+        })?;
+        let byte_permit = self.inner.byte_budget.try_acquire(retained_bytes).ok_or_else(|| {
+            self.inner.rejected_bytes.fetch_add(1, Ordering::Relaxed);
+            RocketMQError::network_connection_failed("pending_request", "pending request byte capacity exhausted")
         })?;
         let reservation = self.inner.next_reservation.fetch_add(1, Ordering::Relaxed);
         let key = PendingRequestKey {
@@ -205,6 +308,7 @@ impl PendingRequestTable {
             deadline,
             timeout_millis,
             _permit: permit,
+            _byte_permit: byte_permit,
             completion: Box::new(OneShotCompletion {
                 sender: Mutex::new(Some(sender)),
             }),
@@ -256,6 +360,15 @@ impl PendingRequestTable {
 
     pub fn is_empty(&self) -> bool {
         self.inner.entries.is_empty()
+    }
+
+    pub fn usage(&self) -> PendingRequestUsage {
+        PendingRequestUsage {
+            count: self.inner.max_count - self.inner.permits.available_permits(),
+            bytes: self.inner.byte_budget.used_bytes.load(Ordering::Acquire),
+            rejected_count: self.inner.rejected_count.load(Ordering::Relaxed),
+            rejected_bytes: self.inner.rejected_bytes.load(Ordering::Relaxed),
+        }
     }
 
     /// Returns the age of the oldest pending request for low-cardinality diagnostics.
@@ -344,7 +457,8 @@ impl PendingRequestTable {
         completed
     }
 
-    pub(crate) fn complete_token(&self, token: PendingRequestToken, result: RocketMQResult<RemotingCommand>) -> bool {
+    #[doc(hidden)]
+    pub fn complete_token(&self, token: PendingRequestToken, result: RocketMQResult<RemotingCommand>) -> bool {
         let Some(pending) = self.take_token(token) else {
             return false;
         };
@@ -391,11 +505,13 @@ impl PendingRequestTable {
 }
 
 impl PendingRequestGuard {
-    pub(crate) fn token(&self) -> PendingRequestToken {
+    #[doc(hidden)]
+    pub fn token(&self) -> PendingRequestToken {
         self.token.expect("active pending request guard must have a token")
     }
 
-    pub(crate) fn deadline(&self) -> Instant {
+    #[doc(hidden)]
+    pub fn deadline(&self) -> Instant {
         self.deadline
     }
 
@@ -407,7 +523,8 @@ impl PendingRequestGuard {
         self.table.complete_token(token, result)
     }
 
-    pub(crate) fn expire(mut self, operation: &'static str, timeout_millis: u64) -> RocketMQError {
+    #[doc(hidden)]
+    pub fn expire(mut self, operation: &'static str, timeout_millis: u64) -> RocketMQError {
         let token = self
             .token
             .take()

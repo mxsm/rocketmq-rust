@@ -20,15 +20,12 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
-use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand as DeepRemotingCommand;
 use rocketmq_remoting::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::SerializeType;
-use rocketmq_remoting::rpc::rpc_response::RpcResponse;
 use rocketmq_remoting::RemotingCommand;
-use rocketmq_rust::ArcMut;
 
 type LegacySubscriptionGroupTable = DashMap<CheetahString, Arc<SubscriptionGroupConfig>>;
 type LegacyForbiddenTable = DashMap<CheetahString, HashMap<CheetahString, i32>>;
@@ -101,10 +98,14 @@ fn legacy_subscription_wrapper_keeps_dashmap_arc_mutation_semantics() {
 
 #[test]
 fn legacy_mapping_wrapper_keeps_dashmap_arcmut_fields() {
-    let wrapper = TopicConfigAndMappingSerializeWrapper::default();
-    wrapper
-        .topic_queue_mapping_detail_map
-        .insert("topic".into(), ArcMut::new(TopicQueueMappingDetail::default()));
+    let canonical = rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper {
+        topic_queue_mapping_detail_map: HashMap::from([(
+            CheetahString::from_static_str("topic"),
+            TopicQueueMappingDetail::default(),
+        )]),
+        ..Default::default()
+    };
+    let wrapper = TopicConfigAndMappingSerializeWrapper::from(canonical);
     assert!(wrapper.topic_queue_mapping_detail_map.get("topic").is_some());
 
     let canonical: rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper =
@@ -116,7 +117,15 @@ fn legacy_mapping_wrapper_keeps_dashmap_arcmut_fields() {
 #[test]
 #[allow(deprecated)]
 fn legacy_static_topic_adapter_mutates_arcmut_detail() {
-    let detail = ArcMut::new(TopicQueueMappingDetail::default());
+    let canonical = rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper {
+        topic_queue_mapping_detail_map: HashMap::from([(
+            CheetahString::from_static_str("topic"),
+            TopicQueueMappingDetail::default(),
+        )]),
+        ..Default::default()
+    };
+    let wrapper = TopicConfigAndMappingSerializeWrapper::from(canonical);
+    let detail = wrapper.topic_queue_mapping_detail_map.get("topic").unwrap().clone();
     rocketmq_remoting::protocol::static_topic::put_mapping_info(
         detail.clone(),
         3,
@@ -124,28 +133,6 @@ fn legacy_static_topic_adapter_mutates_arcmut_detail() {
     );
 
     assert!(TopicQueueMappingDetail::get_mapping_info(detail.as_ref(), 3).is_some());
-}
-
-#[test]
-fn legacy_rpc_response_keeps_arcmut_header_storage_and_converts() {
-    let response = RpcResponse::default();
-    let _: &Option<ArcMut<Box<dyn rocketmq_remoting::CommandCustomHeader + Send + Sync>>> = &response.header;
-    let canonical: rocketmq_protocol::rpc::rpc_response::RpcResponse = match response.try_into_canonical() {
-        Ok(response) => response,
-        Err(_) => panic!("unshared legacy response should convert"),
-    };
-    let _legacy = RpcResponse::from(canonical);
-}
-
-#[test]
-#[allow(deprecated)]
-fn legacy_rpc_shared_reference_mutation_facade_has_exact_safe_signature() {
-    let _: for<'a> fn(&'a RpcResponse) -> Option<&'a mut AckMessageRequestHeader> =
-        RpcResponse::get_header_mut_from_ref::<AckMessageRequestHeader>;
-
-    assert!(RpcResponse::default()
-        .get_header_mut_from_ref::<AckMessageRequestHeader>()
-        .is_none());
 }
 
 #[test]

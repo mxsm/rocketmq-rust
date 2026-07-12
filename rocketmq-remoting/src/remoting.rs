@@ -128,7 +128,7 @@ pub(crate) mod inner {
         ) -> RocketMQResult<()> {
             let opaque = cmd.opaque();
             #[cfg(feature = "observability")]
-            let mut metrics_guard = rocketmq_observability::metrics::remoting::RequestMetricsGuard::start(
+            let mut metrics_guard = rocketmq_transport::observability::metrics::remoting::RequestMetricsGuard::start(
                 cmd.code(),
                 cmd.body().map_or(0, |body| body.len() as u64),
                 is_long_polling_request(cmd.code()),

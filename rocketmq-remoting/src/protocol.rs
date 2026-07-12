@@ -28,7 +28,7 @@ pub use rocketmq_protocol::protocol::heartbeat;
 pub mod heartbeat_facade;
 pub mod namespace_util;
 pub use rocketmq_protocol::protocol::namesrv;
-pub use rocketmq_protocol::protocol::remoting_command;
+pub mod remoting_command;
 pub mod remoting_command_compat;
 pub use remoting_command_compat as remoting_command_facade;
 pub use rocketmq_protocol::protocol::request_source;

@@ -38,6 +38,7 @@ rocketmq-model = { workspace = true }
 rocketmq-protocol = { workspace = true }
 rocketmq-runtime = { workspace = true }
 rocketmq-security-api = { workspace = true }
+rocketmq-transport = { workspace = true }
 
 tokio.workspace  = true
 

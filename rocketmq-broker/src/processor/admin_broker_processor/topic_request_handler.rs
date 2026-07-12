@@ -411,7 +411,16 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let mut topic_config_list = request_body
             .topic_config_list
             .into_iter()
-            .map(ArcMut::new)
+            .map(|config| {
+                // Empty topic names are rejected by the manager, so this yields a fresh legacy handle.
+                let mut shared = self
+                    .broker_runtime_inner
+                    .topic_config_manager()
+                    .select_topic_config(&CheetahString::from_static_str(""))
+                    .unwrap_or_default();
+                *shared = config;
+                shared
+            })
             .collect::<Vec<_>>();
         self.broker_runtime_inner
             .topic_config_manager_mut()

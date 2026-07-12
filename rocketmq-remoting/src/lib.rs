@@ -17,6 +17,9 @@
 #![feature(impl_trait_in_assoc_type)]
 extern crate core;
 
+/// Canonical transport owner; retained here as a migration facade.
+pub use rocketmq_transport as transport;
+
 pub mod clients;
 pub mod code;
 pub mod codec;
@@ -38,7 +41,6 @@ pub mod runtime;
 pub mod tls;
 
 // Error helpers for unified error system
-pub mod connection_v2;
 pub mod error_helpers;
 pub mod local;
 pub mod smart_encode_buffer;

@@ -12,4 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod remoting_command_codec;
+pub use rocketmq_transport::codec::remoting_command_codec;
