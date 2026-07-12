@@ -47,6 +47,10 @@ FILE_ITEMS = {
     "preallocate_file": "fn",
 }
 FILE_PLATFORM_REEXPORTS = set(FILE_ITEMS) - {"MappedFileStorage"}
+MAPPING_ITEMS = {
+    "LazyMmapStats": "struct",
+    "MappedFileMapping": "struct",
+}
 DEFAULT_MAPPED_FILE_ALIAS_BRACE_USE_ALLOWLIST = {
     "use crate::utils::ffi::mlock as lock_memory",
     "use crate::utils::ffi::munlock as unlock_memory",
@@ -312,6 +316,17 @@ def active_file_use_statements(source: str) -> list[str]:
     return statements
 
 
+def active_mapping_use_statements(source: str) -> list[str]:
+    mapping_prefix = "rocketmq_store_local::mapped_file::mapping::"
+    statements: list[str] = []
+    for visibility, body, _ in active_use_records(source):
+        if not body.startswith(mapping_prefix):
+            continue
+        prefix = f"{visibility} " if visibility else ""
+        statements.append(f"{prefix}use {body.removeprefix(mapping_prefix)}")
+    return statements
+
+
 def file_item_owner_occurrences(
     sources: dict[Path, str],
     item: str,
@@ -434,7 +449,10 @@ def kernel_item_owner_occurrences(
 
 def active_struct_body(source: str, struct_name: str) -> str:
     source = active_rust_source(source)
-    declaration = re.search(rf"\bstruct\s+{re.escape(struct_name)}\s*\{{", source)
+    declaration = re.search(
+        rf"\bstruct\s+{re.escape(struct_name)}(?:\s*<[^{{}};]*>)?\s*\{{",
+        source,
+    )
     if declaration is None:
         return ""
     start = declaration.end()
@@ -618,6 +636,79 @@ def mapped_file_storage_owner_violations(source: str) -> list[str]:
         ("file_from_offset", "u64"),
     ]
     return [] if fields == expected else [f"MappedFileStorage fields must be exactly: {expected!r}"]
+
+
+def mapped_file_mapping_owner_violations(source: str) -> list[str]:
+    fields = active_struct_fields(source, "MappedFileMapping")
+    expected = [
+        ("value", "OnceLock<M>"),
+        ("init_lock", "Mutex<()>"),
+        ("lazy_enabled", "bool"),
+        ("map_operations", "AtomicU64"),
+        ("map_failures", "AtomicU64"),
+        ("total_millis", "AtomicU64"),
+        ("last_millis", "AtomicU64"),
+    ]
+    return [] if fields == expected else [f"MappedFileMapping fields must be exactly: {expected!r}"]
+
+
+def default_mapped_file_mapping_violations(source: str) -> list[str]:
+    if not active_struct_body(source, "DefaultMappedFile"):
+        return ["DefaultMappedFile struct missing"]
+
+    fields = active_struct_fields(source, "DefaultMappedFile")
+    violations = default_mapped_file_syntax_violations(source)
+    mapping_fields = [
+        (name, field_type)
+        for name, field_type in fields
+        if re.search(r"\bMappedFileMapping\b", field_type)
+    ]
+    if mapping_fields != [("mapping", "MappedFileMapping<ArcMut<MmapMut>>")]:
+        violations.append(
+            "MappedFileMapping fields must be exactly: mapping: MappedFileMapping<ArcMut<MmapMut>>"
+        )
+
+    legacy_names = {
+        "mmapped_file",
+        "mmap_init_lock",
+        "lazy_mmap_enabled",
+        "lazy_mmap_operations",
+        "lazy_mmap_failures",
+        "lazy_mmap_total_millis",
+        "lazy_mmap_last_millis",
+    }
+    violations.extend(
+        f"legacy mapping field: {name}"
+        for name, _ in fields
+        if name in legacy_names
+    )
+    for name, field_type in fields:
+        normalized_type = re.sub(r"\s+", "", field_type)
+        if "OnceLock<" in normalized_type:
+            violations.append(f"direct mapping cell owner field: {name}")
+        if re.search(r"(?:^|::)Mutex<()>$", normalized_type):
+            violations.append(f"direct mapping init lock owner field: {name}")
+        if field_type == "bool" and name != "first_create_in_queue":
+            violations.append(f"direct mapping enablement candidate field: {name}")
+        if re.search(r"(?:^|::)AtomicU64$", normalized_type) and name != "swap_map_time":
+            violations.append(f"direct mapping statistic candidate field: {name}")
+    return violations
+
+
+def legacy_mapping_getter_signature_violations(source: str) -> list[str]:
+    active = active_rust_source(source)
+    signatures = {
+        "is_lazy_mmap_enabled": r"pub\s+fn\s+is_lazy_mmap_enabled\s*\(\s*&self\s*\)\s*->\s*bool",
+        "is_mapped": r"pub\s+fn\s+is_mapped\s*\(\s*&self\s*\)\s*->\s*bool",
+        "lazy_mmap_stats": r"pub\s+fn\s+lazy_mmap_stats\s*\(\s*&self\s*\)\s*->\s*LazyMmapStats",
+        "get_mapped_file_mut": r"pub\s+fn\s+get_mapped_file_mut\s*\(\s*&self\s*\)\s*->\s*&mut\s+MmapMut",
+        "get_mapped_file": r"pub\s+fn\s+get_mapped_file\s*\(\s*&self\s*\)\s*->\s*&MmapMut",
+        "get_mapped_file_arcmut": (
+            r"pub\s+fn\s+get_mapped_file_arcmut\s*\(\s*&self\s*\)\s*"
+            r"->\s*ArcMut\s*<\s*MmapMut\s*>"
+        ),
+    }
+    return [name for name, pattern in signatures.items() if re.search(pattern, active) is None]
 
 
 class StoreLocalContractTests(unittest.TestCase):
@@ -912,6 +1003,101 @@ struct DefaultMappedFile {
 '''
         self.assertEqual([], default_mapped_file_storage_violations(source))
 
+    def test_mapping_owner_scanner_rejects_renamed_fields_and_type_aliases(self) -> None:
+        renamed = '''
+pub struct MappedFileMapping<M> {
+    cell: OnceLock<M>,
+    init_lock: Mutex<()>,
+    lazy_enabled: bool,
+    map_operations: AtomicU64,
+    map_failures: AtomicU64,
+    total_millis: AtomicU64,
+    last_millis: AtomicU64,
+}
+'''
+        aliased = '''
+type MappingCell<T> = OnceLock<T>;
+pub struct MappedFileMapping<M> {
+    value: MappingCell<M>,
+    init_lock: Mutex<()>,
+    lazy_enabled: bool,
+    map_operations: AtomicU64,
+    map_failures: AtomicU64,
+    total_millis: AtomicU64,
+    last_millis: AtomicU64,
+}
+'''
+        self.assertNotEqual([], mapped_file_mapping_owner_violations(renamed))
+        self.assertNotEqual([], mapped_file_mapping_owner_violations(aliased))
+
+    def test_struct_field_scanner_reads_generic_owner(self) -> None:
+        source = "pub struct MappedFileMapping<M> { value: OnceLock<M>, enabled: bool }"
+        self.assertEqual(
+            [("value", "OnceLock<M>"), ("enabled", "bool")],
+            active_struct_fields(source, "MappedFileMapping"),
+        )
+
+    def test_mapping_owner_scanner_ignores_comments_and_strings_but_rejects_duplicates(self) -> None:
+        canonical = Path("canonical.rs")
+        duplicate = Path("duplicate.rs")
+        commented = Path("commented.rs")
+        string = Path("string.rs")
+        sources = {
+            canonical: "pub struct MappedFileMapping<M> { value: OnceLock<M> }",
+            duplicate: "struct MappedFileMapping<T> { value: T }",
+            commented: "// pub struct MappedFileMapping<M> { value: M }",
+            string: 'const TEXT: &str = "pub struct MappedFileMapping<M> {}";',
+        }
+        self.assertEqual(
+            [(canonical, "struct"), (duplicate, "struct")],
+            file_item_owner_occurrences(sources, "MappedFileMapping"),
+        )
+
+    def test_default_mapping_scanner_rejects_renamed_duplicate_and_aliased_owners(self) -> None:
+        renamed = '''
+struct DefaultMappedFile {
+    mapping: MappedFileMapping<ArcMut<MmapMut>>,
+    first_create_in_queue: bool,
+    shadow_enabled: bool,
+    shadow_operations: AtomicU64,
+    swap_map_time: AtomicU64,
+}
+'''
+        duplicate = '''
+struct DefaultMappedFile {
+    mapping: MappedFileMapping<ArcMut<MmapMut>>,
+    shadow: MappedFileMapping<ArcMut<MmapMut>>,
+    first_create_in_queue: bool,
+    swap_map_time: AtomicU64,
+}
+'''
+        aliased = '''
+use rocketmq_store_local::mapped_file::mapping::MappedFileMapping as Mapping;
+struct DefaultMappedFile {
+    mapping: Mapping<ArcMut<MmapMut>>,
+    first_create_in_queue: bool,
+    swap_map_time: AtomicU64,
+}
+'''
+        self.assertNotEqual([], default_mapped_file_mapping_violations(renamed))
+        self.assertNotEqual([], default_mapped_file_mapping_violations(duplicate))
+        self.assertNotEqual([], default_mapped_file_mapping_violations(aliased))
+
+    def test_mapping_reexport_scanner_rejects_alias_brace_and_glob_bypasses(self) -> None:
+        source = '''
+pub use rocketmq_store_local::mapped_file::mapping::LazyMmapStats as Stats;
+pub use rocketmq_store_local::mapped_file::mapping::{LazyMmapStats, MappedFileMapping};
+pub use rocketmq_store_local::mapped_file::mapping::*;
+'''
+        self.assertEqual(
+            {
+                "pub use LazyMmapStats as Stats",
+                "pub use {LazyMmapStats, MappedFileMapping}",
+                "pub use *",
+            },
+            set(active_mapping_use_statements(source)),
+        )
+
     def test_storage_owner_scanner_rejects_extra_size_duplicate_and_aliased_field_types(self) -> None:
         source = '''
 pub struct MappedFileStorage {
@@ -1148,7 +1334,10 @@ struct DefaultMappedFile {
         self.assert_local_crate_exists()
         canonical_dir = LOCAL_CRATE / "src" / "mapped_file"
         facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
-        self.assertEqual(LEAF_FILES | {"file.rs", "kernel.rs"}, {path.name for path in canonical_dir.glob("*.rs")})
+        self.assertEqual(
+            LEAF_FILES | {"file.rs", "kernel.rs", "mapping.rs"},
+            {path.name for path in canonical_dir.glob("*.rs")},
+        )
         self.assertTrue(all(not (facade_dir / name).exists() for name in LEAF_FILES))
 
         rust_sources = {
@@ -1272,6 +1461,33 @@ struct DefaultMappedFile {
             active_default,
             r"pub\s+fn\s+try_parse_file_from_offset\s*\(file_name:\s*&Path\)\s*->\s*io::Result<u64>\s*\{\s*"
             r"rocketmq_store_local::mapped_file::file::try_parse_file_from_offset\(file_name\)\s*\}",
+        )
+
+    def test_mapped_file_mapping_has_one_local_owner_and_exact_store_composition(self) -> None:
+        canonical_file = LOCAL_CRATE / "src" / "mapped_file" / "mapping.rs"
+        rust_sources = {
+            path: path.read_text(encoding="utf-8")
+            for path in ROOT.glob("rocketmq-*/src/**/*.rs")
+        }
+        for item, item_kind in MAPPING_ITEMS.items():
+            self.assertEqual(
+                [(canonical_file, item_kind)],
+                file_item_owner_occurrences(rust_sources, item),
+                item,
+            )
+
+        canonical_source = canonical_file.read_text(encoding="utf-8")
+        self.assertEqual([], mapped_file_mapping_owner_violations(canonical_source))
+        self.assertNotRegex(active_rust_source(canonical_source), r"\bArcMut\b")
+
+        default_mapped_file = (
+            STORE_CRATE / "src" / "log_file" / "mapped_file" / "default_mapped_file_impl.rs"
+        ).read_text(encoding="utf-8")
+        self.assertEqual([], default_mapped_file_mapping_violations(default_mapped_file))
+        self.assertEqual([], legacy_mapping_getter_signature_violations(default_mapped_file))
+        self.assertEqual(
+            ["pub use LazyMmapStats", "use MappedFileMapping"],
+            active_mapping_use_statements(default_mapped_file),
         )
 
     def test_commit_log_planning_items_have_one_canonical_definition_and_exact_facade_reexports(self) -> None:

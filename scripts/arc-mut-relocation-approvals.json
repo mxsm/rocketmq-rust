@@ -73,6 +73,42 @@
       "from": "76247274f271039bf8cd8f1b",
       "to": "4d553633a7d26ce689bc0cd1",
       "reason": "Replacing the DefaultMappedFile File and offset fields with one Local storage field changed the fingerprint of the same struct type reference without adding an occurrence"
+    },
+    {
+      "identity": "acf169f0918de3dabff93aa8",
+      "from": "3b2123c0e754a03714b9b05f",
+      "to": "10aa78f168c907ad4363c55f",
+      "reason": "Composing the Local generic mapping lifecycle changed adjacent tokens around the existing eager ArcMut constructor in the same try_new_inner item without adding an occurrence"
+    },
+    {
+      "identity": "acf169f0918de3dabff93aa8",
+      "from": "58339aed97bc72b445f45f3c",
+      "to": "c9d573ba9d3af5784bcf1def",
+      "reason": "Delegating lazy initialization to the Local lifecycle changed adjacent tokens around the existing ArcMut constructor in the same try_get_mapped_file_ref item without adding an occurrence"
+    },
+    {
+      "identity": "f80c7a60a612919c6a52504e",
+      "from": "8622d524765ef0a77c59a703",
+      "to": "730945afc8f430296c3b811e",
+      "reason": "Replacing direct mmap lifecycle fields with one generic Local composition changed the fingerprint of the existing ArcMut field type in the same DefaultMappedFile struct without adding an occurrence"
+    },
+    {
+      "identity": "f80c7a60a612919c6a52504e",
+      "from": "339f4d5796c1feb6461807fa",
+      "to": "47c3d0ee2f97a9ae8d2dc8d6",
+      "reason": "Delegating lazy initialization to the Local lifecycle changed the fingerprint of the existing ArcMut return type in the same try_get_mapped_file_ref item without adding an occurrence"
+    },
+    {
+      "identity": "f77276860cc979566f9dbc1e",
+      "from": "aade4a10d53ff89ec2766419",
+      "to": "527d46611cfe6efaad6ce88a",
+      "reason": "Replacing direct mmap lifecycle fields with one Local composition changed the fingerprint of the same governed DefaultMappedFile shared UnsafeCell wrapper without adding an occurrence"
+    },
+    {
+      "identity": "22e398389b823d706a043784",
+      "from": "4d553633a7d26ce689bc0cd1",
+      "to": "efc68e011aa65239229d3192",
+      "reason": "Replacing direct mmap lifecycle fields with one Local composition changed the fingerprint of the same DefaultMappedFile struct type reference without adding an occurrence"
     }
   ]
 }

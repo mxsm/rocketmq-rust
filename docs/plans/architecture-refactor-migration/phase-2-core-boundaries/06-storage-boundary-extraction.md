@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -371,3 +371,29 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` This slice does not move mmap, `ArcMut`, `DefaultMappedFile`, `MappedFile`, messages/callbacks,
   config, warmup/memory locking, `TransientStorePool`, flush/group commit, CQ/Index, HA, CommitLog orchestration,
   runtime ownership, or persisted formats. PR-M06-03 and every M06 Exit Checklist item remain open.
+
+## M06-03e generic mmap lifecycle kernel evidence
+
+- [x] `[DEV]` `rocketmq-store-local::mapped_file::mapping` is the single canonical owner of `LazyMmapStats` and
+  generic `MappedFileMapping<M>`. The kernel owns one `OnceLock<M>`, one initialization mutex, lazy enablement,
+  and the four operation/failure/total/last-latency atomics. Eager and lazy construction, double-checked fallible
+  initialization, failure retry, initialized identity, and statistics snapshots are now Local behavior.
+- [x] `[COMPAT]` `DefaultMappedFile` composes exactly one `MappedFileMapping<ArcMut<MmapMut>>` and delegates its
+  existing lazy-enable, mapped-state, statistics, and mapping access paths. Store retains both unsafe
+  `MmapMut::map_mut` calls, `ArcMut`, the open file handle, all reference-returning getter signatures, safety
+  contracts, logging/metrics/observability, and actual mmap creation. The legacy `LazyMmapStats` path is an exact
+  re-export of the Local type.
+- [x] `[TEST]` RED first failed because the Local mapping module and both canonical owners were absent. GREEN
+  deterministically covers eager zero statistics, lazy eligibility, success counters/latency, failed retry,
+  eight concurrent callers with exactly one initializer, value identity, and monotonic statistics. Full Local,
+  DefaultMappedFile, storage/CommitLog compatibility, load/recovery, and the exact Local feature matrix pass.
+- [x] `[REV]` The 47-case mutation-resistant contract proves one Local owner per lifecycle type, the exact Local
+  state fields, one exact Store generic composition, no direct Store mmap cell/init lock/lazy flag/stat counters,
+  no Local `ArcMut` or forbidden dependency, exact re-export, and unchanged getter signatures. Negative fixtures
+  reject renamed fields, type/import aliases, duplicate generic owners, alias/brace/glob facades, comments, and
+  strings. Architecture gates pass. Six governed fingerprints use direct one-for-one BASE-to-HEAD approvals;
+  ArcMut occurrences remain 3,377.
+- [x] `[SCOPE]` This slice does not replace `ArcMut`, enable `arc_lock`, add an `RwLock` or second mapping, change
+  zero-copy/reference getter behavior, or move mmap creation, mapped buffers/results, append/direct-write/flush/
+  warmup/memory-lock algorithms, `DefaultMappedFile`, config, CommitLog orchestration, CQ/Index, or HA. PR-M06-03
+  and every M06 Exit Checklist item remain open.

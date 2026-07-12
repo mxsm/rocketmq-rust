@@ -22,14 +22,12 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use memmap2::MmapMut;
-use parking_lot::Mutex;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::current_millis;
@@ -38,6 +36,8 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
 use rocketmq_store_local::mapped_file::file::MappedFileStorage;
 use rocketmq_store_local::mapped_file::kernel::MappedFileProgress;
+pub use rocketmq_store_local::mapped_file::mapping::LazyMmapStats;
+use rocketmq_store_local::mapped_file::mapping::MappedFileMapping;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -97,29 +97,6 @@ struct LinuxStorageDegradationEvent {
     count: u64,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LazyMmapStats {
-    pub eligible_files: u64,
-    pub mapped_files: u64,
-    pub map_operations: u64,
-    pub map_failures: u64,
-    pub total_millis: u64,
-    pub last_millis: u64,
-}
-
-impl LazyMmapStats {
-    pub fn saturating_add_assign(&mut self, other: Self) {
-        self.eligible_files = self.eligible_files.saturating_add(other.eligible_files);
-        self.mapped_files = self.mapped_files.saturating_add(other.mapped_files);
-        self.map_operations = self.map_operations.saturating_add(other.map_operations);
-        self.map_failures = self.map_failures.saturating_add(other.map_failures);
-        self.total_millis = self.total_millis.saturating_add(other.total_millis);
-        if other.last_millis != 0 {
-            self.last_millis = other.last_millis;
-        }
-    }
-}
-
 impl LinuxStorageDegradationEvent {
     fn new(operation: &'static str, reason: &'static str, errno: i32) -> Self {
         Self {
@@ -167,13 +144,7 @@ fn emit_linux_storage_degradation_observability(event: LinuxStorageDegradationEv
 pub struct DefaultMappedFile {
     reference_resource: ReferenceResourceCounter,
     storage: MappedFileStorage,
-    mmapped_file: OnceLock<ArcMut<MmapMut>>,
-    mmap_init_lock: Mutex<()>,
-    lazy_mmap_enabled: bool,
-    lazy_mmap_operations: AtomicU64,
-    lazy_mmap_failures: AtomicU64,
-    lazy_mmap_total_millis: AtomicU64,
-    lazy_mmap_last_millis: AtomicU64,
+    mapping: MappedFileMapping<ArcMut<MmapMut>>,
     transient_store_pool: Option<TransientStorePool>,
     file_name: CheetahString,
     mapped_byte_buffer: Option<bytes::Bytes>,
@@ -258,8 +229,9 @@ impl DefaultMappedFile {
             }
         }
 
-        let mmapped_file = OnceLock::new();
-        if !lazy_mmap_enabled {
+        let mapping = if lazy_mmap_enabled {
+            MappedFileMapping::new_lazy()
+        } else {
             // SAFETY: `MappedFileStorage::open` opened the file and completed `set_len` before this
             // call. `DefaultMappedFile` itself does not resize or truncate the segment while a
             // mapping is alive. The mapping lifetime is managed by `ArcMut` and its clones,
@@ -267,19 +239,13 @@ impl DefaultMappedFile {
             // not by itself unmap the established mapping. Legacy `get_file` callers must preserve
             // the documented no-size-change compatibility contract.
             let mmap = unsafe { MmapMut::map_mut(storage.file())? };
-            let _ = mmapped_file.set(ArcMut::new(mmap));
-        }
+            MappedFileMapping::new_eager(ArcMut::new(mmap))
+        };
 
         Ok(Self {
             reference_resource: ReferenceResourceCounter::new(),
             storage,
-            mmapped_file,
-            mmap_init_lock: Mutex::new(()),
-            lazy_mmap_enabled,
-            lazy_mmap_operations: AtomicU64::new(0),
-            lazy_mmap_failures: AtomicU64::new(0),
-            lazy_mmap_total_millis: AtomicU64::new(0),
-            lazy_mmap_last_millis: AtomicU64::new(0),
+            mapping,
             file_name,
             mapped_byte_buffer: None,
             progress: MappedFileProgress::new(file_size),
@@ -294,60 +260,29 @@ impl DefaultMappedFile {
 
     #[inline]
     pub fn is_lazy_mmap_enabled(&self) -> bool {
-        self.lazy_mmap_enabled
+        self.mapping.is_lazy_enabled()
     }
 
     #[inline]
     pub fn is_mapped(&self) -> bool {
-        self.mmapped_file.get().is_some()
+        self.mapping.is_mapped()
     }
 
     pub fn lazy_mmap_stats(&self) -> LazyMmapStats {
-        LazyMmapStats {
-            eligible_files: u64::from(self.lazy_mmap_enabled),
-            mapped_files: u64::from(self.lazy_mmap_enabled && self.is_mapped()),
-            map_operations: self.lazy_mmap_operations.load(Ordering::Acquire),
-            map_failures: self.lazy_mmap_failures.load(Ordering::Acquire),
-            total_millis: self.lazy_mmap_total_millis.load(Ordering::Acquire),
-            last_millis: self.lazy_mmap_last_millis.load(Ordering::Acquire),
-        }
+        self.mapping.stats()
     }
 
     fn try_get_mapped_file_ref(&self) -> io::Result<&ArcMut<MmapMut>> {
-        if let Some(mapped_file) = self.mmapped_file.get() {
-            return Ok(mapped_file);
-        }
-
-        let _guard = self.mmap_init_lock.lock();
-        if let Some(mapped_file) = self.mmapped_file.get() {
-            return Ok(mapped_file);
-        }
-
-        let start = Instant::now();
         // SAFETY: construction opened the storage file and completed `set_len`. The
-        // `mmap_init_lock` only serializes lazy mapping initialization. `DefaultMappedFile` itself
-        // does not resize or truncate the segment while a mapping is alive. The mapping lifetime
-        // is managed by `ArcMut` and its clones independently of the `File` handle, so renaming,
-        // reopening, or closing that handle does not by itself unmap the mapping. Legacy
+        // Local initialization lock serializes lazy mapping initialization. `DefaultMappedFile`
+        // itself does not resize or truncate the segment while a mapping is alive. The mapping
+        // lifetime is managed by `ArcMut` and its clones independently of the `File` handle, so
+        // renaming, reopening, or closing that handle does not by itself unmap the mapping. Legacy
         // `get_file` callers must preserve the documented no-size-change compatibility contract.
-        match unsafe { MmapMut::map_mut(self.storage.file()) } {
-            Ok(mmap) => {
-                let elapsed_millis = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-                if self.lazy_mmap_enabled {
-                    self.lazy_mmap_operations.fetch_add(1, Ordering::AcqRel);
-                    self.lazy_mmap_total_millis.fetch_add(elapsed_millis, Ordering::AcqRel);
-                    self.lazy_mmap_last_millis.store(elapsed_millis, Ordering::Release);
-                }
-                let _ = self.mmapped_file.set(ArcMut::new(mmap));
-                Ok(self.mmapped_file.get().expect("mapped file must be initialized"))
-            }
-            Err(error) => {
-                if self.lazy_mmap_enabled {
-                    self.lazy_mmap_failures.fetch_add(1, Ordering::AcqRel);
-                }
-                Err(error)
-            }
-        }
+        self.mapping.get_or_try_init(|| {
+            // SAFETY: the storage invariants above hold for the duration of this mapping.
+            unsafe { MmapMut::map_mut(self.storage.file()) }.map(ArcMut::new)
+        })
     }
 
     fn try_get_mapped_file_arcmut(&self) -> io::Result<ArcMut<MmapMut>> {
@@ -1912,6 +1847,16 @@ mod tests {
         assert!(!mapped_file.is_lazy_mmap_enabled());
         assert!(mapped_file.is_mapped());
         assert_eq!(mapped_file.get_mapped_file().len(), 4096);
+        assert_eq!(mapped_file.lazy_mmap_stats(), LazyMmapStats::default());
+    }
+
+    #[test]
+    fn lazy_mmap_stats_legacy_path_has_local_type_identity() {
+        fn round_trip(stats: LazyMmapStats) -> rocketmq_store_local::mapped_file::mapping::LazyMmapStats {
+            stats
+        }
+
+        assert_eq!(round_trip(LazyMmapStats::default()), LazyMmapStats::default());
     }
 
     #[test]
