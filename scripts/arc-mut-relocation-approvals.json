@@ -53,8 +53,8 @@
     {
       "identity": "ebb212125033591cebb811ba",
       "from": "26d2e0b2c08b64d6e00a411f",
-      "to": "e33954dcd98342cf79a55bc4",
-      "reason": "Importing the Local mapped-file storage handle and formatting imports changed adjacent tokens around the existing ArcMut import without adding or moving an occurrence"
+      "to": "763657513cccba1f2db06b65",
+      "reason": "Importing the Local mapped-file storage handle and applying the repository rustfmt order changed adjacent tokens around the existing ArcMut import without adding or moving an occurrence"
     },
     {
       "identity": "f80c7a60a612919c6a52504e",
@@ -73,12 +73,6 @@
       "from": "76247274f271039bf8cd8f1b",
       "to": "4d553633a7d26ce689bc0cd1",
       "reason": "Replacing the DefaultMappedFile File and offset fields with one Local storage field changed the fingerprint of the same struct type reference without adding an occurrence"
-    },
-    {
-      "identity": "ebb212125033591cebb811ba",
-      "from": "e33954dcd98342cf79a55bc4",
-      "to": "763657513cccba1f2db06b65",
-      "reason": "Applying the repository rustfmt import order changed adjacent tokens around the same ArcMut import without adding or moving an occurrence"
     }
   ]
 }

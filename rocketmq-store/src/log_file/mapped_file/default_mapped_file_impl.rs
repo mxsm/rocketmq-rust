@@ -260,6 +260,11 @@ impl DefaultMappedFile {
 
         let mmapped_file = OnceLock::new();
         if !lazy_mmap_enabled {
+            // SAFETY: `storage.file()` is an open handle whose length was established by
+            // `MappedFileStorage::open`. `DefaultMappedFile` owns the mapping and does not
+            // internally resize or truncate the segment while the mapping is installed; cleanup
+            // releases the mapping before the owner is dropped. Legacy file-handle callers must
+            // preserve the same no-truncation invariant.
             let mmap = unsafe { MmapMut::map_mut(storage.file())? };
             let _ = mmapped_file.set(ArcMut::new(mmap));
         }
@@ -318,6 +323,11 @@ impl DefaultMappedFile {
         }
 
         let start = Instant::now();
+        // SAFETY: `self.storage.file()` remains a valid handle sized during construction. The
+        // `mmap_init_lock` serializes lazy initialization, and the initialized mapping remains
+        // owned by `self.mmapped_file` until cleanup. This owner performs no resize or truncation
+        // while that mapping is installed; legacy file-handle callers must preserve the same
+        // invariant.
         match unsafe { MmapMut::map_mut(self.storage.file()) } {
             Ok(mmap) => {
                 let elapsed_millis = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;

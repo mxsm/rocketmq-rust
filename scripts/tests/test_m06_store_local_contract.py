@@ -19,6 +19,7 @@ import tomllib
 import unittest
 from pathlib import Path
 from typing import Any
+from typing import Callable
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -523,7 +524,68 @@ def default_mapped_file_storage_violations(source: str) -> list[str]:
         storage_fields[0][1],
     ):
         violations.append("storage field must have exact MappedFileStorage type")
+
+    resolve_type = storage_field_type_resolver(source)
+    forbidden_types = {
+        "std::fs::File": "file",
+        "std::path::PathBuf": "path",
+        "u64": "offset",
+    }
+    for name, field_type in fields:
+        owner = forbidden_types.get(resolve_type(field_type))
+        if owner is not None:
+            violations.append(f"direct {owner} owner field: {name}")
     return violations
+
+
+def storage_field_type_resolver(source: str) -> Callable[[str], str]:
+    aliases: dict[str, str] = {}
+    for kind, _, body, _ in active_import_records(source):
+        if kind != "use":
+            continue
+        imported = re.fullmatch(
+            r"(?P<path>(?:::)?std::(?:fs::File|path::PathBuf))"
+            r"(?:\s+as\s+(?P<alias>[A-Za-z_][A-Za-z0-9_]*))?",
+            body,
+        )
+        if imported:
+            path = imported.group("path").removeprefix("::")
+            local_name = imported.group("alias") or path.rsplit("::", 1)[-1]
+            aliases[local_name] = path
+
+    active_source = active_rust_source(source)
+    type_alias = re.compile(
+        r"(?m)^[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?type\s+"
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<target>[^;]+);"
+    )
+    for match in type_alias.finditer(active_source):
+        aliases[match.group("name")] = match.group("target")
+
+    cache: dict[str, str] = {}
+
+    def normalize(field_type: str) -> str:
+        normalized = re.sub(r"\s*::\s*", "::", field_type.strip())
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized.removeprefix("::")
+
+    def resolve(field_type: str) -> str:
+        current = normalize(field_type)
+        trail: list[str] = []
+        seen: set[str] = set()
+        while re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", current):
+            if current in cache:
+                current = cache[current]
+                break
+            if current in seen or current not in aliases:
+                break
+            seen.add(current)
+            trail.append(current)
+            current = normalize(aliases[current])
+        for alias in trail:
+            cache[alias] = current
+        return current
+
+    return resolve
 
 
 def mapped_file_storage_owner_violations(source: str) -> list[str]:
@@ -714,6 +776,79 @@ struct DefaultMappedFile {
         self.assertIn("legacy storage field: file", violations)
         self.assertIn("legacy storage field: file_from_offset", violations)
         self.assertIn("MappedFileStorage fields must be exactly: storage", violations)
+
+    def test_default_storage_scanner_rejects_renamed_fully_qualified_file_field(self) -> None:
+        source = '''
+struct DefaultMappedFile {
+    storage: MappedFileStorage,
+    shadow_file: std::fs::File,
+}
+'''
+        self.assertIn(
+            "direct file owner field: shadow_file",
+            default_mapped_file_storage_violations(source),
+        )
+
+    def test_default_storage_scanner_rejects_renamed_fully_qualified_path_field(self) -> None:
+        source = '''
+struct DefaultMappedFile {
+    storage: MappedFileStorage,
+    canonical_path: std::path::PathBuf,
+}
+'''
+        self.assertIn(
+            "direct path owner field: canonical_path",
+            default_mapped_file_storage_violations(source),
+        )
+
+    def test_default_storage_scanner_rejects_renamed_plain_offset_field(self) -> None:
+        source = '''
+struct DefaultMappedFile {
+    storage: MappedFileStorage,
+    segment_offset: u64,
+}
+'''
+        self.assertIn(
+            "direct offset owner field: segment_offset",
+            default_mapped_file_storage_violations(source),
+        )
+
+    def test_default_storage_scanner_rejects_import_as_file_alias(self) -> None:
+        source = '''
+use std::fs::File as SegmentHandle;
+struct DefaultMappedFile {
+    storage: MappedFileStorage,
+    shadow_file: SegmentHandle,
+}
+'''
+        self.assertIn(
+            "direct file owner field: shadow_file",
+            default_mapped_file_storage_violations(source),
+        )
+
+    def test_default_storage_scanner_rejects_recursive_type_alias(self) -> None:
+        source = '''
+type RawHandle = std::fs::File;
+type SegmentHandle = RawHandle;
+struct DefaultMappedFile {
+    storage: MappedFileStorage,
+    shadow_file: SegmentHandle,
+}
+'''
+        self.assertIn(
+            "direct file owner field: shadow_file",
+            default_mapped_file_storage_violations(source),
+        )
+
+    def test_default_storage_scanner_accepts_atomic_u64_progress_fields(self) -> None:
+        source = '''
+struct DefaultMappedFile {
+    storage: MappedFileStorage,
+    lazy_mmap_operations: AtomicU64,
+    swap_map_time: std::sync::atomic::AtomicU64,
+}
+'''
+        self.assertEqual([], default_mapped_file_storage_violations(source))
 
     def test_storage_owner_scanner_rejects_extra_size_duplicate_and_aliased_field_types(self) -> None:
         source = '''
