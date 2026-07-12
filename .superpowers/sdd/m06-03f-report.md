@@ -55,6 +55,29 @@ The Local deterministic source copies each exact bounded range. The Store adapte
 `MappedFile::get_file_size/get_bytes`; production still owns the same `DefaultMappedFile`, mmap, and Arc lifetime.
 The real Store fixture creates segments through `MappedFileQueue`, avoiding new governed test debt.
 
+## Independent review fixes
+
+The final review found two contract/test-strength gaps; it did not find a persisted-data or runtime behavior defect.
+
+- RED `cargo test -p rocketmq-store-local --lib frame_fit_accepts_equal_boundary_and_rejects_overflow` exited 101
+  with E0432 because the private pure `frame_fits` helper did not exist. GREEN is 1/1: equal end boundaries fit,
+  while `usize::MAX + 1` is rejected without overflow. The cursor now delegates its checked range decision to that
+  helper with unchanged behavior.
+- Three scripted-source tests were added for initial refill `None`, a parseable >=8-byte response shorter than the
+  requested refill, and an oversized frame whose direct second read is short. All three passed on their first
+  focused execution, accurately proving the pre-existing runtime path was already fail-closed: offset remains zero,
+  no retry loop occurs, and the recorded read counts are exactly one, one, and two.
+- RED contract was 49/51: fully-qualified `dyn ...::CommitLogFrameSource` escaped the simple-name detector, and a
+  single-field wrapper with a wrong constructor signature, copied next-message parsing, or hard-coded offset still
+  passed. GREEN is 53/53 after splitting two dedicated mutation tests. The scanner now extracts/normalizes the exact
+  `impl<'a> BatchMessageIterator<'a>` block, requires exactly the three legacy signatures and pure delegation
+  bodies, detects simple and fully-qualified dynamic ports, and conservatively rejects every active alias/brace
+  import in both boundary files. The alias-dynamic fixture is rejected by that fail-closed import policy rather
+  than by claiming arbitrary Rust alias resolution.
+- The first review-fix Local Clippy run found only test helper `type_complexity`; a narrow `ReadCalls` test alias
+  resolved it, and both Local and Store Clippy then passed. ArcMut final guard remained green with no additional
+  relocation or baseline change in the review-fix commit.
+
 ## ArcMut governance
 
 The brief expected no governed relocation because `DefaultMappedFile` itself does not change. Investigation showed
@@ -75,12 +98,12 @@ occurrence objects (9 added/9 removed lines), leaving 1,232 identities and 3,377
 
 All commands ran from the repository root.
 
-- `cargo test -p rocketmq-store-local` - exit 0; 48 unit + 7 record + 6 kernel + 7 mapping + 10 storage tests
-  passed (78 total); nine existing Rustdoc examples ignored.
+- `cargo test -p rocketmq-store-local` - exit 0; 49 unit + 10 record + 6 kernel + 7 mapping + 10 storage tests
+  passed (82 total); nine existing Rustdoc examples ignored.
 - `cargo test -p rocketmq-store --test commitlog_recovery_tests` - exit 0; 9/9.
 - `cargo test -p rocketmq-store --test commitlog_load_tests` - exit 0; 7/7, one stress test ignored.
 - M06 Local, CommitLog planning, and record compatibility targets - exit 0; 3/3, 2/2, and 3/3.
-- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 51/51.
+- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 53/53.
 - Local no-default, fast-load, safe-load, fast+safe, and io_uring exact checks - all exit 0.
 - `cargo tree -p rocketmq-store-local -e normal` - exit 0; no forbidden owner edge.
 - Architecture dependency unit tests - exit 0; 35/35. Fixtures and baseline mode - exit 0.

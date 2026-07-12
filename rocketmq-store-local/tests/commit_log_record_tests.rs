@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::Rc;
+
 use bytes::Bytes;
 use rocketmq_store_local::commit_log::record::is_blank_message;
 use rocketmq_store_local::commit_log::record::CommitLogFrameCursor;
@@ -20,6 +24,7 @@ use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
 
 const PARSE_BATCH_SIZE: usize = 64 * 1024;
+type ReadCalls = Rc<RefCell<Vec<(usize, usize)>>>;
 
 #[derive(Clone)]
 struct BytesSource {
@@ -41,6 +46,39 @@ impl CommitLogFrameSource for BytesSource {
         let end = offset.checked_add(len)?;
         self.bytes.get(offset..end).map(Bytes::copy_from_slice)
     }
+}
+
+#[derive(Clone)]
+struct ScriptedSource {
+    source_len: usize,
+    responses: Rc<RefCell<VecDeque<Option<Bytes>>>>,
+    calls: ReadCalls,
+}
+
+impl CommitLogFrameSource for ScriptedSource {
+    fn source_len(&self) -> usize {
+        self.source_len
+    }
+
+    fn read(&self, offset: usize, len: usize) -> Option<Bytes> {
+        self.calls.borrow_mut().push((offset, len));
+        self.responses.borrow_mut().pop_front().flatten()
+    }
+}
+
+fn scripted_source(
+    source_len: usize,
+    responses: impl IntoIterator<Item = Option<Bytes>>,
+) -> (ScriptedSource, ReadCalls) {
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    (
+        ScriptedSource {
+            source_len,
+            responses: Rc::new(RefCell::new(responses.into_iter().collect())),
+            calls: Rc::clone(&calls),
+        },
+        calls,
+    )
 }
 
 fn frame(size: usize, magic: i32) -> Bytes {
@@ -152,4 +190,37 @@ fn partial_tail_does_not_advance_past_the_last_complete_frame() {
 
     assert_eq!(actual, vec![(complete, 0, 16)]);
     assert_eq!(offset, 16);
+}
+
+#[test]
+fn initial_refill_none_stops_without_advancing_or_retrying() {
+    let (source, calls) = scripted_source(8, [None]);
+    let mut cursor = CommitLogFrameCursor::new(source);
+
+    assert_eq!(cursor.next_message(), None);
+    assert_eq!(cursor.current_offset(), 0);
+    assert_eq!(&*calls.borrow(), &[(0, 8)]);
+}
+
+#[test]
+fn parseable_short_refill_is_rejected_after_one_read() {
+    let (source, calls) = scripted_source(16, [Some(frame(8, MESSAGE_MAGIC_CODE))]);
+    let mut cursor = CommitLogFrameCursor::new(source);
+
+    assert_eq!(cursor.next_message(), None);
+    assert_eq!(cursor.current_offset(), 0);
+    assert_eq!(&*calls.borrow(), &[(0, 16)]);
+}
+
+#[test]
+fn oversized_direct_short_read_is_rejected_after_two_reads() {
+    let oversized = frame(PARSE_BATCH_SIZE + 1, MESSAGE_MAGIC_CODE);
+    let initial_batch = Bytes::copy_from_slice(&oversized[..PARSE_BATCH_SIZE]);
+    let short_direct = Bytes::copy_from_slice(&oversized[..PARSE_BATCH_SIZE]);
+    let (source, calls) = scripted_source(PARSE_BATCH_SIZE + 1, [Some(initial_batch), Some(short_direct)]);
+    let mut cursor = CommitLogFrameCursor::new(source);
+
+    assert_eq!(cursor.next_message(), None);
+    assert_eq!(cursor.current_offset(), 0);
+    assert_eq!(&*calls.borrow(), &[(0, PARSE_BATCH_SIZE), (0, PARSE_BATCH_SIZE + 1)]);
 }

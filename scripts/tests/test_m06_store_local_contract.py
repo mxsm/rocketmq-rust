@@ -185,9 +185,129 @@ def commit_log_record_owner_occurrences(
 def commit_log_record_boundary_violations(source: str) -> list[str]:
     active = active_rust_source(source)
     violations: list[str] = []
-    if re.search(r"\bdyn\s+CommitLogFrameSource\b", active):
+    if re.search(
+        r"\bdyn\s+(?:(?:::)?[A-Za-z_][A-Za-z0-9_]*::)*CommitLogFrameSource\b",
+        active,
+    ):
         violations.append("dynamic CommitLogFrameSource")
+    if any(
+        kind == "use" and (" as " in body or "{" in body)
+        for kind, _, body, _ in active_import_records(source)
+    ):
+        violations.append("forbidden alias/brace import")
     return violations
+
+
+def braced_body(source: str, opening_brace: int) -> tuple[str, int] | None:
+    depth = 0
+    for index in range(opening_brace, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening_brace + 1:index], index + 1
+    return None
+
+
+def normalized_batch_iterator_methods(source: str) -> dict[str, tuple[str, str]] | None:
+    active = active_rust_source(source)
+    impl_blocks: list[tuple[str, str]] = []
+    for impl_match in re.finditer(r"\bimpl\b", active):
+        opening_brace = active.find("{", impl_match.end())
+        semicolon = active.find(";", impl_match.end())
+        if opening_brace == -1 or (semicolon != -1 and semicolon < opening_brace):
+            continue
+        header = active[impl_match.start():opening_brace]
+        if re.search(r"\bBatchMessageIterator\b", header) is None:
+            continue
+        extracted = braced_body(active, opening_brace)
+        if extracted is None:
+            return None
+        body, _ = extracted
+        impl_blocks.append((re.sub(r"\s+", "", header), body))
+
+    if len(impl_blocks) != 1 or impl_blocks[0][0] != "impl<'a>BatchMessageIterator<'a>":
+        return None
+
+    body = impl_blocks[0][1]
+    methods: dict[str, tuple[str, str]] = {}
+    depth = 0
+    index = 0
+    method_start = re.compile(r"(?:pub\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+    while index < len(body):
+        if body[index] == "{":
+            depth += 1
+            index += 1
+            continue
+        if body[index] == "}":
+            depth -= 1
+            index += 1
+            continue
+        if depth != 0:
+            index += 1
+            continue
+        match = method_start.match(body, index)
+        if match is None:
+            index += 1
+            continue
+        opening_brace = body.find("{", match.end())
+        if opening_brace == -1:
+            return None
+        extracted = braced_body(body, opening_brace)
+        if extracted is None or match.group(1) in methods:
+            return None
+        method_body, method_end = extracted
+        methods[match.group(1)] = (
+            re.sub(r"\s+", "", body[match.start():opening_brace]),
+            re.sub(r"\s+", "", method_body),
+        )
+        index = method_end
+    return methods
+
+
+def batch_iterator_method_contract_violations(source: str) -> list[str]:
+    methods = normalized_batch_iterator_methods(source)
+    expected = {
+        "new": (
+            "pubfnnew(mapped_file:&'aArc<DefaultMappedFile>)->Self",
+            "Self{inner:CommitLogFrameCursor::new(MappedFileFrameSource{mapped_file}),}",
+        ),
+        "next_message": (
+            "pubfnnext_message(&mutself)->Option<(Bytes,usize,usize)>",
+            "self.inner.next_message()",
+        ),
+        "current_offset": (
+            "pubfncurrent_offset(&self)->usize",
+            "self.inner.current_offset()",
+        ),
+    }
+    return [] if methods == expected else ["legacy iterator methods must be exact pure delegates"]
+
+
+VALID_COMMIT_LOG_RECORD_FACADE = '''
+pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
+pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
+'''
+VALID_RECOVERY_RECORD_FACADE = '''
+pub use rocketmq_store_local::commit_log::record::is_blank_message;
+pub struct BatchMessageIterator<'a> {
+    inner: CommitLogFrameCursor<MappedFileFrameSource<'a, Arc<DefaultMappedFile>>>,
+}
+impl<'a> BatchMessageIterator<'a> {
+    pub fn new(mapped_file: &'a Arc<DefaultMappedFile>) -> Self {
+        Self {
+            inner: CommitLogFrameCursor::new(MappedFileFrameSource { mapped_file }),
+        }
+    }
+    pub fn next_message(&mut self) -> Option<(Bytes, usize, usize)> {
+        self.inner.next_message()
+    }
+    pub fn current_offset(&self) -> usize {
+        self.inner.current_offset()
+    }
+}
+'''
 
 
 def store_record_facade_violations(commit_log: str, recovery: str) -> list[str]:
@@ -222,6 +342,12 @@ def store_record_facade_violations(commit_log: str, recovery: str) -> list[str]:
         "MappedFileFrameSource<'a, Arc<DefaultMappedFile>>>,\n"
     ):
         violations.append("legacy iterator must wrap only the Local cursor")
+    violations.extend(batch_iterator_method_contract_violations(recovery))
+    if any(
+        kind == "use" and (" as " in body or "{" in body)
+        for kind, _, body, _ in active_import_records(recovery)
+    ):
+        violations.append("recovery boundary forbids alias/brace imports")
     return violations
 
 
@@ -808,19 +934,31 @@ const RAW: &str = r#"fn MIN_MESSAGE_SIZE() {}"#;
         )
         self.assertEqual([], commit_log_record_boundary_violations(masked))
 
-    def test_store_record_facade_contract_rejects_alias_brace_glob_and_algorithm_mutations(self) -> None:
-        valid_commit_log = '''
-pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
-pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
-'''
-        valid_recovery = '''
-pub use rocketmq_store_local::commit_log::record::is_blank_message;
-pub struct BatchMessageIterator<'a> {
-    inner: CommitLogFrameCursor<MappedFileFrameSource<'a, Arc<DefaultMappedFile>>>,
-}
+    def test_commit_log_record_contract_rejects_qualified_dyn_and_alias_imports(self) -> None:
+        qualified_dynamic = (
+            "pub struct Bad { source: Box<dyn "
+            "rocketmq_store_local::commit_log::record::CommitLogFrameSource> }"
+        )
+        aliased_dynamic = '''
+use rocketmq_store_local::commit_log::record::CommitLogFrameSource as FrameSource;
+pub struct Bad { source: Box<dyn FrameSource> }
 '''
         self.assertEqual(
-            [], store_record_facade_violations(valid_commit_log, valid_recovery)
+            ["dynamic CommitLogFrameSource"],
+            commit_log_record_boundary_violations(qualified_dynamic),
+        )
+        self.assertIn(
+            "forbidden alias/brace import",
+            commit_log_record_boundary_violations(aliased_dynamic),
+        )
+
+    def test_store_record_facade_contract_rejects_alias_brace_glob_and_algorithm_mutations(self) -> None:
+        self.assertEqual(
+            [],
+            store_record_facade_violations(
+                VALID_COMMIT_LOG_RECORD_FACADE,
+                VALID_RECOVERY_RECORD_FACADE,
+            ),
         )
         for mutated_commit_log in [
             "pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE as CODE;",
@@ -828,13 +966,53 @@ pub struct BatchMessageIterator<'a> {
             "pub use rocketmq_store_local::commit_log::record::*;",
         ]:
             self.assertNotEqual(
-                [], store_record_facade_violations(mutated_commit_log, valid_recovery)
+                [],
+                store_record_facade_violations(
+                    mutated_commit_log,
+                    VALID_RECOVERY_RECORD_FACADE,
+                ),
             )
-        copied_recovery = valid_recovery + "\nconst PARSE_BATCH_SIZE: usize = 65536;"
+        copied_recovery = VALID_RECOVERY_RECORD_FACADE + "\nconst PARSE_BATCH_SIZE: usize = 65536;"
         self.assertIn(
             "legacy iterator constants copied",
-            store_record_facade_violations(valid_commit_log, copied_recovery),
+            store_record_facade_violations(
+                VALID_COMMIT_LOG_RECORD_FACADE,
+                copied_recovery,
+            ),
         )
+
+    def test_store_record_wrapper_contract_rejects_method_and_import_mutations(self) -> None:
+        wrong_new_signature = VALID_RECOVERY_RECORD_FACADE.replace(
+            "new(mapped_file: &'a Arc<DefaultMappedFile>)",
+            "new(mapped_file: &Arc<DefaultMappedFile>)",
+        )
+        copied_next_algorithm = VALID_RECOVERY_RECORD_FACADE.replace(
+            "self.inner.next_message()",
+            '''
+let mut peek = self.buffer.clone();
+let total_size = peek.get_i32();
+if total_size <= 0 || !self.refill_buffer() { return None; }
+self.buffer.copy_to_bytes(total_size as usize)
+''',
+        )
+        hard_coded_offset = VALID_RECOVERY_RECORD_FACADE.replace("self.inner.current_offset()", "999")
+        brace_recovery_import = VALID_RECOVERY_RECORD_FACADE.replace(
+            "pub use rocketmq_store_local::commit_log::record::is_blank_message;",
+            "pub use rocketmq_store_local::commit_log::record::{is_blank_message};",
+        )
+        for mutation in [
+            wrong_new_signature,
+            copied_next_algorithm,
+            hard_coded_offset,
+            brace_recovery_import,
+        ]:
+            self.assertNotEqual(
+                [],
+                store_record_facade_violations(
+                    VALID_COMMIT_LOG_RECORD_FACADE,
+                    mutation,
+                ),
+            )
 
     def test_commit_log_record_owner_scanner_rejects_duplicate_constants_functions_and_aliases(self) -> None:
         canonical = Path("record.rs")

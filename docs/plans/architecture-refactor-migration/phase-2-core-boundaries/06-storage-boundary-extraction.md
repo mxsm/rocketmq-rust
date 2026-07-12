@@ -416,6 +416,12 @@ python scripts/arc_mut_guard.py
   and legacy-signature compatibility. The mutation-resistant contract proves the Local+Store owner boundary,
   exact re-exports, wrapper-only Store iterator, static source port, and forbidden dependency closure while
   rejecting duplicate owners, copied algorithms, aliases/brace/glob imports, comments, strings, and `dyn` ports.
+- [x] `[REVIEW]` The final contract extracts and normalizes the exact `impl<'a> BatchMessageIterator<'a>` block,
+  requires its three legacy signatures and pure delegation bodies, and rejects a wrong constructor lifetime,
+  copied peek/size/refill parsing, a hard-coded offset, fully-qualified or aliased dynamic ports, and every active
+  alias/brace import in the Local record and Store recovery boundary files. Scripted sources deterministically
+  prove initial `None`, parseable-short refill, and oversized direct-short reads stop at offset zero with one/two
+  bounded calls. A private pure fit helper freezes equal-end acceptance and `usize::MAX` overflow rejection.
 - [x] `[REV]` Local/Store/workspace Clippy, Local `-D warnings` Rustdoc, exact Local feature checks, architecture
   dependency gates, and ArcMut gates pass. ArcMut investigation found three direct production fingerprint
   relocations caused by the wrapper extraction; the baseline changes only those three one-for-one occurrence

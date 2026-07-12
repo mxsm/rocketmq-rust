@@ -26,6 +26,12 @@ pub const BLANK_MAGIC_CODE: i32 = -875286124;
 const PARSE_BATCH_SIZE: usize = 64 * 1024;
 const MIN_MESSAGE_SIZE: usize = 4 + 4;
 
+fn frame_fits(absolute_offset: usize, frame_size: usize, source_len: usize) -> bool {
+    absolute_offset
+        .checked_add(frame_size)
+        .is_some_and(|frame_end| frame_end <= source_len)
+}
+
 /// Returns whether `frame` starts with a complete CommitLog blank marker.
 #[inline]
 pub fn is_blank_message(frame: &Bytes) -> bool {
@@ -107,7 +113,7 @@ impl<S: CommitLogFrameSource> CommitLogFrameCursor<S> {
 
             let frame_size = total_size as usize;
             let absolute_offset = self.current_offset;
-            if absolute_offset.checked_add(frame_size)? > self.source_len {
+            if !frame_fits(absolute_offset, frame_size, self.source_len) {
                 return None;
             }
 
@@ -137,5 +143,16 @@ impl<S: CommitLogFrameSource> CommitLogFrameCursor<S> {
     /// Returns the absolute offset immediately after the last complete returned frame.
     pub fn current_offset(&self) -> usize {
         self.current_offset
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::frame_fits;
+
+    #[test]
+    fn frame_fit_accepts_equal_boundary_and_rejects_overflow() {
+        assert!(frame_fits(8, 8, 16));
+        assert!(!frame_fits(usize::MAX, 1, usize::MAX));
     }
 }
