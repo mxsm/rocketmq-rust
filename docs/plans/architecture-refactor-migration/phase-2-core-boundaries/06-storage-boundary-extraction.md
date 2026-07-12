@@ -353,14 +353,19 @@ python scripts/arc_mut_guard.py
   outcome classification, canonical path/offset, rename/reopen/delete ordering, eager/lazy mmap, transient
   commit/read, injected flush failure, Store type identity, recovery compatibility, and the exact Local feature
   matrix.
-- [x] `[REV]` The 39-case mutation-resistant contract requires exactly one canonical file owner with only
+- [x] `[REV]` The 41-case mutation-resistant contract requires exactly one canonical file owner with only
   `File`/`PathBuf`/offset fields, exact Store platform re-exports and parse wrappers, exactly one
-  `storage: MappedFileStorage`, no field resolving through direct paths, import aliases, or recursive type aliases
-  to `std::fs::File`, `std::path::PathBuf`, or plain `u64`, one Unix-only normal `libc` dependency, and the
-  unchanged forbidden dependency closure. Negative fixtures reject comments/strings, aliases, brace and glob
-  re-exports, type aliases, duplicate owners/fields, renamed storage fields, aliased field types, and misplaced
-  dependencies while proving `AtomicU64` is not misclassified. Both mmap calls document their concrete safety
-  invariants and every Local file public API documents errors, panics, and lifecycle ordering where applicable.
+  `storage: MappedFileStorage`, no field resolving through fully-qualified paths or direct non-aliased imports to
+  `std::fs::File`, `std::path::PathBuf`, or plain `u64`, one Unix-only normal `libc` dependency, and the unchanged
+  forbidden dependency closure. Every active alias/brace use and type alias in DefaultMappedFile is governed by
+  an exact syntax allowlist; the contract does not claim to parse arbitrary Rust use trees or generic aliases.
+  Negative fixtures reject comments/strings, non-allowlisted direct/brace aliases, generic/default type aliases,
+  duplicate owners/fields, renamed storage fields, aliased field types, and misplaced dependencies while proving
+  `AtomicU64` and the complete existing allowlist are accepted. Both mmap calls document completed `set_len`,
+  owner no-truncation, `ArcMut` mapping lifetime independent of file-handle rename/reopen/close, and the lazy
+  initialization lock. The legacy `get_file` Rustdoc explicitly records the caller-enforced no-size-change
+  compatibility contract; every Local file public API documents errors, panics, and lifecycle ordering where
+  applicable.
   Architecture/routing gates pass; five governed DefaultMappedFile/ArcMut fingerprints use exactly five direct
   one-for-one approvals with no new occurrence, so the governed count remains 3377.
 - [x] `[SCOPE]` This slice does not move mmap, `ArcMut`, `DefaultMappedFile`, `MappedFile`, messages/callbacks,

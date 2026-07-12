@@ -47,6 +47,12 @@ FILE_ITEMS = {
     "preallocate_file": "fn",
 }
 FILE_PLATFORM_REEXPORTS = set(FILE_ITEMS) - {"MappedFileStorage"}
+DEFAULT_MAPPED_FILE_ALIAS_BRACE_USE_ALLOWLIST = {
+    "use crate::utils::ffi::mlock as lock_memory",
+    "use crate::utils::ffi::munlock as unlock_memory",
+    "use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT}",
+}
+DEFAULT_MAPPED_FILE_TYPE_ALIAS_ALLOWLIST = {"type Target = [u8]"}
 PROGRESS_FIELDS = {
     "file_size",
     "wrote_position",
@@ -507,11 +513,12 @@ def default_mapped_file_storage_violations(source: str) -> list[str]:
         return ["DefaultMappedFile struct missing"]
 
     fields = active_struct_fields(source, "DefaultMappedFile")
-    violations = [
+    violations = default_mapped_file_syntax_violations(source)
+    violations.extend(
         f"legacy storage field: {name}"
         for name, _ in fields
         if name in {"file", "file_from_offset"}
-    ]
+    )
     storage_fields = [
         (name, field_type)
         for name, field_type in fields
@@ -538,30 +545,58 @@ def default_mapped_file_storage_violations(source: str) -> list[str]:
     return violations
 
 
+def normalize_policy_use_statement(statement: str) -> str:
+    statement = re.sub(r"\s*::\s*", "::", statement.strip())
+    statement = re.sub(r"\s+", " ", statement)
+    statement = re.sub(r"\{\s*", "{", statement)
+    statement = re.sub(r"\s*,\s*", ", ", statement)
+    statement = re.sub(r",\s*}", "}", statement)
+    statement = re.sub(r"\s*}", "}", statement)
+    return statement
+
+
+def active_type_alias_statements(source: str) -> list[str]:
+    active_source = active_rust_source(source)
+    type_alias = re.compile(
+        r"(?m)^[ \t]*(?P<visibility>pub(?:\s*\([^)]*\))?\s+)?"
+        r"type\s+(?P<body>[^;]+);"
+    )
+    statements: list[str] = []
+    for match in type_alias.finditer(active_source):
+        visibility = re.sub(r"\s+", "", (match.group("visibility") or "").strip())
+        body = re.sub(r"\s*::\s*", "::", match.group("body").strip())
+        body = re.sub(r"\s*=\s*", " = ", body)
+        body = re.sub(r"\s+", " ", body)
+        prefix = f"{visibility} " if visibility else ""
+        statements.append(f"{prefix}type {body}")
+    return statements
+
+
+def default_mapped_file_syntax_violations(source: str) -> list[str]:
+    violations: list[str] = []
+    for kind, _, body, statement in active_import_records(source):
+        if kind != "use" or (" as " not in body and "{" not in body):
+            continue
+        normalized = normalize_policy_use_statement(statement)
+        if normalized not in DEFAULT_MAPPED_FILE_ALIAS_BRACE_USE_ALLOWLIST:
+            violations.append(f"forbidden alias/brace use: {normalized}")
+
+    for statement in active_type_alias_statements(source):
+        if statement not in DEFAULT_MAPPED_FILE_TYPE_ALIAS_ALLOWLIST:
+            violations.append(f"forbidden type alias: {statement}")
+    return violations
+
+
 def storage_field_type_resolver(source: str) -> Callable[[str], str]:
     aliases: dict[str, str] = {}
     for kind, _, body, _ in active_import_records(source):
         if kind != "use":
             continue
-        imported = re.fullmatch(
-            r"(?P<path>(?:::)?std::(?:fs::File|path::PathBuf))"
-            r"(?:\s+as\s+(?P<alias>[A-Za-z_][A-Za-z0-9_]*))?",
-            body,
-        )
+        imported = re.fullmatch(r"(?P<path>(?:::)?std::(?:fs::File|path::PathBuf))", body)
         if imported:
             path = imported.group("path").removeprefix("::")
-            local_name = imported.group("alias") or path.rsplit("::", 1)[-1]
+            local_name = path.rsplit("::", 1)[-1]
             aliases[local_name] = path
-
-    active_source = active_rust_source(source)
-    type_alias = re.compile(
-        r"(?m)^[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?type\s+"
-        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<target>[^;]+);"
-    )
-    for match in type_alias.finditer(active_source):
-        aliases[match.group("name")] = match.group("target")
-
-    cache: dict[str, str] = {}
 
     def normalize(field_type: str) -> str:
         normalized = re.sub(r"\s*::\s*", "::", field_type.strip())
@@ -569,21 +604,8 @@ def storage_field_type_resolver(source: str) -> Callable[[str], str]:
         return normalized.removeprefix("::")
 
     def resolve(field_type: str) -> str:
-        current = normalize(field_type)
-        trail: list[str] = []
-        seen: set[str] = set()
-        while re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", current):
-            if current in cache:
-                current = cache[current]
-                break
-            if current in seen or current not in aliases:
-                break
-            seen.add(current)
-            trail.append(current)
-            current = normalize(aliases[current])
-        for alias in trail:
-            cache[alias] = current
-        return current
+        normalized = normalize(field_type)
+        return aliases.get(normalized, normalized)
 
     return resolve
 
@@ -821,9 +843,11 @@ struct DefaultMappedFile {
     shadow_file: SegmentHandle,
 }
 '''
-        self.assertIn(
-            "direct file owner field: shadow_file",
-            default_mapped_file_storage_violations(source),
+        self.assertTrue(
+            any(
+                violation.startswith("forbidden alias/brace use:")
+                for violation in default_mapped_file_storage_violations(source)
+            )
         )
 
     def test_default_storage_scanner_rejects_recursive_type_alias(self) -> None:
@@ -835,13 +859,51 @@ struct DefaultMappedFile {
     shadow_file: SegmentHandle,
 }
 '''
-        self.assertIn(
-            "direct file owner field: shadow_file",
-            default_mapped_file_storage_violations(source),
+        self.assertTrue(
+            any(
+                violation.startswith("forbidden type alias:")
+                for violation in default_mapped_file_storage_violations(source)
+            )
+        )
+
+    def test_default_storage_scanner_rejects_brace_import_alias_bypass(self) -> None:
+        source = '''
+use std::fs::{File as SegmentHandle, Metadata};
+struct DefaultMappedFile {
+    storage: MappedFileStorage,
+    shadow_file: SegmentHandle,
+}
+'''
+        self.assertTrue(
+            any(
+                violation.startswith("forbidden alias/brace use:")
+                for violation in default_mapped_file_storage_violations(source)
+            )
+        )
+
+    def test_default_storage_scanner_rejects_generic_default_type_alias_bypass(self) -> None:
+        source = '''
+type SegmentHandle<T = std::fs::File> = T;
+struct DefaultMappedFile {
+    storage: MappedFileStorage,
+    shadow_file: SegmentHandle,
+}
+'''
+        self.assertTrue(
+            any(
+                violation.startswith("forbidden type alias:")
+                for violation in default_mapped_file_storage_violations(source)
+            )
         )
 
     def test_default_storage_scanner_accepts_atomic_u64_progress_fields(self) -> None:
         source = '''
+use crate::utils::ffi::mlock as lock_memory;
+use crate::utils::ffi::munlock as unlock_memory;
+use windows::Win32::System::Memory::{
+    VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT,
+};
+type Target = [u8];
 struct DefaultMappedFile {
     storage: MappedFileStorage,
     lazy_mmap_operations: AtomicU64,

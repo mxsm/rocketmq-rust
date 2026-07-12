@@ -630,14 +630,17 @@ pub trait MappedFile {
     /// An `i64` representing the number of accesses to the mapped byte buffer since the last swap.
     fn get_mapped_byte_buffer_access_count_since_last_swap(&self) -> i64;
 
-    /// Retrieves a reference to the underlying file.
+    /// Returns the underlying file through the legacy compatibility boundary.
     ///
-    /// This method provides access to the `File` instance associated with the mapped file. It can
-    /// be used for operations that require direct access to the file, such as file metadata
-    /// retrieval.
+    /// Repository callers use this handle only for metadata inspection and `try_clone`. A cloned
+    /// handle remains subject to the same compatibility contract.
     ///
-    /// # Returns
-    /// A reference to the `File` instance associated with the mapped file.
+    /// # Compatibility contract
+    ///
+    /// Callers must not invoke `set_len`, truncate the file, or perform any other size-changing
+    /// operation while a memory mapping or mapped-buffer lease backed by this file is alive. This
+    /// safe legacy accessor cannot enforce that invariant; violating it can invalidate the safety
+    /// requirements of the existing file-backed memory mappings.
     fn get_file(&self) -> &File;
 
     /// Marks the mapped file for deletion.
