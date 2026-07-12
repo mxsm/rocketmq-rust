@@ -114,7 +114,9 @@ impl<M> MappedFileMapping<M> {
         self.value.get()
     }
 
-    /// Returns a consistent snapshot of the lazy initialization statistics.
+    /// Returns a snapshot of independently updated lazy initialization counters.
+    ///
+    /// Fields may reflect concurrent updates observed at different instants.
     pub fn stats(&self) -> LazyMmapStats {
         LazyMmapStats {
             eligible_files: u64::from(self.lazy_enabled),
