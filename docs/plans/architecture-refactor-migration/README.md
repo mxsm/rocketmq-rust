@@ -4,7 +4,7 @@
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
-> 当前复核状态：根 workspace 27 个 package，目标 32 个 package，剩余 5 个计划 package
+> 当前复核状态：根 workspace 28 个 package，目标 32 个 package，剩余 4 个计划 package
 
 ## 1. 使用方式
 
@@ -49,7 +49,7 @@
 
 M01 入口有 22 个根 workspace package；M03 加入 `rocketmq-model` 和 `rocketmq-security-api`，M04 加入
 `rocketmq-protocol`，M05 加入 `rocketmq-transport`，M06 capability spike 加入 `rocketmq-store-api`，
-当前为 27 个。
+M06-03a leaf foundation 加入 `rocketmq-store-local`，当前为 28 个。
 以下 10 个新 crate 按计划逐步加入，最终精确达到 32 个：
 
 | 新 crate | 首次创建里程碑 | 最终职责 |
