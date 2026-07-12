@@ -25,10 +25,12 @@ use rocketmq_store::store_api_adapter::legacy_put_status_to_append_status;
 use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
 use rocketmq_store::store_api_adapter::LegacyMessageStoreAdapter;
 use rocketmq_store::store_api_adapter::LegacyMessageStoreReadAdapter;
+use rocketmq_store::store_api_adapter::LegacyReadRequest;
 use rocketmq_store::store_api_adapter::LegacyReadResult;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthError;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store::store_error::StoreErrorKind;
+use rocketmq_store_api::AppendReceiptError;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::GetStatus;
@@ -64,9 +66,10 @@ fn legacy_receipt_preserves_result_and_separate_watermarks() {
     );
     assert_eq!(80, receipt.appended_watermark());
     assert_eq!(48, receipt.durable_watermark());
-    assert_eq!(AppendStatus::FlushDiskTimeout, receipt.canonical().status());
-    assert_eq!(Some(40..60), receipt.canonical().appended_range());
-    assert_eq!(Durability::Memory, receipt.canonical().durability());
+    let canonical = receipt.canonical().expect("valid canonical receipt");
+    assert_eq!(AppendStatus::FlushDiskTimeout, canonical.status());
+    assert_eq!(Some(40..60), canonical.appended_range());
+    assert_eq!(Durability::Memory, canonical.durability());
     let append = receipt.result().append_message_result().expect("append result");
     assert_eq!(40, append.wrote_offset);
     assert_eq!(20, append.wrote_bytes);
@@ -74,6 +77,26 @@ fn legacy_receipt_preserves_result_and_separate_watermarks() {
     assert_eq!(1234, append.store_timestamp);
     assert_eq!(7, append.logics_offset);
     assert_eq!(2, append.msg_num);
+}
+
+#[test]
+fn legacy_receipt_reports_invalid_projection_without_panicking() {
+    let mut empty = append_result();
+    empty.wrote_bytes = 0;
+    let receipt = legacy_append_receipt(
+        PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(empty)),
+        80,
+        48,
+    );
+    assert_eq!(Some(&AppendReceiptError::EmptyRange), receipt.canonical().err());
+    assert_eq!(PutMessageStatus::PutOk, receipt.result().put_message_status());
+
+    let remote = legacy_append_receipt(PutMessageResult::new(PutMessageStatus::PutOk, None, true), 80, 48);
+    assert_eq!(
+        Some(&AppendReceiptError::AcceptedStatusWithoutRange),
+        remote.canonical().err()
+    );
+    assert!(remote.result().remote_put());
 }
 
 #[test]
@@ -219,7 +242,8 @@ where
             Receipt = LegacyAppendReceipt,
             Error = StoreError,
         > + StoreHealth<Snapshot = LegacyStoreHealthSnapshot>,
-    for<'a> LegacyMessageStoreReadAdapter<'a, MS>: MessageReader<Output = Option<LegacyReadResult>, Error = StoreError>,
+    for<'a> LegacyMessageStoreReadAdapter<'a, MS>:
+        MessageReader<Request = LegacyReadRequest, Output = Option<LegacyReadResult>, Error = StoreError>,
 {
     assert!(std::mem::size_of::<LegacyMessageStoreAdapter<'_, MS>>() > 0);
 }

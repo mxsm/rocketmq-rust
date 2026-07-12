@@ -14,11 +14,14 @@
 
 //! Compatibility bridge from the legacy message-store facade to narrow capabilities.
 
+use std::future::Future;
+
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_store_api::AppendReceipt;
+use rocketmq_store_api::AppendReceiptError;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::FlushBacklog as ApiFlushBacklog;
@@ -43,14 +46,13 @@ use crate::base::message_store::MessageStore;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferCacheState;
 use crate::base::select_result::SelectMappedBufferResult;
-use crate::filter::ArcMessageFilter;
 use crate::store_error::StoreErrorKind;
 
 /// Legacy append output plus independent append and durable progress.
 #[derive(Clone)]
 pub struct LegacyAppendReceipt {
     result: PutMessageResult,
-    canonical: AppendReceipt,
+    canonical: Result<AppendReceipt, AppendReceiptError>,
     appended_watermark: i64,
     durable_watermark: i64,
 }
@@ -62,8 +64,8 @@ impl LegacyAppendReceipt {
     }
 
     /// Returns the canonical backend-neutral receipt projection.
-    pub const fn canonical(&self) -> &AppendReceipt {
-        &self.canonical
+    pub fn canonical(&self) -> Result<&AppendReceipt, &AppendReceiptError> {
+        self.canonical.as_ref()
     }
 
     /// Returns the exclusive primary-log append watermark observed after the operation.
@@ -93,9 +95,9 @@ pub fn legacy_append_receipt(
             } else {
                 Durability::Memory
             };
-            AppendReceipt::new(status, start..end, appended_watermark, durable_watermark, durability)
+            AppendReceipt::try_new(status, start..end, appended_watermark, durable_watermark, durability)
         }
-        None => AppendReceipt::rejected(status, appended_watermark, durable_watermark),
+        None => AppendReceipt::try_rejected(status, appended_watermark, durable_watermark),
     };
     LegacyAppendReceipt {
         result,
@@ -261,6 +263,96 @@ impl<'a, MS> LegacyMessageStoreHealthAdapter<'a, MS> {
     }
 }
 
+/// Adapter-local narrow port for the legacy read methods used by [`MessageReader`].
+///
+/// Filtered reads remain on the unchanged legacy trait. This canonical read port intentionally
+/// forwards only unfiltered reads, so its hot request path has no dynamic filter allocation.
+/// Test doubles can implement these four operations without copying `MessageStore`.
+pub trait LegacyReadCallBoundary: Sync {
+    fn get_message(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_messages: i32,
+    ) -> impl Future<Output = Option<GetMessageResult>> + Send;
+
+    fn get_message_with_size_limit(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_messages: i32,
+        max_total_size: i32,
+    ) -> impl Future<Output = Option<GetMessageResult>> + Send;
+
+    fn query_message(
+        &self,
+        topic: &CheetahString,
+        key: &CheetahString,
+        max_messages: i32,
+        begin: i64,
+        end: i64,
+    ) -> impl Future<Output = Option<QueryMessageResult>> + Send;
+
+    fn select_message(&self, physical_offset: i64, size: Option<i32>) -> Option<SelectMappedBufferResult>;
+}
+
+impl<MS: MessageStore> LegacyReadCallBoundary for MS {
+    async fn get_message(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_messages: i32,
+    ) -> Option<GetMessageResult> {
+        MessageStore::get_message(self, group, topic, queue_id, offset, max_messages, None).await
+    }
+
+    async fn get_message_with_size_limit(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_messages: i32,
+        max_total_size: i32,
+    ) -> Option<GetMessageResult> {
+        MessageStore::get_message_with_size_limit(
+            self,
+            group,
+            topic,
+            queue_id,
+            offset,
+            max_messages,
+            max_total_size,
+            None,
+        )
+        .await
+    }
+
+    async fn query_message(
+        &self,
+        topic: &CheetahString,
+        key: &CheetahString,
+        max_messages: i32,
+        begin: i64,
+        end: i64,
+    ) -> Option<QueryMessageResult> {
+        MessageStore::query_message(self, topic, key, max_messages, begin, end).await
+    }
+
+    fn select_message(&self, physical_offset: i64, size: Option<i32>) -> Option<SelectMappedBufferResult> {
+        match size {
+            Some(size) => MessageStore::select_one_message_by_offset_with_size(self, physical_offset, size),
+            None => MessageStore::select_one_message_by_offset(self, physical_offset),
+        }
+    }
+}
+
 /// Read-only compatibility adapter that forwards legacy reads through [`MessageReader`].
 pub struct LegacyMessageStoreReadAdapter<'a, MS> {
     store: &'a MS,
@@ -282,7 +374,6 @@ pub enum LegacyReadRequest {
         offset: i64,
         max_messages: i32,
         max_total_size: Option<i32>,
-        filter: Option<ArcMessageFilter>,
     },
     Query {
         topic: CheetahString,
@@ -417,7 +508,10 @@ impl<MS: MessageStore> MessageAppender<MessageExtBatch> for LegacyMessageStoreAd
     }
 }
 
-impl<MS: MessageStore> MessageReader for LegacyMessageStoreReadAdapter<'_, MS> {
+impl<MS> MessageReader for LegacyMessageStoreReadAdapter<'_, MS>
+where
+    MS: LegacyReadCallBoundary,
+{
     type Request = LegacyReadRequest;
     type Output = Option<LegacyReadResult>;
     type Error = StoreError;
@@ -431,25 +525,16 @@ impl<MS: MessageStore> MessageReader for LegacyMessageStoreReadAdapter<'_, MS> {
                 offset,
                 max_messages,
                 max_total_size,
-                filter,
             } => {
                 let result = match max_total_size {
                     Some(max_total_size) => {
                         self.store
-                            .get_message_with_size_limit(
-                                &group,
-                                &topic,
-                                queue_id,
-                                offset,
-                                max_messages,
-                                max_total_size,
-                                filter,
-                            )
+                            .get_message_with_size_limit(&group, &topic, queue_id, offset, max_messages, max_total_size)
                             .await
                     }
                     None => {
                         self.store
-                            .get_message(&group, &topic, queue_id, offset, max_messages, filter)
+                            .get_message(&group, &topic, queue_id, offset, max_messages)
                             .await
                     }
                 };
@@ -467,12 +552,11 @@ impl<MS: MessageStore> MessageReader for LegacyMessageStoreReadAdapter<'_, MS> {
                 .await
                 .map(query_result_from_legacy)
                 .map(LegacyReadResult::Query),
-            LegacyReadRequest::Select { physical_offset, size } => match size {
-                Some(size) => self.store.select_one_message_by_offset_with_size(physical_offset, size),
-                None => self.store.select_one_message_by_offset(physical_offset),
-            }
-            .map(selected_result_from_legacy)
-            .map(LegacyReadResult::Select),
+            LegacyReadRequest::Select { physical_offset, size } => self
+                .store
+                .select_message(physical_offset, size)
+                .map(selected_result_from_legacy)
+                .map(LegacyReadResult::Select),
         };
         Ok(result)
     }

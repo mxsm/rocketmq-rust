@@ -36,6 +36,7 @@ CAPABILITIES = {
 ALLOWED_DEPENDENCIES = {"rocketmq-model", "rocketmq-error", "bytes"}
 M06_02_TYPES = {
     "AppendReceipt",
+    "AppendReceiptError",
     "AppendStatus",
     "DerivedProgress",
     "Durability",
@@ -136,6 +137,24 @@ def function_body(source: str, signature: str) -> str:
     raise AssertionError(f"unterminated function: {signature}")
 
 
+def item_body(source: str, signature: str) -> str:
+    start = source.index(signature)
+    brace = source.index("{", start)
+    depth = 0
+    for index in range(brace, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[brace + 1 : index]
+    raise AssertionError(f"unterminated item: {signature}")
+
+
+def arc_dyn_aliases(source: str) -> set[str]:
+    return set(re.findall(r"(?:pub\s+)?type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*Arc\s*<\s*dyn\b", source))
+
+
 class StoreApiContractTests(unittest.TestCase):
     def test_workspace_contains_minimal_runtime_neutral_store_api_crate(self) -> None:
         root_manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
@@ -177,11 +196,24 @@ class StoreApiContractTests(unittest.TestCase):
 
     def test_legacy_read_results_and_native_lease_stay_in_the_store_adapter(self) -> None:
         source = (ROOT / "rocketmq-store" / "src" / "store_api_adapter.rs").read_text(encoding="utf-8")
-        self.assertIn("impl<MS: MessageStore> MessageReader for LegacyMessageStoreReadAdapter", source)
+        filter_source = (ROOT / "rocketmq-store" / "src" / "filter.rs").read_text(encoding="utf-8")
+        request = item_body(source, "pub enum LegacyReadRequest")
+        hidden_dyn_aliases = arc_dyn_aliases(filter_source)
+        request_identifiers = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", request))
+        self.assertIn("impl<MS> MessageReader for LegacyMessageStoreReadAdapter", source)
+        self.assertIn("impl<MS: MessageStore> LegacyReadCallBoundary for MS", source)
         self.assertIn("type Output = Option<LegacyReadResult>", source)
         self.assertIn("_selected: SelectMappedBufferResult", source)
         self.assertIn("map(selected_result_from_legacy)", source)
         self.assertNotIn("impl MessageStore for LegacyMessageStore", source)
+        self.assertIn("pub enum LegacyReadRequest", source)
+        self.assertNotIn("filter", request)
+        self.assertEqual(set(), hidden_dyn_aliases & request_identifiers)
+        self.assertNotIn("ArcMessageFilter", source)
+
+    def test_arc_dyn_alias_detection_catches_hidden_hot_path_types(self) -> None:
+        fixture = "pub type HiddenFilter = Arc<dyn Filter>; pub enum Request { Get(Option<HiddenFilter>) }"
+        self.assertEqual({"HiddenFilter"}, arc_dyn_aliases(fixture))
 
     def test_compound_backend_identifiers_are_rejected(self) -> None:
         for identifier, token in COMPOUND_FORBIDDEN_FIXTURES.items():

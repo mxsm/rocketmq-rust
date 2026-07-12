@@ -180,34 +180,106 @@ pub struct AppendReceipt {
     durability: Durability,
 }
 
+/// Invariant violation rejected while constructing an [`AppendReceipt`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppendReceiptError {
+    EmptyRange,
+    ReversedRange,
+    RejectedStatusWithRange,
+    AcceptedStatusWithoutRange,
+    AppendedWatermarkBehindRange,
+    DurableWatermarkBehindRange,
+    DurableWatermarkAheadOfAppended,
+    MemoryDurabilityAlreadyCovered,
+}
+
+impl fmt::Display for AppendReceiptError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::EmptyRange => "appended range is empty",
+            Self::ReversedRange => "appended range is reversed",
+            Self::RejectedStatusWithRange => "rejected append status cannot carry an appended range",
+            Self::AcceptedStatusWithoutRange => "accepted append status requires an appended range",
+            Self::AppendedWatermarkBehindRange => "appended watermark does not cover the appended range",
+            Self::DurableWatermarkBehindRange => "durable watermark does not cover the claimed durability",
+            Self::DurableWatermarkAheadOfAppended => "durable watermark exceeds appended progress",
+            Self::MemoryDurabilityAlreadyCovered => "memory durability under-reports reached local durability",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl StdError for AppendReceiptError {}
+
 impl AppendReceipt {
-    /// Creates a receipt for a non-empty half-open physical byte range.
-    pub fn new(
+    /// Creates a receipt after validating range, status, watermark, and durability invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppendReceiptError`] when any receipt field contradicts another field.
+    pub fn try_new(
         status: AppendStatus,
         appended_range: Range<i64>,
         appended_watermark: i64,
         durable_watermark: i64,
         durability: Durability,
-    ) -> Self {
-        let appended_range = (appended_range.start < appended_range.end).then_some(appended_range);
-        Self {
+    ) -> Result<Self, AppendReceiptError> {
+        if appended_range.start == appended_range.end {
+            return Err(AppendReceiptError::EmptyRange);
+        }
+        if appended_range.start > appended_range.end {
+            return Err(AppendReceiptError::ReversedRange);
+        }
+        if !status.is_accepted() {
+            return Err(AppendReceiptError::RejectedStatusWithRange);
+        }
+        if appended_watermark < appended_range.end {
+            return Err(AppendReceiptError::AppendedWatermarkBehindRange);
+        }
+        if durable_watermark > appended_watermark {
+            return Err(AppendReceiptError::DurableWatermarkAheadOfAppended);
+        }
+        match durability {
+            Durability::Memory if durable_watermark >= appended_range.end => {
+                return Err(AppendReceiptError::MemoryDurabilityAlreadyCovered);
+            }
+            Durability::Local | Durability::Replicated if durable_watermark < appended_range.end => {
+                return Err(AppendReceiptError::DurableWatermarkBehindRange);
+            }
+            Durability::Memory | Durability::Local | Durability::Replicated => {}
+        }
+        Ok(Self {
             status,
-            appended_range,
+            appended_range: Some(appended_range),
             appended_watermark,
             durable_watermark,
             durability,
-        }
+        })
     }
 
-    /// Creates a rejected receipt without inventing an appended range.
-    pub const fn rejected(status: AppendStatus, appended_watermark: i64, durable_watermark: i64) -> Self {
-        Self {
+    /// Creates a rejected receipt after validating status and watermark invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppendReceiptError`] for an accepted status or reversed progress watermarks.
+    pub const fn try_rejected(
+        status: AppendStatus,
+        appended_watermark: i64,
+        durable_watermark: i64,
+    ) -> Result<Self, AppendReceiptError> {
+        if status.is_accepted() {
+            return Err(AppendReceiptError::AcceptedStatusWithoutRange);
+        }
+        if durable_watermark > appended_watermark {
+            return Err(AppendReceiptError::DurableWatermarkAheadOfAppended);
+        }
+        Ok(Self {
             status,
             appended_range: None,
             appended_watermark,
             durable_watermark,
             durability: Durability::Memory,
-        }
+        })
     }
 
     /// Returns the neutral append outcome.
@@ -318,7 +390,7 @@ impl<L> LeasedBytes<L> {
 
     /// Consumes the lease and returns independently owned bytes.
     pub fn into_bytes(self) -> Bytes {
-        self.bytes.clone()
+        self.bytes
     }
 }
 
@@ -372,6 +444,11 @@ impl<L> SelectResult<L> {
     /// Returns the leased data.
     pub const fn data(&self) -> &LeasedBytes<L> {
         &self.data
+    }
+
+    /// Consumes the selected result and returns its leased data.
+    pub fn into_data(self) -> LeasedBytes<L> {
+        self.data
     }
 
     /// Returns the neutral cache observation.
