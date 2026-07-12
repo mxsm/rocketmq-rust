@@ -107,11 +107,8 @@ use crate::utils::ffi::madvise;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::ffi::MADV_RANDOM;
 
-// Message's MAGIC CODE daa320a7
-pub const MESSAGE_MAGIC_CODE: i32 = -626843481;
-
-// End of file empty MAGIC CODE cbd43194
-pub const BLANK_MAGIC_CODE: i32 = -875286124;
+pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
+pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
 
 //CRC32 Format: [PROPERTY_CRC32 + NAME_VALUE_SEPARATOR + 10-digit fixed-length string +
 // PROPERTY_SEPARATOR]

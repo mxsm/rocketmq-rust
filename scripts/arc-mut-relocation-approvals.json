@@ -109,6 +109,24 @@
       "from": "4d553633a7d26ce689bc0cd1",
       "to": "efc68e011aa65239229d3192",
       "reason": "Replacing direct mmap lifecycle fields with one Local composition changed the fingerprint of the same DefaultMappedFile struct type reference without adding an occurrence"
+    },
+    {
+      "identity": "c98c11c62d7172081fb48e8b",
+      "from": "05e434792c97159e42a0ba1f",
+      "to": "fa7ebcefeae71c5caa42693f",
+      "reason": "Importing the Local CommitLog frame cursor changed adjacent tokens around the existing DefaultMappedFile import without adding or moving an occurrence"
+    },
+    {
+      "identity": "126b2048d1dc96a60da90a3d",
+      "from": "4c0ad73a5ebce8a7aa5ce5f9",
+      "to": "5640320689c5eee5cd7cf008",
+      "reason": "Wrapping the existing DefaultMappedFile field reference in the private generic Local-source adapter changed its fingerprint within the same legacy iterator without adding an occurrence"
+    },
+    {
+      "identity": "126b2048d1dc96a60da90a3d",
+      "from": "827442feb29094b6890a4f23",
+      "to": "a0396c92d0a67c84a42c19e3",
+      "reason": "Delegating the legacy iterator constructor to the Local cursor changed adjacent tokens around the unchanged DefaultMappedFile constructor parameter without adding an occurrence"
     }
   ]
 }

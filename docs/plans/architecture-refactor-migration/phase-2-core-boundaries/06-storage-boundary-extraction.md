@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -397,3 +397,29 @@ python scripts/arc_mut_guard.py
   zero-copy/reference getter behavior, or move mmap creation, mapped buffers/results, append/direct-write/flush/
   warmup/memory-lock algorithms, `DefaultMappedFile`, config, CommitLog orchestration, CQ/Index, or HA. PR-M06-03
   and every M06 Exit Checklist item remain open.
+
+## M06-03f CommitLog frame cursor and magic ownership evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::record` is the canonical storage-boundary owner of the CommitLog
+  V1 message magic, blank magic, pure blank-marker check, static `CommitLogFrameSource`, and generic
+  `CommitLogFrameCursor<S>`. The cursor retains the 64-KiB batching order, direct oversized-frame reads,
+  cross-batch refill, absolute offsets, and buffer reset while stopping without advancement at incomplete headers,
+  non-positive sizes, unavailable reads, and declared dirty-tail overruns.
+- [x] `[COMPAT]` Store CommitLog constants and the recovery blank helper are exact Local re-exports.
+  `BatchMessageIterator<'a>` keeps its exact constructor/method signatures and contains only a Local cursor over a
+  private static `MappedFile` adapter; no iterator algorithm remains in Store. Common and Protocol retain their
+  pre-existing wire-codec constants as separate compatibility surfaces; this slice does not claim a whole-repo
+  constant owner and does not move V2, CRC, properties, dispatch, configuration, mmap, or persisted bytes.
+- [x] `[TEST]` RED/GREEN Local goldens cover empty/short sources, one/multiple frames, non-positive sizes,
+  dirty tails, exact/oversized/crossing 64-KiB frames, blank recognition, and final offsets. Real
+  `DefaultMappedFile` tests prove oversized, cross-batch, dirty-tail, constant-path, helper-path, function-identity,
+  and legacy-signature compatibility. The mutation-resistant contract proves the Local+Store owner boundary,
+  exact re-exports, wrapper-only Store iterator, static source port, and forbidden dependency closure while
+  rejecting duplicate owners, copied algorithms, aliases/brace/glob imports, comments, strings, and `dyn` ports.
+- [x] `[REV]` Local/Store/workspace Clippy, Local `-D warnings` Rustdoc, exact Local feature checks, architecture
+  dependency gates, and ArcMut gates pass. ArcMut investigation found three direct production fingerprint
+  relocations caused by the wrapper extraction; the baseline changes only those three one-for-one occurrence
+  objects, adds no test approval, and remains 1,232 identities/3,377 occurrences.
+- [x] `[SCOPE]` No message/property/CRC/V2 parsing, `DispatchRequest`, recovery context/config/checkpoint,
+  mmap/`ArcMut` representation, `DefaultMappedFile` ownership, append/flush/group commit, CQ/Index, or HA moved.
+  PR-M06-03 and every M06 Exit Checklist item remain open.

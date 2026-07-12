@@ -91,6 +91,11 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "AbnormalRecoveryFileRange": ("struct", "recovery.rs"),
     "AbnormalRecoveryWindow": ("struct", "recovery.rs"),
     "plan_abnormal_recovery_window_from_ranges": ("fn", "recovery.rs"),
+    "MESSAGE_MAGIC_CODE": ("const", "record.rs"),
+    "BLANK_MAGIC_CODE": ("const", "record.rs"),
+    "is_blank_message": ("fn", "record.rs"),
+    "CommitLogFrameSource": ("trait", "record.rs"),
+    "CommitLogFrameCursor": ("struct", "record.rs"),
 }
 COMMIT_LOG_FACADE_ITEMS = {
     "commit_log_loader.rs": {
@@ -103,6 +108,7 @@ COMMIT_LOG_FACADE_ITEMS = {
         "AbnormalRecoveryFileRange": "recovery",
         "AbnormalRecoveryWindow": "recovery",
         "plan_abnormal_recovery_window_from_ranges": "recovery",
+        "is_blank_message": "record",
     },
 }
 FACADE_ROOT_ITEMS = {
@@ -164,10 +170,59 @@ def active_commit_log_facade_reexports(source: str) -> dict[str, str]:
     return {
         item: module
         for module, item in re.findall(
-            r"pub\s+use\s+rocketmq_store_local::commit_log::(load|recovery)::([A-Za-z_][A-Za-z0-9_]*)\s*;",
+            r"pub\s+use\s+rocketmq_store_local::commit_log::(load|recovery|record)::([A-Za-z_][A-Za-z0-9_]*)\s*;",
             source,
         )
     }
+
+
+def commit_log_record_owner_occurrences(
+    sources: dict[Path, str], item: str
+) -> list[tuple[Path, str]]:
+    return file_item_owner_occurrences(sources, item)
+
+
+def commit_log_record_boundary_violations(source: str) -> list[str]:
+    active = active_rust_source(source)
+    violations: list[str] = []
+    if re.search(r"\bdyn\s+CommitLogFrameSource\b", active):
+        violations.append("dynamic CommitLogFrameSource")
+    return violations
+
+
+def store_record_facade_violations(commit_log: str, recovery: str) -> list[str]:
+    violations: list[str] = []
+    expected_commit_log = {
+        "MESSAGE_MAGIC_CODE": "record",
+        "BLANK_MAGIC_CODE": "record",
+    }
+    actual_commit_log = {
+        item: module
+        for item, module in active_commit_log_facade_reexports(commit_log).items()
+        if item in expected_commit_log
+    }
+    if actual_commit_log != expected_commit_log:
+        violations.append("commit_log constants must be exact record re-exports")
+
+    expected_recovery = {"is_blank_message": "record"}
+    actual_recovery = {
+        item: module
+        for item, module in active_commit_log_facade_reexports(recovery).items()
+        if item in expected_recovery
+    }
+    if actual_recovery != expected_recovery:
+        violations.append("recovery blank helper must be an exact record re-export")
+
+    active_recovery = active_rust_source(recovery)
+    if re.search(r"\bconst\s+(?:PARSE_BATCH_SIZE|MIN_MESSAGE_SIZE)\b", active_recovery):
+        violations.append("legacy iterator constants copied")
+    iterator_body = active_struct_body(recovery, "BatchMessageIterator")
+    if iterator_body != (
+        "\n    inner: CommitLogFrameCursor<"
+        "MappedFileFrameSource<'a, Arc<DefaultMappedFile>>>,\n"
+    ):
+        violations.append("legacy iterator must wrap only the Local cursor")
+    return violations
 
 
 def active_tracing_info_targets(source: str) -> list[str | None]:
@@ -735,6 +790,68 @@ pub use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryWindow;
         self.assertEqual(
             {"AbnormalRecoveryWindow": "recovery"},
             active_commit_log_facade_reexports(source),
+        )
+
+    def test_commit_log_record_contract_rejects_dynamic_port_and_masks_inactive_text(self) -> None:
+        valid = "pub struct CommitLogFrameCursor<S: CommitLogFrameSource> { source: S }"
+        dynamic = "pub struct Bad { source: Box<dyn CommitLogFrameSource> }"
+        masked = r'''
+// dyn CommitLogFrameSource
+/* const PARSE_BATCH_SIZE: usize = 1; */
+const TEXT: &str = "struct BatchMessageIterator";
+const RAW: &str = r#"fn MIN_MESSAGE_SIZE() {}"#;
+'''
+        self.assertEqual([], commit_log_record_boundary_violations(valid))
+        self.assertEqual(
+            ["dynamic CommitLogFrameSource"],
+            commit_log_record_boundary_violations(dynamic),
+        )
+        self.assertEqual([], commit_log_record_boundary_violations(masked))
+
+    def test_store_record_facade_contract_rejects_alias_brace_glob_and_algorithm_mutations(self) -> None:
+        valid_commit_log = '''
+pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
+pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
+'''
+        valid_recovery = '''
+pub use rocketmq_store_local::commit_log::record::is_blank_message;
+pub struct BatchMessageIterator<'a> {
+    inner: CommitLogFrameCursor<MappedFileFrameSource<'a, Arc<DefaultMappedFile>>>,
+}
+'''
+        self.assertEqual(
+            [], store_record_facade_violations(valid_commit_log, valid_recovery)
+        )
+        for mutated_commit_log in [
+            "pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE as CODE;",
+            "pub use rocketmq_store_local::commit_log::record::{MESSAGE_MAGIC_CODE, BLANK_MAGIC_CODE};",
+            "pub use rocketmq_store_local::commit_log::record::*;",
+        ]:
+            self.assertNotEqual(
+                [], store_record_facade_violations(mutated_commit_log, valid_recovery)
+            )
+        copied_recovery = valid_recovery + "\nconst PARSE_BATCH_SIZE: usize = 65536;"
+        self.assertIn(
+            "legacy iterator constants copied",
+            store_record_facade_violations(valid_commit_log, copied_recovery),
+        )
+
+    def test_commit_log_record_owner_scanner_rejects_duplicate_constants_functions_and_aliases(self) -> None:
+        canonical = Path("record.rs")
+        duplicate = Path("duplicate.rs")
+        masked = Path("masked.rs")
+        sources = {
+            canonical: "pub const MESSAGE_MAGIC_CODE: i32 = -626843481; pub fn is_blank_message() {}",
+            duplicate: "const MESSAGE_MAGIC_CODE: i32 = 1; use x::other as is_blank_message;",
+            masked: '// const MESSAGE_MAGIC_CODE: i32 = 2; const TEXT: &str = "fn is_blank_message";',
+        }
+        self.assertEqual(
+            [(duplicate, "const"), (canonical, "const")],
+            commit_log_record_owner_occurrences(sources, "MESSAGE_MAGIC_CODE"),
+        )
+        self.assertEqual(
+            [(duplicate, "alias"), (canonical, "fn")],
+            commit_log_record_owner_occurrences(sources, "is_blank_message"),
         )
 
     def test_tracing_target_scanner_ignores_comments_and_strings(self) -> None:
@@ -1493,7 +1610,10 @@ struct DefaultMappedFile {
     def test_commit_log_planning_items_have_one_canonical_definition_and_exact_facade_reexports(self) -> None:
         self.assert_local_crate_exists()
         canonical_dir = LOCAL_CRATE / "src" / "commit_log"
-        self.assertEqual({"load.rs", "recovery.rs"}, {path.name for path in canonical_dir.glob("*.rs")})
+        self.assertEqual(
+            {"load.rs", "recovery.rs", "record.rs"},
+            {path.name for path in canonical_dir.glob("*.rs")},
+        )
 
         log_file_root = (STORE_CRATE / "src" / "log_file.rs").read_text(encoding="utf-8")
         self.assertIn("pub(crate) mod commit_log_loader;", active_rust_source(log_file_root))
@@ -1503,14 +1623,48 @@ struct DefaultMappedFile {
             path: path.read_text(encoding="utf-8")
             for path in ROOT.glob("rocketmq-*/src/**/*.rs")
         }
+        storage_boundary_sources = {
+            path: source
+            for path, source in rust_sources.items()
+            if LOCAL_CRATE in path.parents or STORE_CRATE in path.parents
+        }
         for item, (item_kind, expected_file) in COMMIT_LOG_CANONICAL_ITEMS.items():
-            definitions = canonical_definition_paths(rust_sources, item, item_kind)
+            sources = storage_boundary_sources if expected_file == "record.rs" else rust_sources
+            definitions = canonical_definition_paths(sources, item, item_kind)
             self.assertEqual([canonical_dir / expected_file], definitions, item)
 
         facade_dir = STORE_CRATE / "src" / "log_file"
         for facade_file, expected_items in COMMIT_LOG_FACADE_ITEMS.items():
             facade = (facade_dir / facade_file).read_text(encoding="utf-8")
             self.assertEqual(expected_items, active_commit_log_facade_reexports(facade), facade_file)
+
+    def test_commit_log_record_has_one_owner_exact_facades_and_wrapper_only_legacy_iterator(self) -> None:
+        canonical_file = LOCAL_CRATE / "src" / "commit_log" / "record.rs"
+        rust_sources = {
+            path: path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        for item in [
+            "MESSAGE_MAGIC_CODE",
+            "BLANK_MAGIC_CODE",
+            "is_blank_message",
+            "CommitLogFrameSource",
+            "CommitLogFrameCursor",
+        ]:
+            self.assertEqual(
+                [(canonical_file, COMMIT_LOG_CANONICAL_ITEMS[item][0])],
+                commit_log_record_owner_occurrences(rust_sources, item),
+                item,
+            )
+
+        canonical_source = canonical_file.read_text(encoding="utf-8")
+        self.assertEqual([], commit_log_record_boundary_violations(canonical_source))
+        self.assertNotIn("MESSAGE_MAGIC_CODE_V2", active_rust_source(canonical_source))
+
+        commit_log = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
+        recovery = (STORE_CRATE / "src" / "log_file" / "commit_log_recovery.rs").read_text(encoding="utf-8")
+        self.assertEqual([], store_record_facade_violations(commit_log, recovery))
 
     def test_commit_log_summary_logging_preserves_legacy_targets(self) -> None:
         expected_targets = {

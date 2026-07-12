@@ -31,119 +31,59 @@ use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_V2;
 use rocketmq_common::MessageDecoder::SYSFLAG_POSITION;
 use tracing::info;
 
+pub use rocketmq_store_local::commit_log::record::is_blank_message;
 pub use rocketmq_store_local::commit_log::recovery::plan_abnormal_recovery_window_from_ranges;
 pub use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryFileRange;
 pub use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryWindow;
 pub use rocketmq_store_local::commit_log::recovery::RecoveryStatistics;
 
+use rocketmq_store_local::commit_log::record::CommitLogFrameCursor;
+use rocketmq_store_local::commit_log::record::CommitLogFrameSource;
+
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::log_file::commit_log::check_message_and_return_size;
-use crate::log_file::commit_log::BLANK_MAGIC_CODE;
 use crate::log_file::commit_log::MESSAGE_MAGIC_CODE;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 
-/// Batch size for message parsing - trade memory for fewer I/O calls
-const PARSE_BATCH_SIZE: usize = 64 * 1024; // 64KB per batch
-const MIN_MESSAGE_SIZE: usize = 4 + 4; // totalSize + magicCode
+struct MappedFileFrameSource<'a, M> {
+    mapped_file: &'a M,
+}
 
-/// Optimized message iterator that reads in batches
+impl<M> CommitLogFrameSource for MappedFileFrameSource<'_, M>
+where
+    M: std::ops::Deref,
+    M::Target: MappedFile,
+{
+    fn source_len(&self) -> usize {
+        std::ops::Deref::deref(self.mapped_file).get_file_size() as usize
+    }
+
+    fn read(&self, offset: usize, len: usize) -> Option<Bytes> {
+        std::ops::Deref::deref(self.mapped_file).get_bytes(offset, len)
+    }
+}
+
+/// Compatibility wrapper for the Local batched CommitLog frame cursor.
 pub struct BatchMessageIterator<'a> {
-    mapped_file: &'a Arc<DefaultMappedFile>,
-    current_offset: usize,
-    file_size: u64,
-    buffer: Bytes,
-    buffer_start_offset: usize,
+    inner: CommitLogFrameCursor<MappedFileFrameSource<'a, Arc<DefaultMappedFile>>>,
 }
 
 impl<'a> BatchMessageIterator<'a> {
     pub fn new(mapped_file: &'a Arc<DefaultMappedFile>) -> Self {
-        let file_size = mapped_file.get_file_size();
         Self {
-            mapped_file,
-            current_offset: 0,
-            file_size,
-            buffer: Bytes::new(),
-            buffer_start_offset: 0,
+            inner: CommitLogFrameCursor::new(MappedFileFrameSource { mapped_file }),
         }
     }
 
-    /// Fetch next batch of data into buffer
-    fn refill_buffer(&mut self) -> bool {
-        if self.current_offset >= self.file_size as usize {
-            return false;
-        }
-
-        let remaining = self.file_size as usize - self.current_offset;
-        let fetch_size = remaining.min(PARSE_BATCH_SIZE);
-
-        if let Some(bytes) = self.mapped_file.get_bytes(self.current_offset, fetch_size) {
-            self.buffer = bytes;
-            self.buffer_start_offset = self.current_offset;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Get next message without copying (returns reference into mmap)
     pub fn next_message(&mut self) -> Option<(Bytes, usize, usize)> {
-        loop {
-            // Ensure we have enough data in buffer for message header
-            if self.buffer.remaining() < MIN_MESSAGE_SIZE && !self.refill_buffer() {
-                return None;
-            }
-
-            let offset_in_buffer = self.current_offset - self.buffer_start_offset;
-
-            // Peek at total size without consuming
-            if self.buffer.remaining() < 4 {
-                return None;
-            }
-
-            let total_size = {
-                let mut temp = self.buffer.clone();
-                temp.get_i32()
-            };
-
-            if total_size <= 0 {
-                return None;
-            }
-
-            let msg_size = total_size as usize;
-            let absolute_offset = self.current_offset;
-
-            // Check if entire message is in current buffer
-            if self.buffer.remaining() < msg_size {
-                // Message spans beyond current buffer, fetch larger chunk
-                if msg_size > PARSE_BATCH_SIZE {
-                    // Large message, fetch directly
-                    let msg_bytes = self.mapped_file.get_bytes(self.current_offset, msg_size)?;
-                    self.current_offset += msg_size;
-                    // Clear buffer to force refill on next call
-                    self.buffer = Bytes::new();
-                    return Some((msg_bytes, absolute_offset, msg_size));
-                } else {
-                    // Refill buffer and retry
-                    if !self.refill_buffer() {
-                        return None;
-                    }
-                    continue;
-                }
-            }
-
-            // Entire message is in buffer, extract it
-            let msg_bytes = self.buffer.copy_to_bytes(msg_size);
-            self.current_offset += msg_size;
-
-            return Some((msg_bytes, absolute_offset, msg_size));
-        }
+        self.inner.next_message()
     }
 
     pub fn current_offset(&self) -> usize {
-        self.current_offset
+        self.inner.current_offset()
     }
 }
 
@@ -322,18 +262,6 @@ fn is_mapped_file_matched_recover(
     }
 
     false
-}
-
-/// Check if a message is blank (end of file marker)
-#[inline]
-pub fn is_blank_message(msg_bytes: &Bytes) -> bool {
-    if msg_bytes.len() < 8 {
-        return false;
-    }
-    let mut temp = msg_bytes.clone();
-    let _total_size = temp.get_i32();
-    let magic_code = temp.get_i32();
-    magic_code == BLANK_MAGIC_CODE
 }
 
 #[cfg(test)]

@@ -13,4 +13,5 @@
 // limitations under the License.
 
 pub mod load;
+pub mod record;
 pub mod recovery;
