@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -306,3 +306,26 @@ python scripts/arc_mut_guard.py
   architecture dependency gates, ArcMut gates, and the AGENTS routing guard pass.
 - [x] `[SCOPE]` This slice does not move mmap/prefetch execution, `DefaultMappedFile`, flush/group commit, CQ/Index,
   HA, runtime ownership, or persisted formats. The PR-M06-03 checklist and the M06 Exit Checklist remain open.
+
+## M06-03c mapped-file progress and lifecycle kernel evidence
+
+- [x] `[DEV]` `rocketmq-store-local::mapped_file::kernel` is the single canonical owner of
+  `MappedFileProgress`, `ReferenceResource`, `ReferenceResourceBase`, and `ReferenceResourceCounter`.
+  `MappedFileProgress` owns the legacy file size, wrote/committed/flushed positions, store/last-flush timestamps,
+  and start/stop timestamps with the original initial values and atomic orderings.
+- [x] `[COMPAT]` `DefaultMappedFile` now composes the Local progress/lifecycle kernel and delegates every legacy
+  `MappedFile` progress method. The old Store `reference_resource` and `reference_resource_counter` modules are
+  exact narrow re-exports, so their existing crate visibility and type identity are unchanged. Direct and
+  transient-store readable positions, segment-full equality, successful-flush-only durable advancement, append,
+  commit, warmup timestamp, graceful/forced shutdown, and cleanup-once behavior remain unchanged.
+- [x] `[TEST]` RED first proved the Local kernel and owner contract were absent. GREEN covers six deterministic
+  Local progress/lifecycle cases, 26 existing `DefaultMappedFile` cases including an injected flush failure,
+  the active-Rust ownership contract, the exact Local feature matrix, recovery compatibility, package/workspace
+  Clippy, architecture dependency gates, ArcMut gates, and AGENTS routing.
+- [x] `[REV]` The mutation-resistant contract strips comments and strings, requires one canonical definition,
+  exact Store facade re-exports, a single `progress: MappedFileProgress` composition field, no duplicate direct
+  progress atomic fields/accesses, and the unchanged Local forbidden dependency closure. The sole ArcMut import
+  fingerprint relocation is approved one-for-one; the governed occurrence count remains 3377.
+- [x] `[SCOPE]` This slice does not move `File`, mmap/`ArcMut`, `DefaultMappedFile`, messages/callbacks, config,
+  `TransientStorePool`, flush owner, CQ/Index, HA, runtime ownership, or persisted formats. PR-M06-03 and every
+  M06 Exit Checklist item remain open.

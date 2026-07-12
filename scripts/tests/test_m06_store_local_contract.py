@@ -32,6 +32,22 @@ LEAF_FILES = {
     "mapped_file_error.rs",
     "metrics.rs",
 }
+KERNEL_ITEMS = {
+    "MappedFileProgress": "struct",
+    "ReferenceResource": "trait",
+    "ReferenceResourceBase": "struct",
+    "ReferenceResourceCounter": "struct",
+}
+PROGRESS_FIELDS = {
+    "file_size",
+    "wrote_position",
+    "committed_position",
+    "flushed_position",
+    "store_timestamp",
+    "last_flush_time",
+    "start_timestamp",
+    "stop_timestamp",
+}
 CANONICAL_ITEMS = {
     "DirectIoBuffer": ("struct", "direct_io.rs"),
     "DirectIoRequest": ("struct", "direct_io.rs"),
@@ -244,6 +260,33 @@ def canonical_definition_paths(sources: dict[Path, str], item: str, item_kind: s
     ]
 
 
+def active_kernel_reexports(source: str) -> set[str]:
+    return set(
+        re.findall(
+            r"pub(?:\s*\(crate\))?\s+use\s+rocketmq_store_local::mapped_file::kernel::"
+            r"([A-Za-z_][A-Za-z0-9_]*)\s*;",
+            active_rust_source(source),
+        )
+    )
+
+
+def active_struct_body(source: str, struct_name: str) -> str:
+    source = active_rust_source(source)
+    declaration = re.search(rf"\bstruct\s+{re.escape(struct_name)}\s*\{{", source)
+    if declaration is None:
+        return ""
+    start = declaration.end()
+    depth = 1
+    for index in range(start, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:index]
+    return ""
+
+
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
@@ -324,6 +367,24 @@ info!("missing target");
             canonical_definition_paths(sources, "io_uring_backend_status", "fn"),
         )
 
+    def test_kernel_scanners_ignore_comments_and_strings(self) -> None:
+        facade = '''
+// pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
+const TEXT: &str = "pub use rocketmq_store_local::mapped_file::kernel::MappedFileProgress;";
+pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResourceBase;
+'''
+        owner = '''
+pub struct DefaultMappedFile {
+    progress: MappedFileProgress,
+    // wrote_position: AtomicI32,
+    text: &'static str,
+}
+const TEXT: &str = "struct DefaultMappedFile { flushed_position: AtomicI32 }";
+'''
+        self.assertEqual({"ReferenceResourceBase"}, active_kernel_reexports(facade))
+        self.assertIn("progress: MappedFileProgress", active_struct_body(owner, "DefaultMappedFile"))
+        self.assertNotIn("wrote_position", active_struct_body(owner, "DefaultMappedFile"))
+
     def test_workspace_and_feature_ownership_are_exact(self) -> None:
         self.assert_local_crate_exists()
         root_manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
@@ -377,7 +438,7 @@ info!("missing target");
         self.assert_local_crate_exists()
         canonical_dir = LOCAL_CRATE / "src" / "mapped_file"
         facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
-        self.assertEqual(LEAF_FILES, {path.name for path in canonical_dir.glob("*.rs")})
+        self.assertEqual(LEAF_FILES | {"kernel.rs"}, {path.name for path in canonical_dir.glob("*.rs")})
         self.assertTrue(all(not (facade_dir / name).exists() for name in LEAF_FILES))
 
         rust_sources = {
@@ -392,6 +453,46 @@ info!("missing target");
         reexports = active_facade_reexports(facade)
         self.assertTrue(FACADE_ROOT_ITEMS.issubset(reexports), FACADE_ROOT_ITEMS - reexports)
         self.assertIn("io_uring_impl", reexports)
+
+    def test_mapped_file_kernel_has_one_owner_exact_facades_and_no_store_state_copy(self) -> None:
+        canonical_file = LOCAL_CRATE / "src" / "mapped_file" / "kernel.rs"
+        rust_sources = {
+            path: path.read_text(encoding="utf-8")
+            for path in ROOT.glob("rocketmq-*/src/**/*.rs")
+        }
+        for item, item_kind in KERNEL_ITEMS.items():
+            self.assertEqual(
+                [canonical_file],
+                canonical_definition_paths(rust_sources, item, item_kind),
+                item,
+            )
+
+        facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
+        reference_facade = (facade_dir / "reference_resource.rs").read_text(encoding="utf-8")
+        counter_facade = (facade_dir / "reference_resource_counter.rs").read_text(encoding="utf-8")
+        self.assertEqual({"ReferenceResource"}, active_kernel_reexports(reference_facade))
+        self.assertEqual(
+            {"ReferenceResourceBase", "ReferenceResourceCounter"},
+            active_kernel_reexports(counter_facade),
+        )
+
+        default_mapped_file = (
+            facade_dir / "default_mapped_file_impl.rs"
+        ).read_text(encoding="utf-8")
+        active_default = active_rust_source(default_mapped_file)
+        struct_body = active_struct_body(default_mapped_file, "DefaultMappedFile")
+        self.assertRegex(struct_body, r"\bprogress\s*:\s*MappedFileProgress\s*,")
+        for field in PROGRESS_FIELDS:
+            self.assertNotRegex(
+                struct_body,
+                rf"\b{re.escape(field)}\s*:\s*(?:Atomic[A-Za-z0-9_]+|u64|i64|i32)\b",
+                field,
+            )
+            self.assertNotRegex(
+                active_default,
+                rf"\bself\.{re.escape(field)}\.(?:load|store|fetch_add|fetch_sub)\s*\(",
+                field,
+            )
 
     def test_commit_log_planning_items_have_one_canonical_definition_and_exact_facade_reexports(self) -> None:
         self.assert_local_crate_exists()

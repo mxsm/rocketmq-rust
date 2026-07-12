@@ -37,6 +37,12 @@
       "from": "e2bdce57ebe0e4ed417580be",
       "to": "ded036bc867beefc6db3270a",
       "reason": "Replacing facade load definitions with canonical Local re-exports changed adjacent tokens around the existing DefaultMappedFile import without adding an occurrence"
+    },
+    {
+      "identity": "ebb212125033591cebb811ba",
+      "from": "b5e35ab8bca98a5f31be4b78",
+      "to": "26d2e0b2c08b64d6e00a411f",
+      "reason": "Importing the Local mapped-file progress kernel and formatting imports changed adjacent tokens around the existing ArcMut import without adding or moving an occurrence"
     }
   ]
 }

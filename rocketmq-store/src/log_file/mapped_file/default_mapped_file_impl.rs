@@ -39,6 +39,7 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
+use rocketmq_store_local::mapped_file::kernel::MappedFileProgress;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -180,17 +181,10 @@ pub struct DefaultMappedFile {
     file_name: CheetahString,
     file_from_offset: u64,
     mapped_byte_buffer: Option<bytes::Bytes>,
-    wrote_position: AtomicI32,
-    committed_position: AtomicI32,
-    flushed_position: AtomicI32,
-    file_size: u64,
-    store_timestamp: AtomicU64,
+    progress: MappedFileProgress,
     first_create_in_queue: bool,
-    last_flush_time: AtomicU64,
     swap_map_time: AtomicU64,
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
-    start_timestamp: AtomicI64,
-    stop_timestamp: AtomicI64,
     metrics: Option<MappedFileMetrics>,
     flush_strategy: FlushStrategy,
 }
@@ -296,18 +290,11 @@ impl DefaultMappedFile {
             file_name,
             file_from_offset,
             mapped_byte_buffer: None,
-            wrote_position: Default::default(),
-            committed_position: Default::default(),
-            flushed_position: Default::default(),
-            file_size,
-            store_timestamp: Default::default(),
+            progress: MappedFileProgress::new(file_size),
             first_create_in_queue: false,
-            last_flush_time: AtomicU64::new(0),
             swap_map_time: AtomicU64::new(current_millis()),
             mapped_byte_buffer_access_count_since_last_swap: Default::default(),
-            start_timestamp: AtomicI64::new(-1),
             transient_store_pool,
-            stop_timestamp: AtomicI64::new(-1),
             metrics: Some(MappedFileMetrics::new()),
             flush_strategy: FlushStrategy::Async,
         })
@@ -471,7 +458,7 @@ impl DefaultMappedFile {
         }
 
         let position = position as usize;
-        let file_size = self.file_size as usize;
+        let file_size = self.progress.file_size() as usize;
         position < file_size && position.checked_add(size).is_some_and(|end| end <= file_size)
     }
 
@@ -496,13 +483,12 @@ impl DefaultMappedFile {
         }
 
         let flush_started = Instant::now();
-        let flushed_position = self.flushed_position.load(Ordering::Acquire);
+        let flushed_position = self.progress.flushed_position();
         let result = flush(self, flushed_position, value);
         MappedFile::release(self);
         result.map_err(MappedFileError::FlushFailed)?;
 
-        self.flushed_position.store(value, Ordering::Release);
-        self.last_flush_time.store(current_millis(), Ordering::Relaxed);
+        self.progress.record_flush_success(value);
         if let Some(metrics) = &self.metrics {
             metrics.record_flush(flush_started.elapsed());
         }
@@ -536,12 +522,12 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn get_file_size(&self) -> u64 {
-        self.file_size
+        self.progress.file_size()
     }
 
     #[inline]
     fn is_full(&self) -> bool {
-        self.file_size == self.wrote_position.load(Ordering::Acquire) as u64
+        self.progress.is_full()
     }
 
     #[inline]
@@ -555,11 +541,12 @@ impl MappedFile for DefaultMappedFile {
         message_callback: &AMC,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
-        let current_pos = self.wrote_position.load(Ordering::Acquire) as u64;
-        if current_pos >= self.file_size {
+        let current_pos = self.progress.wrote_position() as u64;
+        if current_pos >= self.progress.file_size() {
             error!(
                 "MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}",
-                current_pos, self.file_size
+                current_pos,
+                self.progress.file_size()
             );
             return AppendMessageResult {
                 status: AppendMessageStatus::UnknownError,
@@ -569,13 +556,12 @@ impl MappedFile for DefaultMappedFile {
         let result = message_callback.do_append(
             self.file_from_offset as i64, // file name parsed as offset
             self,
-            (self.file_size - current_pos) as i32, // remaining space
+            (self.progress.file_size() - current_pos) as i32, // remaining space
             message,
             put_message_context,
         );
-        self.wrote_position.fetch_add(result.wrote_bytes, Ordering::AcqRel);
-        self.store_timestamp
-            .store(result.store_timestamp as u64, Ordering::Release);
+        self.progress
+            .record_append(result.wrote_bytes, result.store_timestamp as u64);
 
         if let Some(metrics) = &self.metrics {
             metrics.record_write(result.wrote_bytes as usize);
@@ -591,11 +577,12 @@ impl MappedFile for DefaultMappedFile {
         put_message_context: &mut PutMessageContext,
         enabled_append_prop_crc: bool,
     ) -> AppendMessageResult {
-        let current_pos = self.wrote_position.load(Ordering::Acquire) as u64;
-        if current_pos >= self.file_size {
+        let current_pos = self.progress.wrote_position() as u64;
+        if current_pos >= self.progress.file_size() {
             error!(
                 "MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}",
-                current_pos, self.file_size
+                current_pos,
+                self.progress.file_size()
             );
             return AppendMessageResult {
                 status: AppendMessageStatus::UnknownError,
@@ -605,14 +592,13 @@ impl MappedFile for DefaultMappedFile {
         let result = message_callback.do_append_batch(
             self.file_from_offset as i64,
             self,
-            (self.file_size - current_pos) as i32,
+            (self.progress.file_size() - current_pos) as i32,
             message,
             put_message_context,
             enabled_append_prop_crc,
         );
-        self.wrote_position.fetch_add(result.wrote_bytes, Ordering::AcqRel);
-        self.store_timestamp
-            .store(result.store_timestamp as u64, Ordering::Release);
+        self.progress
+            .record_append(result.wrote_bytes, result.store_timestamp as u64);
         result
     }
 
@@ -637,7 +623,7 @@ impl MappedFile for DefaultMappedFile {
     #[inline]
     fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
         // not check can read position, so maybe read invalid data in the file
-        if pos + size > self.file_size as usize {
+        if pos + size > self.progress.file_size() as usize {
             return None;
         }
         Some(Bytes::copy_from_slice(&self.get_mapped_file()[pos..pos + size]))
@@ -648,19 +634,19 @@ impl MappedFile for DefaultMappedFile {
         //check can read position
         let max_readable_position = self.get_read_position() as usize;
         let end_position = pos + size;
-        if max_readable_position < end_position || end_position > self.file_size as usize {
+        if max_readable_position < end_position || end_position > self.progress.file_size() as usize {
             return None;
         }
         Some(Bytes::copy_from_slice(&self.get_mapped_file()[pos..end_position]))
     }
 
     fn append_message_offset_length(&self, data: &[u8], offset: usize, length: usize) -> bool {
-        let current_pos = self.wrote_position.load(Ordering::Acquire) as usize;
-        if current_pos + length <= self.file_size as usize {
+        let current_pos = self.progress.wrote_position() as usize;
+        if current_pos + length <= self.progress.file_size() as usize {
             let mut mapped_file = &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
             if let Some(data_slice) = data.get(offset..offset + length) {
                 if mapped_file.write_all(data_slice).is_ok() {
-                    self.wrote_position.fetch_add(length as i32, Ordering::AcqRel);
+                    self.progress.advance_wrote_position(length as i32);
                     return true;
                 } else {
                     error!("append_message_offset_length write_all error");
@@ -673,9 +659,9 @@ impl MappedFile for DefaultMappedFile {
     }
 
     fn append_message_no_position_update(&self, data: &[u8], offset: usize, length: usize) -> bool {
-        let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
+        let current_pos = self.progress.wrote_position_relaxed() as usize;
 
-        if current_pos + length <= self.file_size as usize {
+        if current_pos + length <= self.progress.file_size() as usize {
             let mut mapped_file = &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
             if let Some(data_slice) = data.get(offset..offset + length) {
                 if mapped_file.write_all(data_slice).is_ok() {
@@ -695,10 +681,10 @@ impl MappedFile for DefaultMappedFile {
     /// Returns a direct mutable buffer for zero-copy message encoding.
     /// Eliminates the intermediate pre_encode_buffer, reducing CPU usage.
     fn get_direct_write_buffer(&self, required_space: usize) -> Option<(&mut [u8], usize)> {
-        let current_pos = self.wrote_position.load(Ordering::Acquire) as usize;
+        let current_pos = self.progress.wrote_position() as usize;
 
         // Check if we have enough space
-        if current_pos + required_space > self.file_size as usize {
+        if current_pos + required_space > self.progress.file_size() as usize {
             return None;
         }
 
@@ -717,19 +703,21 @@ impl MappedFile for DefaultMappedFile {
             return false;
         }
 
-        let current_pos = self.wrote_position.load(Ordering::Acquire) as usize;
+        let current_pos = self.progress.wrote_position() as usize;
 
         // Verify the write doesn't exceed file size
-        if current_pos + bytes_written > self.file_size as usize {
+        if current_pos + bytes_written > self.progress.file_size() as usize {
             error!(
                 "commit_direct_write: write exceeds file size. pos={}, bytes={}, file_size={}",
-                current_pos, bytes_written, self.file_size
+                current_pos,
+                bytes_written,
+                self.progress.file_size()
             );
             return false;
         }
 
         // Update write position atomically
-        self.wrote_position.fetch_add(bytes_written as i32, Ordering::AcqRel);
+        self.progress.advance_wrote_position(bytes_written as i32);
 
         // Record metrics
         if let Some(metrics) = &self.metrics {
@@ -740,7 +728,7 @@ impl MappedFile for DefaultMappedFile {
     }
 
     fn write_bytes_segment(&self, data: &[u8], start: usize, offset: usize, length: usize) -> bool {
-        if start + length <= self.file_size as usize {
+        if start + length <= self.progress.file_size() as usize {
             let mut mapped_file = &mut self.get_mapped_file_mut()[start..start + length];
             if data.len() == length {
                 if mapped_file.write_all(data).is_ok() {
@@ -764,7 +752,7 @@ impl MappedFile for DefaultMappedFile {
     fn put_slice(&self, data: &[u8], index: usize) -> bool {
         let length = data.len();
         let end_index = index + length;
-        if length > 0 && end_index <= self.file_size as usize {
+        if length > 0 && end_index <= self.progress.file_size() as usize {
             let mut mapped_file = &mut self.get_mapped_file_mut()[index..end_index];
             if mapped_file.write_all(data).is_ok() {
                 return true;
@@ -793,7 +781,7 @@ impl MappedFile for DefaultMappedFile {
     fn try_flush(&self, flush_least_pages: i32) -> MappedFileResult<i32> {
         self.try_flush_with(flush_least_pages, |mapped_file, flushed_position, value| {
             let flush_size = value - flushed_position;
-            if flush_size > 0 && flush_size < (mapped_file.file_size as i32) / 2 {
+            if flush_size > 0 && flush_size < (mapped_file.progress.file_size() as i32) / 2 {
                 mapped_file
                     .get_mapped_file()
                     .flush_range(flushed_position as usize, flush_size as usize)
@@ -806,8 +794,7 @@ impl MappedFile for DefaultMappedFile {
     #[inline]
     fn commit(&self, commit_least_pages: i32) -> i32 {
         if self.is_able_to_commit(commit_least_pages) {
-            let wrote_position = self.wrote_position.load(Ordering::Acquire);
-            self.committed_position.store(wrote_position, Ordering::Release);
+            self.progress.commit_wrote_position();
         }
         self.get_committed_position()
     }
@@ -872,7 +859,7 @@ impl MappedFile for DefaultMappedFile {
             .fetch_add(1, Ordering::AcqRel);
 
         if let Some(metrics) = &self.metrics {
-            metrics.record_read(self.file_size as usize, false);
+            metrics.record_read(self.progress.file_size() as usize, false);
         }
 
         self.get_mapped_file()
@@ -884,7 +871,7 @@ impl MappedFile for DefaultMappedFile {
             .fetch_add(1, Ordering::AcqRel);
 
         if let Some(metrics) = &self.metrics {
-            metrics.record_read(self.file_size as usize, false);
+            metrics.record_read(self.progress.file_size() as usize, false);
         }
 
         self.get_mapped_file()
@@ -892,7 +879,7 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn get_store_timestamp(&self) -> u64 {
-        self.store_timestamp.load(Ordering::Relaxed)
+        self.progress.store_timestamp()
     }
 
     #[inline]
@@ -975,22 +962,22 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn get_flushed_position(&self) -> i32 {
-        self.flushed_position.load(Ordering::Acquire)
+        self.progress.flushed_position()
     }
 
     #[inline]
     fn set_flushed_position(&self, flushed_position: i32) {
-        self.flushed_position.store(flushed_position, Ordering::SeqCst)
+        self.progress.set_flushed_position(flushed_position)
     }
 
     #[inline]
     fn get_wrote_position(&self) -> i32 {
-        self.wrote_position.load(std::sync::atomic::Ordering::Acquire)
+        self.progress.wrote_position()
     }
 
     #[inline]
     fn set_wrote_position(&self, wrote_position: i32) {
-        self.wrote_position.store(wrote_position, Ordering::SeqCst)
+        self.progress.set_wrote_position(wrote_position)
     }
 
     /// Return The max position which have valid data
@@ -1000,32 +987,29 @@ impl MappedFile for DefaultMappedFile {
     /// An `i32` representing the current read position.
     #[inline]
     fn get_read_position(&self) -> i32 {
-        match self.transient_store_pool {
-            None => self.wrote_position.load(Ordering::Acquire),
-            Some(_) => self.committed_position.load(Ordering::Acquire),
-        }
+        self.progress.read_position(self.transient_store_pool.is_some())
     }
 
     #[inline]
     fn set_committed_position(&self, committed_position: i32) {
-        self.committed_position.store(committed_position, Ordering::SeqCst)
+        self.progress.set_committed_position(committed_position)
     }
 
     #[inline]
     fn get_committed_position(&self) -> i32 {
-        self.committed_position.load(Ordering::Acquire)
+        self.progress.committed_position()
     }
 
     #[inline]
     fn mlock(&self) {
-        if let Err(error) = lock_memory(self.get_mapped_file().as_ptr(), self.file_size as usize) {
+        if let Err(error) = lock_memory(self.get_mapped_file().as_ptr(), self.progress.file_size() as usize) {
             warn!(file_name = %self.file_name, error = %error, "failed to mlock mapped file");
         }
     }
 
     #[inline]
     fn munlock(&self) {
-        if let Err(error) = unlock_memory(self.get_mapped_file().as_ptr(), self.file_size as usize) {
+        if let Err(error) = unlock_memory(self.get_mapped_file().as_ptr(), self.progress.file_size() as usize) {
             warn!(file_name = %self.file_name, error = %error, "failed to munlock mapped file");
         }
     }
@@ -1098,7 +1082,7 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn get_last_flush_time(&self) -> u64 {
-        self.last_flush_time.load(Ordering::Relaxed)
+        self.progress.last_flush_time()
     }
 
     #[inline]
@@ -1249,12 +1233,13 @@ impl MappedFile for DefaultMappedFile {
             ));
         }
 
-        if file_size as u64 != self.file_size {
+        if file_size as u64 != self.progress.file_size() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
                     "mapped file init size mismatch: expected {}, got {}",
-                    self.file_size, file_size
+                    self.progress.file_size(),
+                    file_size
                 ),
             ));
         }
@@ -1263,7 +1248,7 @@ impl MappedFile for DefaultMappedFile {
     }
 
     fn get_slice(&self, pos: usize, size: usize) -> Option<&[u8]> {
-        if pos >= self.file_size as usize || pos + size >= self.file_size as usize {
+        if pos >= self.progress.file_size() as usize || pos + size >= self.progress.file_size() as usize {
             return None;
         }
 
@@ -1334,7 +1319,7 @@ impl DefaultMappedFile {
         R: FnMut(LinuxStorageDegradationEvent),
     {
         let page_size = get_page_size().max(1);
-        let file_size = self.file_size as usize;
+        let file_size = self.progress.file_size() as usize;
         if file_size == 0 {
             return;
         }
@@ -1373,7 +1358,7 @@ impl DefaultMappedFile {
                             last_flush_offset, end, self.file_name, error
                         );
                     } else {
-                        self.last_flush_time.store(current_millis(), Ordering::Relaxed);
+                        self.progress.record_flush_time();
                     }
                     last_flush_offset = end;
                 }
@@ -1391,7 +1376,7 @@ impl DefaultMappedFile {
                         last_flush_offset, file_size, self.file_name, error
                     );
                 } else {
-                    self.last_flush_time.store(current_millis(), Ordering::Relaxed);
+                    self.progress.record_flush_time();
                 }
             }
         }
@@ -1463,11 +1448,11 @@ impl DefaultMappedFile {
     }
 
     fn lock_region_address_and_len(&self, offset: u64, requested_len: usize) -> Option<(*const u8, usize)> {
-        if requested_len == 0 || offset >= self.file_size {
+        if requested_len == 0 || offset >= self.progress.file_size() {
             return None;
         }
 
-        let remaining = self.file_size.saturating_sub(offset);
+        let remaining = self.progress.file_size().saturating_sub(offset);
         let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
         if len == 0 {
             return None;
@@ -1484,7 +1469,7 @@ impl DefaultMappedFile {
     /// The start timestamp as i64. Returns -1 if not set.
     #[inline]
     pub fn get_start_timestamp(&self) -> i64 {
-        self.start_timestamp.load(Ordering::Acquire)
+        self.progress.start_timestamp()
     }
 
     /// Sets the start timestamp of the mapped file.
@@ -1494,7 +1479,7 @@ impl DefaultMappedFile {
     /// * `timestamp` - The start timestamp to set
     #[inline]
     pub fn set_start_timestamp(&self, timestamp: i64) {
-        self.start_timestamp.store(timestamp, Ordering::Release);
+        self.progress.set_start_timestamp(timestamp);
     }
 
     /// Gets the stop timestamp of the mapped file.
@@ -1504,7 +1489,7 @@ impl DefaultMappedFile {
     /// The stop timestamp as i64. Returns -1 if not set.
     #[inline]
     pub fn get_stop_timestamp(&self) -> i64 {
-        self.stop_timestamp.load(Ordering::Acquire)
+        self.progress.stop_timestamp()
     }
 
     /// Sets the stop timestamp of the mapped file.
@@ -1514,7 +1499,7 @@ impl DefaultMappedFile {
     /// * `timestamp` - The stop timestamp to set
     #[inline]
     pub fn set_stop_timestamp(&self, timestamp: i64) {
-        self.stop_timestamp.store(timestamp, Ordering::Release);
+        self.progress.set_stop_timestamp(timestamp);
     }
 
     #[inline]
@@ -1522,7 +1507,7 @@ impl DefaultMappedFile {
         if self.is_full() {
             return true;
         }
-        let flush = self.flushed_position.load(Ordering::Acquire);
+        let flush = self.progress.flushed_position();
         let write = self.get_read_position();
         if flush_least_pages > 0 {
             return (write - flush) / OS_PAGE_SIZE as i32 >= flush_least_pages;
@@ -1535,8 +1520,8 @@ impl DefaultMappedFile {
         if self.is_full() {
             return true;
         }
-        let committed = self.committed_position.load(Ordering::Acquire);
-        let write = self.wrote_position.load(Ordering::Acquire);
+        let committed = self.progress.committed_position();
+        let write = self.progress.wrote_position();
         if commit_least_pages > 0 {
             return (write - committed) / OS_PAGE_SIZE as i32 >= commit_least_pages;
         }
@@ -1560,7 +1545,7 @@ impl DefaultMappedFile {
             );
             return true;
         }
-        TOTAL_MAPPED_VIRTUAL_MEMORY.fetch_sub(self.file_size as i64, Ordering::Relaxed);
+        TOTAL_MAPPED_VIRTUAL_MEMORY.fetch_sub(self.progress.file_size() as i64, Ordering::Relaxed);
         TOTAL_MAPPED_FILES.fetch_sub(1, Ordering::Relaxed);
         info!("unmap file[REF:{}] {} OK", current_ref, self.file_name);
         true
@@ -1678,7 +1663,7 @@ impl DefaultMappedFile {
         }
 
         // Bounds check
-        if pos + size > self.file_size as usize {
+        if pos + size > self.progress.file_size() as usize {
             return None;
         }
 
@@ -1728,9 +1713,9 @@ impl DefaultMappedFile {
         let mut total_written = 0;
 
         for message in messages.iter_mut() {
-            let current_pos = self.wrote_position.load(Ordering::Acquire) as u64;
+            let current_pos = self.progress.wrote_position() as u64;
 
-            if current_pos >= self.file_size {
+            if current_pos >= self.progress.file_size() {
                 results.push(AppendMessageResult {
                     status: AppendMessageStatus::UnknownError,
                     ..Default::default()
@@ -1741,14 +1726,13 @@ impl DefaultMappedFile {
             let result = message_callback.do_append(
                 self.file_from_offset as i64,
                 self,
-                (self.file_size - current_pos) as i32,
+                (self.progress.file_size() - current_pos) as i32,
                 message,
                 put_message_context,
             );
 
-            self.wrote_position.fetch_add(result.wrote_bytes, Ordering::AcqRel);
-            self.store_timestamp
-                .store(result.store_timestamp as u64, Ordering::Release);
+            self.progress
+                .record_append(result.wrote_bytes, result.store_timestamp as u64);
 
             total_written += result.wrote_bytes as usize;
             results.push(result);
@@ -1787,7 +1771,7 @@ impl DefaultMappedFile {
     pub fn flush_range(&self, start: usize, end: usize) -> i32 {
         use std::time::Instant;
 
-        if start >= end || end > self.file_size as usize {
+        if start >= end || end > self.progress.file_size() as usize {
             return 0;
         }
 
@@ -1795,7 +1779,7 @@ impl DefaultMappedFile {
 
         // Perform the flush
         if self.transient_store_pool.is_some() {
-            self.committed_position.store(end as i32, Ordering::Release);
+            self.progress.set_committed_position_release(end as i32);
         }
 
         let result = match self.get_mapped_file().flush_range(start, end - start) {

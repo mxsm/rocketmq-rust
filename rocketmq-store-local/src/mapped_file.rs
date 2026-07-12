@@ -19,6 +19,8 @@ mod mapped_file_error;
 mod metrics;
 
 pub mod io_uring_impl;
+#[doc(hidden)]
+pub mod kernel;
 
 pub use direct_io::DirectIoBuffer;
 pub use direct_io::DirectIoRequest;
