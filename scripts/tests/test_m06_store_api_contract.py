@@ -49,19 +49,19 @@ REMOVED_M06_02_TYPES = {
     "AdminResponse",
     "StoreFuture",
 }
-FORBIDDEN_NORMALIZED_TOKENS = {
-    "timer",
-    "ha",
-    "rocksdb",
-    "tiered",
-    "tokio",
-    "runtime",
-    "remoting",
+FORBIDDEN_NORMALIZED_TOKENS = (
     "observability",
     "mappedfile",
+    "remoting",
+    "rocksdb",
+    "runtime",
     "broker",
     "native",
-}
+    "tiered",
+    "timer",
+    "tokio",
+    "ha",
+)
 COMPOUND_FORBIDDEN_FIXTURES = {
     "HaState": "ha",
     "TimerWheel": "timer",
@@ -92,6 +92,11 @@ def normalized(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
+def normalized_segments(identifier: str) -> set[str]:
+    parts = re.findall(r"[A-Z]+(?=[A-Z][a-z]|[0-9_]|$)|[A-Z]?[a-z]+|[0-9]+", identifier)
+    return {normalized(part) for part in parts}
+
+
 def forbidden_identifiers(source: str) -> dict[str, str]:
     code = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
     code = re.sub(r"//[^\r\n]*", " ", code)
@@ -99,8 +104,9 @@ def forbidden_identifiers(source: str) -> dict[str, str]:
     forbidden: dict[str, str] = {}
     for identifier in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", code):
         candidate = normalized(identifier)
+        segments = normalized_segments(identifier)
         for token in FORBIDDEN_NORMALIZED_TOKENS:
-            if token in candidate:
+            if (token == "ha" and token in segments) or (token != "ha" and token in candidate):
                 forbidden[identifier] = token
                 break
     return forbidden
@@ -155,6 +161,15 @@ class StoreApiContractTests(unittest.TestCase):
         for identifier, token in COMPOUND_FORBIDDEN_FIXTURES.items():
             with self.subTest(identifier=identifier):
                 self.assertEqual(token, forbidden_identifiers(f"pub struct {identifier};").get(identifier))
+
+    def test_forbidden_token_priority_is_deterministic_and_specific_first(self) -> None:
+        expected = tuple(sorted(FORBIDDEN_NORMALIZED_TOKENS, key=lambda token: (-len(token), token)))
+        self.assertEqual(expected, FORBIDDEN_NORMALIZED_TOKENS)
+
+    def test_short_ha_token_only_matches_an_identifier_segment(self) -> None:
+        for identifier in ("HashMap", "HandleState", "Chart"):
+            with self.subTest(identifier=identifier):
+                self.assertEqual({}, forbidden_identifiers(f"pub struct {identifier};"))
 
     def test_real_broker_send_and_reject_paths_traverse_capabilities(self) -> None:
         manifest = tomllib.loads((ROOT / "rocketmq-broker" / "Cargo.toml").read_text(encoding="utf-8"))

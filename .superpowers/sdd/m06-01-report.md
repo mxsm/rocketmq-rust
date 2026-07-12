@@ -78,6 +78,14 @@ current final state.
      exact-token comparison.
    - GREEN: the command passed 4/4 after checking normalized substrings in code identifiers while
      excluding comments and string literals. No allowlist was required.
+6. Deterministic forbidden-token priority (third review fix)
+   - RED: `python scripts/tests/test_m06_store_api_contract.py` exited 1 because unordered set
+     iteration classified `MappedFileHandle` as the short token `ha` instead of the specific token
+     `mappedfile`. The deterministic-priority assertion also failed, and focused ambiguity fixtures
+     showed false `ha` matches for `HashMap`, `HandleState`, and `Chart`.
+   - GREEN: the command passed 6/6 after replacing the set with an explicit longest/specific-first
+     tuple. The short `ha` token now matches only a CamelCase/snake_case identifier segment; all five
+     compound backend fixtures remain enforced.
 
 The first API test draft omitted a `Future` import. That setup-only error was corrected before the
 API RED evidence above was recorded.
@@ -89,7 +97,11 @@ All commands ran from the repository root with `GIT_CONFIG_NOSYSTEM=1`.
 - `cargo test -p rocketmq-store-api` — exit 0; 2/2 integration tests plus unit/doc targets.
 - `cargo test -p rocketmq-store --test store_api_legacy_adapter` — exit 0; 3/3.
 - `cargo test -p rocketmq-broker processor::send_message_processor::tests --lib` — exit 0; 17/17.
-- `python scripts/tests/test_m06_store_api_contract.py` — exit 0; 4/4.
+- `python scripts/tests/test_m06_store_api_contract.py` — exit 0; 6/6.
+- `Remove-Item Env:PYTHONHASHSEED -ErrorAction SilentlyContinue; foreach ($run in 1..20) { python
+  scripts/tests/test_m06_store_api_contract.py; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }`
+  — exit 0; 20 independent Python processes, 6/6 in every process
+  (`CONTRACT_REPEAT_OK processes=20 tests_per_process=6`).
 - `python scripts/tests/test_architecture_dependency_guard.py` — exit 0; 35/35.
 - `python scripts/architecture_dependency_guard.py --fixtures` — exit 0; one clean fixture and six
   violation fixtures.
