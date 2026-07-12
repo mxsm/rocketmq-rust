@@ -27,7 +27,7 @@ All RED commands ran before production edits.
 2. Mutation-resistant ownership contract
    - RED: `python -m unittest scripts.tests.test_m06_store_local_contract` exited 1 with 13 tests and two expected
      failures because `kernel.rs` and `MappedFileProgress` had no canonical owner.
-   - GREEN: the final target exits 0 with 18/18 tests. It proves one active definition for all four kernel items,
+   - GREEN: the final target exits 0 with 21/21 tests. It proves one active definition for all four kernel items,
      exact legacy facade re-exports, one composed progress field, no copied progress atomics/direct accesses, and
      the existing forbidden-dependency closure. Scanner fixtures prove comments, ordinary strings, and raw strings
      cannot satisfy the contract.
@@ -49,6 +49,15 @@ All RED commands ran before production edits.
      `MappedFileProgress` field.
    - The first GREEN scanner attempt exposed a test-only performance defect and timed out at 124 seconds. A linear
      source prefilter removed the full-repository repeated scan; the final contract completes in 6.947 seconds.
+5. Second independent-review alias-chain and type-namespace hardening
+   - RED: three targeted mutation tests completed in 0.002 seconds and failed exactly three assertions. The prior
+     boundary scanner returned no finding for both a Local kernel module alias followed by a public item re-export
+     and a crate alias followed by a public kernel glob; the owner scanner also returned no enum/union occurrences.
+   - GREEN: the final 21/21 contract completes in 11.719 seconds. Each Store source is active-parsed once into
+     semicolon-bounded use records. Simple module/crate/ancestor `as` aliases are collected and resolved
+     iteratively before public uses are compared with the three-statement exact allowlist. This catches the two
+     reviewed alias-chain forms while leaving DefaultMappedFile's required private direct import alone. Owner
+     occurrences now include struct, trait, type, enum, union, and module declarations plus use-as aliases.
 
 ## Semantic preservation
 
@@ -87,7 +96,7 @@ All commands ran from the repository root.
 - `cargo test -p rocketmq-store --test m06_store_local_compatibility` - exit 0; 3/3 existing leaf identity tests.
 - `cargo test -p rocketmq-store --test commitlog_recovery_tests` - exit 0; 9/9.
 - `cargo test -p rocketmq-store --test m06_store_local_commitlog_compatibility` - exit 0; 2/2.
-- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 18/18, including five explicit
+- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 21/21, including eight explicit
   independent-review negative mutation fixtures.
 - `cargo check -p rocketmq-store-local --no-default-features` - exit 0.
 - `cargo check -p rocketmq-store-local --no-default-features --features fast-load` - exit 0.

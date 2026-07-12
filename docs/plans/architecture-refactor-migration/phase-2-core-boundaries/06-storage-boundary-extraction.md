@@ -322,13 +322,14 @@ python scripts/arc_mut_guard.py
   Local progress/lifecycle cases, 26 existing `DefaultMappedFile` cases including an injected flush failure,
   the active-Rust ownership contract, the exact Local feature matrix, recovery compatibility, package/workspace
   Clippy, architecture dependency gates, ArcMut gates, and AGENTS routing.
-- [x] `[REV]` The 18-case mutation-resistant contract strips comments and strings; detects private, `pub`, and
-  `pub(crate)` same-name struct/trait/type declarations, type aliases, use-as aliases, and glob re-exports; and
-  permits only the three exact legacy lifecycle re-exports. It unconditionally rejects every old progress field
-  name regardless of type/access, requires exactly one `MappedFileProgress` field named `progress`, rejects a
-  second kernel field under any name, and preserves the Local dependency closure. Five negative mutation fixtures
-  freeze every independent-review bypass. The sole ArcMut import fingerprint relocation is approved one-for-one;
-  the governed occurrence count remains 3377.
+- [x] `[REV]` The 21-case mutation-resistant contract strips comments and strings; detects private, `pub`, and
+  `pub(crate)` same-name struct/trait/type/enum/union/module declarations, type aliases, and use-as aliases; and
+  resolves the reviewed simple module/crate/ancestor alias chains before checking public item/glob re-exports
+  against the three exact legacy lifecycle statements. It unconditionally rejects every old progress field name
+  regardless of type/access, requires exactly one `MappedFileProgress` field named `progress`, rejects a second
+  kernel field under any name, and preserves the Local dependency closure. Eight negative mutation fixtures cover
+  both review rounds. The sole ArcMut import fingerprint relocation is approved one-for-one; the governed
+  occurrence count remains 3377.
 - [x] `[SCOPE]` This slice does not move `File`, mmap/`ArcMut`, `DefaultMappedFile`, messages/callbacks, config,
   `TransientStorePool`, flush owner, CQ/Index, HA, runtime ownership, or persisted formats. PR-M06-03 and every
   M06 Exit Checklist item remain open.

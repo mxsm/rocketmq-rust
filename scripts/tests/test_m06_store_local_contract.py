@@ -270,30 +270,119 @@ def active_kernel_reexports(source: str) -> set[str]:
     )
 
 
-def active_kernel_use_statements(source: str) -> list[str]:
-    statements: list[str] = []
+def active_use_records(source: str) -> list[tuple[str, str, str]]:
+    records: list[tuple[str, str, str]] = []
     pattern = re.compile(
-        r"(?m)^\s*(?P<visibility>pub(?:\s*\(\s*crate\s*\))?\s+)?"
-        r"use\s+rocketmq_store_local::mapped_file::kernel::(?P<tail>[^;]+);"
+        r"(?m)^[ \t]*(?P<visibility>pub(?:\s*\([^)]*\))?[ \t]+)?"
+        r"use[ \t\r\n]+(?P<body>[^;]+);"
     )
     for match in pattern.finditer(active_rust_source(source)):
         visibility = re.sub(r"\s+", "", (match.group("visibility") or "").strip())
-        tail = re.sub(r"\s+", " ", match.group("tail")).strip()
+        body = re.sub(r"\s*::\s*", "::", match.group("body").strip())
+        body = re.sub(r"\s+as\s+", " as ", body)
+        body = re.sub(r"\s+", " ", body).strip()
         prefix = f"{visibility} " if visibility else ""
-        statements.append(f"{prefix}use {tail}")
+        records.append((visibility, body, f"{prefix}use {body}"))
+    return records
+
+
+def active_kernel_use_statements(source: str) -> list[str]:
+    kernel_prefix = "rocketmq_store_local::mapped_file::kernel::"
+    statements: list[str] = []
+    for visibility, body, _ in active_use_records(source):
+        if not body.startswith(kernel_prefix):
+            continue
+        prefix = f"{visibility} " if visibility else ""
+        statements.append(f"{prefix}use {body.removeprefix(kernel_prefix)}")
     return statements
+
+
+def simple_use_alias(body: str) -> tuple[str, str] | None:
+    direct = re.fullmatch(
+        r"(?P<path>(?:::)?[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)"
+        r" as (?P<alias>[A-Za-z_][A-Za-z0-9_]*)",
+        body,
+    )
+    if direct:
+        return direct.group("path"), direct.group("alias")
+
+    self_alias = re.fullmatch(
+        r"(?P<path>(?:::)?[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)"
+        r"::\{self as (?P<alias>[A-Za-z_][A-Za-z0-9_]*)\}",
+        body,
+    )
+    if self_alias:
+        return self_alias.group("path"), self_alias.group("alias")
+    return None
+
+
+def use_candidate_paths(body: str) -> list[str]:
+    body = re.sub(r" as [A-Za-z_][A-Za-z0-9_]*$", "", body)
+    brace = re.fullmatch(r"(?P<prefix>.+)::\{(?P<members>[^{}]+)\}", body)
+    if brace:
+        prefix = brace.group("prefix")
+        candidates: list[str] = []
+        for member in brace.group("members").split(","):
+            member = re.sub(r"\s+as\s+.+$", "", member.strip())
+            candidates.append(prefix if member == "self" else f"{prefix}::{member}")
+        return candidates
+    return [body]
+
+
+def resolved_use_paths(path: str, aliases: dict[str, set[str]]) -> set[str]:
+    queue = [(path.removeprefix("::").removesuffix("::*"), frozenset())]
+    resolved: set[str] = set()
+    seen: set[tuple[str, frozenset[str]]] = set()
+    while queue:
+        candidate, used_aliases = queue.pop()
+        state = (candidate, used_aliases)
+        if state in seen:
+            continue
+        seen.add(state)
+        resolved.add(candidate)
+        segments = candidate.split("::")
+        for index, segment in enumerate(segments):
+            if segment in used_aliases:
+                continue
+            for target in aliases.get(segment, set()):
+                suffix = "::".join(segments[index + 1:])
+                expanded = f"{target}::{suffix}" if suffix else target
+                queue.append((expanded, used_aliases | {segment}))
+    return resolved
 
 
 def kernel_facade_boundary_uses(
     sources: dict[Path, str],
 ) -> list[tuple[Path, str]]:
+    records_by_path = {
+        path: active_use_records(source)
+        for path, source in sources.items()
+        if "use" in source
+    }
+    aliases: dict[str, set[str]] = {}
+    for records in records_by_path.values():
+        for _, body, _ in records:
+            alias = simple_use_alias(body)
+            if alias:
+                target, name = alias
+                aliases.setdefault(name, set()).add(target)
+
+    kernel_path = "rocketmq_store_local::mapped_file::kernel"
     boundary_uses: list[tuple[Path, str]] = []
-    for path, source in sources.items():
-        if "rocketmq_store_local::mapped_file::kernel::" not in source:
-            continue
-        for statement in active_kernel_use_statements(source):
-            tail = statement.split("use ", maxsplit=1)[1]
-            if statement.startswith("pub") or re.search(r"\bas\b", tail) or "*" in tail:
+    for path in sorted(records_by_path, key=str):
+        for visibility, body, statement in records_by_path[path]:
+            if not visibility.startswith("pub"):
+                continue
+            mentions_kernel_item = any(
+                re.search(rf"\b{re.escape(item)}\b", body)
+                for item in KERNEL_ITEMS
+            )
+            resolves_to_kernel = any(
+                resolved == kernel_path or resolved.startswith(f"{kernel_path}::")
+                for candidate in use_candidate_paths(body)
+                for resolved in resolved_use_paths(candidate, aliases)
+            )
+            if mentions_kernel_item or resolves_to_kernel:
                 boundary_uses.append((path, statement))
     return boundary_uses
 
@@ -303,8 +392,8 @@ def kernel_item_owner_occurrences(
     item: str,
 ) -> list[tuple[Path, str]]:
     declaration = re.compile(
-        rf"\b(?:pub(?:\s*\(\s*crate\s*\))?\s+)?"
-        rf"(?P<kind>struct|trait|type)\s+{re.escape(item)}\b"
+        rf"\b(?:pub(?:\s*\([^)]*\))?\s+)?"
+        rf"(?P<kind>struct|trait|type|enum|union|mod)\s+{re.escape(item)}\b"
     )
     aliased_import = re.compile(rf"\bas\s+{re.escape(item)}\b")
     occurrences: list[tuple[Path, str]] = []
@@ -542,10 +631,52 @@ pub use rocketmq_store_local::mapped_file::kernel::*;
         )
         self.assertEqual(
             [
-                (facade, "pub(crate) use ReferenceResource as Shadow"),
-                (facade, "pub use *"),
+                (
+                    facade,
+                    "pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResource as Shadow",
+                ),
+                (
+                    facade,
+                    "pub use rocketmq_store_local::mapped_file::kernel::*",
+                ),
             ],
             kernel_facade_boundary_uses({facade: source}),
+        )
+
+    def test_kernel_facade_scanner_rejects_module_alias_reexport(self) -> None:
+        facade = Path("module_alias.rs")
+        source = """
+use rocketmq_store_local::mapped_file::kernel as local_kernel;
+pub(crate) use local_kernel::MappedFileProgress;
+"""
+        self.assertEqual(
+            [(facade, "pub(crate) use local_kernel::MappedFileProgress")],
+            kernel_facade_boundary_uses({facade: source}),
+        )
+
+    def test_kernel_facade_scanner_rejects_crate_alias_glob_reexport(self) -> None:
+        facade = Path("crate_alias.rs")
+        source = """
+use rocketmq_store_local as local;
+pub use local::mapped_file::kernel::*;
+"""
+        self.assertEqual(
+            [(facade, "pub use local::mapped_file::kernel::*")],
+            kernel_facade_boundary_uses({facade: source}),
+        )
+
+    def test_kernel_owner_scanner_rejects_enum_and_union_duplicates(self) -> None:
+        enum_owner = Path("enum.rs")
+        union_owner = Path("union.rs")
+        self.assertEqual(
+            [(enum_owner, "enum"), (union_owner, "union")],
+            kernel_item_owner_occurrences(
+                {
+                    enum_owner: "pub enum MappedFileProgress { Empty }",
+                    union_owner: "union MappedFileProgress { value: usize }",
+                },
+                "MappedFileProgress",
+            ),
         )
 
     def test_default_mapped_file_scanner_rejects_old_field_with_new_type(self) -> None:
@@ -676,15 +807,15 @@ struct DefaultMappedFile {
             [
                 (
                     facade_dir / "reference_resource.rs",
-                    "pub(crate) use ReferenceResource",
+                    "pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResource",
                 ),
                 (
                     facade_dir / "reference_resource_counter.rs",
-                    "pub(crate) use ReferenceResourceBase",
+                    "pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResourceBase",
                 ),
                 (
                     facade_dir / "reference_resource_counter.rs",
-                    "pub(crate) use ReferenceResourceCounter",
+                    "pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResourceCounter",
                 ),
             ],
             kernel_facade_boundary_uses(store_sources),
