@@ -19,13 +19,23 @@ use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::message_store::GenericMessageStore;
 use rocketmq_store::store_api_adapter::legacy_append_receipt;
+use rocketmq_store::store_api_adapter::legacy_error_kind_to_api;
+use rocketmq_store::store_api_adapter::legacy_get_status_to_api;
+use rocketmq_store::store_api_adapter::legacy_put_status_to_append_status;
 use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
 use rocketmq_store::store_api_adapter::LegacyMessageStoreAdapter;
+use rocketmq_store::store_api_adapter::LegacyMessageStoreReadAdapter;
+use rocketmq_store::store_api_adapter::LegacyReadResult;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthError;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store::store_error::StoreErrorKind;
+use rocketmq_store_api::AppendStatus;
+use rocketmq_store_api::Durability;
+use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::MessageAppender;
+use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreErrorKind as ApiStoreErrorKind;
 use rocketmq_store_api::StoreHealth;
 
 fn append_result() -> AppendMessageResult {
@@ -54,6 +64,9 @@ fn legacy_receipt_preserves_result_and_separate_watermarks() {
     );
     assert_eq!(80, receipt.appended_watermark());
     assert_eq!(48, receipt.durable_watermark());
+    assert_eq!(AppendStatus::FlushDiskTimeout, receipt.canonical().status());
+    assert_eq!(Some(40..60), receipt.canonical().appended_range());
+    assert_eq!(Durability::Memory, receipt.canonical().durability());
     let append = receipt.result().append_message_result().expect("append result");
     assert_eq!(40, append.wrote_offset);
     assert_eq!(20, append.wrote_bytes);
@@ -61,6 +74,97 @@ fn legacy_receipt_preserves_result_and_separate_watermarks() {
     assert_eq!(1234, append.store_timestamp);
     assert_eq!(7, append.logics_offset);
     assert_eq!(2, append.msg_num);
+}
+
+#[test]
+fn every_legacy_append_status_maps_exhaustively_without_collapsing() {
+    let cases = [
+        (PutMessageStatus::PutOk, AppendStatus::PutOk),
+        (PutMessageStatus::FlushDiskTimeout, AppendStatus::FlushDiskTimeout),
+        (PutMessageStatus::FlushSlaveTimeout, AppendStatus::FlushReplicaTimeout),
+        (PutMessageStatus::SlaveNotAvailable, AppendStatus::ReplicaUnavailable),
+        (PutMessageStatus::ServiceNotAvailable, AppendStatus::ServiceUnavailable),
+        (
+            PutMessageStatus::CreateMappedFileFailed,
+            AppendStatus::StorageUnavailable,
+        ),
+        (PutMessageStatus::MessageIllegal, AppendStatus::InvalidMessage),
+        (
+            PutMessageStatus::PropertiesSizeExceeded,
+            AppendStatus::PropertiesTooLarge,
+        ),
+        (PutMessageStatus::OsPageCacheBusy, AppendStatus::PageCacheBusy),
+        (PutMessageStatus::UnknownError, AppendStatus::Unknown),
+        (
+            PutMessageStatus::InSyncReplicasNotEnough,
+            AppendStatus::InsufficientReplicas,
+        ),
+        (
+            PutMessageStatus::PutToRemoteBrokerFail,
+            AppendStatus::RemoteAppendFailed,
+        ),
+        (
+            PutMessageStatus::LmqConsumeQueueNumExceeded,
+            AppendStatus::QueueLimitExceeded,
+        ),
+        (
+            PutMessageStatus::WheelTimerFlowControl,
+            AppendStatus::ScheduleFlowControl,
+        ),
+        (
+            PutMessageStatus::WheelTimerMsgIllegal,
+            AppendStatus::ScheduleMessageIllegal,
+        ),
+        (PutMessageStatus::WheelTimerNotEnable, AppendStatus::ScheduleDisabled),
+    ];
+
+    for (legacy, expected) in cases {
+        assert_eq!(expected, legacy_put_status_to_append_status(legacy));
+    }
+}
+
+#[test]
+fn every_legacy_error_kind_maps_to_a_neutral_kind_exhaustively() {
+    let cases = [
+        (StoreErrorKind::MappedFile, ApiStoreErrorKind::Storage),
+        (StoreErrorKind::RocksDb, ApiStoreErrorKind::Storage),
+        (StoreErrorKind::NotStarted, ApiStoreErrorKind::NotStarted),
+        (StoreErrorKind::MessageNotFound, ApiStoreErrorKind::NotFound),
+        (StoreErrorKind::Config, ApiStoreErrorKind::InvalidRequest),
+        (StoreErrorKind::Unsupported, ApiStoreErrorKind::Unsupported),
+        (StoreErrorKind::InvalidState, ApiStoreErrorKind::Internal),
+        (StoreErrorKind::Storage, ApiStoreErrorKind::Storage),
+        (StoreErrorKind::TieredStore, ApiStoreErrorKind::Unavailable),
+        (StoreErrorKind::Ha, ApiStoreErrorKind::Unavailable),
+        (StoreErrorKind::DLedger, ApiStoreErrorKind::Unavailable),
+        (StoreErrorKind::MappedFileNotFound, ApiStoreErrorKind::NotFound),
+    ];
+
+    for (legacy, expected) in cases {
+        assert_eq!(expected, legacy_error_kind_to_api(legacy));
+    }
+}
+
+#[test]
+fn every_legacy_get_status_maps_exhaustively() {
+    use rocketmq_store::base::message_status_enum::GetMessageStatus;
+
+    let cases = [
+        (GetMessageStatus::Found, GetStatus::Found),
+        (GetMessageStatus::NoMatchedMessage, GetStatus::NoMatchedMessage),
+        (GetMessageStatus::MessageWasRemoving, GetStatus::MessageWasRemoving),
+        (GetMessageStatus::OffsetFoundNull, GetStatus::OffsetFoundNull),
+        (GetMessageStatus::OffsetOverflowBadly, GetStatus::OffsetOverflowBadly),
+        (GetMessageStatus::OffsetOverflowOne, GetStatus::OffsetOverflowOne),
+        (GetMessageStatus::OffsetTooSmall, GetStatus::OffsetTooSmall),
+        (GetMessageStatus::NoMatchedLogicQueue, GetStatus::NoMatchedLogicQueue),
+        (GetMessageStatus::NoMessageInQueue, GetStatus::NoMessageInQueue),
+        (GetMessageStatus::OffsetReset, GetStatus::OffsetReset),
+    ];
+
+    for (legacy, expected) in cases {
+        assert_eq!(expected, legacy_get_status_to_api(legacy));
+    }
 }
 
 #[test]
@@ -85,6 +189,24 @@ fn every_legacy_health_error_preserves_its_exact_compatibility_token() {
     }
 }
 
+#[test]
+fn legacy_health_exposes_a_backend_neutral_canonical_projection() {
+    let legacy = LegacyStoreHealthSnapshot {
+        writable: false,
+        last_error: Some(LegacyStoreHealthError::new(StoreErrorKind::Ha)),
+        appended_watermark: 80,
+        durable_watermark: 48,
+        ..LegacyStoreHealthSnapshot::default()
+    };
+
+    let canonical = legacy.canonical();
+
+    assert!(!canonical.writable());
+    assert_eq!(Some(ApiStoreErrorKind::Unavailable), canonical.last_error());
+    assert_eq!(80, canonical.appended_watermark());
+    assert_eq!(48, canonical.durable_watermark());
+}
+
 fn assert_adapter_contract<MS>()
 where
     MS: MessageStore,
@@ -97,6 +219,7 @@ where
             Receipt = LegacyAppendReceipt,
             Error = StoreError,
         > + StoreHealth<Snapshot = LegacyStoreHealthSnapshot>,
+    for<'a> LegacyMessageStoreReadAdapter<'a, MS>: MessageReader<Output = Option<LegacyReadResult>, Error = StoreError>,
 {
     assert!(std::mem::size_of::<LegacyMessageStoreAdapter<'_, MS>>() > 0);
 }

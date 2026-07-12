@@ -34,17 +34,27 @@ CAPABILITIES = {
     "AdminStore",
 }
 ALLOWED_DEPENDENCIES = {"rocketmq-model", "rocketmq-error", "bytes"}
-REMOVED_M06_02_TYPES = {
+M06_02_TYPES = {
     "AppendReceipt",
     "AppendStatus",
+    "DerivedProgress",
     "Durability",
+    "FlushBacklog",
+    "GetResult",
+    "GetStatus",
+    "LeasedBytes",
+    "QueryResult",
+    "ReadCacheState",
+    "SelectResult",
+    "StoreHealthSnapshot",
+}
+DEFERRED_TYPES = {
     "ReadRequest",
     "ReadResult",
     "StoredMessage",
     "OffsetRange",
     "ReplicationState",
     "DerivedRecord",
-    "DerivedProgress",
     "AdminRequest",
     "AdminResponse",
     "StoreFuture",
@@ -143,19 +153,35 @@ class StoreApiContractTests(unittest.TestCase):
                     self.assertNotIn("package", spec, f"dependency alias is forbidden: {alias}")
         self.assertEqual(ALLOWED_DEPENDENCIES, dependencies)
 
-    def test_public_contracts_are_associated_type_only_and_backend_neutral(self) -> None:
+    def test_public_contracts_include_m06_02_results_and_remain_backend_neutral(self) -> None:
         source = (CRATE / "src" / "lib.rs").read_text(encoding="utf-8")
         for capability in CAPABILITIES:
             self.assertIn(f"pub trait {capability}", source)
-        for removed in REMOVED_M06_02_TYPES:
+        for required in M06_02_TYPES:
+            self.assertRegex(source, rf"pub (?:struct|enum) {required}(?:<L>)?")
+        for removed in DEFERRED_TYPES:
             self.assertNotIn(f"pub struct {removed}", source)
             self.assertNotIn(f"pub enum {removed}", source)
             self.assertNotIn(f"pub type {removed}", source)
         self.assertNotIn("Pin<Box", source)
         self.assertNotIn("dyn Future", source)
         self.assertNotIn("Box::pin", source)
+        self.assertNotIn("Arc<dyn", source)
+        self.assertNotIn("trait MessageStore", source)
         self.assertIn("pub enum StoreOperation", source)
+        self.assertIn("pub struct LeasedBytes<L>", source)
+        self.assertIn("pub struct SelectResult<L>", source)
+        self.assertIn("pub struct GetResult<L>", source)
+        self.assertIn("pub struct QueryResult<L>", source)
         self.assertEqual({}, forbidden_identifiers(source))
+
+    def test_legacy_read_results_and_native_lease_stay_in_the_store_adapter(self) -> None:
+        source = (ROOT / "rocketmq-store" / "src" / "store_api_adapter.rs").read_text(encoding="utf-8")
+        self.assertIn("impl<MS: MessageStore> MessageReader for LegacyMessageStoreReadAdapter", source)
+        self.assertIn("type Output = Option<LegacyReadResult>", source)
+        self.assertIn("_selected: SelectMappedBufferResult", source)
+        self.assertIn("map(selected_result_from_legacy)", source)
+        self.assertNotIn("impl MessageStore for LegacyMessageStore", source)
 
     def test_compound_backend_identifiers_are_rejected(self) -> None:
         for identifier, token in COMPOUND_FORBIDDEN_FIXTURES.items():

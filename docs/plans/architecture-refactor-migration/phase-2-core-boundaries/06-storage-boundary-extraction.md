@@ -59,12 +59,12 @@
 
 ### PR-M06-02：中立 receipt/read result 与 compatibility bridge
 
-- [ ] `[DEV]` 实现 AppendReceipt 的 first/last/appended/durable watermark 和 Durability。
-- [ ] `[DEV]` 实现 DerivedProgress/StoreHealth，明确派生进度不是主写 ack 条件。
-- [ ] `[DEV]` 为 Get/Query/SelectMappedBuffer 设计 Bytes/lease 中立结果；旧 MappedFile 结果留 Local adapter。
-- [ ] `[DEV]` 将旧 126 方法 trait 组合/转发到窄 capability，不新增 required method。
-- [ ] `[TEST]` 覆盖错误映射、lease 生命周期、receipt 等价和 legacy trait compile fixture。
-- [ ] `[REV]` 检查热路径用泛型/enum，只有冷边界用 `Arc<dyn Trait>`。
+- [x] `[DEV]` 实现 AppendReceipt 的 first/last/appended/durable watermark 和 Durability。
+- [x] `[DEV]` 实现 DerivedProgress/StoreHealth，明确派生进度不是主写 ack 条件。
+- [x] `[DEV]` 为 Get/Query/SelectMappedBuffer 设计 Bytes/lease 中立结果；旧 MappedFile 结果留 Local adapter。
+- [x] `[DEV]` 将旧 126 方法 trait 组合/转发到窄 capability，不新增 required method。
+- [x] `[TEST]` 覆盖错误映射、lease 生命周期、receipt 等价和 legacy trait compile fixture。
+- [x] `[REV]` 检查热路径用泛型/enum，只有冷边界用 `Arc<dyn Trait>`。
 - [ ] 回滚点：保留 API crate但撤销首个 consumer；不复制旧 trait 到新 crate。
 
 ### PR-M06-03：创建 Local crate 并迁 CommitLog/load/recovery
@@ -241,3 +241,24 @@ python scripts/arc_mut_guard.py
   Tokio、MappedFile/HA/Timer/native implementation 类型进入 API crate。
 - [x] `[COMPAT]` CommitLog、CQ/Index、持久布局、`MessageStore`、`LocalFileMessageStore`、公开深路径、
   Serde/default 与 feature alias 均未移动或更改；M06-02 及后续清单保持未完成。
+
+## M06-02 neutral receipt/read results evidence
+
+- [x] `[DEV]` `AppendReceipt` 保留半开 first/last appended range、独立 appended/durable watermark、
+  16 项中立 append status 与显式 `Memory`/`Local`/`Replicated` durability；legacy receipt 继续原样持有
+  `PutMessageResult`，Broker response code/remark 未改变。
+- [x] `[DEV]` `DerivedProgress` 明确拒绝充当 primary acknowledgement 或 durability condition；
+  `StoreHealthSnapshot` 只使用闭合 error kind 和低基数中立健康字段。
+- [x] `[DEV]` `LeasedBytes<L>`、`SelectResult<L>`、`GetResult<L>`、`QueryResult<L>` 使用 `Bytes`
+  和泛型 lease；`LegacyReadLease` 私有持有并按原 `Drop` 释放 `SelectMappedBufferResult`，API crate
+  不出现 MappedFile/native backend 类型。
+- [x] `[DEV]` 借用式 `LegacyMessageStoreReadAdapter` 通过 closed request/result enum 转发现有
+  Get/Query/Select 方法，compile fixture 同时组合 append/read/health capabilities，未复制或扩展
+  126-method `MessageStore` trait。
+- [x] `[TEST]` API default/no-default tests/doctests、receipt/progress/health/read/lease tests、16 append
+  status、10 get status、12 legacy error mapping、legacy compile fixture 与 M06-01 Broker 17 项 parity
+  tests 全部通过。
+- [x] `[REV]` source/dependency contracts、architecture fixtures/baseline、ArcMut fixtures/guard、package
+  和 workspace Clippy 均通过；热路径无 `Arc<dyn Trait>`、boxed future、runtime 或 blocking boundary。
+- [x] `[COMPAT]` CommitLog/WAL owner、CQ/Index 与 persisted layout、公开路径、Serde/default、feature alias、
+  response/watermark/buffer lifetime 均未改变；M06-03 及后续清单仍未完成。

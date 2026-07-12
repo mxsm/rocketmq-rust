@@ -14,20 +14,43 @@
 
 //! Compatibility bridge from the legacy message-store facade to narrow capabilities.
 
+use bytes::Bytes;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_store_api::AppendReceipt;
+use rocketmq_store_api::AppendStatus;
+use rocketmq_store_api::Durability;
+use rocketmq_store_api::FlushBacklog as ApiFlushBacklog;
+use rocketmq_store_api::GetResult;
+use rocketmq_store_api::GetStatus;
+use rocketmq_store_api::LeasedBytes;
 use rocketmq_store_api::MessageAppender;
+use rocketmq_store_api::MessageReader;
+use rocketmq_store_api::QueryResult;
+use rocketmq_store_api::ReadCacheState;
+use rocketmq_store_api::SelectResult;
 use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreErrorKind as ApiStoreErrorKind;
 use rocketmq_store_api::StoreHealth;
+use rocketmq_store_api::StoreHealthSnapshot as ApiStoreHealthSnapshot;
 
+use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::PutMessageResult;
+use crate::base::message_status_enum::GetMessageStatus;
+use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::message_store::MessageStore;
+use crate::base::query_message_result::QueryMessageResult;
+use crate::base::select_result::SelectMappedBufferCacheState;
+use crate::base::select_result::SelectMappedBufferResult;
+use crate::filter::ArcMessageFilter;
 use crate::store_error::StoreErrorKind;
 
 /// Legacy append output plus independent append and durable progress.
 #[derive(Clone)]
 pub struct LegacyAppendReceipt {
     result: PutMessageResult,
+    canonical: AppendReceipt,
     appended_watermark: i64,
     durable_watermark: i64,
 }
@@ -36,6 +59,11 @@ impl LegacyAppendReceipt {
     /// Returns the unchanged legacy append result.
     pub const fn result(&self) -> &PutMessageResult {
         &self.result
+    }
+
+    /// Returns the canonical backend-neutral receipt projection.
+    pub const fn canonical(&self) -> &AppendReceipt {
+        &self.canonical
     }
 
     /// Returns the exclusive primary-log append watermark observed after the operation.
@@ -55,10 +83,76 @@ pub fn legacy_append_receipt(
     appended_watermark: i64,
     durable_watermark: i64,
 ) -> LegacyAppendReceipt {
+    let status = legacy_put_status_to_append_status(result.put_message_status());
+    let canonical = match result.append_message_result() {
+        Some(append) => {
+            let start = append.wrote_offset;
+            let end = start.saturating_add(i64::from(append.wrote_bytes));
+            let durability = if durable_watermark >= end {
+                Durability::Local
+            } else {
+                Durability::Memory
+            };
+            AppendReceipt::new(status, start..end, appended_watermark, durable_watermark, durability)
+        }
+        None => AppendReceipt::rejected(status, appended_watermark, durable_watermark),
+    };
     LegacyAppendReceipt {
         result,
+        canonical,
         appended_watermark,
         durable_watermark,
+    }
+}
+
+/// Maps every legacy append outcome to a distinct neutral status.
+pub const fn legacy_put_status_to_append_status(status: PutMessageStatus) -> AppendStatus {
+    match status {
+        PutMessageStatus::PutOk => AppendStatus::PutOk,
+        PutMessageStatus::FlushDiskTimeout => AppendStatus::FlushDiskTimeout,
+        PutMessageStatus::FlushSlaveTimeout => AppendStatus::FlushReplicaTimeout,
+        PutMessageStatus::SlaveNotAvailable => AppendStatus::ReplicaUnavailable,
+        PutMessageStatus::ServiceNotAvailable => AppendStatus::ServiceUnavailable,
+        PutMessageStatus::CreateMappedFileFailed => AppendStatus::StorageUnavailable,
+        PutMessageStatus::MessageIllegal => AppendStatus::InvalidMessage,
+        PutMessageStatus::PropertiesSizeExceeded => AppendStatus::PropertiesTooLarge,
+        PutMessageStatus::OsPageCacheBusy => AppendStatus::PageCacheBusy,
+        PutMessageStatus::UnknownError => AppendStatus::Unknown,
+        PutMessageStatus::InSyncReplicasNotEnough => AppendStatus::InsufficientReplicas,
+        PutMessageStatus::PutToRemoteBrokerFail => AppendStatus::RemoteAppendFailed,
+        PutMessageStatus::LmqConsumeQueueNumExceeded => AppendStatus::QueueLimitExceeded,
+        PutMessageStatus::WheelTimerFlowControl => AppendStatus::ScheduleFlowControl,
+        PutMessageStatus::WheelTimerMsgIllegal => AppendStatus::ScheduleMessageIllegal,
+        PutMessageStatus::WheelTimerNotEnable => AppendStatus::ScheduleDisabled,
+    }
+}
+
+/// Maps exact legacy failure vocabulary to closed backend-neutral categories.
+pub const fn legacy_error_kind_to_api(kind: StoreErrorKind) -> ApiStoreErrorKind {
+    match kind {
+        StoreErrorKind::NotStarted => ApiStoreErrorKind::NotStarted,
+        StoreErrorKind::MessageNotFound | StoreErrorKind::MappedFileNotFound => ApiStoreErrorKind::NotFound,
+        StoreErrorKind::Config => ApiStoreErrorKind::InvalidRequest,
+        StoreErrorKind::Unsupported => ApiStoreErrorKind::Unsupported,
+        StoreErrorKind::MappedFile | StoreErrorKind::RocksDb | StoreErrorKind::Storage => ApiStoreErrorKind::Storage,
+        StoreErrorKind::TieredStore | StoreErrorKind::Ha | StoreErrorKind::DLedger => ApiStoreErrorKind::Unavailable,
+        StoreErrorKind::InvalidState => ApiStoreErrorKind::Internal,
+    }
+}
+
+/// Maps every legacy get outcome without changing its semantics.
+pub const fn legacy_get_status_to_api(status: GetMessageStatus) -> GetStatus {
+    match status {
+        GetMessageStatus::Found => GetStatus::Found,
+        GetMessageStatus::NoMatchedMessage => GetStatus::NoMatchedMessage,
+        GetMessageStatus::MessageWasRemoving => GetStatus::MessageWasRemoving,
+        GetMessageStatus::OffsetFoundNull => GetStatus::OffsetFoundNull,
+        GetMessageStatus::OffsetOverflowBadly => GetStatus::OffsetOverflowBadly,
+        GetMessageStatus::OffsetOverflowOne => GetStatus::OffsetOverflowOne,
+        GetMessageStatus::OffsetTooSmall => GetStatus::OffsetTooSmall,
+        GetMessageStatus::NoMatchedLogicQueue => GetStatus::NoMatchedLogicQueue,
+        GetMessageStatus::NoMessageInQueue => GetStatus::NoMessageInQueue,
+        GetMessageStatus::OffsetReset => GetStatus::OffsetReset,
     }
 }
 
@@ -121,6 +215,28 @@ impl Default for LegacyStoreHealthSnapshot {
     }
 }
 
+impl LegacyStoreHealthSnapshot {
+    /// Returns the backend-neutral health result while retaining exact legacy data in this value.
+    pub fn canonical(&self) -> ApiStoreHealthSnapshot {
+        ApiStoreHealthSnapshot {
+            writable: self.writable,
+            last_error: self.last_error.map(|error| legacy_error_kind_to_api(error.kind)),
+            page_cache_busy: self.page_cache_busy,
+            transient_pool_deficient: self.transient_pool_deficient,
+            flush_backlog: ApiFlushBacklog {
+                queue_depth: self.flush_backlog.queue_depth,
+                oldest_wait_millis: self.flush_backlog.oldest_wait_millis,
+            },
+            dispatch_behind_bytes: self.dispatch_behind_bytes,
+            shutdown: self.shutdown,
+            replication_pending_count: self.replication_pending_count,
+            replication_oldest_wait_millis: self.replication_oldest_wait_millis,
+            appended_watermark: self.appended_watermark,
+            durable_watermark: self.durable_watermark,
+        }
+    }
+}
+
 /// Borrowing adapter that preserves the legacy [`MessageStore`] implementation.
 pub struct LegacyMessageStoreAdapter<'a, MS> {
     store: &'a mut MS,
@@ -142,6 +258,134 @@ impl<'a, MS> LegacyMessageStoreHealthAdapter<'a, MS> {
     /// Wraps an immutable store view without changing ownership.
     pub fn new(store: &'a MS) -> Self {
         Self { store }
+    }
+}
+
+/// Read-only compatibility adapter that forwards legacy reads through [`MessageReader`].
+pub struct LegacyMessageStoreReadAdapter<'a, MS> {
+    store: &'a MS,
+}
+
+impl<'a, MS> LegacyMessageStoreReadAdapter<'a, MS> {
+    /// Wraps an immutable store view without changing ownership or adding legacy methods.
+    pub const fn new(store: &'a MS) -> Self {
+        Self { store }
+    }
+}
+
+/// Legacy read calls represented as one closed compatibility request enum.
+pub enum LegacyReadRequest {
+    Get {
+        group: CheetahString,
+        topic: CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_messages: i32,
+        max_total_size: Option<i32>,
+        filter: Option<ArcMessageFilter>,
+    },
+    Query {
+        topic: CheetahString,
+        key: CheetahString,
+        max_messages: i32,
+        begin: i64,
+        end: i64,
+    },
+    Select {
+        physical_offset: i64,
+        size: Option<i32>,
+    },
+}
+
+/// Neutral result variants corresponding to legacy Get, Query, and selected-buffer reads.
+pub enum LegacyReadResult {
+    Get(GetResult<LegacyReadLease>),
+    Query(QueryResult<LegacyReadLease>),
+    Select(SelectResult<LegacyReadLease>),
+}
+
+/// Lease guard that keeps the legacy selected result alive behind the compatibility boundary.
+///
+/// The native selected-buffer type remains private and is released by its existing `Drop`
+/// implementation when the neutral result is dropped.
+pub struct LegacyReadLease {
+    _selected: SelectMappedBufferResult,
+}
+
+/// Converts a legacy selected buffer into neutral leased bytes.
+pub fn selected_result_from_legacy(selected: SelectMappedBufferResult) -> SelectResult<LegacyReadLease> {
+    let start_offset = selected.start_offset;
+    let cache_state = match selected.cache_state {
+        SelectMappedBufferCacheState::Unknown => ReadCacheState::Unknown,
+        SelectMappedBufferCacheState::Hot => ReadCacheState::Hot,
+        SelectMappedBufferCacheState::Cold => ReadCacheState::Cold,
+    };
+    let bytes = selected
+        .get_bytes()
+        .unwrap_or_else(|| Bytes::copy_from_slice(selected.get_buffer()));
+    SelectResult::new(
+        start_offset,
+        LeasedBytes::new(bytes, LegacyReadLease { _selected: selected }),
+        cache_state,
+    )
+}
+
+/// Converts a legacy logical get result without changing navigation or accounting fields.
+pub fn get_result_from_legacy(result: GetMessageResult) -> GetResult<LegacyReadLease> {
+    let status = result.status().map(legacy_get_status_to_api);
+    let queue_offsets = result.message_queue_offset().clone();
+    let next_begin_offset = result.next_begin_offset();
+    let min_offset = result.min_offset();
+    let max_offset = result.max_offset();
+    let buffer_total_size = result.buffer_total_size();
+    let message_count = result.message_count();
+    let suggest_pulling_from_replica = result.suggest_pulling_from_slave();
+    let commercial_message_count = result.msg_count4_commercial();
+    let commercial_size_per_message = result.commercial_size_per_msg();
+    let cold_data_sum = result.cold_data_sum();
+    let records = result
+        .message_mapped_vec()
+        .into_iter()
+        .map(selected_result_from_legacy)
+        .collect();
+    GetResult {
+        records,
+        queue_offsets,
+        status,
+        next_begin_offset,
+        min_offset,
+        max_offset,
+        buffer_total_size,
+        message_count,
+        suggest_pulling_from_replica,
+        commercial_message_count,
+        commercial_size_per_message,
+        cold_data_sum,
+    }
+}
+
+/// Converts a legacy key-query result without changing its index-safety projection.
+pub fn query_result_from_legacy(result: QueryMessageResult) -> QueryResult<LegacyReadLease> {
+    let QueryMessageResult {
+        message_maped_list,
+        index_last_update_timestamp,
+        index_last_update_phyoffset,
+        buffer_total_size,
+        index_query_safe,
+        index_safe_phyoffset,
+        index_confirm_phyoffset,
+    } = result;
+    QueryResult {
+        records: message_maped_list
+            .into_iter()
+            .map(selected_result_from_legacy)
+            .collect(),
+        index_last_update_timestamp,
+        index_last_update_physical_offset: index_last_update_phyoffset,
+        buffer_total_size,
+        index_query_safe,
+        index_safe_physical_offset: index_safe_phyoffset,
+        index_confirm_physical_offset: index_confirm_phyoffset,
     }
 }
 
@@ -170,6 +414,67 @@ impl<MS: MessageStore> MessageAppender<MessageExtBatch> for LegacyMessageStoreAd
             self.store.get_max_phy_offset(),
             self.store.get_flushed_where(),
         ))
+    }
+}
+
+impl<MS: MessageStore> MessageReader for LegacyMessageStoreReadAdapter<'_, MS> {
+    type Request = LegacyReadRequest;
+    type Output = Option<LegacyReadResult>;
+    type Error = StoreError;
+
+    async fn read(&self, request: Self::Request) -> Result<Self::Output, Self::Error> {
+        let result = match request {
+            LegacyReadRequest::Get {
+                group,
+                topic,
+                queue_id,
+                offset,
+                max_messages,
+                max_total_size,
+                filter,
+            } => {
+                let result = match max_total_size {
+                    Some(max_total_size) => {
+                        self.store
+                            .get_message_with_size_limit(
+                                &group,
+                                &topic,
+                                queue_id,
+                                offset,
+                                max_messages,
+                                max_total_size,
+                                filter,
+                            )
+                            .await
+                    }
+                    None => {
+                        self.store
+                            .get_message(&group, &topic, queue_id, offset, max_messages, filter)
+                            .await
+                    }
+                };
+                result.map(get_result_from_legacy).map(LegacyReadResult::Get)
+            }
+            LegacyReadRequest::Query {
+                topic,
+                key,
+                max_messages,
+                begin,
+                end,
+            } => self
+                .store
+                .query_message(&topic, &key, max_messages, begin, end)
+                .await
+                .map(query_result_from_legacy)
+                .map(LegacyReadResult::Query),
+            LegacyReadRequest::Select { physical_offset, size } => match size {
+                Some(size) => self.store.select_one_message_by_offset_with_size(physical_offset, size),
+                None => self.store.select_one_message_by_offset(physical_offset),
+            }
+            .map(selected_result_from_legacy)
+            .map(LegacyReadResult::Select),
+        };
+        Ok(result)
     }
 }
 
