@@ -46,7 +46,6 @@ use rocketmq_common::CRC32Utils::crc32_bytes;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::cheetah_from_utf8_lossy;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
-use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_V2;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
@@ -89,12 +88,16 @@ use crate::log_file::commit_log_loader::CommitLogLoader;
 use crate::log_file::commit_log_loader::LoadStatistics;
 use crate::log_file::commit_log_loader::RecoveryFilePrefetch;
 use crate::log_file::commit_log_loader::RecoveryMmapAdvice;
+use crate::log_file::commit_log_record_parser::decode_commit_log_record;
+use crate::log_file::commit_log_record_parser::CommitLogRecordBodyMode;
+use crate::log_file::commit_log_record_parser::CommitLogRecordChecksum;
+use crate::log_file::commit_log_record_parser::CommitLogRecordErrorKind;
+use crate::log_file::commit_log_record_parser::CommitLogRecordOutcome;
 use crate::log_file::flush_manager_impl::default_flush_manager::DefaultFlushManager;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
-use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
 use crate::message_store::local_file_message_store::CommitLogDispatcherDefault;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
@@ -2416,97 +2419,69 @@ pub fn check_message_and_return_size(
     max_delay_level: i32,
     delay_level_table: &BTreeMap<i32 /* level */, i64 /* delay timeMillis */>,
 ) -> DispatchRequest {
-    let original_message = if check_crc && message_store_config.force_verify_prop_crc {
-        Some(bytes.clone())
-    } else {
-        None
-    };
-    // Total size
-    let total_size = bytes.get_i32();
+    struct CommonCommitLogChecksum;
 
-    // message magic code
-    let magic_code = bytes.get_i32();
-    match magic_code {
-        MESSAGE_MAGIC_CODE | MESSAGE_MAGIC_CODE_V2 => {
-            // Continue processing the message
+    impl CommitLogRecordChecksum for CommonCommitLogChecksum {
+        fn checksum(&self, bytes: &[u8]) -> u32 {
+            crc32(bytes)
         }
-        BLANK_MAGIC_CODE => {
+    }
+
+    let force_verify_prop_crc = check_crc && message_store_config.force_verify_prop_crc;
+    let body_mode = if !read_body {
+        CommitLogRecordBodyMode::Skip
+    } else if check_crc && !force_verify_prop_crc {
+        CommitLogRecordBodyMode::ReadAndVerify
+    } else {
+        CommitLogRecordBodyMode::Read
+    };
+    let record = match decode_commit_log_record(bytes, body_mode, &CommonCommitLogChecksum) {
+        Ok(CommitLogRecordOutcome::Blank { .. }) => {
+            bytes.advance(8);
             return DispatchRequest {
                 msg_size: 0,
                 success: true,
                 ..Default::default()
             };
         }
-        _ => {
-            warn!("found a illegal magic code 0x{}", format!("{:X}", magic_code),);
-            return DispatchRequest {
-                msg_size: -1,
-                success: false,
-                ..Default::default()
-            };
-        }
-    }
-    let message_version = match MessageVersion::value_of_magic_code(magic_code) {
-        Ok(value) => value,
-        Err(_) => {
-            return DispatchRequest {
-                msg_size: -1,
-                success: false,
-                ..Default::default()
-            };
-        }
-    };
-    let body_crc = bytes.get_i32();
-    let queue_id = bytes.get_i32();
-    let flag = bytes.get_i32();
-    let queue_offset = bytes.get_i64();
-    let physic_offset = bytes.get_i64();
-    let sys_flag = bytes.get_i32();
-    let born_time_stamp = bytes.get_i64();
-
-    let born_host = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
-        bytes.copy_to_bytes(8)
-    } else {
-        bytes.copy_to_bytes(20)
-    };
-    let store_timestamp = bytes.get_i64();
-
-    let store_host = if sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG == 0 {
-        bytes.copy_to_bytes(8)
-    } else {
-        bytes.copy_to_bytes(20)
-    };
-
-    let reconsume_times = bytes.get_i32();
-    let prepared_transaction_offset = bytes.get_i64();
-    let body_len = bytes.get_i32();
-    if body_len > 0 {
-        if read_body {
-            //body content
-            let body = bytes.copy_to_bytes(body_len as usize);
-            if check_crc && !message_store_config.force_verify_prop_crc {
-                let crc = crc32(body.as_ref());
-                if crc != body_crc as u32 {
-                    warn!("CRC check failed. bodyCRC={}, currentCRC={}", crc, body_crc);
-                    return DispatchRequest {
-                        msg_size: -1,
-                        success: false,
-                        ..Default::default()
-                    };
+        Ok(CommitLogRecordOutcome::Message(record)) => record,
+        Err(error) => {
+            match error.kind {
+                CommitLogRecordErrorKind::IllegalMagic { magic_code } => {
+                    warn!("found a illegal magic code 0x{}", format!("{:X}", magic_code));
+                }
+                CommitLogRecordErrorKind::BodyCrcMismatch { computed, stored } => {
+                    warn!("CRC check failed. bodyCRC={}, currentCRC={}", computed, stored);
+                }
+                CommitLogRecordErrorKind::Truncated {
+                    field,
+                    needed,
+                    remaining,
+                } => {
+                    warn!(
+                        "truncated commitlog record at {:?}: needed={}, remaining={}",
+                        field, needed, remaining
+                    );
+                }
+                CommitLogRecordErrorKind::NegativeLength { field, value } => {
+                    warn!("negative commitlog record length at {:?}: value={}", field, value);
                 }
             }
-        } else {
-            //skip body content
-            bytes.advance(body_len as usize);
+            return DispatchRequest {
+                msg_size: -1,
+                success: false,
+                ..Default::default()
+            };
         }
-    }
-    let topic_len = message_version.get_topic_length(bytes);
-    let topic_bytes = bytes.copy_to_bytes(topic_len);
-    let topic = cheetah_from_utf8_lossy(topic_bytes.as_ref());
-    let properties_length = bytes.get_i16();
+    };
+
+    let total_size = record.declared_size;
+    let body_len = record.body_len;
+    let topic_len = record.topic.len();
+    let properties_length = record.properties_len;
+    let topic = cheetah_from_utf8_lossy(record.topic.as_ref());
     let (tags_code, keys, uniq_key, properties_map) = if properties_length > 0 {
-        let properties = bytes.copy_to_bytes(properties_length as usize);
-        let properties_content = cheetah_from_utf8_lossy(properties.as_ref());
+        let properties_content = cheetah_from_utf8_lossy(record.properties.as_ref());
         let properties_map = string_to_message_properties(Some(&properties_content));
         let keys = properties_map.get(MessageConst::PROPERTY_KEYS).cloned();
         let uniq_key = properties_map
@@ -2548,9 +2523,9 @@ pub fn check_message_and_return_size(
                     }
                     if delay_level > 0 {
                         if let Some(delay_time) = delay_level_table.get(&delay_level) {
-                            tags_code = *delay_time + store_timestamp;
+                            tags_code = *delay_time + record.store_timestamp;
                         } else {
-                            tags_code = store_timestamp + 1000;
+                            tags_code = record.store_timestamp + 1000;
                         }
                     }
                 }
@@ -2561,7 +2536,7 @@ pub fn check_message_and_return_size(
         (0, CheetahString::new(), None, HashMap::new())
     };
 
-    if check_crc && message_store_config.force_verify_prop_crc {
+    if force_verify_prop_crc {
         match parse_property_crc(&properties_map) {
             Ok(Some(expected_crc)) => {
                 if total_size < CRC32_RESERVED_LEN {
@@ -2577,18 +2552,10 @@ pub fn check_message_and_return_size(
                 }
 
                 let check_size = total_size as usize - CRC32_RESERVED_LEN as usize;
-                let Some(original_message) = original_message.as_ref() else {
-                    warn!("property CRC check failed because original message bytes are unavailable");
-                    return DispatchRequest {
-                        msg_size: -1,
-                        success: false,
-                        ..Default::default()
-                    };
-                };
-                if original_message.len() < check_size {
+                if record.raw_frame.len() < check_size {
                     warn!(
                         "property CRC check failed because original message length {} is smaller than check size {}",
-                        original_message.len(),
+                        record.raw_frame.len(),
                         check_size
                     );
                     return DispatchRequest {
@@ -2598,7 +2565,7 @@ pub fn check_message_and_return_size(
                     };
                 }
 
-                let current_crc = crc32(&original_message[..check_size]);
+                let current_crc = crc32(&record.raw_frame[..check_size]);
                 if current_crc != expected_crc {
                     warn!(
                         "property CRC check failed. expectedCRC={}, currentCRC={}",
@@ -2623,20 +2590,13 @@ pub fn check_message_and_return_size(
         }
     }
 
-    let read_length = MessageExtEncoder::cal_msg_length(
-        message_version,
-        sys_flag,
-        body_len,
-        topic_len as i32,
-        properties_length as i32,
-    );
-
-    if total_size != read_length {
+    if !record.has_exact_declared_size() {
         error!(
             "[BUG]read total count not equals msg total size. totalSize={}, readTotalCount={}, bodyLen={}, \
              topicLen={}, propertiesLength={}",
-            total_size, read_length, body_len, topic_len, properties_length
+            total_size, record.computed_size, body_len, topic_len, properties_length
         );
+        bytes.advance(total_size as usize);
         return DispatchRequest {
             msg_size: total_size,
             success: false,
@@ -2646,16 +2606,16 @@ pub fn check_message_and_return_size(
     let mut dispatch_request = DispatchRequest {
         success: true,
         topic,
-        queue_id,
-        commit_log_offset: physic_offset,
+        queue_id: record.queue_id,
+        commit_log_offset: record.physical_offset,
         msg_size: total_size,
         tags_code,
-        store_timestamp,
-        consume_queue_offset: queue_offset,
+        store_timestamp: record.store_timestamp,
+        consume_queue_offset: record.queue_offset,
         keys,
         uniq_key,
-        sys_flag,
-        prepared_transaction_offset,
+        sys_flag: record.sys_flag,
+        prepared_transaction_offset: record.prepared_transaction_offset,
         ..DispatchRequest::default()
     };
     if !set_batch_size_if_needed(&properties_map, &mut dispatch_request) {
@@ -2666,6 +2626,7 @@ pub fn check_message_and_return_size(
         };
     }
     dispatch_request.properties_map = Some(properties_map);
+    bytes.advance(total_size as usize);
     dispatch_request
 }
 

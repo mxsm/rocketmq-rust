@@ -15,6 +15,7 @@
 pub(crate) mod cold_data_check_service;
 pub mod commit_log;
 pub(crate) mod commit_log_loader;
+pub(crate) mod commit_log_record_parser;
 pub mod commit_log_recovery;
 pub mod flush_manager_impl;
 pub mod group_commit_request;
