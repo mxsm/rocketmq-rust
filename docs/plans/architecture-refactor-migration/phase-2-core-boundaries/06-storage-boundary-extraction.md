@@ -224,3 +224,20 @@ python scripts/arc_mut_guard.py
 - 向 M07 交付 Broker processor 可消费的 store-api 和 facade 可见性规则。
 - 向 M10 交付唯一 WAL、receipt/progress、Local/Rocks golden、feature matrix 和故障 corpus。
 - 向 M09 交付 store facade ledger、公共路径和下一 major 删除清单。
+
+## M06-01 capability spike evidence
+
+- [x] `[ARCH]` 冻结 `StoreLifecycle`、`MessageAppender`、`MessageReader`、`OffsetIndex`、
+  `StoreHealth`、`ReplicationControl`、`DerivedRecordSink` 和 `AdminStore` 八个窄能力契约。
+- [x] `[DEV]` 创建 workspace crate `rocketmq-store-api`，继承 workspace 元数据，`default = []`，
+  normal dependency 仅为 `rocketmq-model`、`rocketmq-error` 和 `bytes`。
+- [x] `[DEV]` 用低基数 `StoreErrorKind`、稳定 operation 名和无 backend detail 的 `StoreError`
+  固定 backend-neutral 错误面；native 错误仅在 legacy adapter 内分类。
+- [x] `[DEV]` Broker `SendMessageProcessor` 的主单条/批量 append 与发送拒绝路径分别通过
+  `MessageAppender<M>` 和 `StoreHealth` seam；现有 `MessageStore` 由借用式 compatibility adapter 保留。
+- [x] `[TEST]` compile contract、全部 legacy append status 的 processor response parity、typed error、
+  writable health、append/durable watermark 与 legacy adapter fixture 均有 focused 覆盖。
+- [x] `[REV]` dependency policy 和 source contract 拒绝 runtime、Remoting、Observability、backend、
+  Tokio、MappedFile/HA/Timer/native implementation 类型进入 API crate。
+- [x] `[COMPAT]` CommitLog、CQ/Index、持久布局、`MessageStore`、`LocalFileMessageStore`、公开深路径、
+  Serde/default 与 feature alias 均未移动或更改；M06-02 及后续清单保持未完成。

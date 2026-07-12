@@ -56,6 +56,7 @@ rocketmq-rust        = { workspace = true }
 rocketmq-common      = { workspace = true }
 rocketmq-remoting    = { workspace = true }
 rocketmq-store       = { workspace = true }
+rocketmq-store-api   = { workspace = true }
 rocketmq-filter      = { workspace = true }
 rocketmq-runtime     = { workspace = true }
 rocketmq-client-rust = { workspace = true }

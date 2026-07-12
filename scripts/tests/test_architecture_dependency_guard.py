@@ -177,6 +177,23 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
         )
         self.assert_rule(self.run_guard(fixture), "store-api-no-backend")
 
+    def test_store_api_must_not_depend_on_runtime_or_observability(self) -> None:
+        fixture = metadata(
+            [
+                package(
+                    "rocketmq-store-api",
+                    [dependency("rocketmq-runtime"), dependency("rocketmq-observability", kind="dev")],
+                ),
+                package("rocketmq-runtime"),
+                package("rocketmq-observability"),
+            ]
+        )
+        result = self.run_guard(fixture)
+        self.assertEqual(1, result.returncode)
+        self.assertIn("rule=store-api-runtime-neutral", result.stdout)
+        self.assertIn("target=rocketmq-runtime", result.stdout)
+        self.assertIn("target=rocketmq-observability", result.stdout)
+
     def test_proxy_local_must_not_depend_on_client(self) -> None:
         fixture = metadata(
             [

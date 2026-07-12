@@ -41,6 +41,18 @@
       ]
     },
     {
+      "id": "store-api-runtime-neutral",
+      "callers": ["rocketmq-store-api"],
+      "forbidden_targets": [
+        "rocketmq-runtime",
+        "rocketmq-remoting",
+        "rocketmq-observability",
+        "rocketmq-broker",
+        "tokio",
+        "tokio-util"
+      ]
+    },
+    {
       "id": "security-api-contract-only",
       "callers": ["rocketmq-security-api"],
       "forbidden_targets": [

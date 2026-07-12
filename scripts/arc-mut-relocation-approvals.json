@@ -13,6 +13,12 @@
       "from": "ecabd9ec835fb10dbb1b0729",
       "to": "9df9acb361555697c24fe638",
       "reason": "Adding the private per-instance command interceptor wrapper changed the fingerprint of the existing ConnectionHandlerContext field within the same ConnectionHandler struct without adding an occurrence"
+    },
+    {
+      "identity": "07b82a25fb54bfc5a2265102",
+      "from": "0b8a421f424da74a471ce80c",
+      "to": "4e9b4d9782e8d81b77acf884",
+      "reason": "Extending the existing send processor test module with store capability fixtures changed adjacent tokens around the same test glob import without adding an occurrence"
     }
   ]
 }

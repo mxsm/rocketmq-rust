@@ -32,6 +32,7 @@ members = [
   "rocketmq-remoting",
   "rocketmq-runtime",
   "rocketmq-security-api",
+  "rocketmq-store-api",
   "rocketmq-transport",
   "rocketmq-tieredstore",
   "rocketmq-store",
@@ -82,6 +83,7 @@ rocketmq-observability = { version = "1.0.0", path = "./rocketmq-observability" 
 rocketmq-model       = { version = "1.0.0", path = "./rocketmq-model" }
 rocketmq-protocol    = { version = "1.0.0", path = "./rocketmq-protocol" }
 rocketmq-security-api = { version = "1.0.0", path = "./rocketmq-security-api" }
+rocketmq-store-api     = { version = "1.0.0", path = "./rocketmq-store-api", default-features = false }
 rocketmq-transport    = { version = "1.0.0", path = "./rocketmq-transport", default-features = false }
 
 tokio        = { version = "1.52", features = ["full"] }

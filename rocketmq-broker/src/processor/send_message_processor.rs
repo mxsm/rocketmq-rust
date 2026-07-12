@@ -70,12 +70,18 @@ use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
-use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::base::message_store::StoreHealthSnapshot;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
+use rocketmq_store::store_api_adapter::append_receipt_from_legacy;
+use rocketmq_store::store_api_adapter::LegacyMessageStoreAdapter;
+use rocketmq_store::store_api_adapter::LegacyMessageStoreHealthAdapter;
+use rocketmq_store_api::AppendReceipt;
+use rocketmq_store_api::AppendStatus;
+use rocketmq_store_api::MessageAppender;
+use rocketmq_store_api::StoreHealth;
+use rocketmq_store_api::StoreHealthSnapshot;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -163,11 +169,11 @@ where
                 )),
             );
         }
-        let message_store = self.inner.broker_runtime_inner.message_store_unchecked();
-        if let Some(remark) = store_health_reject_remark(
-            self.inner.broker_runtime_inner.broker_config(),
-            message_store.health_snapshot(),
-        ) {
+        let message_store = self.inner.broker_runtime_inner.message_store_unchecked().as_ref();
+        let store_health = LegacyMessageStoreHealthAdapter::new(message_store);
+        if let Some(remark) =
+            store_health_reject_remark_from(self.inner.broker_runtime_inner.broker_config(), &store_health)
+        {
             return (
                 true,
                 Some(RemotingCommand::create_response_command_with_code_remark(
@@ -408,22 +414,22 @@ where
             MessageClientIDSetter::get_uniq_id(&batch_message.message_ext_broker_inner.message_ext_inner.message);
         let topic = batch_message.message_ext_broker_inner.message_ext_inner.topic().clone();
         let topic_message_type = crate::metrics::broker_metrics_manager::get_message_type(&request_header);
-        let put_message_result = if is_inner_batch {
-            self.inner
-                .broker_runtime_inner
-                .message_store_unchecked_mut()
-                .put_message(batch_message.message_ext_broker_inner)
+        let append_receipt = if is_inner_batch {
+            let mut store =
+                LegacyMessageStoreAdapter::new(self.inner.broker_runtime_inner.message_store_unchecked_mut().as_mut());
+            append_message_with_store(&mut store, batch_message.message_ext_broker_inner)
                 .await
+                .map_err(map_store_api_error)?
         } else {
-            self.inner
-                .broker_runtime_inner
-                .message_store_unchecked_mut()
-                .put_messages(batch_message)
+            let mut store =
+                LegacyMessageStoreAdapter::new(self.inner.broker_runtime_inner.message_store_unchecked_mut().as_mut());
+            append_message_with_store(&mut store, batch_message)
                 .await
+                .map_err(map_store_api_error)?
         };
         let result = self
             .handle_put_message_result(
-                put_message_result,
+                append_receipt,
                 &mut response,
                 request,
                 topic.as_str(),
@@ -584,21 +590,24 @@ where
         let topic_message_type = crate::metrics::broker_metrics_manager::get_message_type(&request_header);
         let transaction_id = MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
         let recall_handle = self.build_recall_handle(&message_ext);
-        let put_message_result = if send_transaction_prepare_message {
-            self.inner
+        let append_receipt = if send_transaction_prepare_message {
+            let result = self
+                .inner
                 .transactional_message_service
                 .prepare_message(message_ext)
-                .await
+                .await;
+            let store = self.inner.broker_runtime_inner.message_store_unchecked().as_ref();
+            append_receipt_from_legacy(result, store.get_max_phy_offset(), store.get_flushed_where())
         } else {
-            self.inner
-                .broker_runtime_inner
-                .message_store_unchecked_mut()
-                .put_message(message_ext)
+            let mut store =
+                LegacyMessageStoreAdapter::new(self.inner.broker_runtime_inner.message_store_unchecked_mut().as_mut());
+            append_message_with_store(&mut store, message_ext)
                 .await
+                .map_err(map_store_api_error)?
         };
         let result = self
             .handle_put_message_result(
-                put_message_result,
+                append_receipt,
                 &mut response,
                 request,
                 topic.as_str(),
@@ -622,140 +631,135 @@ where
             Ok(Some(response))
         }
     }
+}
 
-    /// Map PutMessageStatus to response code
-    #[inline]
-    fn map_put_status_to_response_code(
-        &self,
-        status: rocketmq_store::base::message_status_enum::PutMessageStatus,
-        response: &mut RemotingCommand,
-    ) -> bool {
-        use rocketmq_store::base::message_status_enum::PutMessageStatus;
-
-        match status {
-            PutMessageStatus::PutOk => {
-                response.set_code_ref(RemotingSysResponseCode::Success);
-                true
-            }
-            PutMessageStatus::FlushDiskTimeout => {
-                response.set_code_ref(ResponseCode::FlushDiskTimeout);
-                true
-            }
-            PutMessageStatus::FlushSlaveTimeout => {
-                response.set_code_ref(ResponseCode::FlushSlaveTimeout);
-                true
-            }
-            PutMessageStatus::SlaveNotAvailable => {
-                response.set_code_ref(ResponseCode::SlaveNotAvailable);
-                true
-            }
-            PutMessageStatus::ServiceNotAvailable => {
-                response
-                    .set_code_mut(ResponseCode::ServiceNotAvailable)
-                    .set_remark_mut(error_messages::SERVICE_NOT_AVAILABLE);
-                false
-            }
-            PutMessageStatus::CreateMappedFileFailed => {
-                response
-                    .set_code_mut(RemotingSysResponseCode::SystemError)
-                    .set_remark_mut(error_messages::MAPPED_FILE_CREATE_FAILED);
-                false
-            }
-            PutMessageStatus::MessageIllegal | PutMessageStatus::PropertiesSizeExceeded => {
-                response
-                    .set_code_mut(ResponseCode::MessageIllegal)
-                    .set_remark_mut(error_messages::MESSAGE_ILLEGAL);
-                false
-            }
-            PutMessageStatus::OsPageCacheBusy => {
-                response
-                    .set_code_mut(RemotingSysResponseCode::SystemError)
-                    .set_remark_mut(error_messages::OS_PAGE_CACHE_BUSY);
-                false
-            }
-            PutMessageStatus::UnknownError => {
-                response
-                    .set_code_mut(RemotingSysResponseCode::SystemError)
-                    .set_remark_mut("UNKNOWN_ERROR");
-                false
-            }
-            PutMessageStatus::InSyncReplicasNotEnough => {
-                response
-                    .set_code_mut(RemotingSysResponseCode::SystemError)
-                    .set_remark_mut(error_messages::IN_SYNC_REPLICAS_NOT_ENOUGH);
-                false
-            }
-            PutMessageStatus::LmqConsumeQueueNumExceeded => {
-                response
-                    .set_code_mut(RemotingSysResponseCode::SystemError)
-                    .set_remark_mut(error_messages::LMQ_QUEUE_NUM_EXCEEDED);
-                false
-            }
-            PutMessageStatus::WheelTimerFlowControl => {
-                response
-                    .set_code_mut(RemotingSysResponseCode::SystemError)
-                    .set_remark_mut(error_messages::TIMER_FLOW_CONTROL);
-                false
-            }
-            PutMessageStatus::WheelTimerMsgIllegal => {
-                response
-                    .set_code_mut(ResponseCode::MessageIllegal)
-                    .set_remark_mut(error_messages::TIMER_MSG_ILLEGAL);
-                false
-            }
-            PutMessageStatus::WheelTimerNotEnable => {
-                response
-                    .set_code_mut(RemotingSysResponseCode::SystemError)
-                    .set_remark_mut(error_messages::TIMER_NOT_ENABLED);
-                false
-            }
-            _ => {
-                response
-                    .set_code_mut(RemotingSysResponseCode::SystemError)
-                    .set_remark_mut("UNKNOWN_ERROR DEFAULT");
-                false
-            }
+/// Map the backend-neutral append status to the legacy response code.
+#[inline]
+fn map_append_status_to_response(status: AppendStatus, response: &mut RemotingCommand) -> bool {
+    match status {
+        AppendStatus::PutOk => {
+            response.set_code_ref(RemotingSysResponseCode::Success);
+            true
+        }
+        AppendStatus::FlushDiskTimeout => {
+            response.set_code_ref(ResponseCode::FlushDiskTimeout);
+            true
+        }
+        AppendStatus::FlushReplicaTimeout => {
+            response.set_code_ref(ResponseCode::FlushSlaveTimeout);
+            true
+        }
+        AppendStatus::ReplicaUnavailable => {
+            response.set_code_ref(ResponseCode::SlaveNotAvailable);
+            true
+        }
+        AppendStatus::ServiceUnavailable => {
+            response
+                .set_code_mut(ResponseCode::ServiceNotAvailable)
+                .set_remark_mut(error_messages::SERVICE_NOT_AVAILABLE);
+            false
+        }
+        AppendStatus::StorageUnavailable => {
+            response
+                .set_code_mut(RemotingSysResponseCode::SystemError)
+                .set_remark_mut(error_messages::MAPPED_FILE_CREATE_FAILED);
+            false
+        }
+        AppendStatus::InvalidMessage => {
+            response
+                .set_code_mut(ResponseCode::MessageIllegal)
+                .set_remark_mut(error_messages::MESSAGE_ILLEGAL);
+            false
+        }
+        AppendStatus::PageCacheBusy => {
+            response
+                .set_code_mut(RemotingSysResponseCode::SystemError)
+                .set_remark_mut(error_messages::OS_PAGE_CACHE_BUSY);
+            false
+        }
+        AppendStatus::Unknown => {
+            response
+                .set_code_mut(RemotingSysResponseCode::SystemError)
+                .set_remark_mut("UNKNOWN_ERROR");
+            false
+        }
+        AppendStatus::ReplicasUnavailable => {
+            response
+                .set_code_mut(RemotingSysResponseCode::SystemError)
+                .set_remark_mut(error_messages::IN_SYNC_REPLICAS_NOT_ENOUGH);
+            false
+        }
+        AppendStatus::QueueLimit => {
+            response
+                .set_code_mut(RemotingSysResponseCode::SystemError)
+                .set_remark_mut(error_messages::LMQ_QUEUE_NUM_EXCEEDED);
+            false
+        }
+        AppendStatus::TimerFlowControl => {
+            response
+                .set_code_mut(RemotingSysResponseCode::SystemError)
+                .set_remark_mut(error_messages::TIMER_FLOW_CONTROL);
+            false
+        }
+        AppendStatus::TimerMessageIllegal => {
+            response
+                .set_code_mut(ResponseCode::MessageIllegal)
+                .set_remark_mut(error_messages::TIMER_MSG_ILLEGAL);
+            false
+        }
+        AppendStatus::TimerNotEnabled => {
+            response
+                .set_code_mut(RemotingSysResponseCode::SystemError)
+                .set_remark_mut(error_messages::TIMER_NOT_ENABLED);
+            false
+        }
+        AppendStatus::RemoteAppendFailed => {
+            response
+                .set_code_mut(RemotingSysResponseCode::SystemError)
+                .set_remark_mut("UNKNOWN_ERROR DEFAULT");
+            false
         }
     }
+}
 
+impl<MS, TS> SendMessageProcessor<MS, TS>
+where
+    MS: MessageStore,
+    TS: TransactionalMessageService,
+{
     /// Update broker statistics for successful message send
     #[inline]
     fn update_broker_stats_on_success(
         &self,
         topic: &str,
         queue_id: i32,
-        put_message_result: &PutMessageResult,
+        append_receipt: &AppendReceipt,
         begin_time_millis: Instant,
         topic_message_type: &TopicMessageType,
     ) {
-        // SAFETY: When send_ok is true, append_message_result must exist
-        let result = put_message_result
-            .append_message_result()
-            .expect("append_message_result must exist for successful send");
-
         if TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic {
             self.inner
                 .broker_runtime_inner
                 .broker_stats_manager()
-                .inc_queue_put_nums(topic, queue_id, result.msg_num, 1);
+                .inc_queue_put_nums(topic, queue_id, append_receipt.message_count, 1);
             self.inner
                 .broker_runtime_inner
                 .broker_stats_manager()
-                .inc_queue_put_size(topic, queue_id, result.wrote_bytes);
+                .inc_queue_put_size(topic, queue_id, append_receipt.wrote_bytes);
         }
 
         self.inner
             .broker_runtime_inner
             .broker_stats_manager()
-            .inc_topic_put_nums(topic, result.msg_num, 1);
+            .inc_topic_put_nums(topic, append_receipt.message_count, 1);
         self.inner
             .broker_runtime_inner
             .broker_stats_manager()
-            .inc_topic_put_size(topic, result.wrote_bytes);
+            .inc_topic_put_size(topic, append_receipt.wrote_bytes);
         self.inner
             .broker_runtime_inner
             .broker_stats_manager()
-            .inc_broker_put_nums(topic, result.msg_num);
+            .inc_broker_put_nums(topic, append_receipt.message_count);
         let latency_millis = begin_time_millis.elapsed().as_millis();
         let latency_ms_for_stats = latency_millis.min(i32::MAX as u128) as i32;
         self.inner
@@ -764,8 +768,8 @@ where
             .inc_topic_put_latency(topic, queue_id, latency_ms_for_stats);
 
         if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
-            let msg_num = u64::try_from(result.msg_num.max(0)).unwrap_or_default();
-            let bytes = u64::try_from(result.wrote_bytes.max(0)).unwrap_or_default();
+            let msg_num = u64::try_from(append_receipt.message_count.max(0)).unwrap_or_default();
+            let bytes = u64::try_from(append_receipt.wrote_bytes.max(0)).unwrap_or_default();
             let message_size = bytes / msg_num.max(1);
             let is_system = TopicValidator::is_system_topic(topic);
             metrics.record_messages_in_success(topic, topic_message_type, msg_num, bytes, message_size, is_system);
@@ -778,23 +782,19 @@ where
     fn set_success_response_header(
         &self,
         response_header: &mut SendMessageResponseHeader,
-        put_message_result: &PutMessageResult,
+        append_receipt: &AppendReceipt,
         queue_id: i32,
         transaction_id: Option<CheetahString>,
         recall_handle: Option<CheetahString>,
     ) {
-        // SAFETY: When send_ok is true, append_message_result must exist
-        let result = put_message_result
-            .append_message_result()
-            .expect("append_message_result must exist for successful send");
-
         response_header.set_msg_id(
-            result
-                .get_message_id()
+            append_receipt
+                .message_id
+                .clone()
                 .expect("message_id must exist for successful send"),
         );
         response_header.set_queue_id(queue_id);
-        response_header.set_queue_offset(result.logics_offset);
+        response_header.set_queue_offset(append_receipt.logical_offset);
         response_header.set_transaction_id(transaction_id);
         response_header.set_recall_handle(recall_handle);
     }
@@ -804,17 +804,12 @@ where
         &self,
         send_message_context: &mut SendMessageContext,
         response_header: &SendMessageResponseHeader,
-        put_message_result: &PutMessageResult,
+        append_receipt: &AppendReceipt,
         owner: Option<CheetahString>,
         auth_type: Option<CheetahString>,
         owner_parent: Option<CheetahString>,
         owner_self: Option<CheetahString>,
     ) {
-        // SAFETY: When send_ok is true, append_message_result must exist
-        let result = put_message_result
-            .append_message_result()
-            .expect("append_message_result must exist for successful send");
-
         let commercial_size_per_msg = self.inner.broker_runtime_inner.broker_config().commercial_size_per_msg;
         let commercial_base_count = self.inner.broker_runtime_inner.broker_config().commercial_base_count;
 
@@ -822,12 +817,12 @@ where
         send_message_context.queue_id = Some(response_header.queue_id());
         send_message_context.queue_offset = Some(response_header.queue_offset());
 
-        let commercial_msg_num = (result.wrote_bytes as f64 / commercial_size_per_msg as f64).ceil() as i32;
+        let commercial_msg_num = (append_receipt.wrote_bytes as f64 / commercial_size_per_msg as f64).ceil() as i32;
         let inc_value = commercial_msg_num * commercial_base_count;
 
         send_message_context.commercial_send_stats = StatsType::SendSuccess;
         send_message_context.commercial_send_times = inc_value;
-        send_message_context.commercial_send_size = result.wrote_bytes;
+        send_message_context.commercial_send_size = append_receipt.wrote_bytes;
         send_message_context.commercial_owner = owner.unwrap_or_default();
 
         send_message_context.send_stat = StatsType::SendSuccess;
@@ -835,15 +830,15 @@ where
         send_message_context.account_auth_type = auth_type.unwrap_or_default();
         send_message_context.account_owner_parent = owner_parent.unwrap_or_default();
         send_message_context.account_owner_self = owner_self.unwrap_or_default();
-        send_message_context.send_msg_size = result.wrote_bytes;
-        send_message_context.send_msg_num = result.msg_num;
+        send_message_context.send_msg_size = append_receipt.wrote_bytes;
+        send_message_context.send_msg_num = append_receipt.message_count;
     }
 
     /// Update send message context for failure case
     fn update_send_context_on_failure(
         &self,
         send_message_context: &mut SendMessageContext,
-        put_message_result: &PutMessageResult,
+        append_receipt: &AppendReceipt,
         request_body_len: i32,
         owner: Option<CheetahString>,
         auth_type: Option<CheetahString>,
@@ -852,10 +847,7 @@ where
     ) {
         let commercial_size_per_msg = self.inner.broker_runtime_inner.broker_config().commercial_size_per_msg;
 
-        let msg_num = put_message_result
-            .append_message_result()
-            .map_or(1, |inner| inner.msg_num)
-            .max(1);
+        let msg_num = append_receipt.message_count.max(1);
         let commercial_msg_num = (request_body_len as f64 / commercial_size_per_msg as f64).ceil() as i32;
 
         send_message_context.commercial_send_stats = StatsType::SendFailure;
@@ -874,7 +866,7 @@ where
 
     async fn handle_put_message_result(
         &self,
-        put_message_result: PutMessageResult,
+        append_receipt: AppendReceipt,
         response: &mut RemotingCommand,
         request: &RemotingCommand,
         topic: &str,
@@ -888,7 +880,7 @@ where
         topic_message_type: TopicMessageType,
         _message_type: MessageType,
     ) -> (Option<RemotingCommand>, bool) {
-        let send_ok = self.map_put_status_to_response_code(put_message_result.put_message_status(), response);
+        let send_ok = map_append_status_to_response(append_receipt.status, response);
 
         let binding = HashMap::new();
         let ext_fields = request.ext_fields().unwrap_or(&binding);
@@ -902,7 +894,7 @@ where
             self.update_broker_stats_on_success(
                 topic,
                 queue_id_int,
-                &put_message_result,
+                &append_receipt,
                 begin_time_millis,
                 &topic_message_type,
             );
@@ -914,7 +906,7 @@ where
 
                 self.set_success_response_header(
                     response_header,
-                    &put_message_result,
+                    &append_receipt,
                     queue_id_int,
                     transaction_id.clone(),
                     recall_handle.clone(),
@@ -929,7 +921,7 @@ where
                     self.update_send_context_on_success(
                         send_message_context,
                         response_header,
-                        &put_message_result,
+                        &append_receipt,
                         owner,
                         auth_type,
                         owner_parent,
@@ -946,7 +938,7 @@ where
                 let request_body_len = request.body().as_ref().map_or(0, |body| body.len() as i32);
                 self.update_send_context_on_failure(
                     send_message_context,
-                    &put_message_result,
+                    &append_receipt,
                     request_body_len,
                     owner,
                     auth_type,
@@ -1142,39 +1134,82 @@ fn sync_flush_backlog_reject_remark(
     })
 }
 
+async fn append_message_with_store<S, M>(store: &mut S, message: M) -> rocketmq_store_api::StoreResult<AppendReceipt>
+where
+    S: MessageAppender<M>,
+{
+    store.append_message(message).await
+}
+
+fn map_store_api_error(error: rocketmq_store_api::StoreError) -> RocketMQError {
+    use rocketmq_store_api::StoreErrorKind;
+
+    match error.kind() {
+        StoreErrorKind::NotStarted => RocketMQError::not_initialized("message_store"),
+        StoreErrorKind::InvalidRequest | StoreErrorKind::Unsupported => {
+            RocketMQError::illegal_argument("message store append request rejected")
+        }
+        StoreErrorKind::NotFound => RocketMQError::storage_read_failed("message_store", "message not found"),
+        StoreErrorKind::Capacity => RocketMQError::StorageOutOfSpace {
+            path: "message_store".to_string(),
+        },
+        StoreErrorKind::Corruption => RocketMQError::StorageCorrupted {
+            path: "message_store".to_string(),
+        },
+        StoreErrorKind::Unavailable
+        | StoreErrorKind::Storage
+        | StoreErrorKind::Io
+        | StoreErrorKind::Timeout
+        | StoreErrorKind::Internal => RocketMQError::storage_write_failed("message_store", error.kind().as_str()),
+    }
+}
+
+fn store_health_reject_remark_from<S>(broker_config: &BrokerConfig, store: &S) -> Option<String>
+where
+    S: StoreHealth,
+{
+    store_health_reject_remark(broker_config, store.health_snapshot())
+}
+
 fn store_health_reject_remark(broker_config: &BrokerConfig, snapshot: StoreHealthSnapshot) -> Option<String> {
     if snapshot.shutdown {
         return Some("store_backpressure reason=store_shutdown".to_string());
     }
-    if !snapshot.writeable {
-        let error_kind = snapshot
-            .last_flush_error
-            .as_ref()
-            .map_or("unknown", |error| error.kind.as_str());
+    if !snapshot.writable {
+        let error_kind = snapshot.last_error.map_or("unknown", |kind| match kind {
+            // Preserve the legacy send-response token while the capability stays backend-neutral.
+            rocketmq_store_api::StoreErrorKind::Storage => "mapped_file",
+            other => other.as_str(),
+        });
         return Some(format!(
             "store_backpressure reason=store_not_writeable, lastFlushErrorKind={error_kind}"
         ));
     }
-    if snapshot.os_page_cache_busy {
+    if snapshot.page_cache_busy {
         return Some("store_backpressure reason=page_cache_busy".to_string());
     }
-    if snapshot.transient_store_pool_deficient {
+    if snapshot.transient_pool_deficient {
         return Some("store_backpressure reason=transient_store_pool_deficient".to_string());
     }
-    if let Some(remark) = sync_flush_backlog_reject_remark(broker_config, snapshot.sync_flush) {
+    let flush_backlog = SyncFlushRuntimeInfo {
+        queue_depth: snapshot.flush_backlog.queue_depth,
+        oldest_wait_millis: snapshot.flush_backlog.oldest_wait_millis,
+        ..SyncFlushRuntimeInfo::default()
+    };
+    if let Some(remark) = sync_flush_backlog_reject_remark(broker_config, flush_backlog) {
         return Some(format!("store_backpressure reason=sync_flush_backlog, {remark}"));
     }
 
     let ha_count_threshold = broker_config.ha_pending_reject_count;
     let ha_wait_threshold = broker_config.ha_pending_reject_wait_millis;
-    let ha_count_exceeded = ha_count_threshold > 0 && snapshot.ha_pending_request_count >= ha_count_threshold;
-    let ha_wait_exceeded = ha_wait_threshold > 0 && snapshot.ha_pending_oldest_wait_millis >= ha_wait_threshold;
+    let ha_count_exceeded = ha_count_threshold > 0 && snapshot.replication_pending_count >= ha_count_threshold;
+    let ha_wait_exceeded = ha_wait_threshold > 0 && snapshot.replication_oldest_wait_millis >= ha_wait_threshold;
     if ha_count_exceeded || ha_wait_exceeded {
         return Some(format!(
             "store_backpressure reason=ha_pending, pendingCount={}, oldestWaitMillis={}, rejectCount={}, \
              rejectWaitMillis={}",
-            snapshot.ha_pending_request_count,
-            snapshot.ha_pending_oldest_wait_millis,
+            snapshot.replication_pending_count,
+            snapshot.replication_oldest_wait_millis,
             ha_count_threshold,
             ha_wait_threshold
         ));
@@ -1726,6 +1761,26 @@ fn message_store_not_initialized() -> RocketMQError {
 mod tests {
     use super::*;
 
+    struct CapabilityStore {
+        health: rocketmq_store_api::StoreHealthSnapshot,
+        receipt: Option<rocketmq_store_api::AppendReceipt>,
+    }
+
+    impl rocketmq_store_api::MessageAppender<()> for CapabilityStore {
+        fn append_message(&mut self, (): ()) -> rocketmq_store_api::StoreFuture<'_, rocketmq_store_api::AppendReceipt> {
+            let result = self.receipt.take().ok_or_else(|| {
+                rocketmq_store_api::StoreError::new(rocketmq_store_api::StoreErrorKind::Unavailable, "append_message")
+            });
+            Box::pin(async move { result })
+        }
+    }
+
+    impl rocketmq_store_api::StoreHealth for CapabilityStore {
+        fn health_snapshot(&self) -> rocketmq_store_api::StoreHealthSnapshot {
+            self.health.clone()
+        }
+    }
+
     struct NoopSendMessageHook;
 
     impl SendMessageHook for NoopSendMessageHook {
@@ -1752,6 +1807,152 @@ mod tests {
         let error = message_store_not_initialized();
 
         assert_eq!(error.kind(), rocketmq_error::ErrorKind::NotInitialized);
+    }
+
+    #[test]
+    fn store_api_error_maps_to_typed_broker_error_without_backend_detail() {
+        let error =
+            rocketmq_store_api::StoreError::new(rocketmq_store_api::StoreErrorKind::Unavailable, "append_message");
+
+        let mapped = map_store_api_error(error);
+
+        assert_eq!(rocketmq_error::ErrorKind::StorageWriteFailed, mapped.kind());
+        assert!(!mapped.to_string().contains("backend detail"));
+    }
+
+    #[tokio::test]
+    async fn append_seam_depends_only_on_message_appender() {
+        let expected = rocketmq_store_api::AppendReceipt::new(
+            rocketmq_store_api::AppendStatus::PutOk,
+            10..20,
+            20,
+            20,
+            rocketmq_store_api::Durability::Local,
+        );
+        let mut store = CapabilityStore {
+            health: rocketmq_store_api::StoreHealthSnapshot::default(),
+            receipt: Some(expected.clone()),
+        };
+
+        let actual = append_message_with_store(&mut store, ())
+            .await
+            .expect("append succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn reject_seam_depends_only_on_store_health() {
+        let store = CapabilityStore {
+            health: rocketmq_store_api::StoreHealthSnapshot {
+                writable: false,
+                last_error: Some(rocketmq_store_api::StoreErrorKind::Io),
+                ..rocketmq_store_api::StoreHealthSnapshot::default()
+            },
+            receipt: None,
+        };
+
+        let remark =
+            store_health_reject_remark_from(&BrokerConfig::default(), &store).expect("non-writable store rejects");
+
+        assert!(remark.contains("reason=store_not_writeable"));
+        assert!(remark.contains("lastFlushErrorKind=io"));
+    }
+
+    #[test]
+    fn neutral_append_status_preserves_every_legacy_processor_output() {
+        let cases = [
+            (PutMessageStatus::PutOk, RemotingSysResponseCode::Success as i32, None),
+            (
+                PutMessageStatus::FlushDiskTimeout,
+                ResponseCode::FlushDiskTimeout as i32,
+                None,
+            ),
+            (
+                PutMessageStatus::FlushSlaveTimeout,
+                ResponseCode::FlushSlaveTimeout as i32,
+                None,
+            ),
+            (
+                PutMessageStatus::SlaveNotAvailable,
+                ResponseCode::SlaveNotAvailable as i32,
+                None,
+            ),
+            (
+                PutMessageStatus::ServiceNotAvailable,
+                ResponseCode::ServiceNotAvailable as i32,
+                Some(error_messages::SERVICE_NOT_AVAILABLE),
+            ),
+            (
+                PutMessageStatus::CreateMappedFileFailed,
+                RemotingSysResponseCode::SystemError as i32,
+                Some(error_messages::MAPPED_FILE_CREATE_FAILED),
+            ),
+            (
+                PutMessageStatus::MessageIllegal,
+                ResponseCode::MessageIllegal as i32,
+                Some(error_messages::MESSAGE_ILLEGAL),
+            ),
+            (
+                PutMessageStatus::PropertiesSizeExceeded,
+                ResponseCode::MessageIllegal as i32,
+                Some(error_messages::MESSAGE_ILLEGAL),
+            ),
+            (
+                PutMessageStatus::OsPageCacheBusy,
+                RemotingSysResponseCode::SystemError as i32,
+                Some(error_messages::OS_PAGE_CACHE_BUSY),
+            ),
+            (
+                PutMessageStatus::UnknownError,
+                RemotingSysResponseCode::SystemError as i32,
+                Some("UNKNOWN_ERROR"),
+            ),
+            (
+                PutMessageStatus::InSyncReplicasNotEnough,
+                RemotingSysResponseCode::SystemError as i32,
+                Some(error_messages::IN_SYNC_REPLICAS_NOT_ENOUGH),
+            ),
+            (
+                PutMessageStatus::PutToRemoteBrokerFail,
+                RemotingSysResponseCode::SystemError as i32,
+                Some("UNKNOWN_ERROR DEFAULT"),
+            ),
+            (
+                PutMessageStatus::LmqConsumeQueueNumExceeded,
+                RemotingSysResponseCode::SystemError as i32,
+                Some(error_messages::LMQ_QUEUE_NUM_EXCEEDED),
+            ),
+            (
+                PutMessageStatus::WheelTimerFlowControl,
+                RemotingSysResponseCode::SystemError as i32,
+                Some(error_messages::TIMER_FLOW_CONTROL),
+            ),
+            (
+                PutMessageStatus::WheelTimerMsgIllegal,
+                ResponseCode::MessageIllegal as i32,
+                Some(error_messages::TIMER_MSG_ILLEGAL),
+            ),
+            (
+                PutMessageStatus::WheelTimerNotEnable,
+                RemotingSysResponseCode::SystemError as i32,
+                Some(error_messages::TIMER_NOT_ENABLED),
+            ),
+        ];
+
+        for (legacy, expected_code, expected_remark) in cases {
+            let status = rocketmq_store::store_api_adapter::legacy_put_status_to_append_status(legacy);
+            let mut response = RemotingCommand::create_response_command();
+
+            map_append_status_to_response(status, &mut response);
+
+            assert_eq!(expected_code, response.code(), "legacy status {legacy:?}");
+            assert_eq!(
+                expected_remark,
+                response.remark().map(AsRef::as_ref),
+                "legacy status {legacy:?}"
+            );
+        }
     }
 
     #[test]
@@ -1800,14 +2001,13 @@ mod tests {
     #[test]
     fn store_health_reject_remark_does_not_reject_optional_reasons_by_default() {
         let snapshot = StoreHealthSnapshot {
-            sync_flush: SyncFlushRuntimeInfo {
+            flush_backlog: rocketmq_store_api::FlushBacklog {
                 queue_depth: 64,
                 oldest_wait_millis: 10_000,
-                ..SyncFlushRuntimeInfo::default()
             },
             dispatch_behind_bytes: 1024 * 1024,
-            ha_pending_request_count: 64,
-            ha_pending_oldest_wait_millis: 10_000,
+            replication_pending_count: 64,
+            replication_oldest_wait_millis: 10_000,
             ..StoreHealthSnapshot::default()
         };
 
@@ -1817,7 +2017,7 @@ mod tests {
     #[test]
     fn store_health_reject_remark_reports_page_cache_busy() {
         let snapshot = StoreHealthSnapshot {
-            os_page_cache_busy: true,
+            page_cache_busy: true,
             ..StoreHealthSnapshot::default()
         };
 
@@ -1828,7 +2028,7 @@ mod tests {
     #[test]
     fn store_health_reject_remark_reports_transient_pool_deficient() {
         let snapshot = StoreHealthSnapshot {
-            transient_store_pool_deficient: true,
+            transient_pool_deficient: true,
             ..StoreHealthSnapshot::default()
         };
 
@@ -1844,9 +2044,9 @@ mod tests {
             ..BrokerConfig::default()
         };
         let snapshot = StoreHealthSnapshot {
-            sync_flush: SyncFlushRuntimeInfo {
+            flush_backlog: rocketmq_store_api::FlushBacklog {
                 queue_depth: 8,
-                ..SyncFlushRuntimeInfo::default()
+                ..rocketmq_store_api::FlushBacklog::default()
             },
             ..StoreHealthSnapshot::default()
         };
@@ -1863,8 +2063,8 @@ mod tests {
             ..BrokerConfig::default()
         };
         let snapshot = StoreHealthSnapshot {
-            ha_pending_request_count: 4,
-            ha_pending_oldest_wait_millis: 250,
+            replication_pending_count: 4,
+            replication_oldest_wait_millis: 250,
             ..StoreHealthSnapshot::default()
         };
 
@@ -1904,11 +2104,8 @@ mod tests {
     #[test]
     fn store_health_reject_remark_reports_typed_flush_failure() {
         let snapshot = StoreHealthSnapshot {
-            writeable: false,
-            last_flush_error: Some(rocketmq_store::base::message_store::StoreHealthError {
-                kind: rocketmq_store::store_error::StoreErrorKind::MappedFile,
-                detail: "injected failure detail".to_string(),
-            }),
+            writable: false,
+            last_error: Some(rocketmq_store_api::StoreErrorKind::Storage),
             ..StoreHealthSnapshot::default()
         };
 
@@ -1916,6 +2113,6 @@ mod tests {
             store_health_reject_remark(&BrokerConfig::default(), snapshot).expect("flush failure should reject");
         assert!(remark.contains("reason=store_not_writeable"));
         assert!(remark.contains("lastFlushErrorKind=mapped_file"));
-        assert!(!remark.contains("injected failure detail"));
+        assert!(!remark.contains("backend detail"));
     }
 }

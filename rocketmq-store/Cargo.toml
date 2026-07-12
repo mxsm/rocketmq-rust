@@ -58,6 +58,7 @@ rocketmq-common   = { workspace = true }
 rocketmq-rust     = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-error    = { workspace = true }
+rocketmq-store-api = { workspace = true }
 rocketmq-observability = { workspace = true }
 rocketmq-runtime  = { workspace = true }
 rocketmq-tieredstore = { version = "1.0.0", path = "../rocketmq-tieredstore", optional = true }

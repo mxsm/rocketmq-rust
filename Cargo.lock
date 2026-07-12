@@ -4435,6 +4435,7 @@ dependencies = [
  "rocketmq-runtime",
  "rocketmq-rust",
  "rocketmq-store",
+ "rocketmq-store-api",
  "serde",
  "serde_json",
  "sysinfo",
@@ -4886,6 +4887,7 @@ dependencies = [
  "rocketmq-remoting",
  "rocketmq-runtime",
  "rocketmq-rust",
+ "rocketmq-store-api",
  "rocketmq-tieredstore",
  "rocksdb",
  "serde",
@@ -4900,6 +4902,15 @@ dependencies = [
  "trait-variant",
  "uuid",
  "windows",
+]
+
+[[package]]
+name = "rocketmq-store-api"
+version = "1.0.0"
+dependencies = [
+ "bytes",
+ "rocketmq-error",
+ "rocketmq-model",
 ]
 
 [[package]]
