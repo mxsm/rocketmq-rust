@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Instant;
 
@@ -70,18 +71,18 @@ use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
+use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
-use rocketmq_store::store_api_adapter::append_receipt_from_legacy;
+use rocketmq_store::store_api_adapter::legacy_append_receipt;
+use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
 use rocketmq_store::store_api_adapter::LegacyMessageStoreAdapter;
 use rocketmq_store::store_api_adapter::LegacyMessageStoreHealthAdapter;
-use rocketmq_store_api::AppendReceipt;
-use rocketmq_store_api::AppendStatus;
+use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreHealth;
-use rocketmq_store_api::StoreHealthSnapshot;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -98,6 +99,8 @@ use crate::send_message_constants::queue_config;
 use crate::send_message_constants::retry_config;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
+
+type StoreHealthSnapshot = LegacyStoreHealthSnapshot;
 
 mod message_builder;
 
@@ -591,13 +594,14 @@ where
         let transaction_id = MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
         let recall_handle = self.build_recall_handle(&message_ext);
         let append_receipt = if send_transaction_prepare_message {
-            let result = self
-                .inner
-                .transactional_message_service
-                .prepare_message(message_ext)
-                .await;
+            let result = {
+                let mut store = TransactionalMessageAppender::new(&mut *self.inner.transactional_message_service);
+                append_message_with_store(&mut store, message_ext)
+                    .await
+                    .map_err(map_store_api_error)?
+            };
             let store = self.inner.broker_runtime_inner.message_store_unchecked().as_ref();
-            append_receipt_from_legacy(result, store.get_max_phy_offset(), store.get_flushed_where())
+            legacy_append_receipt(result, store.get_max_phy_offset(), store.get_flushed_where())
         } else {
             let mut store =
                 LegacyMessageStoreAdapter::new(self.inner.broker_runtime_inner.message_store_unchecked_mut().as_mut());
@@ -633,87 +637,87 @@ where
     }
 }
 
-/// Map the backend-neutral append status to the legacy response code.
+/// Map the unchanged legacy append status to the legacy response code.
 #[inline]
-fn map_append_status_to_response(status: AppendStatus, response: &mut RemotingCommand) -> bool {
+fn map_put_status_to_response(status: PutMessageStatus, response: &mut RemotingCommand) -> bool {
     match status {
-        AppendStatus::PutOk => {
+        PutMessageStatus::PutOk => {
             response.set_code_ref(RemotingSysResponseCode::Success);
             true
         }
-        AppendStatus::FlushDiskTimeout => {
+        PutMessageStatus::FlushDiskTimeout => {
             response.set_code_ref(ResponseCode::FlushDiskTimeout);
             true
         }
-        AppendStatus::FlushReplicaTimeout => {
+        PutMessageStatus::FlushSlaveTimeout => {
             response.set_code_ref(ResponseCode::FlushSlaveTimeout);
             true
         }
-        AppendStatus::ReplicaUnavailable => {
+        PutMessageStatus::SlaveNotAvailable => {
             response.set_code_ref(ResponseCode::SlaveNotAvailable);
             true
         }
-        AppendStatus::ServiceUnavailable => {
+        PutMessageStatus::ServiceNotAvailable => {
             response
                 .set_code_mut(ResponseCode::ServiceNotAvailable)
                 .set_remark_mut(error_messages::SERVICE_NOT_AVAILABLE);
             false
         }
-        AppendStatus::StorageUnavailable => {
+        PutMessageStatus::CreateMappedFileFailed => {
             response
                 .set_code_mut(RemotingSysResponseCode::SystemError)
                 .set_remark_mut(error_messages::MAPPED_FILE_CREATE_FAILED);
             false
         }
-        AppendStatus::InvalidMessage => {
+        PutMessageStatus::MessageIllegal | PutMessageStatus::PropertiesSizeExceeded => {
             response
                 .set_code_mut(ResponseCode::MessageIllegal)
                 .set_remark_mut(error_messages::MESSAGE_ILLEGAL);
             false
         }
-        AppendStatus::PageCacheBusy => {
+        PutMessageStatus::OsPageCacheBusy => {
             response
                 .set_code_mut(RemotingSysResponseCode::SystemError)
                 .set_remark_mut(error_messages::OS_PAGE_CACHE_BUSY);
             false
         }
-        AppendStatus::Unknown => {
+        PutMessageStatus::UnknownError => {
             response
                 .set_code_mut(RemotingSysResponseCode::SystemError)
                 .set_remark_mut("UNKNOWN_ERROR");
             false
         }
-        AppendStatus::ReplicasUnavailable => {
+        PutMessageStatus::InSyncReplicasNotEnough => {
             response
                 .set_code_mut(RemotingSysResponseCode::SystemError)
                 .set_remark_mut(error_messages::IN_SYNC_REPLICAS_NOT_ENOUGH);
             false
         }
-        AppendStatus::QueueLimit => {
+        PutMessageStatus::LmqConsumeQueueNumExceeded => {
             response
                 .set_code_mut(RemotingSysResponseCode::SystemError)
                 .set_remark_mut(error_messages::LMQ_QUEUE_NUM_EXCEEDED);
             false
         }
-        AppendStatus::TimerFlowControl => {
+        PutMessageStatus::WheelTimerFlowControl => {
             response
                 .set_code_mut(RemotingSysResponseCode::SystemError)
                 .set_remark_mut(error_messages::TIMER_FLOW_CONTROL);
             false
         }
-        AppendStatus::TimerMessageIllegal => {
+        PutMessageStatus::WheelTimerMsgIllegal => {
             response
                 .set_code_mut(ResponseCode::MessageIllegal)
                 .set_remark_mut(error_messages::TIMER_MSG_ILLEGAL);
             false
         }
-        AppendStatus::TimerNotEnabled => {
+        PutMessageStatus::WheelTimerNotEnable => {
             response
                 .set_code_mut(RemotingSysResponseCode::SystemError)
                 .set_remark_mut(error_messages::TIMER_NOT_ENABLED);
             false
         }
-        AppendStatus::RemoteAppendFailed => {
+        PutMessageStatus::PutToRemoteBrokerFail => {
             response
                 .set_code_mut(RemotingSysResponseCode::SystemError)
                 .set_remark_mut("UNKNOWN_ERROR DEFAULT");
@@ -733,33 +737,37 @@ where
         &self,
         topic: &str,
         queue_id: i32,
-        append_receipt: &AppendReceipt,
+        append_receipt: &LegacyAppendReceipt,
         begin_time_millis: Instant,
         topic_message_type: &TopicMessageType,
     ) {
+        let append_result = append_receipt
+            .result()
+            .append_message_result()
+            .expect("append result must exist for successful send");
         if TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic {
             self.inner
                 .broker_runtime_inner
                 .broker_stats_manager()
-                .inc_queue_put_nums(topic, queue_id, append_receipt.message_count, 1);
+                .inc_queue_put_nums(topic, queue_id, append_result.msg_num, 1);
             self.inner
                 .broker_runtime_inner
                 .broker_stats_manager()
-                .inc_queue_put_size(topic, queue_id, append_receipt.wrote_bytes);
+                .inc_queue_put_size(topic, queue_id, append_result.wrote_bytes);
         }
 
         self.inner
             .broker_runtime_inner
             .broker_stats_manager()
-            .inc_topic_put_nums(topic, append_receipt.message_count, 1);
+            .inc_topic_put_nums(topic, append_result.msg_num, 1);
         self.inner
             .broker_runtime_inner
             .broker_stats_manager()
-            .inc_topic_put_size(topic, append_receipt.wrote_bytes);
+            .inc_topic_put_size(topic, append_result.wrote_bytes);
         self.inner
             .broker_runtime_inner
             .broker_stats_manager()
-            .inc_broker_put_nums(topic, append_receipt.message_count);
+            .inc_broker_put_nums(topic, append_result.msg_num);
         let latency_millis = begin_time_millis.elapsed().as_millis();
         let latency_ms_for_stats = latency_millis.min(i32::MAX as u128) as i32;
         self.inner
@@ -768,8 +776,8 @@ where
             .inc_topic_put_latency(topic, queue_id, latency_ms_for_stats);
 
         if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
-            let msg_num = u64::try_from(append_receipt.message_count.max(0)).unwrap_or_default();
-            let bytes = u64::try_from(append_receipt.wrote_bytes.max(0)).unwrap_or_default();
+            let msg_num = u64::try_from(append_result.msg_num.max(0)).unwrap_or_default();
+            let bytes = u64::try_from(append_result.wrote_bytes.max(0)).unwrap_or_default();
             let message_size = bytes / msg_num.max(1);
             let is_system = TopicValidator::is_system_topic(topic);
             metrics.record_messages_in_success(topic, topic_message_type, msg_num, bytes, message_size, is_system);
@@ -782,19 +790,22 @@ where
     fn set_success_response_header(
         &self,
         response_header: &mut SendMessageResponseHeader,
-        append_receipt: &AppendReceipt,
+        append_receipt: &LegacyAppendReceipt,
         queue_id: i32,
         transaction_id: Option<CheetahString>,
         recall_handle: Option<CheetahString>,
     ) {
+        let append_result = append_receipt
+            .result()
+            .append_message_result()
+            .expect("append result must exist for successful send");
         response_header.set_msg_id(
-            append_receipt
-                .message_id
-                .clone()
+            append_result
+                .get_message_id()
                 .expect("message_id must exist for successful send"),
         );
         response_header.set_queue_id(queue_id);
-        response_header.set_queue_offset(append_receipt.logical_offset);
+        response_header.set_queue_offset(append_result.logics_offset);
         response_header.set_transaction_id(transaction_id);
         response_header.set_recall_handle(recall_handle);
     }
@@ -804,7 +815,7 @@ where
         &self,
         send_message_context: &mut SendMessageContext,
         response_header: &SendMessageResponseHeader,
-        append_receipt: &AppendReceipt,
+        append_receipt: &LegacyAppendReceipt,
         owner: Option<CheetahString>,
         auth_type: Option<CheetahString>,
         owner_parent: Option<CheetahString>,
@@ -817,12 +828,16 @@ where
         send_message_context.queue_id = Some(response_header.queue_id());
         send_message_context.queue_offset = Some(response_header.queue_offset());
 
-        let commercial_msg_num = (append_receipt.wrote_bytes as f64 / commercial_size_per_msg as f64).ceil() as i32;
+        let append_result = append_receipt
+            .result()
+            .append_message_result()
+            .expect("append result must exist for successful send");
+        let commercial_msg_num = (append_result.wrote_bytes as f64 / commercial_size_per_msg as f64).ceil() as i32;
         let inc_value = commercial_msg_num * commercial_base_count;
 
         send_message_context.commercial_send_stats = StatsType::SendSuccess;
         send_message_context.commercial_send_times = inc_value;
-        send_message_context.commercial_send_size = append_receipt.wrote_bytes;
+        send_message_context.commercial_send_size = append_result.wrote_bytes;
         send_message_context.commercial_owner = owner.unwrap_or_default();
 
         send_message_context.send_stat = StatsType::SendSuccess;
@@ -830,15 +845,15 @@ where
         send_message_context.account_auth_type = auth_type.unwrap_or_default();
         send_message_context.account_owner_parent = owner_parent.unwrap_or_default();
         send_message_context.account_owner_self = owner_self.unwrap_or_default();
-        send_message_context.send_msg_size = append_receipt.wrote_bytes;
-        send_message_context.send_msg_num = append_receipt.message_count;
+        send_message_context.send_msg_size = append_result.wrote_bytes;
+        send_message_context.send_msg_num = append_result.msg_num;
     }
 
     /// Update send message context for failure case
     fn update_send_context_on_failure(
         &self,
         send_message_context: &mut SendMessageContext,
-        append_receipt: &AppendReceipt,
+        append_receipt: &LegacyAppendReceipt,
         request_body_len: i32,
         owner: Option<CheetahString>,
         auth_type: Option<CheetahString>,
@@ -847,7 +862,11 @@ where
     ) {
         let commercial_size_per_msg = self.inner.broker_runtime_inner.broker_config().commercial_size_per_msg;
 
-        let msg_num = append_receipt.message_count.max(1);
+        let msg_num = append_receipt
+            .result()
+            .append_message_result()
+            .map_or(1, |result| result.msg_num)
+            .max(1);
         let commercial_msg_num = (request_body_len as f64 / commercial_size_per_msg as f64).ceil() as i32;
 
         send_message_context.commercial_send_stats = StatsType::SendFailure;
@@ -866,7 +885,7 @@ where
 
     async fn handle_put_message_result(
         &self,
-        append_receipt: AppendReceipt,
+        append_receipt: LegacyAppendReceipt,
         response: &mut RemotingCommand,
         request: &RemotingCommand,
         topic: &str,
@@ -880,7 +899,7 @@ where
         topic_message_type: TopicMessageType,
         _message_type: MessageType,
     ) -> (Option<RemotingCommand>, bool) {
-        let send_ok = map_append_status_to_response(append_receipt.status, response);
+        let send_ok = map_put_status_to_response(append_receipt.result().put_message_status(), response);
 
         let binding = HashMap::new();
         let ext_fields = request.ext_fields().unwrap_or(&binding);
@@ -1134,39 +1153,72 @@ fn sync_flush_backlog_reject_remark(
     })
 }
 
-async fn append_message_with_store<S, M>(store: &mut S, message: M) -> rocketmq_store_api::StoreResult<AppendReceipt>
+struct TransactionalMessageAppender<'a, TS> {
+    service: &'a mut TS,
+}
+
+impl<'a, TS> TransactionalMessageAppender<'a, TS> {
+    fn new(service: &'a mut TS) -> Self {
+        Self { service }
+    }
+}
+
+impl<TS> MessageAppender<MessageExtBrokerInner> for TransactionalMessageAppender<'_, TS>
 where
-    S: MessageAppender<M>,
+    TS: TransactionalMessageService,
 {
-    store.append_message(message).await
+    type Receipt = PutMessageResult;
+    type Error = rocketmq_store_api::StoreError;
+
+    async fn append_message(&mut self, message: MessageExtBrokerInner) -> Result<Self::Receipt, Self::Error> {
+        Ok(self.service.prepare_message(message).await)
+    }
+}
+
+fn append_message_with_store<'a, S, M>(
+    store: &'a mut S,
+    message: M,
+) -> impl Future<Output = Result<S::Receipt, S::Error>> + Send + 'a
+where
+    S: MessageAppender<M> + 'a,
+    M: Send + 'a,
+{
+    store.append_message(message)
 }
 
 fn map_store_api_error(error: rocketmq_store_api::StoreError) -> RocketMQError {
     use rocketmq_store_api::StoreErrorKind;
 
+    let operation = error.operation().as_str();
     match error.kind() {
-        StoreErrorKind::NotStarted => RocketMQError::not_initialized("message_store"),
-        StoreErrorKind::InvalidRequest | StoreErrorKind::Unsupported => {
-            RocketMQError::illegal_argument("message store append request rejected")
-        }
-        StoreErrorKind::NotFound => RocketMQError::storage_read_failed("message_store", "message not found"),
+        StoreErrorKind::NotStarted => RocketMQError::not_initialized(operation),
+        StoreErrorKind::Unavailable => RocketMQError::Service(rocketmq_error::unified::ServiceError::StartupFailed(
+            operation.to_string(),
+        )),
+        StoreErrorKind::InvalidRequest => RocketMQError::illegal_argument(operation),
+        StoreErrorKind::NotFound => RocketMQError::query_not_found(operation),
         StoreErrorKind::Capacity => RocketMQError::StorageOutOfSpace {
-            path: "message_store".to_string(),
+            path: operation.to_string(),
         },
+        StoreErrorKind::Storage => RocketMQError::storage_write_failed(operation, "storage operation failed"),
+        StoreErrorKind::Io => RocketMQError::IO(std::io::Error::other(operation)),
         StoreErrorKind::Corruption => RocketMQError::StorageCorrupted {
-            path: "message_store".to_string(),
+            path: operation.to_string(),
         },
-        StoreErrorKind::Unavailable
-        | StoreErrorKind::Storage
-        | StoreErrorKind::Io
-        | StoreErrorKind::Timeout
-        | StoreErrorKind::Internal => RocketMQError::storage_write_failed("message_store", error.kind().as_str()),
+        StoreErrorKind::Timeout => RocketMQError::Timeout {
+            operation,
+            timeout_ms: 0,
+        },
+        StoreErrorKind::Unsupported => {
+            RocketMQError::broker_operation_failed(operation, -1, "unsupported store operation")
+        }
+        StoreErrorKind::Internal => RocketMQError::Internal(operation.to_string()),
     }
 }
 
 fn store_health_reject_remark_from<S>(broker_config: &BrokerConfig, store: &S) -> Option<String>
 where
-    S: StoreHealth,
+    S: StoreHealth<Snapshot = StoreHealthSnapshot>,
 {
     store_health_reject_remark(broker_config, store.health_snapshot())
 }
@@ -1176,11 +1228,9 @@ fn store_health_reject_remark(broker_config: &BrokerConfig, snapshot: StoreHealt
         return Some("store_backpressure reason=store_shutdown".to_string());
     }
     if !snapshot.writable {
-        let error_kind = snapshot.last_error.map_or("unknown", |kind| match kind {
-            // Preserve the legacy send-response token while the capability stays backend-neutral.
-            rocketmq_store_api::StoreErrorKind::Storage => "mapped_file",
-            other => other.as_str(),
-        });
+        let error_kind = snapshot
+            .last_error
+            .map_or("unknown", |error| error.compatibility_token());
         return Some(format!(
             "store_backpressure reason=store_not_writeable, lastFlushErrorKind={error_kind}"
         ));
@@ -1760,23 +1810,33 @@ fn message_store_not_initialized() -> RocketMQError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_store::store_api_adapter::LegacyFlushBacklog as FlushBacklog;
+    use rocketmq_store::store_api_adapter::LegacyStoreHealthError;
 
     struct CapabilityStore {
-        health: rocketmq_store_api::StoreHealthSnapshot,
-        receipt: Option<rocketmq_store_api::AppendReceipt>,
+        health: LegacyStoreHealthSnapshot,
+        receipt: Option<LegacyAppendReceipt>,
     }
 
     impl rocketmq_store_api::MessageAppender<()> for CapabilityStore {
-        fn append_message(&mut self, (): ()) -> rocketmq_store_api::StoreFuture<'_, rocketmq_store_api::AppendReceipt> {
+        type Receipt = LegacyAppendReceipt;
+        type Error = rocketmq_store_api::StoreError;
+
+        fn append_message(&mut self, (): ()) -> impl Future<Output = Result<Self::Receipt, Self::Error>> + Send {
             let result = self.receipt.take().ok_or_else(|| {
-                rocketmq_store_api::StoreError::new(rocketmq_store_api::StoreErrorKind::Unavailable, "append_message")
+                rocketmq_store_api::StoreError::new(
+                    rocketmq_store_api::StoreErrorKind::Unavailable,
+                    rocketmq_store_api::StoreOperation::Append,
+                )
             });
-            Box::pin(async move { result })
+            std::future::ready(result)
         }
     }
 
     impl rocketmq_store_api::StoreHealth for CapabilityStore {
-        fn health_snapshot(&self) -> rocketmq_store_api::StoreHealthSnapshot {
+        type Snapshot = LegacyStoreHealthSnapshot;
+
+        fn health_snapshot(&self) -> Self::Snapshot {
             self.health.clone()
         }
     }
@@ -1810,44 +1870,118 @@ mod tests {
     }
 
     #[test]
-    fn store_api_error_maps_to_typed_broker_error_without_backend_detail() {
-        let error =
-            rocketmq_store_api::StoreError::new(rocketmq_store_api::StoreErrorKind::Unavailable, "append_message");
+    fn every_store_api_error_kind_preserves_typed_semantics_and_operation() {
+        use rocketmq_error::RedactionPolicy;
+        use rocketmq_error::RetryClass;
+        use rocketmq_store_api::StoreErrorKind;
 
-        let mapped = map_store_api_error(error);
+        let cases = [
+            (
+                StoreErrorKind::NotStarted,
+                rocketmq_error::ErrorKind::NotInitialized,
+                RetryClass::Never,
+                RedactionPolicy::RedactSensitive,
+            ),
+            (
+                StoreErrorKind::Unavailable,
+                rocketmq_error::ErrorKind::Service,
+                RetryClass::Never,
+                RedactionPolicy::RedactSensitive,
+            ),
+            (
+                StoreErrorKind::InvalidRequest,
+                rocketmq_error::ErrorKind::IllegalArgument,
+                RetryClass::Never,
+                RedactionPolicy::RedactSensitive,
+            ),
+            (
+                StoreErrorKind::NotFound,
+                rocketmq_error::ErrorKind::QueryNotFound,
+                RetryClass::Immediate,
+                RedactionPolicy::Public,
+            ),
+            (
+                StoreErrorKind::Capacity,
+                rocketmq_error::ErrorKind::StorageOutOfSpace,
+                RetryClass::Never,
+                RedactionPolicy::RedactSensitive,
+            ),
+            (
+                StoreErrorKind::Storage,
+                rocketmq_error::ErrorKind::StorageWriteFailed,
+                RetryClass::Never,
+                RedactionPolicy::RedactSensitive,
+            ),
+            (
+                StoreErrorKind::Io,
+                rocketmq_error::ErrorKind::Io,
+                RetryClass::Never,
+                RedactionPolicy::RedactSensitive,
+            ),
+            (
+                StoreErrorKind::Corruption,
+                rocketmq_error::ErrorKind::StorageCorrupted,
+                RetryClass::Never,
+                RedactionPolicy::RedactSensitive,
+            ),
+            (
+                StoreErrorKind::Timeout,
+                rocketmq_error::ErrorKind::Timeout,
+                RetryClass::AfterBackoff,
+                RedactionPolicy::Public,
+            ),
+            (
+                StoreErrorKind::Unsupported,
+                rocketmq_error::ErrorKind::BrokerOperationFailed,
+                RetryClass::SwitchBroker,
+                RedactionPolicy::RedactSensitive,
+            ),
+            (
+                StoreErrorKind::Internal,
+                rocketmq_error::ErrorKind::Internal,
+                RetryClass::Never,
+                RedactionPolicy::RedactSensitive,
+            ),
+        ];
 
-        assert_eq!(rocketmq_error::ErrorKind::StorageWriteFailed, mapped.kind());
-        assert!(!mapped.to_string().contains("backend detail"));
+        for (kind, expected_kind, expected_retry, expected_redaction) in cases {
+            let operation = rocketmq_store_api::StoreOperation::Append;
+            let mapped = map_store_api_error(rocketmq_store_api::StoreError::new(kind, operation));
+
+            assert_eq!(expected_kind, mapped.kind(), "neutral kind {kind:?}");
+            assert_eq!(expected_retry, mapped.spec().recovery.retry, "neutral kind {kind:?}");
+            assert_eq!(expected_redaction, mapped.spec().redact, "neutral kind {kind:?}");
+            assert!(mapped.to_string().contains(operation.as_str()), "neutral kind {kind:?}");
+            assert!(!format!("{:?}", mapped.context()).contains("backend-secret"));
+        }
     }
 
     #[tokio::test]
     async fn append_seam_depends_only_on_message_appender() {
-        let expected = rocketmq_store_api::AppendReceipt::new(
-            rocketmq_store_api::AppendStatus::PutOk,
-            10..20,
-            20,
-            20,
-            rocketmq_store_api::Durability::Local,
-        );
+        let expected = legacy_append_receipt(PutMessageResult::new_default(PutMessageStatus::PutOk), 20, 20);
         let mut store = CapabilityStore {
-            health: rocketmq_store_api::StoreHealthSnapshot::default(),
-            receipt: Some(expected.clone()),
+            health: LegacyStoreHealthSnapshot::default(),
+            receipt: Some(expected),
         };
 
         let actual = append_message_with_store(&mut store, ())
             .await
             .expect("append succeeds");
 
-        assert_eq!(expected, actual);
+        assert_eq!(PutMessageStatus::PutOk, actual.result().put_message_status());
+        assert_eq!(20, actual.appended_watermark());
+        assert_eq!(20, actual.durable_watermark());
     }
 
     #[test]
     fn reject_seam_depends_only_on_store_health() {
         let store = CapabilityStore {
-            health: rocketmq_store_api::StoreHealthSnapshot {
+            health: LegacyStoreHealthSnapshot {
                 writable: false,
-                last_error: Some(rocketmq_store_api::StoreErrorKind::Io),
-                ..rocketmq_store_api::StoreHealthSnapshot::default()
+                last_error: Some(LegacyStoreHealthError::new(
+                    rocketmq_store::store_error::StoreErrorKind::Storage,
+                )),
+                ..LegacyStoreHealthSnapshot::default()
             },
             receipt: None,
         };
@@ -1856,11 +1990,11 @@ mod tests {
             store_health_reject_remark_from(&BrokerConfig::default(), &store).expect("non-writable store rejects");
 
         assert!(remark.contains("reason=store_not_writeable"));
-        assert!(remark.contains("lastFlushErrorKind=io"));
+        assert!(remark.contains("lastFlushErrorKind=storage"));
     }
 
     #[test]
-    fn neutral_append_status_preserves_every_legacy_processor_output() {
+    fn legacy_append_status_preserves_every_processor_output() {
         let cases = [
             (PutMessageStatus::PutOk, RemotingSysResponseCode::Success as i32, None),
             (
@@ -1941,10 +2075,9 @@ mod tests {
         ];
 
         for (legacy, expected_code, expected_remark) in cases {
-            let status = rocketmq_store::store_api_adapter::legacy_put_status_to_append_status(legacy);
             let mut response = RemotingCommand::create_response_command();
 
-            map_append_status_to_response(status, &mut response);
+            map_put_status_to_response(legacy, &mut response);
 
             assert_eq!(expected_code, response.code(), "legacy status {legacy:?}");
             assert_eq!(
@@ -2001,7 +2134,7 @@ mod tests {
     #[test]
     fn store_health_reject_remark_does_not_reject_optional_reasons_by_default() {
         let snapshot = StoreHealthSnapshot {
-            flush_backlog: rocketmq_store_api::FlushBacklog {
+            flush_backlog: FlushBacklog {
                 queue_depth: 64,
                 oldest_wait_millis: 10_000,
             },
@@ -2044,9 +2177,9 @@ mod tests {
             ..BrokerConfig::default()
         };
         let snapshot = StoreHealthSnapshot {
-            flush_backlog: rocketmq_store_api::FlushBacklog {
+            flush_backlog: FlushBacklog {
                 queue_depth: 8,
-                ..rocketmq_store_api::FlushBacklog::default()
+                ..FlushBacklog::default()
             },
             ..StoreHealthSnapshot::default()
         };
@@ -2103,16 +2236,45 @@ mod tests {
 
     #[test]
     fn store_health_reject_remark_reports_typed_flush_failure() {
-        let snapshot = StoreHealthSnapshot {
-            writable: false,
-            last_error: Some(rocketmq_store_api::StoreErrorKind::Storage),
-            ..StoreHealthSnapshot::default()
-        };
+        let cases = [
+            (rocketmq_store::store_error::StoreErrorKind::MappedFile, "mapped_file"),
+            (rocketmq_store::store_error::StoreErrorKind::RocksDb, "rocksdb"),
+            (rocketmq_store::store_error::StoreErrorKind::NotStarted, "not_started"),
+            (
+                rocketmq_store::store_error::StoreErrorKind::MessageNotFound,
+                "message_not_found",
+            ),
+            (rocketmq_store::store_error::StoreErrorKind::Config, "config"),
+            (rocketmq_store::store_error::StoreErrorKind::Unsupported, "unsupported"),
+            (
+                rocketmq_store::store_error::StoreErrorKind::InvalidState,
+                "invalid_state",
+            ),
+            (rocketmq_store::store_error::StoreErrorKind::Storage, "storage"),
+            (rocketmq_store::store_error::StoreErrorKind::TieredStore, "tiered_store"),
+            (rocketmq_store::store_error::StoreErrorKind::Ha, "ha"),
+            (rocketmq_store::store_error::StoreErrorKind::DLedger, "dledger"),
+            (
+                rocketmq_store::store_error::StoreErrorKind::MappedFileNotFound,
+                "mapped_file_not_found",
+            ),
+        ];
 
-        let remark =
-            store_health_reject_remark(&BrokerConfig::default(), snapshot).expect("flush failure should reject");
-        assert!(remark.contains("reason=store_not_writeable"));
-        assert!(remark.contains("lastFlushErrorKind=mapped_file"));
-        assert!(!remark.contains("backend detail"));
+        for (kind, token) in cases {
+            let snapshot = StoreHealthSnapshot {
+                writable: false,
+                last_error: Some(LegacyStoreHealthError::new(kind)),
+                ..StoreHealthSnapshot::default()
+            };
+
+            let remark =
+                store_health_reject_remark(&BrokerConfig::default(), snapshot).expect("flush failure should reject");
+            assert!(remark.contains("reason=store_not_writeable"));
+            assert!(
+                remark.contains(&format!("lastFlushErrorKind={token}")),
+                "legacy kind {kind:?}"
+            );
+            assert!(!remark.contains("backend detail"));
+        }
     }
 }

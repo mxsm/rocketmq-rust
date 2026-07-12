@@ -17,11 +17,15 @@ use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::AppendMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::store_api_adapter::append_receipt_from_legacy;
-use rocketmq_store::store_api_adapter::legacy_put_status_to_append_status;
+use rocketmq_store::message_store::GenericMessageStore;
+use rocketmq_store::store_api_adapter::legacy_append_receipt;
+use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
 use rocketmq_store::store_api_adapter::LegacyMessageStoreAdapter;
-use rocketmq_store_api::AppendStatus;
+use rocketmq_store::store_api_adapter::LegacyStoreHealthError;
+use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
+use rocketmq_store::store_error::StoreErrorKind;
 use rocketmq_store_api::MessageAppender;
+use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreHealth;
 
 fn append_result() -> AppendMessageResult {
@@ -39,68 +43,65 @@ fn append_result() -> AppendMessageResult {
 }
 
 #[test]
-fn legacy_receipt_preserves_output_and_separate_watermarks() {
+fn legacy_receipt_preserves_result_and_separate_watermarks() {
     let legacy = PutMessageResult::new_append_result(PutMessageStatus::FlushDiskTimeout, Some(append_result()));
 
-    let receipt = append_receipt_from_legacy(legacy, 80, 48);
+    let receipt = legacy_append_receipt(legacy, 80, 48);
 
-    assert_eq!(AppendStatus::FlushDiskTimeout, receipt.status);
-    assert_eq!(40..60, receipt.offsets);
-    assert_eq!(80, receipt.appended_watermark);
-    assert_eq!(48, receipt.durable_watermark);
-    assert_eq!(Some("message-id"), receipt.message_id.as_deref());
-    assert_eq!(1234, receipt.store_timestamp);
-    assert_eq!(7, receipt.logical_offset);
-    assert_eq!(2, receipt.message_count);
-    assert!(receipt.is_accepted());
-    assert!(!receipt.is_durable());
+    assert_eq!(
+        PutMessageStatus::FlushDiskTimeout,
+        receipt.result().put_message_status()
+    );
+    assert_eq!(80, receipt.appended_watermark());
+    assert_eq!(48, receipt.durable_watermark());
+    let append = receipt.result().append_message_result().expect("append result");
+    assert_eq!(40, append.wrote_offset);
+    assert_eq!(20, append.wrote_bytes);
+    assert_eq!(Some("message-id"), append.get_message_id().as_deref());
+    assert_eq!(1234, append.store_timestamp);
+    assert_eq!(7, append.logics_offset);
+    assert_eq!(2, append.msg_num);
 }
 
 #[test]
-fn every_legacy_status_has_an_explicit_backend_neutral_mapping() {
+fn every_legacy_health_error_preserves_its_exact_compatibility_token() {
     let cases = [
-        (PutMessageStatus::PutOk, AppendStatus::PutOk),
-        (PutMessageStatus::FlushDiskTimeout, AppendStatus::FlushDiskTimeout),
-        (PutMessageStatus::FlushSlaveTimeout, AppendStatus::FlushReplicaTimeout),
-        (PutMessageStatus::SlaveNotAvailable, AppendStatus::ReplicaUnavailable),
-        (PutMessageStatus::ServiceNotAvailable, AppendStatus::ServiceUnavailable),
-        (
-            PutMessageStatus::CreateMappedFileFailed,
-            AppendStatus::StorageUnavailable,
-        ),
-        (PutMessageStatus::MessageIllegal, AppendStatus::InvalidMessage),
-        (PutMessageStatus::PropertiesSizeExceeded, AppendStatus::InvalidMessage),
-        (PutMessageStatus::OsPageCacheBusy, AppendStatus::PageCacheBusy),
-        (PutMessageStatus::UnknownError, AppendStatus::Unknown),
-        (
-            PutMessageStatus::InSyncReplicasNotEnough,
-            AppendStatus::ReplicasUnavailable,
-        ),
-        (
-            PutMessageStatus::PutToRemoteBrokerFail,
-            AppendStatus::RemoteAppendFailed,
-        ),
-        (PutMessageStatus::LmqConsumeQueueNumExceeded, AppendStatus::QueueLimit),
-        (PutMessageStatus::WheelTimerFlowControl, AppendStatus::TimerFlowControl),
-        (
-            PutMessageStatus::WheelTimerMsgIllegal,
-            AppendStatus::TimerMessageIllegal,
-        ),
-        (PutMessageStatus::WheelTimerNotEnable, AppendStatus::TimerNotEnabled),
+        (StoreErrorKind::MappedFile, "mapped_file"),
+        (StoreErrorKind::RocksDb, "rocksdb"),
+        (StoreErrorKind::NotStarted, "not_started"),
+        (StoreErrorKind::MessageNotFound, "message_not_found"),
+        (StoreErrorKind::Config, "config"),
+        (StoreErrorKind::Unsupported, "unsupported"),
+        (StoreErrorKind::InvalidState, "invalid_state"),
+        (StoreErrorKind::Storage, "storage"),
+        (StoreErrorKind::TieredStore, "tiered_store"),
+        (StoreErrorKind::Ha, "ha"),
+        (StoreErrorKind::DLedger, "dledger"),
+        (StoreErrorKind::MappedFileNotFound, "mapped_file_not_found"),
     ];
 
-    for (legacy, expected) in cases {
-        assert_eq!(expected, legacy_put_status_to_append_status(legacy));
+    for (kind, expected) in cases {
+        assert_eq!(expected, LegacyStoreHealthError::new(kind).compatibility_token());
     }
 }
 
-#[allow(dead_code)]
-fn legacy_adapter_compile_fixture<'a, MS>(adapter: LegacyMessageStoreAdapter<'a, MS>)
+fn assert_adapter_contract<MS>()
 where
     MS: MessageStore,
-    LegacyMessageStoreAdapter<'a, MS>: MessageAppender<rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner>
-        + MessageAppender<rocketmq_common::common::message::message_batch::MessageExtBatch>
-        + StoreHealth,
+    for<'a> LegacyMessageStoreAdapter<'a, MS>: MessageAppender<
+            rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner,
+            Receipt = LegacyAppendReceipt,
+            Error = StoreError,
+        > + MessageAppender<
+            rocketmq_common::common::message::message_batch::MessageExtBatch,
+            Receipt = LegacyAppendReceipt,
+            Error = StoreError,
+        > + StoreHealth<Snapshot = LegacyStoreHealthSnapshot>,
 {
-    let _ = adapter;
+    assert!(std::mem::size_of::<LegacyMessageStoreAdapter<'_, MS>>() > 0);
+}
+
+#[test]
+fn legacy_adapter_compile_fixture_is_monomorphized() {
+    assert_adapter_contract::<GenericMessageStore>();
 }

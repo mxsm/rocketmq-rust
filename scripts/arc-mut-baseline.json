@@ -9602,10 +9602,10 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "4e9b4d9782e8d81b77acf884",
-          "fingerprint": "444f4a7a76be7415c5d3796d",
+          "id": "2cca52fb4a35709c5bdecac5",
+          "fingerprint": "cf82cd1d0b6e5fa99f4511d7",
           "item": "mod tests",
-          "line": 1740
+          "line": 1812
         }
       ],
       "owner": "broker",
@@ -9624,19 +9624,19 @@
           "id": "04d6bc27940536b77bcc1192",
           "fingerprint": "98d7c1a6b17e4399ecdaa4fb",
           "item": "fn new",
-          "line": 281
+          "line": 292
         },
         {
           "id": "8e3784e5cebadaba5a8a850d",
           "fingerprint": "22f60918c9b1420147d5125a",
           "item": "fn new",
-          "line": 282
+          "line": 293
         },
         {
           "id": "c3072f5faa81d0f929393e1a",
           "fingerprint": "18fbfaca4a9df838880a23c4",
           "item": "fn new",
-          "line": 283
+          "line": 294
         }
       ],
       "owner": "broker",
@@ -9655,7 +9655,7 @@
           "id": "e0cf336d0ed7def9941b6bf3",
           "fingerprint": "40252d339f639411abede5ad",
           "item": "<module>",
-          "line": 71
+          "line": 72
         }
       ],
       "owner": "broker",
@@ -9674,49 +9674,49 @@
           "id": "6e4b624d035f2085e9b1584f",
           "fingerprint": "57b8392acda7c81bc7df9989",
           "item": "struct SendMessageProcessor",
-          "line": 104
+          "line": 115
         },
         {
           "id": "a7152ec3fcf0719c8aae4cc0",
           "fingerprint": "dbd3a67acf7e7fad4f85b72d",
           "item": "fn new",
-          "line": 276
+          "line": 287
         },
         {
           "id": "d3487acfea1103cc0579d6b6",
           "fingerprint": "1ab11a43ab762972c4587403",
           "item": "fn new",
-          "line": 277
+          "line": 288
         },
         {
           "id": "a660137587f03df08ce31a23",
           "fingerprint": "81e5986a6af739800c7c7c15",
           "item": "fn handle_retry_and_dlq",
-          "line": 1034
+          "line": 1047
         },
         {
           "id": "26e6797c68516167d6495003",
           "fingerprint": "cc5aa419cb9ba0ff5d25af13",
           "item": "struct Inner",
-          "line": 1198
+          "line": 1288
         },
         {
           "id": "b1cd727d2d125ca94e34a581",
           "fingerprint": "3e7176d71b6b7a82edfa8007",
           "item": "struct Inner",
-          "line": 1199
+          "line": 1289
         },
         {
           "id": "2bfdc513d8cf9336cd0c66e8",
           "fingerprint": "dbf81f54775e57374dd52bf7",
           "item": "struct Inner",
-          "line": 1201
+          "line": 1291
         },
         {
           "id": "a1eb3a2209bb3cd12a244ad6",
           "fingerprint": "4add3830b48a7f6325170d54",
           "item": "struct Inner",
-          "line": 1202
+          "line": 1292
         }
       ],
       "owner": "broker",
@@ -9735,7 +9735,7 @@
           "id": "1df0236b9d7fe3abd03dc52e",
           "fingerprint": "cb2eed41acfda6c28fcef0a2",
           "item": "<module>",
-          "line": 68
+          "line": 69
         }
       ],
       "owner": "broker",
@@ -9754,55 +9754,55 @@
           "id": "9bce6dce5c916f8e7dbf7c28",
           "fingerprint": "f20c4029acdc5537be4b952b",
           "item": "fn process_request",
-          "line": 128
+          "line": 139
         },
         {
           "id": "a1c01a323c606d0b8a39109e",
           "fingerprint": "269b999cc665cc1a767b0e80",
           "item": "fn process_request_inner",
-          "line": 197
+          "line": 208
         },
         {
           "id": "28c7db01aa604eae3ae1d9da",
           "fingerprint": "8bfd140b118b50d57c8cd03f",
           "item": "fn send_batch_message",
-          "line": 295
+          "line": 306
         },
         {
           "id": "1606e7aa79e353fb8721ccc7",
           "fingerprint": "8bfd140b118b50d57c8cd03f",
           "item": "fn send_message",
-          "line": 454
+          "line": 465
         },
         {
           "id": "5c76538644750be5e1787401",
           "fingerprint": "bae395f02f684552cc439a7e",
           "item": "fn handle_put_message_result",
-          "line": 884
+          "line": 897
         },
         {
           "id": "625a3800e95e612ad3a079fc",
           "fingerprint": "57f2d95eb9146c6bc4dd1471",
           "item": "fn pre_send",
-          "line": 988
+          "line": 1001
         },
         {
           "id": "551c823a0c7db14b41813c23",
           "fingerprint": "7dc7e8df9e7e5ce15f8b97e6",
           "item": "fn consumer_send_msg_back",
-          "line": 1255
+          "line": 1345
         },
         {
           "id": "76e5bce6d9c77ee5563fb175",
           "fingerprint": "a2129b847ee59175f2e3de6c",
           "item": "fn build_msg_context",
-          "line": 1533
+          "line": 1623
         },
         {
           "id": "da4967880e5237f1d0bddb6f",
           "fingerprint": "6439621993fb6fbcd3493ca7",
           "item": "fn msg_check",
-          "line": 1581
+          "line": 1671
         }
       ],
       "owner": "broker",
@@ -25786,7 +25786,7 @@
           "id": "106870531b5c1402286dd4a3",
           "fingerprint": "2441971d108661861aed6666",
           "item": "mod tests",
-          "line": 880
+          "line": 897
         }
       ],
       "owner": "remoting",
@@ -25843,7 +25843,7 @@
           "id": "3d8acfdcb2afccbacf354bf9",
           "fingerprint": "20a72466b0be658bba6e6f97",
           "item": "fn try_new_with_send_task_group",
-          "line": 570
+          "line": 587
         }
       ],
       "owner": "remoting",
@@ -25862,13 +25862,13 @@
           "id": "01285f044c5e15df559f9481",
           "fingerprint": "680f20fbc84a85d05caaae4d",
           "item": "fn try_new_without_tokio_runtime_returns_error",
-          "line": 900
+          "line": 917
         },
         {
           "id": "111903170d6ce3ea494acca4",
           "fingerprint": "a6f568b7f6fd459cea6ffd77",
           "item": "fn try_new_with_task_group_parents_send_task_and_close_returns_report",
-          "line": 921
+          "line": 938
         }
       ],
       "owner": "remoting",
@@ -25960,13 +25960,13 @@
           "id": "2615aa74938e8071bc22c87e",
           "fingerprint": "d9b335d6bf54914c13753299",
           "item": "fn try_new_with_send_task_group",
-          "line": 560
+          "line": 577
         },
         {
           "id": "9dd8a0a7a7f7ae2a2941151d",
           "fingerprint": "8589fb18644935e19d313716",
           "item": "fn connection",
-          "line": 656
+          "line": 673
         }
       ],
       "owner": "remoting",
@@ -26230,7 +26230,7 @@
           "id": "12d0bdb098a2af6206a78226",
           "fingerprint": "d5b43916610201eb0070829c",
           "item": "mod tests",
-          "line": 885
+          "line": 878
         }
       ],
       "owner": "remoting",
@@ -26249,19 +26249,19 @@
           "id": "69002597c0830c2526d73970",
           "fingerprint": "40fa9317341d7438e1ab0267",
           "item": "fn run",
-          "line": 322
+          "line": 314
         },
         {
           "id": "445fb457158aa408d4e344d8",
           "fingerprint": "afad78e6a0baa307e3a05cf7",
           "item": "fn run",
-          "line": 325
+          "line": 317
         },
         {
           "id": "a383d0aa6bd1d3edcff77d6a",
           "fingerprint": "fa36e59d3bcb5f1606af6251",
           "item": "impl Future",
-          "line": 751
+          "line": 744
         }
       ],
       "owner": "remoting",
@@ -26299,13 +26299,13 @@
           "id": "f7c44198f1c7ca25fc58b1da",
           "fingerprint": "b4d94164d0ef9c5638420919",
           "item": "struct ConnectionListener",
-          "line": 168
+          "line": 147
         },
         {
           "id": "634d51860e5f9ae3db59bc6a",
           "fingerprint": "d866a9e129f94647f791ed8a",
           "item": "struct ConnectionHandler",
-          "line": 275
+          "line": 254
         }
       ],
       "owner": "remoting",
@@ -26343,7 +26343,7 @@
           "id": "9df9acb361555697c24fe638",
           "fingerprint": "ebcde9e450e29468ff36d47c",
           "item": "struct ConnectionHandler",
-          "line": 277
+          "line": 256
         }
       ],
       "owner": "remoting",
@@ -30415,7 +30415,7 @@
           "id": "b871300ee7ca8786bbc26b35",
           "fingerprint": "60663fd942af19d6f9199b24",
           "item": "fn run_store_local_file_scheduled_lifecycle_probe",
-          "line": 1162
+          "line": 1163
         }
       ],
       "owner": "store",
@@ -30434,7 +30434,7 @@
           "id": "f8b0ea22c86e0bc6cb92ffea",
           "fingerprint": "1e252acb0c5593b57e0095a1",
           "item": "mod bench_support",
-          "line": 75
+          "line": 76
         }
       ],
       "owner": "store",
@@ -30453,7 +30453,7 @@
           "id": "a42c1622746f302febbeff19",
           "fingerprint": "4409877677a2ab1aa08a3793",
           "item": "fn run_store_local_file_scheduled_lifecycle_probe",
-          "line": 1165
+          "line": 1166
         }
       ],
       "owner": "store",
@@ -30472,7 +30472,7 @@
           "id": "f348cf8c3d1bbc140f438bb6",
           "fingerprint": "e059b52786cec435681ca0e9",
           "item": "fn run_store_local_file_scheduled_lifecycle_probe",
-          "line": 1162
+          "line": 1163
         }
       ],
       "owner": "store",
@@ -30491,7 +30491,7 @@
           "id": "ff5cb8579b356fbd4d66fab8",
           "fingerprint": "1f5ae028a080b73b6ea8f67b",
           "item": "mod bench_support",
-          "line": 93
+          "line": 94
         }
       ],
       "owner": "store",

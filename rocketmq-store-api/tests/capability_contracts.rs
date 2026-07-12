@@ -12,114 +12,116 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::ready;
+use std::future::Future;
+
 use bytes::Bytes;
 use rocketmq_model::message::MessageQueue;
-use rocketmq_store_api::AdminRequest;
-use rocketmq_store_api::AdminResponse;
 use rocketmq_store_api::AdminStore;
-use rocketmq_store_api::AppendReceipt;
-use rocketmq_store_api::AppendStatus;
-use rocketmq_store_api::DerivedProgress;
-use rocketmq_store_api::DerivedRecord;
 use rocketmq_store_api::DerivedRecordSink;
-use rocketmq_store_api::Durability;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::OffsetIndex;
-use rocketmq_store_api::OffsetRange;
-use rocketmq_store_api::ReadRequest;
-use rocketmq_store_api::ReadResult;
 use rocketmq_store_api::ReplicationControl;
-use rocketmq_store_api::ReplicationState;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
-use rocketmq_store_api::StoreFuture;
 use rocketmq_store_api::StoreHealth;
-use rocketmq_store_api::StoreHealthSnapshot;
 use rocketmq_store_api::StoreLifecycle;
+use rocketmq_store_api::StoreOperation;
 
 #[derive(Default)]
 struct ContractStore;
 
 impl StoreLifecycle for ContractStore {
-    fn load(&mut self) -> StoreFuture<'_, bool> {
-        Box::pin(async { Ok(true) })
+    type Error = StoreError;
+
+    fn load(&mut self) -> impl Future<Output = Result<bool, Self::Error>> + Send {
+        ready(Ok(true))
     }
 
-    fn start(&mut self) -> StoreFuture<'_, ()> {
-        Box::pin(async { Ok(()) })
+    fn start(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        ready(Ok(()))
     }
 
-    fn shutdown(&mut self) -> StoreFuture<'_, ()> {
-        Box::pin(async { Ok(()) })
+    fn shutdown(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        ready(Ok(()))
     }
 }
 
 impl MessageAppender<Bytes> for ContractStore {
-    fn append_message(&mut self, message: Bytes) -> StoreFuture<'_, AppendReceipt> {
-        let end = i64::try_from(message.len()).expect("fixture length fits i64");
-        Box::pin(async move {
-            Ok(AppendReceipt::new(
-                AppendStatus::PutOk,
-                0..end,
-                end,
-                end,
-                Durability::Local,
-            ))
-        })
+    type Receipt = usize;
+    type Error = StoreError;
+
+    fn append_message(&mut self, message: Bytes) -> impl Future<Output = Result<Self::Receipt, Self::Error>> + Send {
+        ready(Ok(message.len()))
     }
 }
 
 impl MessageReader for ContractStore {
-    fn read(&self, _request: ReadRequest) -> StoreFuture<'_, ReadResult> {
-        Box::pin(async { Ok(ReadResult::default()) })
+    type Request = MessageQueue;
+    type Output = Option<Bytes>;
+    type Error = StoreError;
+
+    fn read(&self, _request: Self::Request) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send {
+        ready(Ok(None))
     }
 }
 
 impl OffsetIndex for ContractStore {
-    fn offset_range(&self, _queue: &MessageQueue) -> Result<OffsetRange, StoreError> {
-        Ok(OffsetRange { min: 0, max: 1 })
+    type Query = MessageQueue;
+    type Output = (i64, i64);
+    type Error = StoreError;
+
+    fn query_offset(&self, _query: &Self::Query) -> Result<Self::Output, Self::Error> {
+        Ok((0, 1))
     }
 }
 
 impl StoreHealth for ContractStore {
-    fn health_snapshot(&self) -> StoreHealthSnapshot {
-        StoreHealthSnapshot::default()
+    type Snapshot = bool;
+
+    fn health_snapshot(&self) -> Self::Snapshot {
+        true
     }
 }
 
 impl ReplicationControl for ContractStore {
-    fn replication_state(&self) -> ReplicationState {
-        ReplicationState::default()
+    type Command = i64;
+    type State = i64;
+    type Error = StoreError;
+
+    fn replication_state(&self) -> Self::State {
+        0
     }
 
-    fn set_confirmed_offset(&mut self, offset: i64) -> Result<(), StoreError> {
-        if offset < 0 {
-            return Err(StoreError::new(StoreErrorKind::InvalidRequest, "set_confirmed_offset"));
-        }
-        Ok(())
+    fn apply_replication(
+        &mut self,
+        command: Self::Command,
+    ) -> impl Future<Output = Result<Self::State, Self::Error>> + Send {
+        ready(Ok(command))
     }
 }
 
 impl DerivedRecordSink for ContractStore {
-    fn append_derived(&mut self, record: DerivedRecord) -> StoreFuture<'_, DerivedProgress> {
-        Box::pin(async move {
-            Ok(DerivedProgress {
-                source_watermark: record.source_offset,
-                derived_watermark: record.source_offset,
-            })
-        })
+    type Record = Bytes;
+    type Progress = usize;
+    type Error = StoreError;
+
+    fn append_derived(
+        &mut self,
+        record: Self::Record,
+    ) -> impl Future<Output = Result<Self::Progress, Self::Error>> + Send {
+        ready(Ok(record.len()))
     }
 }
 
 impl AdminStore for ContractStore {
-    fn execute_admin(&mut self, request: AdminRequest) -> StoreFuture<'_, AdminResponse> {
-        Box::pin(async move {
-            Ok(AdminResponse {
-                operation: request.operation,
-                affected: 0,
-            })
-        })
+    type Request = ();
+    type Response = ();
+    type Error = StoreError;
+
+    fn execute_admin(&mut self, (): Self::Request) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send {
+        ready(Ok(()))
     }
 }
 
@@ -136,37 +138,25 @@ where
 {
 }
 
+fn assert_static_append_future<T>(store: &mut T) -> impl Future<Output = Result<usize, StoreError>> + Send + '_
+where
+    T: MessageAppender<Bytes, Receipt = usize, Error = StoreError>,
+{
+    store.append_message(Bytes::from_static(b"message"))
+}
+
 #[test]
-fn all_narrow_capabilities_are_independently_composable() {
+fn capabilities_are_associated_type_contracts_with_static_append_future() {
     assert_capabilities::<ContractStore>();
+    let mut store = ContractStore;
+    let _future = assert_static_append_future(&mut store);
 }
 
 #[test]
-fn append_receipt_distinguishes_appended_and_durable_watermarks() {
-    let receipt = AppendReceipt::new(AppendStatus::FlushDiskTimeout, 40..60, 60, 48, Durability::Memory);
-
-    assert_eq!(40..60, receipt.offsets);
-    assert_eq!(60, receipt.appended_watermark);
-    assert_eq!(48, receipt.durable_watermark);
-    assert!(receipt.is_accepted());
-    assert!(!receipt.is_durable());
-}
-
-#[test]
-fn store_error_exposes_only_stable_backend_neutral_classification() {
-    let error = StoreError::new(StoreErrorKind::Unavailable, "append_message");
+fn store_error_uses_closed_operation_and_neutral_kind_vocabularies() {
+    let error = StoreError::new(StoreErrorKind::Unavailable, StoreOperation::Append);
 
     assert_eq!(StoreErrorKind::Unavailable, error.kind());
-    assert_eq!("append_message", error.operation());
-    assert_eq!("store operation append_message failed: unavailable", error.to_string());
-}
-
-#[test]
-fn health_defaults_to_writable_without_backpressure() {
-    let health = StoreHealthSnapshot::default();
-
-    assert!(health.writable);
-    assert!(!health.shutdown);
-    assert_eq!(0, health.appended_watermark);
-    assert_eq!(0, health.durable_watermark);
+    assert_eq!(StoreOperation::Append, error.operation());
+    assert_eq!("store operation append failed: unavailable", error.to_string());
 }

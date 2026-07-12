@@ -16,25 +16,121 @@
 
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_store_api::AppendReceipt;
-use rocketmq_store_api::AppendStatus;
-use rocketmq_store_api::Durability;
-use rocketmq_store_api::FlushBacklog;
 use rocketmq_store_api::MessageAppender;
-use rocketmq_store_api::StoreErrorKind as ApiStoreErrorKind;
-use rocketmq_store_api::StoreFuture;
+use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreHealth;
-use rocketmq_store_api::StoreHealthSnapshot as ApiStoreHealthSnapshot;
 
 use crate::base::message_result::PutMessageResult;
-use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::message_store::MessageStore;
 use crate::store_error::StoreErrorKind;
 
-/// Borrowing adapter that preserves the legacy [`MessageStore`] implementation while exposing
-/// only narrow store capabilities to new consumers.
+/// Legacy append output plus independent append and durable progress.
+#[derive(Clone)]
+pub struct LegacyAppendReceipt {
+    result: PutMessageResult,
+    appended_watermark: i64,
+    durable_watermark: i64,
+}
+
+impl LegacyAppendReceipt {
+    /// Returns the unchanged legacy append result.
+    pub const fn result(&self) -> &PutMessageResult {
+        &self.result
+    }
+
+    /// Returns the exclusive primary-log append watermark observed after the operation.
+    pub const fn appended_watermark(&self) -> i64 {
+        self.appended_watermark
+    }
+
+    /// Returns the exclusive durable watermark observed after the operation.
+    pub const fn durable_watermark(&self) -> i64 {
+        self.durable_watermark
+    }
+}
+
+/// Builds the legacy receipt without interpreting or rewriting its status/output fields.
+pub fn legacy_append_receipt(
+    result: PutMessageResult,
+    appended_watermark: i64,
+    durable_watermark: i64,
+) -> LegacyAppendReceipt {
+    LegacyAppendReceipt {
+        result,
+        appended_watermark,
+        durable_watermark,
+    }
+}
+
+/// Exact legacy health error retained only by the compatibility projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LegacyStoreHealthError {
+    kind: StoreErrorKind,
+}
+
+impl LegacyStoreHealthError {
+    /// Creates an exact compatibility projection from the legacy kind.
+    pub const fn new(kind: StoreErrorKind) -> Self {
+        Self { kind }
+    }
+
+    /// Returns the original low-cardinality compatibility token.
+    pub const fn compatibility_token(self) -> &'static str {
+        self.kind.as_str()
+    }
+}
+
+/// Compact sync-flush pressure retained by the compatibility projection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LegacyFlushBacklog {
+    pub queue_depth: u64,
+    pub oldest_wait_millis: u64,
+}
+
+/// Exact health data consumed by the existing Broker admission behavior.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LegacyStoreHealthSnapshot {
+    pub writable: bool,
+    pub last_error: Option<LegacyStoreHealthError>,
+    pub page_cache_busy: bool,
+    pub transient_pool_deficient: bool,
+    pub flush_backlog: LegacyFlushBacklog,
+    pub dispatch_behind_bytes: i64,
+    pub shutdown: bool,
+    pub replication_pending_count: u64,
+    pub replication_oldest_wait_millis: u64,
+    pub appended_watermark: i64,
+    pub durable_watermark: i64,
+}
+
+impl Default for LegacyStoreHealthSnapshot {
+    fn default() -> Self {
+        Self {
+            writable: true,
+            last_error: None,
+            page_cache_busy: false,
+            transient_pool_deficient: false,
+            flush_backlog: LegacyFlushBacklog::default(),
+            dispatch_behind_bytes: 0,
+            shutdown: false,
+            replication_pending_count: 0,
+            replication_oldest_wait_millis: 0,
+            appended_watermark: 0,
+            durable_watermark: 0,
+        }
+    }
+}
+
+/// Borrowing adapter that preserves the legacy [`MessageStore`] implementation.
 pub struct LegacyMessageStoreAdapter<'a, MS> {
     store: &'a mut MS,
+}
+
+impl<'a, MS> LegacyMessageStoreAdapter<'a, MS> {
+    /// Wraps an existing store without changing ownership or lifecycle.
+    pub fn new(store: &'a mut MS) -> Self {
+        Self { store }
+    }
 }
 
 /// Read-only borrowing adapter for admission paths that only need store health.
@@ -43,130 +139,67 @@ pub struct LegacyMessageStoreHealthAdapter<'a, MS> {
 }
 
 impl<'a, MS> LegacyMessageStoreHealthAdapter<'a, MS> {
-    /// Wraps an immutable legacy store view without changing its ownership.
+    /// Wraps an immutable store view without changing ownership.
     pub fn new(store: &'a MS) -> Self {
         Self { store }
     }
 }
 
-impl<'a, MS> LegacyMessageStoreAdapter<'a, MS> {
-    /// Wraps an existing legacy store without changing its ownership or lifecycle.
-    pub fn new(store: &'a mut MS) -> Self {
-        Self { store }
-    }
-}
-
 impl<MS: MessageStore> MessageAppender<MessageExtBrokerInner> for LegacyMessageStoreAdapter<'_, MS> {
-    fn append_message(&mut self, message: MessageExtBrokerInner) -> StoreFuture<'_, AppendReceipt> {
-        Box::pin(async move {
-            let result = self.store.put_message(message).await;
-            Ok(append_receipt_from_legacy(
-                result,
-                self.store.get_max_phy_offset(),
-                self.store.get_flushed_where(),
-            ))
-        })
+    type Receipt = LegacyAppendReceipt;
+    type Error = StoreError;
+
+    async fn append_message(&mut self, message: MessageExtBrokerInner) -> Result<Self::Receipt, Self::Error> {
+        let result = self.store.put_message(message).await;
+        Ok(legacy_append_receipt(
+            result,
+            self.store.get_max_phy_offset(),
+            self.store.get_flushed_where(),
+        ))
     }
 }
 
 impl<MS: MessageStore> MessageAppender<MessageExtBatch> for LegacyMessageStoreAdapter<'_, MS> {
-    fn append_message(&mut self, message: MessageExtBatch) -> StoreFuture<'_, AppendReceipt> {
-        Box::pin(async move {
-            let result = self.store.put_messages(message).await;
-            Ok(append_receipt_from_legacy(
-                result,
-                self.store.get_max_phy_offset(),
-                self.store.get_flushed_where(),
-            ))
-        })
+    type Receipt = LegacyAppendReceipt;
+    type Error = StoreError;
+
+    async fn append_message(&mut self, message: MessageExtBatch) -> Result<Self::Receipt, Self::Error> {
+        let result = self.store.put_messages(message).await;
+        Ok(legacy_append_receipt(
+            result,
+            self.store.get_max_phy_offset(),
+            self.store.get_flushed_where(),
+        ))
     }
 }
 
 impl<MS: MessageStore> StoreHealth for LegacyMessageStoreAdapter<'_, MS> {
-    fn health_snapshot(&self) -> ApiStoreHealthSnapshot {
+    type Snapshot = LegacyStoreHealthSnapshot;
+
+    fn health_snapshot(&self) -> Self::Snapshot {
         health_snapshot_from_legacy(self.store)
     }
 }
 
 impl<MS: MessageStore> StoreHealth for LegacyMessageStoreHealthAdapter<'_, MS> {
-    fn health_snapshot(&self) -> ApiStoreHealthSnapshot {
+    type Snapshot = LegacyStoreHealthSnapshot;
+
+    fn health_snapshot(&self) -> Self::Snapshot {
         health_snapshot_from_legacy(self.store)
     }
 }
 
-/// Converts a legacy append result without leaking its implementation types across the new API.
-pub fn append_receipt_from_legacy(
-    result: PutMessageResult,
-    appended_watermark: i64,
-    durable_watermark: i64,
-) -> AppendReceipt {
-    let status = legacy_put_status_to_append_status(result.put_message_status());
-    let Some(append) = result.append_message_result() else {
-        return AppendReceipt::new(
-            status,
-            appended_watermark..appended_watermark,
-            appended_watermark,
-            durable_watermark,
-            Durability::Memory,
-        );
-    };
-    let start = append.wrote_offset;
-    let end = start.saturating_add(i64::from(append.wrote_bytes));
-    let durability = if durable_watermark >= end {
-        Durability::Local
-    } else {
-        Durability::Memory
-    };
-    let mut receipt = AppendReceipt::new(status, start..end, appended_watermark, durable_watermark, durability);
-    receipt.wrote_bytes = append.wrote_bytes;
-    receipt.message_id = append.get_message_id();
-    receipt.store_timestamp = append.store_timestamp;
-    receipt.logical_offset = append.logics_offset;
-    receipt.message_count = append.msg_num;
-    receipt
-}
-
-/// Maps every legacy append outcome to its stable backend-neutral counterpart.
-pub const fn legacy_put_status_to_append_status(status: PutMessageStatus) -> AppendStatus {
-    match status {
-        PutMessageStatus::PutOk => AppendStatus::PutOk,
-        PutMessageStatus::FlushDiskTimeout => AppendStatus::FlushDiskTimeout,
-        PutMessageStatus::FlushSlaveTimeout => AppendStatus::FlushReplicaTimeout,
-        PutMessageStatus::SlaveNotAvailable => AppendStatus::ReplicaUnavailable,
-        PutMessageStatus::ServiceNotAvailable => AppendStatus::ServiceUnavailable,
-        PutMessageStatus::CreateMappedFileFailed => AppendStatus::StorageUnavailable,
-        PutMessageStatus::MessageIllegal | PutMessageStatus::PropertiesSizeExceeded => AppendStatus::InvalidMessage,
-        PutMessageStatus::OsPageCacheBusy => AppendStatus::PageCacheBusy,
-        PutMessageStatus::UnknownError => AppendStatus::Unknown,
-        PutMessageStatus::InSyncReplicasNotEnough => AppendStatus::ReplicasUnavailable,
-        PutMessageStatus::PutToRemoteBrokerFail => AppendStatus::RemoteAppendFailed,
-        PutMessageStatus::LmqConsumeQueueNumExceeded => AppendStatus::QueueLimit,
-        PutMessageStatus::WheelTimerFlowControl => AppendStatus::TimerFlowControl,
-        PutMessageStatus::WheelTimerMsgIllegal => AppendStatus::TimerMessageIllegal,
-        PutMessageStatus::WheelTimerNotEnable => AppendStatus::TimerNotEnabled,
-    }
-}
-
-const fn map_error_kind(kind: StoreErrorKind) -> ApiStoreErrorKind {
-    match kind {
-        StoreErrorKind::NotStarted => ApiStoreErrorKind::NotStarted,
-        StoreErrorKind::MessageNotFound | StoreErrorKind::MappedFileNotFound => ApiStoreErrorKind::NotFound,
-        StoreErrorKind::Config => ApiStoreErrorKind::InvalidRequest,
-        StoreErrorKind::Unsupported => ApiStoreErrorKind::Unsupported,
-        StoreErrorKind::MappedFile | StoreErrorKind::RocksDb | StoreErrorKind::Storage => ApiStoreErrorKind::Storage,
-        StoreErrorKind::TieredStore | StoreErrorKind::Ha | StoreErrorKind::DLedger => ApiStoreErrorKind::Unavailable,
-        StoreErrorKind::InvalidState => ApiStoreErrorKind::Internal,
-    }
-}
-
-fn health_snapshot_from_legacy<MS: MessageStore>(store: &MS) -> ApiStoreHealthSnapshot {
+fn health_snapshot_from_legacy<MS: MessageStore>(store: &MS) -> LegacyStoreHealthSnapshot {
     let legacy = store.health_snapshot();
-    ApiStoreHealthSnapshot {
+    LegacyStoreHealthSnapshot {
         writable: legacy.writeable,
-        last_error: legacy.last_flush_error.as_ref().map(|error| map_error_kind(error.kind)),
+        last_error: legacy
+            .last_flush_error
+            .as_ref()
+            .map(|error| LegacyStoreHealthError::new(error.kind)),
         page_cache_busy: legacy.os_page_cache_busy,
         transient_pool_deficient: legacy.transient_store_pool_deficient,
-        flush_backlog: FlushBacklog {
+        flush_backlog: LegacyFlushBacklog {
             queue_depth: legacy.sync_flush.queue_depth,
             oldest_wait_millis: legacy.sync_flush.oldest_wait_millis,
         },

@@ -14,9 +14,11 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 import unittest
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,48 +33,130 @@ CAPABILITIES = {
     "DerivedRecordSink",
     "AdminStore",
 }
-ALLOWED_NORMAL_DEPENDENCIES = {"rocketmq-model", "rocketmq-error", "bytes"}
-FORBIDDEN_SOURCE_TOKENS = {
+ALLOWED_DEPENDENCIES = {"rocketmq-model", "rocketmq-error", "bytes"}
+REMOVED_M06_02_TYPES = {
+    "AppendReceipt",
+    "AppendStatus",
+    "Durability",
+    "ReadRequest",
+    "ReadResult",
+    "StoredMessage",
+    "OffsetRange",
+    "ReplicationState",
+    "DerivedRecord",
+    "DerivedProgress",
+    "AdminRequest",
+    "AdminResponse",
+    "StoreFuture",
+}
+FORBIDDEN_NORMALIZED_TOKENS = {
+    "timer",
+    "ha",
+    "rocksdb",
+    "tiered",
     "tokio",
-    "rocketmq_runtime",
-    "rocketmq_remoting",
-    "rocketmq_observability",
-    "MappedFile",
-    "RocksDB",
-    "TieredStore",
-    "CommitLog",
-    "BrokerRuntime",
+    "runtime",
+    "remoting",
+    "observability",
+    "mappedfile",
+    "broker",
+    "native",
 }
 
 
+def dependency_tables(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    tables = [
+        manifest.get("dependencies", {}),
+        manifest.get("dev-dependencies", {}),
+        manifest.get("build-dependencies", {}),
+    ]
+    for target in manifest.get("target", {}).values():
+        tables.extend(
+            [
+                target.get("dependencies", {}),
+                target.get("dev-dependencies", {}),
+                target.get("build-dependencies", {}),
+            ]
+        )
+    return tables
+
+
+def normalized(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def function_body(source: str, signature: str) -> str:
+    start = source.index(signature)
+    brace = source.index("{", start)
+    depth = 0
+    for index in range(brace, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[brace + 1 : index]
+    raise AssertionError(f"unterminated function: {signature}")
+
+
 class StoreApiContractTests(unittest.TestCase):
-    def test_workspace_contains_runtime_neutral_store_api_crate(self) -> None:
+    def test_workspace_contains_minimal_runtime_neutral_store_api_crate(self) -> None:
         root_manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
         self.assertIn("rocketmq-store-api", root_manifest["workspace"]["members"])
         self.assertIn("rocketmq-store-api", root_manifest["workspace"]["dependencies"])
 
         manifest = tomllib.loads((CRATE / "Cargo.toml").read_text(encoding="utf-8"))
         self.assertEqual([], manifest["features"]["default"])
-        self.assertEqual(ALLOWED_NORMAL_DEPENDENCIES, set(manifest.get("dependencies", {})))
+        dependencies: set[str] = set()
+        for table in dependency_tables(manifest):
+            for alias, spec in table.items():
+                dependencies.add(alias)
+                self.assertIn(alias, ALLOWED_DEPENDENCIES)
+                if isinstance(spec, dict):
+                    self.assertNotIn("package", spec, f"dependency alias is forbidden: {alias}")
+        self.assertEqual(ALLOWED_DEPENDENCIES, dependencies)
 
-    def test_public_contracts_are_narrow_and_backend_neutral(self) -> None:
+    def test_public_contracts_are_associated_type_only_and_backend_neutral(self) -> None:
         source = (CRATE / "src" / "lib.rs").read_text(encoding="utf-8")
         for capability in CAPABILITIES:
             self.assertIn(f"pub trait {capability}", source)
-        for token in FORBIDDEN_SOURCE_TOKENS:
-            self.assertNotIn(token, source)
+        for removed in REMOVED_M06_02_TYPES:
+            self.assertNotIn(f"pub struct {removed}", source)
+            self.assertNotIn(f"pub enum {removed}", source)
+            self.assertNotIn(f"pub type {removed}", source)
+        self.assertNotIn("Pin<Box", source)
+        self.assertNotIn("dyn Future", source)
+        self.assertNotIn("Box::pin", source)
+        self.assertIn("pub enum StoreOperation", source)
+        normalized_identifiers = {normalized(identifier) for identifier in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", source)}
+        for token in FORBIDDEN_NORMALIZED_TOKENS:
+            self.assertNotIn(token, normalized_identifiers, f"forbidden API vocabulary: {token}")
 
-    def test_broker_send_path_consumes_the_capability_boundary(self) -> None:
+    def test_real_broker_send_and_reject_paths_traverse_capabilities(self) -> None:
         manifest = tomllib.loads((ROOT / "rocketmq-broker" / "Cargo.toml").read_text(encoding="utf-8"))
         self.assertIn("rocketmq-store-api", manifest["dependencies"])
-
         source = (ROOT / "rocketmq-broker" / "src" / "processor" / "send_message_processor.rs").read_text(
             encoding="utf-8"
         )
-        self.assertIn("S: MessageAppender<M>", source)
-        self.assertIn("S: StoreHealth", source)
-        self.assertIn("append_message_with_store(&mut store", source)
-        self.assertIn("store_health_reject_remark_from", source)
+
+        batch = function_body(source, "async fn send_batch_message")
+        self.assertGreaterEqual(batch.count("append_message_with_store("), 2)
+        self.assertNotIn(".put_message(", batch)
+        self.assertNotIn(".put_messages(", batch)
+
+        single = function_body(source, "async fn send_message<F>")
+        self.assertGreaterEqual(single.count("append_message_with_store("), 2)
+        self.assertNotIn(".put_message(", single)
+        self.assertNotIn(".prepare_message(", single)
+        self.assertIn("TransactionalMessageAppender::new", single)
+
+        reject = function_body(source, "fn reject_request")
+        self.assertIn("store_health_reject_remark_from", reject)
+        self.assertNotIn(".health_snapshot(", reject)
+
+        helper = function_body(source, "fn append_message_with_store")
+        self.assertIn("store.append_message(message)", helper)
+        self.assertNotIn("Box::pin", helper)
 
 
 if __name__ == "__main__":
