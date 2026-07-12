@@ -37,6 +37,7 @@ pub struct LoadStatistics {
 impl LoadStatistics {
     pub fn log_summary(&self) {
         info!(
+            target: "rocketmq_store::log_file::commit_log_loader",
             "CommitLog load completed: {} files ({:.2} GB), {} removed, parallel: {}ms, total: {}ms, mmapAdvice={}, \
              mmapAdviceAttempts={}, mmapAdviceSuccesses={}, mmapAdviceFailures={}, mmapAdviceElapsedMs={}, \
              filePrefetch={}, filePrefetchAttempts={}, filePrefetchSuccesses={}, filePrefetchFailures={}, \

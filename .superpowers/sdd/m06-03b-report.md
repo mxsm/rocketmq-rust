@@ -32,7 +32,7 @@ All RED commands ran before production edits.
 3. Store Local ownership contract
    - RED: `python -m unittest scripts.tests.test_m06_store_local_contract` exited 1 because canonical
      `commit_log/load.rs` and `commit_log/recovery.rs` did not exist.
-   - GREEN: the target exits 0 with 9/9 tests. It proves exact struct/enum/function item kinds, one active
+   - GREEN: the final target exits 0 with 11/11 tests. It proves exact struct/enum/function item kinds, one active
      definition, exact active facade re-exports, unchanged loader/recovery module visibility, and all M06-03a
      forbidden owner edges.
 4. Clippy review fix
@@ -40,11 +40,18 @@ All RED commands ran before production edits.
      `clippy::type-complexity`; production code had no finding.
    - GREEN: a private `RecoveryPlanner` type alias preserves the identity assertion without a lint suppression;
      Store package and root workspace Clippy both exit 0.
+5. Tracing target review fix
+   - RED: `python -m unittest scripts.tests.test_m06_store_local_contract` exited 1 because the moved load summary
+     had no explicit target (`[None]`) instead of its legacy `rocketmq_store::log_file::commit_log_loader` target.
+   - GREEN: the final 11/11 contract fixes both load and recovery summaries to their legacy Store module targets.
+     The target scanner operates on active Rust positions and its mutation fixture rejects line/block comments,
+     ordinary strings, and raw strings as evidence.
 
 ## Compatibility and dependency closure
 
-- Fields, derives, defaults, `as_str` vocabulary, fallback reason strings, statistics logging text, planner
-  algorithms, output values, and public recovery paths are unchanged.
+- Fields, derives, defaults, `as_str` vocabulary, fallback reason strings, statistics logging text and targets,
+  planner algorithms, output values, and public recovery paths are unchanged. Explicit tracing targets preserve
+  the pre-move EnvFilter and log-routing behavior.
 - `commit_log_loader` remains `pub(crate)` and `commit_log_recovery` remains public. Because the loader module was
   never externally public, its canonical/legacy identity is checked inside the facade crate; no visibility was
   widened.
@@ -64,7 +71,8 @@ All commands ran from the repository root.
   seven-case full recovery golden; nine existing rustdoc examples remained ignored.
 - `cargo test -p rocketmq-store --lib m06_load_type_identity` - exit 0; 1/1.
 - `cargo test -p rocketmq-store --test m06_store_local_commitlog_compatibility` - exit 0; 2/2.
-- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 9/9.
+- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 11/11, including active-Rust tracing
+  target preservation and comment/string/raw-string false-positive fixtures.
 - `cargo test -p rocketmq-store --test commitlog_recovery_tests` - exit 0; 9/9.
 - `cargo test -p rocketmq-store --lib commit_log_loader::tests` - exit 0; 11/11.
 - `cargo test -p rocketmq-store --lib commit_log_recovery::tests` - exit 0; 1/1.
@@ -87,10 +95,11 @@ All commands ran from the repository root.
   future-incompatibility notice.
 - `cargo fmt --all -- --check` - exit 0 in the final post-report check.
 - `git diff --check` - exit 0 in the final post-report check.
+- `.\scripts\check-agents-routing.ps1` - exit 0,
+  `AGENTS_ROUTING_CHECK_OK standalone_cargo=4 node_projects=3 routes=8`.
 
 Error hygiene was not triggered because no public error/source coverage changed. Runtime audit was not triggered
-because no task/thread/runtime/blocking owner changed. Routing validation was not triggered because the manifest
-change is an ordinary external dependency within the existing workspace boundary, as allowed by the brief.
+because no task/thread/runtime/blocking owner changed. Routing validation was run successfully as recorded above.
 
 ## Non-goals and remaining work
 

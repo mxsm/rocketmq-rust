@@ -298,10 +298,11 @@ python scripts/arc_mut_guard.py
   and the deterministic range planner with its private pure helpers.
 - [x] `[COMPAT]` The existing Store loader/recovery modules exact re-export the canonical items. The loader's
   private `HintResult` orchestration remains facade-owned through private free recording helpers; the mapped-file,
-  checkpoint, config, message parsing, and CommitLog owners did not move.
+  checkpoint, config, message parsing, and CommitLog owners did not move. Explicit summary-log targets preserve
+  the legacy Store module targets and therefore unchanged EnvFilter/log-routing behavior.
 - [x] `[TEST]` RED/GREEN identity fixtures and the mutation-resistant source contract prove one definition per
   item, unchanged legacy module visibility/path behavior, exact facade re-exports, and seven fixed recovery-window
   outcomes. Local unit tests, CommitLog recovery integration, the exact feature matrix, package/workspace Clippy,
-  architecture dependency gates, and ArcMut gates pass.
+  architecture dependency gates, ArcMut gates, and the AGENTS routing guard pass.
 - [x] `[SCOPE]` This slice does not move mmap/prefetch execution, `DefaultMappedFile`, flush/group commit, CQ/Index,
   HA, runtime ownership, or persisted formats. The PR-M06-03 checklist and the M06 Exit Checklist remain open.

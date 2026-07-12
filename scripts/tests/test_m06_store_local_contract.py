@@ -135,6 +135,19 @@ def active_commit_log_facade_reexports(source: str) -> dict[str, str]:
     }
 
 
+def active_tracing_info_targets(source: str) -> list[str | None]:
+    active_source = active_rust_source(source)
+    targets: list[str | None] = []
+    for invocation in re.finditer(r"\binfo\s*!\s*\(", active_source):
+        original_invocation = source[invocation.start():]
+        target = re.match(
+            r'info\s*!\s*\(\s*target\s*:\s*"([^"]+)"',
+            original_invocation,
+        )
+        targets.append(target.group(1) if target else None)
+    return targets
+
+
 def active_rust_source(source: str) -> str:
     output: list[str] = []
     index = 0
@@ -255,6 +268,20 @@ pub use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryWindow;
         self.assertEqual(
             {"AbnormalRecoveryWindow": "recovery"},
             active_commit_log_facade_reexports(source),
+        )
+
+    def test_tracing_target_scanner_ignores_comments_and_strings(self) -> None:
+        source = r'''
+// info!(target: "commented", "ignored");
+/* info!(target: "block", "ignored"); */
+const TEXT: &str = "info!(target: \"string\", \"ignored\")";
+const RAW: &str = r#"info!(target: "raw", "ignored")"#;
+info!(target: "rocketmq_store::log_file::commit_log_loader", "active");
+info!("missing target");
+'''
+        self.assertEqual(
+            ["rocketmq_store::log_file::commit_log_loader", None],
+            active_tracing_info_targets(source),
         )
 
     def test_tokio_uring_dependency_must_not_also_be_top_level(self) -> None:
@@ -387,6 +414,16 @@ pub use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryWindow;
         for facade_file, expected_items in COMMIT_LOG_FACADE_ITEMS.items():
             facade = (facade_dir / facade_file).read_text(encoding="utf-8")
             self.assertEqual(expected_items, active_commit_log_facade_reexports(facade), facade_file)
+
+    def test_commit_log_summary_logging_preserves_legacy_targets(self) -> None:
+        expected_targets = {
+            "load.rs": ["rocketmq_store::log_file::commit_log_loader"],
+            "recovery.rs": ["rocketmq_store::log_file::commit_log_recovery"],
+        }
+        canonical_dir = LOCAL_CRATE / "src" / "commit_log"
+        for source_file, expected in expected_targets.items():
+            source = (canonical_dir / source_file).read_text(encoding="utf-8")
+            self.assertEqual(expected, active_tracing_info_targets(source), source_file)
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ pub struct RecoveryStatistics {
 impl RecoveryStatistics {
     pub fn log_summary(&self, recovery_type: &str) {
         info!(
+            target: "rocketmq_store::log_file::commit_log_recovery",
             "{} recovery completed: {} files, {} messages, {:.2} MB, {} invalid, {}ms",
             recovery_type,
             self.files_processed,
