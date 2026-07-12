@@ -60,6 +60,12 @@ Every behavior slice started with a failing focused test or contract compile fix
 - A real `RocketMQServer` regression saturates the data writer budget and proves a HeartBeat response uses the
   control reserve. The per-request adapter now binds the actual response connection and admission class instead
   of retaining the connection created before request classification.
+- The final review reproduced a cross-request snapshot race: the session map's shared context was rebound for
+  each command, so a delayed Data response could inherit a later HeartBeat's control class. The server now keeps
+  its connect-time session context stable and creates an independent Channel/ConnectionHandlerContext snapshot
+  for every command. A per-server, test-only hook delays the first Data response until the same socket processes
+  HeartBeat; after the Data writer budget is saturated, the delayed response is rejected instead of borrowing the
+  control reserve. The hook is instance-local, contains no global/static state, and exposes no context ArcMut.
 - Public asynchronous TLS initializer Rustdoc now documents injected `BlockingExecutor` ownership and failure
   behavior. A downstream client benchmark initially exposed E0275 future-layout overflow after timeout retirement
   became asynchronous; boxing only the Remoting retirement boundary removed the overflow without a recursion-limit
@@ -72,9 +78,10 @@ Every behavior slice started with a failing focused test or contract compile fix
   types/functions. TLS connector functions are exact re-exports; the runtime wrapper preserves lifecycle output.
 - Wire commands remain `rocketmq-protocol` types; no schema, request code, response mapping, or body logging was
   introduced.
-- ArcMut promotion is monotonic: 1,266 identities / 3,430 occurrences became 1,233 / 3,378. The earlier 16 exact
-  fingerprint relocations and the final one-item signer-field context relocation were consumed under ADR-013;
-  `rocketmq-transport` contains no ArcMut occurrence.
+- ArcMut promotion is monotonic: 1,266 identities / 3,430 occurrences became 1,233 / 3,378. The final promotion
+  consumes two exact one-to-one same-item fingerprint relocations for the request-local context constructor and
+  the unchanged `ConnectionHandlerContext` field under ADR-013; `rocketmq-transport` contains no ArcMut
+  occurrence.
 - The dependency policy permits Remoting and Common compatibility edges to transport and rejects forbidden
   reverse/business/provider dependencies.
 
@@ -89,17 +96,18 @@ Passed:
 - `cargo test -p rocketmq-transport`
 - `cargo test -p rocketmq-transport --features observability`
 - Remoting no-default/default/combined feature checks
-- `cargo test -p rocketmq-remoting --no-default-features` (111 unit tests plus integration and doc tests)
-- `cargo test -p rocketmq-remoting` (112 unit tests plus integration and doc tests)
+- `cargo test -p rocketmq-remoting --no-default-features` (114 unit tests plus integration and doc tests)
+- `cargo test -p rocketmq-remoting` (115 unit tests plus integration and doc tests)
 - production transport delegation source contracts, canonical public client/server exchange, and injected TLS
   blocking reload coverage
 - deterministic retirement interleaving and blocked-writer deadline/abort regressions, real Remoting control
-  reserve coverage, public codec compatibility compilation, and TLS Rustdoc source contracts
+  reserve coverage, delayed Data-response snapshot isolation on the same socket, public codec compatibility
+  compilation, and TLS Rustdoc source contracts
 - `cargo doc -p rocketmq-transport --no-deps` and `cargo doc -p rocketmq-remoting --no-deps`
 - `cargo test -p rocketmq-client-rust --all-targets --all-features` (943 library tests plus integrations,
   benches, and examples)
 - transport all-target/all-feature and no-default suites (63 and 54 tests)
-- Remoting all-target/all-feature and no-default suites (114 and 113 library tests plus integrations, benches,
+- Remoting all-target/all-feature and no-default suites (115 and 114 library tests plus integrations, benches,
   examples, and compatibility contracts)
 - all seven `rocketmq-observability` CI test feature sets, from default through combined OTLP/Prometheus
 - `cargo tree -p rocketmq-transport -e normal`

@@ -44,8 +44,12 @@ transport-only envelope; the protocol command and its wire/JSON/debug/equality s
 `CompositeCodec` decoder therefore continues to yield `RemotingCommand`; retained-byte metadata is available only
 through the crate-private canonical session codec. Queued responses inherit the originating request class so
 control responses can consume only the bounded control reserve. The production Remoting adapter rebinds each
-processor context to that request's actual response connection, and a real HeartBeat exchange verifies the
-control reserve while the data writer budget is saturated.
+processor context to that request's actual response connection. Its session map retains a stable connect-time
+context for lifecycle events; it is never rebound to a later command. Every command instead receives an
+independent Channel/ConnectionHandlerContext snapshot whose queued connection permanently carries that request's
+admission class. A real HeartBeat exchange verifies the control reserve while the data writer budget is
+saturated, and a delayed Data response on the same socket proves it cannot inherit the HeartBeat class or borrow
+the reserve.
 
 The default values preserve the current permissive envelope and remain explicitly configurable. They are not
 presented as production tuning recommendations; deployment-specific profiling is required before changing them.

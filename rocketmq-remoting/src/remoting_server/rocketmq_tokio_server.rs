@@ -63,6 +63,33 @@ const DEFAULT_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 const EVENT_QUEUE_CAPACITY: usize = 1024;
 
+#[cfg(all(test, not(doctest)))]
+enum TestRequestHookResult {
+    Continue,
+    Intercept,
+}
+
+#[cfg(all(test, not(doctest)))]
+type TestDeferredResponse = Box<
+    dyn FnOnce(
+            rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send,
+>;
+
+#[cfg(all(test, not(doctest)))]
+type TestRequestHook = Arc<dyn Fn(i32, i32, Channel, TestDeferredResponse) -> TestRequestHookResult + Send + Sync>;
+
+trait SessionCommandInterceptor: Send + Sync + 'static {
+    fn intercept(&self, code: i32, opaque: i32, channel: Channel) -> bool;
+}
+
+impl SessionCommandInterceptor for () {
+    fn intercept(&self, _code: i32, _opaque: i32, _channel: Channel) -> bool {
+        false
+    }
+}
+
 /// Server listener managing TCP connection acceptance and connection lifecycle.
 ///
 /// # Architecture
@@ -127,6 +154,7 @@ struct ConnectionListener<RP> {
     admission: Arc<AdmissionController>,
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
+    command_interceptor: Arc<dyn SessionCommandInterceptor>,
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
@@ -205,12 +233,15 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             transport = transport.with_security(security, self.transport_principal.clone());
         }
         transport
-            .run(Arc::new(ConnectionHandler {
-                shutdown_complete_tx: self.shutdown_complete_tx.clone(),
-                conn_disconnect_notify: self.conn_disconnect_notify.clone(),
-                cmd_handler: self.cmd_handler.clone(),
-                event_tx,
-                sessions: dashmap::DashMap::new(),
+            .run(Arc::new(InterceptingConnectionHandler {
+                inner: ConnectionHandler {
+                    shutdown_complete_tx: self.shutdown_complete_tx.clone(),
+                    conn_disconnect_notify: self.conn_disconnect_notify.clone(),
+                    cmd_handler: self.cmd_handler.clone(),
+                    event_tx,
+                    sessions: dashmap::DashMap::new(),
+                },
+                command_interceptor: self.command_interceptor.clone(),
             }))
             .await
     }
@@ -224,13 +255,41 @@ struct ConnectionHandler<RP> {
     sessions: dashmap::DashMap<u64, RemotingSession<ConnectionHandlerContext>>,
 }
 
+struct InterceptingConnectionHandler<RP> {
+    inner: ConnectionHandler<RP>,
+    command_interceptor: Arc<dyn SessionCommandInterceptor>,
+}
+
 struct RemotingSession<C> {
     context: C,
     _shutdown_complete: mpsc::Sender<()>,
 }
 
-impl<RP> ConnectionHandler<RP> {
-    fn run(&self, session: rocketmq_transport::server::SessionHandle) {
+enum RemotingSessionAction {
+    Connect,
+    Command(rocketmq_protocol::protocol::remoting_command::RemotingCommand),
+}
+
+impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
+    async fn run(
+        &self,
+        session: rocketmq_transport::server::SessionHandle,
+        action: RemotingSessionAction,
+        command_interceptor: Option<&dyn SessionCommandInterceptor>,
+    ) {
+        let channel_id = match &action {
+            RemotingSessionAction::Connect => format!("transport-session-{}", session.session_id()),
+            RemotingSessionAction::Command(_) => {
+                let Some(channel_id) = self
+                    .sessions
+                    .get(&session.session_id())
+                    .map(|remoting_session| remoting_session.context.channel().channel_id().to_owned())
+                else {
+                    return;
+                };
+                channel_id
+            }
+        };
         let Ok(channel_inner) = ChannelInner::new_transport_session(
             session.connection(),
             self.cmd_handler.response_table.clone(),
@@ -239,19 +298,36 @@ impl<RP> ConnectionHandler<RP> {
             return;
         };
         let mut channel = Channel::new(ArcMut::new(channel_inner), session.local_addr(), session.remote_addr());
-        channel.set_channel_id(format!("transport-session-{}", session.session_id()));
-        let _ = self.event_tx.try_send(TokioEvent::new(
-            ConnectionNetEvent::CONNECTED(session.remote_addr()),
-            session.remote_addr(),
-            channel.clone(),
-        ));
-        self.sessions.insert(
-            session.session_id(),
-            RemotingSession {
-                context: ArcMut::new(ConnectionHandlerContextWrapper::new(channel)),
-                _shutdown_complete: self.shutdown_complete_tx.clone(),
-            },
-        );
+        channel.set_channel_id(channel_id);
+        let mut remoting_session = RemotingSession {
+            context: ArcMut::new(ConnectionHandlerContextWrapper::new(channel)),
+            _shutdown_complete: self.shutdown_complete_tx.clone(),
+        };
+        match action {
+            RemotingSessionAction::Connect => {
+                let _ = self.event_tx.try_send(TokioEvent::new(
+                    ConnectionNetEvent::CONNECTED(session.remote_addr()),
+                    session.remote_addr(),
+                    remoting_session.context.channel.clone(),
+                ));
+                self.sessions.insert(session.session_id(), remoting_session);
+            }
+            RemotingSessionAction::Command(command) => {
+                if let Some(command_interceptor) = command_interceptor {
+                    if command_interceptor.intercept(
+                        command.code(),
+                        command.opaque(),
+                        remoting_session.context.channel().clone(),
+                    ) {
+                        return;
+                    }
+                }
+                let mut cmd_handler = self.cmd_handler.clone();
+                cmd_handler
+                    .process_message_received(&mut remoting_session.context, command)
+                    .await;
+            }
+        }
     }
 }
 
@@ -261,7 +337,7 @@ impl<RP: RequestProcessor + Sync + 'static> TransportConnectionHandler for Conne
         session: rocketmq_transport::server::SessionHandle,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            self.run(session);
+            self.run(session, RemotingSessionAction::Connect, None).await;
         })
     }
 
@@ -270,16 +346,8 @@ impl<RP: RequestProcessor + Sync + 'static> TransportConnectionHandler for Conne
         session: rocketmq_transport::server::SessionHandle,
         command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let mut cmd_handler = self.cmd_handler.clone();
         Box::pin(async move {
-            let Some((_, mut remoting_session)) = self.sessions.remove(&session.session_id()) else {
-                return;
-            };
-            *remoting_session.context.connection_mut() = session.connection();
-            cmd_handler
-                .process_message_received(&mut remoting_session.context, command)
-                .await;
-            self.sessions.insert(session.session_id(), remoting_session);
+            self.run(session, RemotingSessionAction::Command(command), None).await;
         })
     }
 
@@ -312,6 +380,38 @@ impl<RP: RequestProcessor + Sync + 'static> TransportConnectionHandler for Conne
     }
 }
 
+impl<RP: RequestProcessor + Sync + 'static> TransportConnectionHandler for InterceptingConnectionHandler<RP> {
+    fn connected(
+        &self,
+        session: rocketmq_transport::server::SessionHandle,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.inner.connected(session)
+    }
+
+    fn command(
+        &self,
+        session: rocketmq_transport::server::SessionHandle,
+        command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            self.inner
+                .run(
+                    session,
+                    RemotingSessionAction::Command(command),
+                    Some(self.command_interceptor.as_ref()),
+                )
+                .await;
+        })
+    }
+
+    fn disconnected(
+        &self,
+        session: rocketmq_transport::server::SessionHandle,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.inner.disconnected(session)
+    }
+}
+
 pub struct RocketMQServer<RP> {
     config: Arc<ServerConfig>,
     rpc_hooks: Option<Vec<Arc<dyn RPCHook>>>,
@@ -319,6 +419,8 @@ pub struct RocketMQServer<RP> {
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
     admission: Option<Arc<AdmissionController>>,
+    #[cfg(all(test, not(doctest)))]
+    test_request_hook: Option<TestRequestHook>,
     _phantom_data: std::marker::PhantomData<RP>,
 }
 
@@ -331,6 +433,8 @@ impl<RP> RocketMQServer<RP> {
             transport_security: None,
             transport_principal: None,
             admission: None,
+            #[cfg(all(test, not(doctest)))]
+            test_request_hook: None,
             _phantom_data: std::marker::PhantomData,
         }
     }
@@ -343,6 +447,8 @@ impl<RP> RocketMQServer<RP> {
             transport_security: None,
             transport_principal: None,
             admission: None,
+            #[cfg(all(test, not(doctest)))]
+            test_request_hook: None,
             _phantom_data: std::marker::PhantomData,
         }
     }
@@ -369,6 +475,12 @@ impl<RP> RocketMQServer<RP> {
     #[doc(hidden)]
     pub fn with_admission_controller(mut self, admission: Arc<AdmissionController>) -> Self {
         self.admission = Some(admission);
+        self
+    }
+
+    #[cfg(all(test, not(doctest)))]
+    fn with_test_request_hook(mut self, hook: TestRequestHook) -> Self {
+        self.test_request_hook = Some(hook);
         self
     }
 }
@@ -434,6 +546,10 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             };
         info!("Starting remoting_server at: {}", addr);
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
+        #[cfg(all(test, not(doctest)))]
+        let command_interceptor: Arc<dyn SessionCommandInterceptor> = Arc::new(self.test_request_hook.clone());
+        #[cfg(not(test))]
+        let command_interceptor: Arc<dyn SessionCommandInterceptor> = Arc::new(());
         run_with_tls_config_report(
             listener,
             shutdown,
@@ -446,6 +562,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             self.transport_security.clone(),
             self.transport_principal.clone(),
             self.admission.clone(),
+            command_interceptor,
         )
         .await
     }
@@ -529,6 +646,7 @@ pub async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 
         None,
         None,
         None,
+        Arc::new(()),
     )
     .await
 }
@@ -554,6 +672,7 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
         None,
         None,
         None,
+        Arc::new(()),
     )
     .await;
 }
@@ -570,6 +689,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
     admission: Option<Arc<AdmissionController>>,
+    command_interceptor: Arc<dyn SessionCommandInterceptor>,
 ) -> Option<ShutdownReport> {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
@@ -612,6 +732,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         admission: admission.unwrap_or_else(|| Arc::new(AdmissionController::new(admission_limits))),
         transport_security,
         transport_principal,
+        command_interceptor,
     };
 
     tokio::select! {
@@ -745,6 +866,27 @@ mod tests {
     use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
     use crate::runtime::config::client_config::TokioClientConfig;
 
+    impl SessionCommandInterceptor for Option<TestRequestHook> {
+        fn intercept(&self, code: i32, opaque: i32, channel: Channel) -> bool {
+            let Some(hook) = self.as_ref() else {
+                return false;
+            };
+            let mut response_channel = channel.clone();
+            let deferred_response: TestDeferredResponse = Box::new(move |response| {
+                Box::pin(async move {
+                    let _ = response_channel
+                        .connection_mut()
+                        .send_command(response.set_opaque(opaque))
+                        .await;
+                })
+            });
+            matches!(
+                hook(code, opaque, channel, deferred_response),
+                TestRequestHookResult::Intercept
+            )
+        }
+    }
+
     struct ConnectSignalListener {
         connected: std::sync::Mutex<Option<oneshot::Sender<()>>>,
     }
@@ -768,6 +910,8 @@ mod tests {
     }
 
     struct RemotingMarkerSigner;
+
+    type DelayedResponse = (String, TestDeferredResponse);
 
     impl rocketmq_common::security::OutboundSigner for RemotingMarkerSigner {
         fn sign(
@@ -1033,6 +1177,136 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delayed_data_response_keeps_its_request_admission_class_after_control_request() {
+        let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
+        let addr = reserved.local_addr().unwrap();
+        drop(reserved);
+        let limits = AdmissionLimits {
+            queued: ResourceLimit { count: 4, bytes: 4096 },
+            control_reserve: ResourceLimit { count: 2, bytes: 2048 },
+            ..AdmissionLimits::default()
+        };
+        let admission = Arc::new(AdmissionController::new(limits));
+        let scope = rocketmq_transport::admission::AdmissionScope::new(addr.ip());
+        let delayed: Arc<std::sync::Mutex<Option<DelayedResponse>>> = Arc::new(std::sync::Mutex::new(None));
+        let first_seen = Arc::new(tokio::sync::Notify::new());
+        let second_seen = Arc::new(tokio::sync::Notify::new());
+        let delayed_for_hook = delayed.clone();
+        let first_seen_for_hook = first_seen.clone();
+        let second_seen_for_hook = second_seen.clone();
+        let hook: TestRequestHook = Arc::new(move |code, opaque, channel, deferred_response| match opaque {
+            81 => {
+                assert_eq!(code, crate::code::request_code::RequestCode::SendMessage as i32);
+                *delayed_for_hook.lock().expect("delayed response lock") =
+                    Some((channel.channel_id().to_owned(), deferred_response));
+                first_seen_for_hook.notify_one();
+                TestRequestHookResult::Intercept
+            }
+            82 => {
+                assert_eq!(code, crate::code::request_code::RequestCode::HeartBeat as i32);
+                let delayed_channel_id = delayed_for_hook
+                    .lock()
+                    .expect("delayed response lock")
+                    .as_ref()
+                    .map(|(channel_id, _)| channel_id.clone())
+                    .expect("first request snapshot");
+                assert_eq!(channel.channel_id(), delayed_channel_id);
+                second_seen_for_hook.notify_one();
+                TestRequestHookResult::Continue
+            }
+            _ => TestRequestHookResult::Continue,
+        });
+        let config = Arc::new(ServerConfig {
+            bind_address: addr.ip().to_string(),
+            listen_port: u32::from(addr.port()),
+            ..ServerConfig::default()
+        });
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config)
+            .with_admission_controller(admission.clone())
+            .with_test_request_hook(hook);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_task = tokio::spawn(async move {
+            server
+                .run_with_shutdown_report(DefaultRemotingRequestProcessor, None, async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        let mut client = crate::connection::Connection::new(TcpStream::connect(addr).await.unwrap());
+        client
+            .send_command(
+                crate::protocol::remoting_command::RemotingCommand::create_remoting_command(
+                    crate::code::request_code::RequestCode::SendMessage,
+                )
+                .set_opaque(81),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), first_seen.notified())
+            .await
+            .expect("first data request should reach the processor");
+        client
+            .send_command(
+                crate::protocol::remoting_command::RemotingCommand::create_remoting_command(
+                    crate::code::request_code::RequestCode::HeartBeat,
+                )
+                .set_opaque(82),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), second_seen.notified())
+            .await
+            .expect("second control request should reach the processor");
+        let control_response = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+            .await
+            .expect("control response should use its request snapshot")
+            .expect("control response frame")
+            .expect("control response command");
+        assert_eq!(control_response.opaque(), 82);
+
+        let _data_one = admission
+            .try_acquire(
+                rocketmq_transport::admission::AdmissionResource::Queued,
+                scope,
+                1,
+                rocketmq_transport::admission::AdmissionClass::Data,
+            )
+            .unwrap();
+        let _data_two = admission
+            .try_acquire(
+                rocketmq_transport::admission::AdmissionResource::Queued,
+                scope,
+                1,
+                rocketmq_transport::admission::AdmissionClass::Data,
+            )
+            .unwrap();
+
+        let (_channel_id, delayed_write) = delayed
+            .lock()
+            .expect("delayed response lock")
+            .take()
+            .expect("first request snapshot");
+        delayed_write(
+            crate::protocol::remoting_command::RemotingCommand::create_response_command_with_code(
+                crate::code::response_code::ResponseCode::Success,
+            ),
+        )
+        .await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), client.receive_command())
+                .await
+                .is_err(),
+            "the delayed data response must not borrow the later control request reserve"
+        );
+
+        let _ = shutdown_tx.send(());
+        let report = server_task.await.unwrap().unwrap();
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
     async fn production_remoting_client_and_server_use_injected_transport_security() {
         let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
         let addr = reserved.local_addr().unwrap();
@@ -1198,6 +1472,7 @@ mod tests {
             None,
             None,
             None,
+            Arc::new(()),
         );
         let server_task = tokio::spawn(report);
 

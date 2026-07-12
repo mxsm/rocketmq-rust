@@ -25230,7 +25230,7 @@
           "id": "d9fd5dd6d0b99df09c9cc3e4",
           "fingerprint": "b1e47eb0b57c5231ef75aa01",
           "item": "mod lifecycle_tests",
-          "line": 567
+          "line": 599
         }
       ],
       "owner": "remoting",
@@ -25249,13 +25249,13 @@
           "id": "ba8a21399a93ba16a75704d1",
           "fingerprint": "df28d17254b88ab1fa40621a",
           "item": "fn connect",
-          "line": 101
+          "line": 104
         },
         {
           "id": "3873e1570b0c4686592938ef",
           "fingerprint": "0a7acab7194a87bf5c2cd683",
           "item": "fn connect",
-          "line": 102
+          "line": 105
         }
       ],
       "owner": "remoting",
@@ -25274,19 +25274,19 @@
           "id": "32323d551d2260d9b848054b",
           "fingerprint": "0992794378b7091bba7f9e17",
           "item": "fn drop_last_client_closes_connection_task_group",
-          "line": 589
+          "line": 621
         },
         {
           "id": "14055f58e8b17c10d05c83dc",
           "fingerprint": "0992794378b7091bba7f9e17",
           "item": "fn close_with_report_stops_connection_tasks",
-          "line": 617
+          "line": 663
         },
         {
           "id": "845817835fe411729d930418",
           "fingerprint": "8b8fc9e7f4c4c582cacb1c7f",
           "item": "fn connect_with_service_context_parents_connection_tasks",
-          "line": 669
+          "line": 724
         }
       ],
       "owner": "remoting",
@@ -25305,7 +25305,7 @@
           "id": "a97c5534e1abd1cdc73a4432",
           "fingerprint": "c1d1fcaf72cc640babfd43c4",
           "item": "<module>",
-          "line": 30
+          "line": 31
         }
       ],
       "owner": "remoting",
@@ -25324,31 +25324,31 @@
           "id": "0557622e61419e7f1beb7d33",
           "fingerprint": "db79cce1235aaa8046df286f",
           "item": "struct ClientInner",
-          "line": 84
+          "line": 87
         },
         {
           "id": "8b8b1ebe587bac5ac8600f80",
           "fingerprint": "3b03c3db41cba304e97545d8",
           "item": "fn connect",
-          "line": 185
+          "line": 188
         },
         {
           "id": "736e7e987ab2561cdd9b4ad1",
           "fingerprint": "9592df33d14a8e286d2a1cef",
           "item": "fn connect",
-          "line": 252
+          "line": 255
         },
         {
           "id": "9d6d9dcacef74e70fa68cac3",
           "fingerprint": "8f1df7536af38bd3c6564435",
           "item": "fn connect_with_service_context",
-          "line": 263
+          "line": 266
         },
         {
           "id": "05aa4cb4c1f5bf5334f801b7",
           "fingerprint": "4190cc68881949779d2015bd",
           "item": "fn connect_with_task_group",
-          "line": 273
+          "line": 276
         }
       ],
       "owner": "remoting",
@@ -25367,7 +25367,7 @@
           "id": "8dae31697c64ded094c5bef1",
           "fingerprint": "c389e667fc933f46d32ab6e6",
           "item": "<module>",
-          "line": 46
+          "line": 47
         }
       ],
       "owner": "remoting",
@@ -25386,7 +25386,7 @@
           "id": "52860fb25a2eeaacebf9e9ff",
           "fingerprint": "4051c533dbb4c2635f12bc35",
           "item": "struct ClientInner",
-          "line": 85
+          "line": 88
         }
       ],
       "owner": "remoting",
@@ -25405,7 +25405,7 @@
           "id": "96847efa5e4de3f46523ac22",
           "fingerprint": "478970621d2afa67e709aaa4",
           "item": "mod tests",
-          "line": 1485
+          "line": 1502
         }
       ],
       "owner": "remoting",
@@ -25424,19 +25424,19 @@
           "id": "37c77f63df46d94e828562d6",
           "fingerprint": "78d810505ee1e65422a7a8dc",
           "item": "fn new_with_cl_and_optional_service_context",
-          "line": 290
+          "line": 295
         },
         {
           "id": "b233bba81ad184ccb604526f",
           "fingerprint": "87450077817d0441a1aa3980",
           "item": "fn new_with_cl_and_optional_service_context",
-          "line": 291
+          "line": 296
         },
         {
           "id": "492e001e127e8ef1d746e477",
           "fingerprint": "73211ddcafacefe79c03ab95",
           "item": "fn new_with_cl_and_optional_service_context",
-          "line": 292
+          "line": 297
         },
         {
           "id": "5897b5a5016e288ea8272098",
@@ -25461,13 +25461,13 @@
           "id": "dc851fe3c2049ab26bba42f5",
           "fingerprint": "b689b80256f487885b2ff9bf",
           "item": "fn start_tracks_background_tasks_with_task_group",
-          "line": 1542
+          "line": 1559
         },
         {
           "id": "14fe31e27b783515f74655cb",
           "fingerprint": "6042256a8f6d82bde2123276",
           "item": "fn service_context_parents_background_and_worker_tasks",
-          "line": 1573
+          "line": 1590
         }
       ],
       "owner": "remoting",
@@ -25505,25 +25505,25 @@
           "id": "94bfa03a94d53ce928535afe",
           "fingerprint": "7a3138e4ee96798fa33e22b0",
           "item": "struct RocketmqDefaultClient",
-          "line": 146
+          "line": 147
         },
         {
           "id": "9d0ef21c5217297ea53c8c92",
           "fingerprint": "739f81d7599c0e52eb15053a",
           "item": "struct RocketmqDefaultClient",
-          "line": 151
+          "line": 152
         },
         {
           "id": "e822925ed8b03cc967827adb",
           "fingerprint": "d8aa9d8c25aa14ad1ee96818",
           "item": "struct RocketmqDefaultClient",
-          "line": 156
+          "line": 157
         },
         {
           "id": "93770f5f2d42f254d47dbac9",
           "fingerprint": "f16a797b61b576e1c7413aa7",
           "item": "struct RocketmqDefaultClient",
-          "line": 196
+          "line": 197
         }
       ],
       "owner": "remoting",
@@ -25542,13 +25542,13 @@
           "id": "ae04da6eaa19b0fca0363ff2",
           "fingerprint": "51324da086e0daf9e3868288",
           "item": "fn start_tracks_background_tasks_with_task_group",
-          "line": 1546
+          "line": 1563
         },
         {
           "id": "0658fa99f3fff18f833c611e",
           "fingerprint": "bcf2b4cda3ac33414c0fc2f8",
           "item": "fn service_context_parents_background_and_worker_tasks",
-          "line": 1578
+          "line": 1595
         }
       ],
       "owner": "remoting",
@@ -25586,7 +25586,7 @@
           "id": "2d514c8bc4ec84765ffb6760",
           "fingerprint": "439645079cd61d5c5fb9871c",
           "item": "fn start",
-          "line": 1040
+          "line": 1057
         }
       ],
       "owner": "remoting",
@@ -25605,37 +25605,37 @@
           "id": "3c14b2a75408e54aa0fc687e",
           "fingerprint": "4a3b235f364e0d4e5b60c952",
           "item": "fn update_name_server_address_list_sync",
-          "line": 352
+          "line": 364
         },
         {
           "id": "c5ea2901c6f6896f2bef3e3e",
           "fingerprint": "0bdecfcb12969f9204c92cd4",
           "item": "fn update_name_server_address_list_sync",
-          "line": 359
+          "line": 371
         },
         {
           "id": "8536900339fe281f38c21fc3",
           "fingerprint": "89e9e4e32c99672404b28d9c",
           "item": "fn get_and_create_nameserver_client",
-          "line": 602
+          "line": 614
         },
         {
           "id": "b32d543ac52ef744081fb97d",
           "fingerprint": "e27795468a761f8b8d55ebd8",
           "item": "fn scan_available_name_srv",
-          "line": 902
+          "line": 919
         },
         {
           "id": "5c62c15b572a0bd0df92938a",
           "fingerprint": "f35fe2a4d8f403d2155dc1a7",
           "item": "fn scan_available_name_srv",
-          "line": 928
+          "line": 945
         },
         {
           "id": "ec0022abdfcc2df5fca3b7b0",
           "fingerprint": "5e6613248da0e04975c7cf08",
           "item": "fn scan_available_name_srv",
-          "line": 935
+          "line": 952
         }
       ],
       "owner": "remoting",
@@ -25654,13 +25654,13 @@
           "id": "fcb199b50efb68e46363c335",
           "fingerprint": "103561e32beb10cb6c2fff2f",
           "item": "fn start_tracks_background_tasks_with_task_group",
-          "line": 1559
+          "line": 1576
         },
         {
           "id": "6ae7dc7b15a2ec346d54c570",
           "fingerprint": "6f8a3f5c15c4051da1d16eae",
           "item": "fn service_context_parents_background_and_worker_tasks",
-          "line": 1601
+          "line": 1618
         }
       ],
       "owner": "remoting",
@@ -26230,7 +26230,7 @@
           "id": "12d0bdb098a2af6206a78226",
           "fingerprint": "d5b43916610201eb0070829c",
           "item": "mod tests",
-          "line": 659
+          "line": 885
         }
       ],
       "owner": "remoting",
@@ -26249,19 +26249,19 @@
           "id": "69002597c0830c2526d73970",
           "fingerprint": "40fa9317341d7438e1ab0267",
           "item": "fn run",
-          "line": 233
+          "line": 322
         },
         {
-          "id": "d891a0da5414e8be41b74339",
-          "fingerprint": "bd3ffee3d8c6a23ef4560999",
+          "id": "445fb457158aa408d4e344d8",
+          "fingerprint": "afad78e6a0baa307e3a05cf7",
           "item": "fn run",
-          "line": 243
+          "line": 325
         },
         {
           "id": "a383d0aa6bd1d3edcff77d6a",
           "fingerprint": "fa36e59d3bcb5f1606af6251",
           "item": "impl Future",
-          "line": 534
+          "line": 751
         }
       ],
       "owner": "remoting",
@@ -26280,7 +26280,7 @@
           "id": "50d85462508ec74c1c1d34de",
           "fingerprint": "128f28f9449348d94909532c",
           "item": "<module>",
-          "line": 31
+          "line": 33
         }
       ],
       "owner": "remoting",
@@ -26299,13 +26299,13 @@
           "id": "f7c44198f1c7ca25fc58b1da",
           "fingerprint": "b4d94164d0ef9c5638420919",
           "item": "struct ConnectionListener",
-          "line": 116
+          "line": 168
         },
         {
           "id": "634d51860e5f9ae3db59bc6a",
           "fingerprint": "d866a9e129f94647f791ed8a",
           "item": "struct ConnectionHandler",
-          "line": 214
+          "line": 275
         }
       ],
       "owner": "remoting",
@@ -26324,7 +26324,7 @@
           "id": "1bc77c263de168933a696720",
           "fingerprint": "c389e667fc933f46d32ab6e6",
           "item": "<module>",
-          "line": 45
+          "line": 47
         }
       ],
       "owner": "remoting",
@@ -26340,10 +26340,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "ecabd9ec835fb10dbb1b0729",
-          "fingerprint": "9ca92e32ec6dacd433078388",
+          "id": "9df9acb361555697c24fe638",
+          "fingerprint": "ebcde9e450e29468ff36d47c",
           "item": "struct ConnectionHandler",
-          "line": 216
+          "line": 277
         }
       ],
       "owner": "remoting",

@@ -41,9 +41,11 @@ hid it.
    their existing governed test items instead of being approved.
 5. The initial M05 review-fix promotion consumed sixteen one-to-one fingerprint relocations while the client and
    server connection loops moved to canonical Transport session callbacks. The final review replaces that
-   consumable approval file with one relocation for the unchanged Remoting handler construction: adding the
-   optional no-op signer field changed adjacent struct-literal tokens. It creates no identity or occurrence,
-   remains in the same item, names the exact old/new IDs, and is consumed during monotonic promotion.
+   consumable approval file with two strict one-to-one relocations. Creating a request-local remoting session
+   snapshot moves the existing context constructor within the same `fn run` item; adding the private per-instance
+   interceptor wrapper changes the fingerprint of the existing `ConnectionHandlerContext` field within the same
+   `ConnectionHandler` struct. Neither change adds an identity or occurrence. Both approvals name the exact
+   old/new IDs and are consumed during monotonic promotion.
 
 ## Consequences
 

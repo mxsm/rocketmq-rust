@@ -173,8 +173,9 @@ python scripts/arc_mut_guard.py
 - `connection_v2` was deleted: it had no production consumer, no independent feature boundary, and no usable
   end-to-end request composition to benchmark. It therefore failed the compatibility and maintainability gates
   before performance could justify retaining a second stack.
-- The M05 ArcMut inventory promotion reduces governed identities from 1,266 to 1,233. Fourteen fingerprint-only
-  relocations are explicitly approved by ADR-013; the canonical transport crate contains no ArcMut use.
+- The M05 ArcMut inventory promotion reduces governed identities from 1,266 to 1,233 and occurrences from 3,430
+  to 3,378. The final promotion consumes two strict one-to-one same-item fingerprint relocations approved by
+  ADR-013; the canonical transport crate contains no ArcMut use.
 
 ## 交接物
 
