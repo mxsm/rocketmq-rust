@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | M05 已完成；等待 Gate 审阅 |
+| 状态 | M05 已完成并合并（PR #8186） |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP10 `transport-boundary-spike`；集成 WP03/WP04/WP05 |
 | 前置条件 | PendingRequestGuard、TaskGroup lease、绝对 deadline 稳定；protocol contract 与 wire corpus冻结 |
@@ -159,6 +159,11 @@ python scripts/arc_mut_guard.py
 
 ## M05 completion evidence
 
+- GitHub Issue [#8185](https://github.com/mxsm/rocketmq-rust/issues/8185) 与 ready PR
+  [#8186](https://github.com/mxsm/rocketmq-rust/pull/8186) 已完成；管理员 squash merge 提交为
+  `7ffeafdf62660d883198d270f5afcb8fa37155d5`。
+- 合并提交标题为 `[ISSUE #8185]♻️Extract bounded transport boundary (#8186)`；该提交是当前
+  Phase 2 分支的直接基线，M05 checklist 与已合并代码绑定。
 - Canonical ownership and compatibility paths are recorded in
   `05-transport-compatibility-ledger.md`; legacy config, codec, connection, pending-table, smart-buffer, and
   error-helper paths are exact re-exports, while TLS keeps a narrow lifecycle compatibility adapter.

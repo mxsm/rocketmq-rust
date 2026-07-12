@@ -19,7 +19,7 @@
 | Phase | 里程碑 | 状态 | 负责人 | 计划窗口 | 完成日期 | Evidence Index |
 |---|---|---|---|---|---|---|
 | Phase 1 | M01–M03 | 已完成 | Codex 多代理执行组 | 6–8 周 | 2026-07-11 | [`PHASE-1-DELIVERY.md`](phase-1-safety-foundation/PHASE-1-DELIVERY.md) |
-| Phase 2 | M04–M09 | 进行中 | 待分配 | 12–16 周 | — | — |
+| Phase 2 | M04–M09 | 进行中 | Codex 多代理执行组 | 12–16 周 | — | [`phase-2-core-boundaries/`](phase-2-core-boundaries/) |
 | Phase 3 | M10–M11 | 未开始 | 待分配 | 8–12 周 | — | — |
 | Phase 4 | M12 | 未开始 | 待分配 | 8–12 周 | — | — |
 
@@ -92,20 +92,20 @@
 
 任务文档：[`05-transport-extraction.md`](phase-2-core-boundaries/05-transport-extraction.md)
 
-- [ ] PR-M05-01：创建 crate 与单 request lifecycle spike
-- [ ] PR-M05-02：迁移 codec、buffer 与 net primitives
-- [ ] PR-M05-03：迁移 client、RPC runtime 与 pending table
-- [ ] PR-M05-04：迁移 server、processor adapter 与 shutdown
-- [ ] PR-M05-05：实现有界 admission 与 security adapter
-- [ ] PR-M05-06：完成 remoting facade、feature 与 V2 决策
-- [ ] 对应任务文档的 Exit Checklist 全部通过
+- [x] PR-M05-01：创建 crate 与单 request lifecycle spike
+- [x] PR-M05-02：迁移 codec、buffer 与 net primitives
+- [x] PR-M05-03：迁移 client、RPC runtime 与 pending table
+- [x] PR-M05-04：迁移 server、processor adapter 与 shutdown
+- [x] PR-M05-05：实现有界 admission 与 security adapter
+- [x] PR-M05-06：完成 remoting facade、feature 与 V2 决策
+- [x] 对应任务文档的 Exit Checklist 全部通过
 
 ### M06 Store API、Local 与 RocksDB 边界提取
 
 任务文档：[`06-storage-boundary-extraction.md`](phase-2-core-boundaries/06-storage-boundary-extraction.md)
 
-- [ ] PR-M06-01：完成 Store capability spike
-- [ ] PR-M06-02：迁移中立 receipt/read result 与 compatibility bridge
+- [x] PR-M06-01：完成 Store capability spike
+- [x] PR-M06-02：迁移中立 receipt/read result 与 compatibility bridge
 - [ ] PR-M06-03：创建 Local crate 并迁移 CommitLog/load/recovery
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index

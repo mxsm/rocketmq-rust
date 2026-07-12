@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 已批准，等待 M02/M03 |
+| 状态 | 进行中；M06-01/M06-02 已完成，准备 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -28,10 +28,10 @@
 
 ## 入口条件
 
-- [ ] `[ARCH]` 冻结 capability、AppendReceipt/DerivedProgress/StoreError 语义和 legacy adapter 边界。
+- [x] `[ARCH]` 冻结 capability、AppendReceipt/DerivedProgress/StoreError 语义和 legacy adapter 边界。
 - [ ] `[TEST]` 准备 dirty-tail、flush、HA、recovery、20B CQ/Index、Local/Rocks parity corpus。
-- [ ] `[DEV]` 检查 store/broker/tieredstore 目标文件和现有用户修改无重叠。
-- [ ] `[HUMAN]` 批准 CommitLog 唯一 WAL 与 `rocks → local → api` 单向关系。
+- [x] `[DEV]` 检查 store/broker/tieredstore 目标文件和现有用户修改无重叠。
+- [x] `[HUMAN]` 批准 CommitLog 唯一 WAL 与 `rocks → local → api` 单向关系。
 
 ## 交付物
 
@@ -49,13 +49,13 @@
 
 ### PR-M06-01：Store capability spike
 
-- [ ] `[ARCH]` 固定 StoreLifecycle、MessageAppender、MessageReader、OffsetIndex、StoreHealth、ReplicationControl、DerivedRecordSink、AdminStore。
-- [ ] `[DEV]` 创建 `rocketmq-store-api`，继承 workspace 元数据，`default = []`，只依赖 model/error/Bytes 类值库。
-- [ ] `[DEV]` 设计 backend-neutral StoreError；旧包含 Rocks/Tiered/HA 细节的错误通过 adapter 映射。
-- [ ] `[DEV]` 让一个真实 Broker processor 只依赖 `MessageAppender + StoreHealth`，保留旧 MessageStore adapter。
-- [ ] `[TEST]` 比较新旧 processor 输出、错误、writable 和 watermark 语义。
-- [ ] `[REV]` 检查 API 无 Tokio/runtime/remoting/observability/MappedFile/native backend 类型。
-- [ ] 回滚点：processor 恢复 legacy trait；新 API 可删除，不影响 store 实现。
+- [x] `[ARCH]` 固定 StoreLifecycle、MessageAppender、MessageReader、OffsetIndex、StoreHealth、ReplicationControl、DerivedRecordSink、AdminStore。
+- [x] `[DEV]` 创建 `rocketmq-store-api`，继承 workspace 元数据，`default = []`，只依赖 model/error/Bytes 类值库。
+- [x] `[DEV]` 设计 backend-neutral StoreError；旧包含 Rocks/Tiered/HA 细节的错误通过 adapter 映射。
+- [x] `[DEV]` 让一个真实 Broker processor 只依赖 `MessageAppender + StoreHealth`，保留旧 MessageStore adapter。
+- [x] `[TEST]` 比较新旧 processor 输出、错误、writable 和 watermark 语义。
+- [x] `[REV]` 检查 API 无 Tokio/runtime/remoting/observability/MappedFile/native backend 类型。
+- [x] 回滚点：processor 恢复 legacy trait；新 API 可删除，不影响 store 实现。
 
 ### PR-M06-02：中立 receipt/read result 与 compatibility bridge
 
@@ -65,7 +65,7 @@
 - [x] `[DEV]` 将旧 126 方法 trait 组合/转发到窄 capability，不新增 required method。
 - [x] `[TEST]` 覆盖错误映射、lease 生命周期、receipt 等价和 legacy trait compile fixture。
 - [x] `[REV]` 检查热路径用泛型/enum，只有冷边界用 `Arc<dyn Trait>`。
-- [ ] 回滚点：保留 API crate但撤销首个 consumer；不复制旧 trait 到新 crate。
+- [x] 回滚点：保留 API crate但撤销首个 consumer；不复制旧 trait 到新 crate。
 
 ### PR-M06-03：创建 Local crate 并迁 CommitLog/load/recovery
 
@@ -240,7 +240,7 @@ python scripts/arc_mut_guard.py
 - [x] `[REV]` dependency policy 和 source contract 拒绝 runtime、Remoting、Observability、backend、
   Tokio、MappedFile/HA/Timer/native implementation 类型进入 API crate。
 - [x] `[COMPAT]` CommitLog、CQ/Index、持久布局、`MessageStore`、`LocalFileMessageStore`、公开深路径、
-  Serde/default 与 feature alias 均未移动或更改；M06-02 及后续清单保持未完成。
+  Serde/default 与 feature alias 均未移动或更改；M06-03 及后续清单保持未完成。
 
 ## M06-02 neutral receipt/read results evidence
 
