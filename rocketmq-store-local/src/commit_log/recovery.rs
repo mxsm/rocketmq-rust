@@ -14,6 +14,178 @@
 
 use tracing::info;
 
+const MAX_SIGNED_OFFSET: u64 = 9_223_372_036_854_775_807;
+
+/// Compatibility policy for normal CommitLog recovery paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NormalRecoveryPolicy {
+    /// Sequential recovery retains the start of the last valid message and stops at invalid input.
+    Standard,
+    /// Batched recovery retains the end of the last valid message and continues with the next
+    /// segment.
+    Optimized,
+}
+
+/// Runtime-neutral event consumed by the normal recovery offset state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NormalRecoveryEvent {
+    /// Begins scanning a CommitLog segment at its absolute base offset.
+    SegmentStarted { base_offset: u64 },
+    /// Accepts one validated message frame.
+    MessageAccepted {
+        /// Absolute base offset of the containing segment.
+        segment_base: u64,
+        /// Frame start relative to the containing segment.
+        relative_start: u64,
+        /// Validated frame size.
+        size: u64,
+    },
+    /// Encounters an end-of-segment blank marker.
+    Blank,
+    /// Encounters an invalid record.
+    InvalidRecord,
+    /// Reaches the end of the current frame source.
+    SourceEnded,
+}
+
+/// Control action returned after applying a normal recovery event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NormalRecoveryAction {
+    /// Continue scanning records in the current segment.
+    ContinueRecord,
+    /// Continue recovery at the next segment.
+    ContinueNextSegment,
+    /// Stop recovery at the current watermarks.
+    StopRecovery,
+}
+
+/// Checked offset failure while applying a normal recovery event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum NormalRecoveryOffsetError {
+    /// Segment base plus relative frame start overflowed `u64`.
+    #[error("segment base {base_offset} plus relative start {relative_start} overflowed")]
+    BaseRelativeOverflow {
+        /// Segment base offset.
+        base_offset: u64,
+        /// Relative frame start.
+        relative_start: u64,
+    },
+    /// Message start plus size overflowed `u64`.
+    #[error("message start {start_offset} plus size {size} overflowed")]
+    MessageEndOverflow {
+        /// Absolute message start.
+        start_offset: u64,
+        /// Message frame size.
+        size: u64,
+    },
+    /// A resulting recovery watermark cannot be represented by Store's signed offsets.
+    #[error("recovery offset {offset} exceeds i64::MAX")]
+    OffsetExceedsI64 {
+        /// Out-of-range offset.
+        offset: u64,
+    },
+}
+
+/// Immutable normal recovery watermarks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NormalRecoverySummary {
+    /// Policy-specific last valid message watermark.
+    pub last_valid_offset: u64,
+    /// Physical truncation watermark.
+    pub truncate_offset: u64,
+}
+
+/// Runtime-neutral normal recovery offset state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NormalRecoveryState {
+    last_valid_offset: u64,
+    truncate_offset: u64,
+    policy: NormalRecoveryPolicy,
+}
+
+impl NormalRecoveryState {
+    /// Creates a state machine with both watermarks at the supplied confirmed offset.
+    pub const fn new(initial_offset: u64, policy: NormalRecoveryPolicy) -> Self {
+        Self {
+            last_valid_offset: initial_offset,
+            truncate_offset: initial_offset,
+            policy,
+        }
+    }
+
+    /// Applies one event transactionally and returns the next scan action.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NormalRecoveryOffsetError`] when checked offset arithmetic fails or a resulting
+    /// watermark exceeds `i64::MAX`. The state is unchanged on error.
+    pub fn apply(&mut self, event: NormalRecoveryEvent) -> Result<NormalRecoveryAction, NormalRecoveryOffsetError> {
+        let (action, next_last_valid, next_truncate) = match event {
+            NormalRecoveryEvent::SegmentStarted { base_offset } => match self.policy {
+                NormalRecoveryPolicy::Standard => (
+                    NormalRecoveryAction::ContinueRecord,
+                    self.last_valid_offset,
+                    base_offset,
+                ),
+                NormalRecoveryPolicy::Optimized => (
+                    NormalRecoveryAction::ContinueRecord,
+                    self.last_valid_offset,
+                    self.truncate_offset,
+                ),
+            },
+            NormalRecoveryEvent::MessageAccepted {
+                segment_base,
+                relative_start,
+                size,
+            } => {
+                let start_offset = segment_base.checked_add(relative_start).ok_or(
+                    NormalRecoveryOffsetError::BaseRelativeOverflow {
+                        base_offset: segment_base,
+                        relative_start,
+                    },
+                )?;
+                let end_offset = start_offset
+                    .checked_add(size)
+                    .ok_or(NormalRecoveryOffsetError::MessageEndOverflow { start_offset, size })?;
+                match self.policy {
+                    NormalRecoveryPolicy::Standard => (NormalRecoveryAction::ContinueRecord, start_offset, end_offset),
+                    NormalRecoveryPolicy::Optimized => (NormalRecoveryAction::ContinueRecord, end_offset, end_offset),
+                }
+            }
+            NormalRecoveryEvent::Blank => (
+                NormalRecoveryAction::ContinueNextSegment,
+                self.last_valid_offset,
+                self.truncate_offset,
+            ),
+            NormalRecoveryEvent::InvalidRecord | NormalRecoveryEvent::SourceEnded => {
+                let action = match self.policy {
+                    NormalRecoveryPolicy::Standard => NormalRecoveryAction::StopRecovery,
+                    NormalRecoveryPolicy::Optimized => NormalRecoveryAction::ContinueNextSegment,
+                };
+                (action, self.last_valid_offset, self.truncate_offset)
+            }
+        };
+
+        for offset in [next_last_valid, next_truncate] {
+            if offset > MAX_SIGNED_OFFSET {
+                return Err(NormalRecoveryOffsetError::OffsetExceedsI64 { offset });
+            }
+        }
+
+        self.last_valid_offset = next_last_valid;
+        self.truncate_offset = next_truncate;
+        Ok(action)
+    }
+
+    /// Returns the current last-valid and truncation watermarks.
+    pub const fn summary(&self) -> NormalRecoverySummary {
+        NormalRecoverySummary {
+            last_valid_offset: self.last_valid_offset,
+            truncate_offset: self.truncate_offset,
+        }
+    }
+}
+
 /// Statistics for recovery operations.
 #[derive(Debug, Default, Clone)]
 pub struct RecoveryStatistics {

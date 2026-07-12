@@ -110,6 +110,10 @@ use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordErrorKind;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
+use rocketmq_store_local::commit_log::recovery::NormalRecoveryAction;
+use rocketmq_store_local::commit_log::recovery::NormalRecoveryEvent;
+use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
+use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
 
 pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
@@ -1509,24 +1513,41 @@ impl CommitLog {
             index, recovery_file_limit
         );
 
-        let mut last_valid_msg_phy_offset = self.get_confirm_offset().max(0) as u64;
+        let initial_offset = match u64::try_from(self.get_confirm_offset().max(0)) {
+            Ok(offset) => offset,
+            Err(error) => {
+                warn!("normal optimized recovery initial offset conversion failed: {error}");
+                return;
+            }
+        };
+        let mut normal_recovery = NormalRecoveryState::new(initial_offset, NormalRecoveryPolicy::Optimized);
         let do_dispatch = false;
+
+        let Some(local_message_store) = self.local_file_message_store.as_ref() else {
+            warn!("normal optimized recovery requires an attached local message store");
+            return;
+        };
 
         let mut recovery_ctx = RecoveryContext::new(
             check_crc_on_recover,
             check_dup_info,
             message_store_config,
-            self.local_file_message_store.as_ref().unwrap().max_delay_level(),
-            self.local_file_message_store
-                .as_ref()
-                .unwrap()
-                .delay_level_table_ref()
-                .clone(),
+            local_message_store.max_delay_level(),
+            local_message_store.delay_level_table_ref().clone(),
         );
 
-        while index < mapped_files_inner.len() {
-            let mapped_file = mapped_files_inner.get(index).unwrap();
+        'segments: while index < mapped_files_inner.len() {
+            let Some(mapped_file) = mapped_files_inner.get(index) else {
+                break;
+            };
             let process_offset = mapped_file.get_file_from_offset();
+
+            if let Err(error) = normal_recovery.apply(NormalRecoveryEvent::SegmentStarted {
+                base_offset: process_offset,
+            }) {
+                warn!("normal optimized recovery offset state failed: {error}");
+                break;
+            }
 
             info!(
                 "Recovering physics file: {} (optimized batch mode)",
@@ -1535,29 +1556,91 @@ impl CommitLog {
 
             let mut iterator = BatchMessageIterator::new(mapped_file);
             let mut file_processed = false;
+            let mut record_closed_segment = false;
 
-            while let Some((mut msg_bytes, absolute_offset, msg_size)) = iterator.next_message() {
+            while let Some((mut msg_bytes, absolute_offset, _msg_size)) = iterator.next_message() {
                 let mut dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
 
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
-                    last_valid_msg_phy_offset =
-                        (process_offset + absolute_offset as u64) + dispatch_request.msg_size as u64;
+                    let relative_start = match u64::try_from(absolute_offset) {
+                        Ok(offset) => offset,
+                        Err(error) => {
+                            warn!("normal optimized recovery relative offset conversion failed: {error}");
+                            break 'segments;
+                        }
+                    };
+                    let frame_size = match u64::try_from(dispatch_request.msg_size) {
+                        Ok(size) => size,
+                        Err(error) => {
+                            warn!("normal optimized recovery message size conversion failed: {error}");
+                            break 'segments;
+                        }
+                    };
+                    match normal_recovery.apply(NormalRecoveryEvent::MessageAccepted {
+                        segment_base: process_offset,
+                        relative_start,
+                        size: frame_size,
+                    }) {
+                        Ok(NormalRecoveryAction::ContinueRecord) => {}
+                        Ok(NormalRecoveryAction::ContinueNextSegment) => {
+                            record_closed_segment = true;
+                            break;
+                        }
+                        Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
+                        Err(error) => {
+                            warn!("normal optimized recovery offset state failed: {error}");
+                            break 'segments;
+                        }
+                    }
                     self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
                     file_processed = true;
                 } else if dispatch_request.success && dispatch_request.msg_size == 0 {
                     // End of file marker
                     self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
-                    break;
+                    record_closed_segment = true;
+                    match normal_recovery.apply(NormalRecoveryEvent::Blank) {
+                        Ok(NormalRecoveryAction::ContinueRecord) => continue,
+                        Ok(NormalRecoveryAction::ContinueNextSegment) => break,
+                        Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
+                        Err(error) => {
+                            warn!("normal optimized recovery offset state failed: {error}");
+                            break 'segments;
+                        }
+                    }
                 } else {
                     // Invalid message
                     if dispatch_request.msg_size > 0 {
-                        warn!(
-                            "found a half message at {}, it will be truncated.",
-                            process_offset + absolute_offset as u64,
-                        );
+                        let warning_offset = u64::try_from(absolute_offset)
+                            .ok()
+                            .and_then(|relative| process_offset.checked_add(relative));
+                        if let Some(warning_offset) = warning_offset {
+                            warn!("found a half message at {warning_offset}, it will be truncated.");
+                        } else {
+                            warn!("found a half message with an invalid offset; it will be truncated.");
+                        }
                     }
                     info!("recover physics file end: {}", mapped_file.get_file_name());
-                    break;
+                    record_closed_segment = true;
+                    match normal_recovery.apply(NormalRecoveryEvent::InvalidRecord) {
+                        Ok(NormalRecoveryAction::ContinueRecord) => continue,
+                        Ok(NormalRecoveryAction::ContinueNextSegment) => break,
+                        Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
+                        Err(error) => {
+                            warn!("normal optimized recovery offset state failed: {error}");
+                            break 'segments;
+                        }
+                    }
+                }
+            }
+
+            if !record_closed_segment {
+                match normal_recovery.apply(NormalRecoveryEvent::SourceEnded) {
+                    Ok(NormalRecoveryAction::ContinueRecord | NormalRecoveryAction::ContinueNextSegment) => {}
+                    Ok(NormalRecoveryAction::StopRecovery) => break,
+                    Err(error) => {
+                        warn!("normal optimized recovery offset state failed: {error}");
+                        break;
+                    }
                 }
             }
 
@@ -1568,29 +1651,40 @@ impl CommitLog {
             index += 1;
         }
 
+        let summary = normal_recovery.summary();
+        let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
+            Ok(offset) => offset,
+            Err(error) => {
+                warn!("normal optimized recovery last-valid conversion failed: {error}");
+                return;
+            }
+        };
+        let process_offset = match i64::try_from(summary.truncate_offset) {
+            Ok(offset) => offset,
+            Err(error) => {
+                warn!("normal optimized recovery truncate conversion failed: {error}");
+                return;
+            }
+        };
+
         if broker_config.enable_controller_mode {
-            self.clamp_controller_recover_confirm_offset(
-                message_store.get_min_phy_offset(),
-                last_valid_msg_phy_offset as i64,
-            );
+            self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), last_valid_offset);
         } else {
-            self.set_confirm_offset(last_valid_msg_phy_offset as i64);
+            self.set_confirm_offset(last_valid_offset);
         }
 
-        let process_offset = last_valid_msg_phy_offset;
-
         // Clear ConsumeQueue redundant data
-        if max_phy_offset_of_consume_queue as u64 >= process_offset {
+        if max_phy_offset_of_consume_queue >= process_offset {
             warn!(
                 "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                 max_phy_offset_of_consume_queue, process_offset
             );
-            message_store.truncate_dirty_logic_files(process_offset as i64);
+            message_store.truncate_dirty_logic_files(process_offset);
         }
 
-        self.mapped_file_queue.set_flushed_where(process_offset as i64);
-        self.mapped_file_queue.set_committed_where(process_offset as i64);
-        self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
+        self.mapped_file_queue.set_flushed_where(process_offset);
+        self.mapped_file_queue.set_committed_where(process_offset);
+        self.mapped_file_queue.truncate_dirty_files(process_offset);
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Normal");
@@ -1619,85 +1713,166 @@ impl CommitLog {
                 "Starting normal recovery from file index {} using up to {} commitlog files",
                 index, recovery_file_limit
             );
-            //let mut mapped_file = mapped_files_inner.get(index).unwrap().lock().await;
-            let mut mapped_file = mapped_files_inner.get(index).unwrap();
-            let mut process_offset = mapped_file.get_file_from_offset();
-            let mut mapped_file_offset = 0u64;
-            //When recovering, the maximum value obtained when getting get_confirm_offset is
-            // the file size of the latest file plus the value resolved from the file name.
-            let mut last_valid_msg_phy_offset = self.get_confirm_offset().max(0) as u64;
-            // normal recover doesn't require dispatching
+            let initial_offset = match u64::try_from(self.get_confirm_offset().max(0)) {
+                Ok(offset) => offset,
+                Err(error) => {
+                    warn!("normal recovery initial offset conversion failed: {error}");
+                    return;
+                }
+            };
+            let mut normal_recovery = NormalRecoveryState::new(initial_offset, NormalRecoveryPolicy::Standard);
             let do_dispatch = false;
-            let mut current_pos = 0usize;
-            loop {
-                let (msg, size) = self.get_simple_message_bytes(current_pos, mapped_file.as_ref());
-                if msg.is_none() {
+            let Some(local_message_store) = self.local_file_message_store.as_ref() else {
+                warn!("normal recovery requires an attached local message store");
+                return;
+            };
+            let max_delay_level = local_message_store.max_delay_level();
+            let delay_level_table = local_message_store.delay_level_table_ref().clone();
+            'segments: while index < mapped_files_inner.len() {
+                let Some(mapped_file) = mapped_files_inner.get(index) else {
+                    break;
+                };
+                let process_offset = mapped_file.get_file_from_offset();
+                if let Err(error) = normal_recovery.apply(NormalRecoveryEvent::SegmentStarted {
+                    base_offset: process_offset,
+                }) {
+                    warn!("normal recovery offset state failed: {error}");
                     break;
                 }
-                let mut msg_bytes = msg.unwrap();
-                let mut dispatch_request = check_message_and_return_size(
-                    &mut msg_bytes,
-                    check_crc_on_recover,
-                    check_dup_info,
-                    true,
-                    &message_store_config,
-                    self.local_file_message_store.as_ref().unwrap().max_delay_level(),
-                    self.local_file_message_store.as_ref().unwrap().delay_level_table_ref(),
-                );
-                current_pos += size;
-                if dispatch_request.success && dispatch_request.msg_size > 0 {
-                    last_valid_msg_phy_offset = process_offset + mapped_file_offset;
-                    mapped_file_offset += dispatch_request.msg_size as u64;
-                    self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
-                } else if dispatch_request.success && dispatch_request.msg_size == 0 {
-                    // Come the end of the file, switch to the next file Since the
-                    // return 0 representatives met last hole,
-                    // this can not be included in truncate offset
-                    self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
-                    index += 1;
-                    if index >= mapped_files_inner.len() {
-                        info!(
-                            "recover last {} physics file over, last mapped file:{} ",
-                            recovery_file_limit,
-                            mapped_file.get_file_name(),
-                        );
-                        break;
+
+                let mut current_pos = 0usize;
+                loop {
+                    let frame_position = current_pos;
+                    let (msg, size) = self.get_simple_message_bytes(current_pos, mapped_file.as_ref());
+                    let Some(mut msg_bytes) = msg else {
+                        match normal_recovery.apply(NormalRecoveryEvent::SourceEnded) {
+                            Ok(NormalRecoveryAction::ContinueRecord) => continue,
+                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
+                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
+                            Err(error) => {
+                                warn!("normal recovery offset state failed: {error}");
+                                break 'segments;
+                            }
+                        }
+                    };
+                    let Some(next_position) = current_pos.checked_add(size) else {
+                        warn!("normal recovery frame position overflow at {current_pos} with size {size}");
+                        break 'segments;
+                    };
+                    current_pos = next_position;
+                    let mut dispatch_request = check_message_and_return_size(
+                        &mut msg_bytes,
+                        check_crc_on_recover,
+                        check_dup_info,
+                        true,
+                        &message_store_config,
+                        max_delay_level,
+                        &delay_level_table,
+                    );
+                    if dispatch_request.success && dispatch_request.msg_size > 0 {
+                        let relative_start = match u64::try_from(frame_position) {
+                            Ok(offset) => offset,
+                            Err(error) => {
+                                warn!("normal recovery relative offset conversion failed: {error}");
+                                break 'segments;
+                            }
+                        };
+                        let frame_size = match u64::try_from(dispatch_request.msg_size) {
+                            Ok(frame_size) => frame_size,
+                            Err(error) => {
+                                warn!("normal recovery message size conversion failed: {error}");
+                                break 'segments;
+                            }
+                        };
+                        match normal_recovery.apply(NormalRecoveryEvent::MessageAccepted {
+                            segment_base: process_offset,
+                            relative_start,
+                            size: frame_size,
+                        }) {
+                            Ok(NormalRecoveryAction::ContinueRecord) => {}
+                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
+                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
+                            Err(error) => {
+                                warn!("normal recovery offset state failed: {error}");
+                                break 'segments;
+                            }
+                        }
+                        self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
+                    } else if dispatch_request.success && dispatch_request.msg_size == 0 {
+                        self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
+                        match normal_recovery.apply(NormalRecoveryEvent::Blank) {
+                            Ok(NormalRecoveryAction::ContinueRecord) => continue,
+                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
+                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
+                            Err(error) => {
+                                warn!("normal recovery offset state failed: {error}");
+                                break 'segments;
+                            }
+                        }
                     } else {
-                        mapped_file = mapped_files_inner.get(index).unwrap();
-                        mapped_file_offset = 0;
-                        process_offset = mapped_file.get_file_from_offset();
-                        current_pos = 0;
-                        info!("recover next physics file:{}", mapped_file.get_file_name());
+                        if dispatch_request.msg_size > 0 {
+                            let warning_offset = normal_recovery.summary().truncate_offset;
+                            warn!("found a half message at {warning_offset}, it will be truncated.");
+                        }
+                        info!("recover physics file end,{} ", mapped_file.get_file_name());
+                        match normal_recovery.apply(NormalRecoveryEvent::InvalidRecord) {
+                            Ok(NormalRecoveryAction::ContinueRecord) => continue,
+                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
+                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
+                            Err(error) => {
+                                warn!("normal recovery offset state failed: {error}");
+                                break 'segments;
+                            }
+                        }
                     }
-                } else if !dispatch_request.success {
-                    if dispatch_request.msg_size > 0 {
-                        warn!(
-                            "found a half message at {}, it will be truncated.",
-                            process_offset + mapped_file_offset,
-                        );
+                }
+
+                index += 1;
+                if index < mapped_files_inner.len() {
+                    if let Some(next_file) = mapped_files_inner.get(index) {
+                        info!("recover next physics file:{}", next_file.get_file_name());
                     }
-                    info!("recover physics file end,{} ", mapped_file.get_file_name());
-                    break;
+                } else {
+                    info!(
+                        "recover last {} physics file over, last mapped file:{} ",
+                        recovery_file_limit,
+                        mapped_file.get_file_name(),
+                    );
                 }
             }
-            process_offset += mapped_file_offset;
+
+            let summary = normal_recovery.summary();
+            let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
+                Ok(offset) => offset,
+                Err(error) => {
+                    warn!("normal recovery last-valid conversion failed: {error}");
+                    return;
+                }
+            };
+            let process_offset = match i64::try_from(summary.truncate_offset) {
+                Ok(offset) => offset,
+                Err(error) => {
+                    warn!("normal recovery truncate conversion failed: {error}");
+                    return;
+                }
+            };
             if broker_config.enable_controller_mode {
-                self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), process_offset as i64);
+                self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), process_offset);
             } else {
-                self.set_confirm_offset(last_valid_msg_phy_offset as i64);
+                self.set_confirm_offset(last_valid_offset);
             }
 
             // Clear ConsumeQueue redundant data
-            if max_phy_offset_of_consume_queue as u64 >= process_offset {
+            if max_phy_offset_of_consume_queue >= process_offset {
                 warn!(
                     "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                     max_phy_offset_of_consume_queue, process_offset
                 );
-                message_store.truncate_dirty_logic_files(process_offset as i64)
+                message_store.truncate_dirty_logic_files(process_offset)
             }
-            self.mapped_file_queue.set_flushed_where(process_offset as i64);
-            self.mapped_file_queue.set_committed_where(process_offset as i64);
-            self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
+            self.mapped_file_queue.set_flushed_where(process_offset);
+            self.mapped_file_queue.set_committed_where(process_offset);
+            self.mapped_file_queue.truncate_dirty_files(process_offset);
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
@@ -1719,7 +1894,10 @@ impl CommitLog {
                 if size <= 0 {
                     return (None, 0);
                 }
-                (mapped_file.get_bytes(position, size as usize), size as usize)
+                let Ok(size) = usize::try_from(size) else {
+                    return (None, 0);
+                };
+                (mapped_file.get_bytes(position, size), size)
             }
         }
     }

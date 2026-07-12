@@ -47,7 +47,11 @@ use rocketmq_store::log_file::commit_log_recovery::RecoveryStatistics;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 use rocketmq_store::store_path_config_helper::get_abort_file;
 use rocketmq_store::store_path_config_helper::get_store_path_consume_queue;
+use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 use tempfile::TempDir;
+
+const RECOVERY_SEGMENT_SIZE: usize = 512;
+static FIRST_RECOVERY_BODY: [u8; 120] = [0x41; 120];
 
 fn new_test_store(temp_dir: &TempDir, mut message_store_config: MessageStoreConfig) -> ArcMut<LocalFileMessageStore> {
     message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
@@ -97,6 +101,209 @@ fn corrupt_commitlog_tail(commitlog_file: &Path, offset: i64, payload: &[u8]) {
     file.seek(SeekFrom::Start(offset as u64)).expect("seek commitlog tail");
     file.write_all(payload).expect("write dirty tail");
     file.sync_data().expect("sync dirty tail");
+}
+
+#[derive(Clone, Copy)]
+enum NormalRecoveryRoute {
+    Standard,
+    Optimized,
+}
+
+#[derive(Clone, Copy)]
+enum FirstSegmentShape {
+    Blank,
+    SourceEnded,
+    Invalid,
+    ValidThenBlank,
+}
+
+struct TwoSegmentFixture {
+    temp_dir: TempDir,
+    topic: CheetahString,
+    first_end: i64,
+    second_start: i64,
+    second_end: i64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct NormalRecoverySnapshot {
+    max_phy_offset: i64,
+    confirm_offset: u64,
+    max_queue_offset: i64,
+}
+
+async fn two_segment_fixture(shape: FirstSegmentShape) -> TwoSegmentFixture {
+    let source_dir = TempDir::new().expect("create recovery frame source directory");
+    let temp_dir = TempDir::new().expect("create recovery fixture directory");
+    let topic = CheetahString::from_static_str("m06-normal-recovery-state-topic");
+    let mut config = phase6_store_config();
+    config.mapped_file_size_commit_log = RECOVERY_SEGMENT_SIZE;
+    let mut writer = new_test_store(&source_dir, config);
+    writer.init().await.expect("init recovery fixture writer");
+
+    let first = writer
+        .put_message(build_test_message(&topic, 0, &FIRST_RECOVERY_BODY))
+        .await;
+    assert_eq!(first.put_message_status(), PutMessageStatus::PutOk);
+    let first_append = first.append_message_result().expect("first append result");
+    let first_end = first_append.wrote_offset + i64::from(first_append.wrote_bytes);
+
+    writer.shutdown().await;
+    drop(writer);
+
+    let source_path = first_commitlog_file(source_dir.path());
+    let first_bytes = fs::read(&source_path).expect("read source recovery segment");
+    let commitlog_dir = temp_dir.path().join("commitlog");
+    fs::create_dir_all(&commitlog_dir).expect("create target commitlog directory");
+    let first_path = first_commitlog_file(temp_dir.path());
+    let second_path = temp_dir.path().join("commitlog").join("00000000000000000512");
+    let first_size = usize::try_from(first_append.wrote_bytes).expect("positive first frame size");
+    let valid_frame = &first_bytes[..first_size];
+    let second_start = 512;
+    let second_end = second_start + i64::from(first_append.wrote_bytes);
+    let mut second_segment = vec![0; RECOVERY_SEGMENT_SIZE];
+    second_segment[..first_size].copy_from_slice(valid_frame);
+    fs::write(&second_path, second_segment).expect("write second recovery segment");
+
+    let mut replacement = vec![0; RECOVERY_SEGMENT_SIZE];
+    match shape {
+        FirstSegmentShape::Blank => {
+            replacement[..4].copy_from_slice(&512_i32.to_be_bytes());
+            replacement[4..8].copy_from_slice(&BLANK_MAGIC_CODE.to_be_bytes());
+            fs::write(&first_path, replacement).expect("replace first segment with blank marker");
+        }
+        FirstSegmentShape::SourceEnded => {
+            fs::write(&first_path, replacement).expect("replace first segment with empty source");
+        }
+        FirstSegmentShape::Invalid => {
+            replacement[..4].copy_from_slice(&8_i32.to_be_bytes());
+            replacement[4..8].copy_from_slice(&123_i32.to_be_bytes());
+            fs::write(&first_path, replacement).expect("replace first segment with invalid record");
+        }
+        FirstSegmentShape::ValidThenBlank => {
+            replacement[..first_size].copy_from_slice(valid_frame);
+            let blank_size = RECOVERY_SEGMENT_SIZE - first_size;
+            let blank_size = i32::try_from(blank_size).expect("blank size fits i32");
+            replacement[first_size..first_size + 4].copy_from_slice(&blank_size.to_be_bytes());
+            replacement[first_size + 4..first_size + 8].copy_from_slice(&BLANK_MAGIC_CODE.to_be_bytes());
+            fs::write(&first_path, replacement).expect("write valid frame and blank marker");
+            let replacement = vec![0; RECOVERY_SEGMENT_SIZE];
+            fs::write(&second_path, replacement).expect("replace second segment with empty source");
+        }
+    }
+
+    TwoSegmentFixture {
+        temp_dir,
+        topic,
+        first_end,
+        second_start,
+        second_end,
+    }
+}
+
+async fn run_normal_recovery(fixture: &TwoSegmentFixture, route: NormalRecoveryRoute) -> (u64, NormalRecoverySnapshot) {
+    let mut config = phase6_store_config();
+    config.mapped_file_size_commit_log = RECOVERY_SEGMENT_SIZE;
+    let mut restarted = new_test_store(&fixture.temp_dir, config);
+    restarted.init().await.expect("init recovery fixture reader");
+    assert!(restarted.get_commit_log_mut().load(), "load fixture commitlog");
+    let initial_confirm = u64::try_from(restarted.get_commit_log().get_confirm_offset())
+        .expect("normal recovery initial confirm must be non-negative");
+    let message_store = restarted.clone();
+    match route {
+        NormalRecoveryRoute::Standard => {
+            restarted.get_commit_log_mut().recover_normally(0, message_store).await;
+        }
+        NormalRecoveryRoute::Optimized => {
+            restarted
+                .get_commit_log_mut()
+                .recover_normally_optimized(0, message_store)
+                .await;
+        }
+    }
+    let snapshot = NormalRecoverySnapshot {
+        max_phy_offset: restarted.get_max_phy_offset(),
+        confirm_offset: restarted.get_store_checkpoint().confirm_phy_offset(),
+        max_queue_offset: restarted.get_max_offset_in_queue(&fixture.topic, 0),
+    };
+    (initial_confirm, snapshot)
+}
+
+#[tokio::test]
+async fn normal_recovery_blank_first_segment_rolls_to_valid_second_without_dispatch() {
+    let standard_fixture = two_segment_fixture(FirstSegmentShape::Blank).await;
+    let (_, standard) = run_normal_recovery(&standard_fixture, NormalRecoveryRoute::Standard).await;
+    assert_eq!(
+        standard,
+        NormalRecoverySnapshot {
+            max_phy_offset: standard_fixture.second_end,
+            confirm_offset: u64::try_from(standard_fixture.second_start).expect("second start fits u64"),
+            max_queue_offset: 0,
+        }
+    );
+
+    let optimized_fixture = two_segment_fixture(FirstSegmentShape::Blank).await;
+    let (_, optimized) = run_normal_recovery(&optimized_fixture, NormalRecoveryRoute::Optimized).await;
+    assert_eq!(
+        optimized,
+        NormalRecoverySnapshot {
+            max_phy_offset: optimized_fixture.second_end,
+            confirm_offset: u64::try_from(optimized_fixture.second_end).expect("second end fits u64"),
+            max_queue_offset: 0,
+        }
+    );
+}
+
+#[tokio::test]
+async fn normal_recovery_source_end_and_invalid_control_cross_segment_progress() {
+    for shape in [FirstSegmentShape::SourceEnded, FirstSegmentShape::Invalid] {
+        let standard_fixture = two_segment_fixture(shape).await;
+        let (initial_confirm, standard) = run_normal_recovery(&standard_fixture, NormalRecoveryRoute::Standard).await;
+        assert_eq!(
+            standard,
+            NormalRecoverySnapshot {
+                max_phy_offset: 0,
+                confirm_offset: initial_confirm,
+                max_queue_offset: 0,
+            }
+        );
+
+        let optimized_fixture = two_segment_fixture(shape).await;
+        let (_, optimized) = run_normal_recovery(&optimized_fixture, NormalRecoveryRoute::Optimized).await;
+        assert_eq!(
+            optimized,
+            NormalRecoverySnapshot {
+                max_phy_offset: optimized_fixture.second_end,
+                confirm_offset: u64::try_from(optimized_fixture.second_end).expect("second end fits u64"),
+                max_queue_offset: 0,
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn normal_recovery_empty_later_segment_freezes_route_specific_dual_watermarks() {
+    let standard_fixture = two_segment_fixture(FirstSegmentShape::ValidThenBlank).await;
+    let (_, standard) = run_normal_recovery(&standard_fixture, NormalRecoveryRoute::Standard).await;
+    assert_eq!(
+        standard,
+        NormalRecoverySnapshot {
+            max_phy_offset: standard_fixture.second_start,
+            confirm_offset: 0,
+            max_queue_offset: 0,
+        }
+    );
+
+    let optimized_fixture = two_segment_fixture(FirstSegmentShape::ValidThenBlank).await;
+    let (_, optimized) = run_normal_recovery(&optimized_fixture, NormalRecoveryRoute::Optimized).await;
+    assert_eq!(
+        optimized,
+        NormalRecoverySnapshot {
+            max_phy_offset: optimized_fixture.first_end,
+            confirm_offset: u64::try_from(optimized_fixture.first_end).expect("first end fits u64"),
+            max_queue_offset: 0,
+        }
+    );
 }
 
 #[derive(Debug, PartialEq)]

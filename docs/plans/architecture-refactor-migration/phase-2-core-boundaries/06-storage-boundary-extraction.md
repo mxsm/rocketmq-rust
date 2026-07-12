@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -452,3 +452,28 @@ python scripts/arc_mut_guard.py
   35 项+fixtures+baseline、ArcMut 63 项+fixtures+final guard、格式与 diff 检查通过。
 - [x] `[SCOPE]` M06-03g 已完成；PR-M06-03 父项和 M06 Exit Checklist 保持未完成。本切片不迁移
   append/flush/group commit、CQ/Index、HA、Timer/POP 或 Store composition。
+
+## M06-03h normal recovery dual-watermark state machine evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::recovery` 现拥有 runtime-neutral `NormalRecoveryState`、
+  `NormalRecoveryPolicy`、五种 event、三种 action、typed offset error 与双水位 summary。state 严格只含
+  `last_valid_offset`、`truncate_offset` 和 policy；全部 base+relative、start+size 使用 checked arithmetic，
+  两个候选水位在提交前验证不超过 `i64::MAX`，任何错误保持 state 不变。
+- [x] `[COMPAT]` Standard 保留 frame-start last-valid、frame-end truncate、invalid/source-end 全局停止和
+  blank roll；Optimized 保留 frame-end 双水位及 blank/invalid/source-end 继续下一 segment。Store 仍拥有
+  MappedFile/reader、record parser/CRC/DispatchRequest、日志、normal zero-dispatch、outer segment switch、
+  controller clamp、CQ truncate 与 flushed/committed/truncate 写回。四个 async public 签名保持不变。
+- [x] `[TEST]` Local 8 项覆盖 2×4 event 矩阵、连续消息、first empty、blank→next empty、invalid first+
+  valid second、initial confirm、last blank、三种 overflow、`i64` 上界和 error transaction。真实 Store
+  goldens 覆盖 blank-first+valid-second、SourceEnded/invalid-first+valid-second、后续 empty segment、双水位
+  和 normal zero-dispatch；recovery 12/12、load 7/7（1 ignored）、record 13/13、compatibility 3/3+2/2。
+- [x] `[REVIEW]` 64 项 comment/string-aware contract 证明六个 Local type 的唯一 owner、精确 state fields、
+  start/end policy、checked arithmetic、无 Store orchestration/ArcMut/dyn/alias/brace/glob；锁定四个 public
+  签名、两条 normal 各五个 reducer event/action、无 Store watermark/policy copy，并杀死 branch bypass、
+  start/end 交换、SourceEnded 虚构 kind、unchecked add、Store policy copy 和 reducer 删除。
+- [x] `[REV]` 两条 abnormal 函数 normalized hash 从 BASE 到 HEAD 分别保持 `c16a626f…` 与 `272dd669…`；
+  Local 全量 93 项、五组 feature check、Local/Store/workspace Clippy、Local `-D warnings` Rustdoc、架构
+  35 项+fixtures+baseline、ArcMut 63 项+fixtures+final guard、格式与 diff 检查通过，且无新增依赖。
+- [x] `[SCOPE]` M06-03h 只接入两条 normal recovery；abnormal recovery、dispatch、持久格式、flush/runtime、
+  checkpoint/window selection、controller/dup 条件及 CQ/Index/HA 均未迁移。PR-M06-03 父项和 M06 Exit
+  Checklist 保持未完成。
