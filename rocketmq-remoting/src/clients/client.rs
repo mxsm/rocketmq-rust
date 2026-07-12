@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::common::tls_config::TlsConfig;
+use rocketmq_common::security::PeerInfo;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::RuntimeHandle;
@@ -68,11 +69,13 @@ pub struct Client<PR> {
     pending_requests: PendingRequestTable,
     pending_request_owner: PendingRequestOwner,
     task_lifecycle: Arc<ClientTaskLifecycle>,
+    transport_security: Arc<TransportSecurity>,
+    peer: PeerInfo,
     _processor: PhantomData<fn() -> PR>,
 }
 
 const DEFAULT_CALLBACK_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
-type ConnectedClientSession = (Channel, PendingRequestOwner, SessionHandle);
+type ConnectedClientSession = (Channel, PendingRequestOwner, SessionHandle, SocketAddr, bool);
 type ClientConnectFuture = Pin<Box<dyn Future<Output = RocketMQResult<ConnectedClientSession>> + Send>>;
 
 struct ClientTaskLifecycle {
@@ -200,7 +203,7 @@ where
             ShutdownDeadline::after(Duration::from_secs(10)),
         )
         .await?;
-        let (connection, local_addr, remote_address) = connected.into_parts();
+        let (connection, local_addr, remote_address, negotiated_tls) = connected.into_parts_with_tls();
         let (ready, connected_session) = tokio::sync::oneshot::channel();
         let transport_handler = Arc::new(ClientInner {
             cmd_handler: cmd_handler.clone(),
@@ -230,7 +233,7 @@ where
         if let Some(tx) = tx {
             let _ = tx.send(ConnectionNetEvent::CONNECTED(channel.remote_address()));
         }
-        Ok((channel, pending_request_owner, session))
+        Ok((channel, pending_request_owner, session, remote_address, negotiated_tls))
     })
 }
 
@@ -284,7 +287,7 @@ where
             _child_lease: child_lease,
         });
         let pending_requests = cmd_handler.response_table.clone();
-        let (channel, pending_request_owner, session) = connect(
+        let (channel, pending_request_owner, session, remote_address, negotiated_tls) = connect(
             addr,
             cmd_handler,
             tx.cloned(),
@@ -301,15 +304,26 @@ where
             pending_requests,
             pending_request_owner,
             task_lifecycle,
+            transport_security: Arc::new(TransportSecurity::new(None, None)),
+            peer: PeerInfo::new(remote_address, negotiated_tls),
             _processor: PhantomData,
         })
     }
 
+    pub(crate) fn with_transport_security(mut self, transport_security: Arc<TransportSecurity>) -> Self {
+        self.transport_security = transport_security;
+        self
+    }
+
     async fn send_transport(
         &self,
-        request: RemotingCommand,
+        mut request: RemotingCommand,
         reservation: Option<PendingRequestToken>,
     ) -> RocketMQResult<()> {
+        let transport_security = &self.transport_security;
+        transport_security
+            .sign(&mut request, Some(&self.peer))
+            .map_err(|error| remote_error(format!("request signing failed: {error}")))?;
         let mut connection = self.session.connection();
         match connection.send_command(request).await {
             Ok(()) => Ok(()),
@@ -372,8 +386,16 @@ where
     where
         F: FnMut(),
     {
+        self.invoke_with_callback_timeout(request, DEFAULT_CALLBACK_RESPONSE_TIMEOUT, &mut func)
+            .await;
+    }
+
+    async fn invoke_with_callback_timeout<F>(&self, request: RemotingCommand, timeout: Duration, mut func: F)
+    where
+        F: FnMut(),
+    {
         let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
-        let timeout_millis = DEFAULT_CALLBACK_RESPONSE_TIMEOUT.as_millis() as u64;
+        let timeout_millis = timeout.as_millis().min(u128::from(u64::MAX)) as u64;
         let retained_bytes = request.body().map_or(0, bytes::Bytes::len);
         let guard = match self.pending_requests.register_for_owner_with_bytes(
             &self.pending_request_owner,
@@ -394,6 +416,7 @@ where
             .is_err()
         {
             guard.expire("remoting_client_callback_response", timeout_millis);
+            self.retire_after_timeout();
         }
         func();
     }
@@ -511,13 +534,20 @@ where
 
         // Collect all responses
         let mut results = Vec::with_capacity(receivers.len());
+        let mut timed_out = false;
         for (guard, deadline, rx) in receivers {
             let result = match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), rx).await {
                 Ok(Ok(value)) => value,
                 Ok(Err(error)) => Err(remote_error(error.to_string())),
-                Err(_) => Err(guard.expire("remoting_client_batch_response", timeout_millis)),
+                Err(_) => {
+                    timed_out = true;
+                    Err(guard.expire("remoting_client_batch_response", timeout_millis))
+                }
             };
             results.push(result);
+        }
+        if timed_out {
+            self.retire_after_timeout();
         }
 
         Ok(results)
@@ -546,12 +576,13 @@ where
         self.channel.connection_mut()
     }
 
-    pub(crate) fn retire_after_timeout(&mut self) {
-        self.channel.connection_mut().close();
+    pub(crate) fn retire_after_timeout(&self) {
+        self.session.connection().close();
         let _ = self.notify_shutdown.send(());
         self.pending_requests.close_owner(&self.pending_request_owner, || {
             RocketMQError::network_connection_failed("client", "connection retired after request timeout")
         });
+        self.task_lifecycle.task_group.cancel();
     }
 }
 
@@ -592,13 +623,27 @@ mod lifecycle_tests {
             response_table: PendingRequestTable::new(),
         });
 
-        let client = Client::connect(addr.to_string(), cmd_handler, None, TlsConfig::default())
+        let mut client = Client::connect(addr.to_string(), cmd_handler, None, TlsConfig::default())
             .await
             .expect("connect client");
         let task_group = client.task_lifecycle.task_group.clone();
 
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
         assert_eq!(task_group.task_count(), 2);
+
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let callback_called = called.clone();
+        client
+            .invoke_with_callback_timeout(
+                RemotingCommand::create_remoting_command(5),
+                Duration::from_millis(50),
+                move || callback_called.store(true, std::sync::atomic::Ordering::SeqCst),
+            )
+            .await;
+        assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(task_group.cancellation_token().is_cancelled());
+        assert_eq!(client.connection().state(), crate::connection::ConnectionState::Closed);
+        assert!(client.send(RemotingCommand::create_remoting_command(6)).await.is_err());
 
         drop(client);
 
@@ -646,6 +691,15 @@ mod lifecycle_tests {
             time::Instant::now().duration_since(started_at) < Duration::from_millis(200),
             "batch timeout must be one absolute deadline, not one timeout per sequential await"
         );
+        time::timeout(Duration::from_secs(1), async {
+            while !task_group.cancellation_token().is_cancelled() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("batch timeout must cancel the canonical session");
+        assert_eq!(client.connection().state(), crate::connection::ConnectionState::Closed);
+        assert!(client.send(RemotingCommand::create_remoting_command(4)).await.is_err());
         let report = client.close_with_report(Duration::from_secs(1)).await;
 
         assert!(report.is_healthy(), "{}", report.to_json());

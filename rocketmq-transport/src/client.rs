@@ -44,6 +44,7 @@ pub struct ConnectedTransport {
     connection: Connection,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
+    negotiated_tls: bool,
 }
 
 impl ConnectedTransport {
@@ -57,6 +58,11 @@ impl ConnectedTransport {
 
     pub fn into_parts(self) -> (Connection, SocketAddr, SocketAddr) {
         (self.connection, self.local_addr, self.remote_addr)
+    }
+
+    /// Splits the connection, socket addresses, and actual TLS-negotiation result.
+    pub fn into_parts_with_tls(self) -> (Connection, SocketAddr, SocketAddr, bool) {
+        (self.connection, self.local_addr, self.remote_addr, self.negotiated_tls)
     }
 }
 
@@ -74,7 +80,8 @@ pub async fn connect_with_config(
         .map_err(|_| RocketMQError::network_timeout(address, deadline.remaining()))??;
     let local_addr = stream.local_addr()?;
     let remote_addr = stream.peer_addr()?;
-    let connection = if tls_config.enable {
+    let negotiated_tls = tls_config.enable;
+    let connection = if negotiated_tls {
         #[cfg(feature = "tls")]
         {
             let server_name = server_name_from_address(address);
@@ -95,6 +102,7 @@ pub async fn connect_with_config(
         connection,
         local_addr,
         remote_addr,
+        negotiated_tls,
     })
 }
 

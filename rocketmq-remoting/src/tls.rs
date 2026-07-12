@@ -49,6 +49,20 @@ pub struct TlsServerRuntime {
 }
 
 impl TlsServerRuntime {
+    /// Initializes TLS using the lifecycle-owned blocking executor for certificate I/O.
+    pub async fn initialize_with_service_context(
+        base_config: TlsConfig,
+        service_context: &ServiceContext,
+    ) -> rocketmq_error::RocketMQResult<Self> {
+        Ok(Self {
+            inner: rocketmq_transport::tls::TlsServerRuntime::initialize_with_service_context(
+                base_config,
+                service_context,
+            )
+            .await?,
+        })
+    }
+
     pub fn new(base_config: TlsConfig) -> Self {
         #[cfg(feature = "tls")]
         {

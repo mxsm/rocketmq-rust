@@ -36,3 +36,33 @@ fn production_client_delegates_socket_and_tls_connect_to_transport() {
     assert!(!production.contains("connect_tls_stream"));
     assert!(!production.contains("receive_command()"));
 }
+
+#[test]
+fn production_remoting_threads_optional_security_into_transport() {
+    let server = include_str!("../src/remoting_server/rocketmq_tokio_server.rs");
+    let server = server.split("#[cfg(test)]").next().expect("production server source");
+    let client = include_str!("../src/clients/client.rs");
+    let client = client.split("#[cfg(test)]").next().expect("production client source");
+    let compact_client: String = client.split_whitespace().collect();
+
+    assert!(server.contains("with_transport_security"));
+    assert!(server.contains("transport.with_security"));
+    assert!(compact_client.contains("transport_security.sign"));
+}
+
+#[test]
+fn production_remoting_initializes_tls_asynchronously() {
+    let source = include_str!("../src/remoting_server/rocketmq_tokio_server.rs");
+    let production = source.split("#[cfg(test)]").next().expect("production source");
+    let startup = production
+        .split("pub async fn run_with_shutdown_report")
+        .nth(1)
+        .expect("server startup")
+        .split("pub async fn run<")
+        .next()
+        .expect("server startup body");
+
+    assert!(startup.contains("initialize_with_service_context"));
+    assert!(!startup.contains("TlsServerRuntime::new("));
+    assert!(!startup.contains("TlsServerRuntime::new_with_service_context"));
+}

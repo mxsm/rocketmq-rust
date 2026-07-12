@@ -19,8 +19,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_common::security::Principal;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
@@ -50,6 +52,7 @@ use crate::tls::TlsServerRuntime;
 use rocketmq_transport::admission::AdmissionController;
 use rocketmq_transport::admission::AdmissionLimits;
 use rocketmq_transport::admission::ResourceLimit;
+use rocketmq_transport::security::TransportSecurity;
 use rocketmq_transport::server::ConnectionHandler as TransportConnectionHandler;
 use rocketmq_transport::server::TransportListener;
 
@@ -122,6 +125,8 @@ struct ConnectionListener<RP> {
     task_group: TaskGroup,
 
     admission: Arc<AdmissionController>,
+    transport_security: Option<Arc<TransportSecurity>>,
+    transport_principal: Option<Principal>,
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
@@ -189,13 +194,16 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
         let listener = self.listener.take().ok_or_else(|| {
             RocketMQError::network_connection_failed("remoting-server", "transport listener already started")
         })?;
-        let transport = TransportListener::new(
+        let mut transport = TransportListener::new(
             listener,
             self.task_group.clone(),
             self.tls_runtime.transport_runtime(),
             self.admission.clone(),
             DEFAULT_TLS_HANDSHAKE_TIMEOUT,
         );
+        if let Some(security) = self.transport_security.clone() {
+            transport = transport.with_security(security, self.transport_principal.clone());
+        }
         transport
             .run(Arc::new(ConnectionHandler {
                 shutdown_complete_tx: self.shutdown_complete_tx.clone(),
@@ -307,6 +315,8 @@ pub struct RocketMQServer<RP> {
     config: Arc<ServerConfig>,
     rpc_hooks: Option<Vec<Arc<dyn RPCHook>>>,
     service_context: Option<ServiceContext>,
+    transport_security: Option<Arc<TransportSecurity>>,
+    transport_principal: Option<Principal>,
     _phantom_data: std::marker::PhantomData<RP>,
 }
 
@@ -316,6 +326,8 @@ impl<RP> RocketMQServer<RP> {
             config,
             rpc_hooks: Some(vec![]),
             service_context: None,
+            transport_security: None,
+            transport_principal: None,
             _phantom_data: std::marker::PhantomData,
         }
     }
@@ -325,6 +337,8 @@ impl<RP> RocketMQServer<RP> {
             config,
             rpc_hooks: Some(vec![]),
             service_context: Some(service_context),
+            transport_security: None,
+            transport_principal: None,
             _phantom_data: std::marker::PhantomData,
         }
     }
@@ -335,6 +349,17 @@ impl<RP> RocketMQServer<RP> {
         } else {
             self.rpc_hooks = Some(vec![hook]);
         }
+    }
+
+    /// Installs transport authorization for accepted sessions.
+    pub fn with_transport_security(
+        mut self,
+        transport_security: Arc<TransportSecurity>,
+        principal: Option<Principal>,
+    ) -> Self {
+        self.transport_security = Some(transport_security);
+        self.transport_principal = principal;
+        self
     }
 }
 
@@ -376,12 +401,27 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             }
         };
         let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();
-        let remoting_context = self.service_context.as_ref().map(new_remoting_server_context);
-        let task_group = remoting_context.as_ref().map(|context| context.task_group().clone());
-        let tls_runtime = remoting_context.as_ref().map_or_else(
-            || TlsServerRuntime::new(self.config.tls_config.clone()),
-            |context| TlsServerRuntime::new_with_service_context(self.config.tls_config.clone(), context),
-        );
+        let remoting_context = match self.service_context.as_ref() {
+            Some(context) => new_remoting_server_context(context),
+            None => match standalone_remoting_server_context() {
+                Ok(context) => context,
+                Err(error) => {
+                    error!(%error, "failed to initialize remoting server runtime context");
+                    return None;
+                }
+            },
+        };
+        let task_group = Some(remoting_context.task_group().clone());
+        let tls_runtime =
+            match TlsServerRuntime::initialize_with_service_context(self.config.tls_config.clone(), &remoting_context)
+                .await
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    error!(%error, "failed to initialize remoting server TLS runtime");
+                    return None;
+                }
+            };
         info!("Starting remoting_server at: {}", addr);
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         run_with_tls_config_report(
@@ -393,6 +433,8 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             channel_event_listener,
             tls_runtime,
             task_group,
+            self.transport_security.clone(),
+            self.transport_principal.clone(),
         )
         .await
     }
@@ -426,15 +468,21 @@ pub async fn run_with_report<RP: RequestProcessor + Sync + 'static + Clone>(
     rpc_hooks: Vec<Arc<dyn RPCHook>>,
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
 ) -> Option<ShutdownReport> {
-    run_with_tls_config_report(
+    let service_context = match standalone_remoting_server_context() {
+        Ok(context) => context,
+        Err(error) => {
+            error!(%error, "failed to initialize remoting server runtime context");
+            return None;
+        }
+    };
+    run_with_report_with_service_context(
+        service_context,
         listener,
         shutdown,
         request_processor,
         conn_disconnect_notify,
         rpc_hooks,
         channel_event_listener,
-        TlsServerRuntime::new(Default::default()),
-        None,
     )
     .await
 }
@@ -450,7 +498,14 @@ pub async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
 ) -> Option<ShutdownReport> {
     let remoting_context = new_remoting_server_context(&service_context);
-    let tls_runtime = TlsServerRuntime::new_with_service_context(Default::default(), &remoting_context);
+    let tls_runtime =
+        match TlsServerRuntime::initialize_with_service_context(Default::default(), &remoting_context).await {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                error!(%error, "failed to initialize remoting server TLS runtime");
+                return None;
+            }
+        };
     run_with_tls_config_report(
         listener,
         shutdown,
@@ -460,6 +515,8 @@ pub async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 
         channel_event_listener,
         tls_runtime,
         Some(remoting_context.task_group().clone()),
+        None,
+        None,
     )
     .await
 }
@@ -482,6 +539,8 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
         channel_event_listener,
         tls_runtime,
         None,
+        None,
+        None,
     )
     .await;
 }
@@ -495,6 +554,8 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
     tls_runtime: TlsServerRuntime,
     parented_task_group: Option<TaskGroup>,
+    transport_security: Option<Arc<TransportSecurity>>,
+    transport_principal: Option<Principal>,
 ) -> Option<ShutdownReport> {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
@@ -535,6 +596,8 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         tls_runtime,
         task_group: task_group.clone(),
         admission: Arc::new(AdmissionController::new(admission_limits)),
+        transport_security,
+        transport_principal,
     };
 
     tokio::select! {
@@ -594,6 +657,12 @@ fn new_remoting_server_task_group() -> rocketmq_error::RocketMQResult<TaskGroup>
 
 fn new_remoting_server_context(context: &ServiceContext) -> ServiceContext {
     context.child("rocketmq.remoting.server")
+}
+
+fn standalone_remoting_server_context() -> rocketmq_error::RocketMQResult<ServiceContext> {
+    let runtime = RuntimeContext::try_from_current("rocketmq.remoting.server")
+        .map_err(|error| RocketMQError::network_connection_failed("remoting-server", error.to_string()))?;
+    Ok(runtime.service_context("rocketmq.remoting.server.service"))
 }
 
 fn new_remoting_server_task_group_with_service_context(context: &ServiceContext) -> TaskGroup {
@@ -664,6 +733,38 @@ mod tests {
 
     struct ConnectSignalListener {
         connected: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    }
+
+    struct RequireTransportSignature {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl rocketmq_common::security::RequestPolicy for RequireTransportSignature {
+        fn evaluate_authenticated(
+            &self,
+            context: rocketmq_common::security::AuthenticatedRequestContext<'_>,
+        ) -> rocketmq_common::security::Decision {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if context.request().fields().contains_key("TransportSignature") {
+                rocketmq_common::security::Decision::Allow
+            } else {
+                rocketmq_common::security::Decision::deny("missing transport signature")
+            }
+        }
+    }
+
+    struct RemotingMarkerSigner;
+
+    impl rocketmq_common::security::OutboundSigner for RemotingMarkerSigner {
+        fn sign(
+            &self,
+            _request: rocketmq_common::security::SecurityRequestView<'_>,
+        ) -> Result<rocketmq_common::security::Signature, rocketmq_common::security::SigningError> {
+            Ok(rocketmq_common::security::Signature::new(vec![(
+                cheetah_string::CheetahString::from_static_str("TransportSignature"),
+                rocketmq_common::security::Secret::new(cheetah_string::CheetahString::from_static_str("signed")),
+            )]))
+        }
     }
 
     impl ChannelEventListener for ConnectSignalListener {
@@ -847,6 +948,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn production_remoting_client_and_server_use_injected_transport_security() {
+        let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
+        let addr = reserved.local_addr().unwrap();
+        drop(reserved);
+        let policy = Arc::new(RequireTransportSignature {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let security = Arc::new(rocketmq_transport::security::TransportSecurity::new(
+            Some(policy.clone()),
+            None,
+        ));
+        let config = Arc::new(ServerConfig {
+            bind_address: addr.ip().to_string(),
+            listen_port: u32::from(addr.port()),
+            ..ServerConfig::default()
+        });
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config).with_transport_security(
+            security,
+            Some(rocketmq_common::security::Principal::new("remoting-test")),
+        );
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_task = tokio::spawn(async move {
+            server
+                .run_with_shutdown_report(DefaultRemotingRequestProcessor, None, async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        let mut client =
+            RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor)
+                .with_transport_security(Arc::new(rocketmq_transport::security::TransportSecurity::new(
+                    None,
+                    Some(Arc::new(RemotingMarkerSigner)),
+                )));
+        let remote = cheetah_string::CheetahString::from_string(addr.to_string());
+        let response = client
+            .invoke_request(
+                Some(&remote),
+                crate::protocol::remoting_command::RemotingCommand::create_remoting_command(105),
+                1_000,
+            )
+            .await
+            .expect("signed high-level request");
+        assert_eq!(response.code(), 105);
+        assert_eq!(policy.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let client_report = client.shutdown_with_report(Duration::from_secs(1)).await;
+        assert!(client_report.is_healthy());
+        let _ = shutdown_tx.send(());
+        let report = server_task.await.unwrap().expect("server report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
     async fn run_shutdown_cancels_connection_before_tls_peek_completes() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -952,6 +1109,8 @@ mod tests {
             Vec::new(),
             None,
             tls_runtime,
+            None,
+            None,
             None,
         );
         let server_task = tokio::spawn(report);

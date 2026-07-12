@@ -95,3 +95,60 @@ async fn dropped_collector_never_blocks_or_unbounds_data_plane_admission() {
     }
     assert_eq!(controller.snapshot().queued.current_count, 0);
 }
+
+#[test]
+fn released_session_scopes_are_reclaimed_before_the_key_limit_rejects_new_sessions() {
+    let controller = AdmissionController::new(AdmissionLimits {
+        max_scope_keys: 3,
+        ..AdmissionLimits::default()
+    });
+    let ip = IpAddr::from_str("127.0.0.4").unwrap();
+
+    for session in 1..=100 {
+        let permit = controller
+            .try_acquire(
+                AdmissionResource::Connection,
+                AdmissionScope::new(ip).with_session(session),
+                0,
+                AdmissionClass::Data,
+            )
+            .unwrap_or_else(|error| panic!("released session {session} should not exhaust scope keys: {error}"));
+        drop(permit);
+    }
+}
+
+#[test]
+fn scope_reclamation_is_safe_when_release_and_next_acquire_cross_threads() {
+    let controller = std::sync::Arc::new(AdmissionController::new(AdmissionLimits {
+        max_scope_keys: 2,
+        ..AdmissionLimits::default()
+    }));
+    let ip = IpAddr::from_str("127.0.0.5").unwrap();
+    let first = controller
+        .try_acquire(
+            AdmissionResource::Connection,
+            AdmissionScope::new(ip).with_session(1),
+            0,
+            AdmissionClass::Data,
+        )
+        .unwrap();
+    let released = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let release_barrier = released.clone();
+    let releasing = std::thread::spawn(move || {
+        drop(first);
+        release_barrier.wait();
+    });
+    released.wait();
+
+    let second = controller.try_acquire(
+        AdmissionResource::Connection,
+        AdmissionScope::new(ip).with_session(2),
+        0,
+        AdmissionClass::Data,
+    );
+    releasing.join().unwrap();
+    assert!(
+        second.is_ok(),
+        "a fully released scope must be reclaimable across threads"
+    );
+}

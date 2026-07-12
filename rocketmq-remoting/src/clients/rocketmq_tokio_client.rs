@@ -54,6 +54,7 @@ use crate::runtime::config::client_config::TokioClientConfig;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::tls::TlsConfig;
+use rocketmq_transport::security::TransportSecurity;
 
 /// High-performance async RocketMQ client with connection pooling and auto-reconnection.
 ///
@@ -199,6 +200,9 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     ///
     /// Used for monitoring and metrics collection
     tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+
+    /// Optional signer applied by each canonical transport session before sending.
+    transport_security: Option<Arc<TransportSecurity>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -239,6 +243,7 @@ impl<PR> Clone for RocketmqDefaultClient<PR> {
             service_context: self.service_context.clone(),
             cmd_handler: self.cmd_handler.clone(),
             tx: self.tx.clone(),
+            transport_security: self.transport_security.clone(),
         }
     }
 }
@@ -299,7 +304,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             service_context,
             cmd_handler: ArcMut::new(handler),
             tx,
+            transport_security: None,
         }
+    }
+
+    /// Installs an optional transport signer for newly created outbound sessions.
+    pub fn with_transport_security(mut self, transport_security: Arc<TransportSecurity>) -> Self {
+        self.transport_security = Some(transport_security);
+        self
     }
 
     /// Returns whether newly created outbound connections use TLS.
@@ -723,8 +735,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         tls_config.enable = self.tokio_client_config.use_tls;
 
         let service_context = self.service_context.clone();
+        let transport_security = self.transport_security.clone();
         let connect_result = time::timeout(duration, async move {
-            if let Some(service_context) = service_context.as_ref() {
+            let result = if let Some(service_context) = service_context.as_ref() {
                 Client::connect_with_service_context(
                     service_context,
                     addr_inner,
@@ -735,6 +748,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                 .await
             } else {
                 Client::connect(addr_inner, self.cmd_handler.clone(), self.tx.as_ref(), tls_config).await
+            };
+            match transport_security {
+                Some(transport_security) => result.map(|client| client.with_transport_security(transport_security)),
+                None => result,
             }
         })
         .await;

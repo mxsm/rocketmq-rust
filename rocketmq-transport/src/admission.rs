@@ -266,6 +266,11 @@ impl Budget {
             rejected_count: usage.rejected,
         }
     }
+
+    fn is_idle(&self) -> bool {
+        let usage = self.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        usage.count == 0
+    }
 }
 
 struct BudgetPermit {
@@ -440,6 +445,9 @@ impl AdmissionController {
         let mut scoped = self.scoped.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(budget) = scoped.get(&key) {
             return Ok(budget.clone());
+        }
+        if scoped.len() >= self.limits.max_scope_keys {
+            scoped.retain(|_, budget| Arc::strong_count(budget) > 1 || !budget.is_idle());
         }
         if scoped.len() >= self.limits.max_scope_keys {
             return Err(AdmissionError {

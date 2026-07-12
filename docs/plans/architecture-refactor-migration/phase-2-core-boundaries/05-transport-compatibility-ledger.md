@@ -25,11 +25,19 @@ protocol types, so the move does not introduce a schema conversion.
 Every pending request reserves an opaque before send and owns count plus retained-byte capacity. Response,
 timeout, send failure, owner close, and guard drop compete through one completion path. A retired owner cannot
 reuse an opaque; reconnect creates another owner, preventing a late response from completing a new request.
+Callback and batch response timeouts retire the same canonical session: they close the owner, mark the shared
+connection state closed, signal shutdown, and cancel its task group. A closed queued connection rejects later
+sends before enqueueing.
 
 Admission is hierarchical across global, per-IP, optional per-tenant, and per-session budgets. Connection and
 handshake exhaustion closes/rejects the connection before work is admitted; inflight, queued, and processor
 exhaustion returns an explicit rejection policy. Control traffic has a bounded reserve. Metric events omit scope
 identifiers and use non-blocking `try_send`, so a missing or slow collector cannot block the data plane.
+Idle scoped budgets are reclaimed at the cardinality boundary only when the map owns the last reference and all
+permits are released. Decoded admission bytes cover length prefix, serialized header, and body through a
+transport-only envelope; the protocol command and its wire/JSON/debug/equality shape remain unchanged. Queued
+responses inherit the originating request class so control responses can consume only the bounded control
+reserve.
 
 The default values preserve the current permissive envelope and remain explicitly configurable. They are not
 presented as production tuning recommendations; deployment-specific profiling is required before changing them.
@@ -40,6 +48,12 @@ Transport borrows protocol commands into `SecurityRequestView` and accepts injec
 `OutboundSigner` interfaces. It does not select or depend on an authentication provider. Its normal dependency
 closure contains protocol, security API, runtime, error, and optional observability owners, and excludes Common,
 Remoting, Broker, Store, the high-level Client, legacy DTO crates, and authentication providers.
+
+Production Remoting client/server builders expose additive optional transport-security injection. Defaults are
+`None` and preserve the previous no-op behavior. The outbound signer runs immediately before canonical send;
+the server installs the policy/principal on `TransportListener`. `PeerInfo.tls` records the actual connection
+result, including plaintext accepted in permissive mode. Initial certificate/acceptor construction and reload
+filesystem work both run through the injected `BlockingExecutor` during asynchronous startup.
 
 ## `connection_v2` decision
 

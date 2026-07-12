@@ -57,6 +57,7 @@ struct QueuedConnection {
     writer: mpsc::Sender<QueuedWrite>,
     admission: Arc<AdmissionController>,
     scope: AdmissionScope,
+    response_class: Option<AdmissionClass>,
 }
 
 pub type ConnectionId = CheetahString;
@@ -267,6 +268,7 @@ impl Connection {
         state_tx: watch::Sender<ConnectionState>,
         state_rx: watch::Receiver<ConnectionState>,
         connection_id: ConnectionId,
+        response_class: Option<AdmissionClass>,
     ) -> Self {
         let (stream, peer) = tokio::io::duplex(1);
         drop(peer);
@@ -278,6 +280,7 @@ impl Connection {
             writer,
             admission,
             scope,
+            response_class,
         });
         connection
     }
@@ -328,13 +331,30 @@ impl Connection {
     /// // Connection closed
     /// ```
     pub async fn receive_command(&mut self) -> Option<rocketmq_error::RocketMQResult<RemotingCommand>> {
+        self.receive_command_with_retained_bytes()
+            .await
+            .map(|result| result.map(|(command, _)| command))
+    }
+
+    pub(crate) async fn receive_command_with_retained_bytes(
+        &mut self,
+    ) -> Option<rocketmq_error::RocketMQResult<(RemotingCommand, usize)>> {
         if self.queued.is_some() {
             return None;
         }
-        self.inbound_stream.next().await
+        self.inbound_stream
+            .next()
+            .await
+            .map(|result| result.map(|decoded| (decoded.command, decoded.retained_frame_bytes)))
     }
 
     async fn send_encoded(&mut self, bytes: Bytes, class: AdmissionClass) -> rocketmq_error::RocketMQResult<()> {
+        if self.state() == ConnectionState::Closed {
+            return Err(rocketmq_error::RocketMQError::network_connection_failed(
+                "transport-session-writer",
+                "connection is closed",
+            ));
+        }
         if let Some(queued) = self.queued.as_ref() {
             let permit = queued
                 .admission
@@ -426,8 +446,12 @@ impl Connection {
         rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
         let bytes = self.encode_buffer.split_to(len).freeze();
 
-        self.send_encoded(bytes, AdmissionClass::for_request_code(command.code()))
-            .await
+        let class = self
+            .queued
+            .as_ref()
+            .and_then(|queued| queued.response_class)
+            .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
+        self.send_encoded(bytes, class).await
     }
 
     /// Sends a `RemotingCommand` to the peer (borrows command).
@@ -462,8 +486,12 @@ impl Connection {
         rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
         let bytes = self.encode_buffer.split_to(len).freeze();
 
-        self.send_encoded(bytes, AdmissionClass::for_request_code(command.code()))
-            .await
+        let class = self
+            .queued
+            .as_ref()
+            .and_then(|queued| queued.response_class)
+            .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
+        self.send_encoded(bytes, class).await
     }
 
     /// Sends multiple `RemotingCommand`s in a single batch (optimized for throughput).

@@ -80,6 +80,7 @@ pub struct SessionHandle {
     state_tx: tokio::sync::watch::Sender<ConnectionState>,
     state_rx: tokio::sync::watch::Receiver<ConnectionState>,
     task_group: TaskGroup,
+    response_class: Option<AdmissionClass>,
 }
 
 impl SessionHandle {
@@ -103,11 +104,17 @@ impl SessionHandle {
             self.state_tx.clone(),
             self.state_rx.clone(),
             self.connection_id.clone(),
+            self.response_class,
         )
     }
 
     pub fn task_group(&self) -> &TaskGroup {
         &self.task_group
+    }
+
+    fn with_response_class(mut self, class: AdmissionClass) -> Self {
+        self.response_class = Some(class);
+        self
     }
 }
 
@@ -202,7 +209,6 @@ impl TransportListener {
             let admission = self.admission.clone();
             let handshake_timeout = self.handshake_timeout;
             let idle_timeout = self.idle_timeout;
-            let peer_is_tls = self.tls.mode() != TlsMode::Disabled;
             let security = self.security.clone();
             let principal = self.principal.clone();
             let handler = handler.clone();
@@ -221,12 +227,13 @@ impl TransportListener {
                         () = handshake_cancellation.cancelled() => return,
                         negotiated = tokio::time::timeout(
                             handshake_timeout,
-                            tls.into_connection(stream, remote_addr),
+                            tls.negotiate_connection(stream, remote_addr),
                         ) => negotiated,
                     };
-                    let Ok(Some(connection)) = negotiated else {
+                    let Ok(Some(negotiated)) = negotiated else {
                         return;
                     };
+                    let (connection, peer_is_tls) = negotiated.into_parts();
                     drop(_handshake_permit);
                     run_framed_session(
                         connection,
@@ -284,6 +291,7 @@ async fn run_framed_session<H>(
         state_tx: state_tx.clone(),
         state_rx,
         task_group: task_group.clone(),
+        response_class: None,
     };
     let writer_cancellation = task_group.cancellation_token();
     let writer_state = state_tx.clone();
@@ -333,12 +341,13 @@ async fn run_framed_session<H>(
             () = cancellation.cancelled() => break,
             next = tokio::time::timeout(idle_timeout, stream.next()) => next,
         };
-        let command = match next {
-            Ok(Some(Ok(command))) => command,
+        let decoded = match next {
+            Ok(Some(Ok(decoded))) => decoded,
             Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
         };
+        let command = decoded.command;
         let class = AdmissionClass::for_request_code(command.code());
-        let bytes = command.body().map_or(0, bytes::Bytes::len);
+        let bytes = decoded.retained_frame_bytes;
         let peer = PeerInfo::new(remote_addr, peer_is_tls);
         if let Decision::Deny { reason } = security.authorize(
             &command,
@@ -347,7 +356,7 @@ async fn run_framed_session<H>(
             Resource::new(ResourceKind::Other, command.code().to_string()),
             Action::Manage,
         ) {
-            let mut connection = session.connection();
+            let mut connection = session.clone().with_response_class(class).connection();
             let _ = connection
                 .send_command(
                     RemotingCommand::create_response_command_with_code_remark(
@@ -363,7 +372,7 @@ async fn run_framed_session<H>(
         let _admission_permits = match admission_permits {
             Ok(permits) => permits,
             Err(error) if error.policy() == FullPolicy::Reject => {
-                let mut connection = session.connection();
+                let mut connection = session.clone().with_response_class(class).connection();
                 let _ = connection
                     .send_command(
                         RemotingCommand::create_response_command_with_code_remark(
@@ -377,7 +386,9 @@ async fn run_framed_session<H>(
             }
             Err(_) => break,
         };
-        handler.command(session.clone(), command).await;
+        handler
+            .command(session.clone().with_response_class(class), command)
+            .await;
     }
     handler.disconnected(session.clone()).await;
     let (completion, closed) = tokio::sync::oneshot::channel();
@@ -518,7 +529,7 @@ impl TransportServer {
     ) -> RocketMQResult<Arc<Self>> {
         let listener = tokio::net::TcpListener::bind(config.bind_address).await?;
         let local_addr = listener.local_addr()?;
-        let tls = TlsServerRuntime::new_with_service_context(config.tls.clone(), &service_context);
+        let tls = TlsServerRuntime::initialize_with_service_context(config.tls.clone(), &service_context).await?;
         Ok(Arc::new(Self {
             local_addr,
             listener: Mutex::new(Some(listener)),
@@ -606,20 +617,23 @@ impl TransportServer {
             return;
         };
         let handshake_deadline = tokio::time::Instant::now() + self.config.handshake_timeout;
-        let Ok(Some(mut connection)) =
-            tokio::time::timeout_at(handshake_deadline, self.tls.into_connection(stream, remote_addr)).await
+        let Ok(Some(negotiated)) =
+            tokio::time::timeout_at(handshake_deadline, self.tls.negotiate_connection(stream, remote_addr)).await
         else {
             return;
         };
+        let (mut connection, peer_is_tls) = negotiated.into_parts();
         drop(_handshake_permit);
 
         loop {
             let request_deadline = tokio::time::Instant::now() + self.config.request_timeout;
-            let request = match tokio::time::timeout_at(request_deadline, connection.receive_command()).await {
-                Ok(Some(Ok(request))) => request,
-                Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
-            };
-            let peer = PeerInfo::new(remote_addr, self.config.tls.server.mode != TlsMode::Disabled);
+            let (request, bytes) =
+                match tokio::time::timeout_at(request_deadline, connection.receive_command_with_retained_bytes()).await
+                {
+                    Ok(Some(Ok(request))) => request,
+                    Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
+                };
+            let peer = PeerInfo::new(remote_addr, peer_is_tls);
             let decision = self.security.authorize(
                 &request,
                 Some(&peer),
@@ -643,7 +657,6 @@ impl TransportServer {
                 }
                 continue;
             }
-            let bytes = request.body().map_or(0, bytes::Bytes::len);
             let class = AdmissionClass::for_request_code(request.code());
             let _admission = match self.acquire_request(scope, bytes, class) {
                 Ok(admission) => admission,

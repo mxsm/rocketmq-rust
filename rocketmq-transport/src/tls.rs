@@ -51,6 +51,29 @@ const TLS_HANDSHAKE_MAGIC_CODE: u8 = 0x16;
 const TLS_RELOAD_POLL_INTERVAL: Duration = Duration::from_secs(5);
 pub const TLS_DISABLED_ERROR_REASON: &str = "rocketmq-remoting was compiled without the tls feature";
 
+/// A canonical connection paired with the result of TLS negotiation.
+pub struct NegotiatedConnection {
+    connection: Connection,
+    negotiated_tls: bool,
+}
+
+impl NegotiatedConnection {
+    /// Returns the connection without its negotiation sideband.
+    pub fn into_connection(self) -> Connection {
+        self.connection
+    }
+
+    /// Reports whether this specific connection negotiated TLS.
+    pub fn negotiated_tls(&self) -> bool {
+        self.negotiated_tls
+    }
+
+    /// Splits the connection from its TLS-negotiation result.
+    pub fn into_parts(self) -> (Connection, bool) {
+        (self.connection, self.negotiated_tls)
+    }
+}
+
 #[cfg(feature = "tls")]
 type TlsAcceptorSlot = arc_swap::ArcSwapOption<tokio_rustls::TlsAcceptor>;
 
@@ -108,6 +131,26 @@ impl TlsServerRuntime {
         }
     }
 
+    pub async fn initialize_with_service_context(
+        base_config: TlsConfig,
+        service_context: &ServiceContext,
+    ) -> RocketMQResult<Self> {
+        #[cfg(feature = "tls")]
+        {
+            Self::initialize_with_task_group_and_blocking(
+                base_config,
+                service_context.task_group().child("rocketmq-transport.tls"),
+                service_context.blocking().clone(),
+            )
+            .await
+        }
+
+        #[cfg(not(feature = "tls"))]
+        {
+            Ok(Self::new_with_service_context(base_config, service_context))
+        }
+    }
+
     /// Creates a TLS runtime whose certificate reload task is owned by `task_group`.
     #[cfg(feature = "tls")]
     pub fn new_with_task_group(base_config: TlsConfig, task_group: TaskGroup) -> Self {
@@ -121,6 +164,39 @@ impl TlsServerRuntime {
         blocking: BlockingExecutor,
     ) -> Self {
         Self::new_with_reload_task_group(base_config, Some(task_group), Some(blocking))
+    }
+
+    #[cfg(feature = "tls")]
+    pub async fn initialize_with_task_group_and_blocking(
+        base_config: TlsConfig,
+        task_group: TaskGroup,
+        blocking: BlockingExecutor,
+    ) -> RocketMQResult<Self> {
+        let mode = base_config.server.mode;
+        let acceptor = StdArc::new(TlsAcceptorSlot::empty());
+        if mode != TlsMode::Disabled {
+            let build_config = base_config.clone();
+            let initial = blocking
+                .spawn_io("transport.tls.initialize", move || {
+                    let effective = effective_tls_config(&build_config);
+                    build_server_acceptor(&effective).map(StdArc::new)
+                })
+                .await
+                .map_err(|error| RocketMQError::network_connection_failed("tls-initialize", error.to_string()))?;
+            match initial {
+                Ok(initial) => acceptor.store(Some(initial)),
+                Err(error) => warn!("failed to build initial TLS server acceptor: {error}"),
+            }
+        }
+        let runtime = Self {
+            mode,
+            acceptor,
+            base_config: StdArc::new(base_config),
+            reload_task_group: StdArc::new(Mutex::new(None)),
+            blocking: Some(blocking),
+        };
+        runtime.spawn_reload_task(Some(task_group));
+        Ok(runtime)
     }
 
     #[cfg(feature = "tls")]
@@ -157,7 +233,11 @@ impl TlsServerRuntime {
         }
     }
 
-    pub async fn into_connection(&self, stream: TcpStream, remote_addr: SocketAddr) -> Option<Connection> {
+    pub async fn negotiate_connection(
+        &self,
+        stream: TcpStream,
+        remote_addr: SocketAddr,
+    ) -> Option<NegotiatedConnection> {
         let is_tls_handshake = match peek_tls_handshake(&stream).await {
             Ok(value) => value,
             Err(error) => {
@@ -172,25 +252,47 @@ impl TlsServerRuntime {
                     warn!("client {remote_addr} attempted TLS while server TLS mode is disabled");
                     None
                 } else {
-                    Some(Connection::new(stream))
+                    Some(NegotiatedConnection {
+                        connection: Connection::new(stream),
+                        negotiated_tls: false,
+                    })
                 }
             }
             TlsMode::Permissive => {
                 if is_tls_handshake {
-                    self.accept_tls(stream, remote_addr).await
+                    self.accept_tls(stream, remote_addr)
+                        .await
+                        .map(|connection| NegotiatedConnection {
+                            connection,
+                            negotiated_tls: true,
+                        })
                 } else {
-                    Some(Connection::new(stream))
+                    Some(NegotiatedConnection {
+                        connection: Connection::new(stream),
+                        negotiated_tls: false,
+                    })
                 }
             }
             TlsMode::Enforcing => {
                 if is_tls_handshake {
-                    self.accept_tls(stream, remote_addr).await
+                    self.accept_tls(stream, remote_addr)
+                        .await
+                        .map(|connection| NegotiatedConnection {
+                            connection,
+                            negotiated_tls: true,
+                        })
                 } else {
                     warn!("client {remote_addr} attempted plaintext while server TLS mode is enforcing");
                     None
                 }
             }
         }
+    }
+
+    pub async fn into_connection(&self, stream: TcpStream, remote_addr: SocketAddr) -> Option<Connection> {
+        self.negotiate_connection(stream, remote_addr)
+            .await
+            .map(NegotiatedConnection::into_connection)
     }
 
     pub fn shutdown(&self) {

@@ -2,21 +2,6 @@
   "schema_version": 1,
   "adr": "ADR-013",
   "relocations": [
-    {"identity":"34c7415d040dc61f9d871d26","from":"f690cbc0f44092dfdcbb8728","to":"ba8a21399a93ba16a75704d1","reason":"Existing client channel state construction moved within connect while canonical transport took session ownership"},
-    {"identity":"34c7415d040dc61f9d871d26","from":"f4fe1c4b86ed589dd621f56e","to":"3873e1570b0c4686592938ef","reason":"Existing client handler context construction moved within connect while canonical transport took session ownership"},
-    {"identity":"8bc22da68b127c0d4bd1605b","from":"284dd894a58cf05ed6463b47","to":"845817835fe411729d930418","reason":"Retained-byte regression coverage changed adjacent construction tokens in the existing service-context lifecycle test"},
-    {"identity":"8ead81500e4d25ce05d9e661","from":"17a4b299437350470b84c84b","to":"a97c5534e1abd1cdc73a4432","reason":"Canonical transport imports changed adjacent tokens while the governed ArcMut import remained in the same client module"},
-    {"identity":"a1a435ef91dc94baa807c11b","from":"c15e173fe24d400d56bee1f6","to":"0557622e61419e7f1beb7d33","reason":"The existing ClientInner shared handler now backs the canonical transport callback adapter"},
-    {"identity":"a1a435ef91dc94baa807c11b","from":"ff4bad86a8330d5dd2f27d9c","to":"8b8b1ebe587bac5ac8600f80","reason":"Canonical transport setup boxed the existing connect handler boundary to keep downstream future layout bounded"},
-    {"identity":"5d86bc32cef662c74c4ead3a","from":"3d3bf8ce00090311d02d95ba","to":"8dae31697c64ded094c5bef1","reason":"Canonical transport imports changed adjacent tokens while the governed handler-context import remained in the same client module"},
-    {"identity":"188b5614c735ee7d2ec5bfd0","from":"0c34f5ebe3c77ee663d5eb77","to":"52860fb25a2eeaacebf9e9ff","reason":"ClientInner now stores the same handler context in the canonical transport callback adapter"},
-    {"identity":"8c49548e1ae973dfbeeef6fd","from":"2a206160cde72d23502958c5","to":"3d8acfdcb2afccbacf354bf9","reason":"The existing Channel connection wrapper now also configures transport-session adapters without spawning a remoting writer task"},
-    {"identity":"c5926d58a5526fddd9f2d0db","from":"6138ece6b3f504bba1367fa9","to":"12d0bdb098a2af6206a78226","reason":"Canonical transport server coverage changed adjacent test-module tokens while the governed wildcard import remained test-only"},
-    {"identity":"bc0bc7493ce3e7f541fbadbe","from":"d7aaf13ccf29a1436a9927ac","to":"69002597c0830c2526d73970","reason":"Existing server channel state construction moved within run while canonical transport took session ownership"},
-    {"identity":"bc0bc7493ce3e7f541fbadbe","from":"568141fcf4f54396d04da37c","to":"d891a0da5414e8be41b74339","reason":"Existing server handler context construction moved within run while canonical transport took session ownership"},
-    {"identity":"bc0bc7493ce3e7f541fbadbe","from":"4eaee2413cd6b23a9f891a65","to":"a383d0aa6bd1d3edcff77d6a","reason":"Removing the raw remoting connection loop changed adjacent tokens around the existing server future handler construction"},
-    {"identity":"72f12de4fca03f34082ea5c5","from":"8c4bc658356bbf51cdd3a9b8","to":"50d85462508ec74c1c1d34de","reason":"Canonical transport imports changed adjacent tokens while the governed ArcMut import remained in the same server module"},
-    {"identity":"b7f65d567299f9df63b63158","from":"e20fce96e5c65297fe4eab14","to":"634d51860e5f9ae3db59bc6a","reason":"The shared remoting handler moved from the removed raw ConnectionHandler into the canonical transport callback adapter"},
-    {"identity":"0c33aeb60b10dd37d23d5a33","from":"c945dcd1fed6432a6ba865f7","to":"ecabd9ec835fb10dbb1b0729","reason":"ConnectionHandler now stores the same handler context through canonical transport session state"}
+    {"identity":"b45e5169b5834a0cb0b3ed31","from":"8ecee66b1ea72afa146736df","to":"5897b5a5016e288ea8272098","reason":"Adding the optional no-op transport signer field changed adjacent tokens around the existing remoting handler construction without adding an ArcMut occurrence"}
   ]
 }

@@ -39,6 +39,17 @@ Every behavior slice started with a failing focused test or contract compile fix
   runtime now requires the injected `BlockingExecutor`, including explicit `reload_now` coverage.
 - Workspace Clippy then exposed downstream future-layout overflow in `rocketmq-admin-cli`. Boxing the client
   compatibility connect/session boundary removed the overflow without raising recursion limits.
+- Final review tests first failed on seven production invariants. The fixes now reclaim idle scoped admission
+  budgets without racing live permits; account the complete decoded frame through a transport-only sideband;
+  preserve the request admission class on queued responses; report actual per-connection TLS negotiation;
+  initialize the first TLS acceptor through the injected blocking executor; thread optional policy/signer ports
+  through production Remoting; and retire callback/batch timeout sessions before they can be reused.
+- The retained-frame implementation deliberately leaves `rocketmq_protocol::RemotingCommand` untouched. The
+  legacy codec decoder still returns that command directly, while only the canonical composite/session reader
+  observes `DecodedCommand { command, retained_frame_bytes }`.
+- Full-suite review exposed a timeout retirement race: a send could enter the queued writer after the connection
+  was marked closed but before cancellation drained it. The canonical send boundary now rejects `Closed`
+  connections synchronously.
 
 ## Compatibility and governance
 
@@ -47,8 +58,9 @@ Every behavior slice started with a failing focused test or contract compile fix
   types/functions. TLS connector functions are exact re-exports; the runtime wrapper preserves lifecycle output.
 - Wire commands remain `rocketmq-protocol` types; no schema, request code, response mapping, or body logging was
   introduced.
-- ArcMut promotion is monotonic: 1,266 identities / 3,430 occurrences became 1,233 / 3,378. The 16 exact
-  fingerprint relocations are consumed under ADR-013, and `rocketmq-transport` contains no ArcMut occurrence.
+- ArcMut promotion is monotonic: 1,266 identities / 3,430 occurrences became 1,233 / 3,378. The earlier 16 exact
+  fingerprint relocations and the final one-item signer-field context relocation were consumed under ADR-013;
+  `rocketmq-transport` contains no ArcMut occurrence.
 - The dependency policy permits Remoting and Common compatibility edges to transport and rejects forbidden
   reverse/business/provider dependencies.
 
@@ -67,7 +79,12 @@ Passed:
 - `cargo test -p rocketmq-remoting` (112 unit tests plus integration and doc tests)
 - production transport delegation source contracts, canonical public client/server exchange, and injected TLS
   blocking reload coverage
-- `cargo test -p rocketmq-client-rust --lib` (943 passed)
+- `cargo test -p rocketmq-client-rust --all-targets --all-features` (943 library tests plus integrations,
+  benches, and examples)
+- transport all-target/all-feature and no-default suites (63 and 54 tests)
+- Remoting all-target/all-feature and no-default suites (114 and 113 library tests plus integrations, benches,
+  examples, and compatibility contracts)
+- all seven `rocketmq-observability` CI test feature sets, from default through combined OTLP/Prometheus
 - `cargo tree -p rocketmq-transport -e normal`
 - architecture dependency guard fixtures and baseline
 - runtime audit with `-SkipBaseline -EnforceBoundaryBaseline`

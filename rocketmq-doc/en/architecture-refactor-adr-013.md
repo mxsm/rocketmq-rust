@@ -39,11 +39,11 @@ hid it.
 4. Twenty-seven Phase 1 fingerprint relocations or retained-ID context changes are recorded in
    the Phase 1 promotion history. Additional governed occurrences found during review were removed or folded into
    their existing governed test items instead of being approved.
-5. The M05 review-fix promotion replaces the consumable approval file with sixteen one-to-one fingerprint
-   relocations. None creates a new identity or moves a governed occurrence to a different item. All sixteen are
-   Remoting compatibility occurrences whose fingerprints changed while the client and server connection loops
-   were replaced with canonical Transport session callbacks. The approved file records each exact old and new
-   occurrence ID, and the guard requires every entry to be consumed.
+5. The initial M05 review-fix promotion consumed sixteen one-to-one fingerprint relocations while the client and
+   server connection loops moved to canonical Transport session callbacks. The final review replaces that
+   consumable approval file with one relocation for the unchanged Remoting handler construction: adding the
+   optional no-op signer field changed adjacent struct-literal tokens. It creates no identity or occurrence,
+   remains in the same item, names the exact old/new IDs, and is consumed during monotonic promotion.
 
 ## Consequences
 
