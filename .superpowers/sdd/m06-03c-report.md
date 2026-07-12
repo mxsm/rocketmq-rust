@@ -27,7 +27,7 @@ All RED commands ran before production edits.
 2. Mutation-resistant ownership contract
    - RED: `python -m unittest scripts.tests.test_m06_store_local_contract` exited 1 with 13 tests and two expected
      failures because `kernel.rs` and `MappedFileProgress` had no canonical owner.
-   - GREEN: the final target exits 0 with 21/21 tests. It proves one active definition for all four kernel items,
+   - GREEN: the final target exits 0 with 26/26 tests. It proves one active definition for all four kernel items,
      exact legacy facade re-exports, one composed progress field, no copied progress atomics/direct accesses, and
      the existing forbidden-dependency closure. Scanner fixtures prove comments, ordinary strings, and raw strings
      cannot satisfy the contract.
@@ -53,11 +53,20 @@ All RED commands ran before production edits.
    - RED: three targeted mutation tests completed in 0.002 seconds and failed exactly three assertions. The prior
      boundary scanner returned no finding for both a Local kernel module alias followed by a public item re-export
      and a crate alias followed by a public kernel glob; the owner scanner also returned no enum/union occurrences.
-   - GREEN: the final 21/21 contract completes in 11.719 seconds. Each Store source is active-parsed once into
-     semicolon-bounded use records. Simple module/crate/ancestor `as` aliases are collected and resolved
-     iteratively before public uses are compared with the three-statement exact allowlist. This catches the two
-     reviewed alias-chain forms while leaving DefaultMappedFile's required private direct import alone. Owner
-     occurrences now include struct, trait, type, enum, union, and module declarations plus use-as aliases.
+   - GREEN at this review point reached 21/21. It added enum/union/module owner detection and demonstrated both
+     reviewed alias-chain forms. The later conservative Store policy below supersedes the intermediate alias-map
+     implementation rather than claiming to parse arbitrary recursive Rust use trees.
+6. Third independent-review conservative Store import policy
+   - RED: five targeted policy fixtures completed in 0.003 seconds and failed exactly five assertions. The prior
+     scanner missed rustfmt root-child and mapped-file-child brace aliases, a multi-member brace alias, an
+     `extern crate` alias, and an unrelated public glob re-export.
+   - GREEN: the final 26/26 contract completes in 11.731 seconds. It active-parses semicolon-bounded `use` and
+     `extern crate` statements once per Store source and applies three explicit rules: any import rooted at
+     `rocketmq_store_local` that contains an alias or brace use-tree is forbidden; every public/public(crate) Store
+     glob re-export is forbidden; and every public use containing a protected kernel item must match the existing
+     three canonical statements exactly. Direct public canonical kernel paths are also reviewed by the same
+     allowlist, while DefaultMappedFile's necessary private direct import remains allowed. This is intentionally a
+     conservative repository policy, not a claim of complete Rust recursive use-tree resolution.
 
 ## Semantic preservation
 
@@ -96,7 +105,7 @@ All commands ran from the repository root.
 - `cargo test -p rocketmq-store --test m06_store_local_compatibility` - exit 0; 3/3 existing leaf identity tests.
 - `cargo test -p rocketmq-store --test commitlog_recovery_tests` - exit 0; 9/9.
 - `cargo test -p rocketmq-store --test m06_store_local_commitlog_compatibility` - exit 0; 2/2.
-- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 21/21, including eight explicit
+- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 26/26, including thirteen explicit
   independent-review negative mutation fixtures.
 - `cargo check -p rocketmq-store-local --no-default-features` - exit 0.
 - `cargo check -p rocketmq-store-local --no-default-features --features fast-load` - exit 0.

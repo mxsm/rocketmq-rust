@@ -322,14 +322,15 @@ python scripts/arc_mut_guard.py
   Local progress/lifecycle cases, 26 existing `DefaultMappedFile` cases including an injected flush failure,
   the active-Rust ownership contract, the exact Local feature matrix, recovery compatibility, package/workspace
   Clippy, architecture dependency gates, ArcMut gates, and AGENTS routing.
-- [x] `[REV]` The 21-case mutation-resistant contract strips comments and strings; detects private, `pub`, and
-  `pub(crate)` same-name struct/trait/type/enum/union/module declarations, type aliases, and use-as aliases; and
-  resolves the reviewed simple module/crate/ancestor alias chains before checking public item/glob re-exports
-  against the three exact legacy lifecycle statements. It unconditionally rejects every old progress field name
-  regardless of type/access, requires exactly one `MappedFileProgress` field named `progress`, rejects a second
-  kernel field under any name, and preserves the Local dependency closure. Eight negative mutation fixtures cover
-  both review rounds. The sole ArcMut import fingerprint relocation is approved one-for-one; the governed
-  occurrence count remains 3377.
+- [x] `[REV]` The 26-case mutation-resistant contract strips comments and strings and applies an explicit,
+  conservative Store policy instead of claiming complete recursive Rust use-tree parsing: any active `use` or
+  `extern crate` rooted at `rocketmq_store_local` with an alias/brace tree is forbidden; every public Store glob
+  re-export is forbidden; and public uses containing the four protected items must match the three canonical
+  lifecycle statements exactly. Owner checks include private/`pub`/`pub(crate)` struct, trait, type, enum, union,
+  module, type-alias, and use-as occurrences. The contract also rejects every old progress field name regardless
+  of type/access, requires exactly one `MappedFileProgress` field named `progress`, and preserves the Local
+  dependency closure. Thirteen negative fixtures cover all three review rounds. The sole ArcMut import fingerprint
+  relocation remains one-for-one and the governed occurrence count remains 3377.
 - [x] `[SCOPE]` This slice does not move `File`, mmap/`ArcMut`, `DefaultMappedFile`, messages/callbacks, config,
   `TransientStorePool`, flush owner, CQ/Index, HA, runtime ownership, or persisted formats. PR-M06-03 and every
   M06 Exit Checklist item remain open.

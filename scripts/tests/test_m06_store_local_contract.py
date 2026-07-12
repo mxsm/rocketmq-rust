@@ -270,20 +270,39 @@ def active_kernel_reexports(source: str) -> set[str]:
     )
 
 
-def active_use_records(source: str) -> list[tuple[str, str, str]]:
-    records: list[tuple[str, str, str]] = []
-    pattern = re.compile(
-        r"(?m)^[ \t]*(?P<visibility>pub(?:\s*\([^)]*\))?[ \t]+)?"
-        r"use[ \t\r\n]+(?P<body>[^;]+);"
-    )
-    for match in pattern.finditer(active_rust_source(source)):
+def active_import_records(source: str) -> list[tuple[str, str, str, str]]:
+    active_source = active_rust_source(source)
+    matches: list[tuple[int, str, re.Match[str]]] = []
+    patterns = {
+        "use": re.compile(
+            r"(?m)^[ \t]*(?P<visibility>pub(?:\s*\([^)]*\))?[ \t]+)?"
+            r"use[ \t\r\n]+(?P<body>[^;]+);"
+        ),
+        "extern crate": re.compile(
+            r"(?m)^[ \t]*(?P<visibility>pub(?:\s*\([^)]*\))?[ \t]+)?"
+            r"extern[ \t]+crate[ \t]+(?P<body>[^;]+);"
+        ),
+    }
+    for kind, pattern in patterns.items():
+        matches.extend((match.start(), kind, match) for match in pattern.finditer(active_source))
+
+    records: list[tuple[str, str, str, str]] = []
+    for _, kind, match in sorted(matches, key=lambda entry: entry[0]):
         visibility = re.sub(r"\s+", "", (match.group("visibility") or "").strip())
         body = re.sub(r"\s*::\s*", "::", match.group("body").strip())
         body = re.sub(r"\s+as\s+", " as ", body)
         body = re.sub(r"\s+", " ", body).strip()
         prefix = f"{visibility} " if visibility else ""
-        records.append((visibility, body, f"{prefix}use {body}"))
+        records.append((kind, visibility, body, f"{prefix}{kind} {body}"))
     return records
+
+
+def active_use_records(source: str) -> list[tuple[str, str, str]]:
+    return [
+        (visibility, body, statement)
+        for kind, visibility, body, statement in active_import_records(source)
+        if kind == "use"
+    ]
 
 
 def active_kernel_use_statements(source: str) -> list[str]:
@@ -297,92 +316,31 @@ def active_kernel_use_statements(source: str) -> list[str]:
     return statements
 
 
-def simple_use_alias(body: str) -> tuple[str, str] | None:
-    direct = re.fullmatch(
-        r"(?P<path>(?:::)?[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)"
-        r" as (?P<alias>[A-Za-z_][A-Za-z0-9_]*)",
-        body,
-    )
-    if direct:
-        return direct.group("path"), direct.group("alias")
-
-    self_alias = re.fullmatch(
-        r"(?P<path>(?:::)?[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)"
-        r"::\{self as (?P<alias>[A-Za-z_][A-Za-z0-9_]*)\}",
-        body,
-    )
-    if self_alias:
-        return self_alias.group("path"), self_alias.group("alias")
-    return None
-
-
-def use_candidate_paths(body: str) -> list[str]:
-    body = re.sub(r" as [A-Za-z_][A-Za-z0-9_]*$", "", body)
-    brace = re.fullmatch(r"(?P<prefix>.+)::\{(?P<members>[^{}]+)\}", body)
-    if brace:
-        prefix = brace.group("prefix")
-        candidates: list[str] = []
-        for member in brace.group("members").split(","):
-            member = re.sub(r"\s+as\s+.+$", "", member.strip())
-            candidates.append(prefix if member == "self" else f"{prefix}::{member}")
-        return candidates
-    return [body]
-
-
-def resolved_use_paths(path: str, aliases: dict[str, set[str]]) -> set[str]:
-    queue = [(path.removeprefix("::").removesuffix("::*"), frozenset())]
-    resolved: set[str] = set()
-    seen: set[tuple[str, frozenset[str]]] = set()
-    while queue:
-        candidate, used_aliases = queue.pop()
-        state = (candidate, used_aliases)
-        if state in seen:
-            continue
-        seen.add(state)
-        resolved.add(candidate)
-        segments = candidate.split("::")
-        for index, segment in enumerate(segments):
-            if segment in used_aliases:
-                continue
-            for target in aliases.get(segment, set()):
-                suffix = "::".join(segments[index + 1:])
-                expanded = f"{target}::{suffix}" if suffix else target
-                queue.append((expanded, used_aliases | {segment}))
-    return resolved
-
-
 def kernel_facade_boundary_uses(
     sources: dict[Path, str],
 ) -> list[tuple[Path, str]]:
     records_by_path = {
-        path: active_use_records(source)
+        path: active_import_records(source)
         for path, source in sources.items()
-        if "use" in source
+        if "use" in source or "extern crate" in source
     }
-    aliases: dict[str, set[str]] = {}
-    for records in records_by_path.values():
-        for _, body, _ in records:
-            alias = simple_use_alias(body)
-            if alias:
-                target, name = alias
-                aliases.setdefault(name, set()).add(target)
-
-    kernel_path = "rocketmq_store_local::mapped_file::kernel"
     boundary_uses: list[tuple[Path, str]] = []
     for path in sorted(records_by_path, key=str):
-        for visibility, body, statement in records_by_path[path]:
-            if not visibility.startswith("pub"):
-                continue
-            mentions_kernel_item = any(
+        for kind, visibility, body, statement in records_by_path[path]:
+            rooted_at_local = body.removeprefix("::").startswith("rocketmq_store_local")
+            canonical_alias_or_tree = rooted_at_local and (
+                "{" in body or re.search(r"\bas\b", body)
+            )
+            public_use = kind == "use" and visibility.startswith("pub")
+            public_glob = public_use and "*" in body
+            public_kernel_item = public_use and any(
                 re.search(rf"\b{re.escape(item)}\b", body)
                 for item in KERNEL_ITEMS
             )
-            resolves_to_kernel = any(
-                resolved == kernel_path or resolved.startswith(f"{kernel_path}::")
-                for candidate in use_candidate_paths(body)
-                for resolved in resolved_use_paths(candidate, aliases)
+            public_direct_kernel = public_use and rooted_at_local and (
+                "mapped_file::kernel" in body
             )
-            if mentions_kernel_item or resolves_to_kernel:
+            if canonical_alias_or_tree or public_glob or public_kernel_item or public_direct_kernel:
                 boundary_uses.append((path, statement))
     return boundary_uses
 
@@ -650,7 +608,13 @@ use rocketmq_store_local::mapped_file::kernel as local_kernel;
 pub(crate) use local_kernel::MappedFileProgress;
 """
         self.assertEqual(
-            [(facade, "pub(crate) use local_kernel::MappedFileProgress")],
+            [
+                (
+                    facade,
+                    "use rocketmq_store_local::mapped_file::kernel as local_kernel",
+                ),
+                (facade, "pub(crate) use local_kernel::MappedFileProgress"),
+            ],
             kernel_facade_boundary_uses({facade: source}),
         )
 
@@ -661,7 +625,61 @@ use rocketmq_store_local as local;
 pub use local::mapped_file::kernel::*;
 """
         self.assertEqual(
-            [(facade, "pub use local::mapped_file::kernel::*")],
+            [
+                (facade, "use rocketmq_store_local as local"),
+                (facade, "pub use local::mapped_file::kernel::*"),
+            ],
+            kernel_facade_boundary_uses({facade: source}),
+        )
+
+    def test_store_policy_rejects_rustfmt_root_child_alias(self) -> None:
+        facade = Path("root_child_alias.rs")
+        source = """
+use rocketmq_store_local::{
+    mapped_file::kernel as local_kernel,
+};
+pub(crate) use local_kernel::MappedFileProgress;
+"""
+        violations = kernel_facade_boundary_uses({facade: source})
+        self.assertEqual(2, len(violations))
+        self.assertTrue(any("rocketmq_store_local::{" in statement for _, statement in violations))
+
+    def test_store_policy_rejects_rustfmt_mapped_file_child_kernel_alias(self) -> None:
+        facade = Path("mapped_file_child_alias.rs")
+        source = """
+use rocketmq_store_local::mapped_file::{
+    kernel as local_kernel,
+};
+pub(crate) use local_kernel::MappedFileProgress;
+"""
+        violations = kernel_facade_boundary_uses({facade: source})
+        self.assertEqual(2, len(violations))
+        self.assertTrue(any("mapped_file::{" in statement for _, statement in violations))
+
+    def test_store_policy_rejects_rustfmt_multi_member_brace_alias(self) -> None:
+        facade = Path("multi_member_alias.rs")
+        source = """
+use rocketmq_store_local::{
+    mapped_file::kernel as local_kernel,
+    commit_log as local_commit_log,
+};
+pub(crate) use local_kernel::*;
+"""
+        self.assertEqual(2, len(kernel_facade_boundary_uses({facade: source})))
+
+    def test_store_policy_rejects_extern_crate_alias(self) -> None:
+        facade = Path("extern_alias.rs")
+        source = "extern crate rocketmq_store_local as local;"
+        self.assertEqual(
+            [(facade, "extern crate rocketmq_store_local as local")],
+            kernel_facade_boundary_uses({facade: source}),
+        )
+
+    def test_store_policy_rejects_every_public_glob(self) -> None:
+        facade = Path("public_glob.rs")
+        source = "pub(crate) use any_alias::any_module::*;"
+        self.assertEqual(
+            [(facade, "pub(crate) use any_alias::any_module::*")],
             kernel_facade_boundary_uses({facade: source}),
         )
 
