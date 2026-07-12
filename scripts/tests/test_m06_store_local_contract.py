@@ -33,19 +33,20 @@ LEAF_FILES = {
     "metrics.rs",
 }
 CANONICAL_ITEMS = {
-    "DirectIoBuffer": "direct_io.rs",
-    "DirectIoRequest": "direct_io.rs",
-    "DirectIoValidationError": "direct_io.rs",
-    "FlushStrategy": "flush_strategy.rs",
-    "IoUringBackendStatus": "io_uring_impl.rs",
-    "IoUringFallbackReason": "io_uring_impl.rs",
-    "IoUringOpcodeSupport": "io_uring_impl.rs",
-    "IoUringRuntimeCapability": "io_uring_impl.rs",
-    "LinuxKernelVersion": "io_uring_impl.rs",
-    "MappedBuffer": "mapped_buffer.rs",
-    "MappedFileError": "mapped_file_error.rs",
-    "MappedFileMetrics": "metrics.rs",
-    "MappedFileResult": "mapped_file_error.rs",
+    "DirectIoBuffer": ("struct", "direct_io.rs"),
+    "DirectIoRequest": ("struct", "direct_io.rs"),
+    "DirectIoValidationError": ("enum", "direct_io.rs"),
+    "FlushStrategy": ("enum", "flush_strategy.rs"),
+    "IoUringBackendStatus": ("enum", "io_uring_impl.rs"),
+    "IoUringFallbackReason": ("enum", "io_uring_impl.rs"),
+    "IoUringOpcodeSupport": ("struct", "io_uring_impl.rs"),
+    "IoUringRuntimeCapability": ("struct", "io_uring_impl.rs"),
+    "LinuxKernelVersion": ("struct", "io_uring_impl.rs"),
+    "MappedBuffer": ("struct", "mapped_buffer.rs"),
+    "MappedFileError": ("enum", "mapped_file_error.rs"),
+    "MappedFileMetrics": ("struct", "metrics.rs"),
+    "MappedFileResult": ("type", "mapped_file_error.rs"),
+    "io_uring_backend_status": ("fn", "io_uring_impl.rs"),
 }
 FACADE_ROOT_ITEMS = {
     "DirectIoBuffer",
@@ -165,11 +166,36 @@ def active_rust_source(source: str) -> str:
 
 
 def has_linux_only_optional_tokio_uring(manifest: dict[str, Any]) -> bool:
-    if "tokio-uring" in manifest.get("dependencies", {}):
+    occurrences: list[tuple[str | None, str, Any]] = []
+    table_names = ("dependencies", "build-dependencies", "dev-dependencies")
+    for table_name in table_names:
+        table = manifest.get(table_name, {})
+        if "tokio-uring" in table:
+            occurrences.append((None, table_name, table["tokio-uring"]))
+    for target, target_manifest in manifest.get("target", {}).items():
+        for table_name in table_names:
+            table = target_manifest.get(table_name, {})
+            if "tokio-uring" in table:
+                occurrences.append((target, table_name, table["tokio-uring"]))
+
+    if len(occurrences) != 1:
         return False
-    linux_dependencies = manifest.get("target", {}).get('cfg(target_os = "linux")', {}).get("dependencies", {})
-    specification = linux_dependencies.get("tokio-uring")
-    return isinstance(specification, dict) and specification.get("optional") is True
+    target, table_name, specification = occurrences[0]
+    return (
+        target == 'cfg(target_os = "linux")'
+        and table_name == "dependencies"
+        and isinstance(specification, dict)
+        and specification.get("optional") is True
+    )
+
+
+def canonical_definition_paths(sources: dict[Path, str], item: str, item_kind: str) -> list[Path]:
+    pattern = re.compile(rf"\bpub\s+{re.escape(item_kind)}\s+{re.escape(item)}\b")
+    return [
+        path
+        for path, source in sources.items()
+        if pattern.search(source) and pattern.search(active_rust_source(source))
+    ]
 
 
 class StoreLocalContractTests(unittest.TestCase):
@@ -196,6 +222,35 @@ pub use rocketmq_store_local::mapped_file::MappedFileMetrics;
             },
         }
         self.assertFalse(has_linux_only_optional_tokio_uring(manifest))
+
+    def test_tokio_uring_dependency_rejects_windows_target_and_top_level_build_dependency(self) -> None:
+        linux_dependency = {"tokio-uring": {"version": "0.5", "optional": True}}
+        windows_target = {
+            "target": {
+                'cfg(target_os = "linux")': {"dependencies": linux_dependency},
+                'cfg(target_os = "windows")': {"dependencies": linux_dependency},
+            }
+        }
+        top_level_build = {
+            "build-dependencies": linux_dependency,
+            "target": {'cfg(target_os = "linux")': {"dependencies": linux_dependency}},
+        }
+        self.assertFalse(has_linux_only_optional_tokio_uring(windows_target))
+        self.assertFalse(has_linux_only_optional_tokio_uring(top_level_build))
+
+    def test_canonical_function_definition_scanner_detects_duplicate_active_definitions(self) -> None:
+        first = Path("first.rs")
+        second = Path("second.rs")
+        commented = Path("commented.rs")
+        sources = {
+            first: "pub fn io_uring_backend_status() {}",
+            second: "pub fn io_uring_backend_status() {}",
+            commented: "// pub fn io_uring_backend_status() {}",
+        }
+        self.assertEqual(
+            [first, second],
+            canonical_definition_paths(sources, "io_uring_backend_status", "fn"),
+        )
 
     def test_workspace_and_feature_ownership_are_exact(self) -> None:
         self.assert_local_crate_exists()
@@ -253,14 +308,12 @@ pub use rocketmq_store_local::mapped_file::MappedFileMetrics;
         self.assertEqual(LEAF_FILES, {path.name for path in canonical_dir.glob("*.rs")})
         self.assertTrue(all(not (facade_dir / name).exists() for name in LEAF_FILES))
 
-        rust_sources = list(ROOT.glob("rocketmq-*/src/**/*.rs"))
-        for item, expected_file in CANONICAL_ITEMS.items():
-            pattern = re.compile(rf"\bpub\s+(?:struct|enum|type)\s+{item}\b")
-            definitions = []
-            for path in rust_sources:
-                source = path.read_text(encoding="utf-8")
-                if pattern.search(source) and pattern.search(active_rust_source(source)):
-                    definitions.append(path)
+        rust_sources = {
+            path: path.read_text(encoding="utf-8")
+            for path in ROOT.glob("rocketmq-*/src/**/*.rs")
+        }
+        for item, (item_kind, expected_file) in CANONICAL_ITEMS.items():
+            definitions = canonical_definition_paths(rust_sources, item, item_kind)
             self.assertEqual([canonical_dir / expected_file], definitions, item)
 
         facade = (STORE_CRATE / "src" / "log_file" / "mapped_file.rs").read_text(encoding="utf-8")

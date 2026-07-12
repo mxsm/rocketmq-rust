@@ -51,6 +51,20 @@ Both RED commands ran before any production edit.
    - One initial complete contract run exceeded its 120-second outer timeout after sanitizing every
      workspace Rust source and was not counted. Raw-regex candidate prefiltering now limits lexical
      sanitization without weakening the checks; the final target completes in about five seconds.
+5. Second review fix: unique dependency location and canonical function ownership
+   - RED: two focused mutation tests exited 1. The manifest helper accepted a duplicate Windows
+     target dependency and a top-level build dependency when the valid Linux dependency was also
+     present. The type-only definition scanner returned no definitions for two active synthetic
+     `pub fn io_uring_backend_status` definitions.
+   - GREEN: the complete contract exits 0 with 7/7 tests. The manifest helper scans top-level and
+     every target's normal, build, and dev dependency tables; it accepts exactly one
+     `tokio-uring`, only under the exact Linux target's normal dependencies, with a dictionary
+     specification containing `optional = true`. Windows/other targets, top-level or target build
+     dependencies, dev dependencies, and duplicates are rejected.
+   - GREEN: canonical ownership now uses an explicit item-kind map. It checks structs, enums, type
+     aliases, and `io_uring_backend_status -> (fn, io_uring_impl.rs)` against active Rust source.
+     The synthetic duplicate-function mutation returns both active definitions while ignoring a
+     commented third definition, so the real exact-one assertion would fail on a second owner.
 
 ## Feature and dependency ownership
 
@@ -90,8 +104,9 @@ All commands ran from the repository root.
 - `cargo check -p rocketmq-store-local --features fast-load,safe-load` - exit 0.
 - `cargo check -p rocketmq-store-local --features io_uring` - exit 0.
 - `cargo test -p rocketmq-store --test m06_store_local_compatibility` - exit 0; 3/3.
-- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 5/5, including the
-  comment/string false-positive and target-dependency mutation helpers.
+- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 7/7, including the
+  comment/string false-positive, target/build-dependency placement, and duplicate canonical
+  function mutation helpers.
 - `cargo check -p rocketmq-store` - exit 0.
 - `cargo tree -p rocketmq-store-local -e normal` - exit 0; closure described above.
 - `python scripts/tests/test_architecture_dependency_guard.py` - exit 0; 35/35.
@@ -112,6 +127,11 @@ All commands ran from the repository root.
   documents. The canonical moved error surface and every other guard section are clean.
 - `cargo fmt --all -- --check` - exit 0 in the final post-report check.
 - `git diff --check` - exit 0 in the final post-report check.
+
+The first review fix reran the full workspace Clippy command above. The second review fix changes
+only the Python source/manifest contract and evidence text, so it reran the complete 7/7 contract,
+the 3/3 Rust compatibility fixture, and both Local/Store all-target/all-feature package Clippy
+commands; it did not repeat the unchanged long workspace Clippy gate.
 
 `cargo check -p rocketmq-store --no-default-features` exits 101 with 124 pre-existing
 non-exhaustive matches because all `GenericMessageStore` backend variants are feature-gated out.

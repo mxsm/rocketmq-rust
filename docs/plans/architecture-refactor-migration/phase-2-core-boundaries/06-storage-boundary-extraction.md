@@ -283,9 +283,10 @@ python scripts/arc_mut_guard.py
   source/manifest contract、architecture fixtures/baseline、ArcMut fixtures/guard、package/workspace
   Clippy 与 routing guard 均通过，未增加 dependency/error policy exception。
 - [x] `[REVIEW]` source contract 使用 comment/string-aware active Rust 视图验证全部旧 root type/function
-  re-export，mutation fixture 拒绝注释假导出；manifest mutation fixture 拒绝将 Linux-only optional
-  `tokio-uring` 同时放入 top-level dependencies。compatibility fixture 直接编译所有旧 root 路径并保留
-  `io_uring_impl` 深路径身份。
+  re-export 与 canonical 单定义，包含 `pub fn io_uring_backend_status`；mutation fixture 拒绝注释假导出
+  与第二个 active function owner。manifest mutation fixtures 拒绝 top-level/build dependency、Windows/other
+  target、target build dependency 和重复的 `tokio-uring`，只接受精确 Linux target 下唯一 optional normal
+  dependency。compatibility fixture 直接编译所有旧 root 路径并保留 `io_uring_impl` 深路径身份。
 - [x] `[SCOPE]` 本切片未迁移 `MappedFile`/`DefaultMappedFile`、CommitLog、load/recovery、flush、
   CQ/Index、HA 或 Local composition，未改变持久格式或 runtime ownership。PR-M06-03 顶层条目与
   M06 Exit Checklist 保持未完成。
