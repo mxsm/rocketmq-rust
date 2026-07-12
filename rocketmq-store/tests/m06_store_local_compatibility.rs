@@ -17,22 +17,28 @@ use std::time::Duration;
 
 use memmap2::MmapOptions;
 use parking_lot::RwLock;
+use rocketmq_store::log_file::mapped_file::io_uring_backend_status as legacy_io_uring_backend_status;
 use rocketmq_store::log_file::mapped_file::io_uring_impl as legacy_io_uring;
 use rocketmq_store::log_file::mapped_file::DirectIoBuffer as LegacyDirectIoBuffer;
 use rocketmq_store::log_file::mapped_file::DirectIoRequest as LegacyDirectIoRequest;
 use rocketmq_store::log_file::mapped_file::DirectIoValidationError as LegacyDirectIoValidationError;
 use rocketmq_store::log_file::mapped_file::FlushStrategy as LegacyFlushStrategy;
+use rocketmq_store::log_file::mapped_file::IoUringBackendStatus as LegacyIoUringBackendStatus;
 use rocketmq_store::log_file::mapped_file::MappedBuffer as LegacyMappedBuffer;
 use rocketmq_store::log_file::mapped_file::MappedFileError as LegacyMappedFileError;
 use rocketmq_store::log_file::mapped_file::MappedFileMetrics as LegacyMappedFileMetrics;
+use rocketmq_store::log_file::mapped_file::MappedFileResult as LegacyMappedFileResult;
+use rocketmq_store_local::mapped_file::io_uring_backend_status as canonical_io_uring_backend_status;
 use rocketmq_store_local::mapped_file::io_uring_impl as canonical_io_uring;
 use rocketmq_store_local::mapped_file::DirectIoBuffer as CanonicalDirectIoBuffer;
 use rocketmq_store_local::mapped_file::DirectIoRequest as CanonicalDirectIoRequest;
 use rocketmq_store_local::mapped_file::DirectIoValidationError as CanonicalDirectIoValidationError;
 use rocketmq_store_local::mapped_file::FlushStrategy as CanonicalFlushStrategy;
+use rocketmq_store_local::mapped_file::IoUringBackendStatus as CanonicalIoUringBackendStatus;
 use rocketmq_store_local::mapped_file::MappedBuffer as CanonicalMappedBuffer;
 use rocketmq_store_local::mapped_file::MappedFileError as CanonicalMappedFileError;
 use rocketmq_store_local::mapped_file::MappedFileMetrics as CanonicalMappedFileMetrics;
+use rocketmq_store_local::mapped_file::MappedFileResult as CanonicalMappedFileResult;
 
 fn canonical_direct_buffer(value: LegacyDirectIoBuffer) -> CanonicalDirectIoBuffer {
     value
@@ -59,6 +65,14 @@ fn legacy_mapped_error(value: CanonicalMappedFileError) -> LegacyMappedFileError
 }
 
 fn canonical_metrics(value: LegacyMappedFileMetrics) -> CanonicalMappedFileMetrics {
+    value
+}
+
+fn canonical_io_uring_status(value: LegacyIoUringBackendStatus) -> CanonicalIoUringBackendStatus {
+    value
+}
+
+fn canonical_mapped_file_result<T>(value: LegacyMappedFileResult<T>) -> CanonicalMappedFileResult<T> {
     value
 }
 
@@ -110,9 +124,10 @@ fn mapped_buffer_error_and_metrics_preserve_identity_and_behavior() {
     assert_eq!(&buffer.read(4..14).expect("read mapped buffer")[..], b"local-leaf");
 
     let error = buffer.read(4090..4100).expect_err("out-of-bounds read must fail");
-    let legacy_error = legacy_mapped_error(error);
-    assert!(legacy_error.is_recoverable());
-    assert!(!legacy_error.is_io_error());
+    let legacy_result: LegacyMappedFileResult<()> = Err(legacy_mapped_error(error));
+    let canonical_error = canonical_mapped_file_result(legacy_result).expect_err("error identity must be preserved");
+    assert!(canonical_error.is_recoverable());
+    assert!(!canonical_error.is_io_error());
 
     let metrics = canonical_metrics(LegacyMappedFileMetrics::new());
     metrics.record_write(10);
@@ -125,11 +140,8 @@ fn mapped_buffer_error_and_metrics_preserve_identity_and_behavior() {
 
 #[test]
 fn io_uring_status_and_capability_preserve_identity() {
-    let canonical_status: canonical_io_uring::IoUringBackendStatus = legacy_io_uring::io_uring_backend_status();
-    assert_eq!(
-        canonical_status.as_str(),
-        canonical_io_uring::io_uring_backend_status().as_str()
-    );
+    let canonical_status = canonical_io_uring_status(legacy_io_uring_backend_status());
+    assert_eq!(canonical_status.as_str(), canonical_io_uring_backend_status().as_str());
 
     let canonical_capability: canonical_io_uring::IoUringRuntimeCapability =
         legacy_io_uring::probe_io_uring_runtime_capability();

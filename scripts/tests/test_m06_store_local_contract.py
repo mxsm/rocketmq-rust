@@ -53,6 +53,7 @@ FACADE_ROOT_ITEMS = {
     "DirectIoValidationError",
     "FlushStrategy",
     "IoUringBackendStatus",
+    "io_uring_backend_status",
     "MappedBuffer",
     "MappedFileError",
     "MappedFileMetrics",
@@ -95,9 +96,106 @@ def dependency_tables(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return tables
 
 
+def active_facade_reexports(source: str) -> set[str]:
+    source = active_rust_source(source)
+    return set(re.findall(r"pub\s+use\s+rocketmq_store_local::mapped_file::([A-Za-z_][A-Za-z0-9_]*)\s*;", source))
+
+
+def active_rust_source(source: str) -> str:
+    output: list[str] = []
+    index = 0
+    length = len(source)
+
+    def mask(start: int, end: int) -> None:
+        output.extend("\n" if character == "\n" else " " for character in source[start:end])
+
+    while index < length:
+        if source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            end = length if end == -1 else end
+            mask(index, end)
+            index = end
+            continue
+
+        if source.startswith("/*", index):
+            start = index
+            index += 2
+            depth = 1
+            while index < length and depth:
+                if source.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif source.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+            mask(start, index)
+            continue
+
+        raw = re.match(r'(?:br|cr|r)(?P<hashes>#{0,255})"', source[index:])
+        if raw:
+            start = index
+            delimiter = '"' + raw.group("hashes")
+            index += raw.end()
+            end = source.find(delimiter, index)
+            index = length if end == -1 else end + len(delimiter)
+            mask(start, index)
+            continue
+
+        string_prefix = 1 if source[index] == '"' else 2 if source[index:index + 2] in {'b"', 'c"'} else 0
+        if string_prefix:
+            start = index
+            index += string_prefix
+            while index < length:
+                if source[index] == "\\":
+                    index = min(index + 2, length)
+                elif source[index] == '"':
+                    index += 1
+                    break
+                else:
+                    index += 1
+            mask(start, index)
+            continue
+
+        output.append(source[index])
+        index += 1
+
+    return "".join(output)
+
+
+def has_linux_only_optional_tokio_uring(manifest: dict[str, Any]) -> bool:
+    if "tokio-uring" in manifest.get("dependencies", {}):
+        return False
+    linux_dependencies = manifest.get("target", {}).get('cfg(target_os = "linux")', {}).get("dependencies", {})
+    specification = linux_dependencies.get("tokio-uring")
+    return isinstance(specification, dict) and specification.get("optional") is True
+
+
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
+
+    def test_reexport_scanner_ignores_comments_and_strings(self) -> None:
+        source = '''
+// pub use rocketmq_store_local::mapped_file::DirectIoBuffer;
+/* pub use rocketmq_store_local::mapped_file::MappedFileError; */
+const TEXT: &str = "pub use rocketmq_store_local::mapped_file::FlushStrategy;";
+const RAW: &str = r#"pub use rocketmq_store_local::mapped_file::MappedBuffer;"#;
+pub use rocketmq_store_local::mapped_file::MappedFileMetrics;
+'''
+        self.assertEqual({"MappedFileMetrics"}, active_facade_reexports(source))
+
+    def test_tokio_uring_dependency_must_not_also_be_top_level(self) -> None:
+        manifest = {
+            "dependencies": {"tokio-uring": {"version": "0.5", "optional": True}},
+            "target": {
+                'cfg(target_os = "linux")': {
+                    "dependencies": {"tokio-uring": {"version": "0.5", "optional": True}}
+                }
+            },
+        }
+        self.assertFalse(has_linux_only_optional_tokio_uring(manifest))
 
     def test_workspace_and_feature_ownership_are_exact(self) -> None:
         self.assert_local_crate_exists()
@@ -116,12 +214,15 @@ class StoreLocalContractTests(unittest.TestCase):
             },
             local_manifest["features"],
         )
+        self.assertNotIn("tokio-uring", local_manifest.get("dependencies", {}))
+        self.assertTrue(has_linux_only_optional_tokio_uring(local_manifest))
         store_manifest = tomllib.loads((STORE_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
         self.assertEqual(["local_file_store", "fast-load"], store_manifest["features"]["default"])
         self.assertEqual(["rocketmq-store-local/fast-load"], store_manifest["features"]["fast-load"])
         self.assertEqual(["rocketmq-store-local/safe-load"], store_manifest["features"]["safe-load"])
         self.assertEqual(["rocketmq-store-local/io_uring"], store_manifest["features"]["io_uring"])
         self.assertIn("rocketmq-store-local", store_manifest["dependencies"])
+        self.assertNotIn("tokio-uring", store_manifest.get("dependencies", {}))
         self.assertNotIn("tokio-uring", store_manifest.get("target", {}).get("cfg(target_os = \"linux\")", {}).get("dependencies", {}))
 
     def test_local_manifest_and_sources_have_no_forbidden_owner_edges(self) -> None:
@@ -155,13 +256,17 @@ class StoreLocalContractTests(unittest.TestCase):
         rust_sources = list(ROOT.glob("rocketmq-*/src/**/*.rs"))
         for item, expected_file in CANONICAL_ITEMS.items():
             pattern = re.compile(rf"\bpub\s+(?:struct|enum|type)\s+{item}\b")
-            definitions = [path for path in rust_sources if pattern.search(path.read_text(encoding="utf-8"))]
+            definitions = []
+            for path in rust_sources:
+                source = path.read_text(encoding="utf-8")
+                if pattern.search(source) and pattern.search(active_rust_source(source)):
+                    definitions.append(path)
             self.assertEqual([canonical_dir / expected_file], definitions, item)
 
         facade = (STORE_CRATE / "src" / "log_file" / "mapped_file.rs").read_text(encoding="utf-8")
-        for item in FACADE_ROOT_ITEMS:
-            self.assertIn(f"pub use rocketmq_store_local::mapped_file::{item};", facade)
-        self.assertIn("pub use rocketmq_store_local::mapped_file::io_uring_impl;", facade)
+        reexports = active_facade_reexports(facade)
+        self.assertTrue(FACADE_ROOT_ITEMS.issubset(reexports), FACADE_ROOT_ITEMS - reexports)
+        self.assertIn("io_uring_impl", reexports)
 
 
 if __name__ == "__main__":

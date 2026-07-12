@@ -20,7 +20,7 @@ Both RED commands ran before any production edit.
 1. Source and manifest contract
    - RED: `python -m unittest scripts.tests.test_m06_store_local_contract` exited 1 with three
      assertion failures because the canonical `rocketmq-store-local` directory did not exist.
-   - GREEN: the same target exits 0 with 3/3 tests. It proves workspace membership, exact feature
+   - GREEN: the same target exits 0 with 5/5 tests. It proves workspace membership, exact feature
      ownership/forwarding, forbidden manifest/source edges, six canonical files, single
      definitions, removed facade copies, and exact facade re-exports.
 2. Canonical/legacy compile and behavior fixture
@@ -36,6 +36,21 @@ Both RED commands ran before any production edit.
      `rocketmq-store-local/src` in its domain scan. The missing-file finding is gone without an
      allowlist or baseline expansion; the command retains only the unchanged repository baseline
      listed below.
+4. Review fix: active facade exports and target-only dependency placement
+   - RED: the two focused mutation/helper tests exited 1. The raw source scanner accepted four
+     commented/stringified `pub use` statements, and the initial manifest helper accepted
+     `tokio-uring` when duplicated in both top-level and Linux target dependencies.
+   - GREEN: the helper tests and complete 5/5 contract target exit 0. A comment/string/raw-string
+     aware Rust source view now drives re-export and canonical-definition checks. The facade set
+     includes all ten legacy root types/functions, including `io_uring_backend_status`; the
+     manifest helper requires no top-level dependency and an optional Linux target dependency.
+   - GREEN: the 3/3 compatibility fixture directly imports, calls, or assigns every legacy root
+     export, including `IoUringBackendStatus`, `io_uring_backend_status`, and `MappedFileResult`,
+     while retaining deep `io_uring_impl` type identity. Removing any root re-export now breaks
+     fixture compilation.
+   - One initial complete contract run exceeded its 120-second outer timeout after sanitizing every
+     workspace Rust source and was not counted. Raw-regex candidate prefiltering now limits lexical
+     sanitization without weakening the checks; the final target completes in about five seconds.
 
 ## Feature and dependency ownership
 
@@ -75,7 +90,8 @@ All commands ran from the repository root.
 - `cargo check -p rocketmq-store-local --features fast-load,safe-load` - exit 0.
 - `cargo check -p rocketmq-store-local --features io_uring` - exit 0.
 - `cargo test -p rocketmq-store --test m06_store_local_compatibility` - exit 0; 3/3.
-- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 3/3.
+- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 5/5, including the
+  comment/string false-positive and target-dependency mutation helpers.
 - `cargo check -p rocketmq-store` - exit 0.
 - `cargo tree -p rocketmq-store-local -e normal` - exit 0; closure described above.
 - `python scripts/tests/test_architecture_dependency_guard.py` - exit 0; 35/35.
