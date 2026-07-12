@@ -86,18 +86,22 @@ pub fn legacy_append_receipt(
     durable_watermark: i64,
 ) -> LegacyAppendReceipt {
     let status = legacy_put_status_to_append_status(result.put_message_status());
-    let canonical = match result.append_message_result() {
-        Some(append) => {
-            let start = append.wrote_offset;
-            let end = start.saturating_add(i64::from(append.wrote_bytes));
-            let durability = if durable_watermark >= end {
-                Durability::Local
-            } else {
-                Durability::Memory
-            };
-            AppendReceipt::try_new(status, start..end, appended_watermark, durable_watermark, durability)
+    let canonical = if status.is_accepted() {
+        match result.append_message_result() {
+            Some(append) => {
+                let start = append.wrote_offset;
+                let end = start.saturating_add(i64::from(append.wrote_bytes));
+                let durability = if durable_watermark >= end {
+                    Durability::Local
+                } else {
+                    Durability::Memory
+                };
+                AppendReceipt::try_new(status, start..end, appended_watermark, durable_watermark, durability)
+            }
+            None => AppendReceipt::try_rejected(status, appended_watermark, durable_watermark),
         }
-        None => AppendReceipt::try_rejected(status, appended_watermark, durable_watermark),
+    } else {
+        AppendReceipt::try_rejected(status, appended_watermark, durable_watermark)
     };
     LegacyAppendReceipt {
         result,
@@ -268,7 +272,7 @@ impl<'a, MS> LegacyMessageStoreHealthAdapter<'a, MS> {
 /// Filtered reads remain on the unchanged legacy trait. This canonical read port intentionally
 /// forwards only unfiltered reads, so its hot request path has no dynamic filter allocation.
 /// Test doubles can implement these four operations without copying `MessageStore`.
-pub trait LegacyReadCallBoundary: Sync {
+pub(crate) trait LegacyReadCallBoundary: Sync {
     fn get_message(
         &self,
         group: &CheetahString,
@@ -600,3 +604,7 @@ fn health_snapshot_from_legacy<MS: MessageStore>(store: &MS) -> LegacyStoreHealt
         durable_watermark: store.get_flushed_where(),
     }
 }
+
+#[cfg(test)]
+#[path = "store_api_adapter_test.rs"]
+mod tests;

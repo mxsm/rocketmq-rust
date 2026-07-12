@@ -100,6 +100,36 @@ fn legacy_receipt_reports_invalid_projection_without_panicking() {
 }
 
 #[test]
+fn rejected_outer_status_ignores_inner_append_shape_for_canonical_projection() {
+    let cases = [
+        PutMessageStatus::CreateMappedFileFailed,
+        PutMessageStatus::MessageIllegal,
+        PutMessageStatus::UnknownError,
+    ];
+
+    for status in cases {
+        for wrote_bytes in [20, 0] {
+            let mut diagnostics = append_result();
+            diagnostics.wrote_bytes = wrote_bytes;
+            let receipt = legacy_append_receipt(PutMessageResult::new_append_result(status, Some(diagnostics)), 80, 48);
+
+            let canonical = receipt.canonical().expect("rejected status projects without a range");
+            assert_eq!(legacy_put_status_to_append_status(status), canonical.status());
+            assert_eq!(None, canonical.appended_range());
+            assert!(!canonical.is_accepted());
+            assert_eq!(
+                wrote_bytes,
+                receipt
+                    .result()
+                    .append_message_result()
+                    .expect("legacy diagnostics remain available")
+                    .wrote_bytes
+            );
+        }
+    }
+}
+
+#[test]
 fn every_legacy_append_status_maps_exhaustively_without_collapsing() {
     let cases = [
         (PutMessageStatus::PutOk, AppendStatus::PutOk),

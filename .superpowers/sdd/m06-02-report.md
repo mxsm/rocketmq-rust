@@ -25,7 +25,12 @@ per-read dynamic filter allocation or dispatch was moved into the canonical hot 
   `Local` from the durable watermark; it never infers replica durability from a legacy status.
 - All 16 `PutMessageStatus` variants map one-to-one to distinct neutral `AppendStatus` variants.
   `LegacyAppendReceipt` still owns the original `PutMessageResult`, preserving Broker response
-  codes, remarks, message IDs, timestamps, logical offsets, and public paths.
+  codes, remarks, message IDs, timestamps, logical offsets, and public paths. The outer status is
+  authoritative for acceptance: rejected statuses produce an `Ok` canonical rejected receipt even
+  when an inner append diagnostic is present; accepted statuses require a valid appended range.
+- Operation-time timeout/unavailable status and later observed durability remain independent.
+  Range/watermark coverage is enforced, but the constructor does not infer or reject reached
+  durability from an earlier status token.
 - `DerivedProgress` exposes source and derived watermarks but its primary-ack and
   primary-durability predicates are always false by contract.
 - `StoreHealthSnapshot` contains only neutral error categories and low-cardinality health data.
@@ -36,9 +41,10 @@ per-read dynamic filter allocation or dispatch was moved into the canonical hot 
   guard; consuming `into_bytes` returns independently owned `Bytes`.
 - `LegacyMessageStoreReadAdapter` uses a closed unfiltered request enum and optional result enum to
   forward existing Get, size-limited Get, Query, and Select methods. Its adapter-local four-method
-  `LegacyReadCallBoundary` has a blanket implementation for `MessageStore`, allowing real behavior
-  tests without copying the 126-method trait. It adds no required legacy method and preserves
-  legacy `None` rather than translating it into an error.
+  crate-private `LegacyReadCallBoundary` has a blanket implementation for `MessageStore`, allowing
+  private-module behavior tests without copying the 126-method trait or adding a public
+  semver/coherence surface. It adds no required legacy method and preserves legacy `None` rather
+  than translating it into an error.
 - No Serde/default envelope, feature alias/default, CommitLog/CQ/Index behavior, response mapping,
   persisted format, unsafe region, task, thread, runtime, or blocking call changed.
 
@@ -90,17 +96,43 @@ Every listed RED occurred before its corresponding production edit.
    - GREEN: the new target passed 5/5 with actual size-limited/normal Get, Query, Select, and `None`
      dispatch; direct Get/Query/Select projection; field parity; lease retain/release; and safe
      `into_bytes` after releasing the compatibility lease.
+9. Second review fix: rejected outer status with inner diagnostics
+   - RED: the real-shape adapter test failed with `RejectedStatusWithRange` for
+     `CreateMappedFileFailed`, `MessageIllegal`, and `UnknownError` carrying an inner append
+     diagnostic.
+   - GREEN: all three statuses with positive and zero diagnostic lengths project to `Ok` rejected
+     receipts with no range, while the original `PutMessageResult` and inner diagnostic remain
+     available.
+10. Second review fix: preserve status/watermark independence
+   - RED: `timeout_status_can_coexist_with_later_observed_local_durability` failed with the
+     temporary `StatusDurabilityConflict` over-constraint.
+   - GREEN: the status-derived restriction was removed. The regression passes with
+     `FlushDiskTimeout` plus a later durable watermark covering the range, while all range,
+     watermark, accepted/rejected, and explicit durability-coverage invariants remain enforced.
+11. Second review fix: private compatibility seam
+   - RED: the source contract exited 1 because `LegacyReadCallBoundary` was still `pub`.
+   - GREEN: the seam is now `pub(crate)`, the source contract passes, private fake behavior tests
+     live in the adapter's `#[cfg(test)]` child module, and the integration test retains only the
+     public `MessageStore` compile fixture.
+12. Second review characterization: consuming and mapped-file lease release
+   - A direct `LeasedBytes::into_bytes` guard probe passes and observes the guard dropped before
+     the returned bytes are inspected.
+   - A no-sleep real mapped-file test passes: reference count is 1, explicit hold raises it to 2,
+     canonical projection plus `into_data().into_bytes()` releases it to 1, and shutdown reaches
+     reference count 0 with cleanup observable. The fixture uses a local temporary mapped-file
+     queue and adds no ArcMut baseline identity.
 
 ## Final validation
 
 All commands ran from the repository root with `GIT_CONFIG_NOSYSTEM=1`.
 
-- `cargo test -p rocketmq-store-api` - exit 0; 17 integration tests and doc targets passed.
-- `cargo test -p rocketmq-store-api --no-default-features` - exit 0; the same 17 tests and doc
+- `cargo test -p rocketmq-store-api` - exit 0; 18 integration tests and doc targets passed.
+- `cargo test -p rocketmq-store-api --no-default-features` - exit 0; the same 18 tests and doc
   targets passed with no default features.
 - `cargo doc -p rocketmq-store-api --no-deps` - exit 0.
-- `cargo test -p rocketmq-store --test store_api_legacy_adapter` - exit 0; 8/8.
-- `cargo test -p rocketmq-store --test store_api_legacy_read_behavior` - exit 0; 5/5.
+- `cargo test -p rocketmq-store --test store_api_legacy_adapter` - exit 0; 9/9.
+- `cargo test -p rocketmq-store store_api_adapter::tests --lib` - exit 0; 7/7 private behavior and
+  lease-lifecycle tests.
 - `cargo test -p rocketmq-broker processor::send_message_processor::tests --lib` - exit 0; 17/17
   M06-01 seam/status/health/error parity tests. Existing unrelated test imports emitted two
   ordinary warnings; the command succeeded.

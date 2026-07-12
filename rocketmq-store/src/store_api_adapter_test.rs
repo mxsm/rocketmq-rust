@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Private behavior tests for the legacy store API adapter.
+
 use std::future::ready;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
@@ -19,24 +21,30 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::base::get_message_result::GetMessageResult;
+use crate::base::message_status_enum::GetMessageStatus;
+use crate::base::query_message_result::QueryMessageResult;
+use crate::base::select_result::SelectMappedBufferCacheState;
+use crate::base::select_result::SelectMappedBufferResult;
+use crate::base::select_result::SelectMappedBufferSourceKind;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::base::message_status_enum::GetMessageStatus;
-use rocketmq_store::base::query_message_result::QueryMessageResult;
-use rocketmq_store::base::select_result::SelectMappedBufferCacheState;
-use rocketmq_store::base::select_result::SelectMappedBufferResult;
-use rocketmq_store::base::select_result::SelectMappedBufferSourceKind;
-use rocketmq_store::store_api_adapter::get_result_from_legacy;
-use rocketmq_store::store_api_adapter::query_result_from_legacy;
-use rocketmq_store::store_api_adapter::selected_result_from_legacy;
-use rocketmq_store::store_api_adapter::LegacyMessageStoreReadAdapter;
-use rocketmq_store::store_api_adapter::LegacyReadCallBoundary;
-use rocketmq_store::store_api_adapter::LegacyReadRequest;
-use rocketmq_store::store_api_adapter::LegacyReadResult;
 use rocketmq_store_api::GetStatus;
+use rocketmq_store_api::LeasedBytes;
 use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::ReadCacheState;
+use tempfile::TempDir;
+
+use super::get_result_from_legacy;
+use super::query_result_from_legacy;
+use super::selected_result_from_legacy;
+use super::LegacyMessageStoreReadAdapter;
+use super::LegacyReadCallBoundary;
+use super::LegacyReadRequest;
+use super::LegacyReadResult;
+use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::log_file::mapped_file::reference_resource::ReferenceResource;
+use crate::log_file::mapped_file::MappedFile;
 
 fn selected(payload: Bytes, start_offset: u64, cache_state: SelectMappedBufferCacheState) -> SelectMappedBufferResult {
     SelectMappedBufferResult {
@@ -328,4 +336,51 @@ fn into_bytes_stays_valid_after_the_legacy_lease_is_released() {
     assert_eq!(0, drops.load(Ordering::SeqCst));
     drop(bytes);
     assert_eq!(1, drops.load(Ordering::SeqCst));
+}
+
+struct LeaseReleaseProbe(Arc<AtomicUsize>);
+
+impl Drop for LeaseReleaseProbe {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn leased_bytes_into_bytes_releases_the_guard_before_returning() {
+    let releases = Arc::new(AtomicUsize::new(0));
+    let leased = LeasedBytes::new(Bytes::from_static(b"owned"), LeaseReleaseProbe(releases.clone()));
+
+    let bytes = leased.into_bytes();
+
+    assert_eq!(1, releases.load(Ordering::SeqCst));
+    assert_eq!(b"owned", bytes.as_ref());
+}
+
+#[test]
+fn mapped_file_lease_releases_hold_before_shutdown_cleanup() {
+    let temp_dir = TempDir::new().expect("temp directory");
+    let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 4096, None);
+    let mapped_file = queue.try_create_mapped_file(0).expect("mapped file");
+    assert_eq!(1, ReferenceResource::get_ref_count(mapped_file.as_ref()));
+    assert!(MappedFile::hold(mapped_file.as_ref()));
+    assert_eq!(2, ReferenceResource::get_ref_count(mapped_file.as_ref()));
+
+    let selected = SelectMappedBufferResult {
+        start_offset: 0,
+        bytes: Some(Bytes::from_static(b"mapped")),
+        size: 6,
+        mapped_file: Some(mapped_file.clone()),
+        is_in_cache: true,
+        source_kind: SelectMappedBufferSourceKind::MappedFile,
+        file_offset: 0,
+        cache_state: SelectMappedBufferCacheState::Hot,
+    };
+    let bytes = selected_result_from_legacy(selected).into_data().into_bytes();
+
+    assert_eq!(b"mapped", bytes.as_ref());
+    assert_eq!(1, ReferenceResource::get_ref_count(mapped_file.as_ref()));
+    MappedFile::shutdown(mapped_file.as_ref(), 0);
+    assert_eq!(0, ReferenceResource::get_ref_count(mapped_file.as_ref()));
+    assert!(ReferenceResource::is_cleanup_over(mapped_file.as_ref()));
 }

@@ -131,6 +131,16 @@ fn receipt_rejects_status_and_range_misuse() {
 }
 
 #[test]
+fn timeout_status_can_coexist_with_later_observed_local_durability() {
+    let receipt = AppendReceipt::try_new(AppendStatus::FlushDiskTimeout, 40..60, 80, 60, Durability::Local)
+        .expect("later durable progress is independent from the operation-time timeout");
+
+    assert_eq!(AppendStatus::FlushDiskTimeout, receipt.status());
+    assert_eq!(Durability::Local, receipt.durability());
+    assert!(receipt.is_durable());
+}
+
+#[test]
 fn derived_progress_cannot_ack_or_satisfy_primary_durability() {
     let progress = DerivedProgress::new(64, 48);
 

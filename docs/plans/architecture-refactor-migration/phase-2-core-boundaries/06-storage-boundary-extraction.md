@@ -247,20 +247,22 @@ python scripts/arc_mut_guard.py
 - [x] `[DEV]` `AppendReceipt` 保留半开 first/last appended range、独立 appended/durable watermark、
   16 项中立 append status 与显式 `Memory`/`Local`/`Replicated` durability；legacy receipt 继续原样持有
   `PutMessageResult`，fallible typed constructor 拒绝 range/status/watermark/durability 矛盾，Broker
-  response code/remark 未改变。
+  response code/remark 未改变。outer rejected status 即使携带 inner append diagnostics 也生成 Ok rejected/no-range；
+  operation-time timeout status 与 later observed durability/watermark 保持独立。
 - [x] `[DEV]` `DerivedProgress` 明确拒绝充当 primary acknowledgement 或 durability condition；
   `StoreHealthSnapshot` 只使用闭合 error kind 和低基数中立健康字段。
 - [x] `[DEV]` `LeasedBytes<L>`、`SelectResult<L>`、`GetResult<L>`、`QueryResult<L>` 使用 `Bytes`
   和泛型 lease；`LegacyReadLease` 私有持有并按原 `Drop` 释放 `SelectMappedBufferResult`，API crate
   不出现 MappedFile/native backend 类型。
 - [x] `[DEV]` 借用式 `LegacyMessageStoreReadAdapter` 通过 closed request/result enum 转发现有
-  无 filter 的 Get/Query/Select；filtered read 保留在 legacy trait。adapter-local 四方法 read port
+  无 filter 的 Get/Query/Select；filtered read 保留在 legacy trait。crate-private adapter-local 四方法 read port
   blanket-forward 到 `MessageStore`，compile fixture 同时组合 append/read/health capabilities，未复制或扩展
-  126-method trait，canonical hot request 无 `Arc<dyn Trait>` 或逐次动态分配。
+  126-method trait、未新增 public semver/coherence surface，canonical hot request 无 `Arc<dyn Trait>` 或逐次动态分配。
 - [x] `[TEST]` API default/no-default tests/doctests、receipt/progress/health/read/lease tests、16 append
   status、10 get status、12 legacy error mapping、legacy compile fixture 与 M06-01 Broker 17 项 parity
-  tests 全部通过；真实 legacy behavior tests 另覆盖 size-limit/None dispatch、Get/Query/Select 全字段投影、
-  lease retain/release、Bytes-before-lease drop order 与 `into_bytes` 安全。
+  tests 全部通过；adapter 私有 behavior tests 另覆盖 size-limit/None dispatch、Get/Query/Select 全字段投影、
+  lease retain/release、Bytes-before-lease drop order、`into_bytes` guard release，以及真实 mapped-file
+  hold→canonical projection→release→shutdown cleanup 生命周期。
 - [x] `[REV]` source/dependency contracts、architecture fixtures/baseline、ArcMut fixtures/guard、package
   和 workspace Clippy 均通过；热路径无 `Arc<dyn Trait>`、boxed future、runtime 或 blocking boundary。
 - [x] `[COMPAT]` CommitLog/WAL owner、CQ/Index 与 persisted layout、公开路径、Serde/default、feature alias、

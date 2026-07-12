@@ -201,6 +201,8 @@ class StoreApiContractTests(unittest.TestCase):
         hidden_dyn_aliases = arc_dyn_aliases(filter_source)
         request_identifiers = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", request))
         self.assertIn("impl<MS> MessageReader for LegacyMessageStoreReadAdapter", source)
+        self.assertIn("pub(crate) trait LegacyReadCallBoundary", source)
+        self.assertNotIn("pub trait LegacyReadCallBoundary", source)
         self.assertIn("impl<MS: MessageStore> LegacyReadCallBoundary for MS", source)
         self.assertIn("type Output = Option<LegacyReadResult>", source)
         self.assertIn("_selected: SelectMappedBufferResult", source)
