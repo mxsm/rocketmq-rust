@@ -558,7 +558,7 @@ mod tests {
         let broker_info = create_test_broker_addr_info("broker-a", 0);
         let remote_addr = SocketAddr::from_str("127.0.0.1:10912").unwrap();
         let channel_id = CheetahString::from_static_str("test-channel-002");
-        let mut data_version = DataVersion::new();
+        let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
         data_version.set_state_version(7);
         data_version.set_timestamp(12345);
         data_version.set_counter(9);

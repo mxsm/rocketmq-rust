@@ -25,6 +25,7 @@ use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::config::TopicConfig as RocketMQTopicConfig;
 use rocketmq_common::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 
 use super::types::AllocateMqQueryRequest;
 use super::types::AllocatedMqQueryResult;

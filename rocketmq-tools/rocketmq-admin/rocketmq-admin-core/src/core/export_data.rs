@@ -1385,8 +1385,9 @@ async fn collect_export_metrics_client_info(
     subscription_group_wrapper: &SubscriptionGroupWrapper,
 ) -> Vec<String> {
     let mut client_info = BTreeSet::new();
-    for entry in subscription_group_wrapper.get_subscription_group_table().iter() {
-        let group_name = entry.value().group_name().clone();
+    for group in subscription_group_wrapper.get_subscription_group_table() {
+        let group = group.value();
+        let group_name = group.group_name().clone();
         let Ok(connection) = admin.examine_consumer_connection_info(group_name, None).await else {
             continue;
         };

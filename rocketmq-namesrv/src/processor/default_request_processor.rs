@@ -246,7 +246,7 @@ impl DefaultRequestProcessor {
         let mut filter_server_list = Vec::new();
         if broker_version >= RocketMqVersion::V3_0_11 {
             let register_broker_body = extract_register_broker_body_from_request(request, &request_header)?;
-            topic_config_wrapper = register_broker_body.topic_config_serialize_wrapper;
+            topic_config_wrapper = register_broker_body.topic_config_serialize_wrapper.into();
             filter_server_list = register_broker_body.filter_server_list;
         } else {
             topic_config_wrapper = extract_register_topic_config_from_request(request)?;

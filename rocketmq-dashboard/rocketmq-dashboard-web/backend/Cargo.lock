@@ -2377,6 +2377,7 @@ dependencies = [
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-observability",
+ "rocketmq-protocol",
  "rocketmq-remoting",
  "rocketmq-runtime",
  "rocketmq-rust",
@@ -2418,6 +2419,7 @@ dependencies = [
  "reqwest",
  "rocketmq-error",
  "rocketmq-model",
+ "rocketmq-protocol",
  "rocketmq-runtime",
  "rocketmq-rust",
  "rocketmq-security-api",
@@ -2521,6 +2523,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-protocol"
+version = "1.0.0"
+dependencies = [
+ "bitvec",
+ "bytemuck",
+ "bytes",
+ "cheetah-string",
+ "chrono",
+ "flate2",
+ "lz4_flex",
+ "rocketmq-error",
+ "rocketmq-macros",
+ "rocketmq-model",
+ "serde",
+ "serde_json",
+ "serde_json_any_key",
+ "zstd",
+]
+
+[[package]]
 name = "rocketmq-remoting"
 version = "1.0.0"
 dependencies = [
@@ -2542,6 +2564,7 @@ dependencies = [
  "rocketmq-common",
  "rocketmq-error",
  "rocketmq-macros",
+ "rocketmq-protocol",
  "rocketmq-runtime",
  "rocketmq-rust",
  "rustls-native-certs",

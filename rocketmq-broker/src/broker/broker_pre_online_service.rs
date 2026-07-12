@@ -473,18 +473,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_remoting::protocol::DataVersion;
 
     use super::should_sync_from_peer;
 
     #[test]
     fn should_sync_from_peer_accepts_newer_version() {
-        let mut local = DataVersion::new();
+        let mut local = rocketmq_remoting::protocol::data_version_facade::new_data_version();
         local.set_state_version(1);
         local.set_timestamp(10);
         local.set_counter(1);
 
-        let mut remote = DataVersion::new();
+        let mut remote = rocketmq_remoting::protocol::data_version_facade::new_data_version();
         remote.set_state_version(2);
         remote.set_timestamp(20);
         remote.set_counter(2);
@@ -494,12 +493,12 @@ mod tests {
 
     #[test]
     fn should_sync_from_peer_rejects_older_version() {
-        let mut local = DataVersion::new();
+        let mut local = rocketmq_remoting::protocol::data_version_facade::new_data_version();
         local.set_state_version(2);
         local.set_timestamp(20);
         local.set_counter(2);
 
-        let mut remote = DataVersion::new();
+        let mut remote = rocketmq_remoting::protocol::data_version_facade::new_data_version();
         remote.set_state_version(1);
         remote.set_timestamp(10);
         remote.set_counter(1);
@@ -509,6 +508,9 @@ mod tests {
 
     #[test]
     fn should_sync_from_peer_accepts_missing_version() {
-        assert!(should_sync_from_peer(&DataVersion::new(), None));
+        assert!(should_sync_from_peer(
+            &rocketmq_remoting::protocol::data_version_facade::new_data_version(),
+            None,
+        ));
     }
 }

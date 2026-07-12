@@ -64,6 +64,7 @@ use rocketmq_dashboard_common::ViewMessageRequest;
 use rocketmq_error::ErrorKind;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
+use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;

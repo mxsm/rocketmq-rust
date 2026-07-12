@@ -1504,7 +1504,7 @@ mod tests {
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::MessageDecoder::message_properties_to_string;
-    use rocketmq_remoting::protocol::DataVersion;
+    use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
     use tempfile::tempdir;
 
     use super::*;
@@ -1800,7 +1800,7 @@ mod tests {
         assert!(timer_message_store.load());
         let local_read_time = timer_message_store.curr_read_time_ms.load(Ordering::Relaxed);
 
-        let mut data_version = DataVersion::new();
+        let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
         data_version.next_version_with(88);
         let snapshot = TimerCheckpointSnapshot::new(12_000, 34, 56, 78, data_version.clone());
 
@@ -1834,7 +1834,7 @@ mod tests {
         let deliver_time_ms = (local_read_time as u64).saturating_add(60_000);
         let master_read_time_ms = local_read_time + 120_000;
 
-        let mut data_version = DataVersion::new();
+        let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
         data_version.next_version_with(99);
         let snapshot = TimerCheckpointSnapshot::new(master_read_time_ms, 0, 0, 10, data_version);
 

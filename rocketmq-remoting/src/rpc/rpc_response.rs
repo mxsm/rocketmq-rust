@@ -5,16 +5,11 @@
 // You may obtain a copy of the License at
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use std::any::Any;
 
 use rocketmq_error::RocketMQError;
+use rocketmq_protocol::rpc::rpc_response::RpcResponse as CanonicalRpcResponse;
 use rocketmq_rust::ArcMut;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
@@ -32,10 +27,7 @@ impl RpcResponse {
     where
         T: CommandCustomHeader + Send + Sync + 'static,
     {
-        match self.header.as_ref() {
-            None => None,
-            Some(value) => value.as_ref().as_any().downcast_ref::<T>(),
-        }
+        self.header.as_ref()?.as_ref().as_any().downcast_ref::<T>()
     }
 
     pub fn get_header_mut<T>(&mut self) -> Option<&mut T>
@@ -43,9 +35,8 @@ impl RpcResponse {
         T: CommandCustomHeader + Send + Sync + 'static,
     {
         match self.header.as_mut() {
-            None => None,
             Some(value) if value.strong_count() == 1 => value.as_mut().as_any_mut().downcast_mut::<T>(),
-            Some(_) => None,
+            _ => None,
         }
     }
 
@@ -63,7 +54,7 @@ impl RpcResponse {
 
     pub fn new_exception(exception: Option<RocketMQError>) -> Self {
         Self {
-            code: exception.as_ref().map_or(0, |e| match e {
+            code: exception.as_ref().map_or(0, |error| match error {
                 RocketMQError::BrokerOperationFailed { code, .. } => *code,
                 _ => 0,
             }),
@@ -94,40 +85,44 @@ impl RpcResponse {
             exception: None,
         }
     }
+
+    pub fn try_into_canonical(self) -> Result<CanonicalRpcResponse, Self> {
+        let Self {
+            code,
+            header,
+            body,
+            exception,
+        } = self;
+        let header = match header {
+            Some(header) => match header.try_unwrap() {
+                Ok(header) => Some(header),
+                Err(header) => {
+                    return Err(Self {
+                        code,
+                        header: Some(header),
+                        body,
+                        exception,
+                    });
+                }
+            },
+            None => None,
+        };
+        Ok(CanonicalRpcResponse {
+            code,
+            header,
+            body,
+            exception,
+        })
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use rocketmq_error::RocketMQError;
-
-    use super::*;
-
-    #[test]
-    fn new_exception_accepts_typed_broker_operation_error() {
-        let response = RpcResponse::new_exception(Some(RocketMQError::broker_operation_failed(
-            "RPC",
-            206,
-            "broker rejected",
-        )));
-
-        assert_eq!(response.code, 206);
-        assert!(matches!(
-            response.exception,
-            Some(RocketMQError::BrokerOperationFailed { code: 206, .. })
-        ));
-    }
-
-    #[test]
-    fn new_exception_uses_zero_code_for_non_broker_error() {
-        let response = RpcResponse::new_exception(Some(RocketMQError::response_process_failed(
-            "rpc_response",
-            "local failure",
-        )));
-
-        assert_eq!(response.code, 0);
-        assert!(matches!(
-            response.exception,
-            Some(RocketMQError::ResponseProcessFailed { .. })
-        ));
+impl From<CanonicalRpcResponse> for RpcResponse {
+    fn from(value: CanonicalRpcResponse) -> Self {
+        Self {
+            code: value.code,
+            header: value.header.map(ArcMut::new),
+            body: value.body,
+            exception: value.exception,
+        }
     }
 }

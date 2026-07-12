@@ -47,7 +47,8 @@
 
 ## 2. 目标 package 变化
 
-M01 入口有 22 个根 workspace package；M03 已加入 `rocketmq-model` 和 `rocketmq-security-api`，当前为 24 个。
+M01 入口有 22 个根 workspace package；M03 加入 `rocketmq-model` 和 `rocketmq-security-api`，M04 的
+protocol spike 再加入 `rocketmq-protocol`，当前为 25 个。
 以下 10 个新 crate 按计划逐步加入，最终精确达到 32 个：
 
 | 新 crate | 首次创建里程碑 | 最终职责 |

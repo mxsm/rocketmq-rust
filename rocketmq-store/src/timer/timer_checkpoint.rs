@@ -24,6 +24,7 @@ use std::sync::atomic::Ordering;
 
 use parking_lot::Mutex;
 use rocketmq_common::UtilAll::ensure_dir_ok;
+use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::DataVersion;
 
 const TIMER_CHECKPOINT_SIZE: usize = 56;
@@ -68,7 +69,7 @@ impl TimerCheckpoint {
             last_timer_log_flush_pos: AtomicI64::new(0),
             last_timer_queue_offset: AtomicI64::new(0),
             master_timer_queue_offset: AtomicI64::new(0),
-            data_version: Mutex::new(DataVersion::new()),
+            data_version: Mutex::new(rocketmq_remoting::protocol::data_version_facade::new_data_version()),
         };
         checkpoint.load_from_disk()?;
         Ok(checkpoint)
@@ -170,7 +171,7 @@ impl TimerCheckpoint {
         self.last_timer_queue_offset = AtomicI64::new(read_i64(&buffer[16..24]));
         self.master_timer_queue_offset = AtomicI64::new(read_i64(&buffer[24..32]));
 
-        let mut data_version = DataVersion::new();
+        let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
         data_version.set_state_version(read_i64(&buffer[32..40]));
         data_version.set_timestamp(read_i64(&buffer[40..48]));
         data_version.set_counter(read_i64(&buffer[48..56]));
@@ -258,7 +259,7 @@ impl TimerCheckpointSnapshot {
             ));
         }
 
-        let mut data_version = DataVersion::new();
+        let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
         data_version.set_state_version(read_i64(&buffer[32..40]));
         data_version.set_timestamp(read_i64(&buffer[40..48]));
         data_version.set_counter(read_i64(&buffer[48..56]));

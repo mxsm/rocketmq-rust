@@ -132,7 +132,8 @@ impl TraceDataEncoder {
             }
         }
 
-        transfer_bean.set_trans_data(CheetahString::from_string(sb));
+        let records = rocketmq_protocol::trace::decode_records(&sb);
+        transfer_bean.set_trans_data(rocketmq_protocol::trace::encode_records(&records));
 
         // Extract keys from trace beans
         for bean in trace_beans {
@@ -581,6 +582,12 @@ mod tests {
         };
 
         let transfer_bean = TraceDataEncoder::encoder_from_context_bean(&ctx).unwrap();
+        let canonical_records = rocketmq_protocol::trace::decode_records(&transfer_bean.trans_data);
+        assert_eq!(canonical_records.len(), 1);
+        assert_eq!(
+            rocketmq_protocol::trace::encode_records(&canonical_records),
+            transfer_bean.trans_data
+        );
         let decoded_contexts = TraceDataEncoder::decoder_from_trace_data_string(&transfer_bean.trans_data);
 
         assert_eq!(decoded_contexts.len(), 1);

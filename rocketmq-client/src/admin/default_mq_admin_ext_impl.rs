@@ -122,6 +122,7 @@ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData;
 use rocketmq_remoting::protocol::subscription::group_forbidden::GroupForbidden;
@@ -3088,10 +3089,10 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
-        let subscription_group_wrapper = self.get_all_subscription_group(broker_addr, timeout_millis).await?;
+        let mut subscription_group_wrapper = self.get_all_subscription_group(broker_addr, timeout_millis).await?;
 
         let system_group_set = get_system_group_set();
-        let table = subscription_group_wrapper.get_subscription_group_table();
+        let table = subscription_group_wrapper.get_subscription_group_table_mut();
         // Remove system consumer groups
         table.retain(|key, _| !mix_all::is_sys_consumer_group(key.as_str()) && !system_group_set.contains(key));
 

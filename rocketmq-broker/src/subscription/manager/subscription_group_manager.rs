@@ -26,6 +26,7 @@ use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::mix_all::is_sys_consumer_group;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::file_utils;
+use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -75,7 +76,9 @@ where
         let mut manager = Self {
             subscription_group_table: Arc::new(DashMap::new()),
             forbidden_table: Arc::new(DashMap::new()),
-            data_version: Arc::new(parking_lot::RwLock::new(DataVersion::new())),
+            data_version: Arc::new(parking_lot::RwLock::new(
+                rocketmq_remoting::protocol::data_version_facade::new_data_version(),
+            )),
             broker_runtime_inner,
             #[cfg(feature = "rocksdb_store")]
             rocksdb_config_manager: None,
@@ -1609,8 +1612,8 @@ mod tests {
     #[test]
     fn test_data_version_comparison() {
         // Test DataVersion equality for pagination consistency
-        let version1 = DataVersion::new();
-        let mut version2 = DataVersion::new();
+        let version1 = rocketmq_remoting::protocol::data_version_facade::new_data_version();
+        let mut version2 = rocketmq_remoting::protocol::data_version_facade::new_data_version();
 
         // Initially different (timestamps differ)
         // In real use, we'd set them to same values

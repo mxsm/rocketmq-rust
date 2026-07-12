@@ -428,7 +428,7 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
                     Ok(topic_config_mapping) => {
                         if let Some(remote_detail) = topic_config_mapping.topic_queue_mapping_detail {
                             if remote_detail.topic_queue_mapping_info.bname.as_ref() == Some(&broker_name) {
-                                mapping_detail_by_broker.insert(broker_name, remote_detail.as_ref().clone());
+                                mapping_detail_by_broker.insert(broker_name, remote_detail.clone());
                             }
                         }
                     }

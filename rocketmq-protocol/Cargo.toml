@@ -1,0 +1,49 @@
+# Copyright 2023 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[package]
+name = "rocketmq-protocol"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+description = "Runtime-neutral RocketMQ wire protocol contracts"
+rust-version.workspace = true
+
+[features]
+default = []
+simd = ["dep:simd-json"]
+
+[dependencies]
+bytes.workspace = true
+bitvec = "1.0.1"
+cheetah-string.workspace = true
+flate2 = { version = "1.1.9", features = ["zlib"], default-features = false }
+lz4_flex = { version = "0.13", default-features = false }
+rocketmq-error = { workspace = true, features = ["with_serde"] }
+bytemuck = "1.25.0"
+chrono = "0.4.45"
+rocketmq-macros.workspace = true
+rocketmq-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_json_any_key.workspace = true
+simd-json = { version = "0.17", optional = true }
+zstd = "0.13"
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -74,6 +74,7 @@ use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;

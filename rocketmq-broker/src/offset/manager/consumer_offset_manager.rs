@@ -28,6 +28,7 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::file_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
@@ -818,6 +819,7 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_common::common::config_manager::ConfigManager;
+    use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 

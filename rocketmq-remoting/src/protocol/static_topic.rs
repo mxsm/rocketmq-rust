@@ -12,13 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod logic_queue_mapping_item;
-
-pub(crate) mod i32_key_map_serde;
-pub mod topic_config_and_queue_mapping;
-pub mod topic_queue_mapping_context;
-pub mod topic_queue_mapping_detail;
-pub mod topic_queue_mapping_info;
-pub mod topic_queue_mapping_one;
+pub use rocketmq_protocol::protocol::static_topic::*;
 pub mod topic_queue_mapping_utils;
-pub mod topic_remapping_detail_wrapper;
+
+use rocketmq_rust::ArcMut;
+
+use self::logic_queue_mapping_item::LogicQueueMappingItem;
+use self::topic_queue_mapping_detail::TopicQueueMappingDetail;
+
+#[deprecated(note = "use TopicQueueMappingDetail::put_mapping_info with an exclusive mutable reference")]
+pub fn put_mapping_info(
+    mut mapping_detail: ArcMut<TopicQueueMappingDetail>,
+    global_id: i32,
+    mapping_info: Vec<LogicQueueMappingItem>,
+) {
+    TopicQueueMappingDetail::put_mapping_info(&mut mapping_detail, global_id, mapping_info);
+}

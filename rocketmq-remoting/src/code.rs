@@ -12,11 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod broker_request_code;
-pub mod request_code;
-pub mod response_code;
-
-// Re-exports for simplified imports
-pub use broker_request_code::BrokerRequestCode;
-pub use request_code::RequestCode;
-pub use response_code::RemotingSysResponseCode;
+pub use rocketmq_protocol::code::*;

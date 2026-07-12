@@ -31,6 +31,7 @@ use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopi
 use rocketmq_remoting::protocol::header::query_message_request_header::QueryMessageRequestHeader;
 use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 use rocketmq_rust::ArcMut;
 
 use crate::base::client_config::ClientConfig;

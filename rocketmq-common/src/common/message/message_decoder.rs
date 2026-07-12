@@ -253,155 +253,53 @@ pub fn decode(
     byte_buffer: &mut Bytes,
     read_body: bool,
     de_compress_body: bool,
-    is_client: bool,
+    _is_client: bool,
     is_set_properties_string: bool,
     check_crc: bool,
 ) -> Option<MessageExt> {
-    let initial_remaining = byte_buffer.remaining();
+    let frame = rocketmq_protocol::protocol::body::message_codec::decode_message_frame(byte_buffer).ok()?;
+
+    if read_body && !frame.body.is_empty() && check_crc && crc32(&frame.body) != frame.body_crc {
+        return None;
+    }
+
     let mut msg_ext = MessageExt::default();
+    msg_ext.set_store_size(frame.store_size);
+    msg_ext.set_body_crc(frame.body_crc);
+    msg_ext.set_queue_id(frame.queue_id);
+    msg_ext.message.set_flag(frame.flag);
+    msg_ext.set_queue_offset(frame.queue_offset);
+    msg_ext.set_commit_log_offset(frame.commit_log_offset);
+    msg_ext.set_sys_flag(frame.sys_flag);
+    msg_ext.set_born_timestamp(frame.born_timestamp);
+    msg_ext.set_born_host(frame.born_host);
+    msg_ext.set_store_timestamp(frame.store_timestamp);
+    msg_ext.set_store_host(frame.store_host);
+    msg_ext.set_reconsume_times(frame.reconsume_times);
+    msg_ext.set_prepared_transaction_offset(frame.prepared_transaction_offset);
+    msg_ext.message.set_topic(frame.topic);
 
-    // 1 TOTALSIZE
-    let store_size = get_i32_checked(byte_buffer)?;
-    if store_size <= 0 || store_size as usize > initial_remaining {
-        return None;
-    }
-    msg_ext.set_store_size(store_size);
-
-    // 2 MAGICCODE
-    let magic_code = get_i32_checked(byte_buffer)?;
-    let version = MessageVersion::value_of_magic_code(magic_code).ok()?;
-
-    // 3 BODYCRC
-    let body_crc = get_u32_checked(byte_buffer)?;
-    msg_ext.set_body_crc(body_crc);
-
-    // 4 QUEUEID
-    let queue_id = get_i32_checked(byte_buffer)?;
-    msg_ext.set_queue_id(queue_id);
-
-    // 5 FLAG
-    let flag = get_i32_checked(byte_buffer)?;
-    msg_ext.message.set_flag(flag);
-
-    // 6 QUEUEOFFSET
-    let queue_offset = get_i64_checked(byte_buffer)?;
-    msg_ext.set_queue_offset(queue_offset);
-
-    // 7 PHYSICALOFFSET
-    let physic_offset = get_i64_checked(byte_buffer)?;
-    msg_ext.set_commit_log_offset(physic_offset);
-
-    // 8 SYSFLAG
-    let sys_flag = get_i32_checked(byte_buffer)?;
-    msg_ext.set_sys_flag(sys_flag);
-
-    // 9 BORNTIMESTAMP
-    let born_time_stamp = get_i64_checked(byte_buffer)?;
-    msg_ext.set_born_timestamp(born_time_stamp);
-
-    // 10 BORNHOST
-    let (born_host_address, born_host_ip_length) = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG != 0 {
-        let born_host = copy_to_array_checked::<16>(byte_buffer)?;
-        let port = get_i32_checked(byte_buffer)?;
-        (
-            SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(born_host), port as u16, 0, 0)),
-            16,
-        )
-    } else {
-        let born_host = copy_to_array_checked::<4>(byte_buffer)?;
-        let port = get_i32_checked(byte_buffer)?;
-        (
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(born_host), port as u16)),
-            4,
-        )
-    };
-    msg_ext.set_born_host(born_host_address);
-
-    // 11 STORETIMESTAMP
-    let store_timestamp = get_i64_checked(byte_buffer)?;
-    msg_ext.set_store_timestamp(store_timestamp);
-
-    // 12 STOREHOST
-    let (store_host_address, store_host_ip_length) = if sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG != 0 {
-        let store_host = copy_to_array_checked::<16>(byte_buffer)?;
-        let port = get_i32_checked(byte_buffer)?;
-        (
-            SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(store_host), port as u16, 0, 0)),
-            16,
-        )
-    } else {
-        let store_host = copy_to_array_checked::<4>(byte_buffer)?;
-        let port = get_i32_checked(byte_buffer)?;
-        (
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(store_host), port as u16)),
-            4,
-        )
-    };
-    msg_ext.set_store_host(store_host_address);
-
-    // 13 RECONSUMETIMES
-    let reconsume_times = get_i32_checked(byte_buffer)?;
-    msg_ext.set_reconsume_times(reconsume_times);
-
-    // 14 Prepared Transaction Offset
-    let prepared_transaction_offset = get_i64_checked(byte_buffer)?;
-    msg_ext.set_prepared_transaction_offset(prepared_transaction_offset);
-
-    // 15 BODY
-    let body_len = get_i32_checked(byte_buffer)?;
-    if body_len < 0 {
-        return None;
-    }
-    let body_len = body_len as usize;
-    if body_len > 0 {
-        // Handle reading and processing body
-        if read_body {
-            let body = split_to_checked(byte_buffer, body_len)?;
-            if check_crc {
-                let crc = crc32(&body);
-                if crc != body_crc {
-                    return None;
-                }
-            }
-            let mut body_bytes = body;
-            if de_compress_body && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG {
-                let compression_type = MessageSysFlag::try_get_compression_type(sys_flag).ok()?;
-                body_bytes = compression_type.try_decompression(&body_bytes).ok()?;
-            }
-            msg_ext.message.set_body(Some(body_bytes));
-        } else {
-            let _ = split_to_checked(byte_buffer, body_len)?;
+    if read_body && !frame.body.is_empty() {
+        let mut body = frame.body;
+        if de_compress_body && (frame.sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG {
+            let compression_type = MessageSysFlag::try_get_compression_type(frame.sys_flag).ok()?;
+            body = compression_type.try_decompression(&body).ok()?;
         }
+        msg_ext.message.set_body(Some(body));
     }
 
-    // 16 TOPIC
-    let _address_len = born_host_ip_length + store_host_ip_length;
-    let topic_len = get_topic_length_checked(version, byte_buffer)?;
-    let topic = split_to_checked(byte_buffer, topic_len)?;
-    let topic_str = str::from_utf8(&topic).ok()?;
-    msg_ext.message.set_topic(CheetahString::from_slice(topic_str));
-
-    // 17 properties
-    let properties_length = get_i16_checked(byte_buffer)?;
-    if properties_length < 0 {
-        return None;
+    let mut properties = frame.properties;
+    if is_set_properties_string && !frame.properties_string.is_empty() {
+        properties.insert(
+            CheetahString::from_static_str("propertiesString"),
+            frame.properties_string,
+        );
     }
-    if properties_length > 0 {
-        // Handle reading and processing properties
-        let properties = split_to_checked(byte_buffer, properties_length as usize)?;
-        if !is_set_properties_string {
-            let properties_string = cheetah_from_utf8_lossy(properties.as_ref());
-            let message_properties = string_to_message_properties(Some(&properties_string));
-            *msg_ext.message.properties_mut() = MessageProperties::from_map(message_properties);
-        } else {
-            let properties_string = cheetah_from_utf8_lossy(properties.as_ref());
-            let mut message_properties = string_to_message_properties(Some(&properties_string));
-            message_properties.insert(CheetahString::from_static_str("propertiesString"), properties_string);
-            *msg_ext.message.properties_mut() = MessageProperties::from_map(message_properties);
-        }
-    }
-    let msg_id = build_message_id(store_host_address, physic_offset);
-    msg_ext.set_msg_id(CheetahString::from_string(msg_id));
+    *msg_ext.message.properties_mut() = MessageProperties::from_map(properties);
+    msg_ext.set_msg_id(CheetahString::from_string(build_message_id(
+        frame.store_host,
+        frame.commit_log_offset,
+    )));
 
     Some(msg_ext)
 }

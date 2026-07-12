@@ -38,6 +38,7 @@ use rocketmq_common::TopicAttributes::TopicAttributes;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingDeserializable;
@@ -329,7 +330,10 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 topic_config_table,
                 data_version: self.data_version.as_ref().clone(),
             },
-            topic_queue_mapping_info_map,
+            topic_queue_mapping_info_map: topic_queue_mapping_info_map
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .collect(),
             ..TopicConfigAndMappingSerializeWrapper::default()
         }
     }
@@ -1315,6 +1319,7 @@ mod rocksdb_config_tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::config_manager::ConfigManager;
+    use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
     use rocketmq_rust::ArcMut;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use tempfile::TempDir;
