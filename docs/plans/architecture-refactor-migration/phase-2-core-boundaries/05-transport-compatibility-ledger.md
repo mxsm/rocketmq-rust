@@ -49,7 +49,11 @@ context for lifecycle events; it is never rebound to a later command. Every comm
 independent Channel/ConnectionHandlerContext snapshot whose queued connection permanently carries that request's
 admission class. A real HeartBeat exchange verifies the control reserve while the data writer budget is
 saturated, and a delayed Data response on the same socket proves it cannot inherit the HeartBeat class or borrow
-the reserve.
+the reserve. The connect-time channel retains one fixed TaskGroup child for the connection lifecycle. Command
+snapshots use dynamically registered `TaskGroupChildLease` groups instead: ChannelInner owns a clone of the lease
+group while the snapshot or a deferred response remains reachable, and the session parent holds only a weak
+registration. Completed commands therefore prune back to the connect-time constant rather than accumulating a
+fixed child per request; long polling remains visible to parent shutdown until its snapshot is released.
 
 The default values preserve the current permissive envelope and remain explicitly configurable. They are not
 presented as production tuning recommendations; deployment-specific profiling is required before changing them.

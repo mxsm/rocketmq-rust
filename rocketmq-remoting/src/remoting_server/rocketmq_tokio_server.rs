@@ -78,14 +78,15 @@ type TestDeferredResponse = Box<
 >;
 
 #[cfg(all(test, not(doctest)))]
-type TestRequestHook = Arc<dyn Fn(i32, i32, Channel, TestDeferredResponse) -> TestRequestHookResult + Send + Sync>;
+type TestRequestHook =
+    Arc<dyn Fn(i32, i32, Channel, TaskGroup, TestDeferredResponse) -> TestRequestHookResult + Send + Sync>;
 
 trait SessionCommandInterceptor: Send + Sync + 'static {
-    fn intercept(&self, code: i32, opaque: i32, channel: Channel) -> bool;
+    fn intercept(&self, code: i32, opaque: i32, channel: Channel, session_task_group: TaskGroup) -> bool;
 }
 
 impl SessionCommandInterceptor for () {
-    fn intercept(&self, _code: i32, _opaque: i32, _channel: Channel) -> bool {
+    fn intercept(&self, _code: i32, _opaque: i32, _channel: Channel, _session_task_group: TaskGroup) -> bool {
         false
     }
 }
@@ -290,11 +291,24 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 channel_id
             }
         };
-        let Ok(channel_inner) = ChannelInner::new_transport_session(
-            session.connection(),
-            self.cmd_handler.response_table.clone(),
-            session.task_group().child("rocketmq.remoting.channel"),
-        ) else {
+        let channel_inner = match &action {
+            RemotingSessionAction::Connect => ChannelInner::new_transport_session(
+                session.connection(),
+                self.cmd_handler.response_table.clone(),
+                session.task_group().clone(),
+            ),
+            RemotingSessionAction::Command(_) => {
+                let Ok(task_group_lease) = session.task_group().try_child_lease("rocketmq.remoting.command") else {
+                    return;
+                };
+                ChannelInner::new_transport_session_with_task_group(
+                    session.connection(),
+                    self.cmd_handler.response_table.clone(),
+                    task_group_lease.group().clone(),
+                )
+            }
+        };
+        let Ok(channel_inner) = channel_inner else {
             return;
         };
         let mut channel = Channel::new(ArcMut::new(channel_inner), session.local_addr(), session.remote_addr());
@@ -318,6 +332,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                         command.code(),
                         command.opaque(),
                         remoting_session.context.channel().clone(),
+                        session.task_group().clone(),
                     ) {
                         return;
                     }
@@ -867,7 +882,7 @@ mod tests {
     use crate::runtime::config::client_config::TokioClientConfig;
 
     impl SessionCommandInterceptor for Option<TestRequestHook> {
-        fn intercept(&self, code: i32, opaque: i32, channel: Channel) -> bool {
+        fn intercept(&self, code: i32, opaque: i32, channel: Channel, session_task_group: TaskGroup) -> bool {
             let Some(hook) = self.as_ref() else {
                 return false;
             };
@@ -881,7 +896,7 @@ mod tests {
                 })
             });
             matches!(
-                hook(code, opaque, channel, deferred_response),
+                hook(code, opaque, channel, session_task_group, deferred_response),
                 TestRequestHookResult::Intercept
             )
         }
@@ -1177,6 +1192,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn command_snapshot_task_groups_prune_after_each_response() {
+        const COMMAND_COUNT: usize = 128;
+
+        let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
+        let addr = reserved.local_addr().unwrap();
+        drop(reserved);
+        let session_task_group = Arc::new(std::sync::Mutex::new(None::<TaskGroup>));
+        let session_task_group_for_hook = session_task_group.clone();
+        let hook: TestRequestHook = Arc::new(move |_code, _opaque, _channel, task_group, _deferred_response| {
+            let mut captured = session_task_group_for_hook.lock().expect("session task group lock");
+            if captured.is_none() {
+                *captured = Some(task_group);
+            }
+            TestRequestHookResult::Continue
+        });
+        let config = Arc::new(ServerConfig {
+            bind_address: addr.ip().to_string(),
+            listen_port: u32::from(addr.port()),
+            ..ServerConfig::default()
+        });
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config).with_test_request_hook(hook);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_task = tokio::spawn(async move {
+            server
+                .run_with_shutdown_report(DefaultRemotingRequestProcessor, None, async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        let mut client = crate::connection::Connection::new(TcpStream::connect(addr).await.unwrap());
+        for index in 0..COMMAND_COUNT {
+            let opaque = 1_000 + i32::try_from(index).unwrap();
+            client
+                .send_command(
+                    crate::protocol::remoting_command::RemotingCommand::create_remoting_command(
+                        crate::code::request_code::RequestCode::SendMessage,
+                    )
+                    .set_opaque(opaque),
+                )
+                .await
+                .unwrap();
+            let response = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
+                .await
+                .expect("snapshot response deadline")
+                .expect("snapshot response frame")
+                .expect("snapshot response command");
+            assert_eq!(response.opaque(), opaque);
+        }
+
+        let session_task_group = session_task_group
+            .lock()
+            .expect("session task group lock")
+            .clone()
+            .expect("session task group");
+        let stats = session_task_group.child_stats();
+        assert_eq!(stats.active, 0);
+        assert_eq!(stats.created, COMMAND_COUNT);
+        assert_eq!(stats.pruned, COMMAND_COUNT);
+        assert_eq!(
+            session_task_group.child_count(),
+            1,
+            "only the connect-time child remains"
+        );
+
+        let _ = shutdown_tx.send(());
+        let report = server_task.await.unwrap().unwrap();
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
     async fn delayed_data_response_keeps_its_request_admission_class_after_control_request() {
         let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
         let addr = reserved.local_addr().unwrap();
@@ -1191,31 +1278,36 @@ mod tests {
         let delayed: Arc<std::sync::Mutex<Option<DelayedResponse>>> = Arc::new(std::sync::Mutex::new(None));
         let first_seen = Arc::new(tokio::sync::Notify::new());
         let second_seen = Arc::new(tokio::sync::Notify::new());
+        let session_task_group = Arc::new(std::sync::Mutex::new(None::<TaskGroup>));
         let delayed_for_hook = delayed.clone();
         let first_seen_for_hook = first_seen.clone();
         let second_seen_for_hook = second_seen.clone();
-        let hook: TestRequestHook = Arc::new(move |code, opaque, channel, deferred_response| match opaque {
-            81 => {
-                assert_eq!(code, crate::code::request_code::RequestCode::SendMessage as i32);
-                *delayed_for_hook.lock().expect("delayed response lock") =
-                    Some((channel.channel_id().to_owned(), deferred_response));
-                first_seen_for_hook.notify_one();
-                TestRequestHookResult::Intercept
-            }
-            82 => {
-                assert_eq!(code, crate::code::request_code::RequestCode::HeartBeat as i32);
-                let delayed_channel_id = delayed_for_hook
-                    .lock()
-                    .expect("delayed response lock")
-                    .as_ref()
-                    .map(|(channel_id, _)| channel_id.clone())
-                    .expect("first request snapshot");
-                assert_eq!(channel.channel_id(), delayed_channel_id);
-                second_seen_for_hook.notify_one();
-                TestRequestHookResult::Continue
-            }
-            _ => TestRequestHookResult::Continue,
-        });
+        let session_task_group_for_hook = session_task_group.clone();
+        let hook: TestRequestHook = Arc::new(
+            move |code, opaque, channel, task_group, deferred_response| match opaque {
+                81 => {
+                    assert_eq!(code, crate::code::request_code::RequestCode::SendMessage as i32);
+                    *session_task_group_for_hook.lock().expect("session task group lock") = Some(task_group);
+                    *delayed_for_hook.lock().expect("delayed response lock") =
+                        Some((channel.channel_id().to_owned(), deferred_response));
+                    first_seen_for_hook.notify_one();
+                    TestRequestHookResult::Intercept
+                }
+                82 => {
+                    assert_eq!(code, crate::code::request_code::RequestCode::HeartBeat as i32);
+                    let delayed_channel_id = delayed_for_hook
+                        .lock()
+                        .expect("delayed response lock")
+                        .as_ref()
+                        .map(|(channel_id, _)| channel_id.clone())
+                        .expect("first request snapshot");
+                    assert_eq!(channel.channel_id(), delayed_channel_id);
+                    second_seen_for_hook.notify_one();
+                    TestRequestHookResult::Continue
+                }
+                _ => TestRequestHookResult::Continue,
+            },
+        );
         let config = Arc::new(ServerConfig {
             bind_address: addr.ip().to_string(),
             listen_port: u32::from(addr.port()),
@@ -1265,6 +1357,15 @@ mod tests {
             .expect("control response frame")
             .expect("control response command");
         assert_eq!(control_response.opaque(), 82);
+        let retained_session_task_group = session_task_group
+            .lock()
+            .expect("session task group lock")
+            .clone()
+            .expect("session task group");
+        let retained_stats = retained_session_task_group.child_stats();
+        assert_eq!(retained_stats.active, 1);
+        assert_eq!(retained_stats.created, 2);
+        assert_eq!(retained_stats.pruned, 1);
 
         let _data_one = admission
             .try_acquire(
@@ -1294,6 +1395,10 @@ mod tests {
             ),
         )
         .await;
+        let released_stats = retained_session_task_group.child_stats();
+        assert_eq!(released_stats.active, 0);
+        assert_eq!(released_stats.created, 2);
+        assert_eq!(released_stats.pruned, 2);
         assert!(
             tokio::time::timeout(Duration::from_millis(100), client.receive_command())
                 .await

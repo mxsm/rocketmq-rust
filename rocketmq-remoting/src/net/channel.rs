@@ -542,13 +542,30 @@ impl ChannelInner {
         response_table: PendingRequestTable,
         parent_task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
+        Self::new_transport_session_with_task_group(
+            connection,
+            response_table,
+            parent_task_group.child("rocketmq-remoting.channel"),
+        )
+    }
+
+    /// Creates a transport-backed channel snapshot under an already-owned task group.
+    ///
+    /// Unlike `new_transport_session`, this does not register another fixed child. The caller
+    /// chooses the registration lifetime and the returned `ChannelInner` keeps the supplied
+    /// group alive for exactly as long as the snapshot remains reachable.
+    pub(crate) fn new_transport_session_with_task_group(
+        connection: Connection,
+        response_table: PendingRequestTable,
+        task_group: TaskGroup,
+    ) -> rocketmq_error::RocketMQResult<Self> {
         let pending_request_owner = Some(response_table.new_owner());
         Self::try_new_with_send_task_group(
             connection,
             response_table,
             pending_request_owner,
             None,
-            parent_task_group.child("rocketmq-remoting.channel"),
+            task_group,
             false,
         )
     }

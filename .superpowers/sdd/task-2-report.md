@@ -66,6 +66,13 @@ Every behavior slice started with a failing focused test or contract compile fix
   for every command. A per-server, test-only hook delays the first Data response until the same socket processes
   HeartBeat; after the Data writer budget is saturated, the delayed response is rejected instead of borrowing the
   control reserve. The hook is instance-local, contains no global/static state, and exposes no context ArcMut.
+- The follow-up review then exposed that those request-local snapshots registered fixed TaskGroup children. A
+  128-command same-socket regression first observed zero dynamic children and an unbounded fixed-child count;
+  the delayed-response regression likewise observed zero active leases while its snapshot was still reachable.
+  Command snapshots now use `try_child_lease`, and ChannelInner retains only the lease group's TaskGroup clone.
+  Normal responses finish with `active = 0` and `created = pruned = 128`; a delayed snapshot holds exactly one
+  active child until its deferred response is released, after which `created = pruned = 2`. The connect-time
+  fixed child remains constant and shutdown reports healthy.
 - Public asynchronous TLS initializer Rustdoc now documents injected `BlockingExecutor` ownership and failure
   behavior. A downstream client benchmark initially exposed E0275 future-layout overflow after timeout retirement
   became asynchronous; boxing only the Remoting retirement boundary removed the overflow without a recursion-limit
@@ -96,8 +103,8 @@ Passed:
 - `cargo test -p rocketmq-transport`
 - `cargo test -p rocketmq-transport --features observability`
 - Remoting no-default/default/combined feature checks
-- `cargo test -p rocketmq-remoting --no-default-features` (114 unit tests plus integration and doc tests)
-- `cargo test -p rocketmq-remoting` (115 unit tests plus integration and doc tests)
+- `cargo test -p rocketmq-remoting --no-default-features` (115 unit tests plus integration and doc tests)
+- `cargo test -p rocketmq-remoting` (116 unit tests plus integration and doc tests)
 - production transport delegation source contracts, canonical public client/server exchange, and injected TLS
   blocking reload coverage
 - deterministic retirement interleaving and blocked-writer deadline/abort regressions, real Remoting control
@@ -107,7 +114,7 @@ Passed:
 - `cargo test -p rocketmq-client-rust --all-targets --all-features` (943 library tests plus integrations,
   benches, and examples)
 - transport all-target/all-feature and no-default suites (63 and 54 tests)
-- Remoting all-target/all-feature and no-default suites (115 and 114 library tests plus integrations, benches,
+- Remoting all-target/all-feature and no-default suites (116 and 115 library tests plus integrations, benches,
   examples, and compatibility contracts)
 - all seven `rocketmq-observability` CI test feature sets, from default through combined OTLP/Prometheus
 - `cargo tree -p rocketmq-transport -e normal`

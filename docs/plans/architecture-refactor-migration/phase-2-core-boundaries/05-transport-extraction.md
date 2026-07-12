@@ -176,6 +176,9 @@ python scripts/arc_mut_guard.py
 - The M05 ArcMut inventory promotion reduces governed identities from 1,266 to 1,233 and occurrences from 3,430
   to 3,378. The final promotion consumes two strict one-to-one same-item fingerprint relocations approved by
   ADR-013; the canonical transport crate contains no ArcMut use.
+- Per-command Remoting snapshots use weakly registered TaskGroup child leases. A 128-command same-socket
+  regression proves active children return to the connect-time constant with created/pruned counters aligned;
+  delayed responses remain visible as one active child only until the snapshot is released.
 
 ## 交接物
 
