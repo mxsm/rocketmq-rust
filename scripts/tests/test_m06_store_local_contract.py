@@ -224,6 +224,12 @@ def commit_log_record_parser_boundary_violations(source: str) -> list[str]:
         active,
     ):
         violations.append("dynamic checksum port")
+    if re.search(r"\bMessage\s*\(\s*Box\s*<\s*CommitLogRecord\s*>\s*\)", active):
+        violations.append("per-record heap allocation")
+    declared_boundary = re.search(r"\bif\s+input\.len\s*\(\s*\)\s*<\s*declared_len\b", active)
+    blank_return = re.search(r"\bif\s+magic_code\s*==\s*BLANK_MAGIC_CODE\b", active)
+    if blank_return is not None and (declared_boundary is None or declared_boundary.start() > blank_return.start()):
+        violations.append("blank marker bypasses declared frame boundary")
     if re.search(r"\buse\s+bytes::Buf(?:Mut)?\s*;", active) or re.search(
         r"\.(?:get_i16|get_i32|get_i64|copy_to_bytes|advance)\s*\(",
         active,
@@ -1136,9 +1142,25 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(input: &Bytes) {}
             valid.replace("use bytes::Bytes;", "use bytes::{Bytes};"),
             valid.replace("use bytes::Bytes;", "use bytes::*;"),
             valid.replace("use bytes::Bytes;", "use bytes::Bytes as RawBytes;"),
+            valid + "enum Outcome { Message(Box<CommitLogRecord>) }",
         ]
         for mutation in mutations:
             self.assertNotEqual([], commit_log_record_parser_boundary_violations(mutation))
+
+    def test_commit_log_record_parser_contract_rejects_blank_boundary_removal(self) -> None:
+        valid = '''
+use bytes::Bytes;
+pub trait CommitLogRecordChecksum {}
+pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(input: &Bytes) {
+    let declared_len = 8usize;
+    if input.len() < declared_len { return; }
+    let magic_code = BLANK_MAGIC_CODE;
+    if magic_code == BLANK_MAGIC_CODE { return; }
+}
+'''
+        self.assertEqual([], commit_log_record_parser_boundary_violations(valid))
+        mutation = valid.replace("if input.len() < declared_len { return; }", "")
+        self.assertNotEqual([], commit_log_record_parser_boundary_violations(mutation))
 
     def test_store_record_parser_wrapper_contract_rejects_copy_and_import_mutations(self) -> None:
         root = "pub mod commit_log;"

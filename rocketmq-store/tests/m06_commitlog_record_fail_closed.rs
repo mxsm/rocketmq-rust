@@ -13,14 +13,19 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
+use rocketmq_common::common::message::message_single::tags_string2tags_code;
 use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::MessageDecoder::create_crc32;
+use rocketmq_store::base::dispatch_request::DispatchRequest;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::log_file::commit_log::check_message_and_return_size;
 use rocketmq_store::log_file::commit_log::CRC32_RESERVED_LEN;
@@ -34,6 +39,61 @@ const BODY_LEN_OFFSET: usize = 84;
 enum Version {
     V1,
     V2,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DispatchRequestProjection {
+    topic: CheetahString,
+    queue_id: i32,
+    commit_log_offset: i64,
+    msg_size: i32,
+    tags_code: i64,
+    store_timestamp: i64,
+    consume_queue_offset: i64,
+    keys: CheetahString,
+    success: bool,
+    uniq_key: Option<CheetahString>,
+    sys_flag: i32,
+    prepared_transaction_offset: i64,
+    properties_map: Option<BTreeMap<String, String>>,
+    bit_map: Option<Vec<u8>>,
+    buffer_size: i32,
+    msg_base_offset: i64,
+    batch_size: i16,
+    next_reput_from_offset: i64,
+    offset_id: Option<CheetahString>,
+}
+
+impl From<&DispatchRequest> for DispatchRequestProjection {
+    fn from(request: &DispatchRequest) -> Self {
+        let properties_map = request.properties_map.as_ref().map(|properties| {
+            properties
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect()
+        });
+        Self {
+            topic: request.topic.clone(),
+            queue_id: request.queue_id,
+            commit_log_offset: request.commit_log_offset,
+            msg_size: request.msg_size,
+            tags_code: request.tags_code,
+            store_timestamp: request.store_timestamp,
+            consume_queue_offset: request.consume_queue_offset,
+            keys: request.keys.clone(),
+            success: request.success,
+            uniq_key: request.uniq_key.clone(),
+            sys_flag: request.sys_flag,
+            prepared_transaction_offset: request.prepared_transaction_offset,
+            properties_map,
+            bit_map: request.bit_map.clone(),
+            buffer_size: request.buffer_size,
+            msg_base_offset: request.msg_base_offset,
+            batch_size: request.batch_size,
+            next_reput_from_offset: request.next_reput_from_offset,
+            offset_id: request.offset_id.clone(),
+        }
+    }
 }
 
 fn frame(version: Version, sys_flag: i32, body: &[u8], topic: &[u8], properties: &[u8]) -> Bytes {
@@ -114,14 +174,26 @@ fn dispatch_with(
     read_body: bool,
     config: Arc<MessageStoreConfig>,
 ) -> rocketmq_store::base::dispatch_request::DispatchRequest {
+    dispatch_with_policy(bytes, check_crc, check_dup_info, read_body, config, 0, &BTreeMap::new())
+}
+
+fn dispatch_with_policy(
+    bytes: &mut Bytes,
+    check_crc: bool,
+    check_dup_info: bool,
+    read_body: bool,
+    config: Arc<MessageStoreConfig>,
+    max_delay_level: i32,
+    delay_level_table: &BTreeMap<i32, i64>,
+) -> DispatchRequest {
     check_message_and_return_size(
         bytes,
         check_crc,
         check_dup_info,
         read_body,
         &config,
-        0,
-        &BTreeMap::new(),
+        max_delay_level,
+        delay_level_table,
     )
 }
 
@@ -132,6 +204,17 @@ fn property(name: &str, value: &str) -> Vec<u8> {
     bytes.extend_from_slice(value.as_bytes());
     bytes.push(2);
     bytes
+}
+
+fn properties(entries: &[(&str, &str)]) -> Vec<u8> {
+    entries.iter().flat_map(|(name, value)| property(name, value)).collect()
+}
+
+fn property_map(entries: &[(&str, &str)]) -> HashMap<CheetahString, CheetahString> {
+    entries
+        .iter()
+        .map(|(name, value)| (CheetahString::from(*name), CheetahString::from(*value)))
+        .collect()
 }
 
 fn property_crc_frame(body: &[u8]) -> Bytes {
@@ -239,6 +322,31 @@ fn blank_advances_only_header_and_valid_message_advances_declared_size() {
 }
 
 #[test]
+fn blank_declared_size_is_bounded_before_advancement() {
+    for (declared_size, available, valid) in [(8, 8, true), (64, 64, true), (7, 8, false), (64, 8, false)] {
+        let mut encoded = BytesMut::with_capacity(available);
+        encoded.put_i32(declared_size);
+        encoded.put_i32(BLANK_MAGIC_CODE);
+        encoded.put_bytes(0xA5, available - 8);
+        let mut input = encoded.freeze();
+        let original = input.clone();
+
+        let request = dispatch(&mut input, false, false);
+
+        assert_eq!(
+            request.success, valid,
+            "declared_size={declared_size}, available={available}"
+        );
+        assert_eq!(request.msg_size, if valid { 0 } else { -1 });
+        if valid {
+            assert_eq!(input, original.slice(8..));
+        } else {
+            assert_eq!(input, original);
+        }
+    }
+}
+
+#[test]
 fn extra_bytes_size_mismatch_advances_declared_and_preserves_next_record() {
     let first = frame(Version::V1, 0, b"body", b"topic", b"");
     let second = frame(Version::V1, 0, b"next", b"topic", b"");
@@ -325,4 +433,141 @@ fn duplicate_and_inner_batch_errors_leave_input_unchanged() {
     assert!(!request.success);
     assert_eq!(request.msg_size, -1);
     assert_eq!(bad_batch, bad_batch_original);
+}
+
+#[test]
+fn valid_v1_dispatch_request_whole_value_golden_preserves_policy_fields() {
+    let entries = [
+        (MessageConst::PROPERTY_TAGS, "tag-v1"),
+        (MessageConst::PROPERTY_KEYS, "key-a key-b"),
+        (MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX, "uniq-v1"),
+        (MessageConst::DUP_INFO, "left_right"),
+        (MessageConst::PROPERTY_INNER_BASE, "101"),
+        (MessageConst::PROPERTY_INNER_NUM, "4"),
+    ];
+    let encoded_properties = properties(&entries);
+    let record = frame(
+        Version::V1,
+        (1 << 4) | (1 << 5),
+        b"body-v1",
+        b"topic-v1",
+        &encoded_properties,
+    );
+    let mut input = record.clone();
+    let tags = CheetahString::from("tag-v1");
+
+    let actual = dispatch_with(&mut input, true, true, true, Arc::new(MessageStoreConfig::default()));
+    let expected = DispatchRequest {
+        topic: CheetahString::from("topic-v1"),
+        queue_id: 3,
+        commit_log_offset: 13,
+        msg_size: record.len() as i32,
+        tags_code: tags_string2tags_code(Some(&tags)),
+        store_timestamp: 19,
+        consume_queue_offset: 11,
+        keys: CheetahString::from("key-a key-b"),
+        success: true,
+        uniq_key: Some(CheetahString::from("uniq-v1")),
+        sys_flag: (1 << 4) | (1 << 5),
+        prepared_transaction_offset: 29,
+        properties_map: Some(property_map(&entries)),
+        msg_base_offset: 101,
+        batch_size: 4,
+        ..DispatchRequest::default()
+    };
+
+    assert_eq!(
+        DispatchRequestProjection::from(&actual),
+        DispatchRequestProjection::from(&expected)
+    );
+    assert!(input.is_empty());
+}
+
+#[test]
+fn valid_v2_dispatch_request_whole_value_goldens_preserve_delay_table_and_fallback() {
+    let entries = [
+        (MessageConst::PROPERTY_TAGS, "ignored-by-delay"),
+        (MessageConst::PROPERTY_DELAY_TIME_LEVEL, "9"),
+    ];
+    let encoded_properties = properties(&entries);
+    let record = frame(
+        Version::V2,
+        0,
+        b"body-v2",
+        TopicValidator::RMQ_SYS_SCHEDULE_TOPIC.as_bytes(),
+        &encoded_properties,
+    );
+    let mut delay_table = BTreeMap::new();
+    delay_table.insert(5, 4_000);
+    let mut table_input = record.clone();
+
+    let table_actual = dispatch_with_policy(
+        &mut table_input,
+        false,
+        false,
+        false,
+        Arc::new(MessageStoreConfig::default()),
+        5,
+        &delay_table,
+    );
+    let table_expected = DispatchRequest {
+        topic: CheetahString::from(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC),
+        queue_id: 3,
+        commit_log_offset: 13,
+        msg_size: record.len() as i32,
+        tags_code: 4_019,
+        store_timestamp: 19,
+        consume_queue_offset: 11,
+        success: true,
+        sys_flag: 0,
+        prepared_transaction_offset: 29,
+        properties_map: Some(property_map(&entries)),
+        ..DispatchRequest::default()
+    };
+    assert_eq!(
+        DispatchRequestProjection::from(&table_actual),
+        DispatchRequestProjection::from(&table_expected)
+    );
+    assert!(table_input.is_empty());
+
+    let fallback_entries = [
+        (MessageConst::PROPERTY_TAGS, "also-ignored"),
+        (MessageConst::PROPERTY_DELAY_TIME_LEVEL, "3"),
+    ];
+    let fallback_record = frame(
+        Version::V2,
+        0,
+        b"body-v2",
+        TopicValidator::RMQ_SYS_SCHEDULE_TOPIC.as_bytes(),
+        &properties(&fallback_entries),
+    );
+    let mut fallback_input = fallback_record.clone();
+    let fallback_actual = dispatch_with_policy(
+        &mut fallback_input,
+        false,
+        false,
+        false,
+        Arc::new(MessageStoreConfig::default()),
+        5,
+        &BTreeMap::new(),
+    );
+    let fallback_expected = DispatchRequest {
+        topic: CheetahString::from(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC),
+        queue_id: 3,
+        commit_log_offset: 13,
+        msg_size: fallback_record.len() as i32,
+        tags_code: 1_019,
+        store_timestamp: 19,
+        consume_queue_offset: 11,
+        success: true,
+        sys_flag: 0,
+        prepared_transaction_offset: 29,
+        properties_map: Some(property_map(&fallback_entries)),
+        ..DispatchRequest::default()
+    };
+    assert_eq!(
+        DispatchRequestProjection::from(&fallback_actual),
+        DispatchRequestProjection::from(&fallback_expected)
+    );
+    assert!(fallback_input.is_empty());
 }

@@ -430,19 +430,23 @@ python scripts/arc_mut_guard.py
   mmap/`ArcMut` representation, `DefaultMappedFile` ownership, append/flush/group commit, CQ/Index, or HA moved.
   PR-M06-03 and every M06 Exit Checklist item remain open.
 
-## M06-03g bounded CommitLog record parser evidence（under review）
+## M06-03g bounded CommitLog record parser evidence
 
-- [ ] `[DEV]` `rocketmq-store-local::commit_log::record_parser` 已成为 Local+Store 存储边界内 V1/V2 有界
+- [x] `[DEV]` `rocketmq-store-local::commit_log::record_parser` 已成为 Local+Store 存储边界内 V1/V2 有界
   record parser、中立 DTO、结构错误与静态 checksum port 的 owner；Store 删除 parser 模块副本，仅保留
   checksum/config、property/dup/tag/delay、property CRC、inner-batch、`DispatchRequest` 映射和最终事务推进。
-- [ ] `[COMPAT]` 提交 A 固化 fail-closed 与事务推进规则，提交 B 仅机械搬移 parser。去除 Rustdoc、路径和公开
+- [x] `[COMPAT]` 提交 A 固化 fail-closed 与事务推进规则，提交 B 仅机械搬移 parser。去除 Rustdoc、路径和公开
   可见性差异后，A/B 从 `RecordReader` 到测试模块前的算法文本完全相同；同一 fail-closed corpus 在 A/B
   均为 10/10。Common、Protocol 与 Local V1/V2 magic 仅比较值兼容，不声明全仓唯一 owner。
-- [ ] `[TEST]` 当前 focused evidence：fail-closed/transaction 10/10、Local parser DTO/checksum spy 3/3、Store
-  既有 property-CRC/inner-batch 2/2、Local ownership/mutation contract 55/55。独立审查要求的合法 V1/V2
-  `DispatchRequest` whole-value goldens、blank declared-size 矩阵与 hot-path allocation mutation 尚未关闭。
-- [ ] `[REVIEW]` 所有权、只读输入、无 Store parser copy、无 `dyn` checksum、无 Buf cursor parsing、无新增
-  依赖、无 alias/brace/glob import 与 duplicate owner 的 contract 已建立。Blank declared boundary 与每消息
-  heap allocation 将在 B 后独立 review-fix 提交中修复并由 mutation fixture 锁定。
-- [ ] `[SCOPE]` PR-M06-03 父项和 M06 Exit Checklist 保持未完成；完成 review-fix、全量门禁与独立审查后
-  才勾选 M06-03g。本切片不迁移 append/flush/group commit、CQ/Index、HA、Timer/POP 或 Store composition。
+- [x] `[TEST]` 最终 focused evidence：fail-closed/transaction/whole-value 13/13、Local 全量 85 项、Store
+  property-CRC/inner-batch 2/2、record compatibility 3/3、Local ownership/mutation contract 56/56。合法 V1
+  whole-value golden 覆盖双 IPv6 host、topic、queue/physical offset、sysflag、store timestamp、tags、keys、
+  uniq、dup 与 inner batch；两份 V2 golden 覆盖 delay clamp+table 和缺表 fallback。
+- [x] `[REVIEW]` Blank 在返回前验证 `declared >= 8 && declared <= available`，合法 blank 仍仅推进 8 字节；
+  `CommitLogRecord` 保持 inline，enum 上最窄 Clippy reason 明确热路径禁止每消息 heap allocation。contract
+  同时杀死 blank boundary 删除与 `Box<CommitLogRecord>` 重引入，并继续约束只读输入、无 Store copy、无
+  `dyn`/Buf cursor、新增依赖、alias/brace/glob import 或 duplicate owner。
+- [x] `[REV]` 五组 Local feature check、Local/Store/workspace Clippy、Local `-D warnings` Rustdoc、架构
+  35 项+fixtures+baseline、ArcMut 63 项+fixtures+final guard、格式与 diff 检查通过。
+- [x] `[SCOPE]` M06-03g 已完成；PR-M06-03 父项和 M06 Exit Checklist 保持未完成。本切片不迁移
+  append/flush/group commit、CQ/Index、HA、Timer/POP 或 Store composition。

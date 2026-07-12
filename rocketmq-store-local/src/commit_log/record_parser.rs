@@ -193,6 +193,10 @@ impl CommitLogRecord {
 }
 
 /// Successful blank-marker or message decoding result.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "CommitLog decoding is a per-message hot path; retaining the record inline avoids a heap allocation"
+)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CommitLogRecordOutcome {
     /// End-of-segment blank marker.
@@ -201,7 +205,7 @@ pub enum CommitLogRecordOutcome {
         declared_size: i32,
     },
     /// Decoded CommitLog message.
-    Message(Box<CommitLogRecord>),
+    Message(CommitLogRecord),
 }
 
 struct RecordReader {
@@ -313,6 +317,17 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
             },
         });
     }
+    let declared_len = declared_size as usize;
+    if input.len() < declared_len {
+        return Err(CommitLogRecordError {
+            declared_size: Some(declared_size),
+            kind: CommitLogRecordErrorKind::Truncated {
+                field: CommitLogRecordField::Record,
+                needed: declared_len,
+                remaining: input.len(),
+            },
+        });
+    }
     let magic_code = top_level_i32(input, 4, CommitLogRecordField::MagicCode).map_err(|mut error| {
         error.declared_size = Some(declared_size);
         error
@@ -330,18 +345,6 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
             });
         }
     };
-    let declared_len = declared_size as usize;
-    if input.len() < declared_len {
-        return Err(CommitLogRecordError {
-            declared_size: Some(declared_size),
-            kind: CommitLogRecordErrorKind::Truncated {
-                field: CommitLogRecordField::Record,
-                needed: declared_len,
-                remaining: input.len(),
-            },
-        });
-    }
-
     let raw_frame = input.slice(..declared_len);
     let mut reader = RecordReader::new(raw_frame.clone(), 8, declared_size);
     let body_crc = reader.read_i32(CommitLogRecordField::BodyCrc)?;
@@ -416,7 +419,7 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
     let properties = reader.take(properties_len as usize, CommitLogRecordField::Properties)?;
     let computed_size = reader.index as i32;
 
-    Ok(CommitLogRecordOutcome::Message(Box::new(CommitLogRecord {
+    Ok(CommitLogRecordOutcome::Message(CommitLogRecord {
         raw_frame,
         declared_size,
         computed_size,
@@ -438,7 +441,7 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
         topic,
         properties_len,
         properties,
-    })))
+    }))
 }
 
 #[cfg(test)]

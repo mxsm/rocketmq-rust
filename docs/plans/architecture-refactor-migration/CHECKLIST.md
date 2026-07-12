@@ -113,7 +113,7 @@
   - [x] M06-03d：迁移 OS file/path/offset 与 open/resize/preallocate/rename/delete kernel
   - [x] M06-03e：迁移泛型 mmap 初始化生命周期与 lazy statistics kernel
   - [x] M06-03f：迁移 CommitLog V1/blank record 常量、blank helper 与静态 frame cursor
-  - [ ] M06-03g：迁移有界 CommitLog record parser（代码与所有权搬移完成，独立审查修复进行中）
+  - [x] M06-03g：迁移有界 CommitLog record parser，并完成 fail-closed、无堆分配与完整 dispatch golden 审查
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer
