@@ -1,236 +1,137 @@
 # M06-01 Store capability spike report
 
-## Outcome
+## Final outcome
 
-M06-01 introduces the runtime-neutral `rocketmq-store-api` boundary, a borrowing compatibility
-adapter over the existing `MessageStore`, and one real Broker send-processor composition seam.
-The main single-message and batch append paths now consume `MessageAppender<M>` and the admission
-path consumes `StoreHealth`; the legacy store remains the active implementation behind adapters.
-No M06-02 or later ownership move was implemented.
+M06-01 adds the runtime-neutral `rocketmq-store-api` capability boundary and composes it into real
+Broker send and admission paths without moving store ownership. The final API exposes eight traits
+through associated types and statically dispatched RPITIT futures, plus only the closed
+`StoreOperation`, neutral `StoreErrorKind`, and `StoreError` values. Concrete append/read/health/
+replication/derived/admin DTOs remain deferred to M06-02.
 
-## Changed files
+The compatibility implementation remains in `rocketmq-store`. Its borrowing adapter owns the
+unchanged legacy `PutMessageResult`, independent append/durable watermark observations, and exact
+legacy health-error tokens. Ordinary single, batch, and transactional-prepare append paths traverse
+`MessageAppender`; Broker admission traverses `StoreHealth`. No persisted layout, public
+`MessageStore` method, feature, lifecycle owner, task, runtime, or blocking boundary changed.
 
-- `Cargo.toml`, `Cargo.lock`: register and lock the new workspace crate.
-- `rocketmq-store-api/Cargo.toml`, `rocketmq-store-api/src/lib.rs`: define the empty-default-feature
-  crate, eight narrow capabilities, runtime-neutral values, append/durable watermarks, health, and
-  backend-neutral typed errors.
-- `rocketmq-store-api/tests/capability_contracts.rs`: compile/composition, error, writable, and
-  watermark contracts.
-- `rocketmq-store/Cargo.toml`, `rocketmq-store/src/lib.rs`,
-  `rocketmq-store/src/store_api_adapter.rs`: expose borrowing legacy append/health adapters and
-  exhaustive legacy status/error mappings without changing `MessageStore`.
-- `rocketmq-store/tests/store_api_legacy_adapter.rs`: legacy compile fixture, status mapping, output,
-  and watermark parity.
-- `rocketmq-broker/Cargo.toml`, `rocketmq-broker/src/processor/send_message_processor.rs`: wire the
-  actual send/reject paths through narrow capabilities and keep response/status/statistics behavior.
-- `scripts/architecture-dependency-policy.json`,
-  `scripts/tests/test_architecture_dependency_guard.py`,
-  `scripts/tests/test_m06_store_api_contract.py`: enforce dependency and focused source contracts.
-- `scripts/arc-mut-baseline.json`, `scripts/arc-mut-relocation-approvals.json`: record one reviewed
-  one-to-one fingerprint relocation for the unchanged test-module glob import. Identity count and
-  occurrence count did not increase.
-- `docs/plans/architecture-refactor-migration/phase-2-core-boundaries/06-storage-boundary-extraction.md`:
-  append only the M06-01 evidence checklist; later substeps remain incomplete.
+## Final design and compatibility decisions
 
-## RED to GREEN evidence
+- `MessageAppender<M>` remains generic over consumer-owned message inputs, so store-api does not
+  depend on Broker or `rocketmq-common` message types.
+- The hot append path uses static dispatch. It contains no `StoreFuture`, `dyn Future`,
+  `Pin<Box<_>>`, or `Box::pin` allocation.
+- `StoreOperation` is a closed vocabulary. Store errors contain no native error, path, message body,
+  credential, or implementation detail.
+- Broker maps errors by `(StoreOperation, StoreErrorKind)`. For append, `Unavailable` and `NotFound`
+  become redacted `BrokerOperationFailed` errors with `SwitchBroker` recovery. Lifecycle
+  `Unavailable` remains `Service`, and read `NotFound` remains `QueryNotFound`.
+- All 16 legacy `PutMessageStatus` response code/remark pairs are preserved exhaustively.
+- All 12 legacy writable-rejection error tokens are preserved exactly in the compatibility layer;
+  backend vocabulary is absent from store-api.
+- Store-api keeps the previously approved direct dependencies `bytes`, `rocketmq-error`, and
+  `rocketmq-model`; production source exposes no concrete type from them in this spike.
 
-1. Crate/source contract
-   - RED: `python scripts/tests/test_m06_store_api_contract.py` exited 1 because the workspace member
-     and `rocketmq-store-api/src/lib.rs` did not exist.
-   - RED: `cargo test -p rocketmq-store-api --test capability_contracts` exited 1 with 23 E0432
-     unresolved imports for the wished-for capability and value surface.
-   - GREEN: the same Rust test passed 4/4; the source/manifest contract passed 3/3 after the Broker
-     seam was wired.
-2. Legacy compatibility adapter
-   - RED: `cargo test -p rocketmq-store --test store_api_legacy_adapter` exited 1 because
-     `store_api_adapter` and the API dependency did not exist.
-   - GREEN: the same command passed 2/2 and compiled the generic legacy adapter fixture.
-3. Broker capability seam
-   - RED: `cargo test -p rocketmq-broker append_seam_depends_only_on_message_appender --lib`
-     exited 1 because the API dependency and the two generic seam functions were absent.
-   - GREEN: `cargo test -p rocketmq-broker seam_depends_only --lib` passed 2/2 with the production
-     single/batch append and reject paths using the same seam functions.
-4. Processor output parity
-   - The initial test draft had tuple setup errors and was corrected before counting RED.
-   - RED: the corrected parity command exited 1 only because `map_append_status_to_response` was
-     absent.
-   - GREEN: `cargo test -p rocketmq-broker neutral_append_status_preserves_every_legacy_processor_output --lib`
-     passed 1/1 across all 16 legacy statuses, including exact response code and remark.
-5. Architecture rule
-   - RED: the focused architecture unit exited 1 because only the generic target-DAG finding existed
-     and the dedicated `store-api-runtime-neutral` rule was missing.
-   - GREEN: the focused fixture passed 1/1 after adding the narrow forbidden-edge rule; the complete
-     architecture suite passed 35/35.
-6. Writable compatibility
-   - RED: the health corpus passed 7/8 and exposed a `mapped_file` to `io` response-token regression.
-   - RED: the corrected neutral contract then failed with E0599 because `StoreErrorKind::Storage` did
-     not exist.
-   - GREEN: the health corpus passed 8/8 after adding neutral `Storage` and restoring `mapped_file`
-     only at the Broker compatibility response layer.
-7. Typed Broker error mapping
-   - RED: the named test exited 1 only because `map_store_api_error` did not exist.
-   - GREEN: the named test passed 1/1 after exhaustive kind-to-`RocketMQError` mapping; the error
-     guard no longer reports the three new source-stringification findings.
+## Changed areas
 
-## Validation evidence
+- `rocketmq-store-api/`: minimal capability/error contracts and compile contracts.
+- `rocketmq-store/src/store_api_adapter.rs` and its integration test: borrowing append/health
+  compatibility adapters.
+- `rocketmq-broker/src/processor/send_message_processor.rs`: append, transaction, admission,
+  response-parity, health-parity, and typed-error composition.
+- `scripts/tests/test_m06_store_api_contract.py`: dependency-table, public-surface, static-future,
+  forbidden-vocabulary, and structural production-seam contracts.
+- Architecture policy/tests: runtime-neutral store-api dependency edge.
+- ArcMut baseline/relocation evidence: one reviewed Broker test glob-import relocation. The final
+  fix restores the eight specified Remoting identities to their exact base-branch entries.
+- Phase checklist and this report: M06-01 evidence only; later steps remain incomplete.
 
-Completed before the cold final gate:
+## Historical TDD evidence
 
-- `cargo check -p rocketmq-store-api --no-default-features` — passed.
-- `cargo check -p rocketmq-store-api` — passed.
-- `cargo test -p rocketmq-store-api` — passed, 4 integration tests plus unit/doc targets.
-- `cargo test -p rocketmq-store --test store_api_legacy_adapter` — passed 2/2.
-- Broker focused seam/parity/error/health commands — passed 2/2, 1/1, 1/1, and 8/8.
-- `cargo tree -p rocketmq-store-api -e normal` — only direct API dependencies
-  `bytes`, `rocketmq-error`, and `rocketmq-model`; no forbidden implementation/runtime crate.
-- `python scripts/tests/test_architecture_dependency_guard.py` — passed 35/35.
-- `python scripts/architecture_dependency_guard.py --fixtures` — passed clean fixture plus six
-  violation fixtures.
-- `python scripts/architecture_dependency_guard.py --mode baseline` — passed.
-- `python scripts/arc_mut_guard.py --fixtures` — passed 24 fixtures.
-- ArcMut bootstrap/promote/compare — 1,233 identities and 3,378 occurrences before and after;
-  reviewed one-to-one relocation passed.
-- `python scripts/arc_mut_guard.py` — passed.
-- `cargo clippy -p rocketmq-store-api --all-targets -- -D warnings` — passed.
-- `cargo clippy -p rocketmq-store --lib -- -D warnings` — passed.
-- `cargo clippy -p rocketmq-broker --lib -- -D warnings` — passed after gating one test-only import.
-- `scripts/check-agents-routing.ps1` — passed: four standalone Cargo projects, three Node projects,
-  eight routes.
-- `scripts/check-error-hygiene.ps1` — the changed send processor is clean. The command remains exit
-  1 only for pre-existing findings: one auth source-stringification site, eight MCP `anyhow` sites,
-  and two missing governance documents.
-- `git diff --check` — passed before final cold validation.
+These RED results are historical pre-fix observations; the matching GREEN results describe the
+current final state.
 
-Cold final validation is recorded below after it completes.
-
-## Compatibility decisions
-
-- `MessageAppender<M>` is generic over the consumer-owned message input, so the API crate does not
-  depend on `rocketmq-common`; Broker continues using `MessageExtBrokerInner` and `MessageExtBatch`
-  only at the legacy adapter boundary.
-- `AppendReceipt` keeps the append range, appended watermark, and durable watermark independent.
-  A timeout can therefore remain accepted without being reported durable.
-- `StoreError` exposes only a stable kind and operation name. Native error objects, paths, and
-  implementation details remain inside `rocketmq-store`.
-- The existing `mapped_file` Broker rejection remark is preserved only in the compatibility response
-  projection from neutral `Storage`; it is not part of the API error taxonomy.
-- The adapter borrows the current store. It adds no task, runtime, blocking boundary, ownership
-  container, or `ArcMut` occurrence.
-- CommitLog and every persisted layout remain untouched. Existing store types, methods, deep paths,
-  Serde/default behavior, feature aliases, and lifecycle owners remain in place.
-
-## Remaining baselines and concerns
-
-- M06-02 and later extraction work remains intentionally untouched, including physical ownership of
-  Local/Rocks modules and broader MessageStore decomposition.
-- The repository error-hygiene command still has the unrelated pre-existing findings listed above;
-  no new allowlist or governance baseline was added.
-- ArcMut debt did not increase. One existing test glob-import fingerprint moved because tests were
-  added in the same module; ADR-013 relocation evidence records exactly that one-to-one move.
-- Windows cold builds emit `linker_messages` about generated import libraries. Rust explicitly notes
-  that this lint ignores `-D warnings`; focused Clippy otherwise completed successfully.
-
-## Cold final gates
-
-- `cargo fmt --all -- --check` — passed, including the final post-review rerun.
-- `cargo check -p rocketmq-store-api --no-default-features` — passed.
-- `cargo check -p rocketmq-store-api` — passed.
-- `cargo test -p rocketmq-store-api` — passed 4/4 plus unit/doc targets.
-- `cargo test -p rocketmq-store --test store_api_legacy_adapter` — passed 2/2.
-- Broker cold focused tests — seam 2/2, exact response parity 1/1, typed error 1/1, health 8/8.
-- `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` — passed in
-  4m44s from the cleaned target; the final post-review incremental rerun also passed.
-- Final dependency/source/architecture/ArcMut guards and `git diff --check` — passed.
-- The four standalone Cargo manifests contain no direct `rocketmq-store` or `rocketmq-broker` path
-  dependency, so this change activates no standalone-consumer validation route.
-
-## Review-fix wave
-
-The review-fix wave narrows `rocketmq-store-api` to the M06-01 capability spike, preserves exact
-legacy Broker behavior in the compatibility layer, and closes every blocking review finding. The
-API now publishes the eight traits through associated types and static RPITIT futures, plus only a
-closed `StoreOperation`, neutral `StoreErrorKind`, and `StoreError`. Concrete append, read,
-replication, derived-record, health, and admin DTOs remain deferred to M06-02.
-
-The Broker ordinary single, batch, and transactional-prepare append paths all traverse the
-`MessageAppender` seam. The legacy adapter owns the unchanged `PutMessageResult`, append/durable
-watermarks, and exact health-error compatibility tokens. The response mapper continues to consume
-all 16 legacy `PutMessageStatus` variants exhaustively. No persisted layout, public `MessageStore`
-method, feature, lifecycle owner, task, or runtime boundary changed.
-
-### Review-fix RED to GREEN evidence
-
-1. Minimal associated-type API and static futures
-   - RED: `cargo test -p rocketmq-store-api --test capability_contracts` exited 1 because
-     `StoreOperation`, the associated types, and the RPITIT signatures were absent; the old boxed
-     future and concrete DTO surface did not satisfy the wished-for contract.
-   - GREEN: the same command passed 2/2 after shrinking the public API and removing `StoreFuture`,
-     `Pin<Box<_>>`, and the M06-02 DTO implementations.
-2. Exact legacy adapter compatibility
+1. Minimal capability API
+   - RED: `cargo test -p rocketmq-store-api --test capability_contracts` exited 1 because the closed
+     operation vocabulary, associated types, and static future signatures were absent.
+   - GREEN: the same test target passed 2/2 after removing the concrete M06-02 DTOs and boxed future
+     alias.
+2. Legacy adapter
    - RED: `cargo test -p rocketmq-store --test store_api_legacy_adapter` exited 1 because the adapter
-     still referenced the deleted API DTOs/boxed future aliases and did not expose exact legacy
-     health kinds.
-   - GREEN: the same command passed 3/3, covering unchanged `PutMessageResult`, independent
-     watermarks, a monomorphized generic fixture, and all 12 exact legacy health tokens.
-3. Broker append, status, health, and typed-error behavior
+     referenced the removed API DTOs and did not retain exact legacy health kinds.
+   - GREEN: the same command passed 3/3, including a monomorphized generic fixture, unchanged legacy
+     result/watermarks, and all 12 compatibility tokens.
+3. Complete production seams and parity
+   - RED: focused Broker compilation failed on the removed receipt/status APIs, missing associated
+     type bounds, and the transactional branch bypassing `MessageAppender`.
+   - GREEN: the Broker processor module passed 17/17 with ordinary single, batch, transaction, and
+     reject seams plus all status and health parity cases.
+4. Append-specific typed errors (second review fix)
    - RED: `cargo test -p rocketmq-broker
-     every_store_api_error_kind_preserves_typed_semantics_and_operation --lib` exited 1 with the old
-     API imports, old receipt mapper, missing associated-type bounds, missing transaction adapter,
-     and missing legacy status mapper.
-   - GREEN: `cargo test -p rocketmq-broker processor::send_message_processor::tests --lib` passed
-     17/17. This covers the static append and health seams, transaction-capable production wiring,
-     exact output parity for all 16 legacy statuses, all 12 legacy writable-rejection tokens, and
-     all 11 neutral error kinds with `ErrorKind`, retry, redaction, and operation assertions.
-4. Structural and dependency contracts
-   - RED: `python scripts/tests/test_m06_store_api_contract.py` passed 2/3 while the transactional
-     prepare branch still bypassed `MessageAppender`.
-   - GREEN: the same command passed 3/3 after adding the Broker-local transaction adapter. The
-     contract parses all normal/build/dev/target dependency tables, rejects aliases/case variants,
-     rejects backend/runtime vocabulary and dynamic futures, and structurally inspects production
-     single, batch, transaction, and reject call sites.
-5. Lint feedback
-   - RED: focused Clippy rejected two manual RPITIT implementations as `manual_async_fn`, then
-     rejected two test-only Broker imports in the library target.
-   - GREEN: the implementations use statically dispatched `async fn`, the imports are test-gated,
-     and all focused plus workspace Clippy commands below exit 0.
+     every_store_api_error_kind_preserves_typed_semantics_and_operation --lib` exited 1: append
+     `Unavailable` expected `BrokerOperationFailed` but produced `Service`.
+   - GREEN: the same command passed 1/1. Its exhaustive append table asserts `ErrorKind`, retry,
+     redaction, operation, and boundary view for all 11 neutral kinds; lifecycle/read controls prove
+     mapping is operation-sensitive. Append `NotFound` is no longer `QueryNotFound`.
+5. Compound forbidden identifiers (second review fix)
+   - RED: `python scripts/tests/test_m06_store_api_contract.py` exited 1 with five failures because
+     `HaState`, `TimerWheel`, `RocksDbBackend`, `MappedFileHandle`, and `NativeStore` escaped the old
+     exact-token comparison.
+   - GREEN: the command passed 4/4 after checking normalized substrings in code identifiers while
+     excluding comments and string literals. No allowlist was required.
 
-The first API test draft omitted the `Future` import; that setup-only compile error was corrected
-before recording the API RED evidence.
+The first API test draft omitted a `Future` import. That setup-only error was corrected before the
+API RED evidence above was recorded.
 
-### Review-fix validation evidence
+## Final validation
 
-- `cargo fmt --all` — passed; `cargo fmt --all -- --check` is included in the final rerun below.
-- `cargo test -p rocketmq-store-api` — passed 2/2 plus unit/doc targets.
-- `cargo test -p rocketmq-store --test store_api_legacy_adapter` — passed 3/3.
-- `cargo test -p rocketmq-broker processor::send_message_processor::tests --lib` — passed 17/17.
-- `python scripts/tests/test_m06_store_api_contract.py` — passed 3/3.
-- `cargo tree -p rocketmq-store-api -e normal,build,dev` — only the allowed API dependencies and
-  their transitive dependencies; no forbidden direct backend/runtime edge.
-- `python scripts/tests/test_architecture_dependency_guard.py` — passed 35/35.
-- `python scripts/architecture_dependency_guard.py --fixtures` — passed one clean fixture and six
+All commands ran from the repository root with `GIT_CONFIG_NOSYSTEM=1`.
+
+- `cargo test -p rocketmq-store-api` — exit 0; 2/2 integration tests plus unit/doc targets.
+- `cargo test -p rocketmq-store --test store_api_legacy_adapter` — exit 0; 3/3.
+- `cargo test -p rocketmq-broker processor::send_message_processor::tests --lib` — exit 0; 17/17.
+- `python scripts/tests/test_m06_store_api_contract.py` — exit 0; 4/4.
+- `python scripts/tests/test_architecture_dependency_guard.py` — exit 0; 35/35.
+- `python scripts/architecture_dependency_guard.py --fixtures` — exit 0; one clean fixture and six
   violation fixtures.
-- `python scripts/architecture_dependency_guard.py --mode baseline` — passed.
-- `python scripts/arc_mut_guard.py --fixtures` — passed 24 fixtures.
-- ArcMut bootstrap/promote/compare — passed with 1,233 identities and 3,378 occurrences before and
-  after. One existing test glob-import fingerprint relocated one-to-one; the ADR-013 approval and
-  promoted baseline record no debt increase.
-- `python scripts/arc_mut_guard.py` — passed after promotion.
-- `.\scripts\check-agents-routing.ps1` — passed: four standalone Cargo projects, three Node
+- `python scripts/architecture_dependency_guard.py --mode baseline` — exit 0.
+- `python scripts/arc_mut_guard.py --fixtures` — exit 0; 24 fixtures.
+- `python scripts/arc_mut_guard.py --bootstrap
+  target/m06-01-fix2-arc-bootstrap-final.json` — exit 0; 1,233 entries.
+- `python scripts/arc_mut_guard.py --promote-baseline
+  target/m06-01-fix2-arc-promoted-final.json` — exit 0; target-only output with 1,233 identities and
+  3,378 occurrences. The output was not copied into the tracked baseline.
+- `python scripts/arc_mut_guard.py --compare-baseline
+  target/m06-01-fix2-arc-promoted-final.json` — exit 0, `ARC_MUT_GUARD_OK`.
+- `python scripts/arc_mut_guard.py` — exit 0, `ARC_MUT_GUARD_OK`.
+- A PowerShell JSON comparison of the eight identities named in the second review against
+  `7ffeafdf6:scripts/arc-mut-baseline.json` — exit 0,
+  `ARC_SELECTED_BASE_ENTRIES_OK identities=8`.
+- `cargo clippy -p rocketmq-store-api --all-targets -- -D warnings` — exit 0.
+- `cargo clippy -p rocketmq-store --all-targets -- -D warnings` — exit 0.
+- `cargo clippy -p rocketmq-broker --lib -- -D warnings` — exit 0.
+- `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` — exit 0 in
+  29.7s. Windows emitted only `linker_messages`, which Rust explicitly states ignores `-D
+  warnings`, plus an unrelated `proc-macro-error2` future-incompatibility notice.
+- `.\scripts\check-agents-routing.ps1` — exit 0; four standalone Cargo projects, three Node
   projects, eight routes.
-- `.\scripts\check-error-hygiene.ps1` — the changed send processor is clean. The command remains
-  exit 1 only for the same pre-existing findings: one auth source-stringification site, eight MCP
-  `anyhow` sites, and two missing governance documents.
-- `cargo clippy -p rocketmq-store-api --all-targets -- -D warnings` — passed.
-- `cargo clippy -p rocketmq-store --all-targets -- -D warnings` — passed.
-- `cargo clippy -p rocketmq-broker --lib -- -D warnings` — passed.
-- `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` — passed in 47s.
-  Windows emitted only the documented `linker_messages` warning, which Rust states ignores
-  `-D warnings`, plus an unrelated future-incompatibility notice for `proc-macro-error2`.
+- `.\scripts\check-error-hygiene.ps1` — exit 1 only for the pre-existing baseline: one auth source
+  stringification site, eight MCP `anyhow` sites, and two missing governance documents. The changed
+  send processor is clean; no allowlist or exception was added.
+- `cargo fmt --all -- --check` — exit 0 in the final post-report rerun.
+- `git diff --check` — exit 0 in the final post-report rerun.
 
-### Review-fix remaining concerns
+## ArcMut scope and remaining drift
+
+The tracked baseline retains only the M06-01 Broker test-import relocation and restores the exact
+base entries for the four `channel.rs` and four `rocketmq_tokio_server.rs` identities named by the
+review. Current Remoting source line metadata differs from those base entries; the target-only
+promotion reflects that pre-existing drift, while the tracked baseline intentionally does not
+absorb it. Identity and occurrence debt remains 1,233 / 3,378, and the normal guard passes because
+the governed identities, occurrence IDs, and fingerprints did not expand.
+
+## Remaining concerns
 
 - M06-02 and later DTO/ownership extraction remains intentionally unimplemented.
-- The error-hygiene repository baseline remains red only for the unrelated findings listed above;
-  no allowlist or governance exception was added.
-- The API crate keeps its already-approved `bytes`, `rocketmq-error`, and `rocketmq-model` direct
-  dependencies, but its production source exposes no concrete type from them in this M06-01 spike.
+- The repository error-hygiene baseline remains red only for the unrelated findings listed above.
+- The pre-existing Remoting line-number drift is intentionally visible and unpromoted; it does not
+  change governed ArcMut identities or occurrences.

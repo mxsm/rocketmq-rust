@@ -62,6 +62,13 @@ FORBIDDEN_NORMALIZED_TOKENS = {
     "broker",
     "native",
 }
+COMPOUND_FORBIDDEN_FIXTURES = {
+    "HaState": "ha",
+    "TimerWheel": "timer",
+    "RocksDbBackend": "rocksdb",
+    "MappedFileHandle": "mappedfile",
+    "NativeStore": "native",
+}
 
 
 def dependency_tables(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -83,6 +90,20 @@ def dependency_tables(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 
 def normalized(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def forbidden_identifiers(source: str) -> dict[str, str]:
+    code = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
+    code = re.sub(r"//[^\r\n]*", " ", code)
+    code = re.sub(r'(?s)(?:br|r|b)?(?:#+)?".*?"(?:#+)?', " ", code)
+    forbidden: dict[str, str] = {}
+    for identifier in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", code):
+        candidate = normalized(identifier)
+        for token in FORBIDDEN_NORMALIZED_TOKENS:
+            if token in candidate:
+                forbidden[identifier] = token
+                break
+    return forbidden
 
 
 def function_body(source: str, signature: str) -> str:
@@ -128,9 +149,12 @@ class StoreApiContractTests(unittest.TestCase):
         self.assertNotIn("dyn Future", source)
         self.assertNotIn("Box::pin", source)
         self.assertIn("pub enum StoreOperation", source)
-        normalized_identifiers = {normalized(identifier) for identifier in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", source)}
-        for token in FORBIDDEN_NORMALIZED_TOKENS:
-            self.assertNotIn(token, normalized_identifiers, f"forbidden API vocabulary: {token}")
+        self.assertEqual({}, forbidden_identifiers(source))
+
+    def test_compound_backend_identifiers_are_rejected(self) -> None:
+        for identifier, token in COMPOUND_FORBIDDEN_FIXTURES.items():
+            with self.subTest(identifier=identifier):
+                self.assertEqual(token, forbidden_identifiers(f"pub struct {identifier};").get(identifier))
 
     def test_real_broker_send_and_reject_paths_traverse_capabilities(self) -> None:
         manifest = tomllib.loads((ROOT / "rocketmq-broker" / "Cargo.toml").read_text(encoding="utf-8"))

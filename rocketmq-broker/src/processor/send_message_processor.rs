@@ -1188,31 +1188,39 @@ where
 
 fn map_store_api_error(error: rocketmq_store_api::StoreError) -> RocketMQError {
     use rocketmq_store_api::StoreErrorKind;
+    use rocketmq_store_api::StoreOperation;
 
-    let operation = error.operation().as_str();
-    match error.kind() {
-        StoreErrorKind::NotStarted => RocketMQError::not_initialized(operation),
-        StoreErrorKind::Unavailable => RocketMQError::Service(rocketmq_error::unified::ServiceError::StartupFailed(
-            operation.to_string(),
-        )),
-        StoreErrorKind::InvalidRequest => RocketMQError::illegal_argument(operation),
-        StoreErrorKind::NotFound => RocketMQError::query_not_found(operation),
-        StoreErrorKind::Capacity => RocketMQError::StorageOutOfSpace {
-            path: operation.to_string(),
+    let operation = error.operation();
+    let operation_name = operation.as_str();
+    match (operation, error.kind()) {
+        (StoreOperation::Append, StoreErrorKind::Unavailable) => {
+            RocketMQError::broker_operation_failed(operation_name, -1, "store temporarily unavailable")
+        }
+        (StoreOperation::Append, StoreErrorKind::NotFound) => {
+            RocketMQError::broker_operation_failed(operation_name, -1, "append target unavailable")
+        }
+        (_, StoreErrorKind::NotStarted) => RocketMQError::not_initialized(operation_name),
+        (_, StoreErrorKind::Unavailable) => RocketMQError::Service(
+            rocketmq_error::unified::ServiceError::StartupFailed(operation_name.to_string()),
+        ),
+        (_, StoreErrorKind::InvalidRequest) => RocketMQError::illegal_argument(operation_name),
+        (_, StoreErrorKind::NotFound) => RocketMQError::query_not_found(operation_name),
+        (_, StoreErrorKind::Capacity) => RocketMQError::StorageOutOfSpace {
+            path: operation_name.to_string(),
         },
-        StoreErrorKind::Storage => RocketMQError::storage_write_failed(operation, "storage operation failed"),
-        StoreErrorKind::Io => RocketMQError::IO(std::io::Error::other(operation)),
-        StoreErrorKind::Corruption => RocketMQError::StorageCorrupted {
-            path: operation.to_string(),
+        (_, StoreErrorKind::Storage) => RocketMQError::storage_write_failed(operation_name, "storage operation failed"),
+        (_, StoreErrorKind::Io) => RocketMQError::IO(std::io::Error::other(operation_name)),
+        (_, StoreErrorKind::Corruption) => RocketMQError::StorageCorrupted {
+            path: operation_name.to_string(),
         },
-        StoreErrorKind::Timeout => RocketMQError::Timeout {
-            operation,
+        (_, StoreErrorKind::Timeout) => RocketMQError::Timeout {
+            operation: operation_name,
             timeout_ms: 0,
         },
-        StoreErrorKind::Unsupported => {
-            RocketMQError::broker_operation_failed(operation, -1, "unsupported store operation")
+        (_, StoreErrorKind::Unsupported) => {
+            RocketMQError::broker_operation_failed(operation_name, -1, "unsupported store operation")
         }
-        StoreErrorKind::Internal => RocketMQError::Internal(operation.to_string()),
+        (_, StoreErrorKind::Internal) => RocketMQError::Internal(operation_name.to_string()),
     }
 }
 
@@ -1884,8 +1892,8 @@ mod tests {
             ),
             (
                 StoreErrorKind::Unavailable,
-                rocketmq_error::ErrorKind::Service,
-                RetryClass::Never,
+                rocketmq_error::ErrorKind::BrokerOperationFailed,
+                RetryClass::SwitchBroker,
                 RedactionPolicy::RedactSensitive,
             ),
             (
@@ -1896,9 +1904,9 @@ mod tests {
             ),
             (
                 StoreErrorKind::NotFound,
-                rocketmq_error::ErrorKind::QueryNotFound,
-                RetryClass::Immediate,
-                RedactionPolicy::Public,
+                rocketmq_error::ErrorKind::BrokerOperationFailed,
+                RetryClass::SwitchBroker,
+                RedactionPolicy::RedactSensitive,
             ),
             (
                 StoreErrorKind::Capacity,
@@ -1952,8 +1960,25 @@ mod tests {
             assert_eq!(expected_retry, mapped.spec().recovery.retry, "neutral kind {kind:?}");
             assert_eq!(expected_redaction, mapped.spec().redact, "neutral kind {kind:?}");
             assert!(mapped.to_string().contains(operation.as_str()), "neutral kind {kind:?}");
-            assert!(!format!("{:?}", mapped.context()).contains("backend-secret"));
+            let public = mapped.boundary_view();
+            assert_eq!(expected_kind, public.kind(), "neutral kind {kind:?}");
+            assert_eq!(expected_retry, public.retry(), "neutral kind {kind:?}");
+            assert_eq!(mapped.public_message(), public.message(), "neutral kind {kind:?}");
+            assert_ne!(mapped.to_string(), public.message(), "neutral kind {kind:?}");
+            assert!(!format!("{:?}", public.context()).contains("backend-secret"));
         }
+
+        let startup_unavailable = map_store_api_error(rocketmq_store_api::StoreError::new(
+            StoreErrorKind::Unavailable,
+            rocketmq_store_api::StoreOperation::Start,
+        ));
+        assert_eq!(rocketmq_error::ErrorKind::Service, startup_unavailable.kind());
+
+        let read_not_found = map_store_api_error(rocketmq_store_api::StoreError::new(
+            StoreErrorKind::NotFound,
+            rocketmq_store_api::StoreOperation::Read,
+        ));
+        assert_eq!(rocketmq_error::ErrorKind::QueryNotFound, read_not_found.kind());
     }
 
     #[tokio::test]
