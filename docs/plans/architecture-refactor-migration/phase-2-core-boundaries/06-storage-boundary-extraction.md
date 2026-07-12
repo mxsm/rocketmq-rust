@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -482,3 +482,31 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03h 只接入两条 normal recovery；abnormal recovery、dispatch、持久格式、flush/runtime、
   checkpoint/window selection、controller/dup 条件及 CQ/Index/HA 均未迁移。PR-M06-03 父项和 M06 Exit
   Checklist 保持未完成。
+
+## M06-03i abnormal recovery triple-watermark state machine evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::recovery` 现拥有 runtime-neutral
+  `AbnormalRecoveryState`、standard/optimized policy、ungated/confirm-bounded dispatch gate、五种 event、
+  六种 action、typed offset error 与 `last_valid_offset`/`confirm_valid_offset`/`truncate_offset` 三水位
+  summary。state 只含三水位与 policy；base+relative、start+validated-size、encoded physical offset+input-size
+  全部 checked，负 offset、溢出或超过 `i64::MAX` 时 fail closed 且 state 保持不变。
+- [x] `[COMPAT]` Store 两条 abnormal recovery 只把纯 offset/action 决策交给 Local；MappedFile/window、I/O、
+  parser/CRC、每条消息 fresh confirm limit、dispatch/stats、blank file-end hook、CQ truncate 与最终
+  flushed/committed/truncate 写回仍由 Store 拥有。Standard 保留 accumulator/start last-valid，Optimized
+  保留 absolute frame-end last-valid；controller 最终使用 confirm-valid clamp，非 controller 使用 last-valid。
+  Normal recovery API/实现、checkpoint/window 选择、持久字节、公开签名与依赖均未改变。
+- [x] `[TEST]` Local 7 项覆盖 constructor/i64 边界、segment start、policy×gate、encoded candidate 与
+  validated size 分离、fresh gate limit、blank/invalid/source matrix、overflow/negative 与错误事务性。真实
+  Store 19 项 recovery integration 包含 dirty tail、blank hook、invalid/source、后续 empty segment、负 CQ，
+  并对 Standard/Optimized 分别证明 dup 的 first eligible/second skipped 仍截断两帧，以及 controller 的
+  first eligible/second ineligible 最终 clamp 到第一条 encoded input end；Store lib 573 项通过。
+- [x] `[REVIEW]` 70 项 comment/string-aware contract 锁定 Local 唯一 owner、精确 state fields、checked
+  arithmetic、policy/action/gate 矩阵，以及 Store 两条 adapter 的 input-size candidate、validated-size
+  advance、fresh gate、skip-without-dispatch、blank hook、stats、唯一 summary、controller/non-controller 与
+  CQ/physical truncate 数据流；22 个 reviewer mutation 覆盖边界比较、gate bypass、constant summary、错误
+  candidate、dispatch/stats/CQ/controller 分支和 Store policy copy。
+- [x] `[REV]` Local 全量 101 项、五组 feature check、Store recovery 19 项、Store lib 573 项、Local/Store/
+  workspace Clippy、Local `-D warnings` Rustdoc、架构 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+
+  final guard、格式与 diff 检查通过；真实 gate golden 没有新增 `ArcMut`/`LocalFileMessageStore` occurrence。
+- [x] `[SCOPE]` M06-03i 只接入两条 abnormal recovery。PR-M06-03 父项和 M06 Exit Checklist 保持未完成；
+  append/flush/group commit、CQ/Index、HA、Timer/POP、Local composition、runtime ownership 与持久格式均未迁移。

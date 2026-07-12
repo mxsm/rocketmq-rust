@@ -31,9 +31,11 @@ use std::sync::Arc;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::broker::broker_config::BrokerConfig as RuntimeBrokerConfig;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -68,6 +70,27 @@ fn new_test_store(temp_dir: &TempDir, mut message_store_config: MessageStoreConf
     let store_clone = store.clone();
     store.set_message_store_arc(store_clone);
     store
+}
+
+thread_local! {
+    static NEXT_BROKER_CONFIG: std::cell::RefCell<Option<RuntimeBrokerConfig>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+struct BrokerConfig;
+
+impl BrokerConfig {
+    fn default() -> RuntimeBrokerConfig {
+        NEXT_BROKER_CONFIG.with(|slot| slot.borrow_mut().take().unwrap_or_default())
+    }
+}
+
+fn stage_next_broker_config(config: RuntimeBrokerConfig) {
+    NEXT_BROKER_CONFIG.with(|slot| {
+        let previous = slot.borrow_mut().replace(config);
+        assert!(previous.is_none(), "broker config staging slot must be empty");
+    });
 }
 
 fn phase6_store_config() -> MessageStoreConfig {
@@ -115,6 +138,13 @@ enum FirstSegmentShape {
     SourceEnded,
     Invalid,
     ValidThenBlank,
+    ValidPair,
+}
+
+#[derive(Clone, Copy)]
+enum AbnormalRecoveryGateMode {
+    Duplication,
+    Controller,
 }
 
 struct TwoSegmentFixture {
@@ -141,9 +171,12 @@ async fn two_segment_fixture(shape: FirstSegmentShape) -> TwoSegmentFixture {
     let mut writer = new_test_store(&source_dir, config);
     writer.init().await.expect("init recovery fixture writer");
 
-    let first = writer
-        .put_message(build_test_message(&topic, 0, &FIRST_RECOVERY_BODY))
-        .await;
+    let mut first_message = build_test_message(&topic, 0, &FIRST_RECOVERY_BODY);
+    first_message.put_property(
+        CheetahString::from_static_str(MessageConst::DUP_INFO),
+        CheetahString::from_static_str("0_0"),
+    );
+    let first = writer.put_message(first_message).await;
     assert_eq!(first.put_message_status(), PutMessageStatus::PutOk);
     let first_append = first.append_message_result().expect("first append result");
     let first_end = first_append.wrote_offset + i64::from(first_append.wrote_bytes);
@@ -163,6 +196,9 @@ async fn two_segment_fixture(shape: FirstSegmentShape) -> TwoSegmentFixture {
     let second_end = second_start + i64::from(first_append.wrote_bytes);
     let mut second_segment = vec![0; RECOVERY_SEGMENT_SIZE];
     second_segment[..first_size].copy_from_slice(valid_frame);
+    if matches!(shape, FirstSegmentShape::ValidPair) {
+        second_segment[28..36].copy_from_slice(&second_start.to_be_bytes());
+    }
     fs::write(&second_path, second_segment).expect("write second recovery segment");
 
     let mut replacement = vec![0; RECOVERY_SEGMENT_SIZE];
@@ -189,6 +225,14 @@ async fn two_segment_fixture(shape: FirstSegmentShape) -> TwoSegmentFixture {
             fs::write(&first_path, replacement).expect("write valid frame and blank marker");
             let replacement = vec![0; RECOVERY_SEGMENT_SIZE];
             fs::write(&second_path, replacement).expect("replace second segment with empty source");
+        }
+        FirstSegmentShape::ValidPair => {
+            replacement[..first_size].copy_from_slice(valid_frame);
+            let blank_size = RECOVERY_SEGMENT_SIZE - first_size;
+            let blank_size = i32::try_from(blank_size).expect("blank size fits i32");
+            replacement[first_size..first_size + 4].copy_from_slice(&blank_size.to_be_bytes());
+            replacement[first_size + 4..first_size + 8].copy_from_slice(&BLANK_MAGIC_CODE.to_be_bytes());
+            fs::write(&first_path, replacement).expect("write first valid frame and blank marker");
         }
     }
 
@@ -238,6 +282,93 @@ async fn run_normal_recovery_with_max_cq(
 
 async fn run_normal_recovery(fixture: &TwoSegmentFixture, route: NormalRecoveryRoute) -> (u64, NormalRecoverySnapshot) {
     run_normal_recovery_with_max_cq(fixture, route, 0).await
+}
+
+async fn run_abnormal_recovery_with_max_cq(
+    fixture: &TwoSegmentFixture,
+    route: NormalRecoveryRoute,
+    max_phy_offset_of_consume_queue: i64,
+) -> NormalRecoverySnapshot {
+    let mut config = phase6_store_config();
+    config.mapped_file_size_commit_log = RECOVERY_SEGMENT_SIZE;
+    let mut restarted = new_test_store(&fixture.temp_dir, config);
+    restarted.init().await.expect("init abnormal recovery fixture reader");
+    assert!(restarted.get_commit_log_mut().load(), "load abnormal fixture commitlog");
+    let message_store = restarted.clone();
+    match route {
+        NormalRecoveryRoute::Standard => {
+            restarted
+                .get_commit_log_mut()
+                .recover_abnormally(max_phy_offset_of_consume_queue, message_store)
+                .await;
+        }
+        NormalRecoveryRoute::Optimized => {
+            restarted
+                .get_commit_log_mut()
+                .recover_abnormally_optimized(max_phy_offset_of_consume_queue, message_store)
+                .await;
+        }
+    }
+    NormalRecoverySnapshot {
+        max_phy_offset: restarted.get_max_phy_offset(),
+        confirm_offset: restarted.get_store_checkpoint().confirm_phy_offset(),
+        max_queue_offset: restarted.get_max_offset_in_queue(&fixture.topic, 0),
+    }
+}
+
+async fn run_gated_abnormal_recovery(
+    fixture: &TwoSegmentFixture,
+    route: NormalRecoveryRoute,
+    gate_mode: AbnormalRecoveryGateMode,
+) -> NormalRecoverySnapshot {
+    let mut config = phase6_store_config();
+    config.mapped_file_size_commit_log = RECOVERY_SEGMENT_SIZE;
+    match gate_mode {
+        AbnormalRecoveryGateMode::Duplication => config.duplication_enable = true,
+        AbnormalRecoveryGateMode::Controller => {
+            config.enable_controller_mode = true;
+            config.broker_role = BrokerRole::Slave;
+        }
+    }
+    let broker_config = match gate_mode {
+        AbnormalRecoveryGateMode::Duplication => RuntimeBrokerConfig {
+            duplication_enable: true,
+            ..RuntimeBrokerConfig::default()
+        },
+        AbnormalRecoveryGateMode::Controller => RuntimeBrokerConfig {
+            enable_controller_mode: true,
+            ..RuntimeBrokerConfig::default()
+        },
+    };
+    stage_next_broker_config(broker_config);
+    let mut restarted = new_test_store(&fixture.temp_dir, config);
+    restarted.init().await.expect("init gated abnormal recovery reader");
+    assert!(restarted.get_commit_log_mut().load(), "load gated abnormal fixture");
+    let gate_limit = match gate_mode {
+        AbnormalRecoveryGateMode::Duplication => fixture.first_end,
+        AbnormalRecoveryGateMode::Controller => fixture.first_end + 1,
+    };
+    restarted.get_commit_log_mut().set_confirm_offset(gate_limit);
+    let message_store = restarted.clone();
+    match route {
+        NormalRecoveryRoute::Standard => {
+            restarted
+                .get_commit_log_mut()
+                .recover_abnormally(0, message_store)
+                .await;
+        }
+        NormalRecoveryRoute::Optimized => {
+            restarted
+                .get_commit_log_mut()
+                .recover_abnormally_optimized(0, message_store)
+                .await;
+        }
+    }
+    NormalRecoverySnapshot {
+        max_phy_offset: restarted.get_max_phy_offset(),
+        confirm_offset: restarted.get_store_checkpoint().confirm_phy_offset(),
+        max_queue_offset: restarted.get_max_offset_in_queue(&fixture.topic, 0),
+    }
 }
 
 #[tokio::test]
@@ -328,6 +459,146 @@ async fn normal_recovery_negative_consume_queue_offset_preserves_route_watermark
 
         assert_eq!(negative_initial, baseline_initial);
         assert_eq!(negative, baseline);
+    }
+}
+
+#[tokio::test]
+async fn abnormal_recovery_blank_hook_rolls_without_dispatching_a_blank_record() {
+    let standard_fixture = two_segment_fixture(FirstSegmentShape::Blank).await;
+    let standard = run_abnormal_recovery_with_max_cq(&standard_fixture, NormalRecoveryRoute::Standard, 0).await;
+    assert_eq!(
+        standard,
+        NormalRecoverySnapshot {
+            max_phy_offset: standard_fixture.second_end,
+            confirm_offset: u64::try_from(standard_fixture.second_start).expect("second start fits u64"),
+            max_queue_offset: 1,
+        }
+    );
+
+    let optimized_fixture = two_segment_fixture(FirstSegmentShape::Blank).await;
+    let optimized = run_abnormal_recovery_with_max_cq(&optimized_fixture, NormalRecoveryRoute::Optimized, 0).await;
+    assert_eq!(
+        optimized,
+        NormalRecoverySnapshot {
+            max_phy_offset: optimized_fixture.second_end,
+            confirm_offset: u64::try_from(optimized_fixture.second_end).expect("second end fits u64"),
+            max_queue_offset: 1,
+        }
+    );
+}
+
+#[tokio::test]
+async fn abnormal_recovery_invalid_and_source_end_keep_route_specific_cross_segment_actions() {
+    for shape in [FirstSegmentShape::SourceEnded, FirstSegmentShape::Invalid] {
+        let standard_fixture = two_segment_fixture(shape).await;
+        let standard = run_abnormal_recovery_with_max_cq(&standard_fixture, NormalRecoveryRoute::Standard, 0).await;
+        assert_eq!(
+            standard,
+            NormalRecoverySnapshot {
+                max_phy_offset: 0,
+                confirm_offset: 0,
+                max_queue_offset: 0,
+            }
+        );
+
+        let optimized_fixture = two_segment_fixture(shape).await;
+        let optimized = run_abnormal_recovery_with_max_cq(&optimized_fixture, NormalRecoveryRoute::Optimized, 0).await;
+        assert_eq!(
+            optimized,
+            NormalRecoverySnapshot {
+                max_phy_offset: optimized_fixture.second_end,
+                confirm_offset: u64::try_from(optimized_fixture.second_end).expect("second end fits u64"),
+                max_queue_offset: 1,
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn abnormal_recovery_empty_later_segment_freezes_route_specific_three_watermarks() {
+    let standard_fixture = two_segment_fixture(FirstSegmentShape::ValidThenBlank).await;
+    let standard = run_abnormal_recovery_with_max_cq(&standard_fixture, NormalRecoveryRoute::Standard, 0).await;
+    assert_eq!(
+        standard,
+        NormalRecoverySnapshot {
+            max_phy_offset: standard_fixture.second_start,
+            confirm_offset: 0,
+            max_queue_offset: 1,
+        }
+    );
+
+    let optimized_fixture = two_segment_fixture(FirstSegmentShape::ValidThenBlank).await;
+    let optimized = run_abnormal_recovery_with_max_cq(&optimized_fixture, NormalRecoveryRoute::Optimized, 0).await;
+    assert_eq!(
+        optimized,
+        NormalRecoverySnapshot {
+            max_phy_offset: optimized_fixture.first_end,
+            confirm_offset: u64::try_from(optimized_fixture.first_end).expect("first end fits u64"),
+            max_queue_offset: 1,
+        }
+    );
+}
+
+#[tokio::test]
+async fn abnormal_recovery_negative_consume_queue_offset_preserves_route_watermarks() {
+    for route in [NormalRecoveryRoute::Standard, NormalRecoveryRoute::Optimized] {
+        let baseline_fixture = two_segment_fixture(FirstSegmentShape::Blank).await;
+        let baseline = run_abnormal_recovery_with_max_cq(&baseline_fixture, route, 0).await;
+        let negative_fixture = two_segment_fixture(FirstSegmentShape::Blank).await;
+        let negative = run_abnormal_recovery_with_max_cq(&negative_fixture, route, -1).await;
+        assert_eq!(negative, baseline);
+    }
+}
+
+#[tokio::test]
+async fn abnormal_recovery_dup_gate_skips_second_dispatch_but_keeps_physical_truncate() {
+    let standard_fixture = two_segment_fixture(FirstSegmentShape::ValidPair).await;
+    let standard = run_gated_abnormal_recovery(
+        &standard_fixture,
+        NormalRecoveryRoute::Standard,
+        AbnormalRecoveryGateMode::Duplication,
+    )
+    .await;
+    assert_eq!(standard_fixture.second_start, RECOVERY_SEGMENT_SIZE as i64);
+    assert_eq!(
+        standard,
+        NormalRecoverySnapshot {
+            max_phy_offset: standard_fixture.second_end,
+            confirm_offset: u64::try_from(standard_fixture.second_start).expect("second start fits u64"),
+            max_queue_offset: 1,
+        }
+    );
+
+    let optimized_fixture = two_segment_fixture(FirstSegmentShape::ValidPair).await;
+    let optimized = run_gated_abnormal_recovery(
+        &optimized_fixture,
+        NormalRecoveryRoute::Optimized,
+        AbnormalRecoveryGateMode::Duplication,
+    )
+    .await;
+    assert_eq!(
+        optimized,
+        NormalRecoverySnapshot {
+            max_phy_offset: optimized_fixture.second_end,
+            confirm_offset: u64::try_from(optimized_fixture.second_end).expect("second end fits u64"),
+            max_queue_offset: 1,
+        }
+    );
+}
+
+#[tokio::test]
+async fn abnormal_recovery_controller_clamps_to_last_confirm_eligible_input_end() {
+    for route in [NormalRecoveryRoute::Standard, NormalRecoveryRoute::Optimized] {
+        let fixture = two_segment_fixture(FirstSegmentShape::ValidPair).await;
+        let snapshot = run_gated_abnormal_recovery(&fixture, route, AbnormalRecoveryGateMode::Controller).await;
+        assert_eq!(
+            snapshot,
+            NormalRecoverySnapshot {
+                max_phy_offset: fixture.second_end,
+                confirm_offset: u64::try_from(fixture.first_end).expect("first end fits u64"),
+                max_queue_offset: 1,
+            }
+        );
     }
 }
 

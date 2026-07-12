@@ -16,6 +16,270 @@ use tracing::info;
 
 const MAX_SIGNED_OFFSET: u64 = 9_223_372_036_854_775_807;
 
+/// Compatibility policy for abnormal CommitLog recovery paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbnormalRecoveryPolicy {
+    /// Sequential recovery retains the start of the last valid message and stops at invalid input.
+    Standard,
+    /// Batched recovery retains the end of the last valid message and continues with the next
+    /// segment.
+    Optimized,
+}
+
+/// Per-message dispatch boundary supplied by Store abnormal recovery orchestration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbnormalRecoveryDispatchGate {
+    /// Dispatch is not bounded by a confirm offset.
+    Ungated,
+    /// Dispatch only when the input-frame end does not exceed `confirm_offset`.
+    ConfirmBounded { confirm_offset: u64 },
+}
+
+/// Runtime-neutral event consumed by the abnormal recovery state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbnormalRecoveryEvent {
+    /// Begins scanning a CommitLog segment at its absolute base offset.
+    SegmentStarted { base_offset: u64 },
+    /// Accepts one validated message frame.
+    MessageAccepted {
+        /// Absolute base offset of the containing segment.
+        segment_base: u64,
+        /// Input-frame start relative to the containing segment.
+        relative_start: u64,
+        /// Size accepted by the record parser.
+        validated_size: u64,
+        /// Absolute end calculated from the record's encoded physical offset and input size.
+        confirm_candidate_end: i64,
+        /// Current Store dispatch boundary for this message.
+        dispatch_gate: AbnormalRecoveryDispatchGate,
+    },
+    /// Encounters an end-of-segment blank marker.
+    Blank,
+    /// Encounters an invalid record.
+    InvalidRecord,
+    /// Reaches the end of the current frame source.
+    SourceEnded,
+}
+
+/// Control action returned after applying an abnormal recovery event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbnormalRecoveryAction {
+    /// Continue scanning records in the current segment.
+    ContinueRecord,
+    /// Dispatch the accepted message and continue scanning.
+    DispatchMessage,
+    /// Skip dispatch for the accepted message and continue scanning.
+    SkipMessageDispatch,
+    /// Notify the compatibility file-end hook and continue with the next segment.
+    NotifyFileEndAndContinueNextSegment,
+    /// Continue recovery at the next segment without a file-end notification.
+    ContinueNextSegment,
+    /// Stop recovery at the current watermarks.
+    StopRecovery,
+}
+
+/// Checked offset failure while applying an abnormal recovery event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AbnormalRecoveryOffsetError {
+    /// Segment base plus relative frame start overflowed `u64`.
+    #[error("segment base {base_offset} plus relative start {relative_start} overflowed")]
+    BaseRelativeOverflow {
+        /// Segment base offset.
+        base_offset: u64,
+        /// Relative frame start.
+        relative_start: u64,
+    },
+    /// Message start plus validated size overflowed `u64`.
+    #[error("message start {start_offset} plus validated size {validated_size} overflowed")]
+    MessageEndOverflow {
+        /// Absolute message start.
+        start_offset: u64,
+        /// Validated message size.
+        validated_size: u64,
+    },
+    /// A confirm candidate was negative.
+    #[error("confirm candidate {candidate} is negative")]
+    NegativeConfirmCandidate {
+        /// Invalid signed candidate.
+        candidate: i64,
+    },
+    /// A resulting recovery watermark cannot be represented by Store's signed offsets.
+    #[error("recovery offset {offset} exceeds i64::MAX")]
+    OffsetExceedsI64 {
+        /// Out-of-range offset.
+        offset: u64,
+    },
+}
+
+/// Immutable abnormal recovery watermarks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AbnormalRecoverySummary {
+    /// Policy-specific last valid message watermark.
+    pub last_valid_offset: u64,
+    /// End of the last message eligible for confirm-bounded dispatch.
+    pub confirm_valid_offset: u64,
+    /// Physical truncation watermark.
+    pub truncate_offset: u64,
+}
+
+/// Runtime-neutral abnormal recovery state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AbnormalRecoveryState {
+    last_valid_offset: u64,
+    confirm_valid_offset: u64,
+    truncate_offset: u64,
+    policy: AbnormalRecoveryPolicy,
+}
+
+impl AbnormalRecoveryState {
+    /// Creates a state machine with all watermarks at the supplied compatibility seed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AbnormalRecoveryOffsetError::OffsetExceedsI64`] when the seed cannot be
+    /// represented by Store's signed offsets.
+    pub const fn try_new(
+        initial_offset: u64,
+        policy: AbnormalRecoveryPolicy,
+    ) -> Result<Self, AbnormalRecoveryOffsetError> {
+        if initial_offset > MAX_SIGNED_OFFSET {
+            return Err(AbnormalRecoveryOffsetError::OffsetExceedsI64 { offset: initial_offset });
+        }
+        Ok(Self {
+            last_valid_offset: initial_offset,
+            confirm_valid_offset: initial_offset,
+            truncate_offset: initial_offset,
+            policy,
+        })
+    }
+
+    /// Applies one event transactionally and returns the next Store action.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AbnormalRecoveryOffsetError`] when checked arithmetic fails, a confirm candidate
+    /// is negative, or a resulting watermark exceeds `i64::MAX`. State is unchanged on error.
+    pub fn apply(
+        &mut self,
+        event: AbnormalRecoveryEvent,
+    ) -> Result<AbnormalRecoveryAction, AbnormalRecoveryOffsetError> {
+        let (action, next_last_valid, next_confirm_valid, next_truncate) = match event {
+            AbnormalRecoveryEvent::SegmentStarted { base_offset } => match self.policy {
+                AbnormalRecoveryPolicy::Standard => (
+                    AbnormalRecoveryAction::ContinueRecord,
+                    self.last_valid_offset,
+                    self.confirm_valid_offset,
+                    base_offset,
+                ),
+                AbnormalRecoveryPolicy::Optimized => (
+                    AbnormalRecoveryAction::ContinueRecord,
+                    self.last_valid_offset,
+                    self.confirm_valid_offset,
+                    self.truncate_offset,
+                ),
+            },
+            AbnormalRecoveryEvent::MessageAccepted {
+                segment_base,
+                relative_start,
+                validated_size,
+                confirm_candidate_end,
+                dispatch_gate,
+            } => {
+                let confirm_candidate = u64::try_from(confirm_candidate_end).map_err(|_| {
+                    AbnormalRecoveryOffsetError::NegativeConfirmCandidate {
+                        candidate: confirm_candidate_end,
+                    }
+                })?;
+                let (message_end, next_last_valid) = match self.policy {
+                    AbnormalRecoveryPolicy::Standard => {
+                        let message_start = self.truncate_offset;
+                        let message_end = message_start.checked_add(validated_size).ok_or(
+                            AbnormalRecoveryOffsetError::MessageEndOverflow {
+                                start_offset: message_start,
+                                validated_size,
+                            },
+                        )?;
+                        (message_end, message_start)
+                    }
+                    AbnormalRecoveryPolicy::Optimized => {
+                        let message_start = segment_base.checked_add(relative_start).ok_or(
+                            AbnormalRecoveryOffsetError::BaseRelativeOverflow {
+                                base_offset: segment_base,
+                                relative_start,
+                            },
+                        )?;
+                        let message_end = message_start.checked_add(validated_size).ok_or(
+                            AbnormalRecoveryOffsetError::MessageEndOverflow {
+                                start_offset: message_start,
+                                validated_size,
+                            },
+                        )?;
+                        (message_end, message_end)
+                    }
+                };
+                let dispatch_allowed = match dispatch_gate {
+                    AbnormalRecoveryDispatchGate::Ungated => true,
+                    AbnormalRecoveryDispatchGate::ConfirmBounded { confirm_offset } => {
+                        confirm_candidate <= confirm_offset
+                    }
+                };
+                let action = if dispatch_allowed {
+                    AbnormalRecoveryAction::DispatchMessage
+                } else {
+                    AbnormalRecoveryAction::SkipMessageDispatch
+                };
+                let update_confirm = dispatch_allowed
+                    && (self.policy == AbnormalRecoveryPolicy::Optimized
+                        || matches!(dispatch_gate, AbnormalRecoveryDispatchGate::ConfirmBounded { .. }));
+                let next_confirm_valid = if update_confirm {
+                    confirm_candidate
+                } else {
+                    self.confirm_valid_offset
+                };
+                (action, next_last_valid, next_confirm_valid, message_end)
+            }
+            AbnormalRecoveryEvent::Blank => (
+                AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment,
+                self.last_valid_offset,
+                self.confirm_valid_offset,
+                self.truncate_offset,
+            ),
+            AbnormalRecoveryEvent::InvalidRecord | AbnormalRecoveryEvent::SourceEnded => {
+                let action = match self.policy {
+                    AbnormalRecoveryPolicy::Standard => AbnormalRecoveryAction::StopRecovery,
+                    AbnormalRecoveryPolicy::Optimized => AbnormalRecoveryAction::ContinueNextSegment,
+                };
+                (
+                    action,
+                    self.last_valid_offset,
+                    self.confirm_valid_offset,
+                    self.truncate_offset,
+                )
+            }
+        };
+
+        for offset in [next_last_valid, next_confirm_valid, next_truncate] {
+            if offset > MAX_SIGNED_OFFSET {
+                return Err(AbnormalRecoveryOffsetError::OffsetExceedsI64 { offset });
+            }
+        }
+
+        self.last_valid_offset = next_last_valid;
+        self.confirm_valid_offset = next_confirm_valid;
+        self.truncate_offset = next_truncate;
+        Ok(action)
+    }
+
+    /// Returns the current abnormal recovery watermarks.
+    pub const fn summary(&self) -> AbnormalRecoverySummary {
+        AbnormalRecoverySummary {
+            last_valid_offset: self.last_valid_offset,
+            confirm_valid_offset: self.confirm_valid_offset,
+            truncate_offset: self.truncate_offset,
+        }
+    }
+}
+
 /// Compatibility policy for normal CommitLog recovery paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NormalRecoveryPolicy {

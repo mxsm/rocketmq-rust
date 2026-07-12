@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 import tomllib
 import unittest
@@ -117,10 +116,6 @@ NORMAL_RECOVERY_ITEMS = {
     "NormalRecoveryOffsetError": "enum",
     "NormalRecoverySummary": "struct",
     "NormalRecoveryState": "struct",
-}
-ABNORMAL_RECOVERY_BODY_HASHES = {
-    "recover_abnormally_optimized": "c16a626f45d97069eff88eb1370ae1195e9e71747c085b2a3fc37512aff093c6",
-    "recover_abnormally": "272dd66951ba29ec54b36e7e9706ab82241299cb5bb154da05c796363624cb9c",
 }
 COMMIT_LOG_FACADE_ITEMS = {
     "commit_log_loader.rs": {
@@ -389,6 +384,77 @@ def normal_recovery_state_boundary_violations(source: str) -> list[str]:
     return violations
 
 
+def abnormal_recovery_state_boundary_violations(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", maxsplit=1)[0]
+    violations: list[str] = []
+    fields = active_struct_fields(production, "AbnormalRecoveryState")
+    expected_fields = [
+        ("last_valid_offset", "u64"),
+        ("confirm_valid_offset", "u64"),
+        ("truncate_offset", "u64"),
+        ("policy", "AbnormalRecoveryPolicy"),
+    ]
+    if fields != expected_fields:
+        violations.append("Local abnormal recovery state fields changed")
+
+    gate_body = active_item_body(production, "enum", "AbnormalRecoveryDispatchGate")
+    if gate_body is None or re.sub(r"\s+", "", gate_body) != "Ungated,ConfirmBounded{confirm_offset:u64},":
+        violations.append("Local abnormal recovery dispatch gate changed")
+    event_body = active_item_body(production, "enum", "AbnormalRecoveryEvent")
+    normalized_event = "" if event_body is None else re.sub(r"\s+", "", event_body)
+    expected_message = (
+        "MessageAccepted{segment_base:u64,relative_start:u64,validated_size:u64,"
+        "confirm_candidate_end:i64,dispatch_gate:AbnormalRecoveryDispatchGate,}"
+    )
+    if expected_message not in normalized_event or "input_size:u64" in normalized_event:
+        violations.append("Local abnormal recovery message event fields changed")
+
+    action_body = active_item_body(production, "enum", "AbnormalRecoveryAction")
+    action_names = [] if action_body is None else re.findall(r"\b([A-Z][A-Za-z0-9_]*)\b", action_body)
+    expected_actions = [
+        "ContinueRecord",
+        "DispatchMessage",
+        "SkipMessageDispatch",
+        "NotifyFileEndAndContinueNextSegment",
+        "ContinueNextSegment",
+        "StopRecovery",
+    ]
+    if action_names != expected_actions:
+        violations.append("Local abnormal recovery action matrix changed")
+
+    impl_body = active_impl_body(production, "AbnormalRecoveryState")
+    if impl_body is None:
+        violations.append("Local abnormal recovery reducer missing")
+    else:
+        normalized = re.sub(r"\s+", "", impl_body)
+        required = [
+            "confirm_candidate<=confirm_offset",
+            "self.policy==AbnormalRecoveryPolicy::Optimized||matches!(dispatch_gate,AbnormalRecoveryDispatchGate::ConfirmBounded{..})",
+            "AbnormalRecoveryPolicy::Standard=>AbnormalRecoveryAction::StopRecovery",
+            "AbnormalRecoveryPolicy::Optimized=>AbnormalRecoveryAction::ContinueNextSegment",
+            "AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment",
+            "letmessage_start=self.truncate_offset",
+            "(message_end,message_start)",
+            "segment_base.checked_add(relative_start)",
+            "(message_end,message_end)",
+        ]
+        if any(fragment not in normalized for fragment in required):
+            violations.append("Local abnormal recovery transition matrix changed")
+        if re.search(r"\b(?:segment_base\s*\+\s*relative_start|message_start\s*\+\s*validated_size)\b", impl_body):
+            violations.append("Local abnormal recovery uses unchecked offset arithmetic")
+        if re.search(r"\b(?:ArcMut|DispatchRequest|MessageStoreConfig|controller|checkpoint|window|stats|dyn)\b", impl_body):
+            violations.append("Local abnormal recovery absorbed Store orchestration")
+        if re.search(r"\b(?:as|unwrap|expect|panic)\b", impl_body):
+            violations.append("Local abnormal recovery uses forbidden conversion or panic")
+
+    if any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local abnormal recovery forbids alias/brace/glob imports")
+    return violations
+
+
 def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
     violations: list[str] = []
     signatures = {
@@ -407,17 +473,13 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
         if named_function_signature(commit_log, name) != expected:
             violations.append(f"{name} public signature changed")
 
-    for name, expected_hash in ABNORMAL_RECOVERY_BODY_HASHES.items():
-        body = named_function_body(commit_log, name)
-        actual_hash = "" if body is None else hashlib.sha256(re.sub(r"\s+", "", body).encode()).hexdigest()
-        if actual_hash != expected_hash:
-            violations.append(f"{name} body changed")
-
     recovery_prefix = "rocketmq_store_local::commit_log::recovery::"
     recovery_imports = {
         body.removeprefix(recovery_prefix)
         for kind, _, body, _ in active_import_records(commit_log)
-        if kind == "use" and body.startswith(recovery_prefix)
+        if kind == "use"
+        and body.startswith(recovery_prefix)
+        and body.removeprefix(recovery_prefix).startswith("Normal")
     }
     expected_recovery_imports = {
         "NormalRecoveryAction",
@@ -555,6 +617,129 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
         state_creation = body.find("NormalRecoveryState::try_new")
         if state_creation == -1 or (empty_branch != -1 and state_creation < empty_branch):
             violations.append(f"{name} empty-file path must bypass Local reducer")
+    return violations
+
+
+def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
+    violations: list[str] = []
+    recovery_prefix = "rocketmq_store_local::commit_log::recovery::"
+    expected_imports = {
+        "AbnormalRecoveryAction",
+        "AbnormalRecoveryDispatchGate",
+        "AbnormalRecoveryEvent",
+        "AbnormalRecoveryPolicy",
+        "AbnormalRecoveryState",
+    }
+    imports = {
+        body.removeprefix(recovery_prefix)
+        for kind, _, body, _ in active_import_records(commit_log)
+        if kind == "use" and body.startswith(recovery_prefix) and body.removeprefix(recovery_prefix).startswith("Abnormal")
+    }
+    if imports != expected_imports:
+        violations.append("Store abnormal recovery imports must be exact Local imports")
+    if any(
+        kind == "use"
+        and body.startswith(recovery_prefix)
+        and body.removeprefix(recovery_prefix).startswith("Abnormal")
+        and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(commit_log)
+    ):
+        violations.append("Store abnormal recovery imports forbid alias/brace/glob")
+
+    candidate_helper = named_function_body(commit_log, "abnormal_confirm_candidate_end")
+    normalized_candidate = "" if candidate_helper is None else re.sub(r"\s+", "", candidate_helper)
+    for fragment in [
+        "ifcommit_log_offset<0",
+        "i64::try_from(input_size)",
+        "commit_log_offset.checked_add(input_size)",
+    ]:
+        if fragment not in normalized_candidate:
+            violations.append("Store abnormal confirm candidate helper changed")
+            break
+    cq_helper = named_function_body(commit_log, "should_truncate_abnormal_recovery_consume_queue")
+    if cq_helper is None or re.sub(r"\s+", "", cq_helper) != (
+        "max<0||u64::try_from(max).is_ok_and(|value|value>=truncate)"
+    ):
+        violations.append("Store abnormal recovery ConsumeQueue predicate changed")
+
+    for name, policy in [
+        ("recover_abnormally", "Standard"),
+        ("recover_abnormally_optimized", "Optimized"),
+    ]:
+        body = named_function_body(commit_log, name)
+        if body is None:
+            violations.append(f"{name} body missing")
+            continue
+        if body.count(f"AbnormalRecoveryPolicy::{policy}") != 1:
+            violations.append(f"{name} Local abnormal policy construction changed")
+        if body.count("AbnormalRecoveryState::try_new") != 1:
+            violations.append(f"{name} must construct one Local abnormal state")
+        normalized = re.sub(r"\s+", "", body)
+        if policy == "Optimized":
+            seed = "letinitial_offset=ifindex==0{first_recovery_file.get_file_from_offset()}else{0};"
+            input_size = "msg_size"
+        else:
+            seed = "letinitial_offset=first_recovery_file.get_file_from_offset();"
+            input_size = "input_size"
+        if seed not in normalized:
+            violations.append(f"{name} abnormal recovery seed changed")
+        if normalized.count(
+            f"abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,{input_size})"
+        ) != 1:
+            violations.append(f"{name} confirm candidate must use raw input size")
+        if body.count("self.get_confirm_offset().max(0)") != 1:
+            violations.append(f"{name} must read a fresh confirm limit per message")
+        if body.count("AbnormalRecoveryDispatchGate::ConfirmBounded") != 1:
+            violations.append(f"{name} must build one Local confirm-bounded gate")
+        for event in ["SegmentStarted", "MessageAccepted", "Blank", "InvalidRecord", "SourceEnded"]:
+            if body.count(f"AbnormalRecoveryEvent::{event}") != 1:
+                violations.append(f"{name} must route {event} through Local abnormal reducer")
+        if body.count("abnormal_recovery.summary()") != 1:
+            violations.append(f"{name} must bind exactly one Local abnormal summary")
+        if "AbnormalRecoverySummary{" in normalized:
+            violations.append(f"{name} must not construct an abnormal summary")
+        if "letdo_dispatch=true;" not in normalized or "do_dispatch=false" in normalized:
+            violations.append(f"{name} abnormal recovery dispatch mode changed")
+        dispatch_arm = (
+            "Ok(AbnormalRecoveryAction::DispatchMessage)=>{"
+            "self.on_commit_log_dispatch(&mutdispatch_request,do_dispatch,true,false);}"
+        )
+        if dispatch_arm not in normalized or "Ok(AbnormalRecoveryAction::SkipMessageDispatch)=>{}" not in normalized:
+            violations.append(f"{name} must obey Local message dispatch actions")
+        blank_hook = (
+            "Ok(AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment)=>{"
+            "self.on_commit_log_dispatch(&mutdispatch_request,do_dispatch,true,true);"
+        )
+        if blank_hook not in normalized or "self.dispatcher.dispatch" in normalized:
+            violations.append(f"{name} blank must use only the compatibility file-end hook")
+        if policy == "Standard":
+            checked_cursor = "current_pos.checked_add(input_size)"
+            if normalized.count(checked_cursor) != 1 or "current_pos+input_size" in normalized:
+                violations.append(f"{name} raw input cursor advancement changed")
+        else:
+            if "file_processed=true;" not in normalized or "recovery_ctx.stats.files_processed+=1;" not in normalized:
+                violations.append(f"{name} skipped valid messages must remain counted")
+        required_final = [
+            "letsummary=abnormal_recovery.summary();",
+            "i64::try_from(summary.last_valid_offset)",
+            "i64::try_from(summary.confirm_valid_offset)",
+            "i64::try_from(summary.truncate_offset)",
+            "self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(),confirm_valid_offset)",
+            "self.set_confirm_offset(last_valid_offset)",
+            "should_truncate_abnormal_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
+            "message_store.truncate_dirty_logic_files(process_offset)",
+            "self.mapped_file_queue.set_flushed_where(process_offset)",
+            "self.mapped_file_queue.set_committed_where(process_offset)",
+            "self.mapped_file_queue.truncate_dirty_files(process_offset)",
+        ]
+        if any(fragment not in normalized for fragment in required_final):
+            violations.append(f"{name} final abnormal watermarks changed")
+        if re.search(r"\b(?:last_valid_msg_phy_offset|last_confirm_valid_msg_phy_offset|mapped_file_offset)\b", body):
+            violations.append(f"{name} copied Local abnormal watermark state")
+        if re.search(r"\bmatch\s+AbnormalRecoveryPolicy\b", body):
+            violations.append(f"{name} copied Local abnormal policy match")
+        if re.search(r"\b(?:as|unwrap|expect|panic)\b", body):
+            violations.append(f"{name} uses unchecked conversion or panic")
     return violations
 
 
@@ -1558,17 +1743,63 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
                 "(NormalRecoveryAction::ContinueRecord, end_offset, end_offset)",
                 1,
             ),
-            source.replace("SourceEnded,", "SourceEnded { kind: u8 },", 1),
+            source[: source.index("pub enum NormalRecoveryEvent")]
+            + source[source.index("pub enum NormalRecoveryEvent") :].replace(
+                "SourceEnded,", "SourceEnded { kind: u8 },", 1
+            ),
             source.replace(
                 "let (action, next_last_valid, next_truncate) = match event {",
                 "let controller = 0;\n        let (action, next_last_valid, next_truncate) = match event {",
                 1,
             ),
-            source.replace("segment_base.checked_add(relative_start)", "segment_base + relative_start", 1),
+            source[: source.index("impl NormalRecoveryState")]
+            + source[source.index("impl NormalRecoveryState") :].replace(
+                "segment_base.checked_add(relative_start)", "segment_base + relative_start", 1
+            ),
             source.replace("use tracing::info;", "use tracing::info as recovery_info;", 1),
         ]
         for mutation in mutations:
             self.assertNotEqual([], normal_recovery_state_boundary_violations(mutation))
+
+    def test_abnormal_recovery_state_contract_rejects_matrix_and_ownership_mutations(self) -> None:
+        source = (LOCAL_CRATE / "src" / "commit_log" / "recovery.rs").read_text(encoding="utf-8")
+        self.assertEqual([], abnormal_recovery_state_boundary_violations(source))
+        mutations = [
+            source.replace("confirm_candidate <= confirm_offset", "confirm_candidate < confirm_offset", 1),
+            source.replace(
+                "self.policy == AbnormalRecoveryPolicy::Optimized\n"
+                "                        || matches!(dispatch_gate, AbnormalRecoveryDispatchGate::ConfirmBounded { .. })",
+                "matches!(dispatch_gate, AbnormalRecoveryDispatchGate::ConfirmBounded { .. })",
+                1,
+            ),
+            source.replace(
+                "|| matches!(dispatch_gate, AbnormalRecoveryDispatchGate::ConfirmBounded { .. })",
+                "|| true",
+                1,
+            ),
+            source.replace(
+                "AbnormalRecoveryPolicy::Standard => AbnormalRecoveryAction::StopRecovery",
+                "AbnormalRecoveryPolicy::Standard => AbnormalRecoveryAction::ContinueNextSegment",
+                1,
+            ),
+            source.replace(
+                "policy: AbnormalRecoveryPolicy,",
+                "policy: AbnormalRecoveryPolicy,\n    controller: bool,",
+                1,
+            ),
+            source.replace("validated_size: u64,", "input_size: u64,", 1),
+            source.replace(
+                "let (action, next_last_valid, next_confirm_valid, next_truncate) = match event {",
+                "let stats = 0;\n        let (action, next_last_valid, next_confirm_valid, next_truncate) = match event {",
+                1,
+            ),
+            source.replace("segment_base.checked_add(relative_start)", "segment_base + relative_start", 1),
+            source.replace("use tracing::info;", "use tracing::info as recovery_info;", 1),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
+                self.assertNotEqual([], abnormal_recovery_state_boundary_violations(mutation))
 
     def test_store_normal_recovery_adapters_reject_branch_bypass_and_abnormal_mutations(self) -> None:
         source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
@@ -1634,6 +1865,57 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
         )
         self.assertNotEqual(source, mutation)
         self.assertNotEqual([], store_normal_recovery_adapter_violations(mutation))
+
+    def test_store_abnormal_recovery_adapters_use_local_state(self) -> None:
+        source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
+        self.assertEqual([], store_abnormal_recovery_adapter_violations(source))
+
+    def test_store_abnormal_recovery_contract_rejects_review_mutations(self) -> None:
+        source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
+        self.assertEqual([], store_abnormal_recovery_adapter_violations(source))
+        abnormal_start = source.index("pub async fn recover_abnormally_optimized")
+
+        def mutate_abnormal(old: str, new: str) -> str:
+            return source[:abnormal_start] + source[abnormal_start:].replace(old, new, 1)
+
+        mutations = [
+            mutate_abnormal("self.get_confirm_offset().max(0)", "initial_offset"),
+            source.replace(
+                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, msg_size)",
+                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, validated_size)",
+                1,
+            ),
+            source.replace(
+                "Ok(AbnormalRecoveryAction::SkipMessageDispatch) => {}",
+                "Ok(AbnormalRecoveryAction::SkipMessageDispatch) => {\n                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);\n                        }",
+                1,
+            ),
+            source.replace("let initial_offset = if index == 0", "let initial_offset = if false", 1),
+            source.replace(
+                "let summary = abnormal_recovery.summary();",
+                "let summary = rocketmq_store_local::commit_log::recovery::AbnormalRecoverySummary { last_valid_offset: 0, confirm_valid_offset: 0, truncate_offset: 0 };",
+                1,
+            ),
+            source.replace(
+                "message_store.get_min_phy_offset(), confirm_valid_offset",
+                "message_store.get_min_phy_offset(), last_valid_offset",
+                1,
+            ),
+            mutate_abnormal("self.set_confirm_offset(last_valid_offset)", "self.set_confirm_offset(process_offset)"),
+            mutate_abnormal("summary.truncate_offset", "summary.last_valid_offset"),
+            mutate_abnormal(
+                "self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);",
+                "self.dispatcher.dispatch(&dispatch_request);",
+            ),
+            mutate_abnormal("file_processed = true;", "file_processed = false;"),
+            source.replace("current_pos.checked_add(input_size)", "current_pos + input_size", 1),
+            source.replace("abnormal_confirm_candidate_end", "abnormal_confirm_candidate_end_bypass", 1),
+            source.replace("AbnormalRecoveryPolicy::Standard", "AbnormalRecoveryPolicy::Optimized", 1),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
+                self.assertNotEqual([], store_abnormal_recovery_adapter_violations(mutation))
 
     def test_store_record_parser_wrapper_contract_rejects_copy_and_import_mutations(self) -> None:
         root = "pub mod commit_log;"

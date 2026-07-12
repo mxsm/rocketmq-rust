@@ -110,6 +110,11 @@ use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordErrorKind;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
+use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryAction;
+use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
+use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryEvent;
+use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
+use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryAction;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryEvent;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
@@ -138,6 +143,39 @@ fn normal_recovery_start_index(mapped_file_count: usize, max_recovery_commit_log
 
 fn should_truncate_normal_recovery_consume_queue(max: i64, truncate: u64) -> bool {
     max < 0 || u64::try_from(max).is_ok_and(|value| value >= truncate)
+}
+
+fn should_truncate_abnormal_recovery_consume_queue(max: i64, truncate: u64) -> bool {
+    max < 0 || u64::try_from(max).is_ok_and(|value| value >= truncate)
+}
+
+#[derive(Debug, thiserror::Error)]
+enum AbnormalRecoveryAdapterOffsetError {
+    #[error("commitlog offset {offset} is negative")]
+    NegativeCommitLogOffset { offset: i64 },
+    #[error("input frame size {size} exceeds i64::MAX")]
+    InputSizeExceedsI64 { size: usize },
+    #[error("commitlog offset {offset} plus input frame size {size} overflowed")]
+    ConfirmCandidateOverflow { offset: i64, size: i64 },
+}
+
+fn abnormal_confirm_candidate_end(
+    commit_log_offset: i64,
+    input_size: usize,
+) -> Result<i64, AbnormalRecoveryAdapterOffsetError> {
+    if commit_log_offset < 0 {
+        return Err(AbnormalRecoveryAdapterOffsetError::NegativeCommitLogOffset {
+            offset: commit_log_offset,
+        });
+    }
+    let input_size = i64::try_from(input_size)
+        .map_err(|_| AbnormalRecoveryAdapterOffsetError::InputSizeExceedsI64 { size: input_size })?;
+    commit_log_offset
+        .checked_add(input_size)
+        .ok_or(AbnormalRecoveryAdapterOffsetError::ConfirmCandidateOverflow {
+            offset: commit_log_offset,
+            size: input_size,
+        })
 }
 
 fn log_abnormal_recovery_window(
@@ -2010,29 +2048,49 @@ impl CommitLog {
         log_abnormal_recovery_window(&recovery_window, "optimized");
 
         let mut index = recovery_window.start_index;
-        let mut last_valid_msg_phy_offset = 0u64;
-        let mut last_confirm_valid_msg_phy_offset = 0u64;
+        let Some(first_recovery_file) = mapped_files_inner.get(index) else {
+            warn!("optimized abnormal recovery window starts outside mapped files: {index}");
+            return;
+        };
+        let initial_offset = if index == 0 {
+            first_recovery_file.get_file_from_offset()
+        } else {
+            0
+        };
+        let mut abnormal_recovery =
+            match AbnormalRecoveryState::try_new(initial_offset, AbnormalRecoveryPolicy::Optimized) {
+                Ok(state) => state,
+                Err(error) => {
+                    warn!("optimized abnormal recovery initial state failed: {error}");
+                    return;
+                }
+            };
         let do_dispatch = true;
+
+        let Some(local_message_store) = self.local_file_message_store.as_ref() else {
+            warn!("optimized abnormal recovery requires an attached local message store");
+            return;
+        };
 
         let mut recovery_ctx = RecoveryContext::new(
             check_crc_on_recover,
             check_dup_info,
             self.message_store_config.clone(),
-            self.local_file_message_store.as_ref().unwrap().max_delay_level(),
-            self.local_file_message_store
-                .as_ref()
-                .unwrap()
-                .delay_level_table_ref()
-                .clone(),
+            local_message_store.max_delay_level(),
+            local_message_store.delay_level_table_ref().clone(),
         );
 
-        while index < mapped_files_inner.len() {
-            let mapped_file = mapped_files_inner.get(index).unwrap();
+        'segments: while index < mapped_files_inner.len() {
+            let Some(mapped_file) = mapped_files_inner.get(index) else {
+                break;
+            };
             let process_offset = mapped_file.get_file_from_offset();
 
-            if index == 0 {
-                last_valid_msg_phy_offset = process_offset;
-                last_confirm_valid_msg_phy_offset = process_offset;
+            if let Err(error) = abnormal_recovery.apply(AbnormalRecoveryEvent::SegmentStarted {
+                base_offset: process_offset,
+            }) {
+                warn!("optimized abnormal recovery offset state failed: {error}");
+                break;
             }
 
             info!(
@@ -2042,41 +2100,126 @@ impl CommitLog {
 
             let mut iterator = BatchMessageIterator::new(mapped_file);
             let mut file_processed = false;
+            let mut record_closed_segment = false;
 
             while let Some((mut msg_bytes, absolute_offset, msg_size)) = iterator.next_message() {
                 let mut dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
 
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
-                    last_valid_msg_phy_offset =
-                        (process_offset + absolute_offset as u64) + dispatch_request.msg_size as u64;
-
-                    let should_dispatch =
-                        if self.message_store_config.duplication_enable || broker_config.enable_controller_mode {
-                            dispatch_request.commit_log_offset + msg_size as i64 <= self.get_confirm_offset()
-                        } else {
-                            true
+                    let confirm_candidate_end =
+                        match abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, msg_size) {
+                            Ok(candidate) => candidate,
+                            Err(error) => {
+                                warn!("optimized abnormal recovery confirm candidate failed: {error}");
+                                break 'segments;
+                            }
                         };
-
-                    if should_dispatch {
-                        self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
-                        last_confirm_valid_msg_phy_offset = dispatch_request.commit_log_offset as u64 + msg_size as u64;
+                    let validated_size = match u64::try_from(dispatch_request.msg_size) {
+                        Ok(size) => size,
+                        Err(error) => {
+                            warn!("optimized abnormal recovery validated size conversion failed: {error}");
+                            break 'segments;
+                        }
+                    };
+                    let relative_start = match u64::try_from(absolute_offset) {
+                        Ok(offset) => offset,
+                        Err(error) => {
+                            warn!("optimized abnormal recovery relative offset conversion failed: {error}");
+                            break 'segments;
+                        }
+                    };
+                    let dispatch_gate =
+                        if self.message_store_config.duplication_enable || broker_config.enable_controller_mode {
+                            let confirm_offset = match u64::try_from(self.get_confirm_offset().max(0)) {
+                                Ok(offset) => offset,
+                                Err(error) => {
+                                    warn!("optimized abnormal recovery confirm limit conversion failed: {error}");
+                                    break 'segments;
+                                }
+                            };
+                            AbnormalRecoveryDispatchGate::ConfirmBounded { confirm_offset }
+                        } else {
+                            AbnormalRecoveryDispatchGate::Ungated
+                        };
+                    match abnormal_recovery.apply(AbnormalRecoveryEvent::MessageAccepted {
+                        segment_base: process_offset,
+                        relative_start,
+                        validated_size,
+                        confirm_candidate_end,
+                        dispatch_gate,
+                    }) {
+                        Ok(AbnormalRecoveryAction::DispatchMessage) => {
+                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
+                        }
+                        Ok(AbnormalRecoveryAction::SkipMessageDispatch) => {}
+                        Ok(action) => {
+                            warn!("optimized abnormal recovery unexpected message action: {action:?}");
+                            break 'segments;
+                        }
+                        Err(error) => {
+                            warn!("optimized abnormal recovery offset state failed: {error}");
+                            break 'segments;
+                        }
                     }
-
                     file_processed = true;
                 } else if dispatch_request.success && dispatch_request.msg_size == 0 {
                     // End of file marker
-                    self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
-                    break;
+                    record_closed_segment = true;
+                    match abnormal_recovery.apply(AbnormalRecoveryEvent::Blank) {
+                        Ok(AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment) => {
+                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
+                            break;
+                        }
+                        Ok(action) => {
+                            warn!("optimized abnormal recovery unexpected blank action: {action:?}");
+                            break 'segments;
+                        }
+                        Err(error) => {
+                            warn!("optimized abnormal recovery offset state failed: {error}");
+                            break 'segments;
+                        }
+                    }
                 } else {
                     // Invalid message
                     if dispatch_request.msg_size > 0 {
-                        warn!(
-                            "found a half message at {}, it will be truncated.",
-                            process_offset + absolute_offset as u64,
-                        );
+                        let warning_offset = u64::try_from(absolute_offset)
+                            .ok()
+                            .and_then(|relative| process_offset.checked_add(relative));
+                        if let Some(warning_offset) = warning_offset {
+                            warn!("found a half message at {warning_offset}, it will be truncated.");
+                        } else {
+                            warn!("found a half message with an invalid offset; it will be truncated.");
+                        }
                     }
                     info!("recover physics file end: {}", mapped_file.get_file_name());
-                    break;
+                    record_closed_segment = true;
+                    match abnormal_recovery.apply(AbnormalRecoveryEvent::InvalidRecord) {
+                        Ok(AbnormalRecoveryAction::ContinueNextSegment) => break,
+                        Ok(AbnormalRecoveryAction::StopRecovery) => break 'segments,
+                        Ok(action) => {
+                            warn!("optimized abnormal recovery unexpected invalid action: {action:?}");
+                            break 'segments;
+                        }
+                        Err(error) => {
+                            warn!("optimized abnormal recovery offset state failed: {error}");
+                            break 'segments;
+                        }
+                    }
+                }
+            }
+
+            if !record_closed_segment {
+                match abnormal_recovery.apply(AbnormalRecoveryEvent::SourceEnded) {
+                    Ok(AbnormalRecoveryAction::ContinueNextSegment) => {}
+                    Ok(AbnormalRecoveryAction::StopRecovery) => break,
+                    Ok(action) => {
+                        warn!("optimized abnormal recovery unexpected source-end action: {action:?}");
+                        break;
+                    }
+                    Err(error) => {
+                        warn!("optimized abnormal recovery offset state failed: {error}");
+                        break;
+                    }
                 }
             }
 
@@ -2087,29 +2230,47 @@ impl CommitLog {
             index += 1;
         }
 
-        let process_offset = last_valid_msg_phy_offset;
+        let summary = abnormal_recovery.summary();
+        let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
+            Ok(offset) => offset,
+            Err(error) => {
+                warn!("optimized abnormal recovery last-valid conversion failed: {error}");
+                return;
+            }
+        };
+        let confirm_valid_offset = match i64::try_from(summary.confirm_valid_offset) {
+            Ok(offset) => offset,
+            Err(error) => {
+                warn!("optimized abnormal recovery confirm-valid conversion failed: {error}");
+                return;
+            }
+        };
+        let process_offset = match i64::try_from(summary.truncate_offset) {
+            Ok(offset) => offset,
+            Err(error) => {
+                warn!("optimized abnormal recovery truncate conversion failed: {error}");
+                return;
+            }
+        };
 
         if broker_config.enable_controller_mode {
-            self.clamp_controller_recover_confirm_offset(
-                message_store.get_min_phy_offset(),
-                last_confirm_valid_msg_phy_offset as i64,
-            );
+            self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), confirm_valid_offset);
         } else {
-            self.set_confirm_offset(last_valid_msg_phy_offset as i64);
+            self.set_confirm_offset(last_valid_offset);
         }
 
         // Clear ConsumeQueue redundant data
-        if max_phy_offset_of_consume_queue as u64 >= process_offset {
+        if should_truncate_abnormal_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
             warn!(
                 "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                 max_phy_offset_of_consume_queue, process_offset
             );
-            message_store.truncate_dirty_logic_files(process_offset as i64);
+            message_store.truncate_dirty_logic_files(process_offset);
         }
 
-        self.mapped_file_queue.set_flushed_where(process_offset as i64);
-        self.mapped_file_queue.set_committed_where(process_offset as i64);
-        self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
+        self.mapped_file_queue.set_flushed_where(process_offset);
+        self.mapped_file_queue.set_committed_where(process_offset);
+        self.mapped_file_queue.truncate_dirty_files(process_offset);
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Abnormal");
@@ -2141,100 +2302,224 @@ impl CommitLog {
             log_abnormal_recovery_window(&recovery_window, "standard");
 
             let mut index = recovery_window.start_index;
-            //let mut mapped_file = mapped_files_inner.get(index).unwrap().lock().await;
-            let mut mapped_file = mapped_files_inner.get(index).unwrap();
-            let mut process_offset = mapped_file.get_file_from_offset();
-            let mut mapped_file_offset = 0u64;
-            //When recovering, the maximum value obtained when getting get_confirm_offset is
-            // the file size of the latest file plus the value resolved from the file name.
-            let mut last_valid_msg_phy_offset = process_offset;
-            let mut last_confirm_valid_msg_phy_offset = process_offset;
-            // normal recover doesn't require dispatching
+            let Some(first_recovery_file) = mapped_files_inner.get(index) else {
+                warn!("standard abnormal recovery window starts outside mapped files: {index}");
+                return;
+            };
+            let initial_offset = first_recovery_file.get_file_from_offset();
+            let mut abnormal_recovery =
+                match AbnormalRecoveryState::try_new(initial_offset, AbnormalRecoveryPolicy::Standard) {
+                    Ok(state) => state,
+                    Err(error) => {
+                        warn!("standard abnormal recovery initial state failed: {error}");
+                        return;
+                    }
+                };
             let do_dispatch = true;
-            let mut current_pos = 0usize;
-            loop {
-                let (msg, size) = self.get_simple_message_bytes(current_pos, mapped_file.as_ref());
-                if msg.is_none() {
+            let Some(local_message_store) = self.local_file_message_store.as_ref() else {
+                warn!("standard abnormal recovery requires an attached local message store");
+                return;
+            };
+            let max_delay_level = local_message_store.max_delay_level();
+            let delay_level_table = local_message_store.delay_level_table_ref().clone();
+
+            'segments: while index < mapped_files_inner.len() {
+                let Some(mapped_file) = mapped_files_inner.get(index) else {
+                    break;
+                };
+                let process_offset = mapped_file.get_file_from_offset();
+                if let Err(error) = abnormal_recovery.apply(AbnormalRecoveryEvent::SegmentStarted {
+                    base_offset: process_offset,
+                }) {
+                    warn!("standard abnormal recovery offset state failed: {error}");
                     break;
                 }
-                let mut msg_bytes = msg.unwrap();
-                let mut dispatch_request = check_message_and_return_size(
-                    &mut msg_bytes,
-                    check_crc_on_recover,
-                    check_dup_info,
-                    true,
-                    &self.message_store_config,
-                    self.local_file_message_store.as_ref().unwrap().max_delay_level(),
-                    self.local_file_message_store.as_ref().unwrap().delay_level_table_ref(),
-                );
-                current_pos += size;
-                if dispatch_request.success && dispatch_request.msg_size > 0 {
-                    last_valid_msg_phy_offset = process_offset + mapped_file_offset;
-                    mapped_file_offset += dispatch_request.msg_size as u64;
 
-                    if self.message_store_config.duplication_enable || self.broker_config.enable_controller_mode {
-                        if dispatch_request.commit_log_offset + size as i64 <= self.get_confirm_offset() {
-                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
-                            last_confirm_valid_msg_phy_offset = dispatch_request.commit_log_offset as u64 + size as u64;
+                let mut current_pos = 0usize;
+                loop {
+                    let frame_position = current_pos;
+                    let (msg, input_size) = self.get_simple_message_bytes(current_pos, mapped_file.as_ref());
+                    let Some(mut msg_bytes) = msg else {
+                        match abnormal_recovery.apply(AbnormalRecoveryEvent::SourceEnded) {
+                            Ok(AbnormalRecoveryAction::StopRecovery) => break 'segments,
+                            Ok(AbnormalRecoveryAction::ContinueNextSegment) => break,
+                            Ok(action) => {
+                                warn!("standard abnormal recovery unexpected source-end action: {action:?}");
+                                break 'segments;
+                            }
+                            Err(error) => {
+                                warn!("standard abnormal recovery offset state failed: {error}");
+                                break 'segments;
+                            }
+                        }
+                    };
+                    let Some(next_position) = current_pos.checked_add(input_size) else {
+                        warn!(
+                            "standard abnormal recovery frame position overflow at {current_pos} with size \
+                             {input_size}"
+                        );
+                        break 'segments;
+                    };
+                    current_pos = next_position;
+                    let mut dispatch_request = check_message_and_return_size(
+                        &mut msg_bytes,
+                        check_crc_on_recover,
+                        check_dup_info,
+                        true,
+                        &self.message_store_config,
+                        max_delay_level,
+                        &delay_level_table,
+                    );
+                    if dispatch_request.success && dispatch_request.msg_size > 0 {
+                        let confirm_candidate_end =
+                            match abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, input_size) {
+                                Ok(candidate) => candidate,
+                                Err(error) => {
+                                    warn!("standard abnormal recovery confirm candidate failed: {error}");
+                                    break 'segments;
+                                }
+                            };
+                        let validated_size = match u64::try_from(dispatch_request.msg_size) {
+                            Ok(size) => size,
+                            Err(error) => {
+                                warn!("standard abnormal recovery validated size conversion failed: {error}");
+                                break 'segments;
+                            }
+                        };
+                        let relative_start = match u64::try_from(frame_position) {
+                            Ok(offset) => offset,
+                            Err(error) => {
+                                warn!("standard abnormal recovery relative offset conversion failed: {error}");
+                                break 'segments;
+                            }
+                        };
+                        let dispatch_gate =
+                            if self.message_store_config.duplication_enable || broker_config.enable_controller_mode {
+                                let confirm_offset = match u64::try_from(self.get_confirm_offset().max(0)) {
+                                    Ok(offset) => offset,
+                                    Err(error) => {
+                                        warn!("standard abnormal recovery confirm limit conversion failed: {error}");
+                                        break 'segments;
+                                    }
+                                };
+                                AbnormalRecoveryDispatchGate::ConfirmBounded { confirm_offset }
+                            } else {
+                                AbnormalRecoveryDispatchGate::Ungated
+                            };
+                        match abnormal_recovery.apply(AbnormalRecoveryEvent::MessageAccepted {
+                            segment_base: process_offset,
+                            relative_start,
+                            validated_size,
+                            confirm_candidate_end,
+                            dispatch_gate,
+                        }) {
+                            Ok(AbnormalRecoveryAction::DispatchMessage) => {
+                                self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
+                            }
+                            Ok(AbnormalRecoveryAction::SkipMessageDispatch) => {}
+                            Ok(action) => {
+                                warn!("standard abnormal recovery unexpected message action: {action:?}");
+                                break 'segments;
+                            }
+                            Err(error) => {
+                                warn!("standard abnormal recovery offset state failed: {error}");
+                                break 'segments;
+                            }
+                        }
+                    } else if dispatch_request.success && dispatch_request.msg_size == 0 {
+                        match abnormal_recovery.apply(AbnormalRecoveryEvent::Blank) {
+                            Ok(AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment) => {
+                                self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
+                                break;
+                            }
+                            Ok(action) => {
+                                warn!("standard abnormal recovery unexpected blank action: {action:?}");
+                                break 'segments;
+                            }
+                            Err(error) => {
+                                warn!("standard abnormal recovery offset state failed: {error}");
+                                break 'segments;
+                            }
                         }
                     } else {
-                        self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
+                        if dispatch_request.msg_size > 0 {
+                            let warning_offset = u64::try_from(frame_position)
+                                .ok()
+                                .and_then(|relative| process_offset.checked_add(relative));
+                            if let Some(warning_offset) = warning_offset {
+                                warn!("found a half message at {warning_offset}, it will be truncated.");
+                            } else {
+                                warn!("found a half message with an invalid offset; it will be truncated.");
+                            }
+                        }
+                        info!("recover physics file end,{} ", mapped_file.get_file_name());
+                        match abnormal_recovery.apply(AbnormalRecoveryEvent::InvalidRecord) {
+                            Ok(AbnormalRecoveryAction::StopRecovery) => break 'segments,
+                            Ok(AbnormalRecoveryAction::ContinueNextSegment) => break,
+                            Ok(action) => {
+                                warn!("standard abnormal recovery unexpected invalid action: {action:?}");
+                                break 'segments;
+                            }
+                            Err(error) => {
+                                warn!("standard abnormal recovery offset state failed: {error}");
+                                break 'segments;
+                            }
+                        }
                     }
-                } else if dispatch_request.success && dispatch_request.msg_size == 0 {
-                    // Come the end of the file, switch to the next file Since the
-                    // return 0 representatives met last hole,
-                    // this can not be included in truncate offset
-                    self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
-                    index += 1;
-                    if index >= mapped_files_inner.len() {
-                        info!(
-                            "recover last 3 physics file over, last mapped file:{} ",
-                            mapped_file.get_file_name()
-                        );
-                        break;
-                    } else {
-                        mapped_file = mapped_files_inner.get(index).unwrap();
-                        mapped_file_offset = 0;
-                        process_offset = mapped_file.get_file_from_offset();
-                        current_pos = 0;
-                        info!("recover next physics file:{}", mapped_file.get_file_name());
+                }
+
+                index += 1;
+                if index < mapped_files_inner.len() {
+                    if let Some(next_file) = mapped_files_inner.get(index) {
+                        info!("recover next physics file:{}", next_file.get_file_name());
                     }
-                } else if !dispatch_request.success {
-                    if dispatch_request.msg_size > 0 {
-                        warn!(
-                            "found a half message at {}, it will be truncated.",
-                            process_offset + mapped_file_offset,
-                        );
-                    }
-                    info!("recover physics file end,{} ", mapped_file.get_file_name());
-                    break;
+                } else {
+                    info!(
+                        "recover last physics file over, last mapped file:{} ",
+                        mapped_file.get_file_name()
+                    );
                 }
             }
 
-            // only for rocksdb mode
-            // this.getMessageStore().finishCommitLogDispatch();
-
-            process_offset += mapped_file_offset;
+            let summary = abnormal_recovery.summary();
+            let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
+                Ok(offset) => offset,
+                Err(error) => {
+                    warn!("standard abnormal recovery last-valid conversion failed: {error}");
+                    return;
+                }
+            };
+            let confirm_valid_offset = match i64::try_from(summary.confirm_valid_offset) {
+                Ok(offset) => offset,
+                Err(error) => {
+                    warn!("standard abnormal recovery confirm-valid conversion failed: {error}");
+                    return;
+                }
+            };
+            let process_offset = match i64::try_from(summary.truncate_offset) {
+                Ok(offset) => offset,
+                Err(error) => {
+                    warn!("standard abnormal recovery truncate conversion failed: {error}");
+                    return;
+                }
+            };
             if broker_config.enable_controller_mode {
-                self.clamp_controller_recover_confirm_offset(
-                    message_store.get_min_phy_offset(),
-                    last_confirm_valid_msg_phy_offset as i64,
-                );
+                self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), confirm_valid_offset);
             } else {
-                self.set_confirm_offset(last_valid_msg_phy_offset as i64);
+                self.set_confirm_offset(last_valid_offset);
             }
 
-            // Clear ConsumeQueue redundant data
-            if max_phy_offset_of_consume_queue as u64 >= process_offset {
+            if should_truncate_abnormal_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset)
+            {
                 warn!(
                     "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                     max_phy_offset_of_consume_queue, process_offset
                 );
-                message_store.truncate_dirty_logic_files(process_offset as i64)
+                message_store.truncate_dirty_logic_files(process_offset)
             }
-            self.mapped_file_queue.set_flushed_where(process_offset as i64);
-            self.mapped_file_queue.set_committed_where(process_offset as i64);
-            self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
+            self.mapped_file_queue.set_flushed_where(process_offset);
+            self.mapped_file_queue.set_committed_where(process_offset);
+            self.mapped_file_queue.truncate_dirty_files(process_offset);
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
@@ -2946,6 +3231,35 @@ mod tests {
         assert!(!should_truncate_normal_recovery_consume_queue(9, 10));
         assert!(should_truncate_normal_recovery_consume_queue(10, 10));
         assert!(should_truncate_normal_recovery_consume_queue(11, 10));
+    }
+
+    #[test]
+    fn abnormal_recovery_consume_queue_truncation_preserves_signed_legacy_semantics() {
+        assert!(should_truncate_abnormal_recovery_consume_queue(-1, 10));
+        assert!(!should_truncate_abnormal_recovery_consume_queue(0, 10));
+        assert!(!should_truncate_abnormal_recovery_consume_queue(9, 10));
+        assert!(should_truncate_abnormal_recovery_consume_queue(10, 10));
+        assert!(should_truncate_abnormal_recovery_consume_queue(11, 10));
+    }
+
+    #[test]
+    fn abnormal_recovery_confirm_candidate_is_checked_and_fail_closed() {
+        assert_eq!(abnormal_confirm_candidate_end(7, 5).expect("valid candidate"), 12);
+        assert!(matches!(
+            abnormal_confirm_candidate_end(-1, 1),
+            Err(AbnormalRecoveryAdapterOffsetError::NegativeCommitLogOffset { offset: -1 })
+        ));
+        assert!(matches!(
+            abnormal_confirm_candidate_end(i64::MAX, 1),
+            Err(AbnormalRecoveryAdapterOffsetError::ConfirmCandidateOverflow {
+                offset: i64::MAX,
+                size: 1,
+            })
+        ));
+        assert!(matches!(
+            abnormal_confirm_candidate_end(0, usize::MAX),
+            Err(AbnormalRecoveryAdapterOffsetError::InputSizeExceedsI64 { size: usize::MAX })
+        ));
     }
 
     #[test]
