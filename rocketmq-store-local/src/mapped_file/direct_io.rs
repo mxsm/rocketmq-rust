@@ -70,6 +70,7 @@ impl DirectIoBuffer {
 
         let layout = Layout::from_size_align(len, alignment)
             .map_err(|_| DirectIoValidationError::InvalidAlignment { alignment })?;
+        // SAFETY: `layout` has a non-zero size and a validated power-of-two alignment.
         let ptr = unsafe { alloc_zeroed(layout) };
         let ptr = NonNull::new(ptr).ok_or(DirectIoValidationError::AllocationFailed { len, alignment })?;
 
@@ -103,11 +104,13 @@ impl DirectIoBuffer {
 
     #[inline]
     pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: `ptr` owns an initialized allocation of exactly `len` bytes for `self`'s lifetime.
         unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: `&mut self` provides exclusive access to the initialized `len`-byte allocation.
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 }
@@ -115,6 +118,7 @@ impl DirectIoBuffer {
 impl Drop for DirectIoBuffer {
     fn drop(&mut self) {
         if let Ok(layout) = Layout::from_size_align(self.len, self.alignment) {
+            // SAFETY: `ptr` was allocated with this exact layout and has not been deallocated.
             unsafe {
                 dealloc(self.ptr.as_ptr(), layout);
             }

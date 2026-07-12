@@ -47,6 +47,17 @@ CANONICAL_ITEMS = {
     "MappedFileMetrics": "metrics.rs",
     "MappedFileResult": "mapped_file_error.rs",
 }
+FACADE_ROOT_ITEMS = {
+    "DirectIoBuffer",
+    "DirectIoRequest",
+    "DirectIoValidationError",
+    "FlushStrategy",
+    "IoUringBackendStatus",
+    "MappedBuffer",
+    "MappedFileError",
+    "MappedFileMetrics",
+    "MappedFileResult",
+}
 FORBIDDEN_DEPENDENCIES = {
     "rocketmq-common",
     "rocketmq-rust",
@@ -128,6 +139,9 @@ class StoreLocalContractTests(unittest.TestCase):
         findings: list[str] = []
         for path in sorted((LOCAL_CRATE / "src").rglob("*.rs")):
             source = path.read_text(encoding="utf-8")
+            source = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
+            source = re.sub(r"//[^\r\n]*", " ", source)
+            source = re.sub(r'(?s)(?:br|r|b)?(?:#+)?".*?"(?:#+)?', " ", source)
             for token in FORBIDDEN_SOURCE_TOKENS:
                 if re.search(rf"\b{re.escape(token)}\b", source):
                     findings.append(f"{path.relative_to(ROOT)}: {token}")
@@ -147,9 +161,8 @@ class StoreLocalContractTests(unittest.TestCase):
             self.assertEqual([canonical_dir / expected_file], definitions, item)
 
         facade = (STORE_CRATE / "src" / "log_file" / "mapped_file.rs").read_text(encoding="utf-8")
-        self.assertIn("pub use rocketmq_store_local::mapped_file::{", facade)
-        for item in CANONICAL_ITEMS:
-            self.assertIn(item, facade)
+        for item in FACADE_ROOT_ITEMS:
+            self.assertIn(f"pub use rocketmq_store_local::mapped_file::{item};", facade)
         self.assertIn("pub use rocketmq_store_local::mapped_file::io_uring_impl;", facade)
 
 

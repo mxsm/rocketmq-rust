@@ -4888,6 +4888,7 @@ dependencies = [
  "rocketmq-runtime",
  "rocketmq-rust",
  "rocketmq-store-api",
+ "rocketmq-store-local",
  "rocketmq-tieredstore",
  "rocksdb",
  "serde",
@@ -4896,7 +4897,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-uring",
  "tokio-util",
  "tracing",
  "trait-variant",
@@ -4924,6 +4924,18 @@ dependencies = [
  "rocketmq-error",
  "rocketmq-store",
  "tabled",
+]
+
+[[package]]
+name = "rocketmq-store-local"
+version = "1.0.0"
+dependencies = [
+ "bytes",
+ "memmap2",
+ "parking_lot",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio-uring",
 ]
 
 [[package]]

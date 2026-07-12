@@ -80,9 +80,8 @@ fn direct_io_and_flush_strategy_preserve_identity_and_behavior() {
 
     let buffer = canonical_direct_buffer(LegacyDirectIoBuffer::new(4096, 4096).expect("aligned buffer"));
     assert_eq!((buffer.as_ptr() as usize) % 4096, 0);
-    let request = canonical_direct_request(
-        LegacyDirectIoRequest::new(8192, buffer).expect("aligned request and file offset"),
-    );
+    let request =
+        canonical_direct_request(LegacyDirectIoRequest::new(8192, buffer).expect("aligned request and file offset"));
     assert_eq!(request.file_offset(), 8192);
     assert_eq!(request.len(), 4096);
 
@@ -127,7 +126,10 @@ fn mapped_buffer_error_and_metrics_preserve_identity_and_behavior() {
 #[test]
 fn io_uring_status_and_capability_preserve_identity() {
     let canonical_status: canonical_io_uring::IoUringBackendStatus = legacy_io_uring::io_uring_backend_status();
-    assert_eq!(canonical_status.as_str(), canonical_io_uring::io_uring_backend_status().as_str());
+    assert_eq!(
+        canonical_status.as_str(),
+        canonical_io_uring::io_uring_backend_status().as_str()
+    );
 
     let canonical_capability: canonical_io_uring::IoUringRuntimeCapability =
         legacy_io_uring::probe_io_uring_runtime_capability();

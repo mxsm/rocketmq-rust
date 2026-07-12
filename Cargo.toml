@@ -33,6 +33,7 @@ members = [
   "rocketmq-runtime",
   "rocketmq-security-api",
   "rocketmq-store-api",
+  "rocketmq-store-local",
   "rocketmq-transport",
   "rocketmq-tieredstore",
   "rocketmq-store",
@@ -65,6 +66,9 @@ description = """
 Unofficial Rust implementation of Apache RocketMQ
 """
 rust-version = "1.95.0"
+
+[workspace.lints]
+
 [workspace.dependencies]
 rocketmq-common      = { version = "1.0.0", path = "./rocketmq-common" }
 rocketmq-runtime     = { version = "1.0.0", path = "./rocketmq-runtime" }
@@ -84,6 +88,7 @@ rocketmq-model       = { version = "1.0.0", path = "./rocketmq-model" }
 rocketmq-protocol    = { version = "1.0.0", path = "./rocketmq-protocol" }
 rocketmq-security-api = { version = "1.0.0", path = "./rocketmq-security-api" }
 rocketmq-store-api     = { version = "1.0.0", path = "./rocketmq-store-api", default-features = false }
+rocketmq-store-local   = { version = "1.0.0", path = "./rocketmq-store-local", default-features = false }
 rocketmq-transport    = { version = "1.0.0", path = "./rocketmq-transport", default-features = false }
 
 tokio        = { version = "1.52", features = ["full"] }

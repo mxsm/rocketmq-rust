@@ -31,16 +31,7 @@ pub mod default_mapped_file_impl;
 pub(crate) mod reference_resource;
 mod reference_resource_counter;
 
-// New modules for storage optimization
 mod builder;
-mod direct_io;
-mod flush_strategy;
-mod mapped_buffer;
-mod mapped_file_error;
-mod metrics;
-
-// io_uring support boundary.
-pub mod io_uring_impl;
 
 /*
 // Factory for creating MappedFile instances
@@ -49,19 +40,20 @@ pub mod factory;
 
 // Re-export commonly used types
 pub use builder::MappedFileBuilder;
-pub use direct_io::DirectIoBuffer;
-pub use direct_io::DirectIoRequest;
-pub use direct_io::DirectIoValidationError;
 /*pub use factory::MappedFileConfig;
 pub use factory::MappedFileFactory;
 pub use factory::MappedFileType;*/
-pub use flush_strategy::FlushStrategy;
-pub use io_uring_impl::io_uring_backend_status;
-pub use io_uring_impl::IoUringBackendStatus;
-pub use mapped_buffer::MappedBuffer;
-pub use mapped_file_error::MappedFileError;
-pub use mapped_file_error::MappedFileResult;
-pub use metrics::MappedFileMetrics;
+pub use rocketmq_store_local::mapped_file::io_uring_backend_status;
+pub use rocketmq_store_local::mapped_file::io_uring_impl;
+pub use rocketmq_store_local::mapped_file::DirectIoBuffer;
+pub use rocketmq_store_local::mapped_file::DirectIoRequest;
+pub use rocketmq_store_local::mapped_file::DirectIoValidationError;
+pub use rocketmq_store_local::mapped_file::FlushStrategy;
+pub use rocketmq_store_local::mapped_file::IoUringBackendStatus;
+pub use rocketmq_store_local::mapped_file::MappedBuffer;
+pub use rocketmq_store_local::mapped_file::MappedFileError;
+pub use rocketmq_store_local::mapped_file::MappedFileMetrics;
+pub use rocketmq_store_local::mapped_file::MappedFileResult;
 
 pub trait MappedFile {
     /// Returns the file name of the mapped file.

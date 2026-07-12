@@ -231,7 +231,8 @@ impl MappedBuffer {
             // This avoids Bytes overhead while maintaining good performance
             let mut vec = vec![0u8; size];
 
-            // SAFETY: vec is fully initialized with zeros, safe to copy into
+            // SAFETY: Both slices are valid for `size` bytes, and the fresh `vec` cannot overlap
+            // the mapped source region.
             unsafe {
                 // Use ptr::copy_nonoverlapping for aligned, non-temporal access
                 std::ptr::copy_nonoverlapping(slice.as_ptr(), vec.as_mut_ptr(), size);
@@ -383,6 +384,8 @@ mod tests {
         file.flush().unwrap();
 
         let file = file.reopen().unwrap();
+        // SAFETY: The reopened file remains alive while creating the mapping and is not resized
+        // while the returned mapping is in use.
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
 
         Arc::new(RwLock::new(mmap))
