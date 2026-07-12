@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -439,13 +439,15 @@ python scripts/arc_mut_guard.py
   可见性差异后，A/B 从 `RecordReader` 到测试模块前的算法文本完全相同；同一 fail-closed corpus 在 A/B
   均为 10/10。Common、Protocol 与 Local V1/V2 magic 仅比较值兼容，不声明全仓唯一 owner。
 - [x] `[TEST]` 最终 focused evidence：fail-closed/transaction/whole-value 13/13、Local 全量 85 项、Store
-  property-CRC/inner-batch 2/2、record compatibility 3/3、Local ownership/mutation contract 56/56。合法 V1
+  property-CRC/inner-batch 2/2、record compatibility 3/3、Local ownership/mutation contract 62/62。合法 V1
   whole-value golden 覆盖双 IPv6 host、topic、queue/physical offset、sysflag、store timestamp、tags、keys、
   uniq、dup 与 inner batch；两份 V2 golden 覆盖 delay clamp+table 和缺表 fallback。
 - [x] `[REVIEW]` Blank 在返回前验证 `declared >= 8 && declared <= available`，合法 blank 仍仅推进 8 字节；
   `CommitLogRecord` 保持 inline，enum 上最窄 Clippy reason 明确热路径禁止每消息 heap allocation。contract
-  同时杀死 blank boundary 删除与 `Box<CommitLogRecord>` 重引入，并继续约束只读输入、无 Store copy、无
-  `dyn`/Buf cursor、新增依赖、alias/brace/glob import 或 duplicate owner。
+  对 comment/string-aware active Rust 保守拒绝任意 `Box`、fully-qualified `std::boxed::Box` 与 parser type
+  alias，并杀死 blank boundary 删除。Store wrapper contract 锁定精确旧签名、恰好一次 Local decode、三处
+  精确事务 advance，拒绝 `from_be_bytes`、input Buf get/copy/slice/index parsing；继续约束只读输入、无
+  Store copy、无 `dyn`/新增依赖、alias/brace/glob import 或 duplicate owner。
 - [x] `[REV]` 五组 Local feature check、Local/Store/workspace Clippy、Local `-D warnings` Rustdoc、架构
   35 项+fixtures+baseline、ArcMut 63 项+fixtures+final guard、格式与 diff 检查通过。
 - [x] `[SCOPE]` M06-03g 已完成；PR-M06-03 父项和 M06 Exit Checklist 保持未完成。本切片不迁移

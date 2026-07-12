@@ -224,8 +224,10 @@ def commit_log_record_parser_boundary_violations(source: str) -> list[str]:
         active,
     ):
         violations.append("dynamic checksum port")
-    if re.search(r"\bMessage\s*\(\s*Box\s*<\s*CommitLogRecord\s*>\s*\)", active):
+    if re.search(r"\bBox\b", active):
         violations.append("per-record heap allocation")
+    if re.search(r"\btype\s+[A-Za-z_][A-Za-z0-9_]*\s*=", active):
+        violations.append("parser type alias")
     declared_boundary = re.search(r"\bif\s+input\.len\s*\(\s*\)\s*<\s*declared_len\b", active)
     blank_return = re.search(r"\bif\s+magic_code\s*==\s*BLANK_MAGIC_CODE\b", active)
     if blank_return is not None and (declared_boundary is None or declared_boundary.start() > blank_return.start()):
@@ -283,13 +285,39 @@ def store_record_parser_wrapper_violations(log_file_root: str, commit_log: str) 
     ):
         violations.append("Store parser imports forbid alias/brace/glob")
 
+    active_commit_log = active_rust_source(commit_log)
+    signature_match = re.search(r"\bpub\s+fn\s+check_message_and_return_size\b", active_commit_log)
+    if signature_match is None:
+        violations.append("Store parser wrapper signature changed")
+    else:
+        opening_brace = active_commit_log.find("{", signature_match.end())
+        signature = (
+            "" if opening_brace == -1 else re.sub(r"\s+", "", active_commit_log[signature_match.start():opening_brace])
+        )
+        expected_signature = (
+            "pubfncheck_message_and_return_size(bytes:&mutBytes,check_crc:bool,"
+            "check_dup_info:bool,read_body:bool,message_store_config:&Arc<MessageStoreConfig>,"
+            "max_delay_level:i32,delay_level_table:&BTreeMap<i32,i64>,)->DispatchRequest"
+        )
+        if signature != expected_signature:
+            violations.append("Store parser wrapper signature changed")
+
     body = named_function_body(commit_log, "check_message_and_return_size")
     if body is None:
         violations.append("Store parser wrapper is missing")
     else:
-        if re.search(r"\.(?:get_i16|get_i32|get_i64|copy_to_bytes)\s*\(", body):
+        if len(re.findall(r"\bdecode_commit_log_record\s*\(", body)) != 1:
+            violations.append("Store wrapper must delegate exactly once to Local decoder")
+        if re.search(r"\bfrom_be_bytes\s*\(", body) or re.search(
+            r"\bbytes\s*(?:\[|\.\s*(?:get_[A-Za-z0-9_]+|copy_to_bytes|copy_to_slice|slice)\s*\()",
+            body,
+        ):
             violations.append("Store wrapper copied raw parser")
-        if len(re.findall(r"\bbytes\.advance\s*\(", body)) != 3:
+        advance_calls = [
+            re.sub(r"\s+", "", argument)
+            for argument in re.findall(r"\bbytes\s*\.\s*advance\s*\(([^()]*)\)\s*;", body)
+        ]
+        if advance_calls != ["8", "total_sizeasusize", "total_sizeasusize"]:
             violations.append("Store wrapper transaction advances changed")
     return violations
 
@@ -384,6 +412,28 @@ def batch_iterator_method_contract_violations(source: str) -> list[str]:
 VALID_COMMIT_LOG_RECORD_FACADE = '''
 pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
+'''
+VALID_STORE_RECORD_PARSER_WRAPPER = '''
+use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
+use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
+use rocketmq_store_local::commit_log::record_parser::CommitLogRecordErrorKind;
+use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
+use rocketmq_store_local::commit_log::record_parser::decode_commit_log_record;
+
+pub fn check_message_and_return_size(
+    bytes: &mut Bytes,
+    check_crc: bool,
+    check_dup_info: bool,
+    read_body: bool,
+    message_store_config: &Arc<MessageStoreConfig>,
+    max_delay_level: i32,
+    delay_level_table: &BTreeMap<i32, i64>,
+) -> DispatchRequest {
+    let _ = decode_commit_log_record(bytes, body_mode, &checksum);
+    bytes.advance(8);
+    bytes.advance(total_size as usize);
+    bytes.advance(total_size as usize);
+}
 '''
 VALID_RECOVERY_RECORD_FACADE = '''
 pub use rocketmq_store_local::commit_log::record::is_blank_message;
@@ -1162,31 +1212,49 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(input: &Bytes) {
         mutation = valid.replace("if input.len() < declared_len { return; }", "")
         self.assertNotEqual([], commit_log_record_parser_boundary_violations(mutation))
 
+    def test_commit_log_record_parser_contract_rejects_direct_heap_allocation(self) -> None:
+        mutation = '''
+use bytes::Bytes;
+pub fn decode_commit_log_record<C>(input: &Bytes) {}
+struct Heap(Box<CommitLogRecord>);
+'''
+        self.assertNotEqual([], commit_log_record_parser_boundary_violations(mutation))
+
+    def test_commit_log_record_parser_contract_rejects_qualified_heap_allocation(self) -> None:
+        mutation = '''
+use bytes::Bytes;
+pub fn decode_commit_log_record<C>(input: &Bytes) {}
+struct Heap(std::boxed::Box<CommitLogRecord>);
+'''
+        self.assertNotEqual([], commit_log_record_parser_boundary_violations(mutation))
+
+    def test_commit_log_record_parser_contract_rejects_heap_type_alias(self) -> None:
+        mutation = '''
+use bytes::Bytes;
+pub fn decode_commit_log_record<C>(input: &Bytes) {}
+type HeapRecord = Box<CommitLogRecord>;
+enum Outcome { Message(HeapRecord) }
+'''
+        self.assertNotEqual([], commit_log_record_parser_boundary_violations(mutation))
+
+    def test_commit_log_record_parser_heap_contract_masks_comments_and_strings(self) -> None:
+        masked = r'''
+use bytes::Bytes;
+pub fn decode_commit_log_record<C>(input: &Bytes) {}
+// Box<CommitLogRecord>
+/* type HeapRecord = std::boxed::Box<CommitLogRecord>; */
+const TEXT: &str = "Box<CommitLogRecord>";
+const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
+'''
+        self.assertEqual([], commit_log_record_parser_boundary_violations(masked))
+
     def test_store_record_parser_wrapper_contract_rejects_copy_and_import_mutations(self) -> None:
         root = "pub mod commit_log;"
-        imports = "\n".join(
-            f"use rocketmq_store_local::commit_log::record_parser::{item};"
-            for item in sorted(
-                {
-                    "decode_commit_log_record",
-                    "CommitLogRecordBodyMode",
-                    "CommitLogRecordChecksum",
-                    "CommitLogRecordErrorKind",
-                    "CommitLogRecordOutcome",
-                }
-            )
-        )
-        wrapper = imports + '''
-pub fn check_message_and_return_size(bytes: &mut Bytes) {
-    bytes.advance(8);
-    bytes.advance(9);
-    bytes.advance(10);
-}
-'''
+        wrapper = VALID_STORE_RECORD_PARSER_WRAPPER
         self.assertEqual([], store_record_parser_wrapper_violations(root, wrapper))
         mutations = [
             (root + "\nmod commit_log_record_parser;", wrapper),
-            (root, wrapper.replace("bytes.advance(10);", "bytes.get_i32();")),
+            (root, wrapper.replace("bytes.advance(8);", "bytes.get_i32();")),
             (root, wrapper.replace(
                 "use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;",
                 "use rocketmq_store_local::commit_log::record_parser::*;",
@@ -1197,6 +1265,34 @@ pub fn check_message_and_return_size(bytes: &mut Bytes) {
                 [],
                 store_record_parser_wrapper_violations(mutated_root, mutated_wrapper),
             )
+
+    def test_store_record_parser_wrapper_contract_rejects_signature_and_decode_mutations(self) -> None:
+        root = "pub mod commit_log;"
+        mutations = [
+            VALID_STORE_RECORD_PARSER_WRAPPER.replace("check_crc: bool", "check_crc: i32"),
+            VALID_STORE_RECORD_PARSER_WRAPPER.replace(
+                "    let _ = decode_commit_log_record(bytes, body_mode, &checksum);\n",
+                "",
+            ),
+        ]
+        for mutation in mutations:
+            self.assertNotEqual([], store_record_parser_wrapper_violations(root, mutation))
+
+    def test_store_record_parser_wrapper_contract_rejects_manual_raw_parsing_and_advance_shape_mutations(self) -> None:
+        root = "pub mod commit_log;"
+        mutations = [
+            VALID_STORE_RECORD_PARSER_WRAPPER.replace(
+                "    let _ = decode_commit_log_record(bytes, body_mode, &checksum);",
+                "    let _ = i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);\n"
+                "    let _ = decode_commit_log_record(bytes, body_mode, &checksum);",
+            ),
+            VALID_STORE_RECORD_PARSER_WRAPPER.replace(
+                "bytes.advance(8);",
+                "bytes.advance(total_size as usize);",
+            ),
+        ]
+        for mutation in mutations:
+            self.assertNotEqual([], store_record_parser_wrapper_violations(root, mutation))
 
     def test_tracing_target_scanner_ignores_comments_and_strings(self) -> None:
         source = r'''

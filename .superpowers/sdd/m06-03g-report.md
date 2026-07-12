@@ -34,7 +34,7 @@ the PR-M06-03 parent and M06 Exit Checklist intentionally remain open.
 - Neutral parser tests: 3/3, including checksum call count/order and complete V1/V2 records across all IPv4/IPv6
   host-width combinations.
 - Existing Store property-CRC and malformed inner-batch focused tests: 2/2.
-- Local storage ownership/mutation contract: 56/56. It rejects mutable decoder input, unchecked Buf cursor reads,
+- Local storage ownership/mutation contract: 62/62. It rejects mutable decoder input, unchecked Buf cursor reads,
   dynamic checksum ports, parser aliases/brace/glob imports, duplicate owners, a Store parser module copy, copied
   Store raw parsing, and changed transactional advance sites.
 
@@ -58,6 +58,13 @@ the existing Common and Protocol codec surfaces without claiming whole-repositor
    queue/physical offsets, sysflag, timestamp, tag hash, keys, uniq, valid dup, and valid inner batch. V2 covers
    delay clamp+table and missing-table fallback.
 4. The blank-boundary mutation fails if the declared-size check is removed or moved after the blank return.
+5. Final ownership review hardens the comment/string-aware active-Rust contract to reject any active `Box`,
+   fully-qualified `std::boxed::Box`, and parser type alias. Separate mutations cover direct, qualified, and
+   `type HeapRecord = Box<CommitLogRecord>; Message(HeapRecord)` forms while masked comments/strings remain valid.
+   The Store wrapper contract now locks the exact legacy signature, requires exactly one Local decode call, rejects
+   manual `from_be_bytes` and input Buf get/copy/slice/index parsing, and accepts only the existing ordered advance
+   arguments `8`, `total_size as usize`, `total_size as usize`. Removing decode while retaining three advances,
+   changing an argument shape, or copying scalar parsing fails deterministically.
 
 These fixes are intentionally isolated after the mechanical B commit.
 
@@ -67,7 +74,7 @@ These fixes are intentionally isolated after the mechanical B commit.
   compatibility: 3/3.
 - `cargo test -p rocketmq-store-local`: 52 unit + 10 record + 6 kernel + 7 mapping + 10 storage tests passed
   (85 total); nine existing Rustdoc examples ignored.
-- Ownership/mutation contract: 56/56. Local no-default, fast-load, safe-load, fast+safe, and io_uring checks passed.
+- Ownership/mutation contract: 62/62. Local no-default, fast-load, safe-load, fast+safe, and io_uring checks passed.
 - Local and Store all-target/all-feature Clippy, Local `RUSTDOCFLAGS=-D warnings` Rustdoc, and workspace no-deps
   all-target/all-feature Clippy passed. Windows emitted only the existing `linker_messages` notice that ignores
   `-D warnings`, plus the existing future-incompatibility notice for `proc-macro-error2`.
