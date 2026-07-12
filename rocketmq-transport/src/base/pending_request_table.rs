@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -55,7 +54,12 @@ pub struct PendingRequestToken {
 pub struct PendingRequestOwner {
     table_id: u64,
     id: u64,
-    accepting: Arc<AtomicBool>,
+    state: Arc<Mutex<PendingOwnerState>>,
+}
+
+#[derive(Debug)]
+struct PendingOwnerState {
+    accepting: bool,
 }
 
 impl PendingRequestOwner {
@@ -63,16 +67,15 @@ impl PendingRequestOwner {
         Self {
             table_id,
             id,
-            accepting: Arc::new(AtomicBool::new(true)),
+            state: Arc::new(Mutex::new(PendingOwnerState { accepting: true })),
         }
     }
 
     fn retire(&self) {
-        self.accepting.store(false, Ordering::Release);
-    }
-
-    fn is_accepting(&self) -> bool {
-        self.accepting.load(Ordering::Acquire)
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .accepting = false;
     }
 }
 
@@ -279,7 +282,8 @@ impl PendingRequestTable {
         sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
     ) -> RocketMQResult<PendingRequestGuard> {
         self.validate_owner(owner)?;
-        if !owner.is_accepting() {
+        let owner_state = owner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !owner_state.accepting {
             return Err(RocketMQError::network_connection_failed(
                 "pending_request",
                 "connection owner is retired; reconnect before sending another request",
@@ -314,7 +318,7 @@ impl PendingRequestTable {
             }),
         };
 
-        match self.inner.entries.entry(key) {
+        let result = match self.inner.entries.entry(key) {
             Entry::Vacant(entry) => {
                 entry.insert(pending);
                 Ok(PendingRequestGuard {
@@ -327,7 +331,9 @@ impl PendingRequestTable {
                 "pending_request",
                 format!("opaque {opaque} is already reserved on this connection"),
             )),
-        }
+        };
+        drop(owner_state);
+        result
     }
 
     /// Compatibility adapter for the table's default single-connection owner.
@@ -383,7 +389,8 @@ impl PendingRequestTable {
         if owner.table_id != self.inner.table_id {
             return 0;
         }
-        owner.retire();
+        let mut owner_state = owner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        owner_state.accepting = false;
         let tokens = self.tokens_for_owner(owner.id);
         let mut completed = 0;
         for token in tokens {
@@ -393,6 +400,7 @@ impl PendingRequestTable {
             pending.completion.complete(Err(cause()));
             completed += 1;
         }
+        drop(owner_state);
         completed
     }
 
@@ -565,5 +573,41 @@ impl PendingRequest {
 
     fn is_expired(&self, now: Instant) -> bool {
         now >= self.deadline
+    }
+}
+
+#[cfg(test)]
+mod owner_epoch_tests {
+    use std::sync::mpsc;
+
+    use super::*;
+
+    #[test]
+    fn registration_linearizes_behind_the_owner_close_gate() {
+        let table = PendingRequestTable::new();
+        let owner = table.new_owner();
+        let mut closing = owner.state.lock().unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let registering_table = table.clone();
+        let registering_owner = owner.clone();
+        let registration = std::thread::spawn(move || {
+            let (sender, _receiver) = tokio::sync::oneshot::channel();
+            started_tx.send(()).unwrap();
+            let result = registering_table.register_for_owner(&registering_owner, 7, 30_000, sender);
+            result_tx.send(result.is_ok()).unwrap();
+        });
+
+        started_rx.recv().unwrap();
+        assert!(
+            result_rx.recv_timeout(Duration::from_millis(20)).is_err(),
+            "registration must wait while close owns the epoch gate"
+        );
+        closing.accepting = false;
+        drop(closing);
+
+        assert!(!result_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        registration.join().unwrap();
+        assert!(table.is_empty());
     }
 }

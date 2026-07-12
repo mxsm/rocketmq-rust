@@ -14,6 +14,7 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,15 +30,10 @@ use rocketmq_runtime::TaskKind;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
-use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
-use tokio::sync::OwnedSemaphorePermit;
-use tokio::sync::Semaphore;
-use tokio::time;
 use tracing::error;
 use tracing::info;
-use tracing::warn;
 
 use crate::base::channel_event_listener::ChannelEventListener;
 use crate::base::connection_net_event::ConnectionNetEvent;
@@ -51,174 +47,18 @@ use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::tls::TlsServerRuntime;
+use rocketmq_transport::admission::AdmissionController;
+use rocketmq_transport::admission::AdmissionLimits;
+use rocketmq_transport::admission::ResourceLimit;
+use rocketmq_transport::server::ConnectionHandler as TransportConnectionHandler;
+use rocketmq_transport::server::TransportListener;
 
 /// Default limit the max number of connections.
 const DEFAULT_MAX_CONNECTIONS: usize = 1000;
 
-/// Default idle timeout in seconds (aligned with Java version: 120s)
-const DEFAULT_CHANNEL_IDLE_TIMEOUT_SECONDS: u64 = 120;
+const DEFAULT_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Per-connection handler managing the lifecycle of a single client connection.
-///
-/// # Performance Notes
-/// - Uses reference-counted handler to avoid cloning heavyweight objects
-/// - Shutdown signal via broadcast for efficient multi-connection coordination
-/// - Connection context wrapped in ArcMut for safe concurrent access
-///
-/// # Lifecycle
-/// 1. Created when TCP connection accepted
-/// 2. Spawned into dedicated Tokio task
-/// 3. Processes commands until shutdown or disconnection
-/// 4. Notifies listeners on drop
-pub struct ConnectionHandler<RP> {
-    /// Connection-specific context (channel, state, metrics)
-    ///
-    /// Wrapped in ArcMut to allow sharing with async tasks without excessive cloning
-    connection_handler_context: ConnectionHandlerContext,
-
-    /// Shutdown coordination signal
-    ///
-    /// Receives broadcast when server initiates graceful shutdown
-    shutdown: Shutdown,
-
-    /// Completion notification sender
-    ///
-    /// Dropped when handler completes, signaling to shutdown coordinator
-    _shutdown_complete: mpsc::Sender<()>,
-
-    /// Optional disconnect event broadcaster
-    ///
-    /// If Some, sends `SocketAddr` when connection closes (for routing table cleanup)
-    conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
-
-    /// Shared command processing handler
-    ///
-    /// Reference-counted to avoid cloning per-connection (contains processor + hooks)
-    cmd_handler: ArcMut<RemotingGeneralHandler<RP>>,
-
-    /// Event notification channel for ChannelEventListener
-    ///
-    /// Used to send IDLE and EXCEPTION events to the event dispatcher
-    event_tx: Option<mpsc::UnboundedSender<TokioEvent>>,
-
-    /// Idle timeout duration for this connection
-    ///
-    /// When no data received for this duration, connection is closed and IDLE event is triggered
-    idle_timeout: Duration,
-}
-
-impl<RP> Drop for ConnectionHandler<RP> {
-    fn drop(&mut self) {
-        if let Some(ref sender) = self.conn_disconnect_notify {
-            let socket_addr = self.connection_handler_context.remote_address();
-            warn!("connection[{}] disconnected, Send notify message.", socket_addr);
-            let _ = sender.send(socket_addr);
-        }
-    }
-}
-
-impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
-    /// Main event loop processing incoming commands until shutdown or disconnect.
-    ///
-    /// # Flow
-    /// 1. Wait for next command or shutdown signal (via `tokio::select!`)
-    /// 2. Decode and validate command
-    /// 3. Dispatch to business logic processor
-    /// 4. Repeat until connection closes or shutdown requested
-    ///
-    /// # Performance
-    /// - Zero-copy command reception where possible
-    /// - Early exit on shutdown reduces unnecessary work
-    /// - Connection state checked once per loop iteration
-    ///
-    /// # Error Handling
-    /// - Decode errors: logged, connection marked unhealthy
-    /// - Processor errors: logged, connection continues (per-request isolation)
-    /// - Connection closed: graceful return Ok(())
-    #[inline]
-    async fn handle(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        // Get idle timeout configuration from handler
-        let idle_timeout = self.idle_timeout;
-        let remote_addr = self.connection_handler_context.remote_address();
-
-        // HOT PATH: Main server receive loop
-        while !self.shutdown.is_shutdown {
-            let channel = self.connection_handler_context.channel_mut();
-
-            let frame = tokio::select! {
-                // Branch 1: Receive next command from peer
-                res = channel.connection_mut().receive_command() => res,
-
-                // Branch 2: Shutdown signal received
-                _ = self.shutdown.recv() => {
-                    // Mark connection as closed to prevent further sends
-                    channel.connection_mut().close();
-                    return Ok(());
-                }
-
-                // Branch 3: Idle timeout - no data received for configured duration
-                _ = tokio::time::sleep(idle_timeout) => {
-                    warn!(
-                        "Connection idle timeout ({}s), remote: {}",
-                        idle_timeout.as_secs(),
-                        remote_addr
-                    );
-
-                    // Clone channel before closing to avoid borrow conflicts
-                    let channel_clone = channel.clone();
-
-                    // Send IDLE event to listener
-                    if let Some(ref event_tx) = self.event_tx {
-                        let _ = event_tx.send(TokioEvent::new(
-                            ConnectionNetEvent::IDLE,
-                            remote_addr,
-                            channel_clone,
-                        ));
-                    }
-
-                    // Close connection due to idle timeout
-                    channel.connection_mut().close();
-                    return Ok(());
-                }
-            };
-
-            // Extract command or handle end-of-stream
-            let cmd = match frame {
-                Some(Ok(frame)) => frame,
-                Some(Err(e)) => {
-                    // Decode error - log and close connection
-                    error!("Failed to decode command: {:?}", e);
-
-                    // Clone channel before closing to avoid borrow conflicts
-                    let channel_clone = channel.clone();
-
-                    // Send EXCEPTION event to listener
-                    if let Some(ref event_tx) = self.event_tx {
-                        let _ = event_tx.send(TokioEvent::new(
-                            ConnectionNetEvent::EXCEPTION,
-                            remote_addr,
-                            channel_clone,
-                        ));
-                    }
-
-                    channel.connection_mut().close();
-                    return Err(e);
-                }
-                None => {
-                    // Peer closed connection gracefully
-                    return Ok(());
-                }
-            };
-
-            // Dispatch command to business logic
-            // Note: process_message_received handles errors internally
-            self.cmd_handler
-                .process_message_received(&mut self.connection_handler_context, cmd)
-                .await;
-        }
-        Ok(())
-    }
-}
+const EVENT_QUEUE_CAPACITY: usize = 1024;
 
 /// Server listener managing TCP connection acceptance and connection lifecycle.
 ///
@@ -240,14 +80,12 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
 /// - Shared handler state (Arc) to avoid per-connection clones
 struct ConnectionListener<RP> {
     /// TCP socket acceptor bound to server address
-    listener: TcpListener,
+    listener: Option<TcpListener>,
 
     /// Semaphore controlling max concurrent connections
     ///
     /// Permits acquired before accept, released on handler drop.
     /// Provides backpressure when server reaches capacity.
-    limit_connections: Arc<Semaphore>,
-
     /// Shutdown broadcast sender
     ///
     /// All connection handlers subscribe to this channel.
@@ -282,6 +120,8 @@ struct ConnectionListener<RP> {
 
     /// Tracks remoting event and connection tasks for shutdown diagnostics.
     task_group: TaskGroup,
+
+    admission: Arc<AdmissionController>,
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
@@ -312,8 +152,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
     async fn run(&mut self) -> RocketMQResult<()> {
         info!("Server ready to accept connections");
 
-        // Event notification channel (unbounded to prevent accept() blocking)
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<TokioEvent>();
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<TokioEvent>(EVENT_QUEUE_CAPACITY);
 
         // Spawn event dispatcher task if listener configured
         if let Some(listener) = self.channel_event_listener.take() {
@@ -347,198 +186,121 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             }
         }
 
-        // Main accept loop
-        loop {
-            // OPTIMIZATION: Acquire permit BEFORE accept() to provide backpressure
-            // If at capacity, accept() won't be called until a slot frees up
-            let permit = acquire_connection_permit(&self.limit_connections).await?;
-
-            // Accept next connection (with exponential backoff on errors)
-            let (socket, remote_addr) = self.accept().await?;
-
-            // OPTIMIZATION: Enable TCP_NODELAY for low-latency RPC
-            // Disables Nagle's algorithm to send small packets immediately
-            if let Err(e) = socket.set_nodelay(true) {
-                warn!("Failed to set TCP_NODELAY for {}: {}", remote_addr, e);
-            }
-
-            let local_addr = socket.local_addr()?;
-            info!("Accepted connection: {} → {}", remote_addr, local_addr);
-
-            let tls_runtime = self.tls_runtime.clone();
-            let cmd_handler = self.cmd_handler.clone();
-            let notify_shutdown = self.notify_shutdown.subscribe();
-            let shutdown_complete_tx = self.shutdown_complete_tx.clone();
-            let conn_disconnect_notify = self.conn_disconnect_notify.clone();
-            let event_tx_clone = event_tx.clone();
-            let connection_lease = match self.task_group.try_child_lease("rocketmq.remoting.connection") {
-                Ok(lease) => lease,
-                Err(error) => {
-                    warn!(%error, "Failed to register connection task group");
-                    drop(permit);
-                    continue;
-                }
-            };
-            let connection_task_group = connection_lease.group().clone();
-            let handler_task_group = connection_task_group.clone();
-            let connection_shutdown_group = connection_task_group.clone();
-
-            // Spawn dedicated task for this connection
-            if let Err(error) =
-                connection_task_group.spawn("rocketmq.remoting.connection", TaskKind::Worker, async move {
-                    let _connection_lease = connection_lease;
-                    let mut shutdown = Shutdown::new(notify_shutdown);
-                    let connection = tokio::select! {
-                        connection = tls_runtime.into_connection(socket, remote_addr) => connection,
-                        () = shutdown.recv() => {
-                            drop(permit);
-                            return;
-                        }
-                    };
-                    let Some(connection) = connection else {
-                        drop(permit);
-                        return;
-                    };
-
-                    // Create connection channel wrapper
-                    let channel_inner = match ChannelInner::try_new_with_pending_requests_and_task_group(
-                        connection,
-                        cmd_handler.response_table.clone(),
-                        handler_task_group.clone(),
-                    ) {
-                        Ok(channel_inner) => ArcMut::new(channel_inner),
-                        Err(error) => {
-                            error!(
-                                remote_addr = %remote_addr,
-                                error = %error,
-                                "failed to initialize remoting channel"
-                            );
-                            drop(permit);
-                            return;
-                        }
-                    };
-                    let channel = Channel::new(channel_inner, local_addr, remote_addr);
-
-                    // Notify CONNECTED event after plaintext/TLS negotiation succeeds
-                    let _ = event_tx_clone.send(TokioEvent::new(
-                        ConnectionNetEvent::CONNECTED(remote_addr),
-                        remote_addr,
-                        channel.clone(),
-                    ));
-
-                    // Build connection handler
-                    let idle_timeout = Duration::from_secs(DEFAULT_CHANNEL_IDLE_TIMEOUT_SECONDS);
-                    let handler_event_tx = event_tx_clone.clone();
-                    let handler = ConnectionHandler {
-                        connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
-                            channel: channel.clone(),
-                        }),
-                        shutdown,
-                        _shutdown_complete: shutdown_complete_tx,
-                        conn_disconnect_notify,
-                        cmd_handler,
-                        event_tx: Some(handler_event_tx),
-                        idle_timeout,
-                    };
-                    let mut handler = handler;
-
-                    // Run handler until completion
-                    if let Err(err) = handler.handle().await {
-                        error!(
-                            remote_addr = %remote_addr,
-                            error = ?err,
-                            "Connection handler terminated with error"
-                        );
-                    }
-
-                    let channel_report = handler
-                        .connection_handler_context
-                        .channel_mut()
-                        .channel_inner_mut()
-                        .close_with_report(
-                            connection_shutdown_group
-                                .shutdown_deadline()
-                                .map_or(Duration::from_secs(3), |deadline| {
-                                    deadline.remaining().min(Duration::from_secs(3))
-                                }),
-                        )
-                        .await;
-                    channel_report.log_if_unhealthy();
-
-                    // Notify DISCONNECTED event
-                    let _ = event_tx_clone.send(TokioEvent::new(
-                        ConnectionNetEvent::DISCONNECTED,
-                        remote_addr,
-                        handler.connection_handler_context.channel.clone(),
-                    ));
-
-                    info!("Client {} disconnected", remote_addr);
-
-                    // IMPORTANT: Permit released when `permit` drops here
-                    drop(permit);
-                })
-            {
-                error!(remote_addr = %remote_addr, error = %error, "failed to spawn remoting connection task");
-            }
-        }
-    }
-
-    /// Accept new TCP connection with exponential backoff on transient errors.
-    ///
-    /// # Error Handling Strategy
-    /// - **Fatal errors** (e.g., listener closed): Return immediately
-    /// - **Transient errors** (e.g., too many open files): Retry with backoff
-    /// - **Max retries**: Give up after backoff reaches 64 seconds
-    ///
-    /// # Backoff Schedule
-    /// ```text
-    /// Attempt | Delay
-    /// --------|-------
-    /// 1       | 1s
-    /// 2       | 2s
-    /// 3       | 4s
-    /// 4       | 8s
-    /// 5       | 16s
-    /// 6       | 32s
-    /// 7       | 64s (final)
-    /// ```
-    ///
-    /// # Performance
-    /// - Fast path: Single syscall when no errors
-    /// - Slow path: Exponential backoff prevents thundering herd
-    async fn accept(&mut self) -> RocketMQResult<(TcpStream, SocketAddr)> {
-        let mut backoff = 1;
-        const MAX_BACKOFF: u64 = 64;
-
-        loop {
-            match self.listener.accept().await {
-                Ok((socket, remote_addr)) => {
-                    // Fast path: successful accept
-                    return Ok((socket, remote_addr));
-                }
-                Err(err) => {
-                    if backoff > MAX_BACKOFF {
-                        // Exceeded retry limit - fatal error
-                        error!("Accept failed after {} retries, last error: {}", MAX_BACKOFF, err);
-                        return Err(err.into());
-                    }
-
-                    // Log transient error and retry
-                    warn!("Accept error (will retry in {}s): {}", backoff, err);
-                }
-            }
-
-            // Exponential backoff before retry
-            time::sleep(Duration::from_secs(backoff)).await;
-            backoff *= 2;
-        }
+        let listener = self.listener.take().ok_or_else(|| {
+            RocketMQError::network_connection_failed("remoting-server", "transport listener already started")
+        })?;
+        let transport = TransportListener::new(
+            listener,
+            self.task_group.clone(),
+            self.tls_runtime.transport_runtime(),
+            self.admission.clone(),
+            DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+        );
+        transport
+            .run(Arc::new(ConnectionHandler {
+                shutdown_complete_tx: self.shutdown_complete_tx.clone(),
+                conn_disconnect_notify: self.conn_disconnect_notify.clone(),
+                cmd_handler: self.cmd_handler.clone(),
+                event_tx,
+                sessions: dashmap::DashMap::new(),
+            }))
+            .await
     }
 }
 
-async fn acquire_connection_permit(limit_connections: &Arc<Semaphore>) -> RocketMQResult<OwnedSemaphorePermit> {
-    limit_connections.clone().acquire_owned().await.map_err(|err| {
-        RocketMQError::network_connection_failed("remoting-server", format!("connection limit semaphore closed: {err}"))
-    })
+struct ConnectionHandler<RP> {
+    shutdown_complete_tx: mpsc::Sender<()>,
+    conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
+    cmd_handler: ArcMut<RemotingGeneralHandler<RP>>,
+    event_tx: mpsc::Sender<TokioEvent>,
+    sessions: dashmap::DashMap<u64, RemotingSession<ConnectionHandlerContext>>,
+}
+
+struct RemotingSession<C> {
+    context: C,
+    _shutdown_complete: mpsc::Sender<()>,
+}
+
+impl<RP> ConnectionHandler<RP> {
+    fn run(&self, session: rocketmq_transport::server::SessionHandle) {
+        let Ok(channel_inner) = ChannelInner::new_transport_session(
+            session.connection(),
+            self.cmd_handler.response_table.clone(),
+            session.task_group().child("rocketmq.remoting.channel"),
+        ) else {
+            return;
+        };
+        let mut channel = Channel::new(ArcMut::new(channel_inner), session.local_addr(), session.remote_addr());
+        channel.set_channel_id(format!("transport-session-{}", session.session_id()));
+        let _ = self.event_tx.try_send(TokioEvent::new(
+            ConnectionNetEvent::CONNECTED(session.remote_addr()),
+            session.remote_addr(),
+            channel.clone(),
+        ));
+        self.sessions.insert(
+            session.session_id(),
+            RemotingSession {
+                context: ArcMut::new(ConnectionHandlerContextWrapper::new(channel)),
+                _shutdown_complete: self.shutdown_complete_tx.clone(),
+            },
+        );
+    }
+}
+
+impl<RP: RequestProcessor + Sync + 'static> TransportConnectionHandler for ConnectionHandler<RP> {
+    fn connected(
+        &self,
+        session: rocketmq_transport::server::SessionHandle,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            self.run(session);
+        })
+    }
+
+    fn command(
+        &self,
+        session: rocketmq_transport::server::SessionHandle,
+        command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let mut cmd_handler = self.cmd_handler.clone();
+        Box::pin(async move {
+            let Some((_, mut remoting_session)) = self.sessions.remove(&session.session_id()) else {
+                return;
+            };
+            cmd_handler
+                .process_message_received(&mut remoting_session.context, command)
+                .await;
+            self.sessions.insert(session.session_id(), remoting_session);
+        })
+    }
+
+    fn disconnected(
+        &self,
+        session: rocketmq_transport::server::SessionHandle,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let event_tx = self.event_tx.clone();
+        let conn_disconnect_notify = self.conn_disconnect_notify.clone();
+        Box::pin(async move {
+            let Some((_, mut remoting_session)) = self.sessions.remove(&session.session_id()) else {
+                return;
+            };
+            let channel_report = remoting_session
+                .context
+                .channel_mut()
+                .channel_inner_mut()
+                .close_with_report(Duration::from_secs(3))
+                .await;
+            channel_report.log_if_unhealthy();
+            if let Some(notify) = conn_disconnect_notify {
+                let _ = notify.send(session.remote_addr());
+            }
+            let _ = event_tx.try_send(TokioEvent::new(
+                ConnectionNetEvent::DISCONNECTED,
+                session.remote_addr(),
+                remoting_session.context.channel.clone(),
+            ));
+        })
+    }
 }
 
 pub struct RocketMQServer<RP> {
@@ -754,16 +516,25 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         rpc_hooks,
         response_table: PendingRequestTable::with_capacity(512),
     };
+    let mut admission_limits = AdmissionLimits::default();
+    admission_limits.connections = ResourceLimit {
+        count: DEFAULT_MAX_CONNECTIONS,
+        ..admission_limits.connections
+    };
+    admission_limits.handshakes = ResourceLimit {
+        count: DEFAULT_MAX_CONNECTIONS,
+        ..admission_limits.handshakes
+    };
     let mut listener = ConnectionListener {
-        listener,
+        listener: Some(listener),
         notify_shutdown,
         shutdown_complete_tx,
         conn_disconnect_notify,
-        limit_connections: Arc::new(Semaphore::new(DEFAULT_MAX_CONNECTIONS)),
         channel_event_listener,
         cmd_handler: ArcMut::new(handler),
         tls_runtime,
         task_group: task_group.clone(),
+        admission: Arc::new(AdmissionController::new(admission_limits)),
     };
 
     tokio::select! {
@@ -801,6 +572,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     drop(notify_shutdown);
     drop(shutdown_complete_tx);
 
+    task_group.cancel();
     let _ = tokio::time::timeout(deadline.remaining(), shutdown_complete_rx.recv()).await;
     let mut report = task_group.shutdown_until(deadline).await;
     if let Some(tls_report) = tls_report {
@@ -885,7 +657,10 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::*;
+    use crate::clients::rocketmq_tokio_client::RocketmqDefaultClient;
+    use crate::clients::RemotingClient;
     use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+    use crate::runtime::config::client_config::TokioClientConfig;
 
     struct ConnectSignalListener {
         connected: std::sync::Mutex<Option<oneshot::Sender<()>>>,
@@ -973,19 +748,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn acquire_connection_permit_closed_semaphore_returns_error_without_panicking() {
-        let semaphore = Arc::new(Semaphore::new(1));
-        semaphore.close();
-
-        let error = match acquire_connection_permit(&semaphore).await {
-            Ok(_) => panic!("closed semaphore should return an error"),
-            Err(error) => error,
-        };
-
-        assert!(error.to_string().contains("connection limit semaphore closed"));
-    }
-
-    #[tokio::test]
     async fn run_with_shutdown_bind_error_returns_without_panicking() {
         let config = Arc::new(ServerConfig {
             bind_address: "127.0.0.1".to_string(),
@@ -1045,6 +807,42 @@ mod tests {
             .expect("server should shut down before timeout")
             .expect("server task should not panic")
             .expect("server should return shutdown report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn public_client_and_server_exchange_through_canonical_transport_session() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener address");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_task = tokio::spawn(run_with_report(
+            listener,
+            async {
+                let _ = shutdown_rx.await;
+            },
+            DefaultRemotingRequestProcessor,
+            None,
+            Vec::new(),
+            None,
+        ));
+        let mut client =
+            RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
+        let remote_addr = cheetah_string::CheetahString::from_string(addr.to_string());
+        let request = crate::protocol::remoting_command::RemotingCommand::create_remoting_command(105);
+        let opaque = request.opaque();
+        let response = client
+            .invoke_request(Some(&remote_addr), request, 1_000)
+            .await
+            .expect("echo response");
+        assert_eq!(response.code(), 105);
+        assert_eq!(response.opaque(), opaque);
+
+        let client_report = client.shutdown_with_report(Duration::from_secs(1)).await;
+        assert!(client_report.is_healthy());
+        let _ = shutdown_tx.send(());
+        let report = server_task.await.unwrap().unwrap();
         assert!(report.is_healthy(), "{}", report.to_json());
     }
 

@@ -39,13 +39,11 @@ hid it.
 4. Twenty-seven Phase 1 fingerprint relocations or retained-ID context changes are recorded in
    the Phase 1 promotion history. Additional governed occurrences found during review were removed or folded into
    their existing governed test items instead of being approved.
-5. The M05 promotion replaces the consumable approval file with fourteen one-to-one fingerprint relocations.
-   None creates a new identity: nine are Remoting compatibility adapters still owned by `remoting` and due at
-   M11; two are context-only Broker relocations owned by `broker` and due at M05;
-   one is a context-only Client
-   relocation owned by `client` and due at M05; one is a context-only Store relocation owned by `store` and due
-   at M11; and one is a context-only Admin Core relocation owned by `tools` and due at M08. The approved file
-   records each exact old and new occurrence ID, and the guard requires every entry to be consumed.
+5. The M05 review-fix promotion replaces the consumable approval file with sixteen one-to-one fingerprint
+   relocations. None creates a new identity or moves a governed occurrence to a different item. All sixteen are
+   Remoting compatibility occurrences whose fingerprints changed while the client and server connection loops
+   were replaced with canonical Transport session callbacks. The approved file records each exact old and new
+   occurrence ID, and the guard requires every entry to be consumed.
 
 ## Consequences
 
@@ -53,8 +51,9 @@ hid it.
 - Phase 1 can close at M03 while preserving R0 public compatibility.
 - M05, M06, and M11 retain measurable ArcMut burn-down obligations; M11 fails if any corrected entry remains.
 - Future fingerprint churn requires explicit review rather than automatic baseline regeneration.
-- The M05 baseline contains 1,233 identities, a reduction of 33 from the Phase 1 closeout baseline, and the new
-  `rocketmq-transport` canonical boundary contains no ArcMut occurrence.
+- The reviewed M05 baseline contains 1,233 identities and 3,378 occurrences, a reduction of 33 identities and 52
+  occurrences from the Phase 1 closeout baseline. The canonical `rocketmq-transport` boundary contains no ArcMut
+  occurrence.
 
 ## Rejected alternatives
 

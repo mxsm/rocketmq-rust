@@ -1278,6 +1278,15 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 Ok(response)
             }
             Ok(Err(err)) => {
+                if matches!(err, rocketmq_error::RocketMQError::Timeout { .. }) {
+                    client.retire_after_timeout();
+                    if let Some(ref addr) = target_addr {
+                        self.connection_tables.remove(addr);
+                        if let Some(ref pool) = self.connection_pool {
+                            pool.remove(addr);
+                        }
+                    }
+                }
                 if let Some(ref addr) = target_addr {
                     self.latency_tracker.record_error(addr);
 
@@ -1295,7 +1304,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 Err(err)
             }
             Err(_) => {
+                client.retire_after_timeout();
                 if let Some(ref addr) = target_addr {
+                    self.connection_tables.remove(addr);
+                    if let Some(ref pool) = self.connection_pool {
+                        pool.remove(addr);
+                    }
                     self.latency_tracker.record_error(addr);
 
                     if let Some(ref pool) = self.connection_pool {
@@ -1634,6 +1648,64 @@ mod tests {
                 .map(|value| value.as_str()),
             Some("true")
         );
+
+        server.await.expect("server task");
+        client.shutdown();
+    }
+
+    #[tokio::test]
+    async fn timed_out_request_retires_the_pooled_connection_before_the_next_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let (first_socket, _) = listener.accept().await.expect("accept first client");
+            let mut first = Connection::new(first_socket);
+            let _ = first
+                .receive_command()
+                .await
+                .expect("first request frame")
+                .expect("first request");
+
+            let (second_socket, _) = time::timeout(Duration::from_secs(1), listener.accept())
+                .await
+                .expect("timeout must force a reconnect")
+                .expect("accept replacement client");
+            let mut second = Connection::new(second_socket);
+            let request = second
+                .receive_command()
+                .await
+                .expect("replacement request frame")
+                .expect("replacement request");
+            second
+                .send_command(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                        .set_opaque(request.opaque()),
+                )
+                .await
+                .expect("send replacement response");
+        });
+
+        let mut client =
+            RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
+        let target = CheetahString::from_string(addr.to_string());
+        assert!(client
+            .invoke_request(
+                Some(&target),
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                30,
+            )
+            .await
+            .is_err());
+
+        let response = client
+            .invoke_request(
+                Some(&target),
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                500,
+            )
+            .await
+            .expect("next request must use a new owner and connection");
+        assert_eq!(response.code(), ResponseCode::Success.to_i32());
 
         server.await.expect("server task");
         client.shutdown();

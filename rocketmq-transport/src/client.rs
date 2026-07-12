@@ -30,7 +30,85 @@ use crate::admission::AdmissionScope;
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestUsage;
+use crate::codec::remoting_command_codec::FrameLimits;
+use crate::config::TlsConfig;
 use crate::connection::Connection;
+use crate::security::TransportSecurity;
+#[cfg(feature = "tls")]
+use crate::tls::connect_tls_stream;
+#[cfg(not(feature = "tls"))]
+use crate::tls::tls_disabled_error;
+use rocketmq_security_api::PeerInfo;
+
+pub struct ConnectedTransport {
+    connection: Connection,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+}
+
+impl ConnectedTransport {
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.remote_addr
+    }
+
+    pub fn into_parts(self) -> (Connection, SocketAddr, SocketAddr) {
+        (self.connection, self.local_addr, self.remote_addr)
+    }
+}
+
+/// Connects TCP, negotiates optional TLS, and installs the canonical framed transport under one
+/// absolute deadline.
+pub async fn connect_with_config(
+    address: &str,
+    tls_config: &TlsConfig,
+    frame_limits: FrameLimits,
+    deadline: ShutdownDeadline,
+) -> RocketMQResult<ConnectedTransport> {
+    let timeout_at = tokio::time::Instant::from_std(deadline.instant());
+    let stream = tokio::time::timeout_at(timeout_at, tokio::net::TcpStream::connect(address))
+        .await
+        .map_err(|_| RocketMQError::network_timeout(address, deadline.remaining()))??;
+    let local_addr = stream.local_addr()?;
+    let remote_addr = stream.peer_addr()?;
+    let connection = if tls_config.enable {
+        #[cfg(feature = "tls")]
+        {
+            let server_name = server_name_from_address(address);
+            let tls_stream = tokio::time::timeout_at(timeout_at, connect_tls_stream(stream, &server_name, tls_config))
+                .await
+                .map_err(|_| RocketMQError::network_timeout(address, deadline.remaining()))??;
+            Connection::new_with_stream_and_limits(tls_stream, frame_limits)
+        }
+        #[cfg(not(feature = "tls"))]
+        {
+            let _ = stream;
+            return Err(tls_disabled_error());
+        }
+    } else {
+        Connection::new_with_limits(stream, frame_limits)
+    };
+    Ok(ConnectedTransport {
+        connection,
+        local_addr,
+        remote_addr,
+    })
+}
+
+#[cfg(feature = "tls")]
+fn server_name_from_address(address: &str) -> String {
+    if let Ok(socket_addr) = address.parse::<SocketAddr>() {
+        return socket_addr.ip().to_string();
+    }
+    address
+        .rsplit_once(':')
+        .map_or(address, |(host, _)| host)
+        .trim_matches(['[', ']'])
+        .to_string()
+}
 
 /// Canonical low-level request client. Higher-level routing remains outside transport.
 pub struct TransportClient {
@@ -38,10 +116,19 @@ pub struct TransportClient {
     admission: Arc<AdmissionController>,
     pending: PendingRequestTable,
     next_opaque: AtomicI32,
+    security: Arc<TransportSecurity>,
 }
 
 impl TransportClient {
     pub fn new(service_context: ServiceContext, admission: Arc<AdmissionController>) -> Self {
+        Self::new_with_security(service_context, admission, Arc::new(TransportSecurity::new(None, None)))
+    }
+
+    pub fn new_with_security(
+        service_context: ServiceContext,
+        admission: Arc<AdmissionController>,
+        security: Arc<TransportSecurity>,
+    ) -> Self {
         Self {
             _service_context: service_context,
             admission,
@@ -50,6 +137,7 @@ impl TransportClient {
                 max_bytes: 256 * 1024 * 1024,
             }),
             next_opaque: AtomicI32::new(1),
+            security,
         }
     }
 
@@ -69,6 +157,10 @@ impl TransportClient {
             .map_err(|_| RocketMQError::network_timeout(address.to_string(), deadline.remaining()))??;
         let local_ip = stream.local_addr()?.ip();
         let scope = AdmissionScope::new(address.ip()).with_session(address.port() as u64);
+        let peer = PeerInfo::new(address, false);
+        self.security
+            .sign(&mut request, Some(&peer))
+            .map_err(|error| RocketMQError::network_connection_failed(address.to_string(), error.to_string()))?;
         let retained_bytes = request.body().map_or(0, bytes::Bytes::len);
         let _connection_permit = self
             .admission
@@ -110,7 +202,16 @@ impl TransportClient {
 
         match tokio::time::timeout_at(timeout_at, connection.receive_command()).await {
             Ok(Some(Ok(response))) => {
-                self.pending.complete_response_for_owner(&owner, opaque, response);
+                let response_opaque = response.opaque();
+                if !self
+                    .pending
+                    .complete_response_for_owner(&owner, response_opaque, response)
+                {
+                    guard.complete(Err(RocketMQError::network_connection_failed(
+                        address.to_string(),
+                        format!("unexpected response opaque {response_opaque}; expected {opaque}"),
+                    )));
+                }
             }
             Ok(Some(Err(error))) => {
                 guard.complete(Err(error));

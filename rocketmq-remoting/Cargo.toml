@@ -35,7 +35,7 @@ rocketmq-rust   = { workspace = true }
 rocketmq-error  = { workspace = true }
 rocketmq-runtime = { workspace = true }
 rocketmq-protocol = { workspace = true }
-rocketmq-transport = { workspace = true }
+rocketmq-transport = { workspace = true, default-features = false }
 
 anyhow.workspace = true
 bytes.workspace  = true

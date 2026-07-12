@@ -18,6 +18,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use rocketmq_protocol::code::request_code::RequestCode;
+
 /// Simultaneous item and retained-byte limit for one transport resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceLimit {
@@ -97,6 +99,20 @@ pub enum AdmissionResource {
 pub enum AdmissionClass {
     Data,
     Control,
+}
+
+impl AdmissionClass {
+    pub fn for_request_code(code: i32) -> Self {
+        match RequestCode::from(code) {
+            RequestCode::HeartBeat
+            | RequestCode::RegisterBroker
+            | RequestCode::UnregisterBroker
+            | RequestCode::GetRouteinfoByTopic
+            | RequestCode::GetBrokerClusterInfo
+            | RequestCode::GetBrokerRuntimeInfo => Self::Control,
+            _ => Self::Data,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

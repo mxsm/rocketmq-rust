@@ -82,7 +82,7 @@ rocketmq-observability = { version = "1.0.0", path = "./rocketmq-observability" 
 rocketmq-model       = { version = "1.0.0", path = "./rocketmq-model" }
 rocketmq-protocol    = { version = "1.0.0", path = "./rocketmq-protocol" }
 rocketmq-security-api = { version = "1.0.0", path = "./rocketmq-security-api" }
-rocketmq-transport    = { version = "1.0.0", path = "./rocketmq-transport" }
+rocketmq-transport    = { version = "1.0.0", path = "./rocketmq-transport", default-features = false }
 
 tokio        = { version = "1.52", features = ["full"] }
 tokio-util   = { version = "0.7.18", features = ["full"] }

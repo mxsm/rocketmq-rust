@@ -28,6 +28,6 @@ impl RequestProcessor for DefaultRemotingRequestProcessor {
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        Ok(Some(request.clone()))
+        Ok(Some(RemotingCommand::create_response_command_with_code(request.code())))
     }
 }

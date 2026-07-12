@@ -59,6 +59,18 @@ pub struct FrameLimits {
 impl Default for FrameLimits {
     fn default() -> Self {
         Self {
+            max_frame_bytes: 4 * 1024 * 1024,
+            max_header_bytes: 1024 * 1024,
+            max_body_bytes: 4 * 1024 * 1024,
+            initial_read_bytes: 8 * 1024,
+        }
+    }
+}
+
+impl FrameLimits {
+    /// Compatibility envelope selected explicitly by the Remoting owner.
+    pub const fn legacy_compatibility() -> Self {
+        Self {
             max_frame_bytes: 16 * 1024 * 1024,
             max_header_bytes: 4 * 1024 * 1024,
             max_body_bytes: 16 * 1024 * 1024,
@@ -199,6 +211,13 @@ impl CompositeCodec {
         Self {
             bytes_codec: BytesCodec::new(),
             remoting_command_codec: RemotingCommandCodec::new(),
+        }
+    }
+
+    pub fn with_limits(limits: FrameLimits) -> Self {
+        Self {
+            bytes_codec: BytesCodec::new(),
+            remoting_command_codec: RemotingCommandCodec::with_limits(limits),
         }
     }
 }

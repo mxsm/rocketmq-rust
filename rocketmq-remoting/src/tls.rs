@@ -16,6 +16,10 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 #[cfg(feature = "tls")]
+use rocketmq_runtime::BlockingExecutor;
+#[cfg(feature = "tls")]
+use rocketmq_runtime::BlockingPoolPolicy;
+#[cfg(feature = "tls")]
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownReport;
@@ -52,7 +56,20 @@ impl TlsServerRuntime {
                 Ok(handle) => {
                     let runtime = RuntimeHandle::new(handle);
                     let task_group = TaskGroup::root("rocketmq-remoting.tls", runtime);
-                    rocketmq_transport::tls::TlsServerRuntime::new_with_task_group(base_config, task_group)
+                    match BlockingExecutor::new(
+                        BlockingPoolPolicy::default(),
+                        task_group.child("rocketmq-remoting.tls.blocking-reaper"),
+                    ) {
+                        Ok(blocking) => rocketmq_transport::tls::TlsServerRuntime::new_with_task_group_and_blocking(
+                            base_config,
+                            task_group,
+                            blocking,
+                        ),
+                        Err(error) => {
+                            warn!(?error, "failed to create TLS reload BlockingExecutor");
+                            rocketmq_transport::tls::TlsServerRuntime::new(base_config)
+                        }
+                    }
                 }
                 Err(error) => {
                     warn!(?error, "failed to start TLS reload task outside Tokio runtime");
@@ -78,6 +95,10 @@ impl TlsServerRuntime {
 
     pub fn mode(&self) -> TlsMode {
         self.inner.mode()
+    }
+
+    pub(crate) fn transport_runtime(&self) -> rocketmq_transport::tls::TlsServerRuntime {
+        self.inner.clone()
     }
 
     pub async fn into_connection(&self, stream: TcpStream, remote_addr: SocketAddr) -> Option<Connection> {

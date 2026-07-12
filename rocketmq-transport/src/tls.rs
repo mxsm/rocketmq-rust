@@ -31,6 +31,8 @@ pub use crate::config::TlsMode;
 use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+#[cfg(feature = "tls")]
+use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownReport;
 #[cfg(feature = "tls")]
@@ -59,6 +61,7 @@ pub struct TlsServerRuntime {
     acceptor: StdArc<TlsAcceptorSlot>,
     base_config: StdArc<TlsConfig>,
     reload_task_group: StdArc<Mutex<Option<TaskGroup>>>,
+    blocking: Option<BlockingExecutor>,
 }
 
 #[cfg(not(feature = "tls"))]
@@ -71,7 +74,7 @@ impl TlsServerRuntime {
     pub fn new(base_config: TlsConfig) -> Self {
         #[cfg(feature = "tls")]
         {
-            Self::new_with_reload_task_group(base_config, None)
+            Self::new_with_reload_task_group(base_config, None, None)
         }
 
         #[cfg(not(feature = "tls"))]
@@ -92,6 +95,7 @@ impl TlsServerRuntime {
             Self::new_with_reload_task_group(
                 base_config,
                 Some(service_context.task_group().child("rocketmq-transport.tls")),
+                Some(service_context.blocking().clone()),
             )
         }
 
@@ -107,11 +111,24 @@ impl TlsServerRuntime {
     /// Creates a TLS runtime whose certificate reload task is owned by `task_group`.
     #[cfg(feature = "tls")]
     pub fn new_with_task_group(base_config: TlsConfig, task_group: TaskGroup) -> Self {
-        Self::new_with_reload_task_group(base_config, Some(task_group))
+        Self::new_with_reload_task_group(base_config, Some(task_group), None)
     }
 
     #[cfg(feature = "tls")]
-    fn new_with_reload_task_group(base_config: TlsConfig, reload_task_group: Option<TaskGroup>) -> Self {
+    pub fn new_with_task_group_and_blocking(
+        base_config: TlsConfig,
+        task_group: TaskGroup,
+        blocking: BlockingExecutor,
+    ) -> Self {
+        Self::new_with_reload_task_group(base_config, Some(task_group), Some(blocking))
+    }
+
+    #[cfg(feature = "tls")]
+    fn new_with_reload_task_group(
+        base_config: TlsConfig,
+        reload_task_group: Option<TaskGroup>,
+        blocking: Option<BlockingExecutor>,
+    ) -> Self {
         {
             let effective_config = effective_tls_config(&base_config);
             let acceptor = StdArc::new(TlsAcceptorSlot::empty());
@@ -131,6 +148,7 @@ impl TlsServerRuntime {
                 acceptor,
                 base_config: StdArc::new(base_config),
                 reload_task_group: StdArc::new(Mutex::new(None)),
+                blocking,
             };
             if reload_task_group.is_some() {
                 runtime.spawn_reload_task(reload_task_group);
@@ -198,6 +216,34 @@ impl TlsServerRuntime {
     }
 
     #[cfg(feature = "tls")]
+    pub async fn reload_now(&self) -> RocketMQResult<()> {
+        let Some(blocking) = self.blocking.as_ref() else {
+            return Err(RocketMQError::network_connection_failed(
+                "tls-reload",
+                "TLS reload requires an injected BlockingExecutor",
+            ));
+        };
+        let base_config = self.base_config.clone();
+        let mode = self.mode;
+        let acceptor = blocking
+            .spawn_io("transport.tls.reload", move || {
+                let effective = effective_tls_config(&base_config);
+                let _snapshot = file_snapshot(&effective.watched_server_paths());
+                if mode == TlsMode::Disabled {
+                    Ok(None)
+                } else {
+                    build_server_acceptor(&effective).map(|acceptor| Some(StdArc::new(acceptor)))
+                }
+            })
+            .await
+            .map_err(|error| RocketMQError::network_connection_failed("tls-reload", error.to_string()))??;
+        if let Some(acceptor) = acceptor {
+            self.acceptor.store(Some(acceptor));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "tls")]
     async fn accept_tls(&self, stream: TcpStream, remote_addr: SocketAddr) -> Option<Connection> {
         let Some(acceptor) = self.acceptor.load_full() else {
             warn!("client {remote_addr} attempted TLS but no TLS server acceptor is configured");
@@ -227,6 +273,10 @@ impl TlsServerRuntime {
 
         let base_config = self.base_config.clone();
         let acceptor = self.acceptor.clone();
+        let Some(blocking) = self.blocking.clone() else {
+            warn!("TLS reload task requires an injected BlockingExecutor");
+            return;
+        };
         let Some(task_group) = task_group else {
             return;
         };
@@ -234,22 +284,48 @@ impl TlsServerRuntime {
         *self.reload_task_group.lock() = Some(task_group.clone());
 
         if let Err(error) = task_group.spawn_service("remoting.tls.reload", async move {
-            let mut previous_snapshot = file_snapshot(&effective_tls_config(&base_config).watched_server_paths());
+            let initial_config = base_config.clone();
+            let mut previous_snapshot = match blocking
+                .spawn_io("transport.tls.reload.snapshot", move || {
+                    file_snapshot(&effective_tls_config(&initial_config).watched_server_paths())
+                })
+                .await
+            {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    warn!(?error, "failed to inspect initial TLS reload snapshot");
+                    Vec::new()
+                }
+            };
             loop {
                 tokio::select! {
                     () = cancellation_token.cancelled() => break,
                     () = time::sleep(TLS_RELOAD_POLL_INTERVAL) => {}
                 }
 
-                let effective_config = effective_tls_config(&base_config);
-                let paths = effective_config.watched_server_paths();
-                let current_snapshot = file_snapshot(&paths);
-                if current_snapshot == previous_snapshot {
+                let reload_config = base_config.clone();
+                let current_snapshot = match blocking
+                    .spawn_io("transport.tls.reload", move || {
+                        let effective_config = effective_tls_config(&reload_config);
+                        let paths = effective_config.watched_server_paths();
+                        let current_snapshot = file_snapshot(&paths);
+                        let acceptor = build_server_acceptor(&effective_config);
+                        (current_snapshot, acceptor)
+                    })
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        warn!(?error, "TLS reload blocking work failed");
+                        continue;
+                    }
+                };
+                if current_snapshot.0 == previous_snapshot {
                     continue;
                 }
 
-                previous_snapshot = current_snapshot;
-                match build_server_acceptor(&effective_config) {
+                previous_snapshot = current_snapshot.0;
+                match current_snapshot.1 {
                     Ok(tls_acceptor) => {
                         acceptor.store(Some(StdArc::new(tls_acceptor)));
                         debug!("TLS server acceptor reloaded after file change");

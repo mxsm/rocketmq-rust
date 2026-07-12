@@ -51,3 +51,13 @@ fn oversized_frame_is_rejected_before_body_allocation() {
     assert!(codec.decode(&mut announced).is_err());
     assert!(announced.capacity() < 1024);
 }
+
+#[test]
+fn legacy_large_frame_acceptance_requires_an_explicit_owner_profile() {
+    let canonical = FrameLimits::default();
+    let legacy = FrameLimits::legacy_compatibility();
+
+    assert!(canonical.max_frame_bytes < 16 * 1024 * 1024);
+    assert_eq!(legacy.max_frame_bytes, 16 * 1024 * 1024);
+    assert_eq!(canonical.initial_read_bytes, 8 * 1024);
+}
