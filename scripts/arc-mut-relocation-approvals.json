@@ -43,6 +43,42 @@
       "from": "b5e35ab8bca98a5f31be4b78",
       "to": "26d2e0b2c08b64d6e00a411f",
       "reason": "Importing the Local mapped-file progress kernel and formatting imports changed adjacent tokens around the existing ArcMut import without adding or moving an occurrence"
+    },
+    {
+      "identity": "acf169f0918de3dabff93aa8",
+      "from": "6e40d6b2bf075d97b6755b7d",
+      "to": "3b2123c0e754a03714b9b05f",
+      "reason": "Delegating eager mapped-file creation to the Local storage handle changed adjacent tokens around the existing ArcMut constructor in the same try_new_inner item without adding an occurrence"
+    },
+    {
+      "identity": "ebb212125033591cebb811ba",
+      "from": "26d2e0b2c08b64d6e00a411f",
+      "to": "e33954dcd98342cf79a55bc4",
+      "reason": "Importing the Local mapped-file storage handle and formatting imports changed adjacent tokens around the existing ArcMut import without adding or moving an occurrence"
+    },
+    {
+      "identity": "f80c7a60a612919c6a52504e",
+      "from": "b4aa6b87d22d9ca9e6a02260",
+      "to": "8622d524765ef0a77c59a703",
+      "reason": "Replacing the DefaultMappedFile File and offset fields with one Local storage field changed adjacent tokens around the existing ArcMut field type without adding an occurrence"
+    },
+    {
+      "identity": "f77276860cc979566f9dbc1e",
+      "from": "0c6dcf2166eef2fcf442f868",
+      "to": "aade4a10d53ff89ec2766419",
+      "reason": "Replacing the DefaultMappedFile File and offset fields with the Local storage composition changed the fingerprint of the same governed shared UnsafeCell wrapper without adding an occurrence"
+    },
+    {
+      "identity": "22e398389b823d706a043784",
+      "from": "76247274f271039bf8cd8f1b",
+      "to": "4d553633a7d26ce689bc0cd1",
+      "reason": "Replacing the DefaultMappedFile File and offset fields with one Local storage field changed the fingerprint of the same struct type reference without adding an occurrence"
+    },
+    {
+      "identity": "ebb212125033591cebb811ba",
+      "from": "e33954dcd98342cf79a55bc4",
+      "to": "763657513cccba1f2db06b65",
+      "reason": "Applying the repository rustfmt import order changed adjacent tokens around the same ArcMut import without adding or moving an occurrence"
     }
   ]
 }

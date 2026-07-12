@@ -4931,6 +4931,7 @@ name = "rocketmq-store-local"
 version = "1.0.0"
 dependencies = [
  "bytes",
+ "libc",
  "memmap2",
  "parking_lot",
  "tempfile",

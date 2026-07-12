@@ -38,6 +38,14 @@ KERNEL_ITEMS = {
     "ReferenceResourceBase": "struct",
     "ReferenceResourceCounter": "struct",
 }
+FILE_ITEMS = {
+    "MappedFileStorage": "struct",
+    "FilePreallocateOutcome": "enum",
+    "PREALLOCATE_UNSUPPORTED_ERRNO": "const",
+    "classify_file_preallocate_result": "fn",
+    "preallocate_file": "fn",
+}
+FILE_PLATFORM_REEXPORTS = set(FILE_ITEMS) - {"MappedFileStorage"}
 PROGRESS_FIELDS = {
     "file_size",
     "wrote_position",
@@ -251,6 +259,22 @@ def has_linux_only_optional_tokio_uring(manifest: dict[str, Any]) -> bool:
     )
 
 
+def has_unix_only_normal_libc(manifest: dict[str, Any]) -> bool:
+    occurrences: list[tuple[str | None, str, Any]] = []
+    table_names = ("dependencies", "build-dependencies", "dev-dependencies")
+    for table_name in table_names:
+        table = manifest.get(table_name, {})
+        if "libc" in table:
+            occurrences.append((None, table_name, table["libc"]))
+    for target, target_manifest in manifest.get("target", {}).items():
+        for table_name in table_names:
+            table = target_manifest.get(table_name, {})
+            if "libc" in table:
+                occurrences.append((target, table_name, table["libc"]))
+
+    return occurrences == [('cfg(unix)', "dependencies", "0.2.186")]
+
+
 def canonical_definition_paths(sources: dict[Path, str], item: str, item_kind: str) -> list[Path]:
     pattern = re.compile(rf"\bpub\s+{re.escape(item_kind)}\s+{re.escape(item)}\b")
     return [
@@ -268,6 +292,36 @@ def active_kernel_reexports(source: str) -> set[str]:
             active_rust_source(source),
         )
     )
+
+
+def active_file_use_statements(source: str) -> list[str]:
+    file_prefix = "rocketmq_store_local::mapped_file::file::"
+    statements: list[str] = []
+    for visibility, body, _ in active_use_records(source):
+        if not body.startswith(file_prefix):
+            continue
+        prefix = f"{visibility} " if visibility else ""
+        statements.append(f"{prefix}use {body.removeprefix(file_prefix)}")
+    return statements
+
+
+def file_item_owner_occurrences(
+    sources: dict[Path, str],
+    item: str,
+) -> list[tuple[Path, str]]:
+    declaration = re.compile(
+        rf"\b(?:pub(?:\s*\([^)]*\))?\s+)?"
+        rf"(?P<kind>struct|trait|type|enum|union|const|static|fn|mod)\s+{re.escape(item)}\b"
+    )
+    aliased_import = re.compile(rf"\bas\s+{re.escape(item)}\b")
+    occurrences: list[tuple[Path, str]] = []
+    for path, source in sources.items():
+        if item not in source:
+            continue
+        active_source = active_rust_source(source)
+        occurrences.extend((path, match.group("kind")) for match in declaration.finditer(active_source))
+        occurrences.extend((path, "alias") for _ in aliased_import.finditer(active_source))
+    return sorted(occurrences, key=lambda occurrence: (str(occurrence[0]), occurrence[1]))
 
 
 def active_import_records(source: str) -> list[tuple[str, str, str, str]]:
@@ -447,6 +501,41 @@ def default_mapped_file_progress_violations(source: str) -> list[str]:
     return violations
 
 
+def default_mapped_file_storage_violations(source: str) -> list[str]:
+    if not active_struct_body(source, "DefaultMappedFile"):
+        return ["DefaultMappedFile struct missing"]
+
+    fields = active_struct_fields(source, "DefaultMappedFile")
+    violations = [
+        f"legacy storage field: {name}"
+        for name, _ in fields
+        if name in {"file", "file_from_offset"}
+    ]
+    storage_fields = [
+        (name, field_type)
+        for name, field_type in fields
+        if re.search(r"\bMappedFileStorage\b", field_type)
+    ]
+    if [name for name, _ in storage_fields] != ["storage"]:
+        violations.append("MappedFileStorage fields must be exactly: storage")
+    elif not re.fullmatch(
+        r"(?:[A-Za-z_][A-Za-z0-9_]*::)*MappedFileStorage",
+        storage_fields[0][1],
+    ):
+        violations.append("storage field must have exact MappedFileStorage type")
+    return violations
+
+
+def mapped_file_storage_owner_violations(source: str) -> list[str]:
+    fields = active_struct_fields(source, "MappedFileStorage")
+    expected = [
+        ("file", "File"),
+        ("path", "PathBuf"),
+        ("file_from_offset", "u64"),
+    ]
+    return [] if fields == expected else [f"MappedFileStorage fields must be exactly: {expected!r}"]
+
+
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
@@ -513,6 +602,17 @@ info!("missing target");
         self.assertFalse(has_linux_only_optional_tokio_uring(windows_target))
         self.assertFalse(has_linux_only_optional_tokio_uring(top_level_build))
 
+    def test_libc_dependency_must_be_one_unix_normal_dependency(self) -> None:
+        valid = {"target": {"cfg(unix)": {"dependencies": {"libc": "0.2.186"}}}}
+        top_level = {
+            "dependencies": {"libc": "0.2.186"},
+            "target": {"cfg(unix)": {"dependencies": {"libc": "0.2.186"}}},
+        }
+        build_only = {"target": {"cfg(unix)": {"build-dependencies": {"libc": "0.2.186"}}}}
+        self.assertTrue(has_unix_only_normal_libc(valid))
+        self.assertFalse(has_unix_only_normal_libc(top_level))
+        self.assertFalse(has_unix_only_normal_libc(build_only))
+
     def test_canonical_function_definition_scanner_detects_duplicate_active_definitions(self) -> None:
         first = Path("first.rs")
         second = Path("second.rs")
@@ -549,6 +649,82 @@ const TEXT: &str = "struct DefaultMappedFile { flushed_position: AtomicI32 }";
         self.assertIn("progress: MappedFileProgress", active_struct_body(owner, "DefaultMappedFile"))
         self.assertNotIn("wrote_position", active_struct_body(owner, "DefaultMappedFile"))
         self.assertEqual([], default_mapped_file_progress_violations(owner))
+
+    def test_file_scanners_ignore_comments_and_strings(self) -> None:
+        facade = '''
+// pub use rocketmq_store_local::mapped_file::file::FilePreallocateOutcome;
+const TEXT: &str = "pub use rocketmq_store_local::mapped_file::file::preallocate_file;";
+pub use rocketmq_store_local::mapped_file::file::classify_file_preallocate_result;
+'''
+        owner = '''
+pub struct DefaultMappedFile {
+    storage: MappedFileStorage,
+    // file: File,
+    text: &'static str,
+}
+const TEXT: &str = "struct DefaultMappedFile { file_from_offset: u64 }";
+'''
+        self.assertEqual(
+            ["pub use classify_file_preallocate_result"],
+            active_file_use_statements(facade),
+        )
+        self.assertEqual([], default_mapped_file_storage_violations(owner))
+
+    def test_file_owner_scanner_rejects_type_alias_and_duplicate_owner(self) -> None:
+        canonical = Path("canonical.rs")
+        duplicate = Path("duplicate.rs")
+        alias = Path("alias.rs")
+        self.assertEqual(
+            [(alias, "type"), (canonical, "struct"), (duplicate, "struct")],
+            file_item_owner_occurrences(
+                {
+                    canonical: "pub struct MappedFileStorage { file: File }",
+                    duplicate: "struct MappedFileStorage;",
+                    alias: "pub type MappedFileStorage = usize;",
+                },
+                "MappedFileStorage",
+            ),
+        )
+
+    def test_file_reexport_scanner_exposes_alias_brace_and_glob_bypasses(self) -> None:
+        source = '''
+pub use rocketmq_store_local::mapped_file::file::FilePreallocateOutcome as Outcome;
+pub use rocketmq_store_local::mapped_file::file::{preallocate_file, PREALLOCATE_UNSUPPORTED_ERRNO};
+pub use rocketmq_store_local::mapped_file::file::*;
+'''
+        self.assertEqual(
+            {
+                "pub use FilePreallocateOutcome as Outcome",
+                "pub use {preallocate_file, PREALLOCATE_UNSUPPORTED_ERRNO}",
+                "pub use *",
+            },
+            set(active_file_use_statements(source)),
+        )
+
+    def test_default_mapped_file_storage_scanner_rejects_duplicate_and_legacy_fields(self) -> None:
+        source = '''
+struct DefaultMappedFile {
+    storage: MappedFileStorage,
+    shadow: MappedFileStorage,
+    file: File,
+    file_from_offset: u64,
+}
+'''
+        violations = default_mapped_file_storage_violations(source)
+        self.assertIn("legacy storage field: file", violations)
+        self.assertIn("legacy storage field: file_from_offset", violations)
+        self.assertIn("MappedFileStorage fields must be exactly: storage", violations)
+
+    def test_storage_owner_scanner_rejects_extra_size_duplicate_and_aliased_field_types(self) -> None:
+        source = '''
+pub struct MappedFileStorage {
+    file: std::fs::File,
+    path: CanonicalPath,
+    file_from_offset: Offset,
+    file_size: u64,
+}
+'''
+        self.assertNotEqual([], mapped_file_storage_owner_violations(source))
 
     def test_kernel_owner_scanner_rejects_type_alias_bypass(self) -> None:
         alias = Path("alias.rs")
@@ -740,6 +916,7 @@ struct DefaultMappedFile {
         )
         self.assertNotIn("tokio-uring", local_manifest.get("dependencies", {}))
         self.assertTrue(has_linux_only_optional_tokio_uring(local_manifest))
+        self.assertTrue(has_unix_only_normal_libc(local_manifest))
         store_manifest = tomllib.loads((STORE_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
         self.assertEqual(["local_file_store", "fast-load"], store_manifest["features"]["default"])
         self.assertEqual(["rocketmq-store-local/fast-load"], store_manifest["features"]["fast-load"])
@@ -774,7 +951,7 @@ struct DefaultMappedFile {
         self.assert_local_crate_exists()
         canonical_dir = LOCAL_CRATE / "src" / "mapped_file"
         facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
-        self.assertEqual(LEAF_FILES | {"kernel.rs"}, {path.name for path in canonical_dir.glob("*.rs")})
+        self.assertEqual(LEAF_FILES | {"file.rs", "kernel.rs"}, {path.name for path in canonical_dir.glob("*.rs")})
         self.assertTrue(all(not (facade_dir / name).exists() for name in LEAF_FILES))
 
         rust_sources = {
@@ -845,6 +1022,59 @@ struct DefaultMappedFile {
         self.assertEqual(
             [],
             default_mapped_file_progress_violations(default_mapped_file),
+        )
+
+    def test_mapped_file_storage_has_one_owner_exact_platform_reexports_and_no_store_state_copy(self) -> None:
+        canonical_file = LOCAL_CRATE / "src" / "mapped_file" / "file.rs"
+        rust_sources = {
+            path: path.read_text(encoding="utf-8")
+            for path in ROOT.glob("rocketmq-*/src/**/*.rs")
+        }
+        for item, item_kind in FILE_ITEMS.items():
+            self.assertEqual(
+                [(canonical_file, item_kind)],
+                file_item_owner_occurrences(rust_sources, item),
+                item,
+            )
+        canonical_source = canonical_file.read_text(encoding="utf-8")
+        self.assertEqual([], mapped_file_storage_owner_violations(canonical_source))
+        self.assertEqual(
+            [canonical_file],
+            canonical_definition_paths(
+                {canonical_file: canonical_source},
+                "parse_file_from_offset",
+                "fn",
+            ),
+        )
+        self.assertEqual(
+            [canonical_file],
+            canonical_definition_paths(
+                {canonical_file: canonical_source},
+                "try_parse_file_from_offset",
+                "fn",
+            ),
+        )
+
+        platform = (STORE_CRATE / "src" / "platform.rs").read_text(encoding="utf-8")
+        self.assertEqual(
+            {f"pub use {item}" for item in FILE_PLATFORM_REEXPORTS},
+            set(active_file_use_statements(platform)),
+        )
+
+        default_mapped_file = (
+            STORE_CRATE / "src" / "log_file" / "mapped_file" / "default_mapped_file_impl.rs"
+        ).read_text(encoding="utf-8")
+        self.assertEqual([], default_mapped_file_storage_violations(default_mapped_file))
+        active_default = active_rust_source(default_mapped_file)
+        self.assertRegex(
+            active_default,
+            r"pub\s+fn\s+parse_file_from_offset\s*\(file_name:\s*&Path\)\s*->\s*u64\s*\{\s*"
+            r"rocketmq_store_local::mapped_file::file::parse_file_from_offset\(file_name\)\s*\}",
+        )
+        self.assertRegex(
+            active_default,
+            r"pub\s+fn\s+try_parse_file_from_offset\s*\(file_name:\s*&Path\)\s*->\s*io::Result<u64>\s*\{\s*"
+            r"rocketmq_store_local::mapped_file::file::try_parse_file_from_offset\(file_name\)\s*\}",
         )
 
     def test_commit_log_planning_items_have_one_canonical_definition_and_exact_facade_reexports(self) -> None:

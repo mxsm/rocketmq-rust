@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs;
 use std::fs::File;
-use std::fs::OpenOptions;
 use std::io;
 use std::io::Write;
 use std::ops::Deref;
 use std::path::Path;
-use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
@@ -39,6 +36,7 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
+use rocketmq_store_local::mapped_file::file::MappedFileStorage;
 use rocketmq_store_local::mapped_file::kernel::MappedFileProgress;
 use tracing::debug;
 use tracing::error;
@@ -65,7 +63,6 @@ use crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceC
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::mapped_file::MappedFileError;
 use crate::log_file::mapped_file::MappedFileResult;
-use crate::platform::preallocate_file;
 use crate::platform::FilePreallocateOutcome;
 use crate::utils::ffi::get_page_size;
 use crate::utils::ffi::madvise;
@@ -169,7 +166,7 @@ fn emit_linux_storage_degradation_observability(event: LinuxStorageDegradationEv
 
 pub struct DefaultMappedFile {
     reference_resource: ReferenceResourceCounter,
-    file: File,
+    storage: MappedFileStorage,
     mmapped_file: OnceLock<ArcMut<MmapMut>>,
     mmap_init_lock: Mutex<()>,
     lazy_mmap_enabled: bool,
@@ -179,7 +176,6 @@ pub struct DefaultMappedFile {
     lazy_mmap_last_millis: AtomicU64,
     transient_store_pool: Option<TransientStorePool>,
     file_name: CheetahString,
-    file_from_offset: u64,
     mapped_byte_buffer: Option<bytes::Bytes>,
     progress: MappedFileProgress,
     first_create_in_queue: bool,
@@ -237,24 +233,15 @@ impl DefaultMappedFile {
         transient_store_pool: Option<TransientStorePool>,
         lazy_mmap_enabled: bool,
     ) -> io::Result<Self> {
-        let path_buf = PathBuf::from(file_name.as_str());
+        let path_buf = Path::new(file_name.as_str()).to_path_buf();
         let dir = path_buf
             .parent()
             .and_then(|path| path.to_str())
             .ok_or_else(|| invalid_input_error(format!("file path is invalid: {file_name}")))?;
         ensure_dir_ok(dir);
 
-        let file_from_offset = Self::try_parse_file_from_offset(&path_buf)?;
-        let existing_len = fs::metadata(&path_buf).map(|metadata| metadata.len()).unwrap_or(0);
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path_buf)?;
-        file.set_len(file_size)?;
-        if existing_len < file_size {
-            let preallocate_outcome = preallocate_file(&file, file_size);
+        let (storage, preallocate_outcome) = MappedFileStorage::open(path_buf, file_size)?;
+        if let Some(preallocate_outcome) = preallocate_outcome {
             if let Some(event) = file_preallocate_degradation_event(preallocate_outcome) {
                 emit_linux_storage_degradation_observability(event);
             }
@@ -273,13 +260,13 @@ impl DefaultMappedFile {
 
         let mmapped_file = OnceLock::new();
         if !lazy_mmap_enabled {
-            let mmap = unsafe { MmapMut::map_mut(&file)? };
+            let mmap = unsafe { MmapMut::map_mut(storage.file())? };
             let _ = mmapped_file.set(ArcMut::new(mmap));
         }
 
         Ok(Self {
             reference_resource: ReferenceResourceCounter::new(),
-            file,
+            storage,
             mmapped_file,
             mmap_init_lock: Mutex::new(()),
             lazy_mmap_enabled,
@@ -288,7 +275,6 @@ impl DefaultMappedFile {
             lazy_mmap_total_millis: AtomicU64::new(0),
             lazy_mmap_last_millis: AtomicU64::new(0),
             file_name,
-            file_from_offset,
             mapped_byte_buffer: None,
             progress: MappedFileProgress::new(file_size),
             first_create_in_queue: false,
@@ -332,7 +318,7 @@ impl DefaultMappedFile {
         }
 
         let start = Instant::now();
-        match unsafe { MmapMut::map_mut(&self.file) } {
+        match unsafe { MmapMut::map_mut(self.storage.file()) } {
             Ok(mmap) => {
                 let elapsed_millis = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
                 if self.lazy_mmap_enabled {
@@ -374,51 +360,12 @@ impl DefaultMappedFile {
     /// This function will panic if the file name cannot be parsed to a valid `u64` offset.
     #[inline]
     pub fn parse_file_from_offset(file_name: &Path) -> u64 {
-        Self::try_parse_file_from_offset(file_name).expect("File name parse to offset is invalid")
+        rocketmq_store_local::mapped_file::file::parse_file_from_offset(file_name)
     }
 
     #[inline]
     pub fn try_parse_file_from_offset(file_name: &Path) -> io::Result<u64> {
-        file_name
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|s| s.parse::<u64>().ok())
-            .ok_or_else(|| {
-                invalid_input_error(format!("file name parse to offset is invalid: {}", file_name.display()))
-            })
-    }
-
-    /// Creates and initializes a new file with the specified name and size.
-    ///
-    /// This function takes a `CheetahString` representing the file name and a `u64`
-    /// representing the file size. It creates a new file at the specified path,
-    /// truncates it to the specified size, and returns the file handle.
-    ///
-    /// # Arguments
-    ///
-    /// * `file_name` - A `CheetahString` representing the name of the file.
-    /// * `file_size` - A `u64` representing the size of the file to be created.
-    ///
-    /// # Returns
-    ///
-    /// A `File` handle to the newly created file.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if the file cannot be opened or if the file size
-    /// cannot be set.
-    fn build_file(file_name: &CheetahString, file_size: u64) -> File {
-        let path = PathBuf::from(file_name.as_str());
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-            .expect("Open file failed");
-        file.set_len(file_size)
-            .unwrap_or_else(|_| panic!("failed to set file size: {file_name}"));
-        file
+        rocketmq_store_local::mapped_file::file::try_parse_file_from_offset(file_name)
     }
 
     pub fn new_with_transient_store_pool(
@@ -505,14 +452,11 @@ impl MappedFile for DefaultMappedFile {
 
     fn rename_to(&mut self, file_name: &str) -> bool {
         let new_file = Path::new(file_name);
-        match std::fs::rename(self.file_name.as_str(), new_file) {
+        match self.storage.rename(new_file) {
             Ok(_) => {
                 self.file_name = CheetahString::from(file_name);
-                match fs::File::open(new_file) {
-                    Ok(new_file) => {
-                        self.file = new_file;
-                    }
-                    Err(_) => return false,
+                if self.storage.reopen().is_err() {
+                    return false;
                 }
                 true
             }
@@ -554,7 +498,7 @@ impl MappedFile for DefaultMappedFile {
             };
         }
         let result = message_callback.do_append(
-            self.file_from_offset as i64, // file name parsed as offset
+            self.storage.file_from_offset() as i64, // file name parsed as offset
             self,
             (self.progress.file_size() - current_pos) as i32, // remaining space
             message,
@@ -590,7 +534,7 @@ impl MappedFile for DefaultMappedFile {
             };
         }
         let result = message_callback.do_append_batch(
-            self.file_from_offset as i64,
+            self.storage.file_from_offset() as i64,
             self,
             (self.progress.file_size() - current_pos) as i32,
             message,
@@ -765,7 +709,7 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn get_file_from_offset(&self) -> u64 {
-        self.file_from_offset
+        self.storage.file_from_offset()
     }
 
     fn flush(&self, flush_least_pages: i32) -> i32 {
@@ -828,7 +772,7 @@ impl MappedFile for DefaultMappedFile {
                 };
 
                 Some(SelectMappedBufferResult {
-                    start_offset: self.file_from_offset + pos as u64,
+                    start_offset: self.storage.file_from_offset() + pos as u64,
                     size,
                     bytes: Some(bytes),
                     is_in_cache,
@@ -840,14 +784,17 @@ impl MappedFile for DefaultMappedFile {
             } else {
                 warn!(
                     "matched, but hold failed, request pos: {}, fileFromOffset: {}",
-                    pos, self.file_from_offset
+                    pos,
+                    self.storage.file_from_offset()
                 );
                 None
             }
         } else {
             warn!(
                 "selectMappedBuffer request pos invalid, request pos: {}, size:{}, fileFromOffset: {}",
-                pos, size, self.file_from_offset
+                pos,
+                size,
+                self.storage.file_from_offset()
             );
             None
         }
@@ -884,7 +831,8 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn get_last_modified_timestamp(&self) -> u64 {
-        self.file
+        self.storage
+            .file()
             .metadata()
             .unwrap()
             .modified()
@@ -905,14 +853,17 @@ impl MappedFile for DefaultMappedFile {
             } else {
                 debug!(
                     "matched, but hold failed, request pos: {}, fileFromOffset: {}",
-                    pos, self.file_from_offset
+                    pos,
+                    self.storage.file_from_offset()
                 );
                 None
             }
         } else {
             warn!(
                 "selectMappedBuffer request pos invalid, request pos: {}, size:{}, fileFromOffset: {}",
-                pos, size, self.file_from_offset
+                pos,
+                size,
+                self.storage.file_from_offset()
             );
             None
         }
@@ -922,7 +873,7 @@ impl MappedFile for DefaultMappedFile {
     fn destroy(&self, interval_forcibly: u64) -> bool {
         MappedFile::shutdown(self, interval_forcibly);
         if self.is_cleanup_over() {
-            if let Err(e) = fs::remove_file(self.file_name.as_str()) {
+            if let Err(e) = self.storage.delete() {
                 error!(file_name = %self.file_name, error = ?e, "delete file failed");
                 false
             } else {
@@ -1061,7 +1012,7 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn get_file(&self) -> &File {
-        &self.file
+        self.storage.file()
     }
 
     #[inline]
@@ -1724,7 +1675,7 @@ impl DefaultMappedFile {
             }
 
             let result = message_callback.do_append(
-                self.file_from_offset as i64,
+                self.storage.file_from_offset() as i64,
                 self,
                 (self.progress.file_size() - current_pos) as i32,
                 message,
@@ -1943,6 +1894,15 @@ mod tests {
     }
 
     #[test]
+    fn eager_mmap_maps_during_construction() {
+        let (_temp_dir, mapped_file) = create_test_file();
+
+        assert!(!mapped_file.is_lazy_mmap_enabled());
+        assert!(mapped_file.is_mapped());
+        assert_eq!(mapped_file.get_mapped_file().len(), 4096);
+    }
+
+    #[test]
     fn lazy_mmap_destroy_before_first_access_does_not_force_mapping() {
         let (temp_dir, mapped_file) = create_lazy_test_file();
         let file_path = temp_dir.path().join("00000000000000000000");
@@ -1951,6 +1911,33 @@ mod tests {
         assert!(mapped_file.destroy(0));
         assert!(!file_path.exists());
         assert_eq!(mapped_file.lazy_mmap_stats().map_operations, 0);
+    }
+
+    #[test]
+    fn rename_delegation_updates_projection_handle_and_destroy_path() {
+        let (temp_dir, mut mapped_file) = create_test_file();
+        let original = temp_dir.path().join("00000000000000000000");
+        let renamed = temp_dir.path().join("renamed-segment");
+
+        assert!(mapped_file.rename_to(renamed.to_str().expect("UTF-8 path")));
+        assert_eq!(mapped_file.get_file_name().as_str(), renamed.to_str().unwrap());
+        assert!(!original.exists());
+        assert!(renamed.exists());
+        assert_eq!(mapped_file.get_file().metadata().unwrap().len(), 4096);
+        assert!(mapped_file.destroy(0));
+        assert!(!renamed.exists());
+    }
+
+    #[test]
+    fn failed_rename_delegation_keeps_projection_and_handle() {
+        let (temp_dir, mut mapped_file) = create_test_file();
+        let original = temp_dir.path().join("00000000000000000000");
+        let missing_parent = temp_dir.path().join("missing").join("renamed-segment");
+
+        assert!(!mapped_file.rename_to(missing_parent.to_str().expect("UTF-8 path")));
+        assert_eq!(mapped_file.get_file_name().as_str(), original.to_str().unwrap());
+        assert!(original.exists());
+        assert_eq!(mapped_file.get_file().metadata().unwrap().len(), 4096);
     }
 
     #[test]

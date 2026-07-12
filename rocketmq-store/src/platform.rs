@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::File;
-
 use crate::utils::ffi::get_page_size;
 
-pub const PREALLOCATE_UNSUPPORTED_ERRNO: i32 = 95;
+pub use rocketmq_store_local::mapped_file::file::classify_file_preallocate_result;
+pub use rocketmq_store_local::mapped_file::file::preallocate_file;
+pub use rocketmq_store_local::mapped_file::file::FilePreallocateOutcome;
+pub use rocketmq_store_local::mapped_file::file::PREALLOCATE_UNSUPPORTED_ERRNO;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorePlatformCapability {
@@ -81,19 +82,6 @@ impl StorePlatformOptimizationCapability {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FilePreallocateOutcome {
-    Allocated,
-    Unsupported { errno: i32 },
-    Failed { errno: i32 },
-}
-
-impl FilePreallocateOutcome {
-    pub fn is_degraded(self) -> bool {
-        matches!(self, Self::Unsupported { .. })
-    }
-}
-
 pub fn current_store_platform_capability() -> StorePlatformCapability {
     StorePlatformCapability {
         os_name: std::env::consts::OS,
@@ -102,53 +90,6 @@ pub fn current_store_platform_capability() -> StorePlatformCapability {
         file_preallocate_supported: cfg!(target_os = "linux"),
         optimization: StorePlatformOptimizationCapability::for_os_name(std::env::consts::OS),
     }
-}
-
-pub fn classify_file_preallocate_result(result: i32, errno: i32) -> FilePreallocateOutcome {
-    if result == 0 {
-        FilePreallocateOutcome::Allocated
-    } else if is_unsupported_preallocate_errno(errno) {
-        FilePreallocateOutcome::Unsupported { errno }
-    } else {
-        FilePreallocateOutcome::Failed { errno }
-    }
-}
-
-pub fn preallocate_file(file: &File, len: u64) -> FilePreallocateOutcome {
-    if len == 0 {
-        return FilePreallocateOutcome::Allocated;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::fd::AsRawFd;
-
-        if len > i64::MAX as u64 {
-            return FilePreallocateOutcome::Failed { errno: libc::EINVAL };
-        }
-
-        let result = unsafe { libc::fallocate(file.as_raw_fd(), 0, 0, len as libc::off_t) };
-        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        classify_file_preallocate_result(result, errno)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = file;
-        FilePreallocateOutcome::Unsupported {
-            errno: PREALLOCATE_UNSUPPORTED_ERRNO,
-        }
-    }
-}
-
-#[cfg(unix)]
-fn is_unsupported_preallocate_errno(errno: i32) -> bool {
-    errno == PREALLOCATE_UNSUPPORTED_ERRNO || errno == libc::ENOSYS || errno == libc::EINVAL
-}
-
-#[cfg(not(unix))]
-fn is_unsupported_preallocate_errno(errno: i32) -> bool {
-    errno == PREALLOCATE_UNSUPPORTED_ERRNO
 }
 
 #[cfg(unix)]

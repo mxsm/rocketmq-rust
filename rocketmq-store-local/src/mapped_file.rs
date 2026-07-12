@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod direct_io;
+pub mod file;
 mod flush_strategy;
 mod mapped_buffer;
 mod mapped_file_error;

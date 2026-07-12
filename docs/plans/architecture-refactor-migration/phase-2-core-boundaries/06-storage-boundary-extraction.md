@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -334,3 +334,32 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` This slice does not move `File`, mmap/`ArcMut`, `DefaultMappedFile`, messages/callbacks, config,
   `TransientStorePool`, flush owner, CQ/Index, HA, runtime ownership, or persisted formats. PR-M06-03 and every
   M06 Exit Checklist item remain open.
+
+## M06-03d mapped-file storage handle kernel evidence
+
+- [x] `[DEV]` `rocketmq-store-local::mapped_file::file::MappedFileStorage` is the single canonical owner of the
+  operating-system `File`, authoritative `PathBuf`, and parsed segment offset. It mechanically owns the legacy
+  metadata snapshot, non-truncating read/write/create open, `set_len`, grow-only preallocation decision,
+  rename/path update, read-only reopen, and delete operations. File size remains owned only by
+  `MappedFileProgress`; storage does not duplicate it.
+- [x] `[COMPAT]` Store `platform` exact re-exports the canonical preallocation constant, outcome type,
+  classifier, and function. `DefaultMappedFile` composes exactly one Local storage handle while retaining
+  directory creation/path validation, the `CheetahString` projection, every tracing/observability target and
+  message, mmap/`ArcMut`, messages, config, progress, and flush ownership. Failed rename leaves path/projection/
+  handle unchanged; successful rename updates Local path and the Store projection before legacy read-only reopen;
+  reopen failure preserves the renamed path; delete success/failure logging remains Store-owned.
+- [x] `[TEST]` RED first proved the Local file owner and Store identity path were absent. GREEN covers numeric and
+  invalid segment names, prefix preservation, grow/shrink/zero-length and deterministic preallocation decisions,
+  outcome classification, canonical path/offset, rename/reopen/delete ordering, eager/lazy mmap, transient
+  commit/read, injected flush failure, Store type identity, recovery compatibility, and the exact Local feature
+  matrix.
+- [x] `[REV]` The 33-case mutation-resistant contract requires exactly one canonical file owner with only
+  `File`/`PathBuf`/offset fields, exact Store platform re-exports and parse wrappers, exactly one
+  `storage: MappedFileStorage`, no direct Store file/offset duplicate, one Unix-only normal `libc` dependency,
+  and the unchanged forbidden dependency closure. Negative fixtures reject comments/strings, aliases, brace and
+  glob re-exports, type aliases, duplicate owners/fields, aliased field types, and misplaced dependencies.
+  Architecture/routing gates pass; five governed DefaultMappedFile/ArcMut fingerprints moved one-for-one with no
+  new occurrence, so the governed count remains 3377.
+- [x] `[SCOPE]` This slice does not move mmap, `ArcMut`, `DefaultMappedFile`, `MappedFile`, messages/callbacks,
+  config, warmup/memory locking, `TransientStorePool`, flush/group commit, CQ/Index, HA, CommitLog orchestration,
+  runtime ownership, or persisted formats. PR-M06-03 and every M06 Exit Checklist item remain open.

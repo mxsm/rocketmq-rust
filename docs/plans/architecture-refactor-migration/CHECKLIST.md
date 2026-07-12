@@ -107,6 +107,10 @@
 - [x] PR-M06-01：完成 Store capability spike
 - [x] PR-M06-02：迁移中立 receipt/read result 与 compatibility bridge
 - [ ] PR-M06-03：创建 Local crate 并迁移 CommitLog/load/recovery
+  - [x] M06-03a：创建 Local leaf foundation 并迁移六个纯 MappedFile leaf
+  - [x] M06-03b：迁移 CommitLog load/recovery 中立规划值与纯 planner
+  - [x] M06-03c：迁移 mapped-file progress 与 reference lifecycle kernel
+  - [x] M06-03d：迁移 OS file/path/offset 与 open/resize/preallocate/rename/delete kernel
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer
