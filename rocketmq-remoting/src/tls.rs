@@ -49,7 +49,17 @@ pub struct TlsServerRuntime {
 }
 
 impl TlsServerRuntime {
-    /// Initializes TLS using the lifecycle-owned blocking executor for certificate I/O.
+    /// Initializes TLS using the lifecycle-owned [`BlockingExecutor`] for certificate I/O.
+    ///
+    /// The canonical transport initializer owns initial file loading on the injected blocking
+    /// executor and parents certificate reload work beneath `service_context`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the canonical transport error if initial blocking work cannot be scheduled or
+    /// joined.
+    ///
+    /// [`BlockingExecutor`]: rocketmq_runtime::BlockingExecutor
     pub async fn initialize_with_service_context(
         base_config: TlsConfig,
         service_context: &ServiceContext,

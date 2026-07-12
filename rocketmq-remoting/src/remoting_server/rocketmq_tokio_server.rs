@@ -275,6 +275,7 @@ impl<RP: RequestProcessor + Sync + 'static> TransportConnectionHandler for Conne
             let Some((_, mut remoting_session)) = self.sessions.remove(&session.session_id()) else {
                 return;
             };
+            *remoting_session.context.connection_mut() = session.connection();
             cmd_handler
                 .process_message_received(&mut remoting_session.context, command)
                 .await;
@@ -317,6 +318,7 @@ pub struct RocketMQServer<RP> {
     service_context: Option<ServiceContext>,
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
+    admission: Option<Arc<AdmissionController>>,
     _phantom_data: std::marker::PhantomData<RP>,
 }
 
@@ -328,6 +330,7 @@ impl<RP> RocketMQServer<RP> {
             service_context: None,
             transport_security: None,
             transport_principal: None,
+            admission: None,
             _phantom_data: std::marker::PhantomData,
         }
     }
@@ -339,6 +342,7 @@ impl<RP> RocketMQServer<RP> {
             service_context: Some(service_context),
             transport_security: None,
             transport_principal: None,
+            admission: None,
             _phantom_data: std::marker::PhantomData,
         }
     }
@@ -359,6 +363,12 @@ impl<RP> RocketMQServer<RP> {
     ) -> Self {
         self.transport_security = Some(transport_security);
         self.transport_principal = principal;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_admission_controller(mut self, admission: Arc<AdmissionController>) -> Self {
+        self.admission = Some(admission);
         self
     }
 }
@@ -435,6 +445,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             task_group,
             self.transport_security.clone(),
             self.transport_principal.clone(),
+            self.admission.clone(),
         )
         .await
     }
@@ -517,6 +528,7 @@ pub async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 
         Some(remoting_context.task_group().clone()),
         None,
         None,
+        None,
     )
     .await
 }
@@ -541,6 +553,7 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
         None,
         None,
         None,
+        None,
     )
     .await;
 }
@@ -556,6 +569,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     parented_task_group: Option<TaskGroup>,
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
+    admission: Option<Arc<AdmissionController>>,
 ) -> Option<ShutdownReport> {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
@@ -595,7 +609,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         cmd_handler: ArcMut::new(handler),
         tls_runtime,
         task_group: task_group.clone(),
-        admission: Arc::new(AdmissionController::new(admission_limits)),
+        admission: admission.unwrap_or_else(|| Arc::new(AdmissionController::new(admission_limits))),
         transport_security,
         transport_principal,
     };
@@ -948,6 +962,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remoting_control_response_uses_reserve_when_data_writer_budget_is_full() {
+        let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
+        let addr = reserved.local_addr().unwrap();
+        drop(reserved);
+        let limits = AdmissionLimits {
+            queued: ResourceLimit { count: 4, bytes: 4096 },
+            control_reserve: ResourceLimit { count: 2, bytes: 2048 },
+            ..AdmissionLimits::default()
+        };
+        let admission = Arc::new(AdmissionController::new(limits));
+        let scope = rocketmq_transport::admission::AdmissionScope::new(addr.ip());
+        let _data_one = admission
+            .try_acquire(
+                rocketmq_transport::admission::AdmissionResource::Queued,
+                scope,
+                1,
+                rocketmq_transport::admission::AdmissionClass::Data,
+            )
+            .unwrap();
+        let _data_two = admission
+            .try_acquire(
+                rocketmq_transport::admission::AdmissionResource::Queued,
+                scope,
+                1,
+                rocketmq_transport::admission::AdmissionClass::Data,
+            )
+            .unwrap();
+        let config = Arc::new(ServerConfig {
+            bind_address: addr.ip().to_string(),
+            listen_port: u32::from(addr.port()),
+            ..ServerConfig::default()
+        });
+        let mut server =
+            RocketMQServer::<DefaultRemotingRequestProcessor>::new(config).with_admission_controller(admission);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_task = tokio::spawn(async move {
+            server
+                .run_with_shutdown_report(DefaultRemotingRequestProcessor, None, async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        let mut client = crate::connection::Connection::new(TcpStream::connect(addr).await.unwrap());
+        client
+            .send_command(
+                crate::protocol::remoting_command::RemotingCommand::create_remoting_command(
+                    crate::code::request_code::RequestCode::HeartBeat,
+                )
+                .set_opaque(71),
+            )
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_millis(250), client.receive_command())
+            .await
+            .expect("control response should consume the reserved writer budget")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            response.code(),
+            crate::code::request_code::RequestCode::HeartBeat as i32
+        );
+        assert_eq!(response.opaque(), 71);
+
+        let _ = shutdown_tx.send(());
+        let report = server_task.await.unwrap().unwrap();
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
     async fn production_remoting_client_and_server_use_injected_transport_security() {
         let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
         let addr = reserved.local_addr().unwrap();
@@ -1109,6 +1194,7 @@ mod tests {
             Vec::new(),
             None,
             tls_runtime,
+            None,
             None,
             None,
             None,

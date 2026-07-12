@@ -131,6 +131,18 @@ impl TlsServerRuntime {
         }
     }
 
+    /// Initializes the TLS acceptor and reload lifecycle under `service_context`.
+    ///
+    /// Initial certificate and key loading runs on the context's injected [`BlockingExecutor`],
+    /// and the reload task is owned by a child of the context task group.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blocking job cannot be scheduled or joined. Invalid initial TLS
+    /// material is logged and retained as an empty acceptor so permissive plaintext behavior stays
+    /// compatible; strict negotiation subsequently fails closed.
+    ///
+    /// [`BlockingExecutor`]: rocketmq_runtime::BlockingExecutor
     pub async fn initialize_with_service_context(
         base_config: TlsConfig,
         service_context: &ServiceContext,

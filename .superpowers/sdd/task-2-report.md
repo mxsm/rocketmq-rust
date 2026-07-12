@@ -50,6 +50,20 @@ Every behavior slice started with a failing focused test or contract compile fix
 - Full-suite review exposed a timeout retirement race: a send could enter the queued writer after the connection
   was marked closed but before cancellation drained it. The canonical send boundary now rejects `Closed`
   connections synchronously.
+- The third review replaced that check-only fix with a deterministic lifecycle gate. Queued sends retain a Tokio
+  read guard from state validation through writer completion; retirement takes the write guard, waits for a real
+  writer close acknowledgement, and has a five-second absolute deadline that aborts a writer stuck in socket I/O.
+  Focused tests force both check/retire/enqueue and blocked-writer interleavings and prove no later socket write.
+- Public codec compatibility is restored explicitly: `CompositeCodec` still implements
+  `Decoder<Item = RemotingCommand>`, while only the crate-private `SessionCodec` exposes retained-frame metadata
+  to canonical readers. A compile contract exercises the public type through the Remoting re-export.
+- A real `RocketMQServer` regression saturates the data writer budget and proves a HeartBeat response uses the
+  control reserve. The per-request adapter now binds the actual response connection and admission class instead
+  of retaining the connection created before request classification.
+- Public asynchronous TLS initializer Rustdoc now documents injected `BlockingExecutor` ownership and failure
+  behavior. A downstream client benchmark initially exposed E0275 future-layout overflow after timeout retirement
+  became asynchronous; boxing only the Remoting retirement boundary removed the overflow without a recursion-limit
+  increase.
 
 ## Compatibility and governance
 
@@ -79,6 +93,9 @@ Passed:
 - `cargo test -p rocketmq-remoting` (112 unit tests plus integration and doc tests)
 - production transport delegation source contracts, canonical public client/server exchange, and injected TLS
   blocking reload coverage
+- deterministic retirement interleaving and blocked-writer deadline/abort regressions, real Remoting control
+  reserve coverage, public codec compatibility compilation, and TLS Rustdoc source contracts
+- `cargo doc -p rocketmq-transport --no-deps` and `cargo doc -p rocketmq-remoting --no-deps`
 - `cargo test -p rocketmq-client-rust --all-targets --all-features` (943 library tests plus integrations,
   benches, and examples)
 - transport all-target/all-feature and no-default suites (63 and 54 tests)

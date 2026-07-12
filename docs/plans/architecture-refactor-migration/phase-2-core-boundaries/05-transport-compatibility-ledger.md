@@ -25,9 +25,14 @@ protocol types, so the move does not introduce a schema conversion.
 Every pending request reserves an opaque before send and owns count plus retained-byte capacity. Response,
 timeout, send failure, owner close, and guard drop compete through one completion path. A retired owner cannot
 reuse an opaque; reconnect creates another owner, preventing a late response from completing a new request.
-Callback and batch response timeouts retire the same canonical session: they close the owner, mark the shared
-connection state closed, signal shutdown, and cancel its task group. A closed queued connection rejects later
-sends before enqueueing.
+Callback and batch response timeouts await retirement of the same canonical session before the pooled connection
+can be reused. Queued sends hold a Tokio lifecycle read guard across state validation, admission, enqueue, and
+writer completion. Retirement takes the matching write guard, sends a writer-close command, and waits for the
+socket close acknowledgement before marking the shared state closed and cancelling the session group. Its
+five-second absolute deadline covers both gate acquisition and writer completion; expiry marks the session closed
+and aborts the owned writer task, including a writer blocked in socket I/O. The synchronous `Connection::close`
+facade remains an immediate compatibility operation and does not hold any synchronous lock across an await. A
+closed queued connection rejects later sends before enqueueing.
 
 Admission is hierarchical across global, per-IP, optional per-tenant, and per-session budgets. Connection and
 handshake exhaustion closes/rejects the connection before work is admitted; inflight, queued, and processor
@@ -35,9 +40,12 @@ exhaustion returns an explicit rejection policy. Control traffic has a bounded r
 identifiers and use non-blocking `try_send`, so a missing or slow collector cannot block the data plane.
 Idle scoped budgets are reclaimed at the cardinality boundary only when the map owns the last reference and all
 permits are released. Decoded admission bytes cover length prefix, serialized header, and body through a
-transport-only envelope; the protocol command and its wire/JSON/debug/equality shape remain unchanged. Queued
-responses inherit the originating request class so control responses can consume only the bounded control
-reserve.
+transport-only envelope; the protocol command and its wire/JSON/debug/equality shape remain unchanged. The public
+`CompositeCodec` decoder therefore continues to yield `RemotingCommand`; retained-byte metadata is available only
+through the crate-private canonical session codec. Queued responses inherit the originating request class so
+control responses can consume only the bounded control reserve. The production Remoting adapter rebinds each
+processor context to that request's actual response connection, and a real HeartBeat exchange verifies the
+control reserve while the data writer budget is saturated.
 
 The default values preserve the current permissive envelope and remain explicitly configurable. They are not
 presented as production tuning recommendations; deployment-specific profiling is required before changing them.

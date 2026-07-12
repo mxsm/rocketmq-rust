@@ -39,6 +39,7 @@ use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
 use crate::codec::remoting_command_codec::CompositeCodec;
 use crate::codec::remoting_command_codec::FrameLimits;
+use crate::codec::remoting_command_codec::SessionCodec;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use std::sync::Arc;
 
@@ -53,11 +54,32 @@ pub(crate) enum QueuedWrite {
     },
 }
 
+pub(crate) struct SessionLifecycle {
+    gate: tokio::sync::RwLock<()>,
+}
+
+impl SessionLifecycle {
+    pub(crate) fn new() -> Self {
+        Self {
+            gate: tokio::sync::RwLock::new(()),
+        }
+    }
+
+    pub(crate) async fn begin_send(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {
+        self.gate.read().await
+    }
+
+    pub(crate) async fn begin_retirement(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
+        self.gate.write().await
+    }
+}
+
 struct QueuedConnection {
     writer: mpsc::Sender<QueuedWrite>,
     admission: Arc<AdmissionController>,
     scope: AdmissionScope,
     response_class: Option<AdmissionClass>,
+    lifecycle: Arc<SessionLifecycle>,
 }
 
 pub type ConnectionId = CheetahString;
@@ -69,6 +91,47 @@ impl<T> ConnectionTransport for T where T: AsyncRead + AsyncWrite + Send + Unpin
 
 pub type BoxedConnectionTransport = Box<dyn ConnectionTransport>;
 pub type ConnectionFramed = Framed<BoxedConnectionTransport, CompositeCodec>;
+type SessionConnectionFramed = Framed<BoxedConnectionTransport, SessionCodec>;
+
+pub(crate) struct SessionConnection {
+    outbound_sink: SplitSink<SessionConnectionFramed, Bytes>,
+    inbound_stream: SplitStream<SessionConnectionFramed>,
+    state_tx: watch::Sender<ConnectionState>,
+    encode_buffer: BytesMut,
+}
+
+impl SessionConnection {
+    pub(crate) async fn receive_command_with_retained_bytes(
+        &mut self,
+    ) -> Option<rocketmq_error::RocketMQResult<(RemotingCommand, usize)>> {
+        self.inbound_stream
+            .next()
+            .await
+            .map(|result| result.map(|decoded| (decoded.command, decoded.retained_frame_bytes)))
+    }
+
+    pub(crate) async fn send_command(&mut self, mut command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+        command.fast_header_encode(&mut self.encode_buffer);
+        if let Some(body) = command.take_body() {
+            self.encode_buffer.put(body);
+        }
+        let len = self.encode_buffer.len();
+        #[cfg(feature = "observability")]
+        rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
+        let bytes = self.encode_buffer.split_to(len).freeze();
+        let result = self.outbound_sink.send(bytes).await;
+        if result.is_err() {
+            let _ = self.state_tx.send(ConnectionState::Degraded);
+        }
+        result
+    }
+
+    pub(crate) async fn shutdown(&mut self) -> rocketmq_error::RocketMQResult<()> {
+        let result = self.outbound_sink.close().await;
+        let _ = self.state_tx.send(ConnectionState::Closed);
+        result
+    }
+}
 
 /// Connection health state
 ///
@@ -177,6 +240,8 @@ pub struct Connection {
     connection_id: ConnectionId,
 
     queued: Option<QueuedConnection>,
+    #[cfg(test)]
+    enqueue_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
 
 impl Hash for Connection {
@@ -258,6 +323,8 @@ impl Connection {
             encode_buffer: BytesMut::with_capacity(BUFFER_SIZE),
             connection_id: CheetahString::from_string(Uuid::new_v4().to_string()),
             queued: None,
+            #[cfg(test)]
+            enqueue_gate: None,
         }
     }
 
@@ -269,6 +336,7 @@ impl Connection {
         state_rx: watch::Receiver<ConnectionState>,
         connection_id: ConnectionId,
         response_class: Option<AdmissionClass>,
+        lifecycle: Arc<SessionLifecycle>,
     ) -> Self {
         let (stream, peer) = tokio::io::duplex(1);
         drop(peer);
@@ -281,12 +349,38 @@ impl Connection {
             admission,
             scope,
             response_class,
+            lifecycle,
         });
         connection
     }
 
-    pub(crate) fn into_framed_parts(self) -> (SplitSink<ConnectionFramed, Bytes>, SplitStream<ConnectionFramed>) {
-        (self.outbound_sink, self.inbound_stream)
+    #[cfg(test)]
+    pub(crate) fn set_enqueue_gate(&mut self, checked: Arc<tokio::sync::Notify>, resume: Arc<tokio::sync::Notify>) {
+        self.enqueue_gate = Some((checked, resume));
+    }
+
+    pub(crate) fn into_framed_parts(
+        self,
+    ) -> (
+        SplitSink<SessionConnectionFramed, Bytes>,
+        SplitStream<SessionConnectionFramed>,
+    ) {
+        let session = self.into_session_connection();
+        (session.outbound_sink, session.inbound_stream)
+    }
+
+    pub(crate) fn into_session_connection(self) -> SessionConnection {
+        let framed = self
+            .outbound_sink
+            .reunite(self.inbound_stream)
+            .unwrap_or_else(|_| unreachable!("connection split halves always originate from the same framed I/O"));
+        let (outbound_sink, inbound_stream) = framed.map_codec(SessionCodec::from).split();
+        SessionConnection {
+            outbound_sink,
+            inbound_stream,
+            state_tx: self.state_tx,
+            encode_buffer: self.encode_buffer,
+        }
     }
 
     /// Gets a reference to the inbound stream for receiving messages
@@ -331,31 +425,26 @@ impl Connection {
     /// // Connection closed
     /// ```
     pub async fn receive_command(&mut self) -> Option<rocketmq_error::RocketMQResult<RemotingCommand>> {
-        self.receive_command_with_retained_bytes()
-            .await
-            .map(|result| result.map(|(command, _)| command))
-    }
-
-    pub(crate) async fn receive_command_with_retained_bytes(
-        &mut self,
-    ) -> Option<rocketmq_error::RocketMQResult<(RemotingCommand, usize)>> {
         if self.queued.is_some() {
             return None;
         }
-        self.inbound_stream
-            .next()
-            .await
-            .map(|result| result.map(|decoded| (decoded.command, decoded.retained_frame_bytes)))
+        self.inbound_stream.next().await
     }
 
     async fn send_encoded(&mut self, bytes: Bytes, class: AdmissionClass) -> rocketmq_error::RocketMQResult<()> {
-        if self.state() == ConnectionState::Closed {
-            return Err(rocketmq_error::RocketMQError::network_connection_failed(
-                "transport-session-writer",
-                "connection is closed",
-            ));
-        }
         if let Some(queued) = self.queued.as_ref() {
+            let _lifecycle_guard = queued.lifecycle.begin_send().await;
+            if self.state() == ConnectionState::Closed {
+                return Err(rocketmq_error::RocketMQError::network_connection_failed(
+                    "transport-session-writer",
+                    "connection is closed",
+                ));
+            }
+            #[cfg(test)]
+            if let Some((checked, resume)) = self.enqueue_gate.as_ref() {
+                checked.notify_one();
+                resume.notified().await;
+            }
             let permit = queued
                 .admission
                 .try_acquire(AdmissionResource::Queued, queued.scope, bytes.len(), class)
@@ -386,6 +475,12 @@ impl Connection {
                     "writer completion dropped",
                 )
             })?;
+        }
+        if self.state() == ConnectionState::Closed {
+            return Err(rocketmq_error::RocketMQError::network_connection_failed(
+                "transport-session-writer",
+                "connection is closed",
+            ));
         }
         match self.outbound_sink.send(bytes).await {
             Ok(()) => Ok(()),

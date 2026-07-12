@@ -35,6 +35,7 @@ use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::Decision;
@@ -56,10 +57,12 @@ use crate::connection::Connection;
 use crate::connection::ConnectionId;
 use crate::connection::ConnectionState;
 use crate::connection::QueuedWrite;
+use crate::connection::SessionLifecycle;
 use crate::security::TransportSecurity;
 use crate::tls::TlsServerRuntime;
 
 const SESSION_WRITER_QUEUE_CAPACITY: usize = 1024;
+const SESSION_RETIREMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub trait RequestProcessor: Send + Sync + 'static {
     fn process(
@@ -81,6 +84,8 @@ pub struct SessionHandle {
     state_rx: tokio::sync::watch::Receiver<ConnectionState>,
     task_group: TaskGroup,
     response_class: Option<AdmissionClass>,
+    lifecycle: Arc<SessionLifecycle>,
+    writer_task_id: TaskId,
 }
 
 impl SessionHandle {
@@ -105,6 +110,7 @@ impl SessionHandle {
             self.state_rx.clone(),
             self.connection_id.clone(),
             self.response_class,
+            self.lifecycle.clone(),
         )
     }
 
@@ -115,6 +121,90 @@ impl SessionHandle {
     fn with_response_class(mut self, class: AdmissionClass) -> Self {
         self.response_class = Some(class);
         self
+    }
+
+    /// Closes the session writer after all sends that already entered the lifecycle gate finish.
+    /// Retirement has a five-second absolute deadline and aborts a writer blocked past it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the writer queue or close completion channel has already terminated, if
+    /// closing the framed socket fails, or if the absolute retirement deadline expires.
+    pub async fn retire(&self) -> rocketmq_error::RocketMQResult<()> {
+        self.retire_with_timeout_inner(SESSION_RETIREMENT_TIMEOUT, None).await
+    }
+
+    async fn retire_with_timeout_inner(
+        &self,
+        timeout: Duration,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        match tokio::time::timeout(timeout, self.retire_inner(started)).await {
+            Ok(result) => result,
+            Err(_) => {
+                let _ = self.state_tx.send(ConnectionState::Closed);
+                self.task_group.cancel();
+                self.task_group.abort_task(self.writer_task_id);
+                Err(rocketmq_error::RocketMQError::network_connection_failed(
+                    "transport-session-writer",
+                    "writer retirement exceeded its absolute deadline",
+                ))
+            }
+        }
+    }
+
+    async fn retire_inner(
+        &self,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        if let Some(started) = started {
+            let _ = started.send(());
+        }
+        let _retirement_guard = self.lifecycle.begin_retirement().await;
+        let (completion, result) = tokio::sync::oneshot::channel();
+        let send_result = self.writer.send(QueuedWrite::Close { completion }).await;
+        if send_result.is_err() {
+            let _ = self.state_tx.send(ConnectionState::Closed);
+            self.task_group.cancel();
+            return Err(rocketmq_error::RocketMQError::network_connection_failed(
+                "transport-session-writer",
+                "writer queue closed before retirement",
+            ));
+        }
+        let close_result = result.await.unwrap_or_else(|_| {
+            Err(rocketmq_error::RocketMQError::network_connection_failed(
+                "transport-session-writer",
+                "writer retirement completion dropped",
+            ))
+        });
+        let _ = self.state_tx.send(ConnectionState::Closed);
+        self.task_group.cancel();
+        close_result
+    }
+
+    #[cfg(test)]
+    fn connection_with_enqueue_gate(
+        &self,
+        checked: Arc<tokio::sync::Notify>,
+        resume: Arc<tokio::sync::Notify>,
+    ) -> Connection {
+        let mut connection = self.connection();
+        connection.set_enqueue_gate(checked, resume);
+        connection
+    }
+
+    #[cfg(test)]
+    async fn retire_with_signal(
+        &self,
+        started: tokio::sync::oneshot::Sender<()>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.retire_with_timeout_inner(SESSION_RETIREMENT_TIMEOUT, Some(started))
+            .await
+    }
+
+    #[cfg(test)]
+    async fn retire_with_timeout(&self, timeout: Duration) -> rocketmq_error::RocketMQResult<()> {
+        self.retire_with_timeout_inner(timeout, None).await
     }
 }
 
@@ -279,7 +369,46 @@ async fn run_framed_session<H>(
     let connection_id = connection.connection_id().clone();
     let (mut sink, mut stream) = connection.into_framed_parts();
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
+    let lifecycle = Arc::new(SessionLifecycle::new());
     let (writer, mut writes) = tokio::sync::mpsc::channel(SESSION_WRITER_QUEUE_CAPACITY);
+    let writer_cancellation = task_group.cancellation_token();
+    let writer_state = state_tx.clone();
+    let writer_group = task_group.clone();
+    let writer_task_id = match writer_group.spawn("rocketmq.transport.session.writer", TaskKind::Worker, async move {
+        loop {
+            let next = tokio::select! {
+                () = writer_cancellation.cancelled() => break,
+                next = writes.recv() => next,
+            };
+            match next {
+                Some(QueuedWrite::Data {
+                    bytes,
+                    completion,
+                    _permit,
+                }) => {
+                    let result = sink.send(bytes).await;
+                    if result.is_err() {
+                        let _ = writer_state.send(ConnectionState::Degraded);
+                    }
+                    let failed = result.is_err();
+                    let _ = completion.send(result);
+                    drop(_permit);
+                    if failed {
+                        break;
+                    }
+                }
+                Some(QueuedWrite::Close { completion }) => {
+                    let result = sink.close().await;
+                    let _ = completion.send(result);
+                    break;
+                }
+                None => break,
+            }
+        }
+    }) {
+        Ok(writer_task_id) => writer_task_id,
+        Err(_) => return,
+    };
     let session = SessionHandle {
         session_id,
         local_addr,
@@ -292,47 +421,9 @@ async fn run_framed_session<H>(
         state_rx,
         task_group: task_group.clone(),
         response_class: None,
+        lifecycle,
+        writer_task_id,
     };
-    let writer_cancellation = task_group.cancellation_token();
-    let writer_state = state_tx.clone();
-    let writer_group = task_group.clone();
-    if writer_group
-        .spawn("rocketmq.transport.session.writer", TaskKind::Worker, async move {
-            loop {
-                let next = tokio::select! {
-                    () = writer_cancellation.cancelled() => break,
-                    next = writes.recv() => next,
-                };
-                match next {
-                    Some(QueuedWrite::Data {
-                        bytes,
-                        completion,
-                        _permit,
-                    }) => {
-                        let result = sink.send(bytes).await;
-                        if result.is_err() {
-                            let _ = writer_state.send(ConnectionState::Degraded);
-                        }
-                        let failed = result.is_err();
-                        let _ = completion.send(result);
-                        drop(_permit);
-                        if failed {
-                            break;
-                        }
-                    }
-                    Some(QueuedWrite::Close { completion }) => {
-                        let result = sink.close().await;
-                        let _ = completion.send(result);
-                        break;
-                    }
-                    None => break,
-                }
-            }
-        })
-        .is_err()
-    {
-        return;
-    }
 
     handler.connected(session.clone()).await;
     let cancellation = task_group.cancellation_token();
@@ -622,7 +713,8 @@ impl TransportServer {
         else {
             return;
         };
-        let (mut connection, peer_is_tls) = negotiated.into_parts();
+        let (connection, peer_is_tls) = negotiated.into_parts();
+        let mut connection = connection.into_session_connection();
         drop(_handshake_permit);
 
         loop {
@@ -733,5 +825,156 @@ impl TransportServer {
     pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
         self.tls.shutdown();
         self.service_context.task_group().shutdown_until(deadline).await
+    }
+}
+
+#[cfg(test)]
+mod retirement_tests {
+    use std::future::Future;
+    use std::net::SocketAddr;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_runtime::RuntimeContext;
+    use tokio::sync::oneshot;
+    use tokio::sync::Notify;
+
+    use super::ConnectionHandler;
+    use super::SessionHandle;
+    use crate::admission::AdmissionController;
+    use crate::admission::AdmissionLimits;
+    use crate::connection::Connection;
+    use crate::security::TransportSecurity;
+
+    struct CaptureSession {
+        sender: std::sync::Mutex<Option<oneshot::Sender<SessionHandle>>>,
+    }
+
+    impl ConnectionHandler for CaptureSession {
+        fn connected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                if let Some(sender) = self.sender.lock().expect("capture lock").take() {
+                    let _ = sender.send(session);
+                }
+            })
+        }
+
+        fn command(
+            &self,
+            _session: SessionHandle,
+            _command: RemotingCommand,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async {})
+        }
+    }
+
+    #[tokio::test]
+    async fn retirement_waits_for_a_checked_send_before_closing_the_writer() {
+        let runtime = RuntimeContext::from_current("transport-retirement-interleaving-test");
+        let service = runtime.service_context("transport-retirement-interleaving");
+        let (transport, peer_stream) = tokio::io::duplex(4096);
+        let (session_tx, session_rx) = oneshot::channel();
+        let handler = Arc::new(CaptureSession {
+            sender: std::sync::Mutex::new(Some(session_tx)),
+        });
+        let local_addr: SocketAddr = "127.0.0.1:19001".parse().unwrap();
+        let remote_addr: SocketAddr = "127.0.0.1:19002".parse().unwrap();
+        let runner = tokio::spawn(super::run_connected_session(
+            Connection::new_with_stream(transport),
+            local_addr,
+            remote_addr,
+            service.task_group().clone(),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Arc::new(TransportSecurity::new(None, None)),
+            None,
+            Duration::from_secs(30),
+            handler,
+        ));
+        let session = session_rx.await.expect("session capture");
+        let checked = Arc::new(Notify::new());
+        let resume_enqueue = Arc::new(Notify::new());
+        let mut checked_connection = session.connection_with_enqueue_gate(checked.clone(), resume_enqueue.clone());
+        let checked_send = tokio::spawn(async move {
+            checked_connection
+                .send_command(RemotingCommand::create_remoting_command(1))
+                .await
+        });
+        checked.notified().await;
+
+        let (retirement_started_tx, retirement_started_rx) = oneshot::channel();
+        let retiring_session = session.clone();
+        let mut retirement =
+            tokio::spawn(async move { retiring_session.retire_with_signal(retirement_started_tx).await });
+        retirement_started_rx.await.expect("retirement started");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut retirement)
+                .await
+                .is_err(),
+            "retirement must wait for a send that passed the lifecycle check"
+        );
+
+        resume_enqueue.notify_one();
+        checked_send.await.unwrap().expect("checked send completes");
+        retirement.await.unwrap().expect("retirement completes");
+
+        let mut post_retirement = session.connection();
+        assert!(post_retirement
+            .send_command(RemotingCommand::create_remoting_command(2))
+            .await
+            .is_err());
+        let mut peer = Connection::new_with_stream(peer_stream);
+        let first = peer.receive_command().await.unwrap().unwrap();
+        assert_eq!(first.code(), 1);
+        assert!(peer.receive_command().await.is_none());
+        runner.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retirement_deadline_aborts_a_writer_blocked_on_socket_io() {
+        let runtime = RuntimeContext::from_current("transport-retirement-deadline-test");
+        let service = runtime.service_context("transport-retirement-deadline");
+        let (transport, _peer_stream) = tokio::io::duplex(64);
+        let (session_tx, session_rx) = oneshot::channel();
+        let handler = Arc::new(CaptureSession {
+            sender: std::sync::Mutex::new(Some(session_tx)),
+        });
+        let local_addr: SocketAddr = "127.0.0.1:19003".parse().unwrap();
+        let remote_addr: SocketAddr = "127.0.0.1:19004".parse().unwrap();
+        let runner = tokio::spawn(super::run_connected_session(
+            Connection::new_with_stream(transport),
+            local_addr,
+            remote_addr,
+            service.task_group().clone(),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Arc::new(TransportSecurity::new(None, None)),
+            None,
+            Duration::from_secs(30),
+            handler,
+        ));
+        let session = session_rx.await.expect("session capture");
+        let mut connection = session.connection();
+        let mut blocked_send = tokio::spawn(async move {
+            connection
+                .send_command(RemotingCommand::create_remoting_command(3).set_body(vec![0_u8; 1024 * 1024]))
+                .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut blocked_send)
+                .await
+                .is_err(),
+            "the socket writer must be blocked before retirement starts"
+        );
+
+        let retirement = session.retire_with_timeout(Duration::from_millis(30)).await;
+        assert!(retirement.is_err(), "the absolute retirement deadline must fire");
+        assert_eq!(session.connection().state(), crate::connection::ConnectionState::Closed);
+        assert!(tokio::time::timeout(Duration::from_secs(1), blocked_send)
+            .await
+            .expect("aborted writer releases the blocked send")
+            .unwrap()
+            .is_err());
+        runner.await.unwrap();
     }
 }

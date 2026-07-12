@@ -26,7 +26,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 ///
 /// The sideband size deliberately lives in the transport layer so it cannot affect the
 /// protocol command's wire shape, equality, debug output, or public data model.
-pub struct DecodedCommand {
+pub(crate) struct DecodedCommand {
     pub(crate) command: RemotingCommand,
     pub(crate) retained_frame_bytes: usize,
 }
@@ -250,10 +250,38 @@ impl CompositeCodec {
 
 impl Decoder for CompositeCodec {
     type Error = rocketmq_error::RocketMQError;
-    type Item = DecodedCommand;
+    type Item = RemotingCommand;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, rocketmq_error::RocketMQError> {
-        self.remoting_command_codec.decode_with_metadata(src)
+        self.remoting_command_codec.decode(src)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Default)]
+pub(crate) struct SessionCodec {
+    inner: CompositeCodec,
+}
+
+impl From<CompositeCodec> for SessionCodec {
+    fn from(inner: CompositeCodec) -> Self {
+        Self { inner }
+    }
+}
+
+impl Decoder for SessionCodec {
+    type Error = rocketmq_error::RocketMQError;
+    type Item = DecodedCommand;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        self.inner.remoting_command_codec.decode_with_metadata(src)
+    }
+}
+
+impl Encoder<Bytes> for SessionCodec {
+    type Error = rocketmq_error::RocketMQError;
+
+    fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        self.inner.encode(item, dst)
     }
 }
 

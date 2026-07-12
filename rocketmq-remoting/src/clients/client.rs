@@ -416,7 +416,7 @@ where
             .is_err()
         {
             guard.expire("remoting_client_callback_response", timeout_millis);
-            self.retire_after_timeout();
+            self.retire_after_timeout().await;
         }
         func();
     }
@@ -547,7 +547,7 @@ where
             results.push(result);
         }
         if timed_out {
-            self.retire_after_timeout();
+            self.retire_after_timeout().await;
         }
 
         Ok(results)
@@ -576,13 +576,14 @@ where
         self.channel.connection_mut()
     }
 
-    pub(crate) fn retire_after_timeout(&self) {
-        self.session.connection().close();
-        let _ = self.notify_shutdown.send(());
-        self.pending_requests.close_owner(&self.pending_request_owner, || {
-            RocketMQError::network_connection_failed("client", "connection retired after request timeout")
-        });
-        self.task_lifecycle.task_group.cancel();
+    pub(crate) fn retire_after_timeout(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let _ = self.session.retire().await;
+            let _ = self.notify_shutdown.send(());
+            self.pending_requests.close_owner(&self.pending_request_owner, || {
+                RocketMQError::network_connection_failed("client", "connection retired after request timeout")
+            });
+        })
     }
 }
 

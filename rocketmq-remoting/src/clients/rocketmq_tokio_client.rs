@@ -1296,7 +1296,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
             }
             Ok(Err(err)) => {
                 if matches!(err, rocketmq_error::RocketMQError::Timeout { .. }) {
-                    client.retire_after_timeout();
+                    client.retire_after_timeout().await;
                     if let Some(ref addr) = target_addr {
                         self.connection_tables.remove(addr);
                         if let Some(ref pool) = self.connection_pool {
@@ -1321,7 +1321,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 Err(err)
             }
             Err(_) => {
-                client.retire_after_timeout();
+                client.retire_after_timeout().await;
                 if let Some(ref addr) = target_addr {
                     self.connection_tables.remove(addr);
                     if let Some(ref pool) = self.connection_pool {

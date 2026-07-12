@@ -66,3 +66,21 @@ fn production_remoting_initializes_tls_asynchronously() {
     assert!(!startup.contains("TlsServerRuntime::new("));
     assert!(!startup.contains("TlsServerRuntime::new_with_service_context"));
 }
+
+#[test]
+fn public_async_tls_initializers_document_blocking_ownership_and_errors() {
+    for source in [
+        include_str!("../../rocketmq-transport/src/tls.rs"),
+        include_str!("../src/tls.rs"),
+    ] {
+        let before_initializer = source
+            .split("pub async fn initialize_with_service_context")
+            .next()
+            .expect("TLS initializer");
+        let docs = before_initializer
+            .rsplit_once("impl TlsServerRuntime")
+            .map_or(before_initializer, |(_, docs)| docs);
+        assert!(docs.contains("BlockingExecutor"));
+        assert!(docs.contains("# Errors"));
+    }
+}

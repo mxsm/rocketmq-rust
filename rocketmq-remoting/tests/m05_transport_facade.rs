@@ -21,6 +21,7 @@ use rocketmq_transport::base::pending_request_table::PendingRequestTable as Cano
 use rocketmq_transport::codec::remoting_command_codec::RemotingCommandCodec as CanonicalCodec;
 use rocketmq_transport::config::TlsConfig as CanonicalTlsConfig;
 use rocketmq_transport::connection::ConnectionState as CanonicalConnectionState;
+use tokio_util::codec::Decoder;
 
 fn canonical_pending(value: LegacyPending) -> CanonicalPending {
     value
@@ -45,4 +46,15 @@ fn legacy_transport_paths_are_exact_reexports_and_canonical_path_is_available() 
     let _ = canonical_tls(LegacyTlsConfig::default());
     let _ = canonical_state(LegacyConnectionState::Healthy);
     let _type_identity = std::any::TypeId::of::<TransportClient>();
+}
+
+#[test]
+fn remoting_composite_codec_keeps_the_legacy_decoder_item() {
+    fn assert_command_decoder<T>()
+    where
+        T: Decoder<Item = rocketmq_remoting::protocol::remoting_command::RemotingCommand>,
+    {
+    }
+
+    assert_command_decoder::<rocketmq_remoting::CompositeCodec>();
 }
