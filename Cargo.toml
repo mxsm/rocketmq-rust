@@ -66,9 +66,6 @@ description = """
 Unofficial Rust implementation of Apache RocketMQ
 """
 rust-version = "1.95.0"
-
-[workspace.lints]
-
 [workspace.dependencies]
 rocketmq-common      = { version = "1.0.0", path = "./rocketmq-common" }
 rocketmq-runtime     = { version = "1.0.0", path = "./rocketmq-runtime" }

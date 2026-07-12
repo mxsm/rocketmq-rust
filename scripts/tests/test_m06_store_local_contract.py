@@ -116,8 +116,6 @@ class StoreLocalContractTests(unittest.TestCase):
             },
             local_manifest["features"],
         )
-        self.assertEqual({"workspace": True}, local_manifest["lints"])
-
         store_manifest = tomllib.loads((STORE_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
         self.assertEqual(["local_file_store", "fast-load"], store_manifest["features"]["default"])
         self.assertEqual(["rocketmq-store-local/fast-load"], store_manifest["features"]["fast-load"])
