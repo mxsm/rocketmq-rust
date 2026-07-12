@@ -76,6 +76,22 @@ fn legacy_constant_and_blank_paths_preserve_identity_and_signatures() {
 
     assert_eq!(commit_log::MESSAGE_MAGIC_CODE, record::MESSAGE_MAGIC_CODE);
     assert_eq!(commit_log::BLANK_MAGIC_CODE, record::BLANK_MAGIC_CODE);
+    assert_eq!(
+        record::MESSAGE_MAGIC_CODE,
+        rocketmq_common::common::message::MESSAGE_MAGIC_CODE_V1
+    );
+    assert_eq!(
+        record::MESSAGE_MAGIC_CODE,
+        rocketmq_remoting::protocol::body::message_codec::MESSAGE_MAGIC_CODE
+    );
+    assert_eq!(
+        record::MESSAGE_MAGIC_CODE_V2,
+        rocketmq_common::common::message::MESSAGE_MAGIC_CODE_V2
+    );
+    assert_eq!(
+        record::MESSAGE_MAGIC_CODE_V2,
+        rocketmq_remoting::protocol::body::message_codec::MESSAGE_MAGIC_CODE_V2
+    );
     assert_eq!(legacy_blank as usize, canonical_blank as usize);
     assert!(legacy_blank(&blank));
 }

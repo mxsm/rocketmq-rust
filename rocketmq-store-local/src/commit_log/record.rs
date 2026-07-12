@@ -20,6 +20,9 @@ use bytes::Bytes;
 /// CommitLog V1 message magic code (`daa320a7`).
 pub const MESSAGE_MAGIC_CODE: i32 = -626843481;
 
+/// CommitLog V2 message magic code (`daa320ab`).
+pub const MESSAGE_MAGIC_CODE_V2: i32 = -626843477;
+
 /// CommitLog end-of-segment blank magic code (`cbd43194`).
 pub const BLANK_MAGIC_CODE: i32 = -875286124;
 

@@ -88,11 +88,6 @@ use crate::log_file::commit_log_loader::CommitLogLoader;
 use crate::log_file::commit_log_loader::LoadStatistics;
 use crate::log_file::commit_log_loader::RecoveryFilePrefetch;
 use crate::log_file::commit_log_loader::RecoveryMmapAdvice;
-use crate::log_file::commit_log_record_parser::decode_commit_log_record;
-use crate::log_file::commit_log_record_parser::CommitLogRecordBodyMode;
-use crate::log_file::commit_log_record_parser::CommitLogRecordChecksum;
-use crate::log_file::commit_log_record_parser::CommitLogRecordErrorKind;
-use crate::log_file::commit_log_record_parser::CommitLogRecordOutcome;
 use crate::log_file::flush_manager_impl::default_flush_manager::DefaultFlushManager;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
@@ -109,6 +104,12 @@ use crate::transfer::segment::SegmentLease;
 use crate::utils::ffi::madvise;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::ffi::MADV_RANDOM;
+
+use rocketmq_store_local::commit_log::record_parser::decode_commit_log_record;
+use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
+use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
+use rocketmq_store_local::commit_log::record_parser::CommitLogRecordErrorKind;
+use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
 
 pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;

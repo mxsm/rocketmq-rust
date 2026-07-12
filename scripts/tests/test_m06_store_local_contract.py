@@ -92,10 +92,22 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "AbnormalRecoveryWindow": ("struct", "recovery.rs"),
     "plan_abnormal_recovery_window_from_ranges": ("fn", "recovery.rs"),
     "MESSAGE_MAGIC_CODE": ("const", "record.rs"),
+    "MESSAGE_MAGIC_CODE_V2": ("const", "record.rs"),
     "BLANK_MAGIC_CODE": ("const", "record.rs"),
     "is_blank_message": ("fn", "record.rs"),
     "CommitLogFrameSource": ("trait", "record.rs"),
     "CommitLogFrameCursor": ("struct", "record.rs"),
+}
+COMMIT_LOG_RECORD_PARSER_ITEMS = {
+    "CommitLogRecordVersion": "enum",
+    "CommitLogRecordBodyMode": "enum",
+    "CommitLogRecordChecksum": "trait",
+    "CommitLogRecordField": "enum",
+    "CommitLogRecordErrorKind": "enum",
+    "CommitLogRecordError": "struct",
+    "CommitLogRecord": "struct",
+    "CommitLogRecordOutcome": "enum",
+    "decode_commit_log_record": "fn",
 }
 COMMIT_LOG_FACADE_ITEMS = {
     "commit_log_loader.rs": {
@@ -195,6 +207,84 @@ def commit_log_record_boundary_violations(source: str) -> list[str]:
         for kind, _, body, _ in active_import_records(source)
     ):
         violations.append("forbidden alias/brace import")
+    return violations
+
+
+def commit_log_record_parser_boundary_violations(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", maxsplit=1)[0]
+    active = active_rust_source(production)
+    violations: list[str] = []
+    if re.search(
+        r"pub\s+fn\s+decode_commit_log_record\s*<[^>]+>\s*\(\s*input\s*:\s*&Bytes\b",
+        active,
+    ) is None:
+        violations.append("decoder input must be read-only Bytes")
+    if re.search(
+        r"\bdyn\s+(?:(?:::)?[A-Za-z_][A-Za-z0-9_]*::)*CommitLogRecordChecksum\b",
+        active,
+    ):
+        violations.append("dynamic checksum port")
+    if re.search(r"\buse\s+bytes::Buf(?:Mut)?\s*;", active) or re.search(
+        r"\.(?:get_i16|get_i32|get_i64|copy_to_bytes|advance)\s*\(",
+        active,
+    ):
+        violations.append("unchecked Buf cursor parsing")
+    if any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("forbidden alias/brace/glob import")
+    return violations
+
+
+def named_function_body(source: str, function_name: str) -> str | None:
+    active = active_rust_source(source)
+    match = re.search(rf"\bfn\s+{re.escape(function_name)}\b", active)
+    if match is None:
+        return None
+    opening_brace = active.find("{", match.end())
+    if opening_brace == -1:
+        return None
+    extracted = braced_body(active, opening_brace)
+    return None if extracted is None else extracted[0]
+
+
+def store_record_parser_wrapper_violations(log_file_root: str, commit_log: str) -> list[str]:
+    violations: list[str] = []
+    if re.search(r"\bmod\s+commit_log_record_parser\b", active_rust_source(log_file_root)):
+        violations.append("Store parser module copy")
+
+    prefix = "rocketmq_store_local::commit_log::record_parser::"
+    expected = {
+        "decode_commit_log_record",
+        "CommitLogRecordBodyMode",
+        "CommitLogRecordChecksum",
+        "CommitLogRecordErrorKind",
+        "CommitLogRecordOutcome",
+    }
+    imports = {
+        body.removeprefix(prefix)
+        for kind, _, body, _ in active_import_records(commit_log)
+        if kind == "use" and body.startswith(prefix)
+    }
+    if imports != expected:
+        violations.append("Store parser imports must be exact Local imports")
+    if any(
+        kind == "use"
+        and body.startswith("rocketmq_store_local::commit_log::record_parser")
+        and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(commit_log)
+    ):
+        violations.append("Store parser imports forbid alias/brace/glob")
+
+    body = named_function_body(commit_log, "check_message_and_return_size")
+    if body is None:
+        violations.append("Store parser wrapper is missing")
+    else:
+        if re.search(r"\.(?:get_i16|get_i32|get_i64|copy_to_bytes)\s*\(", body):
+            violations.append("Store wrapper copied raw parser")
+        if len(re.findall(r"\bbytes\.advance\s*\(", body)) != 3:
+            violations.append("Store wrapper transaction advances changed")
     return violations
 
 
@@ -1032,6 +1122,60 @@ self.buffer.copy_to_bytes(total_size as usize)
             commit_log_record_owner_occurrences(sources, "is_blank_message"),
         )
 
+    def test_commit_log_record_parser_contract_rejects_mutable_buf_dynamic_and_import_mutations(self) -> None:
+        valid = '''
+use bytes::Bytes;
+pub trait CommitLogRecordChecksum {}
+pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(input: &Bytes) {}
+'''
+        self.assertEqual([], commit_log_record_parser_boundary_violations(valid))
+        mutations = [
+            valid.replace("input: &Bytes", "input: &mut Bytes"),
+            valid + "fn raw(mut input: Bytes) { input.get_i32(); }",
+            valid + "struct Bad { checksum: Box<dyn CommitLogRecordChecksum> }",
+            valid.replace("use bytes::Bytes;", "use bytes::{Bytes};"),
+            valid.replace("use bytes::Bytes;", "use bytes::*;"),
+            valid.replace("use bytes::Bytes;", "use bytes::Bytes as RawBytes;"),
+        ]
+        for mutation in mutations:
+            self.assertNotEqual([], commit_log_record_parser_boundary_violations(mutation))
+
+    def test_store_record_parser_wrapper_contract_rejects_copy_and_import_mutations(self) -> None:
+        root = "pub mod commit_log;"
+        imports = "\n".join(
+            f"use rocketmq_store_local::commit_log::record_parser::{item};"
+            for item in sorted(
+                {
+                    "decode_commit_log_record",
+                    "CommitLogRecordBodyMode",
+                    "CommitLogRecordChecksum",
+                    "CommitLogRecordErrorKind",
+                    "CommitLogRecordOutcome",
+                }
+            )
+        )
+        wrapper = imports + '''
+pub fn check_message_and_return_size(bytes: &mut Bytes) {
+    bytes.advance(8);
+    bytes.advance(9);
+    bytes.advance(10);
+}
+'''
+        self.assertEqual([], store_record_parser_wrapper_violations(root, wrapper))
+        mutations = [
+            (root + "\nmod commit_log_record_parser;", wrapper),
+            (root, wrapper.replace("bytes.advance(10);", "bytes.get_i32();")),
+            (root, wrapper.replace(
+                "use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;",
+                "use rocketmq_store_local::commit_log::record_parser::*;",
+            )),
+        ]
+        for mutated_root, mutated_wrapper in mutations:
+            self.assertNotEqual(
+                [],
+                store_record_parser_wrapper_violations(mutated_root, mutated_wrapper),
+            )
+
     def test_tracing_target_scanner_ignores_comments_and_strings(self) -> None:
         source = r'''
 // info!(target: "commented", "ignored");
@@ -1789,7 +1933,7 @@ struct DefaultMappedFile {
         self.assert_local_crate_exists()
         canonical_dir = LOCAL_CRATE / "src" / "commit_log"
         self.assertEqual(
-            {"load.rs", "recovery.rs", "record.rs"},
+            {"load.rs", "recovery.rs", "record.rs", "record_parser.rs"},
             {path.name for path in canonical_dir.glob("*.rs")},
         )
 
@@ -1810,6 +1954,23 @@ struct DefaultMappedFile {
             sources = storage_boundary_sources if expected_file == "record.rs" else rust_sources
             definitions = canonical_definition_paths(sources, item, item_kind)
             self.assertEqual([canonical_dir / expected_file], definitions, item)
+
+        parser_file = canonical_dir / "record_parser.rs"
+        parser_source = parser_file.read_text(encoding="utf-8")
+        for item, item_kind in COMMIT_LOG_RECORD_PARSER_ITEMS.items():
+            self.assertEqual(
+                [(parser_file, item_kind)],
+                commit_log_record_owner_occurrences(storage_boundary_sources, item),
+                item,
+            )
+        self.assertEqual([], commit_log_record_parser_boundary_violations(parser_source))
+
+        self.assertFalse((STORE_CRATE / "src" / "log_file" / "commit_log_record_parser.rs").exists())
+        commit_log = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
+        self.assertEqual(
+            [],
+            store_record_parser_wrapper_violations(log_file_root, commit_log),
+        )
 
         facade_dir = STORE_CRATE / "src" / "log_file"
         for facade_file, expected_items in COMMIT_LOG_FACADE_ITEMS.items():
@@ -1838,7 +1999,7 @@ struct DefaultMappedFile {
 
         canonical_source = canonical_file.read_text(encoding="utf-8")
         self.assertEqual([], commit_log_record_boundary_violations(canonical_source))
-        self.assertNotIn("MESSAGE_MAGIC_CODE_V2", active_rust_source(canonical_source))
+        self.assertIn("MESSAGE_MAGIC_CODE_V2", active_rust_source(canonical_source))
 
         commit_log = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
         recovery = (STORE_CRATE / "src" / "log_file" / "commit_log_recovery.rs").read_text(encoding="utf-8")

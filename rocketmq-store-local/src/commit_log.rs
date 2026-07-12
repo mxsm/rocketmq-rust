@@ -14,4 +14,5 @@
 
 pub mod load;
 pub mod record;
+pub mod record_parser;
 pub mod recovery;

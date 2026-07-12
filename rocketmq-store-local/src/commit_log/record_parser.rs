@@ -12,117 +12,195 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bytes::Bytes;
-use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
-use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
+//! Runtime-neutral, bounds-checked decoding for one CommitLog record.
 
-const MESSAGE_MAGIC_CODE_V2: i32 = -626843477;
+use bytes::Bytes;
+
+use super::record::BLANK_MAGIC_CODE;
+use super::record::MESSAGE_MAGIC_CODE;
+use super::record::MESSAGE_MAGIC_CODE_V2;
+
 const BORN_HOST_V6_FLAG: i32 = 1 << 4;
 const STORE_HOST_V6_FLAG: i32 = 1 << 5;
 
+/// CommitLog record encoding version selected by its magic code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CommitLogRecordVersion {
+pub enum CommitLogRecordVersion {
+    /// One-byte topic length.
     V1,
+    /// Two-byte signed topic length.
     V2,
 }
 
+/// Controls whether body bytes are retained and checksum-verified.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CommitLogRecordBodyMode {
+pub enum CommitLogRecordBodyMode {
+    /// Validate and skip the bounded body bytes.
     Skip,
+    /// Retain body bytes without verifying the body checksum.
     Read,
+    /// Retain body bytes and verify a non-empty body checksum.
     ReadAndVerify,
 }
 
-pub(crate) trait CommitLogRecordChecksum {
+/// Runtime-neutral checksum port used only for body verification.
+pub trait CommitLogRecordChecksum {
+    /// Computes the checksum for the supplied body bytes.
     fn checksum(&self, bytes: &[u8]) -> u32;
 }
 
+/// Field being decoded when a structural error occurred.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CommitLogRecordField {
+pub enum CommitLogRecordField {
+    /// Declared record size.
     TotalSize,
+    /// Record magic code.
     MagicCode,
+    /// Stored body checksum.
     BodyCrc,
+    /// Queue identifier.
     QueueId,
+    /// Message flag.
     Flag,
+    /// Logical queue offset.
     QueueOffset,
+    /// Physical CommitLog offset.
     PhysicalOffset,
+    /// System flag bitmap.
     SysFlag,
+    /// Producer timestamp.
     BornTimestamp,
+    /// Producer host bytes.
     BornHost,
+    /// Store timestamp.
     StoreTimestamp,
+    /// Store host bytes.
     StoreHost,
+    /// Reconsume count.
     ReconsumeTimes,
+    /// Prepared transaction offset.
     PreparedTransactionOffset,
+    /// Body length prefix.
     BodyLength,
+    /// Body bytes.
     Body,
+    /// Topic length prefix.
     TopicLength,
+    /// Topic bytes.
     Topic,
+    /// Properties length prefix.
     PropertiesLength,
+    /// Property bytes.
     Properties,
+    /// Complete declared record frame.
     Record,
 }
 
+/// Structural or body-checksum decoding failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CommitLogRecordErrorKind {
+pub enum CommitLogRecordErrorKind {
+    /// A bounded field did not fit in the declared record frame.
     Truncated {
+        /// Field whose bytes were unavailable.
         field: CommitLogRecordField,
+        /// Number of bytes required by the field.
         needed: usize,
+        /// Number of bytes remaining in the bounded frame.
         remaining: usize,
     },
+    /// A signed length was negative and therefore rejected before conversion.
     NegativeLength {
+        /// Length field that was negative.
         field: CommitLogRecordField,
+        /// Original signed value.
         value: i64,
     },
+    /// The magic code is neither a supported message nor blank marker.
     IllegalMagic {
+        /// Unsupported magic value.
         magic_code: i32,
     },
+    /// A requested non-empty body checksum verification failed.
     BodyCrcMismatch {
+        /// Checksum computed from the bounded body.
         computed: u32,
+        /// Checksum stored in the record header.
         stored: u32,
     },
 }
 
+/// Failed record decoding with an optional declared size.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CommitLogRecordError {
-    pub(crate) declared_size: Option<i32>,
-    pub(crate) kind: CommitLogRecordErrorKind,
+pub struct CommitLogRecordError {
+    /// Declared size when the four-byte size prefix was available.
+    pub declared_size: Option<i32>,
+    /// Specific decoding failure.
+    pub kind: CommitLogRecordErrorKind,
 }
 
-#[allow(dead_code, reason = "the neutral DTO freezes the complete CommitLog record header")]
+/// Fully decoded, runtime-neutral CommitLog message record.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CommitLogRecord {
-    pub(crate) raw_frame: Bytes,
-    pub(crate) declared_size: i32,
-    pub(crate) computed_size: i32,
-    pub(crate) version: CommitLogRecordVersion,
-    pub(crate) body_crc: i32,
-    pub(crate) queue_id: i32,
-    pub(crate) flag: i32,
-    pub(crate) queue_offset: i64,
-    pub(crate) physical_offset: i64,
-    pub(crate) sys_flag: i32,
-    pub(crate) born_timestamp: i64,
-    pub(crate) born_host: Bytes,
-    pub(crate) store_timestamp: i64,
-    pub(crate) store_host: Bytes,
-    pub(crate) reconsume_times: i32,
-    pub(crate) prepared_transaction_offset: i64,
-    pub(crate) body_len: i32,
-    pub(crate) body: Option<Bytes>,
-    pub(crate) topic: Bytes,
-    pub(crate) properties_len: i16,
-    pub(crate) properties: Bytes,
+pub struct CommitLogRecord {
+    /// Exact frame bounded by `declared_size`.
+    pub raw_frame: Bytes,
+    /// Size declared in the record prefix.
+    pub declared_size: i32,
+    /// Size consumed by all decoded fields.
+    pub computed_size: i32,
+    /// Record encoding version.
+    pub version: CommitLogRecordVersion,
+    /// Stored body checksum.
+    pub body_crc: i32,
+    /// Queue identifier.
+    pub queue_id: i32,
+    /// Message flag.
+    pub flag: i32,
+    /// Logical queue offset.
+    pub queue_offset: i64,
+    /// Physical CommitLog offset.
+    pub physical_offset: i64,
+    /// System flag bitmap.
+    pub sys_flag: i32,
+    /// Producer timestamp.
+    pub born_timestamp: i64,
+    /// Raw producer host bytes.
+    pub born_host: Bytes,
+    /// Store timestamp.
+    pub store_timestamp: i64,
+    /// Raw store host bytes.
+    pub store_host: Bytes,
+    /// Reconsume count.
+    pub reconsume_times: i32,
+    /// Prepared transaction offset.
+    pub prepared_transaction_offset: i64,
+    /// Decoded body length.
+    pub body_len: i32,
+    /// Body bytes when requested by the body mode.
+    pub body: Option<Bytes>,
+    /// Raw topic bytes.
+    pub topic: Bytes,
+    /// Decoded properties length.
+    pub properties_len: i16,
+    /// Raw property bytes.
+    pub properties: Bytes,
 }
 
 impl CommitLogRecord {
-    pub(crate) fn has_exact_declared_size(&self) -> bool {
+    /// Returns whether decoded fields consume exactly the declared frame.
+    pub fn has_exact_declared_size(&self) -> bool {
         self.declared_size == self.computed_size
     }
 }
 
+/// Successful blank-marker or message decoding result.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CommitLogRecordOutcome {
-    Blank { declared_size: i32 },
+pub enum CommitLogRecordOutcome {
+    /// End-of-segment blank marker.
+    Blank {
+        /// Size carried by the marker header.
+        declared_size: i32,
+    },
+    /// Decoded CommitLog message.
     Message(Box<CommitLogRecord>),
 }
 
@@ -216,7 +294,11 @@ fn top_level_i32(input: &Bytes, offset: usize, field: CommitLogRecordField) -> R
     Ok(i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
-pub(crate) fn decode_commit_log_record<C: CommitLogRecordChecksum>(
+/// Decodes one CommitLog record without mutating the input cursor.
+///
+/// Every field read is bounded by the declared record size. Signed lengths are
+/// rejected before conversion, and body verification is delegated to `checksum`.
+pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
     input: &Bytes,
     body_mode: CommitLogRecordBodyMode,
     checksum: &C,
