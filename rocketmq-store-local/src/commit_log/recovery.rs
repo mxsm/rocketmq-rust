@@ -105,12 +105,20 @@ pub struct NormalRecoveryState {
 
 impl NormalRecoveryState {
     /// Creates a state machine with both watermarks at the supplied confirmed offset.
-    pub const fn new(initial_offset: u64, policy: NormalRecoveryPolicy) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NormalRecoveryOffsetError::OffsetExceedsI64`] when the initial offset cannot be
+    /// represented by Store's signed offsets.
+    pub const fn try_new(initial_offset: u64, policy: NormalRecoveryPolicy) -> Result<Self, NormalRecoveryOffsetError> {
+        if initial_offset > MAX_SIGNED_OFFSET {
+            return Err(NormalRecoveryOffsetError::OffsetExceedsI64 { offset: initial_offset });
+        }
+        Ok(Self {
             last_valid_offset: initial_offset,
             truncate_offset: initial_offset,
             policy,
-        }
+        })
     }
 
     /// Applies one event transactionally and returns the next scan action.

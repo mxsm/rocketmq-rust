@@ -136,6 +136,10 @@ fn normal_recovery_start_index(mapped_file_count: usize, max_recovery_commit_log
     mapped_file_count.saturating_sub(normal_recovery_file_count_limit(max_recovery_commit_log_files))
 }
 
+fn should_truncate_normal_recovery_consume_queue(max: i64, truncate: u64) -> bool {
+    max < 0 || u64::try_from(max).is_ok_and(|value| value >= truncate)
+}
+
 fn log_abnormal_recovery_window(
     window: &crate::log_file::commit_log_recovery::AbnormalRecoveryWindow,
     recovery_path: &str,
@@ -1520,7 +1524,13 @@ impl CommitLog {
                 return;
             }
         };
-        let mut normal_recovery = NormalRecoveryState::new(initial_offset, NormalRecoveryPolicy::Optimized);
+        let mut normal_recovery = match NormalRecoveryState::try_new(initial_offset, NormalRecoveryPolicy::Optimized) {
+            Ok(state) => state,
+            Err(error) => {
+                warn!("normal optimized recovery initial state failed: {error}");
+                return;
+            }
+        };
         let do_dispatch = false;
 
         let Some(local_message_store) = self.local_file_message_store.as_ref() else {
@@ -1674,7 +1684,7 @@ impl CommitLog {
         }
 
         // Clear ConsumeQueue redundant data
-        if max_phy_offset_of_consume_queue >= process_offset {
+        if should_truncate_normal_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
             warn!(
                 "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                 max_phy_offset_of_consume_queue, process_offset
@@ -1720,7 +1730,14 @@ impl CommitLog {
                     return;
                 }
             };
-            let mut normal_recovery = NormalRecoveryState::new(initial_offset, NormalRecoveryPolicy::Standard);
+            let mut normal_recovery = match NormalRecoveryState::try_new(initial_offset, NormalRecoveryPolicy::Standard)
+            {
+                Ok(state) => state,
+                Err(error) => {
+                    warn!("normal recovery initial state failed: {error}");
+                    return;
+                }
+            };
             let do_dispatch = false;
             let Some(local_message_store) = self.local_file_message_store.as_ref() else {
                 warn!("normal recovery requires an attached local message store");
@@ -1811,8 +1828,14 @@ impl CommitLog {
                         }
                     } else {
                         if dispatch_request.msg_size > 0 {
-                            let warning_offset = normal_recovery.summary().truncate_offset;
-                            warn!("found a half message at {warning_offset}, it will be truncated.");
+                            let warning_offset = u64::try_from(frame_position)
+                                .ok()
+                                .and_then(|relative| process_offset.checked_add(relative));
+                            if let Some(warning_offset) = warning_offset {
+                                warn!("found a half message at {warning_offset}, it will be truncated.");
+                            } else {
+                                warn!("found a half message with an invalid offset; it will be truncated.");
+                            }
                         }
                         info!("recover physics file end,{} ", mapped_file.get_file_name());
                         match normal_recovery.apply(NormalRecoveryEvent::InvalidRecord) {
@@ -1863,7 +1886,7 @@ impl CommitLog {
             }
 
             // Clear ConsumeQueue redundant data
-            if max_phy_offset_of_consume_queue >= process_offset {
+            if should_truncate_normal_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
                 warn!(
                     "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                     max_phy_offset_of_consume_queue, process_offset
@@ -2914,6 +2937,15 @@ mod tests {
         assert_eq!(normal_recovery_start_index(5, 1), 4);
         assert_eq!(normal_recovery_start_index(5, 2), 3);
         assert_eq!(normal_recovery_start_index(5, 10), 0);
+    }
+
+    #[test]
+    fn normal_recovery_consume_queue_truncation_preserves_signed_legacy_semantics() {
+        assert!(should_truncate_normal_recovery_consume_queue(-1, 10));
+        assert!(!should_truncate_normal_recovery_consume_queue(0, 10));
+        assert!(!should_truncate_normal_recovery_consume_queue(9, 10));
+        assert!(should_truncate_normal_recovery_consume_queue(10, 10));
+        assert!(should_truncate_normal_recovery_consume_queue(11, 10));
     }
 
     #[test]

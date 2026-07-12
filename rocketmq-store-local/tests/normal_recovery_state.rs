@@ -22,7 +22,29 @@ use rocketmq_store_local::commit_log::recovery::NormalRecoverySummary;
 const I64_MAX_U64: u64 = 9_223_372_036_854_775_807;
 
 fn state(policy: NormalRecoveryPolicy, initial_offset: u64) -> NormalRecoveryState {
-    NormalRecoveryState::new(initial_offset, policy)
+    NormalRecoveryState::try_new(initial_offset, policy).expect("test recovery offset must fit i64")
+}
+
+#[test]
+fn constructor_rejects_offsets_above_i64_and_accepts_the_upper_bound() {
+    for policy in [NormalRecoveryPolicy::Standard, NormalRecoveryPolicy::Optimized] {
+        assert_eq!(
+            NormalRecoveryState::try_new(I64_MAX_U64 + 1, policy),
+            Err(NormalRecoveryOffsetError::OffsetExceedsI64 {
+                offset: I64_MAX_U64 + 1,
+            })
+        );
+
+        let recovery =
+            NormalRecoveryState::try_new(I64_MAX_U64, policy).expect("i64::MAX must be a valid recovery offset");
+        assert_eq!(
+            recovery.summary(),
+            NormalRecoverySummary {
+                last_valid_offset: I64_MAX_U64,
+                truncate_offset: I64_MAX_U64,
+            }
+        );
+    }
 }
 
 #[test]

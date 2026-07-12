@@ -14,9 +14,9 @@ flush/commit writes, runtime work, or a Store/MappedFile/ArcMut dependency.
 ## RED to GREEN evidence
 
 - Local RED: `cargo test -p rocketmq-store-local --test normal_recovery_state` exited 101 with six expected E0432
-  errors because policy/event/action/error/state/summary did not exist. GREEN is 8/8.
+  errors because policy/event/action/error/state/summary did not exist. The initial GREEN was 8/8.
 - Store contract RED reported 18 missing adapter obligations across the two normal functions: no Local policy,
-  five events, five reducer calls, and copied legacy watermark state. GREEN full contract is 64/64.
+  five events, five reducer calls, and copied legacy watermark state. The initial GREEN contract was 64/64.
 - Real-path characterization uses one valid persisted frame copied into independent, unmapped 512-byte segment
   fixtures. This avoids changing an unrelated existing append rollover retry and avoids Windows mapped-file write
   locking. The final normal recovery matrix passes in both standard and optimized routes.
@@ -35,6 +35,22 @@ The reducer computes `base + relative` and `start + size` with `checked_add`. Bo
 `i64`; errors return a typed value without mutating state. Store converts every `usize`/`i32` frame offset through
 `TryFrom`, logs any error, and stops the global normal scan.
 
+## Post-review Important fixes
+
+- State construction is now fallible. `NormalRecoveryState::try_new` rejects `i64::MAX + 1` before a state can
+  exist and accepts `i64::MAX`; both Store normal adapters explicitly match conversion and construction errors,
+  log them, and return without `unwrap`, panic, or unchecked casts. The constructor RED produced three expected
+  E0599 errors, and the Local state suite is GREEN at 9/9.
+- ConsumeQueue cleanup restores the legacy negative-maximum behavior without the old unchecked `i64 as u64`.
+  The shared Store predicate is exactly `max < 0 || u64::try_from(max).is_ok_and(|v| v >= truncate)`. Its RED
+  produced five expected E0425 errors; the signed boundary matrix and real standard/optimized public-entry
+  negative-offset watermark comparison are GREEN. This is a compatibility fix, not a new cleanup policy.
+- The active-Rust contract now requires complete `MessageAccepted` action handling, checked `current_pos`
+  advancement with global stop, one final `normal_recovery.summary()` binding per normal route, and summary-fed
+  confirm/CQ/flushed/committed/truncate writes. Three exact mutations were first observed escaping the scanner:
+  an empty `ContinueNextSegment` action, plain `current_pos + size`, and a hand-built constant summary. All are
+  now rejected, bringing the contract to 67/67.
+
 ## Store boundary and compatibility
 
 Store retains `get_simple_message_bytes`, `BatchMessageIterator`, `RecoveryContext`, parser/CRC/property policy,
@@ -49,20 +65,21 @@ The four public async recovery signatures are frozen. Contract hashes prove both
 
 ## Contract and mutation resistance
 
-The 64-case active-Rust contract proves the six Local definitions have one owner, the state has exactly three
+The 67-case active-Rust contract proves the six Local definitions have one owner, the state has exactly three
 fields, source end has no invented kind, arithmetic is checked, and Store orchestration cannot enter the reducer.
-Store adapters must construct the correct policy, submit each of the five events exactly once, act on all four
-record outcomes, and cannot copy mutable last-valid/truncate state or match Local policy. Mutations cover branch
-bypass, event replacement, reducer deletion, start/end exchange, unchecked addition, policy/watermark copies,
-signature drift, and either abnormal body changing.
+Store adapters must fallibly construct the correct policy, submit each of the five events exactly once, fully act
+on every `MessageAccepted` action, bind exactly one final summary, and cannot copy mutable last-valid/truncate
+state or match Local policy. Mutations cover branch bypass, empty action, event replacement, reducer deletion,
+start/end exchange, unchecked addition, constant summary, policy/watermark copies, signature drift, and either
+abnormal body changing.
 
 ## Validation
 
-- Local full: 52 unit + 10 record + 6 kernel + 7 mapping + 10 storage + 8 normal-recovery tests = 93 passed;
+- Local full: 52 unit + 10 record + 6 kernel + 7 mapping + 10 storage + 9 normal-recovery tests = 94 passed;
   nine existing Rustdoc examples ignored.
-- Store recovery: 12/12. CommitLog load: 7/7 with one stress test ignored. Record fail-closed: 13/13. Record and
+- Store recovery: 13/13. CommitLog load: 7/7 with one stress test ignored. Record fail-closed: 13/13. Record and
   recovery-window compatibility: 3/3 and 2/2.
-- Ownership/mutation contract: 64/64. Local no-default, fast-load, safe-load, fast+safe, and io_uring checks passed.
+- Ownership/mutation contract: 67/67. Local no-default, fast-load, safe-load, fast+safe, and io_uring checks passed.
 - Local/Store all-target/all-feature Clippy, workspace no-deps all-target/all-feature Clippy, and Local
   `RUSTDOCFLAGS=-D warnings` Rustdoc passed. Windows emitted only the existing linker notice and existing
   `proc-macro-error2` future-incompatibility notice.

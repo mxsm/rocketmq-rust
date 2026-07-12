@@ -201,7 +201,11 @@ async fn two_segment_fixture(shape: FirstSegmentShape) -> TwoSegmentFixture {
     }
 }
 
-async fn run_normal_recovery(fixture: &TwoSegmentFixture, route: NormalRecoveryRoute) -> (u64, NormalRecoverySnapshot) {
+async fn run_normal_recovery_with_max_cq(
+    fixture: &TwoSegmentFixture,
+    route: NormalRecoveryRoute,
+    max_phy_offset_of_consume_queue: i64,
+) -> (u64, NormalRecoverySnapshot) {
     let mut config = phase6_store_config();
     config.mapped_file_size_commit_log = RECOVERY_SEGMENT_SIZE;
     let mut restarted = new_test_store(&fixture.temp_dir, config);
@@ -212,12 +216,15 @@ async fn run_normal_recovery(fixture: &TwoSegmentFixture, route: NormalRecoveryR
     let message_store = restarted.clone();
     match route {
         NormalRecoveryRoute::Standard => {
-            restarted.get_commit_log_mut().recover_normally(0, message_store).await;
+            restarted
+                .get_commit_log_mut()
+                .recover_normally(max_phy_offset_of_consume_queue, message_store)
+                .await;
         }
         NormalRecoveryRoute::Optimized => {
             restarted
                 .get_commit_log_mut()
-                .recover_normally_optimized(0, message_store)
+                .recover_normally_optimized(max_phy_offset_of_consume_queue, message_store)
                 .await;
         }
     }
@@ -227,6 +234,10 @@ async fn run_normal_recovery(fixture: &TwoSegmentFixture, route: NormalRecoveryR
         max_queue_offset: restarted.get_max_offset_in_queue(&fixture.topic, 0),
     };
     (initial_confirm, snapshot)
+}
+
+async fn run_normal_recovery(fixture: &TwoSegmentFixture, route: NormalRecoveryRoute) -> (u64, NormalRecoverySnapshot) {
+    run_normal_recovery_with_max_cq(fixture, route, 0).await
 }
 
 #[tokio::test]
@@ -304,6 +315,20 @@ async fn normal_recovery_empty_later_segment_freezes_route_specific_dual_waterma
             max_queue_offset: 0,
         }
     );
+}
+
+#[tokio::test]
+async fn normal_recovery_negative_consume_queue_offset_preserves_route_watermarks() {
+    for route in [NormalRecoveryRoute::Standard, NormalRecoveryRoute::Optimized] {
+        let baseline_fixture = two_segment_fixture(FirstSegmentShape::Blank).await;
+        let (baseline_initial, baseline) = run_normal_recovery(&baseline_fixture, route).await;
+
+        let negative_fixture = two_segment_fixture(FirstSegmentShape::Blank).await;
+        let (negative_initial, negative) = run_normal_recovery_with_max_cq(&negative_fixture, route, -1).await;
+
+        assert_eq!(negative_initial, baseline_initial);
+        assert_eq!(negative, baseline);
+    }
 }
 
 #[derive(Debug, PartialEq)]

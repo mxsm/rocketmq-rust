@@ -305,6 +305,32 @@ def active_impl_body(source: str, type_name: str) -> str | None:
     return None if extracted is None else extracted[0]
 
 
+def normal_recovery_event_match_body(function_body: str, event: str) -> str | None:
+    active = active_rust_source(function_body)
+    match = re.search(
+        rf"\bmatch\s+normal_recovery\.apply\s*\(\s*NormalRecoveryEvent::{re.escape(event)}\b",
+        active,
+    )
+    if match is None:
+        return None
+    call_open = active.find("(", match.start())
+    if call_open == -1:
+        return None
+    depth = 0
+    for index in range(call_open, len(active)):
+        if active[index] == "(":
+            depth += 1
+        elif active[index] == ")":
+            depth -= 1
+            if depth == 0:
+                match_open = active.find("{", index + 1)
+                if match_open == -1:
+                    return None
+                extracted = braced_body(active, match_open)
+                return None if extracted is None else extracted[0]
+    return None
+
+
 def normal_recovery_state_boundary_violations(source: str) -> list[str]:
     production = source.split("#[cfg(test)]", maxsplit=1)[0]
     active = active_rust_source(production)
@@ -336,6 +362,22 @@ def normal_recovery_state_boundary_violations(source: str) -> list[str]:
             violations.append("Local normal recovery absorbed Store orchestration")
         if re.search(r"\b(?:as|unwrap|expect|panic)\b", impl_body):
             violations.append("Local normal recovery uses forbidden conversion or panic")
+        if re.search(
+            r"\bpub\s+const\s+fn\s+try_new\s*\(\s*initial_offset\s*:\s*u64\s*,\s*"
+            r"policy\s*:\s*NormalRecoveryPolicy\s*,?\s*\)\s*"
+            r"->\s*Result\s*<\s*Self\s*,\s*NormalRecoveryOffsetError\s*>",
+            impl_body,
+        ) is None:
+            violations.append("Local normal recovery constructor must be fallible")
+        if re.search(r"\bfn\s+new\b", impl_body) or len(re.findall(r"\bfn\s+try_new\b", impl_body)) != 1:
+            violations.append("Local normal recovery constructor owner changed")
+        if re.search(
+            r"\bif\s+initial_offset\s*>\s*MAX_SIGNED_OFFSET\s*\{\s*"
+            r"return\s+Err\s*\(\s*NormalRecoveryOffsetError::OffsetExceedsI64\s*\{\s*"
+            r"offset\s*:\s*initial_offset\s*,?\s*\}\s*\)\s*;\s*\}",
+            impl_body,
+        ) is None:
+            violations.append("Local normal recovery initial offset guard changed")
 
     if any(
         kind == "use" and (" as " in body or "{" in body or "*" in body)
@@ -371,6 +413,34 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
         if actual_hash != expected_hash:
             violations.append(f"{name} body changed")
 
+    recovery_prefix = "rocketmq_store_local::commit_log::recovery::"
+    recovery_imports = {
+        body.removeprefix(recovery_prefix)
+        for kind, _, body, _ in active_import_records(commit_log)
+        if kind == "use" and body.startswith(recovery_prefix)
+    }
+    expected_recovery_imports = {
+        "NormalRecoveryAction",
+        "NormalRecoveryEvent",
+        "NormalRecoveryPolicy",
+        "NormalRecoveryState",
+    }
+    if recovery_imports != expected_recovery_imports:
+        violations.append("Store normal recovery imports must be exact Local imports")
+    if any(
+        kind == "use"
+        and body.startswith(recovery_prefix)
+        and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(commit_log)
+    ):
+        violations.append("Store normal recovery imports forbid alias/brace/glob")
+
+    truncate_helper = named_function_body(commit_log, "should_truncate_normal_recovery_consume_queue")
+    if truncate_helper is None or re.sub(r"\s+", "", truncate_helper) != (
+        "max<0||u64::try_from(max).is_ok_and(|value|value>=truncate)"
+    ):
+        violations.append("Store normal recovery ConsumeQueue predicate changed")
+
     expected_events = ["SegmentStarted", "MessageAccepted", "Blank", "InvalidRecord", "SourceEnded"]
     for name, policy in [
         ("recover_normally", "Standard"),
@@ -382,6 +452,24 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
             continue
         if body.count(f"NormalRecoveryPolicy::{policy}") != 1:
             violations.append(f"{name} Local policy construction changed")
+        if len(re.findall(r"\bmatch\s+NormalRecoveryState::try_new\s*\(", body)) != 1:
+            violations.append(f"{name} must explicitly handle fallible Local state construction")
+        constructor_match = re.search(
+            rf"let\s+mut\s+normal_recovery\s*=\s*match\s+NormalRecoveryState::try_new\s*\(\s*"
+            rf"initial_offset\s*,\s*NormalRecoveryPolicy::{policy}\s*\)\s*\{{\s*"
+            r"Ok\s*\(\s*state\s*\)\s*=>\s*state\s*,\s*"
+            r"Err\s*\(\s*error\s*\)\s*=>\s*\{(?P<error>.*?)\}\s*\}\s*;",
+            body,
+            re.DOTALL,
+        )
+        if constructor_match is None or re.search(
+            r"\bwarn\s*!\s*\(.*?\)\s*;\s*return\s*;",
+            constructor_match.group("error"),
+            re.DOTALL,
+        ) is None:
+            violations.append(f"{name} must log and return on Local state construction error")
+        if "NormalRecoveryState::new" in body or re.search(r"\b(?:unwrap|expect|panic)\b", body):
+            violations.append(f"{name} uses forbidden Local construction or panic")
         if re.search(r"\bmatch\s+NormalRecoveryPolicy\b", body):
             violations.append(f"{name} copied Local recovery policy match")
         for event in expected_events:
@@ -391,13 +479,80 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
             violations.append(f"{name} must apply exactly five Local recovery events")
         if len(re.findall(r"\bmatch\s+normal_recovery\.apply\s*\(", body)) != 4:
             violations.append(f"{name} must act on every record outcome from Local reducer")
+
+        message_match = normal_recovery_event_match_body(body, "MessageAccepted")
+        if message_match is None:
+            violations.append(f"{name} MessageAccepted action match missing")
+        else:
+            for action in ["ContinueRecord", "ContinueNextSegment", "StopRecovery"]:
+                if message_match.count(f"NormalRecoveryAction::{action}") != 1:
+                    violations.append(f"{name} MessageAccepted {action} action changed")
+            if re.search(
+                r"Ok\s*\(\s*NormalRecoveryAction::ContinueRecord\s*\)\s*=>\s*\{\s*\}",
+                message_match,
+            ) is None:
+                violations.append(f"{name} MessageAccepted ContinueRecord action changed")
+            if policy == "Standard":
+                continue_next = r"=>\s*break\s*,"
+            else:
+                continue_next = r"=>\s*\{\s*record_closed_segment\s*=\s*true\s*;\s*break\s*;\s*\}"
+            if re.search(
+                rf"Ok\s*\(\s*NormalRecoveryAction::ContinueNextSegment\s*\)\s*{continue_next}",
+                message_match,
+            ) is None:
+                violations.append(f"{name} MessageAccepted ContinueNextSegment action changed")
+            if re.search(
+                r"Ok\s*\(\s*NormalRecoveryAction::StopRecovery\s*\)\s*=>\s*break\s+'segments\s*,",
+                message_match,
+            ) is None:
+                violations.append(f"{name} MessageAccepted StopRecovery action changed")
+
+        if name == "recover_normally":
+            checked_position = re.search(
+                r"let\s+Some\s*\(\s*next_position\s*\)\s*=\s*"
+                r"current_pos\.checked_add\s*\(\s*size\s*\)\s*else\s*\{(?P<failure>.*?)\}\s*;",
+                body,
+                re.DOTALL,
+            )
+            if checked_position is None or re.search(r"\bbreak\s+'segments\s*;", checked_position.group("failure")) is None:
+                violations.append(f"{name} current_pos must checked_add and stop globally on error")
+            if re.search(r"\bcurrent_pos\s*\+\s*size\b", body):
+                violations.append(f"{name} current_pos uses unchecked addition")
+        elif "current_pos" in body:
+            violations.append(f"{name} copied standard current_pos state")
+
+        if body.count("normal_recovery.summary()") != 1:
+            violations.append(f"{name} must bind exactly one Local recovery summary")
+        normalized_body = re.sub(r"\s+", "", body)
+        required_summary_flow = [
+            "letsummary=normal_recovery.summary();",
+            "letlast_valid_offset=matchi64::try_from(summary.last_valid_offset)",
+            "letprocess_offset=matchi64::try_from(summary.truncate_offset)",
+            "should_truncate_normal_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
+            "self.set_confirm_offset(last_valid_offset)",
+            "message_store.truncate_dirty_logic_files(process_offset)",
+            "self.mapped_file_queue.set_flushed_where(process_offset)",
+            "self.mapped_file_queue.set_committed_where(process_offset)",
+            "self.mapped_file_queue.truncate_dirty_files(process_offset)",
+        ]
+        controller_confirm_offset = "process_offset" if policy == "Standard" else "last_valid_offset"
+        required_summary_flow.append(
+            "self.clamp_controller_recover_confirm_offset("
+            f"message_store.get_min_phy_offset(),{controller_confirm_offset})"
+        )
+        if any(fragment not in normalized_body for fragment in required_summary_flow):
+            violations.append(f"{name} final recovery writes must flow from Local summary")
+        if "NormalRecoverySummary{" in normalized_body:
+            violations.append(f"{name} must not construct a Store-owned recovery summary")
+        if body.count("should_truncate_normal_recovery_consume_queue(") != 1:
+            violations.append(f"{name} must use the shared ConsumeQueue predicate exactly once")
         if re.search(r"\b(?:last_valid_msg_phy_offset|mapped_file_offset)\b", body):
             violations.append(f"{name} copied Local recovery watermark state")
         mutable_names = re.findall(r"\blet\s+mut\s+([A-Za-z_][A-Za-z0-9_]*)\b", body)
         if any("last_valid" in mutable_name or "truncate" in mutable_name for mutable_name in mutable_names):
             violations.append(f"{name} copied Local recovery policy state")
         empty_branch = body.find("mapped_files_inner.is_empty()")
-        state_creation = body.find("NormalRecoveryState::new")
+        state_creation = body.find("NormalRecoveryState::try_new")
         if state_creation == -1 or (empty_branch != -1 and state_creation < empty_branch):
             violations.append(f"{name} empty-file path must bypass Local reducer")
     return violations
@@ -1447,6 +1602,38 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
                 self.assertNotEqual([], store_normal_recovery_adapter_violations(mutation))
+
+    def test_store_normal_recovery_contract_rejects_empty_message_action(self) -> None:
+        source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
+        mutation = source.replace(
+            """Ok(NormalRecoveryAction::ContinueNextSegment) => {
+                            record_closed_segment = true;
+                            break;
+                        }""",
+            "Ok(NormalRecoveryAction::ContinueNextSegment) => {}",
+            1,
+        )
+        self.assertNotEqual(source, mutation)
+        self.assertNotEqual([], store_normal_recovery_adapter_violations(mutation))
+
+    def test_store_normal_recovery_contract_rejects_plain_current_position_addition(self) -> None:
+        source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
+        mutation = source.replace("current_pos.checked_add(size)", "Some(current_pos + size)", 1)
+        self.assertNotEqual(source, mutation)
+        self.assertNotEqual([], store_normal_recovery_adapter_violations(mutation))
+
+    def test_store_normal_recovery_contract_rejects_handmade_final_summary(self) -> None:
+        source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
+        mutation = source.replace(
+            "let summary = normal_recovery.summary();",
+            """let summary = rocketmq_store_local::commit_log::recovery::NormalRecoverySummary {
+            last_valid_offset: 0,
+            truncate_offset: 0,
+        };""",
+            1,
+        )
+        self.assertNotEqual(source, mutation)
+        self.assertNotEqual([], store_normal_recovery_adapter_violations(mutation))
 
     def test_store_record_parser_wrapper_contract_rejects_copy_and_import_mutations(self) -> None:
         root = "pub mod commit_log;"

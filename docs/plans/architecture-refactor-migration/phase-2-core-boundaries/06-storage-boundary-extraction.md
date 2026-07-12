@@ -462,17 +462,22 @@ python scripts/arc_mut_guard.py
 - [x] `[COMPAT]` Standard 保留 frame-start last-valid、frame-end truncate、invalid/source-end 全局停止和
   blank roll；Optimized 保留 frame-end 双水位及 blank/invalid/source-end 继续下一 segment。Store 仍拥有
   MappedFile/reader、record parser/CRC/DispatchRequest、日志、normal zero-dispatch、outer segment switch、
-  controller clamp、CQ truncate 与 flushed/committed/truncate 写回。四个 async public 签名保持不变。
-- [x] `[TEST]` Local 8 项覆盖 2×4 event 矩阵、连续消息、first empty、blank→next empty、invalid first+
+  controller clamp、CQ truncate 与 flushed/committed/truncate 写回。复审修复以 checked `TryFrom` 恢复 CQ
+  `max < 0` 时触发 truncate 的旧语义；四个 async public 签名保持不变。
+- [x] `[TEST]` Local 9 项覆盖 fallible constructor 的 `i64::MAX`/`MAX+1` 边界、2×4 event 矩阵、连续消息、
+  first empty、blank→next empty、invalid first+
   valid second、initial confirm、last blank、三种 overflow、`i64` 上界和 error transaction。真实 Store
   goldens 覆盖 blank-first+valid-second、SourceEnded/invalid-first+valid-second、后续 empty segment、双水位
-  和 normal zero-dispatch；recovery 12/12、load 7/7（1 ignored）、record 13/13、compatibility 3/3+2/2。
-- [x] `[REVIEW]` 64 项 comment/string-aware contract 证明六个 Local type 的唯一 owner、精确 state fields、
+  和 normal zero-dispatch，并验证负 CQ 参数不改变两条 public normal 路径的其余水位；recovery 13/13、
+  load 7/7（1 ignored）、record 13/13、compatibility 3/3+2/2。
+- [x] `[REVIEW]` 67 项 comment/string-aware contract 证明六个 Local type 的唯一 owner、fallible constructor、
+  精确 state fields、
   start/end policy、checked arithmetic、无 Store orchestration/ArcMut/dyn/alias/brace/glob；锁定四个 public
-  签名、两条 normal 各五个 reducer event/action、无 Store watermark/policy copy，并杀死 branch bypass、
-  start/end 交换、SourceEnded 虚构 kind、unchecked add、Store policy copy 和 reducer 删除。
+  签名、两条 normal 各五个 reducer event/action、MessageAccepted 三 action、current_pos 全局 stop、唯一
+  summary 绑定及最终写回数据流、无 Store watermark/policy copy，并杀死 empty action、plain add、constant
+  summary、branch bypass、start/end 交换、SourceEnded 虚构 kind、Store policy copy 和 reducer 删除。
 - [x] `[REV]` 两条 abnormal 函数 normalized hash 从 BASE 到 HEAD 分别保持 `c16a626f…` 与 `272dd669…`；
-  Local 全量 93 项、五组 feature check、Local/Store/workspace Clippy、Local `-D warnings` Rustdoc、架构
+  Local 全量 94 项、五组 feature check、Local/Store/workspace Clippy、Local `-D warnings` Rustdoc、架构
   35 项+fixtures+baseline、ArcMut 63 项+fixtures+final guard、格式与 diff 检查通过，且无新增依赖。
 - [x] `[SCOPE]` M06-03h 只接入两条 normal recovery；abnormal recovery、dispatch、持久格式、flush/runtime、
   checkpoint/window selection、controller/dup 条件及 CQ/Index/HA 均未迁移。PR-M06-03 父项和 M06 Exit
