@@ -27,7 +27,7 @@ All RED commands ran before production edits.
 2. Mutation-resistant ownership contract
    - RED: `python -m unittest scripts.tests.test_m06_store_local_contract` exited 1 with 13 tests and two expected
      failures because `kernel.rs` and `MappedFileProgress` had no canonical owner.
-   - GREEN: the same target exits 0 with 13/13 tests. It proves one active definition for all four kernel items,
+   - GREEN: the final target exits 0 with 18/18 tests. It proves one active definition for all four kernel items,
      exact legacy facade re-exports, one composed progress field, no copied progress atomics/direct accesses, and
      the existing forbidden-dependency closure. Scanner fixtures prove comments, ordinary strings, and raw strings
      cannot satisfy the contract.
@@ -35,6 +35,20 @@ All RED commands ran before production edits.
    - GREEN: `cargo test -p rocketmq-store default_mapped_file_impl` exits 0 with 26/26 focused tests. The existing
      injected I/O failure keeps the durable position unchanged; the real transient-store path preserves
      wrote/commit/read/flush sequencing.
+4. Independent-review mutation hardening
+   - RED: after the first implementation commit, `python -m unittest scripts.tests.test_m06_store_local_contract`
+     exited 1 with the original 13 tests green and five new synthetic bypass fixtures raising five errors because
+     the old scanner had no owner-occurrence, kernel-use-statement, or exact progress-field validators.
+   - GREEN: the final 18/18 contract detects private, `pub`, and `pub(crate)` same-name struct/trait/type
+     declarations and type aliases, use-as aliases, and glob re-exports. A crate-wide Store facade scan accepts
+     only the existing three exact `pub(crate)` legacy re-exports. The DefaultMappedFile field parser
+     unconditionally rejects all eight old
+     progress field names, requires exactly one `MappedFileProgress` field named `progress`, and rejects a second
+     field of that type under any name. Explicit negative fixtures cover `pub type MappedFileProgress`, private and
+     crate-visible duplicates, `ReferenceResource as Shadow`, `wrote_position: ProgressAtomic`, and a second
+     `MappedFileProgress` field.
+   - The first GREEN scanner attempt exposed a test-only performance defect and timed out at 124 seconds. A linear
+     source prefilter removed the full-repository repeated scan; the final contract completes in 6.947 seconds.
 
 ## Semantic preservation
 
@@ -73,7 +87,8 @@ All commands ran from the repository root.
 - `cargo test -p rocketmq-store --test m06_store_local_compatibility` - exit 0; 3/3 existing leaf identity tests.
 - `cargo test -p rocketmq-store --test commitlog_recovery_tests` - exit 0; 9/9.
 - `cargo test -p rocketmq-store --test m06_store_local_commitlog_compatibility` - exit 0; 2/2.
-- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 13/13.
+- `python -m unittest scripts.tests.test_m06_store_local_contract` - exit 0; 18/18, including five explicit
+  independent-review negative mutation fixtures.
 - `cargo check -p rocketmq-store-local --no-default-features` - exit 0.
 - `cargo check -p rocketmq-store-local --no-default-features --features fast-load` - exit 0.
 - `cargo check -p rocketmq-store-local --no-default-features --features safe-load` - exit 0.

@@ -270,6 +270,60 @@ def active_kernel_reexports(source: str) -> set[str]:
     )
 
 
+def active_kernel_use_statements(source: str) -> list[str]:
+    statements: list[str] = []
+    pattern = re.compile(
+        r"(?m)^\s*(?P<visibility>pub(?:\s*\(\s*crate\s*\))?\s+)?"
+        r"use\s+rocketmq_store_local::mapped_file::kernel::(?P<tail>[^;]+);"
+    )
+    for match in pattern.finditer(active_rust_source(source)):
+        visibility = re.sub(r"\s+", "", (match.group("visibility") or "").strip())
+        tail = re.sub(r"\s+", " ", match.group("tail")).strip()
+        prefix = f"{visibility} " if visibility else ""
+        statements.append(f"{prefix}use {tail}")
+    return statements
+
+
+def kernel_facade_boundary_uses(
+    sources: dict[Path, str],
+) -> list[tuple[Path, str]]:
+    boundary_uses: list[tuple[Path, str]] = []
+    for path, source in sources.items():
+        if "rocketmq_store_local::mapped_file::kernel::" not in source:
+            continue
+        for statement in active_kernel_use_statements(source):
+            tail = statement.split("use ", maxsplit=1)[1]
+            if statement.startswith("pub") or re.search(r"\bas\b", tail) or "*" in tail:
+                boundary_uses.append((path, statement))
+    return boundary_uses
+
+
+def kernel_item_owner_occurrences(
+    sources: dict[Path, str],
+    item: str,
+) -> list[tuple[Path, str]]:
+    declaration = re.compile(
+        rf"\b(?:pub(?:\s*\(\s*crate\s*\))?\s+)?"
+        rf"(?P<kind>struct|trait|type)\s+{re.escape(item)}\b"
+    )
+    aliased_import = re.compile(rf"\bas\s+{re.escape(item)}\b")
+    occurrences: list[tuple[Path, str]] = []
+    for path, source in sources.items():
+        if item not in source:
+            continue
+        active_source = active_rust_source(source)
+        occurrences.extend(
+            (path, match.group("kind"))
+            for match in declaration.finditer(active_source)
+        )
+        occurrences.extend(
+            (path, "use-as")
+            for statement in active_source.split(";")
+            if re.search(r"\buse\b", statement) and aliased_import.search(statement)
+        )
+    return occurrences
+
+
 def active_struct_body(source: str, struct_name: str) -> str:
     source = active_rust_source(source)
     declaration = re.search(rf"\bstruct\s+{re.escape(struct_name)}\s*\{{", source)
@@ -285,6 +339,65 @@ def active_struct_body(source: str, struct_name: str) -> str:
             if depth == 0:
                 return source[start:index]
     return ""
+
+
+def active_struct_fields(source: str, struct_name: str) -> list[tuple[str, str]]:
+    body = active_struct_body(source, struct_name)
+    if not body:
+        return []
+
+    segments: list[str] = []
+    start = 0
+    depths = {"<": 0, "(": 0, "[": 0, "{": 0}
+    closing = {">": "<", ")": "(", "]": "[", "}": "{"}
+    for index, character in enumerate(body):
+        if character in depths:
+            depths[character] += 1
+        elif character in closing:
+            opener = closing[character]
+            depths[opener] = max(0, depths[opener] - 1)
+        elif character == "," and not any(depths.values()):
+            segments.append(body[start:index])
+            start = index + 1
+    segments.append(body[start:])
+
+    fields: list[tuple[str, str]] = []
+    field_pattern = re.compile(
+        r"(?s)^\s*(?:#\s*\[[^\]]*\]\s*)*"
+        r"(?:pub(?:\s*\([^)]*\))?\s+)?"
+        r"(?:r#)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?P<type>.+?)\s*$"
+    )
+    for segment in segments:
+        match = field_pattern.match(segment)
+        if match:
+            field_type = re.sub(r"\s+", " ", match.group("type")).strip()
+            fields.append((match.group("name"), field_type))
+    return fields
+
+
+def default_mapped_file_progress_violations(source: str) -> list[str]:
+    if not active_struct_body(source, "DefaultMappedFile"):
+        return ["DefaultMappedFile struct missing"]
+
+    fields = active_struct_fields(source, "DefaultMappedFile")
+    violations = [
+        f"legacy progress field: {name}"
+        for name, _ in fields
+        if name in PROGRESS_FIELDS
+    ]
+    progress_fields = [
+        (name, field_type)
+        for name, field_type in fields
+        if re.search(r"\bMappedFileProgress\b", field_type)
+    ]
+    if [name for name, _ in progress_fields] != ["progress"]:
+        violations.append("MappedFileProgress fields must be exactly: progress")
+    elif not re.fullmatch(
+        r"(?:[A-Za-z_][A-Za-z0-9_]*::)*MappedFileProgress",
+        progress_fields[0][1],
+    ):
+        violations.append("progress field must have exact MappedFileProgress type")
+    return violations
 
 
 class StoreLocalContractTests(unittest.TestCase):
@@ -382,8 +495,82 @@ pub struct DefaultMappedFile {
 const TEXT: &str = "struct DefaultMappedFile { flushed_position: AtomicI32 }";
 '''
         self.assertEqual({"ReferenceResourceBase"}, active_kernel_reexports(facade))
+        self.assertEqual(
+            ["pub(crate) use ReferenceResourceBase"],
+            active_kernel_use_statements(facade),
+        )
         self.assertIn("progress: MappedFileProgress", active_struct_body(owner, "DefaultMappedFile"))
         self.assertNotIn("wrote_position", active_struct_body(owner, "DefaultMappedFile"))
+        self.assertEqual([], default_mapped_file_progress_violations(owner))
+
+    def test_kernel_owner_scanner_rejects_type_alias_bypass(self) -> None:
+        alias = Path("alias.rs")
+        self.assertEqual(
+            [(alias, "type")],
+            kernel_item_owner_occurrences(
+                {alias: "pub type MappedFileProgress = usize;"},
+                "MappedFileProgress",
+            ),
+        )
+
+    def test_kernel_owner_scanner_rejects_private_and_crate_visible_duplicates(self) -> None:
+        private = Path("private.rs")
+        crate_visible = Path("crate_visible.rs")
+        self.assertEqual(
+            [(private, "struct"), (crate_visible, "trait")],
+            kernel_item_owner_occurrences(
+                {
+                    private: "struct ReferenceResource {}",
+                    crate_visible: "pub(crate) trait ReferenceResource {}",
+                },
+                "ReferenceResource",
+            ),
+        )
+
+    def test_kernel_use_scanner_rejects_alias_and_glob_bypasses(self) -> None:
+        facade = Path("facade.rs")
+        source = """
+pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResource as Shadow;
+pub use rocketmq_store_local::mapped_file::kernel::*;
+"""
+        self.assertEqual(
+            {
+                "pub(crate) use ReferenceResource as Shadow",
+                "pub use *",
+            },
+            set(active_kernel_use_statements(source)),
+        )
+        self.assertEqual(
+            [
+                (facade, "pub(crate) use ReferenceResource as Shadow"),
+                (facade, "pub use *"),
+            ],
+            kernel_facade_boundary_uses({facade: source}),
+        )
+
+    def test_default_mapped_file_scanner_rejects_old_field_with_new_type(self) -> None:
+        source = """
+struct DefaultMappedFile {
+    progress: MappedFileProgress,
+    wrote_position: ProgressAtomic,
+}
+"""
+        self.assertIn(
+            "legacy progress field: wrote_position",
+            default_mapped_file_progress_violations(source),
+        )
+
+    def test_default_mapped_file_scanner_rejects_second_progress_kernel_field(self) -> None:
+        source = """
+struct DefaultMappedFile {
+    progress: MappedFileProgress,
+    shadow: MappedFileProgress,
+}
+"""
+        self.assertIn(
+            "MappedFileProgress fields must be exactly: progress",
+            default_mapped_file_progress_violations(source),
+        )
 
     def test_workspace_and_feature_ownership_are_exact(self) -> None:
         self.assert_local_crate_exists()
@@ -462,37 +649,54 @@ const TEXT: &str = "struct DefaultMappedFile { flushed_position: AtomicI32 }";
         }
         for item, item_kind in KERNEL_ITEMS.items():
             self.assertEqual(
-                [canonical_file],
-                canonical_definition_paths(rust_sources, item, item_kind),
+                [(canonical_file, item_kind)],
+                kernel_item_owner_occurrences(rust_sources, item),
                 item,
             )
 
         facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
         reference_facade = (facade_dir / "reference_resource.rs").read_text(encoding="utf-8")
         counter_facade = (facade_dir / "reference_resource_counter.rs").read_text(encoding="utf-8")
-        self.assertEqual({"ReferenceResource"}, active_kernel_reexports(reference_facade))
         self.assertEqual(
-            {"ReferenceResourceBase", "ReferenceResourceCounter"},
-            active_kernel_reexports(counter_facade),
+            ["pub(crate) use ReferenceResource"],
+            active_kernel_use_statements(reference_facade),
+        )
+        self.assertEqual(
+            [
+                "pub(crate) use ReferenceResourceBase",
+                "pub(crate) use ReferenceResourceCounter",
+            ],
+            active_kernel_use_statements(counter_facade),
+        )
+        store_sources = {
+            path: path.read_text(encoding="utf-8")
+            for path in STORE_CRATE.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [
+                (
+                    facade_dir / "reference_resource.rs",
+                    "pub(crate) use ReferenceResource",
+                ),
+                (
+                    facade_dir / "reference_resource_counter.rs",
+                    "pub(crate) use ReferenceResourceBase",
+                ),
+                (
+                    facade_dir / "reference_resource_counter.rs",
+                    "pub(crate) use ReferenceResourceCounter",
+                ),
+            ],
+            kernel_facade_boundary_uses(store_sources),
         )
 
         default_mapped_file = (
             facade_dir / "default_mapped_file_impl.rs"
         ).read_text(encoding="utf-8")
-        active_default = active_rust_source(default_mapped_file)
-        struct_body = active_struct_body(default_mapped_file, "DefaultMappedFile")
-        self.assertRegex(struct_body, r"\bprogress\s*:\s*MappedFileProgress\s*,")
-        for field in PROGRESS_FIELDS:
-            self.assertNotRegex(
-                struct_body,
-                rf"\b{re.escape(field)}\s*:\s*(?:Atomic[A-Za-z0-9_]+|u64|i64|i32)\b",
-                field,
-            )
-            self.assertNotRegex(
-                active_default,
-                rf"\bself\.{re.escape(field)}\.(?:load|store|fetch_add|fetch_sub)\s*\(",
-                field,
-            )
+        self.assertEqual(
+            [],
+            default_mapped_file_progress_violations(default_mapped_file),
+        )
 
     def test_commit_log_planning_items_have_one_canonical_definition_and_exact_facade_reexports(self) -> None:
         self.assert_local_crate_exists()
