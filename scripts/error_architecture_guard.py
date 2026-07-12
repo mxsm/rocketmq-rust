@@ -692,7 +692,7 @@ def check_source_stringification_allowlist() -> list[Finding]:
             "#[source]",
             "source: Box<RocketMQError>",
         ],
-        ROOT / "rocketmq-store" / "src" / "log_file" / "mapped_file" / "mapped_file_error.rs": [
+        ROOT / "rocketmq-store-local" / "src" / "mapped_file" / "mapped_file_error.rs": [
             "MmapFailed(#[source] io::Error)",
             "FlushFailed(#[source] io::Error)",
         ],
@@ -713,6 +713,7 @@ def check_source_stringification_allowlist() -> list[Finding]:
 
     domain_paths = [
         *rust_files_under("rocketmq-store", "src"),
+        *rust_files_under("rocketmq-store-local", "src"),
         *rust_files_under("rocketmq-controller", "src"),
         *rust_files_under("rocketmq-auth", "src"),
         *rust_files_under("rocketmq-broker", "src"),

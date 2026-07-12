@@ -267,3 +267,21 @@ python scripts/arc_mut_guard.py
   和 workspace Clippy 均通过；热路径无 `Arc<dyn Trait>`、boxed future、runtime 或 blocking boundary。
 - [x] `[COMPAT]` CommitLog/WAL owner、CQ/Index 与 persisted layout、公开路径、Serde/default、feature alias、
   response/watermark/buffer lifetime 均未改变；M06-03 及后续清单仍未完成。
+
+## M06-03a store-local leaf foundation evidence
+
+- [x] `[DEV]` 创建 workspace crate `rocketmq-store-local`，`default = []`，并由 canonical crate
+  拥有 `fast-load`、`safe-load` 与 Linux-only `io_uring` feature；`rocketmq-store` 保持原 default，
+  只转发同名 feature，且不再直接依赖 `tokio-uring`。
+- [x] `[DEV]` 将 `direct_io`、`flush_strategy`、`mapped_buffer`、`mapped_file_error`、`metrics`
+  与 `io_uring_impl` 六个无 owner 反向边的 MappedFile leaf 定义及其单元测试机械迁移到 Local；
+  每个公开类型/函数只有一个 canonical 定义，facade 仅精确 re-export。
+- [x] `[COMPAT]` canonical/legacy fixture 证明 Direct I/O 校验与错误文本、`FlushStrategy`、
+  `MappedBuffer`/`MappedFileError`、metrics、io_uring status/capability 的类型身份与行为保持一致；
+  `rocketmq_store::log_file::mapped_file` 根路径和 `io_uring_impl` 深路径继续可编译。
+- [x] `[REV]` Local normal tree 只包含 `bytes`、`memmap2`、`parking_lot`、`thiserror` 及其基础闭包；
+  source/manifest contract、architecture fixtures/baseline、ArcMut fixtures/guard、package/workspace
+  Clippy 与 routing guard 均通过，未增加 dependency/error policy exception。
+- [x] `[SCOPE]` 本切片未迁移 `MappedFile`/`DefaultMappedFile`、CommitLog、load/recovery、flush、
+  CQ/Index、HA 或 Local composition，未改变持久格式或 runtime ownership。PR-M06-03 顶层条目与
+  M06 Exit Checklist 保持未完成。
