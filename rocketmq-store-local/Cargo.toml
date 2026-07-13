@@ -35,10 +35,12 @@ bytes.workspace = true
 memmap2 = "0.9.10"
 parking_lot.workspace = true
 rayon = "1.12"
+serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile = "3.27.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]

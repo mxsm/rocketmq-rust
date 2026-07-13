@@ -121,6 +121,7 @@
   - [x] M06-03l：迁移 CommitLog recovery memory hint 平台执行到 Local
   - [x] M06-03m：迁移 CommitLog filesystem metadata 收集、校验与空尾删除到 Local
   - [x] M06-03n：迁移 CommitLog 目录发现、文件过滤与稳定文件名排序到 Local
+  - [x] M06-03o：迁移 CommitLog append 值与最小 mapped-file config 到 Local
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

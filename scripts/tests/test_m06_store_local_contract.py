@@ -122,6 +122,34 @@ COMMIT_LOG_HINT_ITEMS = {
     "apply_recovery_mmap_advice": "fn",
     "apply_recovery_file_prefetch": "fn",
 }
+COMMIT_LOG_APPEND_ITEMS = {
+    "AppendMessageStatus": "enum",
+    "AppendMessageResult": "struct",
+    "PutMessageContext": "struct",
+    "CompactionAppendMsgCallback": "trait",
+}
+STORE_APPEND_FACADES = {
+    "base/message_status_enum.rs": (
+        "rocketmq_store_local::commit_log::append",
+        "AppendMessageStatus",
+    ),
+    "base/message_result.rs": (
+        "rocketmq_store_local::commit_log::append",
+        "AppendMessageResult",
+    ),
+    "base/put_message_context.rs": (
+        "rocketmq_store_local::commit_log::append",
+        "PutMessageContext",
+    ),
+    "base/compaction_append_msg_callback.rs": (
+        "rocketmq_store_local::commit_log::append",
+        "CompactionAppendMsgCallback",
+    ),
+    "config/flush_disk_type.rs": (
+        "rocketmq_store_local::config",
+        "FlushDiskType",
+    ),
+}
 COMMIT_LOG_RECORD_PARSER_ITEMS = {
     "CommitLogRecordVersion": "enum",
     "CommitLogRecordBodyMode": "enum",
@@ -218,6 +246,21 @@ def active_commit_log_facade_reexports(source: str) -> dict[str, str]:
             source,
         )
     }
+
+
+def direct_exact_reexport_violations(source: str, module: str, item: str) -> list[str]:
+    expected = f"pub use {module}::{item}"
+    relevant = [
+        statement
+        for kind, _, body, statement in active_import_records(source)
+        if kind == "use" and item in body
+    ]
+    violations: list[str] = []
+    if relevant != [expected]:
+        violations.append(f"{item} must have one direct exact re-export")
+    if file_item_owner_occurrences({Path("facade.rs"): source}, item):
+        violations.append(f"{item} facade declares or aliases an owner")
+    return violations
 
 
 def commit_log_record_owner_occurrences(
@@ -337,6 +380,203 @@ def active_impl_body(source: str, type_name: str) -> str | None:
         return None
     extracted = braced_body(active, opening_brace)
     return None if extracted is None else extracted[0]
+
+
+def active_trait_impl_body(source: str, header_pattern: str) -> str | None:
+    active = active_rust_source(source)
+    match = re.search(header_pattern, active)
+    if match is None:
+        return None
+    opening_brace = active.find("{", match.end())
+    if opening_brace == -1:
+        return None
+    extracted = braced_body(active, opening_brace)
+    return None if extracted is None else extracted[0]
+
+
+def commit_log_append_contract_violations(append_source: str, config_source: str) -> list[str]:
+    append = append_source.split("#[cfg(test)]", maxsplit=1)[0]
+    config = config_source.split("#[cfg(test)]", maxsplit=1)[0]
+    active_append = active_rust_source(append)
+    active_config = active_rust_source(config)
+    normalized_append = re.sub(r"\s+", "", active_append)
+    normalized_config = re.sub(r"\s+", "", active_config)
+    normalized_append_vocabulary = re.sub(r"\s+", "", rust_source_without_comments(append))
+    normalized_config_vocabulary = re.sub(r"\s+", "", rust_source_without_comments(config))
+    violations: list[str] = []
+
+    status_derive = re.search(
+        r"#\[derive\(Debug,\s*Default,\s*Clone,\s*Copy,\s*PartialEq,\s*Eq\)\]\s*"
+        r"pub\s+enum\s+AppendMessageStatus\b",
+        active_append,
+    )
+    status_body = active_item_body(append, "enum", "AppendMessageStatus")
+    expected_status_body = (
+        "#[default]PutOk,EndOfFile,MessageSizeExceeded,PropertiesSizeExceeded,UnknownError,"
+    )
+    if status_derive is None or status_body is None or re.sub(r"\s+", "", status_body) != expected_status_body:
+        violations.append("AppendMessageStatus derive, variants, or default changed")
+
+    status_display = active_trait_impl_body(
+        append,
+        r"\bimpl\s+std::fmt::Display\s+for\s+AppendMessageStatus\b",
+    )
+    normalized_status_display = re.sub(r"\s+", "", status_display or "")
+    expected_status_structure = [
+        "AppendMessageStatus::PutOk=>write!(f,),",
+        "AppendMessageStatus::EndOfFile=>write!(f,),",
+        "AppendMessageStatus::MessageSizeExceeded=>write!(f,),",
+        "AppendMessageStatus::PropertiesSizeExceeded=>write!(f,),",
+        "AppendMessageStatus::UnknownError=>write!(f,),",
+    ]
+    expected_status_vocabulary = [
+        'AppendMessageStatus::PutOk=>write!(f,"PUT_OK")',
+        'AppendMessageStatus::EndOfFile=>write!(f,"END_OF_FILE")',
+        'AppendMessageStatus::MessageSizeExceeded=>write!(f,"MESSAGE_SIZE_EXCEEDED")',
+        'AppendMessageStatus::PropertiesSizeExceeded=>write!(f,"PROPERTIES_SIZE_EXCEEDED")',
+        'AppendMessageStatus::UnknownError=>write!(f,"UNKNOWN_ERROR")',
+    ]
+    if (
+        status_display is None
+        or any(structure not in normalized_status_display for structure in expected_status_structure)
+        or any(vocabulary not in normalized_append_vocabulary for vocabulary in expected_status_vocabulary)
+    ):
+        violations.append("AppendMessageStatus Display vocabulary changed")
+
+    if "typeMessageIdSupplier=Arc<dynFn()->String+Send+Sync>;" not in normalized_append:
+        violations.append("AppendMessageResult supplier type changed")
+    result_derive = re.search(
+        r"#\[derive\(Clone\)\]\s*pub\s+struct\s+AppendMessageResult\b",
+        active_append,
+    )
+    result_body = active_item_body(append, "struct", "AppendMessageResult")
+    expected_result_body = (
+        "pubstatus:AppendMessageStatus,pubwrote_offset:i64,pubwrote_bytes:i32,"
+        "pubmsg_id:Option<String>,pubmsg_id_supplier:Option<MessageIdSupplier>,"
+        "pubstore_timestamp:i64,publogics_offset:i64,pubpage_cache_rt:i64,pubmsg_num:i32,"
+    )
+    if result_derive is None or result_body is None or re.sub(r"\s+", "", result_body) != expected_result_body:
+        violations.append("AppendMessageResult fields, visibility, types, or Clone changed")
+
+    result_default = active_trait_impl_body(
+        append,
+        r"\bimpl\s+Default\s+for\s+AppendMessageResult\b",
+    )
+    expected_result_default = (
+        "fndefault()->Self{Self{status:AppendMessageStatus::UnknownError,wrote_offset:0,"
+        "wrote_bytes:0,msg_id:None,msg_id_supplier:None,store_timestamp:0,logics_offset:0,"
+        "page_cache_rt:0,msg_num:1,}}"
+    )
+    if result_default is None or re.sub(r"\s+", "", result_default) != expected_result_default:
+        violations.append("AppendMessageResult default status, fields, or msg_num changed")
+
+    result_display = active_trait_impl_body(
+        append,
+        r"\bimpl\s+Display\s+for\s+AppendMessageResult\b",
+    )
+    normalized_result_display = re.sub(r"\s+", "", result_display or "")
+    expected_display_literal = (
+        '"AppendMessageResult[status={:?},wrote_offset={},wrote_bytes={},msg_id={:?},'
+        'store_timestamp={},\\logics_offset={},page_cache_rt={},msg_num={}]"'
+    )
+    expected_display_fields = (
+        "self.status,self.wrote_offset,self.wrote_bytes,self.msg_id,self.store_timestamp,"
+        "self.logics_offset,self.page_cache_rt,self.msg_num"
+    )
+    if (
+        result_display is None
+        or expected_display_literal not in normalized_append_vocabulary
+        or expected_display_fields not in normalized_result_display
+    ):
+        violations.append("AppendMessageResult Display vocabulary or field order changed")
+
+    is_ok = re.sub(r"\s+", "", named_function_body(append, "is_ok") or "")
+    if is_ok != "self.status==AppendMessageStatus::PutOk":
+        violations.append("AppendMessageResult is_ok semantics changed")
+    get_message_id = re.sub(r"\s+", "", named_function_body(append, "get_message_id") or "")
+    expected_supplier_precedence = (
+        "matchself.msg_id_supplier{None=>self.msg_id.clone(),Some(refmsg_id_supplier)=>{"
+        "letmsg_id=msg_id_supplier();Some(msg_id)}}"
+    )
+    if get_message_id != expected_supplier_precedence:
+        violations.append("AppendMessageResult supplier precedence changed")
+
+    context_derive = re.search(
+        r"#\[derive\(Debug,\s*Clone,\s*Default\)\]\s*pub\s+struct\s+PutMessageContext\b",
+        active_append,
+    )
+    context_body = active_item_body(append, "struct", "PutMessageContext")
+    expected_context_body = "topic_queue_table_key:String,phy_pos:Vec<i64>,batch_size:i32,"
+    context_impl = re.sub(r"\s+", "", active_impl_body(append, "PutMessageContext") or "")
+    context_contract = [
+        "pubfnnew(topic_queue_table_key:String)->Self",
+        "pubfnget_topic_queue_table_key(&self)->&str",
+        "pubfnget_phy_pos(&self)->&[i64]",
+        "pubfnset_phy_pos(&mutself,phy_pos:Vec<i64>)",
+        "pubfnget_phy_pos_mut(&mutself)->&mut[i64]",
+        "pubfnget_batch_size(&self)->i32",
+        "pubfnset_batch_size(&mutself,batch_size:i32)",
+        "pubfnset_topic_queue_table_key(&mutself,topic_queue_table_key:String)",
+    ]
+    if (
+        context_derive is None
+        or context_body is None
+        or re.sub(r"\s+", "", context_body) != expected_context_body
+        or any(signature not in context_impl for signature in context_contract)
+    ):
+        violations.append("PutMessageContext fields, derives, or slice accessor signatures changed")
+
+    compaction_body = active_item_body(append, "trait", "CompactionAppendMsgCallback")
+    expected_compaction_body = (
+        "fndo_append(&self,bb_dest:&mutbytes::Bytes,file_from_offset:i64,max_blank:i32,"
+        "bb_src:&mutbytes::Bytes,)->AppendMessageResult;"
+    )
+    if compaction_body is None or re.sub(r"\s+", "", compaction_body) != expected_compaction_body:
+        violations.append("CompactionAppendMsgCallback signature changed")
+
+    flush_derive = re.search(
+        r"#\[derive\(Debug,\s*Copy,\s*Clone,\s*Default,\s*PartialEq\)\]\s*"
+        r"pub\s+enum\s+FlushDiskType\b",
+        active_config,
+    )
+    flush_body = active_item_body(config, "enum", "FlushDiskType")
+    expected_flush_body = "SyncFlush,#[default]AsyncFlush,"
+    flush_vocabulary = [
+        'FlushDiskType::SyncFlush=>"SYNC_FLUSH"',
+        'FlushDiskType::AsyncFlush=>"ASYNC_FLUSH"',
+        '"SYNC_FLUSH"|"SyncFlush"=>Ok(FlushDiskType::SyncFlush)',
+        '"ASYNC_FLUSH"|"AsyncFlush"=>Ok(FlushDiskType::AsyncFlush)',
+        'serde::de::Error::unknown_variant(value,&["SYNC_FLUSH/SyncFlush","ASYNC_FLUSH/AsyncFlush"],)',
+        "deserializer.deserialize_str(FlushDiskTypeVisitor)",
+    ]
+    if (
+        flush_derive is None
+        or flush_body is None
+        or re.sub(r"\s+", "", flush_body) != expected_flush_body
+        or "impl<'de>Deserialize<'de>forFlushDiskType" not in normalized_config
+        or any(vocabulary not in normalized_config_vocabulary for vocabulary in flush_vocabulary)
+    ):
+        violations.append("FlushDiskType derives, default, vocabulary, or manual Deserialize changed")
+
+    forbidden_append_tokens = (
+        "AppendMessageCallback",
+        "PutMessageStatus",
+        "GetMessageStatus",
+        "PutMessageResult",
+        "DefaultMappedFile",
+        "ArcMut",
+        "rocketmq_common",
+        "rocketmq_rust",
+        "rocketmq_store",
+    )
+    present_forbidden = [
+        token
+        for token in forbidden_append_tokens
+        if re.search(rf"\b{re.escape(token)}\b", active_append)
+    ]
+    if present_forbidden:
+        violations.append(f"Local append absorbed forbidden owners or edges: {present_forbidden}")
+    return violations
 
 
 def normal_recovery_event_match_body(function_body: str, event: str) -> str | None:
@@ -1182,6 +1422,69 @@ def active_rust_source(source: str) -> str:
                 else:
                     index += 1
             mask(start, index)
+            continue
+
+        output.append(source[index])
+        index += 1
+
+    return "".join(output)
+
+
+def rust_source_without_comments(source: str) -> str:
+    output: list[str] = []
+    index = 0
+    length = len(source)
+
+    def mask(start: int, end: int) -> None:
+        output.extend("\n" if character == "\n" else " " for character in source[start:end])
+
+    while index < length:
+        if source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            end = length if end == -1 else end
+            mask(index, end)
+            index = end
+            continue
+
+        if source.startswith("/*", index):
+            start = index
+            index += 2
+            depth = 1
+            while index < length and depth:
+                if source.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif source.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+            mask(start, index)
+            continue
+
+        raw = re.match(r'(?:br|cr|r)(?P<hashes>#{0,255})"', source[index:])
+        if raw:
+            start = index
+            delimiter = '"' + raw.group("hashes")
+            index += raw.end()
+            end = source.find(delimiter, index)
+            index = length if end == -1 else end + len(delimiter)
+            output.append(source[start:index])
+            continue
+
+        string_prefix = 1 if source[index] == '"' else 2 if source[index:index + 2] in {'b"', 'c"'} else 0
+        if string_prefix:
+            start = index
+            index += string_prefix
+            while index < length:
+                if source[index] == "\\":
+                    index = min(index + 2, length)
+                elif source[index] == '"':
+                    index += 1
+                    break
+                else:
+                    index += 1
+            output.append(source[start:index])
             continue
 
         output.append(source[index])
@@ -2699,6 +3002,105 @@ pub use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryWindow;
             active_commit_log_facade_reexports(source),
         )
 
+    def test_append_facade_contract_rejects_copy_alias_brace_glob_and_inactive_decoys(self) -> None:
+        module = "rocketmq_store_local::commit_log::append"
+        item = "AppendMessageStatus"
+        valid = f"pub use {module}::{item};"
+        self.assertEqual([], direct_exact_reexport_violations(valid, module, item))
+
+        inactive = f'''\
+// pub struct {item};
+const TEXT: &str = "pub use {module}::{item};";
+pub use {module}::{item};
+'''
+        self.assertEqual([], direct_exact_reexport_violations(inactive, module, item))
+
+        mutations = [
+            f"pub type {item} = {module}::{item};",
+            f"pub use {module}::{item} as {item};",
+            f"pub use {module}::{{{item}}};",
+            f"pub use {module}::*;",
+            f"pub struct {item};",
+        ]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                self.assertNotEqual(
+                    [],
+                    direct_exact_reexport_violations(mutation, module, item),
+                )
+
+    def test_commit_log_append_source_contract_rejects_semantic_and_scope_mutations(self) -> None:
+        append_source = (LOCAL_CRATE / "src" / "commit_log" / "append.rs").read_text(
+            encoding="utf-8"
+        )
+        config_source = (LOCAL_CRATE / "src" / "config.rs").read_text(encoding="utf-8")
+        self.assertEqual([], commit_log_append_contract_violations(append_source, config_source))
+
+        mutations = [
+            (
+                "status",
+                append_source.replace('write!(f, "UNKNOWN_ERROR")', 'write!(f, "UNKNOWN")', 1),
+                config_source,
+                "AppendMessageStatus",
+            ),
+            (
+                "result",
+                append_source.replace("msg_num: 1,", "msg_num: 0,", 1),
+                config_source,
+                "AppendMessageResult",
+            ),
+            (
+                "context",
+                append_source.replace(
+                    "pub fn get_phy_pos_mut(&mut self) -> &mut [i64]",
+                    "pub fn get_phy_pos_mut(&mut self) -> &mut Vec<i64>",
+                    1,
+                ),
+                config_source,
+                "PutMessageContext",
+            ),
+            (
+                "compaction",
+                append_source.replace(
+                    "bb_src: &mut bytes::Bytes,",
+                    "bb_src: &bytes::Bytes,",
+                    1,
+                ),
+                config_source,
+                "CompactionAppendMsgCallback",
+            ),
+            (
+                "flush",
+                append_source,
+                config_source.replace(
+                    '"ASYNC_FLUSH" | "AsyncFlush"',
+                    '"ASYNC_FLUSH" | "ASYNC"',
+                    1,
+                ),
+                "FlushDiskType",
+            ),
+            (
+                "forbidden",
+                "use rocketmq_common::common::message::MessageExt;\n" + append_source,
+                config_source,
+                "forbidden owners or edges",
+            ),
+        ]
+        for mutation_name, mutated_append, mutated_config, expected_violation in mutations:
+            with self.subTest(mutation=mutation_name):
+                self.assertTrue(
+                    mutated_append != append_source or mutated_config != config_source,
+                    mutation_name,
+                )
+                violations = commit_log_append_contract_violations(
+                    mutated_append,
+                    mutated_config,
+                )
+                self.assertTrue(
+                    any(expected_violation in violation for violation in violations),
+                    violations,
+                )
+
     def test_commit_log_record_contract_rejects_dynamic_port_and_masks_inactive_text(self) -> None:
         valid = "pub struct CommitLogFrameCursor<S: CommitLogFrameSource> { source: S }"
         dynamic = "pub struct Bad { source: Box<dyn CommitLogFrameSource> }"
@@ -3914,7 +4316,7 @@ struct DefaultMappedFile {
         self.assert_local_crate_exists()
         canonical_dir = LOCAL_CRATE / "src" / "commit_log"
         self.assertEqual(
-            {"load.rs", "recovery.rs", "record.rs", "record_parser.rs"},
+            {"append.rs", "load.rs", "recovery.rs", "record.rs", "record_parser.rs"},
             {path.name for path in canonical_dir.glob("*.rs")},
         )
 
@@ -3967,6 +4369,69 @@ struct DefaultMappedFile {
         for facade_file, expected_items in COMMIT_LOG_FACADE_ITEMS.items():
             facade = (facade_dir / facade_file).read_text(encoding="utf-8")
             self.assertEqual(expected_items, active_commit_log_facade_reexports(facade), facade_file)
+
+    def test_commit_log_append_values_have_one_local_owner_and_exact_store_facades(self) -> None:
+        canonical_file = LOCAL_CRATE / "src" / "commit_log" / "append.rs"
+        canonical_config = LOCAL_CRATE / "src" / "config.rs"
+        rust_sources = {
+            path: path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        for item, item_kind in COMMIT_LOG_APPEND_ITEMS.items():
+            self.assertEqual(
+                [(canonical_file, item_kind)],
+                file_item_owner_occurrences(rust_sources, item),
+                item,
+            )
+        self.assertEqual(
+            [(canonical_config, "enum")],
+            file_item_owner_occurrences(rust_sources, "FlushDiskType"),
+        )
+        self.assertEqual(
+            [],
+            commit_log_append_contract_violations(
+                canonical_file.read_text(encoding="utf-8"),
+                canonical_config.read_text(encoding="utf-8"),
+            ),
+        )
+
+        commit_log_root = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        local_root = (LOCAL_CRATE / "src" / "lib.rs").read_text(encoding="utf-8")
+        self.assertIn("pub mod append;", active_rust_source(commit_log_root))
+        self.assertIn("pub mod config;", active_rust_source(local_root))
+
+        for relative_path, (module, item) in STORE_APPEND_FACADES.items():
+            facade = (STORE_CRATE / "src" / relative_path).read_text(encoding="utf-8")
+            self.assertEqual(
+                [],
+                direct_exact_reexport_violations(facade, module, item),
+                relative_path,
+            )
+
+        status_facade = (STORE_CRATE / "src" / "base" / "message_status_enum.rs").read_text(
+            encoding="utf-8"
+        )
+        result_facade = (STORE_CRATE / "src" / "base" / "message_result.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            [(Path("status.rs"), "enum")],
+            file_item_owner_occurrences({Path("status.rs"): status_facade}, "PutMessageStatus"),
+        )
+        self.assertEqual(
+            [(Path("status.rs"), "enum")],
+            file_item_owner_occurrences({Path("status.rs"): status_facade}, "GetMessageStatus"),
+        )
+        self.assertEqual(
+            [(Path("result.rs"), "struct")],
+            file_item_owner_occurrences({Path("result.rs"): result_facade}, "PutMessageResult"),
+        )
+
+        manifest = tomllib.loads((LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertEqual({"workspace": True}, manifest["dependencies"]["serde"])
+        self.assertEqual({"workspace": True}, manifest["dev-dependencies"]["serde_json"])
 
     def test_commit_log_record_has_one_owner_exact_facades_and_wrapper_only_legacy_iterator(self) -> None:
         canonical_file = LOCAL_CRATE / "src" / "commit_log" / "record.rs"

@@ -12,28 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum AppendMessageStatus {
-    #[default]
-    PutOk,
-    EndOfFile,
-    MessageSizeExceeded,
-    PropertiesSizeExceeded,
-    UnknownError,
-}
-
-impl std::fmt::Display for AppendMessageStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Compatible with Java enums
-        match self {
-            AppendMessageStatus::PutOk => write!(f, "PUT_OK"),
-            AppendMessageStatus::EndOfFile => write!(f, "END_OF_FILE"),
-            AppendMessageStatus::MessageSizeExceeded => write!(f, "MESSAGE_SIZE_EXCEEDED"),
-            AppendMessageStatus::PropertiesSizeExceeded => write!(f, "PROPERTIES_SIZE_EXCEEDED"),
-            AppendMessageStatus::UnknownError => write!(f, "UNKNOWN_ERROR"),
-        }
-    }
-}
+pub use rocketmq_store_local::commit_log::append::AppendMessageStatus;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PutMessageStatus {

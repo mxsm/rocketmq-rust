@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -657,3 +657,36 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03n 只迁移 CommitLog 目录发现、过滤与排序；metadata validation/empty-last 语义、
   mapped-file factory、position、append/parser/recovery、flush/group commit、CQ/Index、HA、Timer/POP、runtime
   ownership 与持久格式均未改变。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03o CommitLog append values and minimal mapped-file config evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::append` 现唯一拥有 `AppendMessageStatus`、
+  `AppendMessageResult`、`PutMessageContext`、`CompactionAppendMsgCallback`，
+  `rocketmq-store-local::config` 现唯一拥有 `FlushDiskType`。Local 只新增普通 `serde` 与测试专用
+  `serde_json` 依赖，`bytes` 继续复用既有依赖。
+- [x] `[COMPAT]` Store 的 `base::message_status_enum::AppendMessageStatus`、
+  `base::message_result::AppendMessageResult`、`base::put_message_context::PutMessageContext`、
+  `base::compaction_append_msg_callback::CompactionAppendMsgCallback` 与
+  `config::flush_disk_type::FlushDiskType` 五个旧深路径均为 direct exact `pub use`，与 Local canonical owner
+  是同一 Rust 类型/trait。逐字段、derive、default、Display、supplier precedence、context slice API、trait
+  签名及 `FlushDiskType` 四个 Deserialize 词汇与 unknown-variant 行为均保持不变。
+- [x] `[TEST]` TDD RED 由 Local 缺少 append/config owner 的 5 个 E0432、缺少测试依赖及 owner contract
+  指向 Store 旧定义证明；GREEN 后 Local 行为 golden 5/5、Store↔Local identity 1/1、Store 旧 status 7/7、
+  Put result 8/8、FlushDiskType 8/8、DefaultMappedFile compaction 1/1、legacy adapter 9/9。M06 contract
+  87/87，通过 focused source-contract mutation 覆盖 Status、Result、Context、compaction trait、Flush 与禁边
+  六类语义漂移。
+- [x] `[REVIEW]` Local default/no-default/fast/safe/fast+safe/all 六组与 Store default/all、真实
+  `local_file_store` owner 的 fast/safe/fast+safe 五组均通过。四个 raw Store no-default 组合仍各为既有
+  `exit 101`、124 个 E0004 与 1 个 unused `ArcMut`；BASE 对 root/Store manifest 与 `message_store.rs` 零 diff。
+  Local normal dependency tree 共 67 个包且无 common/remoting/store/rust/broker 禁边；四个 standalone Cargo
+  project 无 Local/Store 直连，`rocketmq-store-inspect` 属 root workspace。
+- [x] `[PLATFORM]` WSL/Linux 隔离 target 通过 Local focused 5/5、Store identity 1/1 与 Local/Store default
+  checks；`cargo clean --target-dir target/wsl-m06-03o` 删除 8,480 files/4.4 GiB，并确认隔离目录不存在。
+- [x] `[REV]` Local/Store package 与 root workspace all-target/all-feature Clippy、Local strict Rustdoc、Store
+  normal Rustdoc、格式/diff、AGENTS routing、架构 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+initial/
+  final guard 全部通过。BASE `1da5f8d638b5e84fc6808e31a53c6d994b630fe9` detached scan→candidate 直审均为
+  1,232 identities/3,375 occurrences，0 NEW/0 STALE/0 line-only/0 semantic changes；canonical baseline 未改。
+- [x] `[SCOPE]` M06-03o 不迁移 `AppendMessageCallback`、Put/Get status/result、完整 `MappedFile` trait、
+  `DefaultMappedFile`、per-file flush primitive、flush manager 或 group commit。完整 mapped-file owner 迁移仍以
+  消除/封装 `ArcMut` 和将 common broker/batch message 类型迁入 model 或建立中立 bridge 为硬前置；Local 不得
+  临时依赖 common 或 rocketmq-rust。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。

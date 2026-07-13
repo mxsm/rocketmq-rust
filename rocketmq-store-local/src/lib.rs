@@ -13,4 +13,5 @@
 // limitations under the License.
 
 pub mod commit_log;
+pub mod config;
 pub mod mapped_file;
