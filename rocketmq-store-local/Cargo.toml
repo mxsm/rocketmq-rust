@@ -29,12 +29,18 @@ default = []
 fast-load = []
 safe-load = []
 io_uring = ["dep:tokio-uring"]
+observability = [
+  "dep:rocketmq-observability",
+  "rocketmq-observability/otel-metrics",
+]
 
 [dependencies]
 bytes.workspace = true
 memmap2 = "0.9.10"
 parking_lot.workspace = true
 rayon = "1.12"
+rocketmq-error.workspace = true
+rocketmq-observability = { workspace = true, optional = true }
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

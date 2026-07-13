@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -690,3 +690,30 @@ python scripts/arc_mut_guard.py
   `DefaultMappedFile`、per-file flush primitive、flush manager 或 group commit。完整 mapped-file owner 迁移仍以
   消除/封装 `ArcMut` 和将 common broker/batch message 类型迁入 model 或建立中立 bridge 为硬前置；Local 不得
   临时依赖 common 或 rocketmq-rust。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03p memory-lock manager and platform syscall evidence
+
+- [x] `[DEV]` `rocketmq-store-local::base::memory_lock_manager` 现唯一拥有 `MemoryLockManager`、
+  `MemoryLockCategory` 与 `MemoryLockHandle`；`rocketmq-store-local::utils::ffi` 现唯一拥有 `mlock`/`munlock`
+  平台实现。Local 新增普通 `rocketmq-error` 与可选 `rocketmq-observability` 依赖，并以 `observability` feature
+  精确开启 `otel-metrics`；Store 的同名 feature 向 Local 转发。
+- [x] `[COMPAT]` Store 两个旧模块仅 direct exact re-export 已迁移的三个类型和两个函数；页大小、madvise、
+  prefetch、mincore 与常量仍由 Store 拥有。三个跨 crate 确定性测试 seam 标记为 `#[doc(hidden)] pub`，Rustdoc
+  明确其兼容测试用途；生产路径仍调用普通 lock/unlock API。错误文本、strict/warn-only 预算语义、指标 label、
+  计数器更新与原子内存序保持不变。
+- [x] `[TEST]` TDD RED 先由缺失的 Local owner 文件与 feature/dependency contract 失败证明；GREEN 后 Local
+  行为/并发 golden 5/5、Store↔Local 类型与函数 identity 2/2、Store 既有 pool/range/active-lock focused
+  tests 4/4、2/2、2/2，Local 全量 161 项通过；M06 mutation-resistant contract 91/91。
+- [x] `[FEATURE]` Local default/no-default/fast/safe/fast+safe/observability/all 七组 check 与 Store 七组受支持
+  check 通过；依赖树证明 observability 关闭时 Local 不引入 telemetry，开启时精确进入 `otel-metrics`，Store
+  转发到 Local。Observability CI 的七组 check/test 通过，六组 feature Clippy 与 default Clippy 均只复现两个
+  未触及的 Broker 测试 unused-import 基线。
+- [x] `[PLATFORM]` Windows 与 WSL/Linux 隔离 target 均通过 Local lock golden、Store identity 和
+  observability 编译；Linux 条件编译审查将 Store 的 Windows-only error import 收窄为 `#[cfg(windows)]`。
+- [x] `[REV]` Local/Store package Clippy、精确 root workspace all-target/all-feature Clippy、Local strict
+  Rustdoc、架构 35 项+fixtures+baseline、AGENTS routing、ArcMut 63 项+24 fixtures+guard、格式与 diff 检查通过。
+  Observability CI 的 default+六个指定 feature Clippy 探针只复现两个未触及的 Broker `DataVersionExt`
+  unused-import 基线；error hygiene 仅复现未触及的 Broker/MCP 及缺失既有文档基线。
+- [x] `[SCOPE]` M06-03p 不迁移或修复 `TransientStorePool`，也不迁移 `DefaultMappedFile`、CommitLog
+  orchestration、flush/group commit、CQ/Index、HA、Timer/POP 或持久格式。PR-M06-03 父项、M06 Exit Checklist
+  和 M06-04..12 保持未完成。

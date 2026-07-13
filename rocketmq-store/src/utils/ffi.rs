@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(windows)]
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+
+pub use rocketmq_store_local::utils::ffi::mlock;
+pub use rocketmq_store_local::utils::ffi::munlock;
 
 pub const MADV_NORMAL: i32 = 0;
 pub const MADV_RANDOM: i32 = 1;
@@ -23,59 +27,6 @@ pub const MADV_DONTNEED: i32 = 4;
 #[inline]
 pub fn get_page_size() -> usize {
     page_size::get()
-}
-
-#[inline]
-pub fn mlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
-    #[cfg(unix)]
-    {
-        use std::ffi::c_void;
-        let result = unsafe { libc::mlock(addr as *const c_void, len) };
-        if result != 0 {
-            return Err(RocketMQError::StorageLockFailed {
-                path: "memory lock (mlock)".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    #[cfg(windows)]
-    {
-        use windows::Win32::System::Memory::VirtualLock;
-        // Windows does not have mlock, so we just return Ok
-        let result = unsafe { VirtualLock(addr as _, len) };
-        result.map_err(|e| RocketMQError::StorageLockFailed {
-            path: format!("memory lock (VirtualLock): {}", e),
-        })?;
-        Ok(())
-    }
-}
-
-#[inline]
-pub fn munlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
-    #[cfg(unix)]
-    {
-        use std::ffi::c_void;
-
-        let result = unsafe { libc::munlock(addr as *const c_void, len) };
-        if result != 0 {
-            return Err(RocketMQError::StorageLockFailed {
-                path: "memory unlock (munlock)".to_string(),
-            });
-        }
-        Ok(())
-    }
-    #[cfg(windows)]
-    {
-        use windows::Win32::System::Memory::VirtualUnlock;
-
-        // Windows does not have munlock, so we just return Ok
-        let result = unsafe { VirtualUnlock(addr as _, len) };
-        result.map_err(|e| RocketMQError::StorageLockFailed {
-            path: format!("memory unlock (VirtualUnlock): {}", e),
-        })?;
-        Ok(())
-    }
 }
 
 pub fn madvise(addr: *const u8, len: usize, advice: i32) -> i32 {

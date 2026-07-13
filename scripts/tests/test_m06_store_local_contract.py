@@ -51,6 +51,32 @@ MAPPING_ITEMS = {
     "LazyMmapStats": "struct",
     "MappedFileMapping": "struct",
 }
+MEMORY_LOCK_ITEMS = {
+    "MemoryLockCategory": "enum",
+    "MemoryLockHandle": "struct",
+    "MemoryLockManager": "struct",
+}
+MEMORY_LOCK_MANAGER_FIELDS = [
+    ("warn_only", "bool"),
+    ("budget_bytes", "AtomicU64"),
+    ("lock_attempts", "AtomicUsize"),
+    ("locked_buffers", "AtomicUsize"),
+    ("lock_failed_buffers", "AtomicUsize"),
+    ("lock_skipped_buffers", "AtomicUsize"),
+    ("locked_bytes", "AtomicU64"),
+    ("lock_failed_bytes", "AtomicU64"),
+    ("lock_skipped_bytes", "AtomicU64"),
+]
+MEMORY_LOCK_HANDLE_FIELDS = [
+    ("addr", "usize"),
+    ("len", "usize"),
+    ("category", "MemoryLockCategory"),
+]
+MEMORY_LOCK_SEAMS = {
+    "lock_buffer_with",
+    "lock_region_with",
+    "unlock_region_with",
+}
 DEFAULT_MAPPED_FILE_ALIAS_BRACE_USE_ALLOWLIST = {
     "use crate::utils::ffi::mlock as lock_memory",
     "use crate::utils::ffi::munlock as unlock_memory",
@@ -2976,6 +3002,144 @@ def store_commit_log_file_discovery_violations(source: str) -> list[str]:
     return violations
 
 
+def compact_rust(source: str) -> str:
+    return re.sub(r"\s+", "", rust_source_without_comments(source))
+
+
+def memory_lock_manager_owner_violations(source: str) -> list[str]:
+    production = re.split(r"#\[cfg\(test\)\]\s*mod\s+tests", source, maxsplit=1)[0]
+    compact = compact_rust(production)
+    violations: list[str] = []
+
+    expected_category = (
+        "pubenumMemoryLockCategory{TransientStorePool,CommitLogActiveWindow,"
+        "CommitLogActiveFile,ConsumeQueueHotWindow,IndexHotWindow,}"
+    )
+    if expected_category not in compact:
+        violations.append("MemoryLockCategory variants or order changed")
+    if active_struct_fields(production, "MemoryLockHandle") != MEMORY_LOCK_HANDLE_FIELDS:
+        violations.append("MemoryLockHandle fields changed")
+    if active_struct_fields(production, "MemoryLockManager") != MEMORY_LOCK_MANAGER_FIELDS:
+        violations.append("MemoryLockManager fields changed")
+
+    required_api = {
+        "pubfnnew(warn_only:bool,budget_bytes:u64)->Self",
+        "pubfnwarn_only()->Self",
+        "pubfnwarn_only_with_budget(budget_bytes:u64)->Self",
+        "pubfnlock_buffer(&self,addr:*constu8,len:usize)->RocketMQResult<()> ".replace(" ", ""),
+        "pubfnlock_region(&self,category:MemoryLockCategory,addr:*constu8,len:usize,)->RocketMQResult<Option<MemoryLockHandle>>",
+        "pubfnunlock_region(&self,handle:MemoryLockHandle)->RocketMQResult<()>",
+        "pubfnlock_attempt_count(&self)->usize",
+        "pubfnlocked_buffer_count(&self)->usize",
+        "pubfnlock_failed_buffer_count(&self)->usize",
+        "pubfnlock_skipped_buffer_count(&self)->usize",
+        "pubfnlocked_bytes(&self)->u64",
+        "pubfnlock_failed_bytes(&self)->u64",
+        "pubfnlock_skipped_bytes(&self)->u64",
+    }
+    for signature in sorted(required_api):
+        if signature not in compact:
+            violations.append(f"missing compatibility API: {signature}")
+
+    for seam in sorted(MEMORY_LOCK_SEAMS):
+        if f"#[doc(hidden)]pubfn{seam}" not in compact:
+            violations.append(f"{seam} must remain a doc(hidden) public compatibility seam")
+        seam_declaration = re.search(
+            rf"(?s)(?P<docs>(?:\s*///[^\n]*\n)+)\s*#\[doc\(hidden\)\]\s*pub\s+fn\s+{seam}\b",
+            production,
+        )
+        if seam_declaration is None or "compatibility" not in seam_declaration.group("docs").lower():
+            violations.append(f"{seam} must explain its compatibility-only purpose in Rustdoc")
+        elif "# Errors" not in seam_declaration.group("docs"):
+            violations.append(f"{seam} must document its error contract")
+
+    required_labels = {
+        'Self::TransientStorePool=>"transient_store_pool"',
+        'Self::CommitLogActiveWindow=>"commitlog_active_window"',
+        'Self::CommitLogActiveFile=>"commitlog_active_file"',
+        'Self::ConsumeQueueHotWindow=>"consumequeue_hot_window"',
+        'Self::IndexHotWindow=>"index_hot_window"',
+        'constMEMORY_LOCK_BUDGET_EXHAUSTED_REASON:&str="budget_exhausted"',
+    }
+    for label in sorted(required_labels):
+        if label not in compact:
+            violations.append(f"memory-lock metric label changed: {label}")
+
+    required_atomic_fragments = {
+        "self.lock_attempts.fetch_add(1,Ordering::Relaxed)",
+        "self.locked_buffers.fetch_add(1,Ordering::Relaxed)",
+        "self.lock_failed_buffers.fetch_add(1,Ordering::Relaxed)",
+        "self.lock_skipped_buffers.fetch_add(1,Ordering::Relaxed)",
+        "compare_exchange_weak(current,next,Ordering::AcqRel,Ordering::Acquire)",
+        "self.locked_bytes.fetch_sub(len,Ordering::AcqRel)",
+        "try_update(Ordering::AcqRel,Ordering::Acquire,|current|",
+    }
+    for fragment in sorted(required_atomic_fragments):
+        if fragment not in compact:
+            violations.append(f"memory-lock atomic semantics changed: {fragment}")
+
+    required_observability_calls = {
+        "record_linux_mlock_attempt(event.category,event.count)",
+        "record_linux_mlock_success(event.category,event.count)",
+        "record_linux_mlock_skipped(event.category,event.reason,event.count)",
+        "record_linux_mlock_failure(event.category,event.errno,event.count)",
+        "record_linux_locked_bytes(category.as_str(),locked_bytes)",
+        "record_linux_munlock_failure(category.as_str(),MEMORY_LOCK_UNKNOWN_ERRNO,1,)",
+    }
+    for call in sorted(required_observability_calls):
+        if call not in compact:
+            violations.append(f"memory-lock observability call changed: {call}")
+
+    for forbidden in ("rocketmq_common", "rocketmq_rust", "rocketmq_store::", "crate::base::transient_store_pool"):
+        if forbidden in production:
+            violations.append(f"canonical memory-lock owner gained forbidden dependency: {forbidden}")
+    return violations
+
+
+def memory_lock_ffi_owner_violations(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", maxsplit=1)[0]
+    compact = compact_rust(production)
+    violations: list[str] = []
+    required = {
+        "pubfnmlock(addr:*constu8,len:usize)->RocketMQResult<()>",
+        "pubfnmunlock(addr:*constu8,len:usize)->RocketMQResult<()>",
+        "#[cfg(unix)]",
+        "libc::mlock(addras*constc_void,len)",
+        "libc::munlock(addras*constc_void,len)",
+        'path:"memorylock(mlock)".to_string()',
+        'path:"memoryunlock(munlock)".to_string()',
+        "#[cfg(windows)]",
+        "VirtualLock(addras_,len)",
+        "VirtualUnlock(addras_,len)",
+        'path:format!("memorylock(VirtualLock):{}",e)',
+        'path:format!("memoryunlock(VirtualUnlock):{}",e)',
+    }
+    for fragment in sorted(required):
+        if fragment not in compact:
+            violations.append(f"memory-lock syscall contract changed: {fragment}")
+    unsafe_count = len(re.findall(r"\bunsafe\s*\{", production))
+    safety_count = production.count("// SAFETY:")
+    if unsafe_count != 4 or safety_count < unsafe_count:
+        violations.append("every platform memory-lock unsafe block needs an adjacent SAFETY rationale")
+    return violations
+
+
+def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
+    allowed = {
+        Path("rocketmq-store-local/src/base/memory_lock_manager.rs"),
+        Path("rocketmq-store/src/base/transient_store_pool.rs"),
+        Path("rocketmq-store/src/log_file/commit_log.rs"),
+        Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+    }
+    violations: list[str] = []
+    for path, source in sources.items():
+        production = active_rust_source(re.split(r"#\[cfg\(test\)\]\s*mod\s+tests", source, maxsplit=1)[0])
+        for seam in sorted(MEMORY_LOCK_SEAMS):
+            if re.search(rf"\.{re.escape(seam)}\s*\(", production) and path not in allowed:
+                violations.append(f"{path}: ordinary business code calls hidden seam {seam}")
+    return violations
+
+
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
@@ -4114,8 +4278,17 @@ struct DefaultMappedFile {
                 "fast-load": [],
                 "safe-load": [],
                 "io_uring": ["dep:tokio-uring"],
+                "observability": [
+                    "dep:rocketmq-observability",
+                    "rocketmq-observability/otel-metrics",
+                ],
             },
             local_manifest["features"],
+        )
+        self.assertEqual({"workspace": True}, local_manifest["dependencies"]["rocketmq-error"])
+        self.assertEqual(
+            {"workspace": True, "optional": True},
+            local_manifest["dependencies"]["rocketmq-observability"],
         )
         self.assertNotIn("tokio-uring", local_manifest.get("dependencies", {}))
         self.assertEqual("1.12", local_manifest["dependencies"]["rayon"])
@@ -4126,6 +4299,14 @@ struct DefaultMappedFile {
         self.assertEqual(["rocketmq-store-local/fast-load"], store_manifest["features"]["fast-load"])
         self.assertEqual(["rocketmq-store-local/safe-load"], store_manifest["features"]["safe-load"])
         self.assertEqual(["rocketmq-store-local/io_uring"], store_manifest["features"]["io_uring"])
+        self.assertEqual(
+            [
+                "rocketmq-observability/otel-metrics",
+                "rocketmq-store-local/observability",
+                "rocketmq-tieredstore?/otel-metrics",
+            ],
+            store_manifest["features"]["observability"],
+        )
         self.assertIn("rocketmq-store-local", store_manifest["dependencies"])
         self.assertEqual("1.12", store_manifest["dependencies"]["rayon"])
         self.assertNotIn("tokio-uring", store_manifest.get("dependencies", {}))
@@ -4613,9 +4794,8 @@ struct DefaultMappedFile {
         ffi_source = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
         self.assertEqual([], store_prefetch_ffi_compatibility_violations(ffi_source))
 
+        self.assertNotIn("rocketmq_error", canonical_source)
         manifest = tomllib.loads((LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
-        local_dependencies = manifest["dependencies"]
-        self.assertNotIn("rocketmq-error", local_dependencies)
         windows_dependency = manifest["target"]["cfg(windows)"]["dependencies"]["windows"]
         self.assertEqual("0.62.2", windows_dependency["version"])
         self.assertEqual(
@@ -4948,6 +5128,78 @@ struct DefaultMappedFile {
             with self.subTest(mutation_index=mutation_index):
                 self.assertNotEqual(source, mutation)
                 self.assertNotEqual([], store_commit_log_file_discovery_violations(mutation))
+
+    def test_memory_lock_manager_has_one_local_owner_and_exact_store_facade(self) -> None:
+        canonical_path = LOCAL_CRATE / "src" / "base" / "memory_lock_manager.rs"
+        facade_path = STORE_CRATE / "src" / "base" / "memory_lock_manager.rs"
+        canonical = canonical_path.read_text(encoding="utf-8")
+        facade = facade_path.read_text(encoding="utf-8")
+
+        self.assertEqual([], memory_lock_manager_owner_violations(canonical))
+        sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in (crate / "src").rglob("*.rs")
+        }
+        for item, kind in MEMORY_LOCK_ITEMS.items():
+            self.assertEqual(
+                [(canonical_path.relative_to(ROOT), kind)],
+                file_item_owner_occurrences(sources, item),
+                item,
+            )
+            self.assertEqual(
+                [],
+                direct_exact_reexport_violations(
+                    facade,
+                    "rocketmq_store_local::base::memory_lock_manager",
+                    item,
+                ),
+                item,
+            )
+        self.assertEqual([], memory_lock_seam_call_violations(sources))
+
+    def test_memory_lock_manager_contract_rejects_semantic_mutations(self) -> None:
+        source = (LOCAL_CRATE / "src" / "base" / "memory_lock_manager.rs").read_text(encoding="utf-8")
+        self.assertEqual([], memory_lock_manager_owner_violations(source))
+        mutations = [
+            source.replace("CommitLogActiveWindow,", "CommitLogWarmWindow,", 1),
+            source.replace('"commitlog_active_file"', '"active_file"', 1),
+            source.replace("Ordering::AcqRel, Ordering::Acquire", "Ordering::Relaxed, Ordering::Relaxed", 1),
+            source.replace("MEMORY_LOCK_BUDGET_EXHAUSTED_REASON", '"budget"', 1),
+            source.replace("#[doc(hidden)]", "", 1),
+            source.replace("record_linux_mlock_attempt", "record_linux_mlock_success", 1),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
+                self.assertNotEqual([], memory_lock_manager_owner_violations(mutation))
+
+    def test_memory_lock_syscalls_have_one_local_owner_and_exact_store_facade(self) -> None:
+        canonical = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
+        facade = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
+        self.assertEqual([], memory_lock_ffi_owner_violations(canonical))
+        for item in ("mlock", "munlock"):
+            self.assertEqual(
+                [],
+                direct_exact_reexport_violations(facade, "rocketmq_store_local::utils::ffi", item),
+                item,
+            )
+        for retained in ("get_page_size", "madvise", "prefetch_virtual_memory", "mincore"):
+            self.assertRegex(active_rust_source(facade), rf"pub\s+fn\s+{retained}\b")
+
+    def test_memory_lock_syscall_contract_rejects_platform_mutations(self) -> None:
+        source = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
+        self.assertEqual([], memory_lock_ffi_owner_violations(source))
+        mutations = [
+            source.replace("libc::mlock", "libc::munlock", 1),
+            source.replace("unsafe { VirtualUnlock", "unsafe { VirtualLock", 1),
+            source.replace("memory lock (mlock)", "mlock failed", 1),
+            source.replace("// SAFETY:", "// platform call:", 1),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
+                self.assertNotEqual([], memory_lock_ffi_owner_violations(mutation))
 
     def test_commit_log_summary_logging_preserves_legacy_targets(self) -> None:
         expected_targets = {

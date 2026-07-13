@@ -12,8 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod base;
-pub mod commit_log;
-pub mod config;
-pub mod mapped_file;
-pub mod utils;
+pub mod memory_lock_manager;

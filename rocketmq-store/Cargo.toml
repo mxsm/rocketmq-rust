@@ -48,6 +48,7 @@ safe-load = ["rocketmq-store-local/safe-load"]
 tieredstore = ["dep:rocketmq-tieredstore"]
 observability = [
   "rocketmq-observability/otel-metrics",
+  "rocketmq-store-local/observability",
   "rocketmq-tieredstore?/otel-metrics",
 ]
 observability-traces = ["rocketmq-observability/otel-traces"]

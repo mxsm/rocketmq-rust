@@ -4935,6 +4935,8 @@ dependencies = [
  "memmap2",
  "parking_lot",
  "rayon",
+ "rocketmq-error",
+ "rocketmq-observability",
  "serde",
  "serde_json",
  "tempfile",
