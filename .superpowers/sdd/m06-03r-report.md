@@ -44,6 +44,20 @@ re-export, exact private delegates, and allowed caller surfaces. Negative mutati
 removed branches, comparator drift, the wrong source, checked/saturating arithmetic, dynamic OS page lookup,
 Store wrappers, non-exact re-exports, and extra callers.
 
+Independent review then found that body-only wrapper checks accepted `pub` and every restricted `pub(...)`
+visibility, duplicate/cfg-gated decoys, and a raw fixed-page algorithm hidden behind a second definition. The
+follow-up contract-first RED recorded 22 visibility/cfg/duplicate escapes. A split-helper RED then proved that
+page-delta arithmetic and the least-page comparison could be separated, and a stronger 11-case RED covered
+`4096`, `1024 * 4`, `4 * 1024`, `0x1000`, `1 << 12`, `2048 * 2`, local let/const, chained and module aliases,
+renamed threshold parameters, plus a nested cfg-decoy module paired with an active `impl ... where` raw policy.
+
+GREEN now parses top-level inherent methods and outer attributes, requires exactly one global and inherent
+definition per Local/Store policy method, rejects method/impl `cfg` and `cfg_attr`, and freezes both exact
+signatures and bodies. Store wrappers must have no `pub` visibility. A safe integer-expression resolver follows
+fixed-page aliases and rejects any DefaultMappedFile production division whose divisor resolves to 4,096,
+without rejecting unrelated `/ 2` or dynamic `/ page_size` alignment. The full production reference map still
+rejects every additional Local-policy caller or function-item reference.
+
 ## Feature, platform, and architecture evidence
 
 Local and Store each pass seven feature checks covering their default/no-default or local-file combinations,

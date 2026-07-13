@@ -14,12 +14,14 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import tomllib
 import unittest
 from pathlib import Path
 from typing import Any
 from typing import Callable
+from typing import NamedTuple
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -430,6 +432,419 @@ def named_raw_function_body(source: str, function_name: str) -> str | None:
         return None
     _, end = extracted
     return source[opening_brace + 1:end - 1]
+
+
+class InherentMethodRecord(NamedTuple):
+    visibility: str
+    signature: str
+    body: str
+    cfg_gated: bool
+
+
+def contiguous_outer_attributes_before(source: str, position: int) -> tuple[str, ...]:
+    attributes: list[str] = []
+    cursor = position
+    while cursor > 0:
+        while cursor > 0 and source[cursor - 1].isspace():
+            cursor -= 1
+        if cursor == 0 or source[cursor - 1] != "]":
+            break
+
+        attribute_end = cursor
+        bracket_depth = 0
+        index = cursor - 1
+        attribute_start: int | None = None
+        while index >= 0:
+            if source[index] == "]":
+                bracket_depth += 1
+            elif source[index] == "[":
+                bracket_depth -= 1
+                if bracket_depth == 0:
+                    hash_index = index - 1
+                    while hash_index >= 0 and source[hash_index].isspace():
+                        hash_index -= 1
+                    if hash_index >= 0 and source[hash_index] == "#":
+                        attribute_start = hash_index
+                    break
+            index -= 1
+        if attribute_start is None:
+            break
+        attributes.append(source[attribute_start:attribute_end])
+        cursor = attribute_start
+    attributes.reverse()
+    return tuple(attributes)
+
+
+def attributes_have_cfg_gate(attributes: tuple[str, ...]) -> bool:
+    return any(
+        re.match(r"#\s*\[\s*(?:cfg|cfg_attr)\b", attribute) is not None
+        for attribute in attributes
+    )
+
+
+def inherent_method_records(
+    source: str,
+    type_name: str,
+    method_names: tuple[str, ...],
+) -> dict[str, list[InherentMethodRecord]]:
+    active = active_rust_source(source)
+    records = {method_name: [] for method_name in method_names}
+    impl_declaration = re.compile(
+        rf"(?m)^[ \t]*impl[ \t]+{re.escape(type_name)}\b"
+        rf"(?:[ \t\r\n]+where\b[^{{}}]*)?[ \t\r\n]*\{{"
+    )
+    method_declaration = re.compile(
+        r"(?m)^(?P<indent>[ \t]*)"
+        r"(?P<visibility>pub(?:\s*\([^\n)]*\))?[ \t]+)?"
+        r"fn[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
+    )
+
+    root_brace_depth = 0
+    root_scanned_to = 0
+    for impl_match in impl_declaration.finditer(active):
+        for character in active[root_scanned_to:impl_match.start()]:
+            if character == "{":
+                root_brace_depth += 1
+            elif character == "}":
+                root_brace_depth -= 1
+        root_scanned_to = impl_match.start()
+        if root_brace_depth != 0:
+            continue
+        opening_brace = active.find("{", impl_match.start(), impl_match.end())
+        extracted_impl = braced_body(active, opening_brace) if opening_brace != -1 else None
+        if extracted_impl is None:
+            continue
+        _, impl_end = extracted_impl
+        body_start = opening_brace + 1
+        body_end = impl_end - 1
+        impl_body = active[body_start:body_end]
+        impl_cfg_gated = attributes_have_cfg_gate(
+            contiguous_outer_attributes_before(active, impl_match.start())
+        )
+
+        brace_depth = 0
+        method_scanned_to = 0
+        for method_match in method_declaration.finditer(impl_body):
+            for character in impl_body[method_scanned_to:method_match.start()]:
+                if character == "{":
+                    brace_depth += 1
+                elif character == "}":
+                    brace_depth -= 1
+            method_scanned_to = method_match.end()
+            if brace_depth != 0:
+                continue
+
+            method_name = method_match.group("name")
+            if method_name not in records:
+                continue
+            absolute_match_start = body_start + method_match.start()
+            opening_method_brace = active.find("{", body_start + method_match.end(), body_end)
+            semicolon = active.find(";", body_start + method_match.end(), body_end)
+            if opening_method_brace == -1 or (semicolon != -1 and semicolon < opening_method_brace):
+                continue
+            extracted_method = braced_body(active, opening_method_brace)
+            if extracted_method is None or extracted_method[1] > impl_end:
+                continue
+            method_body, _ = extracted_method
+            indent = method_match.group("indent")
+            signature_start = absolute_match_start + len(indent)
+            method_cfg_gated = attributes_have_cfg_gate(
+                contiguous_outer_attributes_before(active, absolute_match_start)
+            )
+            records[method_name].append(
+                InherentMethodRecord(
+                    visibility=re.sub(
+                        r"\s+",
+                        "",
+                        (method_match.group("visibility") or "").strip(),
+                    ),
+                    signature=re.sub(
+                        r"\s+",
+                        "",
+                        active[signature_start:opening_method_brace],
+                    ),
+                    body=re.sub(r"\s+", "", method_body),
+                    cfg_gated=impl_cfg_gated or method_cfg_gated,
+                )
+            )
+    return records
+
+
+def rust_function_bodies(source: str) -> list[tuple[str, str]]:
+    active = active_rust_source(source)
+    bodies: list[tuple[str, str]] = []
+    for function_match in re.finditer(
+        r"\bfn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b",
+        active,
+    ):
+        opening_brace = active.find("{", function_match.end())
+        semicolon = active.find(";", function_match.end())
+        if opening_brace == -1 or (semicolon != -1 and semicolon < opening_brace):
+            continue
+        extracted = braced_body(active, opening_brace)
+        if extracted is not None:
+            bodies.append((function_match.group("name"), extracted[0]))
+    return bodies
+
+
+def rust_integer_expression_value(
+    expression: str,
+    aliases: dict[str, int],
+) -> int | None:
+    normalized = re.sub(
+        r"\s+as\s+[A-Za-z_][A-Za-z0-9_:]*",
+        "",
+        expression,
+    )
+    normalized = re.sub(
+        r"(?i)\b(0x[0-9a-f_]+|0b[01_]+|0o[0-7_]+|[0-9][0-9_]*)"
+        r"(?:u|i)(?:8|16|32|64|128|size)\b",
+        r"\1",
+        normalized,
+    )
+    try:
+        parsed = ast.parse(normalized, mode="eval")
+    except (SyntaxError, ValueError):
+        return None
+
+    def evaluate(node: ast.AST) -> int | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
+            return node.value
+        if isinstance(node, ast.Name):
+            return aliases.get(node.id)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            operand = evaluate(node.operand)
+            if operand is None:
+                return None
+            return operand if isinstance(node.op, ast.UAdd) else -operand
+        if not isinstance(node, ast.BinOp):
+            return None
+        left = evaluate(node.left)
+        right = evaluate(node.right)
+        if left is None or right is None:
+            return None
+        if isinstance(node.op, ast.Add):
+            value = left + right
+        elif isinstance(node.op, ast.Sub):
+            value = left - right
+        elif isinstance(node.op, ast.Mult):
+            value = left * right
+        elif isinstance(node.op, (ast.Div, ast.FloorDiv)):
+            if right == 0:
+                return None
+            value = abs(left) // abs(right)
+            if (left < 0) != (right < 0):
+                value = -value
+        elif isinstance(node.op, ast.LShift):
+            if not 0 <= right <= 63:
+                return None
+            value = left << right
+        elif isinstance(node.op, ast.RShift):
+            if not 0 <= right <= 63:
+                return None
+            value = left >> right
+        else:
+            return None
+        return value if -(1 << 63) <= value <= (1 << 63) - 1 else None
+
+    return evaluate(parsed.body)
+
+
+INTEGER_ASSIGNMENT = re.compile(
+    r"\b(?:let\s+(?:mut\s+)?|const\s+|static\s+)"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    r"(?:\s*:\s*[^=;]+)?\s*=\s*(?P<expression>[^;]+);"
+)
+
+
+def resolved_integer_aliases(
+    source: str,
+    seed: dict[str, int] | None = None,
+    *,
+    top_level_only: bool = False,
+) -> dict[str, int]:
+    active = active_rust_source(source)
+    assignments: list[tuple[str, str]] = []
+    brace_depth = 0
+    scanned_to = 0
+    for match in INTEGER_ASSIGNMENT.finditer(active):
+        if top_level_only:
+            for character in active[scanned_to:match.start()]:
+                if character == "{":
+                    brace_depth += 1
+                elif character == "}":
+                    brace_depth -= 1
+            scanned_to = match.start()
+            if brace_depth != 0:
+                continue
+        assignments.append((match.group("name"), match.group("expression")))
+
+    aliases = dict(seed or {})
+    unresolved = assignments
+    for _ in range(len(assignments) + 1):
+        next_unresolved: list[tuple[str, str]] = []
+        changed = False
+        for name, expression in unresolved:
+            value = rust_integer_expression_value(expression, aliases)
+            if value is None:
+                next_unresolved.append((name, expression))
+                continue
+            if aliases.get(name) != value:
+                aliases[name] = value
+                changed = True
+        unresolved = next_unresolved
+        if not changed:
+            break
+    return aliases
+
+
+def closing_parenthesis(source: str, opening_parenthesis: int) -> int | None:
+    depth = 0
+    for index in range(opening_parenthesis, len(source)):
+        if source[index] == "(":
+            depth += 1
+        elif source[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def division_rhs_expressions(statement: str) -> list[str]:
+    expressions: list[str] = []
+    primary = re.compile(
+        r"(?:0[xX][0-9A-Fa-f_]+|0[bB][01_]+|0[oO][0-7_]+|[0-9][0-9_]*|"
+        r"[A-Za-z_][A-Za-z0-9_]*)"
+        r"(?:(?:u|i)(?:8|16|32|64|128|size))?"
+        r"(?:\s+as\s+[A-Za-z_][A-Za-z0-9_:]*)?"
+    )
+    for division in re.finditer(r"/(?![/*=])", statement):
+        cursor = division.end()
+        while cursor < len(statement) and statement[cursor].isspace():
+            cursor += 1
+        if cursor < len(statement) and statement[cursor] == "(":
+            end = closing_parenthesis(statement, cursor)
+            if end is not None:
+                expressions.append(statement[cursor:end + 1])
+            continue
+        match = primary.match(statement, cursor)
+        if match is not None:
+            expressions.append(match.group(0))
+
+    for division_method in re.finditer(
+        r"\.(?:checked|saturating|wrapping)_div\s*\(|\.div_euclid\s*\(",
+        statement,
+    ):
+        opening = statement.find("(", division_method.start(), division_method.end())
+        end = closing_parenthesis(statement, opening) if opening != -1 else None
+        if end is not None:
+            expressions.append(statement[opening + 1:end].split(",", maxsplit=1)[0])
+    return expressions
+
+
+def store_threshold_arithmetic_violations(source: str) -> list[str]:
+    threshold = re.compile(r"\b(?:flush_least_pages|commit_least_pages)\b")
+    threshold_operator = re.compile(
+        r"(?:>=|<=|==|!=|>|<|[+\-*/%])|"
+        r"\.(?:checked|saturating|wrapping)_(?:add|sub|mul|div|rem)\s*\(|"
+        r"\.(?:div|rem)_euclid\s*\("
+    )
+    module_aliases = resolved_integer_aliases(
+        source,
+        {"OS_PAGE_SIZE": 4096},
+        top_level_only=True,
+    )
+    violations: list[str] = []
+    for function_name, body in rust_function_bodies(source):
+        statements = re.split(r"[;{}]", body)
+        if any(
+            threshold.search(statement) is not None
+            and threshold_operator.search(statement) is not None
+            for statement in statements
+        ):
+            violations.append(
+                f"Store {function_name} retained a mapped-file threshold comparison"
+            )
+
+        local_aliases = resolved_integer_aliases(
+            body,
+            module_aliases,
+        )
+        fixed_page_divisors = [
+            divisor
+            for statement in statements
+            for divisor in division_rhs_expressions(statement)
+            if rust_integer_expression_value(divisor, local_aliases) == 4096
+        ]
+        if fixed_page_divisors:
+            violations.append(
+                f"Store {function_name} retained fixed-page division"
+            )
+    return violations
+
+
+def cfg_decoy_method_mutation(source: str, function_name: str, active_body: str) -> str:
+    active = active_rust_source(source)
+    match = re.search(
+        rf"(?m)^(?P<indent>[ \t]*)(?:pub(?:\s*\([^\n)]*\))?\s+)?fn\s+{re.escape(function_name)}\b",
+        active,
+    )
+    if match is None:
+        return source
+    opening_brace = active.find("{", match.end())
+    extracted = braced_body(active, opening_brace) if opening_brace != -1 else None
+    if extracted is None:
+        return source
+    _, method_end = extracted
+    indent = match.group("indent")
+    signature = active[match.start() + len(indent):opening_brace].strip()
+    active_definition = (
+        f"{indent}#[cfg(not(any()))]\n"
+        f"{indent}{signature} {{\n{active_body}\n{indent}}}"
+    )
+    return (
+        source[:match.start()]
+        + f"{indent}#[cfg(any())]\n"
+        + source[match.start():method_end]
+        + "\n\n"
+        + active_definition
+        + source[method_end:]
+    )
+
+
+def duplicate_method_mutation(source: str, function_name: str, duplicate_body: str) -> str:
+    active = active_rust_source(source)
+    match = re.search(
+        rf"(?m)^(?P<indent>[ \t]*)(?:pub(?:\s*\([^\n)]*\))?\s+)?fn\s+{re.escape(function_name)}\b",
+        active,
+    )
+    if match is None:
+        return source
+    opening_brace = active.find("{", match.end())
+    extracted = braced_body(active, opening_brace) if opening_brace != -1 else None
+    if extracted is None:
+        return source
+    _, method_end = extracted
+    indent = match.group("indent")
+    signature = active[match.start() + len(indent):opening_brace].strip()
+    duplicate_definition = f"{indent}{signature} {{\n{duplicate_body}\n{indent}}}"
+    return source[:method_end] + "\n\n" + duplicate_definition + source[method_end:]
+
+
+def cfg_attr_method_mutation(source: str, function_name: str) -> str:
+    active = active_rust_source(source)
+    match = re.search(
+        rf"(?m)^(?P<indent>[ \t]*)(?:pub(?:\s*\([^\n)]*\))?\s+)?fn\s+{re.escape(function_name)}\b",
+        active,
+    )
+    if match is None:
+        return source
+    indent = match.group("indent")
+    return (
+        source[:match.start()]
+        + f"{indent}#[cfg_attr(any(), cfg(any()))]\n"
+        + source[match.start():]
+    )
 
 
 def named_function_signature(source: str, function_name: str) -> str | None:
@@ -1807,11 +2222,32 @@ def mapped_file_progress_policy_violations(source: str) -> list[str]:
             "/OS_PAGE_SIZEasi32>=commit_least_pages;}write>committed"
         ),
     }
+    method_records = inherent_method_records(
+        production,
+        "MappedFileProgress",
+        MAPPED_FILE_POLICY_METHODS,
+    )
+    active_production = active_rust_source(production)
     for function_name in MAPPED_FILE_POLICY_METHODS:
-        if expected_signatures[function_name] not in compact:
+        global_definition_count = len(
+            re.findall(rf"\bfn\s+{re.escape(function_name)}\b", active_production)
+        )
+        if global_definition_count != 1:
+            violations.append(
+                f"MappedFileProgress::{function_name} production definition count changed"
+            )
+        records = method_records[function_name]
+        if len(records) != 1:
+            violations.append(
+                f"MappedFileProgress::{function_name} must have exactly one inherent definition"
+            )
+            continue
+        record = records[0]
+        if record.cfg_gated:
+            violations.append(f"MappedFileProgress::{function_name} must not be cfg gated")
+        if record.signature != expected_signatures[function_name]:
             violations.append(f"MappedFileProgress::{function_name} signature changed")
-        body = compact_rust(named_raw_function_body(production, function_name) or "")
-        if body != expected_bodies[function_name]:
+        if record.body != expected_bodies[function_name]:
             violations.append(f"MappedFileProgress::{function_name} behavior changed")
     return violations
 
@@ -1830,7 +2266,11 @@ def mapped_file_progress_adapter_violations(
         )
     )
 
-    expected_wrappers = {
+    expected_wrapper_signatures = {
+        "is_able_to_flush": "fnis_able_to_flush(&self,flush_least_pages:i32)->bool",
+        "is_able_to_commit": "fnis_able_to_commit(&self,commit_least_pages:i32)->bool",
+    }
+    expected_wrapper_bodies = {
         "is_able_to_flush": (
             "self.progress.is_able_to_flush(self.get_read_position(),flush_least_pages)"
         ),
@@ -1841,10 +2281,35 @@ def mapped_file_progress_adapter_violations(
         default_mapped_file_source,
         maxsplit=1,
     )[0]
-    for function_name, expected_body in expected_wrappers.items():
-        body = compact_rust(named_raw_function_body(default_production, function_name) or "")
-        if body != expected_body:
+    wrapper_records = inherent_method_records(
+        default_production,
+        "DefaultMappedFile",
+        MAPPED_FILE_POLICY_METHODS,
+    )
+    default_active = active_rust_source(default_production)
+    for function_name in MAPPED_FILE_POLICY_METHODS:
+        global_definition_count = len(
+            re.findall(rf"\bfn\s+{re.escape(function_name)}\b", default_active)
+        )
+        if global_definition_count != 1:
+            violations.append(f"Store {function_name} production definition count changed")
+        records = wrapper_records[function_name]
+        if len(records) != 1:
+            violations.append(
+                f"Store {function_name} must have exactly one inherent definition"
+            )
+            continue
+        record = records[0]
+        if record.cfg_gated:
+            violations.append(f"Store {function_name} wrapper must not be cfg gated")
+        if record.visibility:
+            violations.append(f"Store {function_name} wrapper must remain private")
+        if record.signature != expected_wrapper_signatures[function_name]:
+            violations.append(f"Store {function_name} wrapper signature changed")
+        if record.body != expected_wrapper_bodies[function_name]:
             violations.append(f"Store {function_name} wrapper must be an exact Local delegation")
+
+    violations.extend(store_threshold_arithmetic_violations(default_production))
 
     references_by_path: dict[Path, list[str]] = {}
     for path, source in production_sources.items():
@@ -1863,7 +2328,6 @@ def mapped_file_progress_adapter_violations(
     if references_by_path != expected_references:
         violations.append(f"mapped-file policy production references changed: {references_by_path}")
 
-    default_active = active_rust_source(default_production)
     if default_active.count("OS_PAGE_SIZE") != 1:
         violations.append("Store DefaultMappedFile retained or duplicated page-threshold arithmetic")
     return violations
@@ -4901,6 +5365,300 @@ struct DefaultMappedFile {
             with self.subTest(canonical_mutation=mutation_index):
                 self.assertNotEqual(canonical, mutation)
                 self.assertNotEqual([], mapped_file_progress_policy_violations(mutation))
+
+        local_raw_bodies = {
+            "is_able_to_flush": """        if self.is_full() {
+            return true;
+        }
+        let flush = self.flushed_position();
+        if flush_least_pages > 0 {
+            return (read_position - flush) / 4096 >= flush_least_pages;
+        }
+        read_position > flush""",
+            "is_able_to_commit": """        if self.is_full() {
+            return true;
+        }
+        let committed = self.committed_position();
+        let write = self.wrote_position();
+        if commit_least_pages > 0 {
+            let page_size = 4096;
+            return (write - committed) / page_size >= commit_least_pages;
+        }
+        write > committed""",
+        }
+        for function_name, raw_body in local_raw_bodies.items():
+            owner_mutations = (
+                cfg_decoy_method_mutation(canonical, function_name, raw_body),
+                duplicate_method_mutation(canonical, function_name, raw_body),
+                cfg_attr_method_mutation(canonical, function_name),
+                canonical.replace(
+                    "impl MappedFileProgress {",
+                    "#[cfg_attr(any(), cfg(any()))]\nimpl MappedFileProgress {",
+                    1,
+                ),
+            )
+            for mutation_kind, mutation in zip(
+                ("cfg_decoy", "duplicate", "cfg_attr", "impl_cfg_attr"),
+                owner_mutations,
+                strict=True,
+            ):
+                with self.subTest(local_wrapper=function_name, mutation=mutation_kind):
+                    self.assertNotEqual(canonical, mutation)
+                    self.assertNotEqual([], mapped_file_progress_policy_violations(mutation))
+
+        for function_name in MAPPED_FILE_POLICY_METHODS:
+            for visibility in (
+                "pub ",
+                "pub(crate) ",
+                "pub(super) ",
+                "pub(self) ",
+                "pub(in crate::log_file) ",
+            ):
+                private_declaration = f"fn {function_name}("
+                mutation = default_mapped_file.replace(
+                    private_declaration,
+                    f"{visibility}{private_declaration}",
+                    1,
+                )
+                with self.subTest(wrapper=function_name, visibility=visibility.strip()):
+                    self.assertNotEqual(default_mapped_file, mutation)
+                    mutated_sources = dict(production_sources)
+                    mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                    self.assertNotEqual(
+                        [],
+                        mapped_file_progress_adapter_violations(
+                            canonical,
+                            mutation,
+                            mutated_sources,
+                        ),
+                    )
+
+        store_raw_bodies = {
+            "is_able_to_flush": """        if self.is_full() {
+            return true;
+        }
+        let flush = self.progress.flushed_position();
+        let read = self.get_read_position();
+        if flush_least_pages > 0 {
+            let page_size = 4096;
+            return (read - flush) / page_size >= flush_least_pages;
+        }
+        read > flush""",
+            "is_able_to_commit": """        if self.is_full() {
+            return true;
+        }
+        let committed = self.progress.committed_position();
+        let write = self.progress.wrote_position();
+        if commit_least_pages > 0 {
+            return (write - committed) / 4096 >= commit_least_pages;
+        }
+        write > committed""",
+        }
+        for function_name, raw_body in store_raw_bodies.items():
+            store_mutations = (
+                cfg_decoy_method_mutation(default_mapped_file, function_name, raw_body),
+                duplicate_method_mutation(default_mapped_file, function_name, raw_body),
+                cfg_attr_method_mutation(default_mapped_file, function_name),
+                default_mapped_file.replace(
+                    "#[allow(unused_variables)]\nimpl DefaultMappedFile {",
+                    "#[allow(unused_variables)]\n"
+                    "#[cfg_attr(any(), cfg(any()))]\n"
+                    "impl DefaultMappedFile {",
+                    1,
+                ),
+            )
+            for mutation_kind, mutation in zip(
+                ("cfg_decoy", "duplicate", "cfg_attr", "impl_cfg_attr"),
+                store_mutations,
+                strict=True,
+            ):
+                with self.subTest(store_wrapper=function_name, mutation=mutation_kind):
+                    self.assertNotEqual(default_mapped_file, mutation)
+                    mutated_sources = dict(production_sources)
+                    mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                    self.assertNotEqual(
+                        [],
+                        mapped_file_progress_adapter_violations(
+                            canonical,
+                            mutation,
+                            mutated_sources,
+                        ),
+                    )
+
+        split_helper_variants = {
+            f"direct_{expression}": (
+                "fn legacy_page_delta(source: i32, progress: i32) -> i32 {\n"
+                f"    (source - progress) / ({expression})\n"
+                "}\n"
+            )
+            for expression in (
+                "4096",
+                "1024 * 4",
+                "4 * 1024",
+                "0x1000",
+                "1 << 12",
+                "2048 * 2",
+            )
+        }
+        split_helper_variants.update(
+            {
+                "local_let_alias": """fn legacy_page_delta(source: i32, progress: i32) -> i32 {
+    let page_unit = 1024 * 4;
+    (source - progress) / page_unit
+}
+""",
+                "local_const_alias": """fn legacy_page_delta(source: i32, progress: i32) -> i32 {
+    const PAGE_UNIT: i32 = 1 << 12;
+    (source - progress) / PAGE_UNIT
+}
+""",
+                "chained_alias": """fn legacy_page_delta(source: i32, progress: i32) -> i32 {
+    let half_page = 2048;
+    let page_unit = half_page * 2;
+    (source - progress) / page_unit
+}
+""",
+                "module_alias": """const LEGACY_PAGE_UNIT: i32 = 0x1000;
+
+fn legacy_page_delta(source: i32, progress: i32) -> i32 {
+    (source - progress) / LEGACY_PAGE_UNIT
+}
+""",
+            }
+        )
+        for variant_name, helper_definition in split_helper_variants.items():
+            split_helper_mutation = default_mapped_file.replace(
+                "#[cfg(test)]\nmod tests",
+                helper_definition
+                + """
+fn duplicate_policy(source: i32, progress: i32, least: i32) -> bool {
+    legacy_page_delta(source, progress) >= least
+}
+
+#[cfg(test)]
+mod tests""",
+                1,
+            )
+            with self.subTest(split_helper=variant_name):
+                self.assertNotEqual(default_mapped_file, split_helper_mutation)
+                split_helper_sources = dict(production_sources)
+                split_helper_sources[DEFAULT_MAPPED_FILE_PATH] = split_helper_mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_progress_adapter_violations(
+                        canonical,
+                        split_helper_mutation,
+                        split_helper_sources,
+                    ),
+                )
+
+        allowed_dynamic_division = default_mapped_file.replace(
+            "#[cfg(test)]\nmod tests",
+            """fn allowed_dynamic_alignment(value: usize) -> usize {
+    let page_size = get_page_size().max(1);
+    value / page_size
+}
+
+fn allowed_half(value: usize) -> usize {
+    value / 2
+}
+
+#[cfg(test)]
+mod tests""",
+            1,
+        )
+        allowed_dynamic_sources = dict(production_sources)
+        allowed_dynamic_sources[DEFAULT_MAPPED_FILE_PATH] = allowed_dynamic_division
+        self.assertEqual(
+            [],
+            mapped_file_progress_adapter_violations(
+                canonical,
+                allowed_dynamic_division,
+                allowed_dynamic_sources,
+            ),
+        )
+
+        flush_wrapper = """    #[inline]
+    fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
+        self.progress
+            .is_able_to_flush(self.get_read_position(), flush_least_pages)
+    }
+"""
+        commit_wrapper = """    #[inline]
+    fn is_able_to_commit(&self, commit_least_pages: i32) -> bool {
+        self.progress.is_able_to_commit(commit_least_pages)
+    }
+"""
+        combined_cfg_bypass = default_mapped_file.replace(flush_wrapper, "", 1).replace(
+            commit_wrapper,
+            "",
+            1,
+        )
+        combined_cfg_bypass = combined_cfg_bypass.replace(
+            "#[cfg(test)]\nmod tests",
+            """#[cfg(any())]
+mod policy_decoy {
+    use super::*;
+
+    impl DefaultMappedFile {
+        fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
+            self.progress
+                .is_able_to_flush(self.get_read_position(), flush_least_pages)
+        }
+
+        fn is_able_to_commit(&self, commit_least_pages: i32) -> bool {
+            self.progress.is_able_to_commit(commit_least_pages)
+        }
+    }
+}
+
+#[cfg(not(any()))]
+impl DefaultMappedFile
+where
+    DefaultMappedFile: Sized,
+{
+    fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
+        let least = flush_least_pages;
+        if self.is_full() {
+            return true;
+        }
+        let progress = self.progress.flushed_position();
+        let source = self.get_read_position();
+        if least > 0 {
+            return (source - progress) / (1 << 12) >= least;
+        }
+        source > progress
+    }
+
+    fn is_able_to_commit(&self, commit_least_pages: i32) -> bool {
+        let least = commit_least_pages;
+        if self.is_full() {
+            return true;
+        }
+        let progress = self.progress.committed_position();
+        let source = self.progress.wrote_position();
+        if least > 0 {
+            return (source - progress) / (2048 * 2) >= least;
+        }
+        source > progress
+    }
+}
+
+#[cfg(test)]
+mod tests""",
+            1,
+        )
+        self.assertNotEqual(default_mapped_file, combined_cfg_bypass)
+        combined_cfg_sources = dict(production_sources)
+        combined_cfg_sources[DEFAULT_MAPPED_FILE_PATH] = combined_cfg_bypass
+        self.assertNotEqual(
+            [],
+            mapped_file_progress_adapter_violations(
+                canonical,
+                combined_cfg_bypass,
+                combined_cfg_sources,
+            ),
+        )
 
         adapter_mutations = [
             default_mapped_file.replace(

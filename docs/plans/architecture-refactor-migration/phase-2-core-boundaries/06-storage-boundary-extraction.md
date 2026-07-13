@@ -775,6 +775,14 @@ python scripts/arc_mut_guard.py
   `DefaultMappedFile` focused 30/30、完整 Local 173 项、Store lib 568/568 和 M06 source/mutation contract
   97/97 通过。mutation contract 拒绝常量类型/表达式、full short-circuit、正/非正分支、比较符、flush read
   source、commit wrote source、saturating/dynamic page、Store wrapper/re-export及额外 caller 漂移。
+- [x] `[REV-FOLLOWUP]` 独立审查 follow-up RED 先证明旧 contract 会放过两个 Store wrapper 的 plain/restricted
+  `pub`、Local/Store duplicate/cfg/cfg_attr decoy 和 split-helper raw policy；更强的 11-case RED 覆盖
+  `4096`、`1024 * 4`、`4 * 1024`、`0x1000`、`1 << 12`、`2048 * 2`、local let/const、chained/module alias、
+  renamed threshold argument，以及 nested cfg module decoy + active `impl ... where`。GREEN 后 Local/Store
+  policy method 均须全 production 与 top-level inherent 各恰好一个定义、无 method/impl `cfg`/`cfg_attr`、
+  签名/body 精确；Store wrapper 还须无任何 `pub` visibility。安全整数表达式 resolver 解析 fixed-page
+  alias chain，并拒绝 DefaultMappedFile production 中 divisor resolve 为 4096 的 page division，同时不误伤
+  合法 `/ 2` 或动态 `/ page_size` alignment；全 production reference map 继续拒绝额外 caller/reference。
 - [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Local 与 Store 各七组 feature closure、
   default/all-feature all-target Clippy、root workspace all-feature Clippy 和 Local strict Rustdoc 均通过；Store
   普通 Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。WSL/Linux 隔离 target 通过 Local focused 8/8、
