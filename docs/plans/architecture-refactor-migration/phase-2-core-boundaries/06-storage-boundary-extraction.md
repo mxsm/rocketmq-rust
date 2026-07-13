@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -569,3 +569,33 @@ python scripts/arc_mut_guard.py
   变化发生直接一对一 relocation，均按 ADR-013 精确批准；promoted baseline 保持 1,232 identities/3,377 occurrences。
 - [x] `[SCOPE]` M06-03k 未迁移 filesystem 校验/删除、真实 mmap/平台系统调用、append/parser/recovery、flush/group
   commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。PR-M06-03 父项和 M06 Exit Checklist 保持未完成。
+
+## M06-03l CommitLog recovery hint platform execution evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::load` 现唯一拥有公开安全的
+  `apply_recovery_mmap_advice` 与 `apply_recovery_file_prefetch`。两者只接受 Local enum、`&MmapMut` 和文件名并返回
+  `HintOutcome`，不返回 `Result`，不暴露裸指针/unsafe API、generic trait、`DefaultMappedFile` 或 `ArcMut`。
+  disabled/unsupported 在计时前返回；真实平台失败只记录 warning 和 failure outcome，不传播到 loader。
+- [x] `[PLATFORM]` Unix mmap advice 使用 `memmap2::Advice::Sequential`；Windows prefetch 由 Local 私有 helper
+  直接调用 `PrefetchVirtualMemory`。Windows 依赖固定为 `windows 0.62.2`，且仅启用 `Win32_System_Memory` 与
+  `Win32_System_Threading`；没有引入 `rocketmq-error`。unsafe 调用具有紧邻 `SAFETY` 注释，Local warning 使用既有
+  `rocketmq_store::log_file::commit_log_loader` target、原 warning 文本和兼容的手工 storage-read 错误文本。
+- [x] `[COMPAT]` Store `apply_memory_hints` 先跳过 lazy-unmapped 文件，再取得一次 mmap/file name 并调用两个 Local
+  adapter；loader 中的 Unix/Windows 实现及 memmap/platform helper import 已删除。Store
+  `utils::ffi::prefetch_virtual_memory` 的签名与函数体零改动。Store 继续拥有 filesystem、rayon、mapped-file factory、
+  position、append/recovery/flush，以及公开 `LoadStatistics`/hint enum re-export 和全部 loader API。
+- [x] `[TEST]` focused RED 分别因两个 Local API 缺失和 canonical owner 缺失而失败；GREEN 后 Windows 与 WSL/Linux
+  Local focused 均为 25/25，Store loader 均为 15/15。Local 全量 127 项、Store load 7 项（另 1 项 ignored）、
+  recovery 19 项、Store lib 577 项通过。纯 mapper 确定性覆盖 `Ok(true)`/`Ok(false)`/error；Store 启用两个 hint 后
+  证明 historical lazy 文件保持 unmapped，且统计只包含平台支持的 eager final-file attempt。
+- [x] `[REVIEW]` 82 项 contract 及 34 个本切片 reviewer mutation 锁定 Local 单一平台 owner、精确安全 API、
+  false/error mapping、非传播失败、计时边界、日志、Store skip 顺序、私有精确 import、无公开 re-export、无重复/
+  alias/brace/glob owner、无直接 Store OS 调用，以及兼容 ffi 完整函数。Windows/WSL check 与 Local/Store Clippy、
+  Windows workspace Clippy、Local strict Rustdoc、Store 普通 Rustdoc、routing 和架构门禁均通过。
+- [x] `[ARC]` BASE 8596→candidate 初扫为 1 NEW/3 STALE：Store 两个平台函数删除产生两个真实
+  `DefaultMappedFile` governed occurrence 删除，不建立 relocation；唯一仍存在的 module import 以
+  `ded036bc867beefc6db3270a`→`710eb3f2dd4a57100c5e0fe1` 一对一 ADR-013 approval 处理。promoted baseline 为
+  1,232 identities/3,375 occurrences，final guard 通过且没有新增债务。
+- [x] `[SCOPE]` M06-03l 不迁移 filesystem、rayon mapping/factory、position、append/parser/recovery、flush/group
+  commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。PR-M06-03 父项、M06 Exit Checklist 与
+  M06-04..12 保持未完成。

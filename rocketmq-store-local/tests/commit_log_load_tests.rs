@@ -16,6 +16,10 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use memmap2::MmapMut;
+use memmap2::MmapOptions;
+use rocketmq_store_local::commit_log::load::apply_recovery_file_prefetch;
+use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;
 use rocketmq_store_local::commit_log::load::record_file_prefetch;
 use rocketmq_store_local::commit_log::load::record_mmap_advice;
 use rocketmq_store_local::commit_log::load::validate_commit_log_file;
@@ -27,6 +31,18 @@ use rocketmq_store_local::commit_log::load::CommitLogMappingOptions;
 use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;
 use rocketmq_store_local::commit_log::load::HintOutcome;
 use rocketmq_store_local::commit_log::load::LoadStatistics;
+use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
+use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
+use tempfile::NamedTempFile;
+
+fn mutable_mapping() -> (NamedTempFile, MmapMut) {
+    let file = NamedTempFile::new().unwrap();
+    file.as_file().set_len(4096).unwrap();
+    // SAFETY: The temporary file remains alive for the returned mapping and is not
+    // accessed through another mapping while this test owns it.
+    let mmap = unsafe { MmapOptions::new().map_mut(file.as_file()).unwrap() };
+    (file, mmap)
+}
 
 fn metadata(path: &str, size: u64) -> CommitLogFileMetadata {
     CommitLogFileMetadata {
@@ -225,6 +241,52 @@ fn prefetch_counters(statistics: &LoadStatistics) -> (u64, u64, u64, u64) {
         statistics.file_prefetch_failures,
         statistics.file_prefetch_elapsed_ms,
     )
+}
+
+#[test]
+fn disabled_recovery_hint_adapters_are_not_attempted() {
+    let (_file, mmap) = mutable_mapping();
+    let mut statistics = LoadStatistics::default();
+
+    record_mmap_advice(
+        &mut statistics,
+        apply_recovery_mmap_advice(RecoveryMmapAdvice::Disabled, &mmap, "commitlog/0"),
+    );
+    record_file_prefetch(
+        &mut statistics,
+        apply_recovery_file_prefetch(RecoveryFilePrefetch::Disabled, &mmap, "commitlog/0"),
+    );
+
+    assert_eq!(mmap_counters(&statistics), (0, 0, 0, 0));
+    assert_eq!(prefetch_counters(&statistics), (0, 0, 0, 0));
+}
+
+#[cfg(not(unix))]
+#[test]
+fn sequential_mmap_advice_is_not_attempted_when_unsupported() {
+    let (_file, mmap) = mutable_mapping();
+    let mut statistics = LoadStatistics::default();
+
+    record_mmap_advice(
+        &mut statistics,
+        apply_recovery_mmap_advice(RecoveryMmapAdvice::Sequential, &mmap, "commitlog/0"),
+    );
+
+    assert_eq!(mmap_counters(&statistics), (0, 0, 0, 0));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn sequential_file_prefetch_is_not_attempted_when_unsupported() {
+    let (_file, mmap) = mutable_mapping();
+    let mut statistics = LoadStatistics::default();
+
+    record_file_prefetch(
+        &mut statistics,
+        apply_recovery_file_prefetch(RecoveryFilePrefetch::Sequential, &mmap, "commitlog/0"),
+    );
+
+    assert_eq!(prefetch_counters(&statistics), (0, 0, 0, 0));
 }
 
 #[test]

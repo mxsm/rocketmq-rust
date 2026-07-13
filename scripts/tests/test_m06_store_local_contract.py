@@ -115,6 +115,8 @@ COMMIT_LOG_HINT_ITEMS = {
     "HintOutcome": "struct",
     "record_mmap_advice": "fn",
     "record_file_prefetch": "fn",
+    "apply_recovery_mmap_advice": "fn",
+    "apply_recovery_file_prefetch": "fn",
 }
 COMMIT_LOG_RECORD_PARSER_ITEMS = {
     "CommitLogRecordVersion": "enum",
@@ -280,6 +282,18 @@ def named_function_body(source: str, function_name: str) -> str | None:
     if opening_brace == -1:
         return None
     extracted = braced_body(active, opening_brace)
+    return None if extracted is None else extracted[0]
+
+
+def named_raw_function_body(source: str, function_name: str) -> str | None:
+    active = active_rust_source(source)
+    match = re.search(rf"\bfn\s+{re.escape(function_name)}\b", active)
+    if match is None:
+        return None
+    opening_brace = active.find("{", match.end())
+    if opening_brace == -1:
+        return None
+    extracted = braced_body(source, opening_brace)
     return None if extracted is None else extracted[0]
 
 
@@ -1822,8 +1836,17 @@ def commit_log_mapping_plan_owner_violations(source: str) -> list[str]:
         if body is None or re.sub(r"\s+", "", body) != getter_bodies[name]:
             violations.append(f"Local mapping {name} getter stopped being narrow")
 
+    mapping_scope = "".join(
+        body or ""
+        for body in [
+            new_body,
+            active_item_body(production, "struct", "CommitLogMappingOptions"),
+            active_item_body(production, "struct", "CommitLogMappingPlan"),
+            active_item_body(production, "struct", "CommitLogMappingEntry"),
+        ]
+    )
     forbidden = ["rayon", "DefaultMappedFile", "std::fs", "remove_file", "memmap"]
-    if any(token in active for token in forbidden):
+    if any(token in mapping_scope for token in forbidden):
         violations.append("Local mapping plan absorbed Store I/O or mmap implementation")
     if normalized.count("fnnew(metadata:Vec<CommitLogFileMetadata>,options:CommitLogMappingOptions)") != 1:
         violations.append("Local mapping plan owner count changed")
@@ -2014,15 +2037,98 @@ def commit_log_hint_owner_violations(source: str) -> list[str]:
         if reducer is None or re.sub(r"\s+", "", reducer) != expected_reducers[name]:
             violations.append(f"Local {name} saturation or field isolation changed")
 
-    forbidden = [
-        "memmap2",
-        "prefetch_virtual_memory",
-        "DefaultMappedFile",
-        "cfg(unix)",
-        "cfg(windows)",
-    ]
+    forbidden = ["DefaultMappedFile", "ArcMut", "rocketmq_error", "RocketMQError", "RocketMQResult"]
     if any(token in active for token in forbidden):
-        violations.append("Local hint reducer absorbed platform operations")
+        violations.append("Local hint boundary absorbed a Store/error representation")
+
+    expected_adapter_signatures = [
+        r"pub\s+fn\s+apply_recovery_mmap_advice\s*\(\s*advice\s*:\s*RecoveryMmapAdvice\s*,"
+        r"\s*mmap\s*:\s*&MmapMut\s*,\s*file_name\s*:\s*&str\s*,?\s*\)\s*->\s*HintOutcome",
+        r"pub\s+fn\s+apply_recovery_file_prefetch\s*\(\s*prefetch\s*:\s*RecoveryFilePrefetch\s*,"
+        r"\s*mmap\s*:\s*&MmapMut\s*,\s*file_name\s*:\s*&str\s*,?\s*\)\s*->\s*HintOutcome",
+    ]
+    if any(re.search(signature, active) is None for signature in expected_adapter_signatures):
+        violations.append("Local recovery hint adapter signatures changed")
+    if re.search(r"pub\s+unsafe\s+fn\s+apply_recovery_", active) or re.search(
+        r"pub\s+fn\s+apply_recovery_[^(]*<", active
+    ):
+        violations.append("Local recovery hint adapters must be safe and non-generic")
+
+    mmap = named_function_body(production, "apply_recovery_mmap_advice")
+    prefetch = named_function_body(production, "apply_recovery_file_prefetch")
+    mapper = named_function_body(production, "prefetch_outcome_from_result")
+    platform = named_function_body(production, "prefetch_virtual_memory")
+    if any(body is None for body in (mmap, prefetch, mapper, platform)):
+        return violations + ["Local recovery hint adapter/helper body missing"]
+
+    mmap_normalized = re.sub(r"\s+", "", mmap)
+    prefetch_normalized = re.sub(r"\s+", "", prefetch)
+    mapper_normalized = re.sub(r"\s+", "", mapper)
+    platform_normalized = re.sub(r"\s+", "", platform)
+    mmap_required = [
+        "RecoveryMmapAdvice::Disabled=>HintOutcome::not_attempted(),",
+        "#[cfg(unix)]",
+        "mmap.advise(Advice::Sequential)",
+        "HintOutcome::failure(elapsed)",
+        "HintOutcome::success(elapsed)",
+        "#[cfg(not(unix))]",
+    ]
+    if any(fragment not in mmap_normalized for fragment in mmap_required):
+        violations.append("Local mmap-advice platform mapping changed")
+    if mmap_normalized.find("RecoveryMmapAdvice::Disabled") > mmap_normalized.find("Instant::now"):
+        violations.append("Local disabled mmap advice starts timing")
+    prefetch_required = [
+        "RecoveryFilePrefetch::Disabled=>HintOutcome::not_attempted(),",
+        "#[cfg(windows)]",
+        "letresult=prefetch_virtual_memory(mmap);",
+        "prefetch_outcome_from_result(result,elapsed)",
+        "#[cfg(not(windows))]",
+    ]
+    if any(fragment not in prefetch_normalized for fragment in prefetch_required):
+        violations.append("Local file-prefetch platform mapping changed")
+    if prefetch_normalized.find("RecoveryFilePrefetch::Disabled") > prefetch_normalized.find("Instant::now"):
+        violations.append("Local disabled file prefetch starts timing")
+    if "?" in mmap_normalized or "?" in prefetch_normalized:
+        violations.append("Local public recovery hint adapter propagates a platform failure")
+
+    expected_mapper = (
+        "matchresult{Ok(true)=>HintOutcome::success(elapsed),"
+        "Ok(false)=>HintOutcome::not_attempted(),Err(_)=>HintOutcome::failure(elapsed),}"
+    )
+    if mapper_normalized != expected_mapper:
+        violations.append("Local prefetch result mapper changed")
+    platform_required = [
+        "ifmmap.is_empty(){returnOk(false);}",
+        "PrefetchVirtualMemory(GetCurrentProcess(),&[range],0)",
+    ]
+    platform_raw = named_raw_function_body(production, "prefetch_virtual_memory") or ""
+    if (
+        "fnprefetch_virtual_memory(mmap:&MmapMut)->Result<bool,String>" not in normalized
+        or re.search(r"#\s*\[\s*cfg\s*\(\s*windows\s*\)\s*\]\s*fn\s+prefetch_virtual_memory", active)
+        is None
+        or any(fragment not in platform_normalized for fragment in platform_required)
+        or "Storage read failed for 'PrefetchVirtualMemory': {error}" not in platform_raw
+    ):
+        violations.append("Local Windows prefetch helper changed")
+    if "// SAFETY:" not in platform_raw:
+        violations.append("Local Windows prefetch unsafe call lacks its exact safety rationale")
+
+    mmap_raw = named_raw_function_body(production, "apply_recovery_mmap_advice") or ""
+    prefetch_raw = named_raw_function_body(production, "apply_recovery_file_prefetch") or ""
+    mmap_warning = re.search(
+        r'warn!\s*\(\s*target\s*:\s*"rocketmq_store::log_file::commit_log_loader"\s*,'
+        r'\s*"Failed to apply sequential memory hint for \{\}: \{\}"',
+        mmap_raw,
+    )
+    if mmap_warning is None:
+        violations.append("Local mmap-advice warning target/text changed")
+    prefetch_warning = re.search(
+        r'warn!\s*\(\s*target\s*:\s*"rocketmq_store::log_file::commit_log_loader"\s*,'
+        r'\s*"Failed to prefetch recovery mapped file \{\}: \{\}"',
+        prefetch_raw,
+    )
+    if prefetch_warning is None:
+        violations.append("Local file-prefetch warning target/text changed")
     return violations
 
 
@@ -2076,8 +2182,6 @@ def store_commit_log_hint_adapter_violations(source: str) -> list[str]:
         "fncreate_mapped_files_parallel(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,)->io::Result<Vec<Arc<DefaultMappedFile>>>",
         "fncreate_mapped_files_sequential(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,)->io::Result<Vec<Arc<DefaultMappedFile>>>",
         "fnapply_memory_hints(&self,mapped_file:&DefaultMappedFile)->(HintOutcome,HintOutcome)",
-        "fnapply_mmap_advice(&self,mapped_file:&DefaultMappedFile)->HintOutcome",
-        "fnapply_file_prefetch(&self,mapped_file:&DefaultMappedFile)->HintOutcome",
     ]
     if any(signature not in normalized for signature in expected_signatures):
         violations.append("Store hint adapter signatures changed")
@@ -2085,9 +2189,7 @@ def store_commit_log_hint_adapter_violations(source: str) -> list[str]:
     parallel = named_function_body(production, "create_mapped_files_parallel")
     sequential = named_function_body(production, "create_mapped_files_sequential")
     memory_hints = named_function_body(production, "apply_memory_hints")
-    mmap = named_function_body(production, "apply_mmap_advice")
-    prefetch = named_function_body(production, "apply_file_prefetch")
-    if any(body is None for body in (parallel, sequential, memory_hints, mmap, prefetch)):
+    if any(body is None for body in (parallel, sequential, memory_hints)):
         return violations + ["Store hint adapter body missing"]
 
     parallel_normalized = re.sub(r"\s+", "", parallel)
@@ -2125,41 +2227,58 @@ def store_commit_log_hint_adapter_violations(source: str) -> list[str]:
         violations.append("Store sequential hint reducer count changed")
 
     memory_normalized = re.sub(r"\s+", "", memory_hints)
-    if not all(
-        fragment in memory_normalized
-        for fragment in [
-            "ifmapped_file.is_lazy_mmap_enabled()&&!mapped_file.is_mapped(){return(HintOutcome::not_attempted(),HintOutcome::not_attempted());}",
-            "letmmap_advice_outcome=self.apply_mmap_advice(mapped_file);",
-            "letfile_prefetch_outcome=self.apply_file_prefetch(mapped_file);",
-            "(mmap_advice_outcome,file_prefetch_outcome)",
-        ]
-    ):
+    memory_required = [
+        "ifmapped_file.is_lazy_mmap_enabled()&&!mapped_file.is_mapped(){return(HintOutcome::not_attempted(),HintOutcome::not_attempted());}",
+        "letmmap=mapped_file.get_mapped_file();",
+        "letfile_name=mapped_file.get_file_name().as_str();",
+        "letmmap_advice_outcome=apply_recovery_mmap_advice(self.recovery_mmap_advice,mmap,file_name);",
+        "letfile_prefetch_outcome=apply_recovery_file_prefetch(self.recovery_file_prefetch,mmap,file_name);",
+        "(mmap_advice_outcome,file_prefetch_outcome)",
+    ]
+    if any(fragment not in memory_normalized for fragment in memory_required):
         violations.append("Store lazy-unmapped hint skip changed")
-
-    mmap_normalized = re.sub(r"\s+", "", mmap)
-    mmap_required = [
-        "ifself.recovery_mmap_advice==RecoveryMmapAdvice::Disabled{returnHintOutcome::not_attempted();}",
-        "RecoveryMmapAdvice::Disabled=>HintOutcome::not_attempted(),",
-        "HintOutcome::failure(start.elapsed())",
-        "HintOutcome::success(start.elapsed())",
-        "HintOutcome::not_attempted()",
-        "mmap.advise(Advice::Sequential)",
+    skip = memory_normalized.find("ifmapped_file.is_lazy_mmap_enabled()")
+    mapped = memory_normalized.find("mapped_file.get_mapped_file()")
+    if skip == -1 or mapped == -1 or skip > mapped:
+        violations.append("Store lazy-unmapped skip must precede mmap access")
+    forbidden_platform = [
+        "memmap2",
+        "cfg(unix)",
+        "cfg(windows)",
+        "prefetch_virtual_memory",
+        ".advise(",
+        "PrefetchVirtualMemory",
     ]
-    if any(fragment not in mmap_normalized for fragment in mmap_required):
-        violations.append("Store mmap platform outcome mapping changed")
+    if any(token in active for token in forbidden_platform):
+        violations.append("Store loader retained direct platform hint execution")
+    if re.search(r"\bfn\s+(?:apply_mmap_advice|apply_file_prefetch|apply_recovery_mmap_advice|apply_recovery_file_prefetch)\b", active):
+        violations.append("Store loader retained a duplicate hint owner")
+    return violations
 
-    prefetch_normalized = re.sub(r"\s+", "", prefetch)
-    prefetch_required = [
-        "ifself.recovery_file_prefetch==RecoveryFilePrefetch::Disabled{returnHintOutcome::not_attempted();}",
-        "RecoveryFilePrefetch::Disabled=>HintOutcome::not_attempted(),",
-        "Ok(true)=>HintOutcome::success(start.elapsed()),",
-        "Ok(false)=>HintOutcome::not_attempted(),",
-        "HintOutcome::failure(start.elapsed())",
-        "HintOutcome::not_attempted()",
-        "prefetch_virtual_memory(mmap.as_ptr(),mmap.len())",
-    ]
-    if any(fragment not in prefetch_normalized for fragment in prefetch_required):
-        violations.append("Store prefetch platform outcome mapping changed")
+
+def store_prefetch_ffi_compatibility_violations(source: str) -> list[str]:
+    active = active_rust_source(source)
+    normalized = re.sub(r"\s+", "", active)
+    violations: list[str] = []
+    signature = "pubfnprefetch_virtual_memory(addr:*constu8,len:usize)->RocketMQResult<bool>"
+    if signature not in normalized:
+        violations.append("Store prefetch_virtual_memory signature changed")
+    body = named_raw_function_body(source, "prefetch_virtual_memory")
+    if body is None:
+        return violations + ["Store prefetch_virtual_memory body missing"]
+    body_normalized = re.sub(r"\s+", "", body)
+    expected = (
+        "iflen==0{returnOk(false);}"
+        "#[cfg(windows)]{usestd::ffi::c_void;usewindows::Win32::System::Memory::PrefetchVirtualMemory;"
+        "usewindows::Win32::System::Memory::WIN32_MEMORY_RANGE_ENTRY;"
+        "usewindows::Win32::System::Threading::GetCurrentProcess;"
+        "letrange=WIN32_MEMORY_RANGE_ENTRY{VirtualAddress:addras*mutc_void,NumberOfBytes:len,};"
+        "unsafe{PrefetchVirtualMemory(GetCurrentProcess(),&[range],0)}.map_err(|error|{"
+        "RocketMQError::StorageReadFailed{path:\"PrefetchVirtualMemory\".to_string(),reason:error.to_string(),}})?;"
+        "Ok(true)}#[cfg(not(windows))]{let_=addr;let_=len;Ok(false)}"
+    )
+    if body_normalized != expected:
+        violations.append("Store prefetch_virtual_memory behavior changed")
     return violations
 
 
@@ -3826,6 +3945,19 @@ struct DefaultMappedFile {
         for item in COMMIT_LOG_HINT_ITEMS:
             self.assertNotIn(item, facade)
 
+        ffi_source = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
+        self.assertEqual([], store_prefetch_ffi_compatibility_violations(ffi_source))
+
+        manifest = tomllib.loads((LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
+        local_dependencies = manifest["dependencies"]
+        self.assertNotIn("rocketmq-error", local_dependencies)
+        windows_dependency = manifest["target"]["cfg(windows)"]["dependencies"]["windows"]
+        self.assertEqual("0.62.2", windows_dependency["version"])
+        self.assertEqual(
+            ["Win32_System_Memory", "Win32_System_Threading"],
+            windows_dependency["features"],
+        )
+
     def test_commit_log_hint_kernel_contract_rejects_invariant_and_reducer_mutations(self) -> None:
         source = (LOCAL_CRATE / "src" / "commit_log" / "load.rs").read_text(encoding="utf-8")
         self.assertEqual([], commit_log_hint_owner_violations(source))
@@ -3840,6 +3972,34 @@ struct DefaultMappedFile {
             source.replace("statistics.mmap_advice_attempts", "statistics.file_prefetch_attempts", 1),
             source.replace(".min(u128::from(u64::MAX))", "", 1),
             source.replace("pub fn failure(elapsed: Duration) -> Self", "pub fn failed(elapsed: Duration) -> Self", 1),
+            source.replace("Ok(false) => HintOutcome::not_attempted(),", "Ok(false) => HintOutcome::success(elapsed),", 1),
+            source.replace("Err(_) => HintOutcome::failure(elapsed),", "Err(_) => HintOutcome::not_attempted(),", 1),
+            source.replace("#[cfg(unix)]\n            {", "#[cfg(windows)]\n            {", 1),
+            source.replace(
+                'warn!(\n                        target: "rocketmq_store::log_file::commit_log_loader",',
+                'warn!(\n                        target: "rocketmq_store_local::commit_log::load",',
+                1,
+            ),
+            source.replace(
+                "Failed to apply sequential memory hint for {}: {}",
+                "Failed to apply memory hint for {}: {}",
+                1,
+            ),
+            source.replace(
+                "let result = prefetch_virtual_memory(mmap);",
+                "let result = prefetch_virtual_memory(mmap)?;",
+                1,
+            ),
+            source.replace(
+                "#[cfg(windows)]\nfn prefetch_virtual_memory",
+                "#[cfg(unix)]\nfn prefetch_virtual_memory",
+                1,
+            ),
+            source.replace(
+                "Storage read failed for 'PrefetchVirtualMemory': {error}",
+                "PrefetchVirtualMemory failed: {error}",
+                1,
+            ),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
@@ -3850,6 +4010,16 @@ struct DefaultMappedFile {
         path = STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
         source = path.read_text(encoding="utf-8")
         self.assertEqual([], store_commit_log_hint_adapter_violations(source))
+        skip = (
+            "        if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped() {\n"
+            "            return (HintOutcome::not_attempted(), HintOutcome::not_attempted());\n"
+            "        }\n\n"
+        )
+        moved_skip = source.replace(skip, "", 1).replace(
+            "        let mmap = mapped_file.get_mapped_file();\n",
+            "        let mmap = mapped_file.get_mapped_file();\n" + skip,
+            1,
+        )
         mutations = [
             source.replace(
                 "use rocketmq_store_local::commit_log::load::HintOutcome;",
@@ -3857,25 +4027,71 @@ struct DefaultMappedFile {
                 1,
             ),
             source.replace(
-                "(HintOutcome::not_attempted(), HintOutcome::not_attempted())",
-                "(HintOutcome::success(Duration::ZERO), HintOutcome::not_attempted())",
+                "use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;",
+                "pub use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;",
                 1,
             ),
-            source.replace("return HintOutcome::not_attempted();", "return HintOutcome::success(Duration::ZERO);", 1),
-            source.replace("Ok(false) => HintOutcome::not_attempted()", "Ok(false) => HintOutcome::failure(start.elapsed())", 1),
-            source.replace("HintOutcome::failure(start.elapsed())", "HintOutcome::success(start.elapsed())", 1),
+            source.replace(
+                "use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;",
+                "use rocketmq_store_local::commit_log::load::{apply_recovery_mmap_advice};",
+                1,
+            ),
+            source.replace(
+                "use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;",
+                "use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice as apply_advice;",
+                1,
+            ),
+            source.replace(
+                "use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;",
+                "use rocketmq_store_local::commit_log::load::*;",
+                1,
+            ),
+            source.replace(skip, "", 1),
+            moved_skip,
+            source.replace(
+                "apply_recovery_mmap_advice(self.recovery_mmap_advice, mmap, file_name)",
+                "apply_recovery_file_prefetch(self.recovery_file_prefetch, mmap, file_name)",
+                1,
+            ),
+            source.replace(
+                "        let mmap = mapped_file.get_mapped_file();",
+                "        let mmap = mapped_file.get_mapped_file();\n        let _ = memmap2::Advice::Sequential;",
+                1,
+            ),
+            source.replace(
+                "\n#[cfg(test)]\nmod tests {",
+                "\nfn apply_recovery_mmap_advice() {}\n\n#[cfg(test)]\nmod tests {",
+                1,
+            ),
             source.replace(
                 "record_mmap_advice(statistics, mmap_advice_outcome);",
                 "statistics.mmap_advice_attempts += 1;",
                 1,
             ),
             source.replace("let results = results?;", "record_mmap_advice(statistics, HintOutcome::not_attempted());\n        let results = results?;", 1),
-            source.replace(") -> HintOutcome", ") -> &HintOutcome", 1),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
                 self.assertNotEqual(source, mutation)
                 self.assertNotEqual([], store_commit_log_hint_adapter_violations(mutation))
+
+    def test_store_prefetch_virtual_memory_contract_rejects_compatibility_mutations(self) -> None:
+        source = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
+        self.assertEqual([], store_prefetch_ffi_compatibility_violations(source))
+        mutations = [
+            source.replace(
+                "pub fn prefetch_virtual_memory(addr: *const u8, len: usize)",
+                "pub fn prefetch_virtual_memory(addr: *mut u8, len: usize)",
+                1,
+            ),
+            source.replace("if len == 0", "if len == usize::MAX", 1),
+            source.replace("Ok(false)", "Ok(true)", 1),
+            source.replace("path: \"PrefetchVirtualMemory\".to_string()", "path: \"prefetch\".to_string()", 1),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
+                self.assertNotEqual([], store_prefetch_ffi_compatibility_violations(mutation))
 
     def test_commit_log_file_validation_contract_rejects_owner_mutations(self) -> None:
         source = (LOCAL_CRATE / "src" / "commit_log" / "load.rs").read_text(encoding="utf-8")

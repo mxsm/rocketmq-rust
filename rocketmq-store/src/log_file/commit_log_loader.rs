@@ -32,6 +32,8 @@ use rayon::prelude::*;
 use tracing::info;
 use tracing::warn;
 
+use rocketmq_store_local::commit_log::load::apply_recovery_file_prefetch;
+use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;
 use rocketmq_store_local::commit_log::load::record_file_prefetch;
 use rocketmq_store_local::commit_log::load::record_mmap_advice;
 use rocketmq_store_local::commit_log::load::validate_commit_log_file;
@@ -49,8 +51,6 @@ pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
 
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
-#[cfg(windows)]
-use crate::utils::ffi::prefetch_virtual_memory;
 
 /// Optimized loader for CommitLog files
 pub struct CommitLogLoader {
@@ -327,92 +327,22 @@ impl CommitLogLoader {
     /// Apply platform-specific memory access hints
     ///
     /// # Platform-specific behavior
-    /// - **Linux/Unix**: `madvise(MADV_SEQUENTIAL)` - kernel prefetch optimization
-    /// - **Windows**: Currently relies on OS default (no explicit hints)
+    /// - **Linux/Unix**: Local applies `madvise(MADV_SEQUENTIAL)` when enabled.
+    /// - **Windows**: Local applies `PrefetchVirtualMemory` when enabled.
     ///
     /// # Implementation
-    /// Uses `memmap2::Mmap::advise()` to provide sequential access hints to the kernel,
-    /// which can improve performance by optimizing readahead and page cache behavior.
+    /// Lazy mappings are skipped before initialization; initialized mappings are passed to the
+    /// Local platform adapters, and their non-fatal outcomes are reduced by the caller.
     fn apply_memory_hints(&self, mapped_file: &DefaultMappedFile) -> (HintOutcome, HintOutcome) {
         if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped() {
             return (HintOutcome::not_attempted(), HintOutcome::not_attempted());
         }
 
-        let mmap_advice_outcome = self.apply_mmap_advice(mapped_file);
-        let file_prefetch_outcome = self.apply_file_prefetch(mapped_file);
+        let mmap = mapped_file.get_mapped_file();
+        let file_name = mapped_file.get_file_name().as_str();
+        let mmap_advice_outcome = apply_recovery_mmap_advice(self.recovery_mmap_advice, mmap, file_name);
+        let file_prefetch_outcome = apply_recovery_file_prefetch(self.recovery_file_prefetch, mmap, file_name);
         (mmap_advice_outcome, file_prefetch_outcome)
-    }
-
-    fn apply_mmap_advice(&self, mapped_file: &DefaultMappedFile) -> HintOutcome {
-        if self.recovery_mmap_advice == RecoveryMmapAdvice::Disabled {
-            return HintOutcome::not_attempted();
-        }
-
-        #[cfg(unix)]
-        {
-            use memmap2::Advice;
-
-            // Access the underlying mmap through the public API
-            let start = std::time::Instant::now();
-            let mmap = mapped_file.get_mapped_file();
-            match self.recovery_mmap_advice {
-                RecoveryMmapAdvice::Disabled => HintOutcome::not_attempted(),
-                RecoveryMmapAdvice::Sequential => {
-                    if let Err(e) = mmap.advise(Advice::Sequential) {
-                        // Non-fatal: madvise failure doesn't affect correctness
-                        warn!(
-                            "Failed to apply sequential memory hint for {}: {}",
-                            mapped_file.get_file_name(),
-                            e
-                        );
-                        HintOutcome::failure(start.elapsed())
-                    } else {
-                        #[cfg(debug_assertions)]
-                        tracing::debug!("Applied MADV_SEQUENTIAL hint to {}", mapped_file.get_file_name());
-                        HintOutcome::success(start.elapsed())
-                    }
-                }
-            }
-        }
-
-        #[cfg(not(unix))]
-        {
-            let _ = mapped_file;
-            HintOutcome::not_attempted()
-        }
-    }
-
-    fn apply_file_prefetch(&self, mapped_file: &DefaultMappedFile) -> HintOutcome {
-        if self.recovery_file_prefetch == RecoveryFilePrefetch::Disabled {
-            return HintOutcome::not_attempted();
-        }
-
-        #[cfg(windows)]
-        {
-            let start = std::time::Instant::now();
-            let mmap = mapped_file.get_mapped_file();
-            match self.recovery_file_prefetch {
-                RecoveryFilePrefetch::Disabled => HintOutcome::not_attempted(),
-                RecoveryFilePrefetch::Sequential => match prefetch_virtual_memory(mmap.as_ptr(), mmap.len()) {
-                    Ok(true) => HintOutcome::success(start.elapsed()),
-                    Ok(false) => HintOutcome::not_attempted(),
-                    Err(error) => {
-                        warn!(
-                            "Failed to prefetch recovery mapped file {}: {}",
-                            mapped_file.get_file_name(),
-                            error
-                        );
-                        HintOutcome::failure(start.elapsed())
-                    }
-                },
-            }
-        }
-
-        #[cfg(not(windows))]
-        {
-            let _ = mapped_file;
-            HintOutcome::not_attempted()
-        }
     }
 }
 
@@ -590,8 +520,8 @@ mod tests {
             temp_dir.path().to_string_lossy().to_string(),
             file_size,
             false,
-            RecoveryMmapAdvice::Disabled,
-            RecoveryFilePrefetch::Disabled,
+            RecoveryMmapAdvice::Sequential,
+            RecoveryFilePrefetch::Sequential,
         )
         .with_lazy_mmap(true);
 
@@ -604,8 +534,8 @@ mod tests {
         assert!(!files[0].is_mapped());
         assert!(!files[1].is_mapped());
         assert!(files[2].is_mapped());
-        assert_eq!(stats.mmap_advice_attempts, 0);
-        assert_eq!(stats.file_prefetch_attempts, 0);
+        assert_eq!(stats.mmap_advice_attempts, u64::from(cfg!(unix)));
+        assert_eq!(stats.file_prefetch_attempts, u64::from(cfg!(windows)));
     }
 
     #[test]

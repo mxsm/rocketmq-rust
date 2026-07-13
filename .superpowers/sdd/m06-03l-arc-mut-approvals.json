@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "adr": "ADR-013",
+  "relocations": [
+    {
+      "identity": "b4ef5272b75fe61fd822816e",
+      "from": "ded036bc867beefc6db3270a",
+      "to": "710eb3f2dd4a57100c5e0fe1",
+      "reason": "Adding the two private Local recovery-hint adapter imports changed adjacent tokens around the existing DefaultMappedFile module import without adding or moving an occurrence"
+    }
+  ]
+}

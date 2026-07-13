@@ -15,8 +15,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use memmap2::MmapMut;
 use thiserror::Error;
 use tracing::info;
+use tracing::warn;
 
 /// Filesystem metadata required to validate and open one CommitLog segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,6 +312,117 @@ impl RecoveryFilePrefetch {
     }
 }
 
+/// Applies the configured recovery mmap advice to an initialized mapping.
+///
+/// Unsupported platforms and disabled advice return a not-attempted outcome.
+/// Platform failures are logged and returned as non-fatal failure outcomes.
+pub fn apply_recovery_mmap_advice(advice: RecoveryMmapAdvice, mmap: &MmapMut, file_name: &str) -> HintOutcome {
+    match advice {
+        RecoveryMmapAdvice::Disabled => HintOutcome::not_attempted(),
+        RecoveryMmapAdvice::Sequential => {
+            #[cfg(unix)]
+            {
+                use memmap2::Advice;
+
+                let start = std::time::Instant::now();
+                let result = mmap.advise(Advice::Sequential);
+                let elapsed = start.elapsed();
+                if let Err(error) = result {
+                    warn!(
+                        target: "rocketmq_store::log_file::commit_log_loader",
+                        "Failed to apply sequential memory hint for {}: {}",
+                        file_name,
+                        error
+                    );
+                    HintOutcome::failure(elapsed)
+                } else {
+                    #[cfg(debug_assertions)]
+                    tracing::debug!(
+                        target: "rocketmq_store::log_file::commit_log_loader",
+                        "Applied MADV_SEQUENTIAL hint to {}",
+                        file_name
+                    );
+                    HintOutcome::success(elapsed)
+                }
+            }
+
+            #[cfg(not(unix))]
+            {
+                let _ = mmap;
+                let _ = file_name;
+                HintOutcome::not_attempted()
+            }
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn prefetch_outcome_from_result(result: Result<bool, String>, elapsed: Duration) -> HintOutcome {
+    match result {
+        Ok(true) => HintOutcome::success(elapsed),
+        Ok(false) => HintOutcome::not_attempted(),
+        Err(_) => HintOutcome::failure(elapsed),
+    }
+}
+
+#[cfg(windows)]
+fn prefetch_virtual_memory(mmap: &MmapMut) -> Result<bool, String> {
+    if mmap.is_empty() {
+        return Ok(false);
+    }
+
+    use std::ffi::c_void;
+
+    use windows::Win32::System::Memory::PrefetchVirtualMemory;
+    use windows::Win32::System::Memory::WIN32_MEMORY_RANGE_ENTRY;
+    use windows::Win32::System::Threading::GetCurrentProcess;
+
+    let range = WIN32_MEMORY_RANGE_ENTRY {
+        VirtualAddress: mmap.as_ptr() as *mut c_void,
+        NumberOfBytes: mmap.len(),
+    };
+    // SAFETY: `range` covers the live bytes owned by `mmap`, the current-process
+    // pseudo-handle is valid for this call, and PrefetchVirtualMemory does not
+    // retain the range after returning.
+    unsafe { PrefetchVirtualMemory(GetCurrentProcess(), &[range], 0) }
+        .map_err(|error| format!("Storage read failed for 'PrefetchVirtualMemory': {error}"))?;
+    Ok(true)
+}
+
+/// Applies the configured recovery file-prefetch hint to an initialized mapping.
+///
+/// Unsupported platforms, disabled prefetch, and an unavailable Windows operation return a
+/// not-attempted outcome. Platform failures are logged and returned as non-fatal failure outcomes.
+pub fn apply_recovery_file_prefetch(prefetch: RecoveryFilePrefetch, mmap: &MmapMut, file_name: &str) -> HintOutcome {
+    match prefetch {
+        RecoveryFilePrefetch::Disabled => HintOutcome::not_attempted(),
+        RecoveryFilePrefetch::Sequential => {
+            #[cfg(windows)]
+            {
+                let start = std::time::Instant::now();
+                let result = prefetch_virtual_memory(mmap);
+                let elapsed = start.elapsed();
+                if let Err(error) = &result {
+                    warn!(
+                        target: "rocketmq_store::log_file::commit_log_loader",
+                        "Failed to prefetch recovery mapped file {}: {}",
+                        file_name,
+                        error
+                    );
+                }
+                prefetch_outcome_from_result(result, elapsed)
+            }
+
+            #[cfg(not(windows))]
+            {
+                let _ = mmap;
+                let _ = file_name;
+                HintOutcome::not_attempted()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,5 +441,23 @@ mod tests {
         assert_eq!(RecoveryMmapAdvice::Sequential.as_str(), "sequential");
         assert_eq!(RecoveryFilePrefetch::Disabled.as_str(), "disabled");
         assert_eq!(RecoveryFilePrefetch::Sequential.as_str(), "sequential");
+    }
+
+    #[test]
+    fn prefetch_result_mapper_distinguishes_success_skip_and_failure() {
+        let success = prefetch_outcome_from_result(Ok(true), Duration::from_millis(3));
+        assert!(success.attempted);
+        assert!(success.succeeded);
+        assert_eq!(success.elapsed, Duration::from_millis(3));
+
+        let skipped = prefetch_outcome_from_result(Ok(false), Duration::from_millis(5));
+        assert!(!skipped.attempted);
+        assert!(!skipped.succeeded);
+        assert_eq!(skipped.elapsed, Duration::ZERO);
+
+        let failure = prefetch_outcome_from_result(Err("platform failure".to_string()), Duration::from_millis(7));
+        assert!(failure.attempted);
+        assert!(!failure.succeeded);
+        assert_eq!(failure.elapsed, Duration::from_millis(7));
     }
 }

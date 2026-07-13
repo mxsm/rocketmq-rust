@@ -181,6 +181,12 @@
       "from": "f0a39403be9e63ed5834b36f",
       "to": "a2a8693a56e430fe111a4e97",
       "reason": "Replacing the Store-private hint result with the canonical Local HintOutcome changed adjacent tokens around the existing file-prefetch DefaultMappedFile parameter without adding or moving an occurrence"
+    },
+    {
+      "identity": "b4ef5272b75fe61fd822816e",
+      "from": "ded036bc867beefc6db3270a",
+      "to": "710eb3f2dd4a57100c5e0fe1",
+      "reason": "Adding the two private Local recovery-hint adapter imports changed adjacent tokens around the existing DefaultMappedFile module import without adding or moving an occurrence"
     }
   ]
 }
