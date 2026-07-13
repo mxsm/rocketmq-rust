@@ -127,6 +127,12 @@
       "from": "827442feb29094b6890a4f23",
       "to": "a0396c92d0a67c84a42c19e3",
       "reason": "Delegating the legacy iterator constructor to the Local cursor changed adjacent tokens around the unchanged DefaultMappedFile constructor parameter without adding an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "33c65fcf9bf85149d1d12b4e",
+      "to": "1149181ee9e04595c8db7578",
+      "reason": "Replacing the private loader metadata parameter with the canonical Local metadata type changed adjacent tokens around the existing DefaultMappedFile return type without adding or moving an occurrence"
     }
   ]
 }

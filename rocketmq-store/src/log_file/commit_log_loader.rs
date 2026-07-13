@@ -33,6 +33,9 @@ use rayon::prelude::*;
 use tracing::info;
 use tracing::warn;
 
+use rocketmq_store_local::commit_log::load::validate_commit_log_file;
+use rocketmq_store_local::commit_log::load::CommitLogFileLoadDecision;
+use rocketmq_store_local::commit_log::load::CommitLogFileMetadata;
 pub use rocketmq_store_local::commit_log::load::LoadStatistics;
 pub use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
 pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
@@ -41,14 +44,6 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 #[cfg(windows)]
 use crate::utils::ffi::prefetch_virtual_memory;
-
-/// Metadata for a single commit log file, collected during parallel scan
-#[derive(Debug, Clone)]
-struct FileMetadata {
-    path: PathBuf,
-    size: u64,
-    file_name: String,
-}
 
 #[derive(Debug, Clone, Copy, Default)]
 struct HintResult {
@@ -192,7 +187,7 @@ impl CommitLogLoader {
         }
 
         let parallel_start = std::time::Instant::now();
-        let file_metadata: Vec<FileMetadata> = if self.enable_parallel && file_paths.len() > 4 {
+        let file_metadata: Vec<CommitLogFileMetadata> = if self.enable_parallel && file_paths.len() > 4 {
             self.collect_metadata_parallel(&file_paths)?
         } else {
             self.collect_metadata_sequential(&file_paths)?
@@ -227,97 +222,64 @@ impl CommitLogLoader {
     /// # Safety
     /// Uses rayon's thread pool for parallel fs::metadata calls.
     /// Each call is independent and thread-safe.
-    fn collect_metadata_parallel(&self, paths: &[PathBuf]) -> io::Result<Vec<FileMetadata>> {
+    fn collect_metadata_parallel(&self, paths: &[PathBuf]) -> io::Result<Vec<CommitLogFileMetadata>> {
         let expected_size = self.mapped_file_size;
-        let is_last_file_idx = paths.len().saturating_sub(1);
+        let last_file_idx = paths.len().saturating_sub(1);
 
         let results: Result<Vec<_>, _> = paths
             .par_iter()
             .enumerate()
             .map(|(idx, path)| {
-                let metadata = fs::metadata(path)
+                let file_metadata = fs::metadata(path)
                     .map_err(|e| io::Error::new(e.kind(), format!("Failed to get metadata for {:?}: {}", path, e)))?;
 
-                let size = metadata.len();
-                let file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-
-                // Validate file size - CRITICAL: Only the last file in the sorted array can be
-                // empty
-                if size == 0 && idx == is_last_file_idx {
-                    // Last file can be empty, remove it (matches original do_load behavior)
-                    if let Err(e) = fs::remove_file(path) {
-                        warn!("Failed to delete empty file {:?}: {}", path, e);
-                    } else {
-                        warn!("{} size is 0, auto deleted.", path.display());
-                    }
-                    return Ok(None);
-                } else if size != expected_size {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!(
-                            "{} length {} not matched expected size {}, please check it manually",
-                            path.display(),
-                            size,
-                            expected_size
-                        ),
-                    ));
-                }
-
-                Ok(Some(FileMetadata {
+                let size = file_metadata.len();
+                let metadata = CommitLogFileMetadata {
                     path: path.clone(),
                     size,
-                    file_name,
-                }))
+                };
+                match validate_commit_log_file(&metadata, expected_size, idx == last_file_idx) {
+                    Ok(CommitLogFileLoadDecision::Load) => Ok(Some(metadata)),
+                    Ok(CommitLogFileLoadDecision::RemoveEmptyLast) => {
+                        if let Err(error) = fs::remove_file(path) {
+                            warn!("Failed to delete empty file {:?}: {}", path, error);
+                        } else {
+                            warn!("{} size is 0, auto deleted.", path.display());
+                        }
+                        Ok(None)
+                    }
+                    Err(error) => Err(io::Error::new(io::ErrorKind::InvalidData, error)),
+                }
             })
             .collect();
 
-        results.map(|v| v.into_iter().flatten().collect())
+        results.map(|metadata| metadata.into_iter().flatten().collect())
     }
 
     /// Fallback: sequential metadata collection
-    fn collect_metadata_sequential(&self, paths: &[PathBuf]) -> io::Result<Vec<FileMetadata>> {
+    fn collect_metadata_sequential(&self, paths: &[PathBuf]) -> io::Result<Vec<CommitLogFileMetadata>> {
         let mut metadata_list = Vec::with_capacity(paths.len());
         let expected_size = self.mapped_file_size;
         let last_file_idx = paths.len().saturating_sub(1);
 
         for (idx, path) in paths.iter().enumerate() {
-            let metadata = fs::metadata(path)?;
-            let size = metadata.len();
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-
-            // Only the last file in the sorted list can be empty (matches original do_load)
-            if size == 0 && idx == last_file_idx {
-                if let Err(e) = fs::remove_file(path) {
-                    warn!("Failed to delete empty file {:?}: {}", path, e);
-                } else {
-                    warn!("{} size is 0, auto deleted.", path.display());
-                }
-                continue;
-            } else if size != expected_size {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "{} length {} not matched expected size {}, please check it manually",
-                        path.display(),
-                        size,
-                        expected_size
-                    ),
-                ));
-            }
-
-            metadata_list.push(FileMetadata {
+            let file_metadata = fs::metadata(path)?;
+            let size = file_metadata.len();
+            let metadata = CommitLogFileMetadata {
                 path: path.clone(),
                 size,
-                file_name,
-            });
+            };
+            match validate_commit_log_file(&metadata, expected_size, idx == last_file_idx) {
+                Ok(CommitLogFileLoadDecision::Load) => metadata_list.push(metadata),
+                Ok(CommitLogFileLoadDecision::RemoveEmptyLast) => {
+                    if let Err(error) = fs::remove_file(path) {
+                        warn!("Failed to delete empty file {:?}: {}", path, error);
+                    } else {
+                        warn!("{} size is 0, auto deleted.", path.display());
+                    }
+                }
+                Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidData, error)),
+            }
         }
 
         Ok(metadata_list)
@@ -326,7 +288,7 @@ impl CommitLogLoader {
     /// Create mapped files in parallel (with synchronization for Vec::push)
     fn create_mapped_files_parallel(
         &self,
-        metadata: &[FileMetadata],
+        metadata: &[CommitLogFileMetadata],
     ) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
         // Parallel creation with ordered collection
         let file_count = metadata.len();
@@ -367,7 +329,7 @@ impl CommitLogLoader {
     /// Fallback: sequential mapped file creation
     fn create_mapped_files_sequential(
         &self,
-        metadata: &[FileMetadata],
+        metadata: &[CommitLogFileMetadata],
     ) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
         let mut mapped_files = Vec::with_capacity(metadata.len());
         let mut mmap_advice_stats = LoadStatistics {
@@ -394,7 +356,12 @@ impl CommitLogLoader {
         Ok((mapped_files, mmap_advice_stats))
     }
 
-    fn create_mapped_file(&self, meta: &FileMetadata, idx: usize, file_count: usize) -> io::Result<DefaultMappedFile> {
+    fn create_mapped_file(
+        &self,
+        meta: &CommitLogFileMetadata,
+        idx: usize,
+        file_count: usize,
+    ) -> io::Result<DefaultMappedFile> {
         let file_name = CheetahString::from_string(meta.path.to_string_lossy().to_string());
         if self.lazy_mmap_enable && idx + 1 < file_count {
             DefaultMappedFile::try_new_lazy_read_only(file_name, self.mapped_file_size)
@@ -751,6 +718,33 @@ mod tests {
     }
 
     #[test]
+    fn parallel_empty_last_filter_preserves_order_and_legacy_statistics() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_size = 4096u64;
+        let mut expected_names = Vec::new();
+        for index in 0..5u64 {
+            let file_path = temp_dir.path().join(format!("{:020}", index * file_size));
+            if index == 4 {
+                std::fs::write(&file_path, []).unwrap();
+            } else {
+                std::fs::write(&file_path, vec![0u8; file_size as usize]).unwrap();
+                expected_names.push(file_path.to_string_lossy().to_string());
+            }
+        }
+        let empty_last_path = temp_dir.path().join(format!("{:020}", 4 * file_size));
+        let loader = CommitLogLoader::new(temp_dir.path().to_string_lossy().to_string(), file_size, true);
+
+        let (files, stats) = loader.load_optimized().unwrap();
+
+        let actual_names: Vec<_> = files.iter().map(|file| file.get_file_name().to_string()).collect();
+        assert_eq!(actual_names, expected_names);
+        assert_eq!(stats.total_files, 4);
+        assert_eq!(stats.total_size_bytes, file_size * 4);
+        assert_eq!(stats.files_removed, 0);
+        assert!(!empty_last_path.exists());
+    }
+
+    #[test]
     fn test_reject_mismatched_size() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("00000000000000000000");
@@ -762,6 +756,76 @@ mod tests {
         let loader = CommitLogLoader::new(temp_dir.path().to_string_lossy().to_string(), expected_size, false);
 
         let result = loader.load_optimized();
-        assert!(result.is_err());
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("mismatched CommitLog size must fail"),
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "{} length {} not matched expected size {}, please check it manually",
+                file_path.display(),
+                actual_size,
+                expected_size
+            )
+        );
+    }
+
+    #[test]
+    fn sequential_validation_returns_first_error_before_removing_empty_last_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let expected_size = 4096u64;
+        let bad_path = temp_dir.path().join("00000000000000000000");
+        let empty_last_path = temp_dir.path().join("00000000000000004096");
+        std::fs::write(&bad_path, vec![0u8; 1]).unwrap();
+        std::fs::write(&empty_last_path, []).unwrap();
+        let loader = CommitLogLoader::new(temp_dir.path().to_string_lossy().to_string(), expected_size, false);
+
+        let error = match loader.load_optimized() {
+            Err(error) => error,
+            Ok(_) => panic!("the first invalid CommitLog file must fail"),
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().starts_with(&bad_path.display().to_string()));
+        assert!(empty_last_path.exists());
+    }
+
+    #[test]
+    fn parallel_validation_rejects_combined_corruption_before_mmap_creation() {
+        let temp_dir = TempDir::new().unwrap();
+        let expected_size = 4096u64;
+        let first_bad_path = temp_dir.path().join("00000000000000004096");
+        let second_bad_path = temp_dir.path().join("00000000000000012288");
+        let empty_last_path = temp_dir.path().join("00000000000000024576");
+        for index in 0..7u64 {
+            let path = temp_dir.path().join(format!("{:020}", index * expected_size));
+            let size = if path == first_bad_path {
+                expected_size - 1
+            } else if path == second_bad_path {
+                expected_size + 1
+            } else if path == empty_last_path {
+                0
+            } else {
+                expected_size
+            };
+            std::fs::write(path, vec![0u8; size as usize]).unwrap();
+        }
+        let loader = CommitLogLoader::new(temp_dir.path().to_string_lossy().to_string(), expected_size, true)
+            .with_lazy_mmap(true);
+
+        let error = match loader.load_optimized() {
+            Err(error) => error,
+            Ok(_) => panic!("parallel CommitLog validation must reject corruption"),
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let message = error.to_string();
+        assert!(
+            message.starts_with(&first_bad_path.display().to_string())
+                || message.starts_with(&second_bad_path.display().to_string()),
+            "unexpected corruption path: {message}"
+        );
     }
 }

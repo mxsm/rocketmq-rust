@@ -12,7 +12,62 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::PathBuf;
+
+use thiserror::Error;
 use tracing::info;
+
+/// Filesystem metadata required to validate and open one CommitLog segment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitLogFileMetadata {
+    /// Filesystem path of the CommitLog segment.
+    pub path: PathBuf,
+    /// Current length of the CommitLog segment in bytes.
+    pub size: u64,
+}
+
+/// Store-side action selected after validating one CommitLog segment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitLogFileLoadDecision {
+    /// Keep the segment and continue loading it.
+    Load,
+    /// Remove an empty final segment and omit it from the load result.
+    RemoveEmptyLast,
+}
+
+/// A CommitLog segment whose length violates the configured segment size.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error(
+    "{} length {actual} not matched expected size {expected}, please check it manually",
+    path.display()
+)]
+pub struct CommitLogFileValidationError {
+    /// Filesystem path of the invalid CommitLog segment.
+    pub path: PathBuf,
+    /// Observed segment length in bytes.
+    pub actual: u64,
+    /// Configured segment length in bytes.
+    pub expected: u64,
+}
+
+/// Validates one CommitLog segment without performing filesystem I/O.
+pub fn validate_commit_log_file(
+    metadata: &CommitLogFileMetadata,
+    expected: u64,
+    is_last: bool,
+) -> Result<CommitLogFileLoadDecision, CommitLogFileValidationError> {
+    if metadata.size == 0 && is_last {
+        return Ok(CommitLogFileLoadDecision::RemoveEmptyLast);
+    }
+    if metadata.size != expected {
+        return Err(CommitLogFileValidationError {
+            path: metadata.path.clone(),
+            actual: metadata.size,
+            expected,
+        });
+    }
+    Ok(CommitLogFileLoadDecision::Load)
+}
 
 /// Statistics for load operation.
 #[derive(Debug, Clone, Default)]

@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -513,3 +513,33 @@ python scripts/arc_mut_guard.py
   final guard、格式与 diff 检查通过；真实 gate golden 没有新增 `ArcMut`/`LocalFileMessageStore` occurrence。
 - [x] `[SCOPE]` M06-03i 只接入两条 abnormal recovery。PR-M06-03 父项和 M06 Exit Checklist 保持未完成；
   append/flush/group commit、CQ/Index、HA、Timer/POP、Local composition、runtime ownership 与持久格式均未迁移。
+
+## M06-03j CommitLog file metadata and validation evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::load` 现唯一拥有
+  `CommitLogFileMetadata`、`CommitLogFileLoadDecision`、`CommitLogFileValidationError` 与纯
+  `validate_commit_log_file`。Local 只按 path/actual/expected/expected-size/is-last 决定 Load、删除空尾文件或
+  typed mismatch error，不拥有 filesystem metadata/delete、rayon、CheetahString、DefaultMappedFile 或 mmap。
+  `expected = 0` 合同已冻结：last empty 删除、non-last empty 加载、non-empty 拒绝。
+- [x] `[COMPAT]` Store 删除私有 `FileMetadata` 及未使用的 `file_name` 字段，并让 canonical metadata 从
+  `fs::metadata` 贯穿到 mapped-file factory。parallel rayon map 与 sequential for 各在原位置调用一次 Local
+  validator；Load 保留，RemoveEmptyLast 继续原地 non-fatal delete+warn 并过滤，错误继续精确映射为
+  `InvalidData`。read-dir/filter/sort/>4、indexed parallel collect/flatten、sequential first-error、lazy/eager mmap、
+  memory hints、position/statistics/time 和公开 loader API 均未改变；legacy `files_removed` 仍为 0。
+- [x] `[TEST]` Local 7 项覆盖 exact Load、empty-last remove、non-last empty、short、long、expected-zero matrix，
+  以及 error fields/`Error`/逐字 Display。Store loader 14 项和 load integration 7 项（另 1 项 stress ignored）覆盖
+  sequential first-error 不删除后续空尾、parallel combined corruption、空尾过滤、顺序、统计、lazy last 与精确
+  error；recovery integration 19 项及 Store lib 576 项通过。
+- [x] `[REVIEW]` 75 项 comment/string-aware contract 锁定四个 Local owner、公开字段/枚举/函数签名与纯 decision
+  matrix，要求三个新增类型在 Store 仅 private import。两条 collector 的 validator 必须位于 rayon map/for 内且
+  位于真实 metadata 读取之后，mmap 创建必须等待完整 validation；同时锁定 non-fatal delete+warn、InvalidData、
+  indexed order/flatten、sequential first-error、公开 loader 签名、canonical metadata flow 与 `files_removed = 0`。
+  Local 5 个及 Store 15 个 mutation 覆盖 wrong-last、bypass、复制校验、decision swap、fatal delete、错误 kind/text、
+  validation 移出 closure、order/flatten、alias/brace/glob、签名和统计篡改。
+- [x] `[REV]` Local 全量 108 项、五组 feature check、Local/Store/workspace Clippy、Local `-D warnings` Rustdoc、
+  Store 普通 Rustdoc、架构 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、格式与 diff 检查通过。
+  canonical metadata 参数只改变既有 `DefaultMappedFile` return-type 邻接 fingerprint；BASE→HEAD relocation 已按
+  ADR-013 精确批准，promoted baseline 仍为 1,232 identities/3,377 occurrences，没有新增或移动 governed occurrence。
+- [x] `[SCOPE]` M06-03j 只迁移 CommitLog 文件长度验证边界；filesystem orchestration、mmap、append/parser/recovery、
+  flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership 与持久格式均未迁移。PR-M06-03 父项和 M06 Exit
+  Checklist 保持未完成。
