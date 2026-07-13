@@ -29,7 +29,8 @@ changed only by a separately reviewed fix:
 - the first unlock error stops later syscalls while dropping `VecDeque::Drain` still removes the remaining queue;
 - destroy does not use memory-lock handles and does not decrement manager statistics.
 
-`init_with_locker` remains crate-private and the new deterministic `destroy_with_unlocker` seam is private.
+`init_with_locker` remains crate-private and the new deterministic `destroy_with_unlocker` seam has no `pub`
+visibility of any kind.
 Moving the final Store production caller also lets `MemoryLockManager::lock_buffer_with` narrow from its temporary
 `#[doc(hidden)] pub` M06-03p visibility to `pub(crate)`. The Local canonical pool is its sole production caller
 outside the manager's public syscall wrapper. `lock_region_with` and `unlock_region_with` remain temporarily
@@ -48,14 +49,24 @@ GREEN passes:
 - Store-to-Local exact type identity: 1/1;
 - existing Store mapped-file transient-pool round trip: 1/1;
 - full Local suite: 69 unit plus 102 integration tests; nine existing doctests remain ignored;
-- full M06 source and mutation contract: 94/94.
+- full M06 source and mutation contract: 95/95.
+
+An independent review found that the first destroy-seam contract rejected only plain `pub fn` and did not freeze
+its caller surfaces. Contract-first RED proved that `pub(crate)`, `pub(super)`, `pub(in crate::base)`, an extra
+canonical production caller, an extra module test caller, and external Local production/integration-test callers
+were incorrectly accepted. GREEN parses the declaration visibility, requires exactly one production call from
+public `destroy`, requires exactly one call in each of the four named module tests, and requires zero calls in
+every other Local/Store production or test file.
 
 The source contract freezes the single Local owner, field schema, public API, exact queue/lifecycle bodies,
 manager projections, private injection seams, the crate-private `lock_buffer_with` boundary, and exact Store
-facade. Per-file production call counts prove Store no longer invokes `lock_buffer_with` and that the Local pool
-is its only production caller outside the manager. Negative mutations reject copied owners,
+facade. Per-file production/test call counts prove Store no longer invokes `lock_buffer_with`, the Local pool is
+its only production caller outside the manager, and `destroy_with_unlocker` cannot be called outside its exact
+public-destroy/module-test surfaces. Negative mutations reject copied owners,
 wrapper/type-alias/brace/glob facades, Clone/shared-field drift, real-commit default changes, iteration instead of
-drain, removed unlock calls, return-order changes, threshold reassociation, widened injection seams, and `Drop`.
+drain, removed unlock calls, return-order changes, threshold reassociation, `pub`, `pub(crate)`, `pub(super)`,
+`pub(self)`, and `pub(in ...)` destroy-seam widening, extra production/test callers, other widened injection
+seams, and `Drop`.
 
 ## Feature, platform, and architecture evidence
 

@@ -739,8 +739,11 @@ python scripts/arc_mut_guard.py
   错误停止后续 syscall，但 drain drop 仍清空剩余 queue；借出的 buffer 不处理，manager 统计不回退。
 - [x] `[TEST]` TDD RED 先由缺失 Local owner/module 和 Rust public fixture E0432 证明；GREEN 后 Local 公开
   Clone/共享状态/并发归还契约 2/2、内部生命周期 8/8、Store 类型身份 1/1、旧 Store mapped-file round-trip
-  1/1、完整 Local 171 项及 M06 source/mutation contract 94/94 通过。mutation contract 拒绝 owner copy、facade
-  wrapper、共享字段/API/阈值/queue 顺序/drain/unlock/real-commit/Drop 漂移及公开 injection seam。
+  1/1、完整 Local 171 项及 M06 source/mutation contract 95/95 通过。独立审查 follow-up RED 证明旧 contract
+  会放过 `destroy_with_unlocker` 的 `pub(crate)`/`pub(super)`/`pub(in ...)` 及额外 production/test caller；GREEN
+  后精确要求 production 仅由公开 `destroy` 调用一次、四个命名模块测试各调用一次、其他 Local/Store 文件为零。
+  mutation contract 同时拒绝 owner copy、facade wrapper、共享字段/API/阈值/queue 顺序/drain/unlock/
+  real-commit/Drop 漂移与任何 `pub` destroy seam visibility。
 - [x] `[FEATURE]` 未修改 Cargo manifest、feature 或依赖；Local 与 Store 各七组 feature closure、default/all
   package Clippy、Local strict Rustdoc 均通过。Store 普通 Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。
 - [x] `[PLATFORM]` Windows 完成全部 focused/full 验证；WSL/Linux 隔离 target 通过公开契约 2/2、内部语义
