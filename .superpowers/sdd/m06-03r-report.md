@@ -69,6 +69,15 @@ exact old-path import plus `file.set_len(OS_PAGE_SIZE)?;`, with exactly two cons
 algorithm. Mutations also prove that unrelated `/ 2` and dynamic page-size division remain accepted. The
 all-Store Local-policy reference map remains exact.
 
+A subsequent reviewer check found that the Local owner and DefaultMappedFile wrapper uniqueness checks still
+used the old first-`mod tests` truncation even though arithmetic and reference checks used item-span masking.
+Contract-first RED reproduced 24 post-test escapes: for both policy methods on both owners, method-level `cfg`
+and `cfg_attr`, impl-level `cfg` and `cfg_attr`, an active duplicate impl, and an active `impl ... where`
+duplicate. Four positive decoys separately prove that exact `#[cfg(test)]` impls are ignored. GREEN now derives
+one masked production view for each canonical Local and Default source and reuses it for the constant/re-export,
+global definition count, inherent impl/method record, signature/body, fixed-page arithmetic, and reference-map
+checks. Exact test items are masked while production items after them remain visible.
+
 ## Feature, platform, and architecture evidence
 
 Local and Store each pass seven feature checks covering their default/no-default or local-file combinations,

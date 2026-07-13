@@ -996,6 +996,37 @@ def cfg_attr_method_mutation(source: str, function_name: str) -> str:
     )
 
 
+def post_test_method_impl_mutation(
+    source: str,
+    type_name: str,
+    method_signature: str,
+    mutation_kind: str,
+) -> str:
+    impl_attribute = {
+        "test_only_impl": "#[cfg(test)]\n",
+        "impl_cfg": "#[cfg(any())]\n",
+        "impl_cfg_attr": "#[cfg_attr(any(), cfg(any()))]\n",
+    }.get(mutation_kind, "")
+    method_attribute = {
+        "method_cfg": "    #[cfg(any())]\n",
+        "method_cfg_attr": "    #[cfg_attr(any(), cfg(any()))]\n",
+    }.get(mutation_kind, "")
+    where_clause = (
+        f"\nwhere\n    {type_name}: Sized,"
+        if mutation_kind == "active_where_duplicate"
+        else ""
+    )
+    return (
+        source
+        + "\n"
+        + impl_attribute
+        + f"impl {type_name}{where_clause}\n{{\n"
+        + method_attribute
+        + f"    {method_signature} {{\n        false\n    }}\n"
+        + "}\n"
+    )
+
+
 def named_function_signature(source: str, function_name: str) -> str | None:
     active = active_rust_source(source)
     match = re.search(rf"\bpub\s+async\s+fn\s+{re.escape(function_name)}\b", active)
@@ -2345,7 +2376,7 @@ def kernel_item_owner_occurrences(
 
 
 def mapped_file_progress_policy_violations(source: str) -> list[str]:
-    production = re.split(r"#\[cfg\(test\)\]\s*mod\s+tests", source, maxsplit=1)[0]
+    production = source_without_cfg_test_items(source)
     compact = compact_rust(production)
     violations: list[str] = []
 
@@ -2408,9 +2439,10 @@ def mapped_file_progress_adapter_violations(
     production_sources: dict[Path, str],
 ) -> list[str]:
     violations = mapped_file_progress_policy_violations(canonical_source)
+    default_production = source_without_cfg_test_items(default_mapped_file_source)
     violations.extend(
         direct_exact_reexport_violations(
-            default_mapped_file_source,
+            default_production,
             "rocketmq_store_local::mapped_file::kernel",
             "OS_PAGE_SIZE",
         )
@@ -2426,11 +2458,6 @@ def mapped_file_progress_adapter_violations(
         ),
         "is_able_to_commit": "self.progress.is_able_to_commit(commit_least_pages)",
     }
-    default_production = re.split(
-        r"#\[cfg\(test\)\]\s*mod\s+tests",
-        default_mapped_file_source,
-        maxsplit=1,
-    )[0]
     wrapper_records = inherent_method_records(
         default_production,
         "DefaultMappedFile",
@@ -2460,14 +2487,18 @@ def mapped_file_progress_adapter_violations(
             violations.append(f"Store {function_name} wrapper must be an exact Local delegation")
 
     store_policy_sources = dict(production_sources)
-    store_policy_sources[DEFAULT_MAPPED_FILE_PATH] = default_mapped_file_source
+    store_policy_sources[DEFAULT_MAPPED_FILE_PATH] = default_production
     violations.extend(
         store_production_mapped_file_policy_violations(store_policy_sources)
     )
 
     references_by_path: dict[Path, list[str]] = {}
     for path, source in production_sources.items():
-        production = source_without_cfg_test_items(source)
+        production = (
+            default_production
+            if path == DEFAULT_MAPPED_FILE_PATH
+            else source_without_cfg_test_items(source)
+        )
         references = MAPPED_FILE_POLICY_REFERENCE.findall(active_rust_source(production))
         if references:
             references_by_path[path] = references
@@ -5560,6 +5591,72 @@ struct DefaultMappedFile {
                     self.assertNotEqual(canonical, mutation)
                     self.assertNotEqual([], mapped_file_progress_policy_violations(mutation))
 
+        local_post_test_signatures = {
+            "is_able_to_flush": (
+                "pub fn is_able_to_flush("
+                "&self, read_position: i32, flush_least_pages: i32) -> bool"
+            ),
+            "is_able_to_commit": (
+                "pub fn is_able_to_commit(&self, commit_least_pages: i32) -> bool"
+            ),
+        }
+        local_post_test_base = canonical + """
+
+#[cfg(test)]
+mod tests {
+    use super::MappedFileProgress;
+
+    impl MappedFileProgress {
+        pub fn is_able_to_flush(
+            &self,
+            _read_position: i32,
+            _flush_least_pages: i32,
+        ) -> bool {
+            false
+        }
+
+        pub fn is_able_to_commit(&self, _commit_least_pages: i32) -> bool {
+            false
+        }
+    }
+}
+"""
+        post_test_mutation_kinds = (
+            "method_cfg",
+            "method_cfg_attr",
+            "impl_cfg",
+            "impl_cfg_attr",
+            "active_duplicate",
+            "active_where_duplicate",
+        )
+        for function_name, signature in local_post_test_signatures.items():
+            test_only_decoy = post_test_method_impl_mutation(
+                local_post_test_base,
+                "MappedFileProgress",
+                signature,
+                "test_only_impl",
+            )
+            with self.subTest(local_post_test=function_name, mutation="test_only_impl"):
+                self.assertEqual(
+                    [],
+                    mapped_file_progress_policy_violations(test_only_decoy),
+                )
+            for mutation_kind in post_test_mutation_kinds:
+                mutation = post_test_method_impl_mutation(
+                    local_post_test_base,
+                    "MappedFileProgress",
+                    signature,
+                    mutation_kind,
+                )
+                with self.subTest(
+                    local_post_test=function_name,
+                    mutation=mutation_kind,
+                ):
+                    self.assertNotEqual(
+                        [],
+                        mapped_file_progress_policy_violations(mutation),
+                    )
+
         for function_name in MAPPED_FILE_POLICY_METHODS:
             for visibility in (
                 "pub ",
@@ -5630,6 +5727,54 @@ struct DefaultMappedFile {
                     self.assertNotEqual(default_mapped_file, mutation)
                     mutated_sources = dict(production_sources)
                     mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                    self.assertNotEqual(
+                        [],
+                        mapped_file_progress_adapter_violations(
+                            canonical,
+                            mutation,
+                            mutated_sources,
+                        ),
+                    )
+
+        store_post_test_signatures = {
+            "is_able_to_flush": (
+                "fn is_able_to_flush(&self, flush_least_pages: i32) -> bool"
+            ),
+            "is_able_to_commit": (
+                "fn is_able_to_commit(&self, commit_least_pages: i32) -> bool"
+            ),
+        }
+        for function_name, signature in store_post_test_signatures.items():
+            test_only_decoy = post_test_method_impl_mutation(
+                default_mapped_file,
+                "DefaultMappedFile",
+                signature,
+                "test_only_impl",
+            )
+            test_only_sources = dict(production_sources)
+            test_only_sources[DEFAULT_MAPPED_FILE_PATH] = test_only_decoy
+            with self.subTest(store_post_test=function_name, mutation="test_only_impl"):
+                self.assertEqual(
+                    [],
+                    mapped_file_progress_adapter_violations(
+                        canonical,
+                        test_only_decoy,
+                        test_only_sources,
+                    ),
+                )
+            for mutation_kind in post_test_mutation_kinds:
+                mutation = post_test_method_impl_mutation(
+                    default_mapped_file,
+                    "DefaultMappedFile",
+                    signature,
+                    mutation_kind,
+                )
+                mutated_sources = dict(production_sources)
+                mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                with self.subTest(
+                    store_post_test=function_name,
+                    mutation=mutation_kind,
+                ):
                     self.assertNotEqual(
                         [],
                         mapped_file_progress_adapter_violations(

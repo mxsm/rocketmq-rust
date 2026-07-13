@@ -791,6 +791,13 @@ python scripts/arc_mut_guard.py
   `StoreCheckpoint` 是唯一兼容例外：必须精确保留旧路径 import、`file.set_len(OS_PAGE_SIZE)?;` 及恰好两处常量
   引用，禁止承载 threshold algorithm；mutation 同时证明合法 `/ 2`、动态 `/ page_size` 和全 Store 精确 Local
   policy reference map 均未回归。
+- [x] `[REV-POST-TEST]` 后续审查发现 Local owner 与 Default wrapper 唯一性检查仍沿用“首个 `mod tests` 前
+  截断”，与已使用 item-span masking 的 arithmetic/reference 检查不一致。contract-first RED 对 Local/Default
+  两个 policy method 分别复现 method `cfg`/`cfg_attr`、impl `cfg`/`cfg_attr`、active duplicate 和 active
+  `impl ... where`，共 24 个 post-test production 逃逸；另有 4 个正向 decoy 证明精确 `#[cfg(test)]` impl 应被
+  忽略。GREEN 后 canonical Local 与 Default 各只生成一份 masked production view，并统一供常量/re-export、
+  global definition count、inherent impl/method、签名/body、fixed-page arithmetic 与 reference map 使用；测试
+  item 被屏蔽，其后的 production item 仍参与合同审计。
 - [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Local 与 Store 各七组 feature closure、
   default/all-feature all-target Clippy、root workspace all-feature Clippy 和 Local strict Rustdoc 均通过；Store
   普通 Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。WSL/Linux 隔离 target 通过 Local focused 8/8、
