@@ -1711,6 +1711,43 @@ def _closure_body(function_body: str, marker: str) -> str | None:
     return None if extracted is None else extracted[0]
 
 
+def _decision_arm_body(scope: str, decision: str) -> str | None:
+    active = active_rust_source(scope)
+    pattern = re.compile(
+        rf"Ok\s*\(\s*CommitLogFileLoadDecision::{re.escape(decision)}\s*\)\s*=>\s*\{{"
+    )
+    matches = list(pattern.finditer(active))
+    if len(matches) != 1:
+        return None
+    opening_brace = active.find("{", matches[0].start())
+    extracted = braced_body(active, opening_brace)
+    return None if extracted is None else extracted[0]
+
+
+def _remove_file_if_let_parts(arm_body: str) -> tuple[str, str, str] | None:
+    active = active_rust_source(arm_body)
+    error_match = re.search(
+        r"if\s+let\s+Err\s*\(\s*error\s*\)\s*=\s*fs::remove_file\s*\(\s*path\s*\)\s*\{",
+        active,
+    )
+    if error_match is None or active[:error_match.start()].strip():
+        return None
+    error_open = active.find("{", error_match.start())
+    error_block = braced_body(active, error_open)
+    if error_block is None:
+        return None
+    error_body, error_end = error_block
+    else_match = re.match(r"\s*else\s*\{", active[error_end:])
+    if else_match is None:
+        return None
+    success_open = active.find("{", error_end + else_match.start())
+    success_block = braced_body(active, success_open)
+    if success_block is None:
+        return None
+    success_body, success_end = success_block
+    return error_body, success_body, active[success_end:]
+
+
 def store_commit_log_file_validation_violations(source: str) -> list[str]:
     production = source.split("#[cfg(test)]", maxsplit=1)[0]
     active = active_rust_source(production)
@@ -1824,15 +1861,33 @@ def store_commit_log_file_validation_violations(source: str) -> list[str]:
         ]
         if any(decision not in scope_normalized for decision in required_decisions):
             violations.append(f"Store {name} CommitLog validation decision adapter changed")
-        removal_index = scope_normalized.find("Ok(CommitLogFileLoadDecision::RemoveEmptyLast)=>")
-        removal_scope = scope_normalized[removal_index:] if removal_index >= 0 else ""
-        if (
-            "ifletErr(error)=fs::remove_file(path)" not in removal_scope
-            or "warn!(" not in removal_scope
-            or (name == "parallel" and "Ok(None)" not in removal_scope)
-            or re.search(r"fs::remove_file\(path\)[^;{}]*\?", removal_scope)
-        ):
+        removal_arm = _decision_arm_body(scope, "RemoveEmptyLast")
+        removal_parts = None if removal_arm is None else _remove_file_if_let_parts(removal_arm)
+        if removal_arm is None or removal_parts is None:
             violations.append(f"Store {name} empty-last removal semantics changed")
+            continue
+        delete_error_body, delete_success_body, removal_tail = removal_parts
+        active_delete_error = active_rust_source(delete_error_body)
+        forbidden_delete_failure = re.search(
+            r"\breturn\s+Err\s*\(|\bErr\s*\(|\bpanic\s*!|\.unwrap\s*\(|\.expect\s*\(|\?",
+            active_delete_error,
+        )
+        warn_only = re.fullmatch(
+            r"\s*warn\s*!\s*\(\s*,\s*path\s*,\s*error\s*\)\s*;\s*",
+            active_delete_error,
+        )
+        if forbidden_delete_failure is not None or warn_only is None:
+            violations.append(f"Store {name} empty-last delete failure is not warn-only")
+        if re.fullmatch(
+            r"\s*warn\s*!\s*\(\s*,\s*path\.display\s*\(\s*\)\s*\)\s*;\s*",
+            active_rust_source(delete_success_body),
+        ) is None:
+            violations.append(f"Store {name} empty-last delete success warning changed")
+        if name == "parallel":
+            if re.fullmatch(r"\s*Ok\s*\(\s*None\s*\)\s*", removal_tail) is None:
+                violations.append("Store parallel empty-last arm must finish with Ok(None)")
+        elif removal_tail.strip():
+            violations.append("Store sequential empty-last arm must continue after filtering")
 
     if not all(
         token in parallel_normalized
@@ -3236,6 +3291,21 @@ struct DefaultMappedFile {
         path = STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
         source = path.read_text(encoding="utf-8")
         self.assertEqual([], store_commit_log_file_validation_violations(source))
+        delete_warning = 'warn!("Failed to delete empty file {:?}: {}", path, error);'
+        fatal_delete = (
+            delete_warning
+            + "\n                        return Err(io::Error::new(io::ErrorKind::Other, error));"
+        )
+        parallel_fatal_delete = source.replace(delete_warning, fatal_delete, 1)
+        first_warning = source.find(delete_warning)
+        second_warning = source.find(delete_warning, first_warning + len(delete_warning))
+        self.assertGreaterEqual(first_warning, 0)
+        self.assertGreater(second_warning, first_warning)
+        sequential_fatal_delete = source[:second_warning] + source[second_warning:].replace(
+            delete_warning,
+            fatal_delete,
+            1,
+        )
         mutations = [
             source.replace("idx == last_file_idx", "idx != last_file_idx", 1),
             source.replace(
@@ -3293,6 +3363,8 @@ struct DefaultMappedFile {
                 1,
             ),
             source.replace("Ok((mapped_files, stats))", "stats.files_removed += 1; Ok((mapped_files, stats))", 1),
+            parallel_fatal_delete,
+            sequential_fatal_delete,
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):

@@ -732,7 +732,8 @@ mod tests {
             }
         }
         let empty_last_path = temp_dir.path().join(format!("{:020}", 4 * file_size));
-        let loader = CommitLogLoader::new(temp_dir.path().to_string_lossy().to_string(), file_size, true);
+        let loader =
+            CommitLogLoader::new(temp_dir.path().to_string_lossy().to_string(), file_size, true).with_lazy_mmap(true);
 
         let (files, stats) = loader.load_optimized().unwrap();
 
@@ -741,6 +742,11 @@ mod tests {
         assert_eq!(stats.total_files, 4);
         assert_eq!(stats.total_size_bytes, file_size * 4);
         assert_eq!(stats.files_removed, 0);
+        assert!(files[..3]
+            .iter()
+            .all(|file| file.is_lazy_mmap_enabled() && !file.is_mapped()));
+        assert!(!files[3].is_lazy_mmap_enabled());
+        assert!(files[3].is_mapped());
         assert!(!empty_last_path.exists());
     }
 

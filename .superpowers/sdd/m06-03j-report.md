@@ -34,11 +34,24 @@ the required byte-for-byte message.
   expected-zero matrix, typed fields, `Error`, and exact display text.
 - Store loader tests passed 14/14. New goldens prove sequential first-error leaves a later empty tail untouched,
   parallel combined corruption returns `InvalidData` for either bad path before mmap creation, and parallel empty
-  filtering preserves order, totals, lazy behavior, and legacy zero `files_removed` accounting.
-- The 75-case source contract includes five Local owner mutations and fifteen Store review mutations for wrong
+  filtering preserves order, totals, and legacy zero `files_removed` accounting. The empty-tail fixture explicitly
+  enables lazy mmap and proves that the first three retained historical files stay lazy/unmapped while the final
+  retained file stays eager/mapped.
+- The 75-case source contract includes five Local owner mutations and seventeen Store review mutations for wrong
   last-file predicates, validator bypass, copied size logic, decision swaps, fatal delete, error kind/text changes,
   validation moved outside its closure, rayon order/flatten, alias/brace/glob imports, signature drift, and
   `files_removed` increments.
+
+## Review follow-up
+
+The first review found that the original contract searched from the RemoveEmptyLast marker through the remainder
+of each collector. Two valid Rust mutations could therefore warn and then return a fatal error from the parallel
+or sequential delete-failure branch without being rejected. Both mutations were added first and produced the
+expected RED failures. The contract now extracts each collector's exact RemoveEmptyLast arm and nested
+`remove_file` Err body. That body must contain only the warning and cannot contain `return Err`, `Err(`, panic,
+unwrap, expect, or `?`; the parallel arm must terminate in `Ok(None)`, while the sequential arm must fall through
+to the next file after filtering. The two new mutations and the complete contract are GREEN. No production
+algorithm changed in this follow-up.
 
 ## Validation
 

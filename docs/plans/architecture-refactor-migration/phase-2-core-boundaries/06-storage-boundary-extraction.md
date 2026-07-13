@@ -529,13 +529,16 @@ python scripts/arc_mut_guard.py
 - [x] `[TEST]` Local 7 项覆盖 exact Load、empty-last remove、non-last empty、short、long、expected-zero matrix，
   以及 error fields/`Error`/逐字 Display。Store loader 14 项和 load integration 7 项（另 1 项 stress ignored）覆盖
   sequential first-error 不删除后续空尾、parallel combined corruption、空尾过滤、顺序、统计、lazy last 与精确
-  error；recovery integration 19 项及 Store lib 576 项通过。
+  error；空尾过滤 fixture 显式启用 lazy mmap，并证明过滤后前三个 historical 文件保持 lazy/unmapped、最后一个有效
+  文件保持 eager/mapped。recovery integration 19 项及 Store lib 576 项通过。
 - [x] `[REVIEW]` 75 项 comment/string-aware contract 锁定四个 Local owner、公开字段/枚举/函数签名与纯 decision
   matrix，要求三个新增类型在 Store 仅 private import。两条 collector 的 validator 必须位于 rayon map/for 内且
   位于真实 metadata 读取之后，mmap 创建必须等待完整 validation；同时锁定 non-fatal delete+warn、InvalidData、
   indexed order/flatten、sequential first-error、公开 loader 签名、canonical metadata flow 与 `files_removed = 0`。
-  Local 5 个及 Store 15 个 mutation 覆盖 wrong-last、bypass、复制校验、decision swap、fatal delete、错误 kind/text、
-  validation 移出 closure、order/flatten、alias/brace/glob、签名和统计篡改。
+  contract 分别提取 parallel/sequential 的 RemoveEmptyLast arm 和内层 remove-file Err body，要求失败分支只能 warn，
+  禁止 return-Err/Err/panic/unwrap/expect/?；parallel 必须以 `Ok(None)` 结束，sequential 必须正常过滤后继续。
+  Local 5 个及 Store 17 个 mutation 覆盖 wrong-last、bypass、复制校验、decision swap、两条有效 Rust fatal-delete、
+  错误 kind/text、validation 移出 closure、order/flatten、alias/brace/glob、签名和统计篡改。
 - [x] `[REV]` Local 全量 108 项、五组 feature check、Local/Store/workspace Clippy、Local `-D warnings` Rustdoc、
   Store 普通 Rustdoc、架构 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、格式与 diff 检查通过。
   canonical metadata 参数只改变既有 `DefaultMappedFile` return-type 邻接 fingerprint；BASE→HEAD relocation 已按
