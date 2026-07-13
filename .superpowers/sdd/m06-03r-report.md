@@ -58,6 +58,17 @@ fixed-page aliases and rejects any DefaultMappedFile production division whose d
 without rejecting unrelated `/ 2` or dynamic `/ page_size` alignment. The full production reference map still
 rejects every additional Local-policy caller or function-item reference.
 
+Final review found that the fixed-page arithmetic scan still inspected only `default_mapped_file_impl.rs`, so a
+raw policy helper could be moved to another Store source file. Contract-first RED reproduced three such escapes:
+two helpers in separate Store paths and a divisor imported through a renamed cross-file constant. GREEN now
+scans every production source under `rocketmq-store/src`, masks exact `#[cfg(test)]` items without discarding
+later production code, resolves fixed-page aliases across files, and includes the offending path in every
+diagnostic. Threshold-name comparisons remain scoped to DefaultMappedFile because other Store orchestration has
+legitimate least-page comparisons. `StoreCheckpoint` is the sole compatibility exception and must retain the
+exact old-path import plus `file.set_len(OS_PAGE_SIZE)?;`, with exactly two constant references and no threshold
+algorithm. Mutations also prove that unrelated `/ 2` and dynamic page-size division remain accepted. The
+all-Store Local-policy reference map remains exact.
+
 ## Feature, platform, and architecture evidence
 
 Local and Store each pass seven feature checks covering their default/no-default or local-file combinations,

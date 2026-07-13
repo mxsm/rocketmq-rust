@@ -783,6 +783,14 @@ python scripts/arc_mut_guard.py
   签名/body 精确；Store wrapper 还须无任何 `pub` visibility。安全整数表达式 resolver 解析 fixed-page
   alias chain，并拒绝 DefaultMappedFile production 中 divisor resolve 为 4096 的 page division，同时不误伤
   合法 `/ 2` 或动态 `/ page_size` alignment；全 production reference map 继续拒绝额外 caller/reference。
+- [x] `[REV-FINAL]` 最终审查发现 fixed-page arithmetic scanner 仍只覆盖 `default_mapped_file_impl.rs`；
+  contract-first RED 复现了两个 Store 外部文件 raw helper 及一个跨文件 renamed constant alias 的三处逃逸。
+  GREEN 将 divisor/alias 扫描扩展到全部 `rocketmq-store/src/**/*.rs` production source；精确屏蔽
+  `#[cfg(test)]` item 而不截断其后的 production code，跨文件传播解析值为 4096 的 alias，并在每条违规诊断中
+  携带文件路径。threshold-name comparison 仍只检查 DefaultMappedFile，避免误伤 Store 合法 orchestration。
+  `StoreCheckpoint` 是唯一兼容例外：必须精确保留旧路径 import、`file.set_len(OS_PAGE_SIZE)?;` 及恰好两处常量
+  引用，禁止承载 threshold algorithm；mutation 同时证明合法 `/ 2`、动态 `/ page_size` 和全 Store 精确 Local
+  policy reference map 均未回归。
 - [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Local 与 Store 各七组 feature closure、
   default/all-feature all-target Clippy、root workspace all-feature Clippy 和 Local strict Rustdoc 均通过；Store
   普通 Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。WSL/Linux 隔离 target 通过 Local focused 8/8、

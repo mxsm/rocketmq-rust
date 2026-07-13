@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 import re
 import tomllib
 import unittest
@@ -46,6 +47,7 @@ MAPPED_FILE_KERNEL_PATH = Path("rocketmq-store-local/src/mapped_file/kernel.rs")
 DEFAULT_MAPPED_FILE_PATH = Path(
     "rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"
 )
+STORE_CHECKPOINT_PATH = Path("rocketmq-store/src/base/store_checkpoint.rs")
 MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush", "is_able_to_commit")
 MAPPED_FILE_POLICY_REFERENCE = re.compile(
     r"(?:\.|::)\s*(is_able_to_flush|is_able_to_commit)\b"
@@ -570,7 +572,8 @@ def inherent_method_records(
     return records
 
 
-def rust_function_bodies(source: str) -> list[tuple[str, str]]:
+@functools.lru_cache(maxsize=512)
+def rust_function_bodies(source: str) -> tuple[tuple[str, str], ...]:
     active = active_rust_source(source)
     bodies: list[tuple[str, str]] = []
     for function_match in re.finditer(
@@ -584,7 +587,7 @@ def rust_function_bodies(source: str) -> list[tuple[str, str]]:
         extracted = braced_body(active, opening_brace)
         if extracted is not None:
             bodies.append((function_match.group("name"), extracted[0]))
-    return bodies
+    return tuple(bodies)
 
 
 def rust_integer_expression_value(
@@ -663,6 +666,22 @@ def resolved_integer_aliases(
     *,
     top_level_only: bool = False,
 ) -> dict[str, int]:
+    seed_items = tuple(sorted((seed or {}).items()))
+    return dict(
+        cached_resolved_integer_aliases(
+            source,
+            seed_items,
+            top_level_only,
+        )
+    )
+
+
+@functools.lru_cache(maxsize=2048)
+def cached_resolved_integer_aliases(
+    source: str,
+    seed_items: tuple[tuple[str, int], ...],
+    top_level_only: bool,
+) -> tuple[tuple[str, int], ...]:
     active = active_rust_source(source)
     assignments: list[tuple[str, str]] = []
     brace_depth = 0
@@ -679,7 +698,7 @@ def resolved_integer_aliases(
                 continue
         assignments.append((match.group("name"), match.group("expression")))
 
-    aliases = dict(seed or {})
+    aliases = dict(seed_items)
     unresolved = assignments
     for _ in range(len(assignments) + 1):
         next_unresolved: list[tuple[str, str]] = []
@@ -695,7 +714,7 @@ def resolved_integer_aliases(
         unresolved = next_unresolved
         if not changed:
             break
-    return aliases
+    return tuple(sorted(aliases.items()))
 
 
 def closing_parenthesis(source: str, opening_parenthesis: int) -> int | None:
@@ -742,7 +761,69 @@ def division_rhs_expressions(statement: str) -> list[str]:
     return expressions
 
 
-def store_threshold_arithmetic_violations(source: str) -> list[str]:
+@functools.lru_cache(maxsize=512)
+def source_without_cfg_test_items(source: str) -> str:
+    active = active_rust_source(source)
+    spans: list[tuple[int, int]] = []
+    cfg_test = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
+    for cfg_match in cfg_test.finditer(active):
+        cursor = cfg_match.end()
+        while cursor < len(active) and active[cursor].isspace():
+            cursor += 1
+        while active.startswith("#[", cursor):
+            attribute_end = active.find("]", cursor + 2)
+            if attribute_end == -1:
+                break
+            cursor = attribute_end + 1
+            while cursor < len(active) and active[cursor].isspace():
+                cursor += 1
+
+        field = re.match(r"[A-Za-z_][A-Za-z0-9_]*\s*:", active[cursor:])
+        if field is not None:
+            comma = active.find(",", cursor + field.end())
+            if comma != -1:
+                spans.append((cfg_match.start(), comma + 1))
+            continue
+
+        opening_brace = active.find("{", cursor)
+        semicolon = active.find(";", cursor)
+        if semicolon != -1 and (opening_brace == -1 or semicolon < opening_brace):
+            spans.append((cfg_match.start(), semicolon + 1))
+            continue
+        extracted = braced_body(active, opening_brace) if opening_brace != -1 else None
+        if extracted is not None:
+            spans.append((cfg_match.start(), extracted[1]))
+
+    output = list(active)
+    for start, end in spans:
+        for index in range(start, end):
+            if output[index] != "\n":
+                output[index] = " "
+    return "".join(output)
+
+
+def store_threshold_arithmetic_violations(
+    source: str,
+    fixed_page_aliases: dict[str, int] | None = None,
+    *,
+    check_threshold_comparisons: bool = True,
+) -> list[str]:
+    seed = fixed_page_aliases or {"OS_PAGE_SIZE": 4096}
+    return list(
+        cached_store_threshold_arithmetic_violations(
+            source,
+            tuple(sorted(seed.items())),
+            check_threshold_comparisons,
+        )
+    )
+
+
+@functools.lru_cache(maxsize=1024)
+def cached_store_threshold_arithmetic_violations(
+    source: str,
+    fixed_page_alias_items: tuple[tuple[str, int], ...],
+    check_threshold_comparisons: bool,
+) -> tuple[str, ...]:
     threshold = re.compile(r"\b(?:flush_least_pages|commit_least_pages)\b")
     threshold_operator = re.compile(
         r"(?:>=|<=|==|!=|>|<|[+\-*/%])|"
@@ -751,13 +832,13 @@ def store_threshold_arithmetic_violations(source: str) -> list[str]:
     )
     module_aliases = resolved_integer_aliases(
         source,
-        {"OS_PAGE_SIZE": 4096},
+        dict(fixed_page_alias_items),
         top_level_only=True,
     )
     violations: list[str] = []
     for function_name, body in rust_function_bodies(source):
         statements = re.split(r"[;{}]", body)
-        if any(
+        if check_threshold_comparisons and any(
             threshold.search(statement) is not None
             and threshold_operator.search(statement) is not None
             for statement in statements
@@ -780,6 +861,74 @@ def store_threshold_arithmetic_violations(source: str) -> list[str]:
             violations.append(
                 f"Store {function_name} retained fixed-page division"
             )
+    return tuple(violations)
+
+
+def store_fixed_page_aliases(production_sources: dict[Path, str]) -> dict[str, int]:
+    fixed_aliases = {"OS_PAGE_SIZE": 4096}
+    use_alias = re.compile(
+        r"\buse\s+[^;{}]*\b(?P<source>[A-Za-z_][A-Za-z0-9_]*)\s+as\s+"
+        r"(?P<alias>[A-Za-z_][A-Za-z0-9_]*)\s*;"
+    )
+    changed = True
+    while changed:
+        changed = False
+        for source in production_sources.values():
+            aliases = resolved_integer_aliases(
+                source,
+                fixed_aliases,
+                top_level_only=True,
+            )
+            for alias, value in aliases.items():
+                if value == 4096 and alias not in fixed_aliases:
+                    fixed_aliases[alias] = value
+                    changed = True
+            for match in use_alias.finditer(active_rust_source(source)):
+                if (
+                    match.group("source") in fixed_aliases
+                    and match.group("alias") not in fixed_aliases
+                ):
+                    fixed_aliases[match.group("alias")] = 4096
+                    changed = True
+    return fixed_aliases
+
+
+def store_checkpoint_page_compatibility_violations(source: str) -> list[str]:
+    compact = re.sub(r"\s+", "", source_without_cfg_test_items(source))
+    expected_import = (
+        "usecrate::log_file::mapped_file::default_mapped_file_impl::OS_PAGE_SIZE;"
+    )
+    violations: list[str] = []
+    if expected_import not in compact:
+        violations.append("StoreCheckpoint OS_PAGE_SIZE import changed")
+    if "file.set_len(OS_PAGE_SIZE)?;" not in compact:
+        violations.append("StoreCheckpoint OS_PAGE_SIZE set_len compatibility changed")
+    if compact.count("OS_PAGE_SIZE") != 2:
+        violations.append("StoreCheckpoint retained an extra OS_PAGE_SIZE reference")
+    return violations
+
+
+def store_production_mapped_file_policy_violations(
+    sources: dict[Path, str],
+) -> list[str]:
+    store_sources = {
+        path: source_without_cfg_test_items(source)
+        for path, source in sources.items()
+        if path.parts[:2] == ("rocketmq-store", "src")
+    }
+    fixed_page_aliases = store_fixed_page_aliases(store_sources)
+    violations: list[str] = []
+    for path, source in store_sources.items():
+        source_violations = store_threshold_arithmetic_violations(
+            source,
+            fixed_page_aliases,
+            check_threshold_comparisons=path == DEFAULT_MAPPED_FILE_PATH,
+        )
+        if path == STORE_CHECKPOINT_PATH:
+            source_violations.extend(store_checkpoint_page_compatibility_violations(source))
+        elif path != DEFAULT_MAPPED_FILE_PATH and "OS_PAGE_SIZE" in active_rust_source(source):
+            source_violations.append("unexpected Store OS_PAGE_SIZE compatibility reference")
+        violations.extend(f"{path.as_posix()}: {violation}" for violation in source_violations)
     return violations
 
 
@@ -1867,6 +2016,7 @@ def active_tracing_info_targets(source: str) -> list[str | None]:
     return targets
 
 
+@functools.lru_cache(maxsize=1024)
 def active_rust_source(source: str) -> str:
     output: list[str] = []
     index = 0
@@ -2309,11 +2459,15 @@ def mapped_file_progress_adapter_violations(
         if record.body != expected_wrapper_bodies[function_name]:
             violations.append(f"Store {function_name} wrapper must be an exact Local delegation")
 
-    violations.extend(store_threshold_arithmetic_violations(default_production))
+    store_policy_sources = dict(production_sources)
+    store_policy_sources[DEFAULT_MAPPED_FILE_PATH] = default_mapped_file_source
+    violations.extend(
+        store_production_mapped_file_policy_violations(store_policy_sources)
+    )
 
     references_by_path: dict[Path, list[str]] = {}
     for path, source in production_sources.items():
-        production = re.split(r"#\[cfg\(test\)\]\s*mod\s+tests", source, maxsplit=1)[0]
+        production = source_without_cfg_test_items(source)
         references = MAPPED_FILE_POLICY_REFERENCE.findall(active_rust_source(production))
         if references:
             references_by_path[path] = references
@@ -5551,6 +5705,116 @@ mod tests""",
                         split_helper_sources,
                     ),
                 )
+
+        out_of_file_helpers = {
+            Path("rocketmq-store/src/base/swappable.rs"): """
+fn legacy_page_delta(source: i32, progress: i32) -> i32 {
+    (source - progress) / (1024 * 4)
+}
+
+fn duplicate_policy(source: i32, progress: i32, least: i32) -> bool {
+    legacy_page_delta(source, progress) >= least
+}
+""",
+            Path("rocketmq-store/src/base/allocate_mapped_file_service.rs"): """
+fn legacy_page_delta(source: i32, progress: i32) -> i32 {
+    let half_page = 2048;
+    let page_unit = half_page * 2;
+    (source - progress) / page_unit
+}
+
+fn duplicate_policy(source: i32, progress: i32, minimum_pages: i32) -> bool {
+    legacy_page_delta(source, progress) >= minimum_pages
+}
+""",
+        }
+        for helper_path, helper_definition in out_of_file_helpers.items():
+            out_of_file_sources = dict(production_sources)
+            out_of_file_sources[helper_path] += helper_definition
+            with self.subTest(out_of_file_helper=helper_path):
+                violations = mapped_file_progress_adapter_violations(
+                    canonical,
+                    default_mapped_file,
+                    out_of_file_sources,
+                )
+                self.assertNotEqual([], violations)
+                self.assertTrue(
+                    any(helper_path.as_posix() in violation for violation in violations)
+                )
+
+        cross_file_alias_sources = dict(production_sources)
+        cross_file_alias_sources[Path("rocketmq-store/src/base/swappable.rs")] += """
+pub(crate) const LEGACY_PAGE_UNIT: i32 = 1024 * 4;
+"""
+        cross_file_alias_sources[
+            Path("rocketmq-store/src/base/allocate_mapped_file_service.rs")
+        ] += """
+use crate::base::swappable::LEGACY_PAGE_UNIT as PAGE_UNIT;
+
+fn legacy_page_delta(source: i32, progress: i32) -> i32 {
+    (source - progress) / PAGE_UNIT
+}
+
+fn duplicate_policy(source: i32, progress: i32, minimum_pages: i32) -> bool {
+    legacy_page_delta(source, progress) >= minimum_pages
+}
+"""
+        with self.subTest(cross_file_alias=True):
+            violations = mapped_file_progress_adapter_violations(
+                canonical,
+                default_mapped_file,
+                cross_file_alias_sources,
+            )
+            self.assertNotEqual([], violations)
+            self.assertTrue(
+                any(
+                    "rocketmq-store/src/base/allocate_mapped_file_service.rs"
+                    in violation
+                    for violation in violations
+                )
+            )
+
+        store_checkpoint = production_sources[STORE_CHECKPOINT_PATH]
+        aliased_checkpoint = store_checkpoint.replace(
+            "use crate::log_file::mapped_file::default_mapped_file_impl::OS_PAGE_SIZE;",
+            "use crate::log_file::mapped_file::default_mapped_file_impl::"
+            "OS_PAGE_SIZE as CHECKPOINT_PAGE_SIZE;",
+            1,
+        ).replace(
+            "file.set_len(OS_PAGE_SIZE)?;",
+            "file.set_len(CHECKPOINT_PAGE_SIZE)?;",
+            1,
+        )
+        self.assertNotEqual(store_checkpoint, aliased_checkpoint)
+        aliased_checkpoint_sources = dict(production_sources)
+        aliased_checkpoint_sources[STORE_CHECKPOINT_PATH] = aliased_checkpoint
+        with self.subTest(aliased_checkpoint=True):
+            violations = mapped_file_progress_adapter_violations(
+                canonical,
+                default_mapped_file,
+                aliased_checkpoint_sources,
+            )
+            self.assertNotEqual([], violations)
+            self.assertTrue(
+                any(STORE_CHECKPOINT_PATH.as_posix() in violation for violation in violations)
+            )
+
+        checkpoint_policy_sources = dict(production_sources)
+        checkpoint_policy_sources[STORE_CHECKPOINT_PATH] += """
+fn forbidden_checkpoint_page_delta(source: i32, progress: i32) -> i32 {
+    (source - progress) / OS_PAGE_SIZE as i32
+}
+"""
+        with self.subTest(checkpoint_page_policy=True):
+            violations = mapped_file_progress_adapter_violations(
+                canonical,
+                default_mapped_file,
+                checkpoint_policy_sources,
+            )
+            self.assertNotEqual([], violations)
+            self.assertTrue(
+                any(STORE_CHECKPOINT_PATH.as_posix() in violation for violation in violations)
+            )
 
         allowed_dynamic_division = default_mapped_file.replace(
             "#[cfg(test)]\nmod tests",
