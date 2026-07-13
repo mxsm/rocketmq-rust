@@ -36,6 +36,11 @@ use tracing::warn;
 use rocketmq_store_local::commit_log::load::validate_commit_log_file;
 use rocketmq_store_local::commit_log::load::CommitLogFileLoadDecision;
 use rocketmq_store_local::commit_log::load::CommitLogFileMetadata;
+use rocketmq_store_local::commit_log::load::CommitLogMappingEntry;
+use rocketmq_store_local::commit_log::load::CommitLogMappingExecution;
+use rocketmq_store_local::commit_log::load::CommitLogMappingMode;
+use rocketmq_store_local::commit_log::load::CommitLogMappingOptions;
+use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;
 pub use rocketmq_store_local::commit_log::load::LoadStatistics;
 pub use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
 pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
@@ -195,12 +200,18 @@ impl CommitLogLoader {
 
         stats.parallel_load_time_ms = parallel_start.elapsed().as_millis();
         stats.total_files = file_metadata.len();
-        stats.total_size_bytes = file_metadata.iter().map(|m| m.size).sum();
+        stats.total_size_bytes = file_metadata.iter().map(|metadata| metadata.size).sum();
 
-        let (mapped_files, mmap_advice_stats) = if self.enable_parallel && file_metadata.len() > 4 {
-            self.create_mapped_files_parallel(&file_metadata)?
-        } else {
-            self.create_mapped_files_sequential(&file_metadata)?
+        let mapping_plan = CommitLogMappingPlan::new(
+            file_metadata,
+            CommitLogMappingOptions {
+                parallel_enabled: self.enable_parallel,
+                lazy_mmap_enabled: self.lazy_mmap_enable,
+            },
+        );
+        let (mapped_files, mmap_advice_stats) = match mapping_plan.execution() {
+            CommitLogMappingExecution::Parallel => self.create_mapped_files_parallel(mapping_plan.entries())?,
+            CommitLogMappingExecution::Sequential => self.create_mapped_files_sequential(mapping_plan.entries())?,
         };
         stats.mmap_advice_attempts = mmap_advice_stats.mmap_advice_attempts;
         stats.mmap_advice_successes = mmap_advice_stats.mmap_advice_successes;
@@ -288,15 +299,13 @@ impl CommitLogLoader {
     /// Create mapped files in parallel (with synchronization for Vec::push)
     fn create_mapped_files_parallel(
         &self,
-        metadata: &[CommitLogFileMetadata],
+        entries: &[CommitLogMappingEntry],
     ) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
         // Parallel creation with ordered collection
-        let file_count = metadata.len();
-        let results: Result<Vec<_>, io::Error> = metadata
+        let results: Result<Vec<_>, io::Error> = entries
             .par_iter()
-            .enumerate()
-            .map(|(idx, meta)| {
-                let mapped_file = self.create_mapped_file(meta, idx, file_count)?;
+            .map(|entry| {
+                let mapped_file = self.create_mapped_file(entry)?;
 
                 // Apply memory hints for sequential access
                 let (mmap_advice_result, file_prefetch_result) = self.apply_memory_hints(&mapped_file);
@@ -329,18 +338,17 @@ impl CommitLogLoader {
     /// Fallback: sequential mapped file creation
     fn create_mapped_files_sequential(
         &self,
-        metadata: &[CommitLogFileMetadata],
+        entries: &[CommitLogMappingEntry],
     ) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
-        let mut mapped_files = Vec::with_capacity(metadata.len());
+        let mut mapped_files = Vec::with_capacity(entries.len());
         let mut mmap_advice_stats = LoadStatistics {
             recovery_mmap_advice: self.recovery_mmap_advice,
             recovery_file_prefetch: self.recovery_file_prefetch,
             ..LoadStatistics::default()
         };
 
-        let file_count = metadata.len();
-        for (idx, meta) in metadata.iter().enumerate() {
-            let mapped_file = self.create_mapped_file(meta, idx, file_count)?;
+        for entry in entries {
+            let mapped_file = self.create_mapped_file(entry)?;
 
             let (mmap_advice_result, file_prefetch_result) = self.apply_memory_hints(&mapped_file);
             record_mmap_advice(&mut mmap_advice_stats, mmap_advice_result);
@@ -356,17 +364,14 @@ impl CommitLogLoader {
         Ok((mapped_files, mmap_advice_stats))
     }
 
-    fn create_mapped_file(
-        &self,
-        meta: &CommitLogFileMetadata,
-        idx: usize,
-        file_count: usize,
-    ) -> io::Result<DefaultMappedFile> {
-        let file_name = CheetahString::from_string(meta.path.to_string_lossy().to_string());
-        if self.lazy_mmap_enable && idx + 1 < file_count {
-            DefaultMappedFile::try_new_lazy_read_only(file_name, self.mapped_file_size)
-        } else {
-            DefaultMappedFile::try_new(file_name, self.mapped_file_size)
+    fn create_mapped_file(&self, entry: &CommitLogMappingEntry) -> io::Result<DefaultMappedFile> {
+        let metadata = entry.metadata();
+        let file_name = CheetahString::from_string(metadata.path.to_string_lossy().to_string());
+        match entry.mode() {
+            CommitLogMappingMode::LazyReadOnly => {
+                DefaultMappedFile::try_new_lazy_read_only(file_name, self.mapped_file_size)
+            }
+            CommitLogMappingMode::Eager => DefaultMappedFile::try_new(file_name, self.mapped_file_size),
         }
     }
 
@@ -747,6 +752,44 @@ mod tests {
             .all(|file| file.is_lazy_mmap_enabled() && !file.is_mapped()));
         assert!(!files[3].is_lazy_mmap_enabled());
         assert!(files[3].is_mapped());
+        assert!(!empty_last_path.exists());
+    }
+
+    #[test]
+    fn parallel_empty_last_with_five_survivors_preserves_order_and_lazy_last() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_size = 4096u64;
+        let mut expected_names = Vec::new();
+        for index in 0..6u64 {
+            let file_path = temp_dir.path().join(format!("{:020}", index * file_size));
+            if index == 5 {
+                std::fs::write(&file_path, []).unwrap();
+            } else {
+                std::fs::write(&file_path, vec![0u8; file_size as usize]).unwrap();
+                expected_names.push(file_path.to_string_lossy().to_string());
+            }
+        }
+        let empty_last_path = temp_dir.path().join(format!("{:020}", 5 * file_size));
+        let loader =
+            CommitLogLoader::new(temp_dir.path().to_string_lossy().to_string(), file_size, true).with_lazy_mmap(true);
+
+        let (files, stats) = loader.load_optimized().unwrap();
+
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| file.get_file_name().to_string())
+                .collect::<Vec<_>>(),
+            expected_names
+        );
+        assert_eq!(stats.total_files, 5);
+        assert_eq!(stats.total_size_bytes, file_size * 5);
+        assert_eq!(stats.files_removed, 0);
+        assert!(files[..4]
+            .iter()
+            .all(|file| file.is_lazy_mmap_enabled() && !file.is_mapped()));
+        assert!(!files[4].is_lazy_mmap_enabled());
+        assert!(files[4].is_mapped());
         assert!(!empty_last_path.exists());
     }
 

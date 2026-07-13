@@ -18,6 +18,10 @@ use std::path::PathBuf;
 use rocketmq_store_local::commit_log::load::validate_commit_log_file;
 use rocketmq_store_local::commit_log::load::CommitLogFileLoadDecision;
 use rocketmq_store_local::commit_log::load::CommitLogFileMetadata;
+use rocketmq_store_local::commit_log::load::CommitLogMappingExecution;
+use rocketmq_store_local::commit_log::load::CommitLogMappingMode;
+use rocketmq_store_local::commit_log::load::CommitLogMappingOptions;
+use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;
 
 fn metadata(path: &str, size: u64) -> CommitLogFileMetadata {
     CommitLogFileMetadata {
@@ -103,4 +107,99 @@ fn validation_error_exposes_fields_and_exact_message() {
     );
     let error_trait: &dyn Error = &error;
     assert!(error_trait.source().is_none());
+}
+
+fn mapping_plan(file_count: usize, parallel_enabled: bool, lazy_mmap_enabled: bool) -> CommitLogMappingPlan {
+    let metadata = (0..file_count)
+        .map(|index| metadata(&format!("commitlog/{index:020}"), 1024 + index as u64))
+        .collect();
+    CommitLogMappingPlan::new(
+        metadata,
+        CommitLogMappingOptions {
+            parallel_enabled,
+            lazy_mmap_enabled,
+        },
+    )
+}
+
+#[test]
+fn empty_mapping_plan_is_sequential() {
+    let plan = mapping_plan(0, true, false);
+
+    assert_eq!(plan.execution(), CommitLogMappingExecution::Sequential);
+    assert!(plan.entries().is_empty());
+}
+
+#[test]
+fn one_mapping_entry_is_sequential() {
+    let plan = mapping_plan(1, true, false);
+
+    assert_eq!(plan.execution(), CommitLogMappingExecution::Sequential);
+    assert_eq!(plan.entries().len(), 1);
+}
+
+#[test]
+fn four_mapping_entries_are_sequential() {
+    let plan = mapping_plan(4, true, false);
+
+    assert_eq!(plan.execution(), CommitLogMappingExecution::Sequential);
+}
+
+#[test]
+fn five_mapping_entries_are_parallel() {
+    let plan = mapping_plan(5, true, false);
+
+    assert_eq!(plan.execution(), CommitLogMappingExecution::Parallel);
+}
+
+#[test]
+fn disabled_parallel_option_keeps_five_entries_sequential() {
+    let plan = mapping_plan(5, false, false);
+
+    assert_eq!(plan.execution(), CommitLogMappingExecution::Sequential);
+}
+
+#[test]
+fn mapping_plan_preserves_metadata_order() {
+    let plan = mapping_plan(5, true, false);
+    let paths: Vec<_> = plan
+        .entries()
+        .iter()
+        .map(|entry| entry.metadata().path.clone())
+        .collect();
+
+    assert_eq!(
+        paths,
+        (0..5)
+            .map(|index| PathBuf::from(format!("commitlog/{index:020}")))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn mapping_entry_keeps_the_whole_metadata_value() {
+    let plan = mapping_plan(3, false, false);
+
+    for (index, entry) in plan.entries().iter().enumerate() {
+        assert_eq!(
+            entry.metadata(),
+            &metadata(&format!("commitlog/{index:020}"), 1024 + index as u64)
+        );
+    }
+}
+
+#[test]
+fn lazy_mapping_marks_only_non_final_entries_read_only() {
+    let plan = mapping_plan(4, false, true);
+    let modes: Vec<_> = plan.entries().iter().map(|entry| entry.mode()).collect();
+
+    assert_eq!(
+        modes,
+        vec![
+            CommitLogMappingMode::LazyReadOnly,
+            CommitLogMappingMode::LazyReadOnly,
+            CommitLogMappingMode::LazyReadOnly,
+            CommitLogMappingMode::Eager,
+        ]
+    );
 }

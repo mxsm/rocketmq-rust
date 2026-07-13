@@ -104,6 +104,13 @@ COMMIT_LOG_LOAD_OWNER_ITEMS = {
     "CommitLogFileValidationError": "struct",
     "validate_commit_log_file": "fn",
 }
+COMMIT_LOG_MAPPING_PLAN_ITEMS = {
+    "CommitLogMappingOptions": "struct",
+    "CommitLogMappingExecution": "enum",
+    "CommitLogMappingMode": "enum",
+    "CommitLogMappingPlan": "struct",
+    "CommitLogMappingEntry": "struct",
+}
 COMMIT_LOG_RECORD_PARSER_ITEMS = {
     "CommitLogRecordVersion": "enum",
     "CommitLogRecordBodyMode": "enum",
@@ -1686,7 +1693,7 @@ def commit_log_file_validation_owner_violations(source: str) -> list[str]:
         if normalized_body.count("CommitLogFileLoadDecision::") != 2:
             violations.append("Local CommitLog validation added decision paths")
 
-    forbidden = ["std::fs", "rayon", "cheetah", "DefaultMappedFile", "remove_file", "metadata("]
+    forbidden = ["std::fs", "rayon", "cheetah", "DefaultMappedFile", "remove_file"]
     if any(token in active for token in forbidden):
         violations.append("Local CommitLog validation absorbed Store I/O or orchestration")
     if any(
@@ -1696,6 +1703,209 @@ def commit_log_file_validation_owner_violations(source: str) -> list[str]:
         violations.append("Local CommitLog validation forbids alias/brace/glob imports")
     if normalized.count("fnvalidate_commit_log_file") != 1:
         violations.append("Local CommitLog validation owner count changed")
+    return violations
+
+
+def _derive_items(source: str, kind: str, item: str) -> set[str] | None:
+    active = active_rust_source(source)
+    pattern = re.compile(
+        rf"#\s*\[derive\(([^\]]*)\)\]\s*pub\s+{re.escape(kind)}\s+{re.escape(item)}\b"
+    )
+    match = pattern.search(active)
+    if match is None:
+        return None
+    return {part.strip() for part in match.group(1).split(",") if part.strip()}
+
+
+def commit_log_mapping_plan_owner_violations(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", maxsplit=1)[0]
+    active = active_rust_source(production)
+    normalized = re.sub(r"\s+", "", active)
+    violations: list[str] = []
+
+    expected_fields = {
+        "CommitLogMappingOptions": [
+            ("parallel_enabled", "bool"),
+            ("lazy_mmap_enabled", "bool"),
+        ],
+        "CommitLogMappingPlan": [
+            ("execution", "CommitLogMappingExecution"),
+            ("entries", "Vec<CommitLogMappingEntry>"),
+        ],
+        "CommitLogMappingEntry": [
+            ("metadata", "CommitLogFileMetadata"),
+            ("mode", "CommitLogMappingMode"),
+        ],
+    }
+    for item, fields in expected_fields.items():
+        if active_struct_fields(production, item) != fields:
+            violations.append(f"Local {item} fields changed")
+
+    options_body = active_item_body(production, "struct", "CommitLogMappingOptions")
+    if options_body is None or re.sub(r"\s+", "", options_body) != (
+        "pubparallel_enabled:bool,publazy_mmap_enabled:bool,"
+    ):
+        violations.append("Local mapping options visibility changed")
+    for item in ("CommitLogMappingPlan", "CommitLogMappingEntry"):
+        body = active_item_body(production, "struct", item)
+        if body is None or re.search(r"\bpub(?:\([^)]*\))?\s+\w+\s*:", body):
+            violations.append(f"Local {item} fields must remain private")
+
+    enum_bodies = {
+        "CommitLogMappingExecution": "Sequential,Parallel,",
+        "CommitLogMappingMode": "Eager,LazyReadOnly,",
+    }
+    for item, expected in enum_bodies.items():
+        body = active_item_body(production, "enum", item)
+        if body is None or re.sub(r"\s+", "", body) != expected:
+            violations.append(f"Local {item} variants changed")
+
+    copy_items = {
+        "CommitLogMappingOptions": "struct",
+        "CommitLogMappingExecution": "enum",
+        "CommitLogMappingMode": "enum",
+    }
+    for item, kind in copy_items.items():
+        derives = _derive_items(production, kind, item)
+        if derives is None or not {"Clone", "Copy"}.issubset(derives):
+            violations.append(f"Local {item} must remain Copy")
+    for item in ("CommitLogMappingPlan", "CommitLogMappingEntry"):
+        derives = _derive_items(production, "struct", item)
+        if derives is not None and ({"Clone", "Copy"} & derives):
+            violations.append(f"Local {item} must not be Clone or Copy")
+
+    signature = re.search(
+        r"pub\s+fn\s+new\s*\(\s*metadata\s*:\s*Vec\s*<\s*CommitLogFileMetadata\s*>\s*,\s*"
+        r"options\s*:\s*CommitLogMappingOptions\s*,?\s*\)\s*->\s*Self",
+        active,
+    )
+    if signature is None:
+        violations.append("Local mapping plan constructor signature changed")
+    if re.search(r"impl\s+CommitLogMappingPlan[\s\S]*?fn\s+\w+\s*\([^)]*:\s*bool", active):
+        violations.append("Local mapping plan exposes a positional bool API")
+
+    new_body = named_function_body(production, "new")
+    expected_new_body = (
+        "letexecution=ifoptions.parallel_enabled&&metadata.len()>4{"
+        "CommitLogMappingExecution::Parallel}else{CommitLogMappingExecution::Sequential};"
+        "letlast_index=metadata.len().saturating_sub(1);"
+        "letentries=metadata.into_iter().enumerate().map(|(index,metadata)|{"
+        "letmode=ifoptions.lazy_mmap_enabled&&index<last_index{"
+        "CommitLogMappingMode::LazyReadOnly}else{CommitLogMappingMode::Eager};"
+        "CommitLogMappingEntry{metadata,mode}}).collect();"
+        "Self{execution,entries}"
+    )
+    if new_body is None or re.sub(r"\s+", "", new_body) != expected_new_body:
+        violations.append("Local mapping plan decision/order/ownership flow changed")
+
+    getter_bodies = {
+        "execution": "self.execution",
+        "entries": "&self.entries",
+        "metadata": "&self.metadata",
+        "mode": "self.mode",
+    }
+    getter_signatures = {
+        "execution": r"pub\s+fn\s+execution\s*\(\s*&self\s*\)\s*->\s*CommitLogMappingExecution",
+        "entries": r"pub\s+fn\s+entries\s*\(\s*&self\s*\)\s*->\s*&\s*\[\s*CommitLogMappingEntry\s*\]",
+        "metadata": r"pub\s+fn\s+metadata\s*\(\s*&self\s*\)\s*->\s*&\s*CommitLogFileMetadata",
+        "mode": r"pub\s+fn\s+mode\s*\(\s*&self\s*\)\s*->\s*CommitLogMappingMode",
+    }
+    for name, signature_pattern in getter_signatures.items():
+        if re.search(signature_pattern, active) is None:
+            violations.append(f"Local mapping {name} getter signature changed")
+        body = named_function_body(production, name)
+        if body is None or re.sub(r"\s+", "", body) != getter_bodies[name]:
+            violations.append(f"Local mapping {name} getter stopped being narrow")
+
+    forbidden = ["rayon", "DefaultMappedFile", "std::fs", "remove_file", "memmap"]
+    if any(token in active for token in forbidden):
+        violations.append("Local mapping plan absorbed Store I/O or mmap implementation")
+    if normalized.count("fnnew(metadata:Vec<CommitLogFileMetadata>,options:CommitLogMappingOptions)") != 1:
+        violations.append("Local mapping plan owner count changed")
+    return violations
+
+
+def store_commit_log_mapping_plan_violations(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", maxsplit=1)[0]
+    active = active_rust_source(production)
+    normalized = re.sub(r"\s+", "", active)
+    violations: list[str] = []
+
+    planning_items = set(COMMIT_LOG_MAPPING_PLAN_ITEMS)
+    private_imports: set[str] = set()
+    prefix = "rocketmq_store_local::commit_log::load::"
+    for visibility, body, _ in active_use_records(production):
+        if not body.startswith(prefix):
+            continue
+        item = body.removeprefix(prefix)
+        if item in planning_items:
+            if visibility:
+                violations.append("Store must not publicly re-export CommitLog mapping plan types")
+            if " as " in body or "{" in body or "*" in body:
+                violations.append("Store CommitLog mapping imports forbid alias/brace/glob")
+            private_imports.add(item)
+    if private_imports != planning_items:
+        violations.append("Store CommitLog mapping plan imports changed")
+
+    load_body = named_function_body(production, "load_optimized")
+    if load_body is None:
+        return violations + ["CommitLogLoader load entrypoint missing"]
+    load = re.sub(r"\s+", "", load_body)
+    required_flow = [
+        "letfile_metadata:Vec<CommitLogFileMetadata>=ifself.enable_parallel&&file_paths.len()>4",
+        "stats.parallel_load_time_ms=parallel_start.elapsed().as_millis();",
+        "stats.total_files=file_metadata.len();",
+        "stats.total_size_bytes=file_metadata.iter().map(|metadata|metadata.size).sum();",
+        "letmapping_plan=CommitLogMappingPlan::new(file_metadata,CommitLogMappingOptions{",
+        "parallel_enabled:self.enable_parallel,",
+        "lazy_mmap_enabled:self.lazy_mmap_enable,",
+        "let(mapped_files,mmap_advice_stats)=matchmapping_plan.execution(){",
+        "CommitLogMappingExecution::Parallel=>self.create_mapped_files_parallel(mapping_plan.entries())?",
+        "CommitLogMappingExecution::Sequential=>self.create_mapped_files_sequential(mapping_plan.entries())?",
+    ]
+    positions = [load.find(fragment) for fragment in required_flow]
+    if any(position == -1 for position in positions) or positions != sorted(positions):
+        violations.append("Store metadata timing/totals/mapping plan flow changed")
+    if load.count("CommitLogMappingPlan::new(") != 1:
+        violations.append("Store must create exactly one mapping plan")
+    if "file_metadata.len()>4" in load or re.search(r"self\.enable_parallel&&mapping_plan", load):
+        violations.append("Store re-evaluated filtered mapping threshold")
+
+    parallel = named_function_body(production, "create_mapped_files_parallel")
+    sequential = named_function_body(production, "create_mapped_files_sequential")
+    create_one = named_function_body(production, "create_mapped_file")
+    expected_signatures = [
+        "fncreate_mapped_files_parallel(&self,entries:&[CommitLogMappingEntry],)->io::Result<(Vec<Arc<DefaultMappedFile>>,LoadStatistics)>",
+        "fncreate_mapped_files_sequential(&self,entries:&[CommitLogMappingEntry],)->io::Result<(Vec<Arc<DefaultMappedFile>>,LoadStatistics)>",
+        "fncreate_mapped_file(&self,entry:&CommitLogMappingEntry)->io::Result<DefaultMappedFile>",
+    ]
+    if any(signature not in normalized for signature in expected_signatures):
+        violations.append("Store mapping adapter signatures changed")
+    if parallel is None or sequential is None or create_one is None:
+        return violations + ["Store mapping adapters missing"]
+
+    parallel_normalized = re.sub(r"\s+", "", parallel)
+    sequential_normalized = re.sub(r"\s+", "", sequential)
+    create_normalized = re.sub(r"\s+", "", create_one)
+    if ".par_iter().map(|entry|" not in parallel_normalized or ".collect();" not in parallel_normalized:
+        violations.append("Store parallel mapping no longer uses ordered entry collection")
+    if "forentryinentries" not in sequential_normalized:
+        violations.append("Store sequential mapping no longer traverses plan entries")
+    for name, body in (("parallel", parallel_normalized), ("sequential", sequential_normalized)):
+        if any(token in body for token in (".enumerate()", "file_count", "lazy_mmap_enable", "idx+1", ".len()>4")):
+            violations.append(f"Store {name} mapping recomputes plan decisions")
+        if body.count("self.create_mapped_file(entry)") != 1:
+            violations.append(f"Store {name} mapping stopped delegating each entry")
+
+    expected_create = (
+        "letmetadata=entry.metadata();"
+        "letfile_name=CheetahString::from_string(metadata.path.to_string_lossy().to_string());"
+        "matchentry.mode(){"
+        "CommitLogMappingMode::LazyReadOnly=>{DefaultMappedFile::try_new_lazy_read_only(file_name,self.mapped_file_size)}"
+        "CommitLogMappingMode::Eager=>DefaultMappedFile::try_new(file_name,self.mapped_file_size),}"
+    )
+    if create_normalized != expected_create:
+        violations.append("Store create_mapped_file stopped following entry metadata/mode only")
     return violations
 
 
@@ -1761,8 +1971,9 @@ def store_commit_log_file_validation_violations(source: str) -> list[str]:
             continue
         if " as " in body or "{" in body or "*" in body:
             violations.append("Store CommitLog validation imports forbid alias/brace/glob")
-        if not visibility:
-            private_imports.append(body.removeprefix(local_prefix))
+        item = body.removeprefix(local_prefix)
+        if not visibility and item in COMMIT_LOG_LOAD_OWNER_ITEMS:
+            private_imports.append(item)
     if sorted(private_imports) != sorted(
         [
             "validate_commit_log_file",
@@ -1789,15 +2000,13 @@ def store_commit_log_file_validation_violations(source: str) -> list[str]:
         collect_position = normalized_load.find(
             "letfile_metadata:Vec<CommitLogFileMetadata>=ifself.enable_parallel&&file_paths.len()>4"
         )
-        create_position = normalized_load.find(
-            "let(mapped_files,mmap_advice_stats)=ifself.enable_parallel&&file_metadata.len()>4"
-        )
+        create_position = normalized_load.find("letmapping_plan=CommitLogMappingPlan::new(file_metadata")
         if (
             collect_position == -1
             or create_position == -1
             or collect_position >= create_position
-            or "self.create_mapped_files_parallel(&file_metadata)?" not in normalized_load
-            or "self.create_mapped_files_sequential(&file_metadata)?" not in normalized_load
+            or "self.create_mapped_files_parallel(mapping_plan.entries())?" not in normalized_load
+            or "self.create_mapped_files_sequential(mapping_plan.entries())?" not in normalized_load
         ):
             violations.append("Store mmap creation no longer follows complete metadata validation")
 
@@ -1904,9 +2113,6 @@ def store_commit_log_file_validation_violations(source: str) -> list[str]:
     expected_private_signatures = [
         "fncollect_metadata_parallel(&self,paths:&[PathBuf])->io::Result<Vec<CommitLogFileMetadata>>",
         "fncollect_metadata_sequential(&self,paths:&[PathBuf])->io::Result<Vec<CommitLogFileMetadata>>",
-        "fncreate_mapped_files_parallel(&self,metadata:&[CommitLogFileMetadata],)->io::Result<(Vec<Arc<DefaultMappedFile>>,LoadStatistics)>",
-        "fncreate_mapped_files_sequential(&self,metadata:&[CommitLogFileMetadata],)->io::Result<(Vec<Arc<DefaultMappedFile>>,LoadStatistics)>",
-        "fncreate_mapped_file(&self,meta:&CommitLogFileMetadata,idx:usize,file_count:usize,)->io::Result<DefaultMappedFile>",
     ]
     if any(signature not in normalized for signature in expected_private_signatures):
         violations.append("Store canonical CommitLog metadata flow changed")
@@ -3267,6 +3473,79 @@ struct DefaultMappedFile {
             "CommitLogFileValidationError",
             active_commit_log_facade_reexports(loader_source),
         )
+
+    def test_commit_log_mapping_plan_has_one_local_owner_and_store_adapter_only(self) -> None:
+        canonical_file = LOCAL_CRATE / "src" / "commit_log" / "load.rs"
+        rust_sources = {
+            path: path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        for item, item_kind in COMMIT_LOG_MAPPING_PLAN_ITEMS.items():
+            self.assertEqual(
+                [(canonical_file, item_kind)],
+                file_item_owner_occurrences(rust_sources, item),
+                item,
+            )
+
+        canonical_source = canonical_file.read_text(encoding="utf-8")
+        self.assertEqual([], commit_log_mapping_plan_owner_violations(canonical_source))
+
+        loader_source = (
+            STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
+        ).read_text(encoding="utf-8")
+        self.assertEqual([], store_commit_log_mapping_plan_violations(loader_source))
+        facade = active_commit_log_facade_reexports(loader_source)
+        for item in COMMIT_LOG_MAPPING_PLAN_ITEMS:
+            self.assertNotIn(item, facade)
+
+    def test_commit_log_mapping_plan_contract_rejects_decision_and_ownership_mutations(self) -> None:
+        source = (LOCAL_CRATE / "src" / "commit_log" / "load.rs").read_text(encoding="utf-8")
+        self.assertEqual([], commit_log_mapping_plan_owner_violations(source))
+        mutations = [
+            source.replace("metadata.len() > 4", "metadata.len() >= 4", 1),
+            source.replace("options.parallel_enabled &&", "!options.parallel_enabled &&", 1),
+            source.replace("options.lazy_mmap_enabled && index < last_index", "options.lazy_mmap_enabled", 1),
+            source.replace(".into_iter()", ".into_iter().rev()", 1),
+            source.replace("CommitLogMappingEntry { metadata, mode }", "CommitLogMappingEntry { metadata: CommitLogFileMetadata { path: metadata.path, size: 0 }, mode }", 1),
+            source.replace("parallel_enabled: bool", "parallel_enabled: usize", 1),
+            source.replace("execution: CommitLogMappingExecution", "pub execution: CommitLogMappingExecution", 1),
+            source.replace("#[derive(Debug)]\npub struct CommitLogMappingPlan", "#[derive(Debug, Clone)]\npub struct CommitLogMappingPlan", 1),
+            source.replace(
+                "pub fn new(metadata: Vec<CommitLogFileMetadata>, options: CommitLogMappingOptions) -> Self",
+                "pub fn new(metadata: Vec<CommitLogFileMetadata>, parallel_enabled: bool) -> Self",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
+                self.assertNotEqual([], commit_log_mapping_plan_owner_violations(mutation))
+
+    def test_store_commit_log_mapping_plan_contract_rejects_threshold_and_recompute_mutations(self) -> None:
+        path = STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
+        source = path.read_text(encoding="utf-8")
+        self.assertEqual([], store_commit_log_mapping_plan_violations(source))
+        mutations = [
+            source.replace("file_paths.len() > 4", "file_paths.len() > 5", 1),
+            source.replace("parallel_enabled: self.enable_parallel", "parallel_enabled: false", 1),
+            source.replace("lazy_mmap_enabled: self.lazy_mmap_enable", "lazy_mmap_enabled: false", 1),
+            source.replace("match mapping_plan.execution()", "if self.enable_parallel", 1),
+            source.replace("mapping_plan.entries()", "&[]", 1),
+            source.replace(".par_iter()\n            .map(|entry|", ".par_iter()\n            .enumerate()\n            .map(|(_, entry)|", 1),
+            source.replace("for entry in entries", "for (idx, entry) in entries.iter().enumerate()", 1),
+            source.replace("match entry.mode()", "if self.lazy_mmap_enable", 1),
+            source.replace("let mapping_plan = CommitLogMappingPlan::new", "let mapping_plan_copy = CommitLogMappingPlan::new(file_metadata, CommitLogMappingOptions { parallel_enabled: false, lazy_mmap_enabled: false });\n        let mapping_plan = CommitLogMappingPlan::new", 1),
+            source.replace(
+                "use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;",
+                "pub use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
+                self.assertNotEqual([], store_commit_log_mapping_plan_violations(mutation))
 
     def test_commit_log_file_validation_contract_rejects_owner_mutations(self) -> None:
         source = (LOCAL_CRATE / "src" / "commit_log" / "load.rs").read_text(encoding="utf-8")

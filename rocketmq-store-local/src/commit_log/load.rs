@@ -69,6 +69,94 @@ pub fn validate_commit_log_file(
     Ok(CommitLogFileLoadDecision::Load)
 }
 
+/// Loader options used to decide how validated CommitLog segments are mapped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommitLogMappingOptions {
+    /// Whether mapping may use the parallel execution path.
+    pub parallel_enabled: bool,
+    /// Whether historical segments may defer read-only mmap creation.
+    pub lazy_mmap_enabled: bool,
+}
+
+/// Execution strategy selected for mapping validated CommitLog segments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitLogMappingExecution {
+    /// Map segments in their input order on the current thread.
+    Sequential,
+    /// Map segments in parallel while preserving their input order.
+    Parallel,
+}
+
+/// Mapping mode selected for one validated CommitLog segment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitLogMappingMode {
+    /// Create the mapping immediately.
+    Eager,
+    /// Defer creation of a read-only mapping until the segment is read.
+    LazyReadOnly,
+}
+
+/// Ordered mapping plan for a fully validated set of CommitLog segments.
+#[derive(Debug)]
+pub struct CommitLogMappingPlan {
+    execution: CommitLogMappingExecution,
+    entries: Vec<CommitLogMappingEntry>,
+}
+
+/// One validated CommitLog segment and its selected mapping mode.
+#[derive(Debug)]
+pub struct CommitLogMappingEntry {
+    metadata: CommitLogFileMetadata,
+    mode: CommitLogMappingMode,
+}
+
+impl CommitLogMappingPlan {
+    /// Builds a plan without performing filesystem or mmap operations.
+    pub fn new(metadata: Vec<CommitLogFileMetadata>, options: CommitLogMappingOptions) -> Self {
+        let execution = if options.parallel_enabled && metadata.len() > 4 {
+            CommitLogMappingExecution::Parallel
+        } else {
+            CommitLogMappingExecution::Sequential
+        };
+        let last_index = metadata.len().saturating_sub(1);
+        let entries = metadata
+            .into_iter()
+            .enumerate()
+            .map(|(index, metadata)| {
+                let mode = if options.lazy_mmap_enabled && index < last_index {
+                    CommitLogMappingMode::LazyReadOnly
+                } else {
+                    CommitLogMappingMode::Eager
+                };
+                CommitLogMappingEntry { metadata, mode }
+            })
+            .collect();
+        Self { execution, entries }
+    }
+
+    /// Returns the selected execution strategy.
+    pub fn execution(&self) -> CommitLogMappingExecution {
+        self.execution
+    }
+
+    /// Returns the ordered segment entries.
+    pub fn entries(&self) -> &[CommitLogMappingEntry] {
+        &self.entries
+    }
+}
+
+impl CommitLogMappingEntry {
+    /// Returns the complete metadata value collected for this segment.
+    pub fn metadata(&self) -> &CommitLogFileMetadata {
+        &self.metadata
+    }
+
+    /// Returns the selected mapping mode.
+    pub fn mode(&self) -> CommitLogMappingMode {
+        self.mode
+    }
+}
+
 /// Statistics for load operation.
 #[derive(Debug, Clone, Default)]
 pub struct LoadStatistics {
