@@ -80,13 +80,13 @@ TRANSIENT_STORE_POOL_FIELDS = [
     ("memory_lock_manager", "Arc<MemoryLockManager>"),
 ]
 TRANSIENT_STORE_POOL_PATH = Path("rocketmq-store-local/src/base/transient_store_pool.rs")
-TRANSIENT_STORE_POOL_DESTROY_SEAM_TEST_CALLERS = (
+TRANSIENT_STORE_POOL_DESTROY_SEAM_TEST_FUNCTIONS = (
     "destroy_unlocks_failed_lock_buffers_without_updating_manager_statistics",
     "destroy_unlocks_budget_skipped_buffer_and_keeps_locked_statistics",
     "destroy_first_error_stops_syscalls_but_drain_removes_remaining_buffers",
     "destroy_ignores_a_borrowed_buffer_and_unlocks_only_available_buffers",
 )
-TRANSIENT_STORE_POOL_DESTROY_SEAM_CALL = re.compile(r"(?:\.|::)\s*destroy_with_unlocker\s*\(")
+TRANSIENT_STORE_POOL_DESTROY_SEAM_REFERENCE = re.compile(r"(?:\.|::)\s*destroy_with_unlocker\b")
 MEMORY_LOCK_SEAMS = {
     "lock_buffer_with",
     "lock_region_with",
@@ -3247,24 +3247,28 @@ def transient_store_pool_owner_violations(source: str) -> list[str]:
         if compact_rust(raw_body or "") != expected_body:
             violations.append(f"TransientStorePool::{function_name} behavior changed")
 
-    production_destroy_seam_calls = len(TRANSIENT_STORE_POOL_DESTROY_SEAM_CALL.findall(active_rust_source(production)))
-    if production_destroy_seam_calls != 1:
+    production_destroy_seam_references = len(
+        TRANSIENT_STORE_POOL_DESTROY_SEAM_REFERENCE.findall(active_rust_source(production))
+    )
+    if production_destroy_seam_references != 1:
         violations.append(
-            "TransientStorePool production destroy_with_unlocker calls changed: "
-            f"expected 1 public destroy delegation, got {production_destroy_seam_calls}"
+            "TransientStorePool production destroy_with_unlocker references changed: "
+            f"expected 1 public destroy delegation, got {production_destroy_seam_references}"
         )
-    test_destroy_seam_calls = len(TRANSIENT_STORE_POOL_DESTROY_SEAM_CALL.findall(active_rust_source(tests)))
-    expected_test_calls = len(TRANSIENT_STORE_POOL_DESTROY_SEAM_TEST_CALLERS)
-    if test_destroy_seam_calls != expected_test_calls:
+    test_destroy_seam_references = len(TRANSIENT_STORE_POOL_DESTROY_SEAM_REFERENCE.findall(active_rust_source(tests)))
+    expected_test_references = len(TRANSIENT_STORE_POOL_DESTROY_SEAM_TEST_FUNCTIONS)
+    if test_destroy_seam_references != expected_test_references:
         violations.append(
-            "TransientStorePool test destroy_with_unlocker calls changed: "
-            f"expected {expected_test_calls}, got {test_destroy_seam_calls}"
+            "TransientStorePool test destroy_with_unlocker references changed: "
+            f"expected {expected_test_references}, got {test_destroy_seam_references}"
         )
-    for test_name in TRANSIENT_STORE_POOL_DESTROY_SEAM_TEST_CALLERS:
+    for test_name in TRANSIENT_STORE_POOL_DESTROY_SEAM_TEST_FUNCTIONS:
         test_body = named_raw_function_body(tests, test_name)
-        call_count = len(TRANSIENT_STORE_POOL_DESTROY_SEAM_CALL.findall(active_rust_source(test_body or "")))
-        if call_count != 1:
-            violations.append(f"TransientStorePool::{test_name} must call destroy_with_unlocker exactly once")
+        reference_count = len(
+            TRANSIENT_STORE_POOL_DESTROY_SEAM_REFERENCE.findall(active_rust_source(test_body or ""))
+        )
+        if reference_count != 1:
+            violations.append(f"TransientStorePool::{test_name} must reference destroy_with_unlocker exactly once")
 
     constructor = compact_rust(named_raw_function_body(production, "new_with_memory_lock_budget") or "")
     constructor_fragments = {
@@ -3299,7 +3303,7 @@ def transient_store_pool_owner_violations(source: str) -> list[str]:
     return violations
 
 
-def transient_store_pool_destroy_seam_call_violations(sources: dict[Path, str]) -> list[str]:
+def transient_store_pool_destroy_seam_reference_violations(sources: dict[Path, str]) -> list[str]:
     violations: list[str] = []
     for path, source in sources.items():
         if "tests" in path.parts:
@@ -3310,20 +3314,23 @@ def transient_store_pool_destroy_seam_call_violations(sources: dict[Path, str]) 
             production = sections[0]
             tests = sections[1] if len(sections) == 2 else ""
 
-        production_calls = len(TRANSIENT_STORE_POOL_DESTROY_SEAM_CALL.findall(active_rust_source(production)))
-        test_calls = len(TRANSIENT_STORE_POOL_DESTROY_SEAM_CALL.findall(active_rust_source(tests)))
-        expected_production_calls = 1 if path == TRANSIENT_STORE_POOL_PATH else 0
-        expected_test_calls = (
-            len(TRANSIENT_STORE_POOL_DESTROY_SEAM_TEST_CALLERS) if path == TRANSIENT_STORE_POOL_PATH else 0
+        production_references = len(
+            TRANSIENT_STORE_POOL_DESTROY_SEAM_REFERENCE.findall(active_rust_source(production))
         )
-        if production_calls != expected_production_calls:
+        test_references = len(TRANSIENT_STORE_POOL_DESTROY_SEAM_REFERENCE.findall(active_rust_source(tests)))
+        expected_production_references = 1 if path == TRANSIENT_STORE_POOL_PATH else 0
+        expected_test_references = (
+            len(TRANSIENT_STORE_POOL_DESTROY_SEAM_TEST_FUNCTIONS) if path == TRANSIENT_STORE_POOL_PATH else 0
+        )
+        if production_references != expected_production_references:
             violations.append(
-                f"{path}: production destroy_with_unlocker calls changed: "
-                f"expected {expected_production_calls}, got {production_calls}"
+                f"{path}: production destroy_with_unlocker references changed: "
+                f"expected {expected_production_references}, got {production_references}"
             )
-        if test_calls != expected_test_calls:
+        if test_references != expected_test_references:
             violations.append(
-                f"{path}: test destroy_with_unlocker calls changed: expected {expected_test_calls}, got {test_calls}"
+                f"{path}: test destroy_with_unlocker references changed: "
+                f"expected {expected_test_references}, got {test_references}"
             )
     return violations
 
@@ -5587,7 +5594,7 @@ fn forbidden_extra_seam_call() {
             ),
         )
         self.assertEqual([], memory_lock_seam_call_violations(sources))
-        self.assertEqual([], transient_store_pool_destroy_seam_call_violations(sources))
+        self.assertEqual([], transient_store_pool_destroy_seam_reference_violations(sources))
 
         local_manifest = tomllib.loads((LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
         store_manifest = tomllib.loads((STORE_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
@@ -5605,6 +5612,16 @@ fn forbidden_extra_seam_call() {
     fn forbidden_extra_destroy_seam_caller() {
         let pool = TransientStorePool::new(1, 1);
         let _ = pool.destroy_with_unlocker(|_, _| Ok(()));
+    }
+}
+"""
+        canonical_with_test_alias_reference = canonical.rsplit("\n}", 1)[0] + """
+
+    #[test]
+    fn forbidden_destroy_seam_alias_reference() {
+        let seam = TransientStorePool::destroy_with_unlocker;
+        let pool = TransientStorePool::new(1, 1);
+        let _ = seam(&pool, |_, _| Ok(()));
     }
 }
 """
@@ -5637,6 +5654,20 @@ mod tests""",
             canonical_with_extra_test_caller,
             canonical.replace(
                 "#[cfg(test)]\nmod tests",
+                """impl TransientStorePool {
+    fn forbidden_destroy_seam_alias_reference(&self) {
+        let seam = Self::destroy_with_unlocker;
+        let _ = seam(self, |_, _| Ok(()));
+    }
+}
+
+#[cfg(test)]
+mod tests""",
+                1,
+            ),
+            canonical_with_test_alias_reference,
+            canonical.replace(
+                "#[cfg(test)]\nmod tests",
                 "impl Drop for TransientStorePool { fn drop(&mut self) {} }\n\n#[cfg(test)]\nmod tests",
                 1,
             ),
@@ -5664,7 +5695,7 @@ mod tests""",
                     ),
                 )
 
-    def test_transient_store_pool_destroy_seam_contract_rejects_external_local_callers(self) -> None:
+    def test_transient_store_pool_destroy_seam_contract_rejects_external_local_references(self) -> None:
         sources = memory_lock_seam_sources()
         local_production_path = Path("rocketmq-store-local/src/base.rs")
         local_test_path = Path("rocketmq-store-local/tests/transient_store_pool_contract.rs")
@@ -5691,11 +5722,33 @@ fn forbidden_destroy_seam_caller() {
 }
 """,
             ),
+            (
+                local_production_path,
+                sources[local_production_path]
+                + """
+
+fn forbidden_destroy_seam_alias_reference() {
+    let _seam = TransientStorePool::destroy_with_unlocker;
+}
+""",
+            ),
+            (
+                local_test_path,
+                sources[local_test_path]
+                + """
+
+#[test]
+fn forbidden_destroy_seam_alias_reference() {
+    let pool = TransientStorePool::new(1, 1);
+    let _seam = pool.destroy_with_unlocker;
+}
+""",
+            ),
         ]
         for mutation_index, (path, mutation) in enumerate(mutations):
             with self.subTest(mutation=mutation_index, path=path):
                 mutated_sources = {**sources, path: mutation}
-                self.assertNotEqual([], transient_store_pool_destroy_seam_call_violations(mutated_sources))
+                self.assertNotEqual([], transient_store_pool_destroy_seam_reference_violations(mutated_sources))
 
     def test_memory_lock_syscalls_have_one_local_owner_and_exact_store_facade(self) -> None:
         canonical = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")

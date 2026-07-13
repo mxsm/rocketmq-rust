@@ -741,9 +741,12 @@ python scripts/arc_mut_guard.py
   Clone/共享状态/并发归还契约 2/2、内部生命周期 8/8、Store 类型身份 1/1、旧 Store mapped-file round-trip
   1/1、完整 Local 171 项及 M06 source/mutation contract 95/95 通过。独立审查 follow-up RED 证明旧 contract
   会放过 `destroy_with_unlocker` 的 `pub(crate)`/`pub(super)`/`pub(in ...)` 及额外 production/test caller；GREEN
-  后精确要求 production 仅由公开 `destroy` 调用一次、四个命名模块测试各调用一次、其他 Local/Store 文件为零。
+  后收紧直接调用面。第二轮 follow-up RED 进一步证明仅匹配后续 `(` 会放过
+  `Self::destroy_with_unlocker` 等函数项/alias reference；最终 contract 扫描去注释/字符串后的全部
+  `.destroy_with_unlocker`/`::destroy_with_unlocker` reference 且不计函数声明，精确要求 production 仅在公开
+  `destroy` 中有一个 reference、四个命名模块测试各一个、其他 Local/Store production/test 文件为零。
   mutation contract 同时拒绝 owner copy、facade wrapper、共享字段/API/阈值/queue 顺序/drain/unlock/
-  real-commit/Drop 漂移与任何 `pub` destroy seam visibility。
+  real-commit/Drop 漂移、任何 `pub` destroy seam visibility、额外直接 caller 与函数项/alias reference。
 - [x] `[FEATURE]` 未修改 Cargo manifest、feature 或依赖；Local 与 Store 各七组 feature closure、default/all
   package Clippy、Local strict Rustdoc 均通过。Store 普通 Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。
 - [x] `[PLATFORM]` Windows 完成全部 focused/full 验证；WSL/Linux 隔离 target 通过公开契约 2/2、内部语义

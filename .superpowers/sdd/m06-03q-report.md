@@ -54,19 +54,27 @@ GREEN passes:
 An independent review found that the first destroy-seam contract rejected only plain `pub fn` and did not freeze
 its caller surfaces. Contract-first RED proved that `pub(crate)`, `pub(super)`, `pub(in crate::base)`, an extra
 canonical production caller, an extra module test caller, and external Local production/integration-test callers
-were incorrectly accepted. GREEN parses the declaration visibility, requires exactly one production call from
-public `destroy`, requires exactly one call in each of the four named module tests, and requires zero calls in
-every other Local/Store production or test file.
+were incorrectly accepted. GREEN parses the declaration visibility and initially constrained the corresponding
+direct-call surfaces.
+
+A second independent review found that the direct-call pattern required a following `(` and therefore accepted
+function-item aliases such as `let seam = Self::destroy_with_unlocker`. Contract-first RED covered canonical
+production and module-test aliases plus external Local production/integration aliases using both
+`.destroy_with_unlocker` and `::destroy_with_unlocker`. GREEN now counts every active-Rust prefixed reference
+without counting the unqualified function declaration: production has exactly one reference in public `destroy`,
+each of the four named module tests has exactly one reference, and every other Local/Store production or test file
+has zero.
 
 The source contract freezes the single Local owner, field schema, public API, exact queue/lifecycle bodies,
 manager projections, private injection seams, the crate-private `lock_buffer_with` boundary, and exact Store
-facade. Per-file production/test call counts prove Store no longer invokes `lock_buffer_with`, the Local pool is
-its only production caller outside the manager, and `destroy_with_unlocker` cannot be called outside its exact
-public-destroy/module-test surfaces. Negative mutations reject copied owners,
+facade. Memory-lock call counts prove Store no longer invokes `lock_buffer_with` and the Local pool is its only
+production caller outside the manager. Separate per-file production/test reference counts prove
+`destroy_with_unlocker` cannot be referenced or called outside its exact public-destroy/module-test surfaces.
+Negative mutations reject copied owners,
 wrapper/type-alias/brace/glob facades, Clone/shared-field drift, real-commit default changes, iteration instead of
 drain, removed unlock calls, return-order changes, threshold reassociation, `pub`, `pub(crate)`, `pub(super)`,
-`pub(self)`, and `pub(in ...)` destroy-seam widening, extra production/test callers, other widened injection
-seams, and `Drop`.
+`pub(self)`, and `pub(in ...)` destroy-seam widening, extra direct callers, function-item/alias references, other
+widened injection seams, and `Drop`.
 
 ## Feature, platform, and architecture evidence
 
