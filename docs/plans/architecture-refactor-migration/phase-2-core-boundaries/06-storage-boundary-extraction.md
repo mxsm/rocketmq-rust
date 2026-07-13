@@ -491,7 +491,8 @@ python scripts/arc_mut_guard.py
   summary。state 只含三水位与 policy；base+relative、start+validated-size、encoded physical offset+input-size
   全部 checked，负 offset、溢出或超过 `i64::MAX` 时 fail closed 且 state 保持不变。
 - [x] `[COMPAT]` Store 两条 abnormal recovery 只把纯 offset/action 决策交给 Local；MappedFile/window、I/O、
-  parser/CRC、每条消息 fresh confirm limit、dispatch/stats、blank file-end hook、CQ truncate 与最终
+  parser/CRC、dup/controller bounded 路径对每条有效消息读取的 fresh confirm limit、dispatch/stats、blank
+  file-end hook 与 CQ truncate 仍由 Store 拥有；ungated 路径不读取 confirm limit。最终
   flushed/committed/truncate 写回仍由 Store 拥有。Standard 保留 accumulator/start last-valid，Optimized
   保留 absolute frame-end last-valid；controller 最终使用 confirm-valid clamp，非 controller 使用 last-valid。
   Normal recovery API/实现、checkpoint/window 选择、持久字节、公开签名与依赖均未改变。
@@ -500,11 +501,13 @@ python scripts/arc_mut_guard.py
   Store 19 项 recovery integration 包含 dirty tail、blank hook、invalid/source、后续 empty segment、负 CQ，
   并对 Standard/Optimized 分别证明 dup 的 first eligible/second skipped 仍截断两帧，以及 controller 的
   first eligible/second ineligible 最终 clamp 到第一条 encoded input end；Store lib 573 项通过。
-- [x] `[REVIEW]` 70 项 comment/string-aware contract 锁定 Local 唯一 owner、精确 state fields、checked
+- [x] `[REVIEW]` 72 项 comment/string-aware contract 锁定 Local 唯一 owner、精确 state fields、checked
   arithmetic、policy/action/gate 矩阵，以及 Store 两条 adapter 的 input-size candidate、validated-size
-  advance、fresh gate、skip-without-dispatch、blank hook、stats、唯一 summary、controller/non-controller 与
-  CQ/physical truncate 数据流；22 个 reviewer mutation 覆盖边界比较、gate bypass、constant summary、错误
-  candidate、dispatch/stats/CQ/controller 分支和 Store policy copy。
+  advance、bounded fresh gate、skip-without-dispatch、blank hook、stats、唯一 summary、controller/non-controller
+  与 CQ/physical truncate 数据流；contract 还锁定 `process_message` 位于 candidate/gate/apply 之前，并要求
+  optimized 的 `file_processed` 在完整 action match 成功后统一更新，使 valid-but-skipped 记录仍计入文件统计。
+  24 个 reviewer mutation 覆盖边界比较、gate bypass、constant summary、错误 candidate、late process、
+  dispatch-only stats、CQ/controller 分支和 Store policy copy。
 - [x] `[REV]` Local 全量 101 项、五组 feature check、Store recovery 19 项、Store lib 573 项、Local/Store/
   workspace Clippy、Local `-D warnings` Rustdoc、架构 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+
   final guard、格式与 diff 检查通过；真实 gate golden 没有新增 `ArcMut`/`LocalFileMessageStore` occurrence。
