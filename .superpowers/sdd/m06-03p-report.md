@@ -26,10 +26,11 @@ its existing observability feature to `rocketmq-store-local/observability`.
 The old Store modules contain direct exact re-exports for only the migrated symbols. Cross-crate tests prove
 bidirectional identity for all three types and function-pointer identity for both syscalls.
 
-The three deterministic injection seams, `lock_buffer_with`, `lock_region_with`, and `unlock_region_with`, are
-`#[doc(hidden)] pub` only because Store compatibility tests must inject syscall outcomes across the crate
-boundary. Their Rustdoc identifies this compatibility purpose and documents errors. Ordinary production code
-continues through the public lock/unlock APIs.
+The three injection seams, `lock_buffer_with`, `lock_region_with`, and `unlock_region_with`, remain
+`#[doc(hidden)] pub` during the migration because Store production adapters still cross the crate boundary:
+`TransientStorePool` initialization, `DefaultMappedFile` range locking/unlocking, and the CommitLog active-lock
+lifecycle. Store and Local deterministic tests use the same temporary seams. Their Rustdoc identifies every
+production/test caller surface and documents errors.
 
 The migration preserves:
 
@@ -50,12 +51,22 @@ GREEN evidence includes:
 - Store-to-Local type and function identity: 2/2;
 - existing Store transient-pool, range-lock, and active-lock focused tests: 4/4, 2/2, and 2/2;
 - full Local suite: 61 unit plus 100 integration tests; nine doctests remain intentionally ignored;
-- final M06 source and mutation contract: 91/91.
+- final M06 source and mutation contract: 92/92.
+
+Reviewer follow-up TDD exposed a weakness in the first contract rather than in runtime behavior. RED injected a
+second production `lock_buffer_with` call into an already allowlisted Store file; the old whole-file allowlist
+incorrectly returned no violation. GREEN replaced it with separate production/test call-site counts and exact
+delegation checks. Focused owner/documentation/delegation/mutation checks pass 3/3, and the full contract passes
+92/92. The review candidate also passes strict Local Rustdoc, Local all-target/all-feature Clippy, and Store
+focused transient-pool 4/4, range-lock 2/2, and memory-lock 14/14 unit tests; the memory-lock filter additionally
+passes the Store-to-Local identity fixture 2/2.
 
 The contract freezes canonical ownership, field schemas, enum order, labels, error text, atomic order, exact Store
-facades, feature wiring, dependency closure, and the narrow seam-call allowlist. Negative fixtures reject copied
-owners, wrapper facades, field or label drift, reordered accounting, undocumented seams, misplaced calls, and
-feature/dependency mutations.
+facades, feature wiring, dependency closure, and the temporary seam callers. Production and test calls are
+counted separately per file; 11 production delegation functions across the canonical manager and Store adapters
+have constrained receiver, argument, and delegation forms. Negative fixtures reject copied owners, wrapper
+facades, field or label drift, reordered accounting, undocumented seams, extra production/test calls, wrong
+receivers, direct callback/syscall bypasses of the canonical manager, and feature/dependency mutations.
 
 ## Feature and dependency evidence
 

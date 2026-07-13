@@ -125,8 +125,8 @@ impl MemoryLockManager {
 
     /// Runs the lock operation through an injected compatibility callback.
     ///
-    /// This hidden compatibility seam is public only so the Store facade can keep deterministic
-    /// tests while the mapped-file owner is migrated in a later slice.
+    /// During the storage-boundary migration, this hidden compatibility seam remains public for
+    /// the Store production `TransientStorePool` adapter and deterministic Store/Local tests.
     ///
     /// # Errors
     ///
@@ -151,8 +151,9 @@ impl MemoryLockManager {
 
     /// Runs a categorized lock through an injected compatibility callback.
     ///
-    /// This hidden compatibility seam is public only so the Store facade can keep deterministic
-    /// tests while the mapped-file owner is migrated in a later slice.
+    /// During the storage-boundary migration, this hidden compatibility seam remains public for
+    /// Store production adapters that implement `DefaultMappedFile` range locking and the
+    /// CommitLog active-lock lifecycle, as well as deterministic Store/Local tests.
     ///
     /// # Errors
     ///
@@ -229,8 +230,9 @@ impl MemoryLockManager {
 
     /// Runs the unlock operation through an injected compatibility callback.
     ///
-    /// This hidden compatibility seam is public only so the Store facade can keep deterministic
-    /// tests while the mapped-file owner is migrated in a later slice.
+    /// During the storage-boundary migration, this hidden compatibility seam remains public for
+    /// Store production adapters that implement `DefaultMappedFile` range unlocking and the
+    /// CommitLog active-lock lifecycle, as well as deterministic Store/Local tests.
     ///
     /// # Errors
     ///

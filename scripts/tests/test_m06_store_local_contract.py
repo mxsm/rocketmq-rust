@@ -77,6 +77,41 @@ MEMORY_LOCK_SEAMS = {
     "lock_region_with",
     "unlock_region_with",
 }
+MEMORY_LOCK_PRODUCTION_SEAM_COUNTS = {
+    Path("rocketmq-store-local/src/base/memory_lock_manager.rs"): {
+        "lock_buffer_with": 1,
+        "lock_region_with": 2,
+        "unlock_region_with": 1,
+    },
+    Path("rocketmq-store/src/base/transient_store_pool.rs"): {"lock_buffer_with": 1},
+    Path("rocketmq-store/src/log_file/commit_log.rs"): {
+        "lock_region_with": 1,
+        "unlock_region_with": 1,
+    },
+    Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"): {
+        "lock_region_with": 2,
+        "unlock_region_with": 2,
+    },
+}
+MEMORY_LOCK_TEST_SEAM_COUNTS = {
+    Path("rocketmq-store-local/src/base/memory_lock_manager.rs"): {
+        "lock_buffer_with": 2,
+        "lock_region_with": 1,
+        "unlock_region_with": 1,
+    },
+    Path("rocketmq-store-local/tests/memory_lock_manager_contract.rs"): {
+        "lock_region_with": 4,
+        "unlock_region_with": 1,
+    },
+    Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"): {
+        "lock_region_with": 3,
+        "unlock_region_with": 1,
+    },
+    Path("rocketmq-store/tests/store_local_memory_lock_identity.rs"): {
+        "lock_region_with": 1,
+        "unlock_region_with": 1,
+    },
+}
 DEFAULT_MAPPED_FILE_ALIAS_BRACE_USE_ALLOWLIST = {
     "use crate::utils::ffi::mlock as lock_memory",
     "use crate::utils::ffi::munlock as unlock_memory",
@@ -3052,6 +3087,14 @@ def memory_lock_manager_owner_violations(source: str) -> list[str]:
             violations.append(f"{seam} must explain its compatibility-only purpose in Rustdoc")
         elif "# Errors" not in seam_declaration.group("docs"):
             violations.append(f"{seam} must document its error contract")
+        else:
+            required_doc_markers = {
+                "lock_buffer_with": ("production", "TransientStorePool", "deterministic"),
+                "lock_region_with": ("production", "DefaultMappedFile", "CommitLog", "deterministic"),
+                "unlock_region_with": ("production", "DefaultMappedFile", "CommitLog", "deterministic"),
+            }[seam]
+            if any(marker not in seam_declaration.group("docs") for marker in required_doc_markers):
+                violations.append(f"{seam} must document every temporary production and test caller surface")
 
     required_labels = {
         'Self::TransientStorePool=>"transient_store_pool"',
@@ -3124,19 +3167,118 @@ def memory_lock_ffi_owner_violations(source: str) -> list[str]:
     return violations
 
 
+def memory_lock_seam_sources() -> dict[Path, str]:
+    sources: dict[Path, str] = {}
+    for crate in (LOCAL_CRATE, STORE_CRATE):
+        for directory in (crate / "src", crate / "tests"):
+            if not directory.is_dir():
+                continue
+            for path in directory.rglob("*.rs"):
+                sources[path.relative_to(ROOT)] = path.read_text(encoding="utf-8")
+    return sources
+
+
 def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
-    allowed = {
-        Path("rocketmq-store-local/src/base/memory_lock_manager.rs"),
-        Path("rocketmq-store/src/base/transient_store_pool.rs"),
-        Path("rocketmq-store/src/log_file/commit_log.rs"),
-        Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
-    }
     violations: list[str] = []
     for path, source in sources.items():
-        production = active_rust_source(re.split(r"#\[cfg\(test\)\]\s*mod\s+tests", source, maxsplit=1)[0])
+        if "tests" in path.parts:
+            production = ""
+            tests = source
+        else:
+            sections = re.split(r"#\[cfg\(test\)\]\s*mod\s+tests", source, maxsplit=1)
+            production = sections[0]
+            tests = sections[1] if len(sections) == 2 else ""
         for seam in sorted(MEMORY_LOCK_SEAMS):
-            if re.search(rf"\.{re.escape(seam)}\s*\(", production) and path not in allowed:
-                violations.append(f"{path}: ordinary business code calls hidden seam {seam}")
+            production_count = len(re.findall(rf"\.{re.escape(seam)}\s*\(", active_rust_source(production)))
+            expected_production_count = MEMORY_LOCK_PRODUCTION_SEAM_COUNTS.get(path, {}).get(seam, 0)
+            if production_count != expected_production_count:
+                violations.append(
+                    f"{path}: production {seam} calls changed: "
+                    f"expected {expected_production_count}, got {production_count}"
+                )
+
+            test_count = len(re.findall(rf"\.{re.escape(seam)}\s*\(", active_rust_source(tests)))
+            expected_test_count = MEMORY_LOCK_TEST_SEAM_COUNTS.get(path, {}).get(seam, 0)
+            if test_count != expected_test_count:
+                violations.append(
+                    f"{path}: test {seam} calls changed: expected {expected_test_count}, got {test_count}"
+                )
+
+    expected_paths = set(MEMORY_LOCK_PRODUCTION_SEAM_COUNTS) | set(MEMORY_LOCK_TEST_SEAM_COUNTS)
+    for missing_path in sorted(expected_paths - set(sources), key=str):
+        violations.append(f"{missing_path}: expected memory-lock seam caller is missing")
+
+    production_delegations = [
+        (
+            Path("rocketmq-store-local/src/base/memory_lock_manager.rs"),
+            "lock_buffer",
+            "self.lock_buffer_with(addr,len,mlock)",
+        ),
+        (
+            Path("rocketmq-store-local/src/base/memory_lock_manager.rs"),
+            "lock_buffer_with",
+            "let_=self.lock_region_with(MemoryLockCategory::TransientStorePool,addr,len,&mutlocker)?;Ok(())",
+        ),
+        (
+            Path("rocketmq-store-local/src/base/memory_lock_manager.rs"),
+            "lock_region",
+            "self.lock_region_with(category,addr,len,mlock)",
+        ),
+        (
+            Path("rocketmq-store-local/src/base/memory_lock_manager.rs"),
+            "unlock_region",
+            "self.unlock_region_with(handle,munlock)",
+        ),
+        (
+            Path("rocketmq-store/src/base/transient_store_pool.rs"),
+            "init_with_locker",
+            "self.memory_lock_manager.lock_buffer_with(buffer.as_ptr(),self.file_size,&mutlocker)?",
+        ),
+        (
+            Path("rocketmq-store/src/log_file/commit_log.rs"),
+            "ensure_active_mapped_file_locked_with",
+            "mapped_file.lock_region_with(&active_memory_lock.manager,target.category,target.offset,target.len,&mutlocker,)?",
+        ),
+        (
+            Path("rocketmq-store/src/log_file/commit_log.rs"),
+            "release_active_memory_lock_locked",
+            "active_memory_lock.manager.unlock_region_with(handle,&mutunlocker)?",
+        ),
+        (
+            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            "lock_region",
+            "self.lock_region_with(memory_lock_manager,category,offset,len,crate::utils::ffi::mlock)",
+        ),
+        (
+            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            "lock_region_with",
+            "memory_lock_manager.lock_region_with(category,addr,len,locker)",
+        ),
+        (
+            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            "unlock_region",
+            "self.unlock_region_with(memory_lock_manager,handle,crate::utils::ffi::munlock)",
+        ),
+        (
+            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            "unlock_region_with",
+            "memory_lock_manager.unlock_region_with(handle,unlocker)",
+        ),
+    ]
+    for path, function_name, expected_fragment in production_delegations:
+        source = sources.get(path)
+        if source is None:
+            continue
+        production = re.split(r"#\[cfg\(test\)\]\s*mod\s+tests", source, maxsplit=1)[0]
+        body = named_function_body(production, function_name)
+        normalized_body = re.sub(r"\s+", "", body or "")
+        if expected_fragment not in normalized_body:
+            violations.append(f"{path}: {function_name} no longer preserves its memory-lock seam delegation")
+        if path.parts[0] == "rocketmq-store" and re.search(
+            r"\b(?:locker|unlocker|mlock|munlock)\s*\(",
+            active_rust_source(body or ""),
+        ):
+            violations.append(f"{path}: {function_name} bypasses the canonical memory-lock manager")
     return violations
 
 
@@ -5136,11 +5278,7 @@ struct DefaultMappedFile {
         facade = facade_path.read_text(encoding="utf-8")
 
         self.assertEqual([], memory_lock_manager_owner_violations(canonical))
-        sources = {
-            path.relative_to(ROOT): path.read_text(encoding="utf-8")
-            for crate in (LOCAL_CRATE, STORE_CRATE)
-            for path in (crate / "src").rglob("*.rs")
-        }
+        sources = memory_lock_seam_sources()
         for item, kind in MEMORY_LOCK_ITEMS.items():
             self.assertEqual(
                 [(canonical_path.relative_to(ROOT), kind)],
@@ -5168,11 +5306,71 @@ struct DefaultMappedFile {
             source.replace("MEMORY_LOCK_BUDGET_EXHAUSTED_REASON", '"budget"', 1),
             source.replace("#[doc(hidden)]", "", 1),
             source.replace("record_linux_mlock_attempt", "record_linux_mlock_success", 1),
+            source.replace("Store production `TransientStorePool` adapter", "Store compatibility adapter", 1),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
                 self.assertNotEqual(source, mutation)
                 self.assertNotEqual([], memory_lock_manager_owner_violations(mutation))
+
+    def test_memory_lock_seam_contract_rejects_call_site_and_delegation_mutations(self) -> None:
+        sources = memory_lock_seam_sources()
+        pool_path = Path("rocketmq-store/src/base/transient_store_pool.rs")
+        pool_source = sources[pool_path]
+        extra_production_call = pool_source.replace(
+            "available_buffers.push_back(buffer);",
+            """
+            let _ = self.memory_lock_manager.lock_buffer_with(
+                buffer.as_ptr(),
+                self.file_size,
+                &mut locker,
+            );
+            available_buffers.push_back(buffer);
+            """,
+            1,
+        )
+        pool_delegation = "self.memory_lock_manager\n                .lock_buffer_with("
+        bypassed_manager = pool_source.replace(
+            pool_delegation,
+            "locker(buffer.as_ptr(), self.file_size)?;\n            self.memory_lock_manager\n                .lock_buffer_with(",
+            1,
+        )
+
+        mapped_file_path = Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs")
+        mapped_file_source = sources[mapped_file_path]
+        wrong_manager_receiver = mapped_file_source.replace(
+            "memory_lock_manager.lock_region_with(category, addr, len, locker)",
+            "self.lock_region_with(memory_lock_manager, category, 0, len, locker)",
+            1,
+        )
+
+        local_test_path = Path("rocketmq-store-local/tests/memory_lock_manager_contract.rs")
+        local_test_source = sources[local_test_path]
+        extra_test_call = local_test_source + """
+
+#[test]
+fn forbidden_extra_seam_call() {
+    let manager = MemoryLockManager::warn_only();
+    let _ = manager.lock_region_with(
+        MemoryLockCategory::CommitLogActiveWindow,
+        std::ptr::null(),
+        1,
+        |_, _| Ok(()),
+    );
+}
+"""
+
+        mutations = [
+            (pool_path, pool_source, extra_production_call),
+            (pool_path, pool_source, bypassed_manager),
+            (mapped_file_path, mapped_file_source, wrong_manager_receiver),
+            (local_test_path, local_test_source, extra_test_call),
+        ]
+        for path, source, mutation in mutations:
+            with self.subTest(path=path):
+                self.assertNotEqual(source, mutation)
+                mutated_sources = {**sources, path: mutation}
+                self.assertNotEqual([], memory_lock_seam_call_violations(mutated_sources))
 
     def test_memory_lock_syscalls_have_one_local_owner_and_exact_store_facade(self) -> None:
         canonical = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")

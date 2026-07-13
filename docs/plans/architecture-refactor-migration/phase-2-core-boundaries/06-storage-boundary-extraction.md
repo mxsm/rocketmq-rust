@@ -698,12 +698,14 @@ python scripts/arc_mut_guard.py
   平台实现。Local 新增普通 `rocketmq-error` 与可选 `rocketmq-observability` 依赖，并以 `observability` feature
   精确开启 `otel-metrics`；Store 的同名 feature 向 Local 转发。
 - [x] `[COMPAT]` Store 两个旧模块仅 direct exact re-export 已迁移的三个类型和两个函数；页大小、madvise、
-  prefetch、mincore 与常量仍由 Store 拥有。三个跨 crate 确定性测试 seam 标记为 `#[doc(hidden)] pub`，Rustdoc
-  明确其兼容测试用途；生产路径仍调用普通 lock/unlock API。错误文本、strict/warn-only 预算语义、指标 label、
-  计数器更新与原子内存序保持不变。
+  prefetch、mincore 与常量仍由 Store 拥有。三个跨 crate seam 在迁移期保持 `#[doc(hidden)] pub`，供 Store 生产
+  `TransientStorePool` adapter、`DefaultMappedFile` range-lock adapter、CommitLog active-lock lifecycle 以及
+  Store/Local 确定性测试共同使用；Rustdoc 明确列出这些临时调用面。错误文本、strict/warn-only 预算语义、指标
+  label、计数器更新与原子内存序保持不变。
 - [x] `[TEST]` TDD RED 先由缺失的 Local owner 文件与 feature/dependency contract 失败证明；GREEN 后 Local
   行为/并发 golden 5/5、Store↔Local 类型与函数 identity 2/2、Store 既有 pool/range/active-lock focused
-  tests 4/4、2/2、2/2，Local 全量 161 项通过；M06 mutation-resistant contract 91/91。
+  tests 4/4、2/2、2/2，Local 全量 161 项通过。Reviewer follow-up RED 证明旧的整文件粗 allowlist 无法拒绝新增
+  生产 seam 调用；按 production/test 调用点收紧后，最终 M06 mutation-resistant contract 92/92。
 - [x] `[FEATURE]` Local default/no-default/fast/safe/fast+safe/observability/all 七组 check 与 Store 七组受支持
   check 通过；依赖树证明 observability 关闭时 Local 不引入 telemetry，开启时精确进入 `otel-metrics`，Store
   转发到 Local。Observability CI 的七组 check/test 通过，六组 feature Clippy 与 default Clippy 均只复现两个
@@ -712,6 +714,9 @@ python scripts/arc_mut_guard.py
   observability 编译；Linux 条件编译审查将 Store 的 Windows-only error import 收窄为 `#[cfg(windows)]`。
 - [x] `[REV]` Local/Store package Clippy、精确 root workspace all-target/all-feature Clippy、Local strict
   Rustdoc、架构 35 项+fixtures+baseline、AGENTS routing、ArcMut 63 项+24 fixtures+guard、格式与 diff 检查通过。
+  Seam contract 分离 production/test 调用点并精确锁定逐文件次数与 canonical manager/Store adapter 共 11 个
+  生产委托形态；mutation 会拒绝新增生产/测试调用、错误 receiver 及绕过 canonical manager 的
+  syscall/callback 调用。
   Observability CI 的 default+六个指定 feature Clippy 探针只复现两个未触及的 Broker `DataVersionExt`
   unused-import 基线；error hygiene 仅复现未触及的 Broker/MCP 及缺失既有文档基线。
 - [x] `[SCOPE]` M06-03p 不迁移或修复 `TransientStorePool`，也不迁移 `DefaultMappedFile`、CommitLog
