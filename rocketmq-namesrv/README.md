@@ -4,18 +4,20 @@
 
 RocketMQ NameServer implementation for [RocketMQ-Rust](../README.md).
 
-`rocketmq-namesrv` provides lightweight service discovery and routing for RocketMQ brokers, clients, and admin tools. It
-tracks broker liveness, topic route metadata, broker membership, write permissions, KV configuration, runtime
-configuration, and optional embedded controller integration. The default route manager is the production-ready V2
-implementation built around concurrent tables and segmented locks.
+`rocketmq-namesrv` provides lightweight service discovery and routing for
+RocketMQ brokers, clients, and admin tools. It tracks broker liveness, topic
+route metadata, broker membership, write permissions, KV configuration,
+runtime configuration, and optional embedded controller integration. The
+default route manager is the production-ready V2 implementation built around
+concurrent tables and segmented locks.
 
-This crate can run as the `rocketmq-namesrv-rust` binary or be embedded through the `bootstrap::Builder` API for tests
-and service composition.
+This crate can run as the `rocketmq-namesrv-rust` binary or be embedded through
+the `bootstrap::Builder` API for tests and service composition.
 
 ## Capabilities
 
 | Area | What it provides |
-|------|------------------|
+| ---- | ---------------- |
 | Service discovery | Broker registration, unregistration, heartbeat tracking, inactive broker scanning, and channel destroy cleanup. |
 | Topic routing | Topic route lookup, standard/legacy JSON route encoding, zone-aware route filtering, filter-server metadata, and order-topic configuration lookup. |
 | Route storage | `RouteInfoManagerWrapper` selects V2 DashMap-based tables by default, with the legacy V1 manager still available through configuration. |
@@ -30,13 +32,14 @@ and service composition.
 
 ![rocketmq-namesrv architecture](../resources/namesrv-architecture.svg)
 
-`KVConfigManager` persists namespace config, `BrokerHousekeepingService` reacts to channel events, scheduled tasks scan
-inactive brokers, and optional `ControllerManager` runs when embedded-controller mode is enabled.
+`KVConfigManager` persists namespace config, `BrokerHousekeepingService` reacts
+to channel events, scheduled tasks scan inactive brokers, and optional
+`ControllerManager` runs when embedded-controller mode is enabled.
 
 ## Protocol Surface
 
 | Category | Request codes |
-|----------|---------------|
+| -------- | ------------- |
 | Client route lookup | `GetRouteinfoByTopic` `105` |
 | Broker lifecycle | `RegisterBroker` `103`, `UnregisterBroker` `104`, `BrokerHeartbeat` `904`, `GetBrokerMemberGroup` `901`, `QueryDataVersion` `322` |
 | Cluster and broker admin | `GetBrokerClusterInfo` `106`, `WipeWritePermOfBroker` `205`, `AddWritePermOfBroker` `327` |
@@ -53,8 +56,8 @@ Unsupported request codes return `RequestCodeNotSupported` from the default proc
 - The repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml).
 - `ROCKETMQ_HOME` or `--rocketmqHome` must be set for a normal binary startup.
 - Port `9876` is the default NameServer listen port.
-- A broker is not required to start the NameServer, but broker registration is required before client route queries can
-  return topic metadata.
+- A broker is not required to start the NameServer, but broker registration is
+  required before client route queries can return topic metadata.
 
 ## Installation
 
@@ -115,15 +118,18 @@ Configuration precedence is:
 
 1. Built-in defaults.
 2. Configuration file passed with `-c` / `--configFile`.
-3. Command-line overrides such as `--listenPort`, `--bindAddress`, `--rocketmqHome`, and `--kvConfigPath`.
+3. Command-line overrides such as `--listenPort`, `--bindAddress`,
+   `--rocketmqHome`, and `--kvConfigPath`.
 
 ## Configuration
 
-The example file [`resource/namesrv-example.toml`](resource/namesrv-example.toml) documents the supported keys. The
-configuration model accepts Java-style camelCase keys and Rust-style field names where serde aliases are defined.
+The example file
+[`resource/namesrv-example.toml`](resource/namesrv-example.toml) documents the
+supported keys. The configuration model accepts Java-style camelCase keys and
+Rust-style field names where serde aliases are defined.
 
 | Key | Default | Purpose |
-|-----|---------|---------|
+| --- | ------- | ------- |
 | `rocketmqHome` | `ROCKETMQ_HOME` / `ROCKETMQ_HOME_PROPERTY` | RocketMQ home directory used by the runtime. |
 | `kvConfigPath` | `~/rocketmq-namesrv/kvConfig.json` | Persisted KV config file. |
 | `configStorePath` | `~/rocketmq-namesrv/rocketmq-namesrv.properties` | Runtime config persistence path. |
@@ -141,7 +147,8 @@ configuration model accepts Java-style camelCase keys and Rust-style field names
 
 ## Embedded Usage
 
-Use `bootstrap::Builder` when embedding the NameServer in tests or higher-level services:
+Use `bootstrap::Builder` when embedding the NameServer in tests or higher-level
+services:
 
 ```rust
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
@@ -170,12 +177,13 @@ async fn run_namesrv() -> rocketmq_error::RocketMQResult<()> {
 }
 ```
 
-For deterministic tests, use `boot_with_shutdown(...)` to provide an explicit shutdown future.
+For deterministic tests, use `boot_with_shutdown(...)` to provide an explicit
+shutdown future.
 
 ## Crate Layout
 
 | Path | Purpose |
-|------|---------|
+| ---- | ------- |
 | [`src/bin/namesrv_bootstrap_server.rs`](src/bin/namesrv_bootstrap_server.rs) | CLI entry point, config merge, embedded-controller config loading, and startup validation. |
 | [`src/bootstrap.rs`](src/bootstrap.rs) | Runtime lifecycle, server startup, processor registration, scheduled broker scans, remoting client, and graceful shutdown. |
 | [`src/processor.rs`](src/processor.rs) | Request processor dispatcher and route request metrics hook. |
@@ -192,18 +200,26 @@ For deterministic tests, use `boot_with_shutdown(...)` to provide an explicit sh
 ## Feature Flags
 
 | Feature | Purpose |
-|---------|---------|
+| ------- | ------- |
 | `observability` | Enables NameServer metrics through `rocketmq-observability/otel-metrics`. |
 
 ## Validation
 
-Focused checks for this crate:
+Start with the smallest command that matches the changed area:
+
+| Change area | Focused validation |
+| ------------ | ------------------ |
+| Route table implementations under `src/route/tables` | `cargo test -p rocketmq-namesrv route::tables` |
+| Default request processor behavior | `cargo test -p rocketmq-namesrv default_request_processor` |
+| NameServer configuration parsing | `cargo test -p rocketmq-namesrv namesrv_config_parse` |
+| Route manager integration | `cargo test -p rocketmq-namesrv --test route_info_manager_integration` |
+| Topic-table index equivalence | `cargo test -p rocketmq-namesrv --test topic_table_index_equivalence` |
+| Benchmark code | `cargo test -p rocketmq-namesrv --benches --no-run` |
+
+For changes spanning multiple library areas, run the crate's full library test suite:
 
 ```bash
 cargo test -p rocketmq-namesrv --lib
-cargo test -p rocketmq-namesrv --test route_info_manager_integration
-cargo test -p rocketmq-namesrv --test topic_table_index_equivalence
-cargo test -p rocketmq-namesrv --benches --no-run
 ```
 
 Workspace-level Rust validation is run from the repository root when Rust code changes:
@@ -224,7 +240,8 @@ cargo bench -p rocketmq-namesrv --bench async_segmented_lock_bench
 cargo bench -p rocketmq-namesrv --bench topic_table_hot_path_bench
 ```
 
-Keep benchmark comparisons on the same toolchain, hardware, route table size, broker count, and topic distribution.
+Keep benchmark comparisons on the same toolchain, hardware, route table size,
+broker count, and topic distribution.
 
 ## License
 
