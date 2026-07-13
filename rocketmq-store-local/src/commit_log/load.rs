@@ -26,17 +26,21 @@ use tracing::info;
 /// Result of discovering loadable files in a CommitLog directory.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CommitLogFileDiscovery {
-    /// The configured CommitLog directory does not exist.
+    /// [`Path::exists`] reports the configured CommitLog directory as absent,
+    /// including when metadata or access errors are folded into `false`.
     DirectoryMissing,
     /// The directory exists but contains no regular files.
     NoFiles,
-    /// Regular files ordered by their filename's UTF-8 representation.
+    /// Regular files ordered by optional UTF-8 filename keys, with non-UTF
+    /// (`None`) keys before UTF (`Some`) keys.
     Files(Vec<PathBuf>),
 }
 
 /// Discovers regular CommitLog files while preserving the legacy filename ordering.
 ///
 /// Directory entry errors and paths that are not regular files are ignored.
+/// For compatibility, the initial [`Path::exists`] check folds metadata and
+/// access errors into [`CommitLogFileDiscovery::DirectoryMissing`].
 ///
 /// # Errors
 ///
