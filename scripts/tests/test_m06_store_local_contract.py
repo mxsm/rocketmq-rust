@@ -99,11 +99,13 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "CommitLogFrameCursor": ("struct", "record.rs"),
 }
 COMMIT_LOG_LOAD_OWNER_ITEMS = {
+    "CommitLogFileDiscovery": "enum",
     "CommitLogFileMetadata": "struct",
     "CommitLogMetadataCollectionOptions": "struct",
     "CommitLogFileLoadDecision": "enum",
     "CommitLogFileValidationError": "struct",
     "collect_commit_log_metadata": "fn",
+    "discover_commit_log_files": "fn",
     "validate_commit_log_file": "fn",
 }
 COMMIT_LOG_MAPPING_PLAN_ITEMS = {
@@ -1872,6 +1874,49 @@ def _derive_items(source: str, kind: str, item: str) -> set[str] | None:
     return {part.strip() for part in match.group(1).split(",") if part.strip()}
 
 
+def commit_log_file_discovery_owner_violations(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", maxsplit=1)[0]
+    active = active_rust_source(production)
+    normalized = re.sub(r"\s+", "", active)
+    violations: list[str] = []
+
+    discovery_body = active_item_body(production, "enum", "CommitLogFileDiscovery")
+    if discovery_body is None or re.sub(r"\s+", "", discovery_body) != (
+        "DirectoryMissing,NoFiles,Files(Vec<PathBuf>),"
+    ):
+        violations.append("Local CommitLog file discovery variants changed")
+    if _derive_items(production, "enum", "CommitLogFileDiscovery") != {
+        "Debug",
+        "PartialEq",
+        "Eq",
+    }:
+        violations.append("Local CommitLog file discovery derives changed")
+
+    signature = (
+        "pubfndiscover_commit_log_files(directory:&Path)"
+        "->io::Result<CommitLogFileDiscovery>"
+    )
+    if signature not in normalized:
+        violations.append("Local CommitLog file discovery signature changed")
+
+    body = named_function_body(production, "discover_commit_log_files")
+    expected_body = (
+        "if!directory.exists(){returnOk(CommitLogFileDiscovery::DirectoryMissing);}"
+        "letmutfile_paths:Vec<PathBuf>=fs::read_dir(directory)?"
+        ".filter_map(Result::ok).map(|entry|entry.path())"
+        ".filter(|path|path.is_file()).collect();"
+        "file_paths.sort_by(|a,b|{a.file_name().and_then(|name|name.to_str())"
+        ".cmp(&b.file_name().and_then(|name|name.to_str()))});"
+        "iffile_paths.is_empty(){Ok(CommitLogFileDiscovery::NoFiles)}"
+        "else{Ok(CommitLogFileDiscovery::Files(file_paths))}"
+    )
+    if body is None or re.sub(r"\s+", "", body) != expected_body:
+        violations.append("Local CommitLog file discovery semantics changed")
+    if normalized.count("fndiscover_commit_log_files") != 1:
+        violations.append("Local CommitLog file discovery owner count changed")
+    return violations
+
+
 def commit_log_mapping_plan_owner_violations(source: str) -> list[str]:
     production = source.split("#[cfg(test)]", maxsplit=1)[0]
     active = active_rust_source(production)
@@ -2491,7 +2536,12 @@ def store_commit_log_file_validation_violations(source: str) -> list[str]:
         if not visibility and item in COMMIT_LOG_LOAD_OWNER_ITEMS:
             private_imports.append(item)
     if sorted(private_imports) != sorted(
-        ["collect_commit_log_metadata", "CommitLogMetadataCollectionOptions"]
+        [
+            "collect_commit_log_metadata",
+            "discover_commit_log_files",
+            "CommitLogFileDiscovery",
+            "CommitLogMetadataCollectionOptions",
+        ]
     ):
         violations.append("Store CommitLog validation imports changed")
 
@@ -2554,6 +2604,72 @@ def store_commit_log_file_validation_violations(source: str) -> list[str]:
         violations.append("Store CommitLog metadata adapter call count changed")
     if normalized.count("CommitLogMetadataCollectionOptions{") != 1:
         violations.append("Store CommitLog metadata options construction changed")
+    return violations
+
+
+def store_commit_log_file_discovery_violations(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", maxsplit=1)[0]
+    active = active_rust_source(production)
+    normalized = re.sub(r"\s+", "", active)
+    violations: list[str] = []
+
+    local_prefix = "rocketmq_store_local::commit_log::load::"
+    private_imports: list[str] = []
+    for visibility, body, _ in active_use_records(production):
+        if not body.startswith(local_prefix):
+            continue
+        item = body.removeprefix(local_prefix)
+        if item not in {"discover_commit_log_files", "CommitLogFileDiscovery"}:
+            continue
+        if visibility:
+            violations.append("Store must not publicly re-export CommitLog file discovery")
+        if " as " in body or "{" in body or "*" in body:
+            violations.append("Store CommitLog file discovery imports forbid alias/brace/glob")
+        private_imports.append(item)
+    if sorted(private_imports) != ["CommitLogFileDiscovery", "discover_commit_log_files"]:
+        violations.append("Store CommitLog file discovery imports changed")
+
+    load_body = named_function_body(production, "load_optimized")
+    if load_body is None:
+        return violations + ["CommitLogLoader load entrypoint missing"]
+    load = re.sub(r"\s+", "", load_body)
+    expected_match = (
+        "letfile_paths=matchdiscover_commit_log_files(Path::new(&self.store_path))?{"
+        "CommitLogFileDiscovery::DirectoryMissing=>{warn!(,self.store_path);"
+        "returnOk((Vec::new(),stats));}"
+        "CommitLogFileDiscovery::NoFiles=>{info!(,self.store_path);"
+        "stats.total_load_time_ms=start.elapsed().as_millis();"
+        "returnOk((Vec::new(),stats));}"
+        "CommitLogFileDiscovery::Files(file_paths)=>file_paths,};"
+    )
+    discovery_position = load.find(expected_match)
+    metadata_position = load.find("letparallel_start=std::time::Instant::now();")
+    if discovery_position == -1 or metadata_position == -1 or discovery_position >= metadata_position:
+        violations.append("Store CommitLog file discovery adapter flow changed")
+
+    raw_load = re.sub(
+        r"\s+", "", named_raw_function_body(production, "load_optimized") or ""
+    )
+    if 'warn!("CommitLogdirectorydoesnotexist:{}",self.store_path);' not in raw_load:
+        violations.append("Store missing CommitLog directory warning changed")
+    if 'info!("Nocommitlogfilesfoundin{}",self.store_path);' not in raw_load:
+        violations.append("Store empty CommitLog directory info changed")
+
+    forbidden = [
+        "usestd::fs;",
+        "usestd::path::PathBuf;",
+        "fs::read_dir(",
+        ".filter_map(Result::ok)",
+        ".is_file()",
+        ".sort_by(",
+        ".sort_unstable",
+        ".try_exists(",
+        "if!dir.exists()",
+    ]
+    if any(token in normalized for token in forbidden):
+        violations.append("Store retained CommitLog file discovery ownership")
+    if normalized.count("discover_commit_log_files(") != 1:
+        violations.append("Store CommitLog file discovery adapter call count changed")
     return violations
 
 
@@ -3896,11 +4012,13 @@ struct DefaultMappedFile {
 
         canonical_source = canonical_file.read_text(encoding="utf-8")
         self.assertEqual([], commit_log_file_validation_owner_violations(canonical_source))
+        self.assertEqual([], commit_log_file_discovery_owner_violations(canonical_source))
 
         loader_source = (
             STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
         ).read_text(encoding="utf-8")
         self.assertEqual([], store_commit_log_file_validation_violations(loader_source))
+        self.assertEqual([], store_commit_log_file_discovery_violations(loader_source))
         self.assertNotIn(
             "CommitLogFileMetadata",
             active_commit_log_facade_reexports(loader_source),
@@ -4231,6 +4349,46 @@ struct DefaultMappedFile {
                 self.assertNotEqual(source, mutation)
                 self.assertNotEqual([], commit_log_file_validation_owner_violations(mutation))
 
+    def test_commit_log_file_discovery_contract_rejects_owner_mutations(self) -> None:
+        source = (LOCAL_CRATE / "src" / "commit_log" / "load.rs").read_text(encoding="utf-8")
+        self.assertEqual([], commit_log_file_discovery_owner_violations(source))
+        mutations = [
+            source.replace("DirectoryMissing,", "Missing,", 1),
+            source.replace(
+                "#[derive(Debug, PartialEq, Eq)]\npub enum CommitLogFileDiscovery",
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum CommitLogFileDiscovery",
+                1,
+            ),
+            source.replace("if !directory.exists()", "if !directory.try_exists()?", 1),
+            source.replace(".filter_map(Result::ok)", ".flatten()", 1),
+            source.replace(".filter(|path| path.is_file())", ".filter(|path| path.is_dir())", 1),
+            source.replace("file_paths.sort_by(", "file_paths.sort_unstable_by(", 1),
+            source.replace(
+                "a.file_name()\n            .and_then(|name| name.to_str())",
+                "a.to_str()",
+                1,
+            ),
+            source.replace(
+                ".cmp(&b.file_name().and_then(|name| name.to_str()))",
+                ".cmp(&b.file_name().and_then(|name| name.to_str())).reverse()",
+                1,
+            ),
+            source.replace(
+                ".and_then(|name| name.to_str())",
+                ".and_then(|name| name.to_str()).and_then(|name| name.parse::<u64>().ok())",
+                1,
+            ),
+            source.replace(
+                "Ok(CommitLogFileDiscovery::NoFiles)",
+                "Ok(CommitLogFileDiscovery::Files(Vec::new()))",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
+                self.assertNotEqual([], commit_log_file_discovery_owner_violations(mutation))
+
     def test_store_commit_log_file_validation_contract_rejects_review_mutations(self) -> None:
         path = STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
         source = path.read_text(encoding="utf-8")
@@ -4282,6 +4440,49 @@ struct DefaultMappedFile {
             with self.subTest(mutation_index=mutation_index):
                 self.assertNotEqual(source, mutation)
                 self.assertNotEqual([], store_commit_log_file_validation_violations(mutation))
+
+    def test_store_commit_log_file_discovery_contract_rejects_adapter_mutations(self) -> None:
+        source = (STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs").read_text(encoding="utf-8")
+        self.assertEqual([], store_commit_log_file_discovery_violations(source))
+        mutations = [
+            source.replace(
+                "use rocketmq_store_local::commit_log::load::discover_commit_log_files;",
+                "pub use rocketmq_store_local::commit_log::load::discover_commit_log_files;",
+                1,
+            ),
+            source.replace(
+                "use rocketmq_store_local::commit_log::load::CommitLogFileDiscovery;",
+                "use rocketmq_store_local::commit_log::load::CommitLogFileDiscovery as Discovery;",
+                1,
+            ),
+            source.replace(
+                "CommitLogFileDiscovery::DirectoryMissing => {",
+                "CommitLogFileDiscovery::DirectoryMissing => {\n                stats.total_load_time_ms = start.elapsed().as_millis();",
+                1,
+            ),
+            source.replace(
+                "CommitLogFileDiscovery::NoFiles => {",
+                "CommitLogFileDiscovery::DirectoryMissing => {",
+                1,
+            ),
+            source.replace("stats.total_load_time_ms = start.elapsed().as_millis();", "", 1),
+            source.replace(
+                "discover_commit_log_files(Path::new(&self.store_path))?",
+                "CommitLogFileDiscovery::Files(Vec::new())",
+                1,
+            ),
+            source.replace(
+                "let file_paths = match discover_commit_log_files",
+                "let _legacy = fs::read_dir(Path::new(&self.store_path));\n        let file_paths = match discover_commit_log_files",
+                1,
+            ),
+            source.replace("CommitLog directory does not exist", "CommitLog path missing", 1),
+            source.replace("No commit log files found in", "CommitLog directory empty", 1),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
+                self.assertNotEqual([], store_commit_log_file_discovery_violations(mutation))
 
     def test_commit_log_summary_logging_preserves_legacy_targets(self) -> None:
         expected_targets = {

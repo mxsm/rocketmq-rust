@@ -23,9 +23,11 @@ use memmap2::MmapOptions;
 use rocketmq_store_local::commit_log::load::apply_recovery_file_prefetch;
 use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;
 use rocketmq_store_local::commit_log::load::collect_commit_log_metadata;
+use rocketmq_store_local::commit_log::load::discover_commit_log_files;
 use rocketmq_store_local::commit_log::load::record_file_prefetch;
 use rocketmq_store_local::commit_log::load::record_mmap_advice;
 use rocketmq_store_local::commit_log::load::validate_commit_log_file;
+use rocketmq_store_local::commit_log::load::CommitLogFileDiscovery;
 use rocketmq_store_local::commit_log::load::CommitLogFileLoadDecision;
 use rocketmq_store_local::commit_log::load::CommitLogFileMetadata;
 use rocketmq_store_local::commit_log::load::CommitLogMappingExecution;
@@ -73,6 +75,78 @@ fn create_commit_log_files(directory: &TempDir, count: usize, size: u64) -> Vec<
             path
         })
         .collect()
+}
+
+#[test]
+fn discovery_reports_missing_directory() {
+    let directory = TempDir::new().unwrap();
+    let missing = directory.path().join("missing");
+
+    let discovery = discover_commit_log_files(&missing).unwrap();
+
+    assert_eq!(discovery, CommitLogFileDiscovery::DirectoryMissing);
+}
+
+#[test]
+fn discovery_reports_empty_directory() {
+    let directory = TempDir::new().unwrap();
+
+    let discovery = discover_commit_log_files(directory.path()).unwrap();
+
+    assert_eq!(discovery, CommitLogFileDiscovery::NoFiles);
+}
+
+#[test]
+fn discovery_excludes_subdirectories_and_reports_no_files() {
+    let directory = TempDir::new().unwrap();
+    fs::create_dir(directory.path().join("00000000000000000000")).unwrap();
+
+    let discovery = discover_commit_log_files(directory.path()).unwrap();
+
+    assert_eq!(discovery, CommitLogFileDiscovery::NoFiles);
+}
+
+#[test]
+fn discovery_keeps_files_only_and_sorts_names_lexicographically() {
+    let directory = TempDir::new().unwrap();
+    fs::create_dir(directory.path().join("00-directory")).unwrap();
+    let ten = directory.path().join("10");
+    let two = directory.path().join("2");
+    fs::write(&two, []).unwrap();
+    fs::write(&ten, []).unwrap();
+
+    let discovery = discover_commit_log_files(directory.path()).unwrap();
+
+    assert_eq!(discovery, CommitLogFileDiscovery::Files(vec![ten, two]));
+}
+
+#[test]
+fn discovery_propagates_root_read_dir_error() {
+    let file = NamedTempFile::new().unwrap();
+    let source_error = fs::read_dir(file.path()).unwrap_err();
+
+    let error = discover_commit_log_files(file.path()).unwrap_err();
+
+    assert_eq!(error.kind(), source_error.kind());
+    assert_eq!(error.raw_os_error(), source_error.raw_os_error());
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_sorts_non_utf_name_before_utf_name() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let directory = TempDir::new().unwrap();
+    let valid = directory.path().join("00");
+    let invalid_name = OsString::from_vec(vec![0xff]);
+    let invalid = directory.path().join(&invalid_name);
+    fs::write(&valid, []).unwrap();
+    fs::write(&invalid, []).unwrap();
+
+    let discovery = discover_commit_log_files(directory.path()).unwrap();
+
+    assert_eq!(discovery, CommitLogFileDiscovery::Files(vec![invalid, valid]));
 }
 
 #[test]

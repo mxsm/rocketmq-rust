@@ -23,6 +23,48 @@ use rayon::prelude::*;
 use thiserror::Error;
 use tracing::info;
 
+/// Result of discovering loadable files in a CommitLog directory.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CommitLogFileDiscovery {
+    /// The configured CommitLog directory does not exist.
+    DirectoryMissing,
+    /// The directory exists but contains no regular files.
+    NoFiles,
+    /// Regular files ordered by their filename's UTF-8 representation.
+    Files(Vec<PathBuf>),
+}
+
+/// Discovers regular CommitLog files while preserving the legacy filename ordering.
+///
+/// Directory entry errors and paths that are not regular files are ignored.
+///
+/// # Errors
+///
+/// Returns the root [`fs::read_dir`] error when the existing path cannot be read
+/// as a directory.
+pub fn discover_commit_log_files(directory: &Path) -> io::Result<CommitLogFileDiscovery> {
+    if !directory.exists() {
+        return Ok(CommitLogFileDiscovery::DirectoryMissing);
+    }
+
+    let mut file_paths: Vec<PathBuf> = fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect();
+    file_paths.sort_by(|a, b| {
+        a.file_name()
+            .and_then(|name| name.to_str())
+            .cmp(&b.file_name().and_then(|name| name.to_str()))
+    });
+
+    if file_paths.is_empty() {
+        Ok(CommitLogFileDiscovery::NoFiles)
+    } else {
+        Ok(CommitLogFileDiscovery::Files(file_paths))
+    }
+}
+
 /// Filesystem metadata required to validate and open one CommitLog segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitLogFileMetadata {

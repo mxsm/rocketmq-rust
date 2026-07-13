@@ -21,10 +21,8 @@
 //! - Zero-copy buffer reuse
 //! - Platform-specific optimizations (madvise on Unix, PrefetchVirtualMemory on Windows)
 
-use std::fs;
 use std::io;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -35,8 +33,10 @@ use tracing::warn;
 use rocketmq_store_local::commit_log::load::apply_recovery_file_prefetch;
 use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;
 use rocketmq_store_local::commit_log::load::collect_commit_log_metadata;
+use rocketmq_store_local::commit_log::load::discover_commit_log_files;
 use rocketmq_store_local::commit_log::load::record_file_prefetch;
 use rocketmq_store_local::commit_log::load::record_mmap_advice;
+use rocketmq_store_local::commit_log::load::CommitLogFileDiscovery;
 use rocketmq_store_local::commit_log::load::CommitLogMappingEntry;
 use rocketmq_store_local::commit_log::load::CommitLogMappingExecution;
 use rocketmq_store_local::commit_log::load::CommitLogMappingMode;
@@ -126,30 +126,18 @@ impl CommitLogLoader {
             ..LoadStatistics::default()
         };
 
-        let dir = Path::new(&self.store_path);
-        if !dir.exists() {
-            warn!("CommitLog directory does not exist: {}", self.store_path);
-            return Ok((Vec::new(), stats));
-        }
-
-        let mut file_paths: Vec<PathBuf> = fs::read_dir(dir)?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.is_file())
-            .collect();
-
-        // Sort by filename (ensures ordering consistency)
-        file_paths.sort_by(|a, b| {
-            a.file_name()
-                .and_then(|n| n.to_str())
-                .cmp(&b.file_name().and_then(|n| n.to_str()))
-        });
-
-        if file_paths.is_empty() {
-            info!("No commit log files found in {}", self.store_path);
-            stats.total_load_time_ms = start.elapsed().as_millis();
-            return Ok((Vec::new(), stats));
-        }
+        let file_paths = match discover_commit_log_files(Path::new(&self.store_path))? {
+            CommitLogFileDiscovery::DirectoryMissing => {
+                warn!("CommitLog directory does not exist: {}", self.store_path);
+                return Ok((Vec::new(), stats));
+            }
+            CommitLogFileDiscovery::NoFiles => {
+                info!("No commit log files found in {}", self.store_path);
+                stats.total_load_time_ms = start.elapsed().as_millis();
+                return Ok((Vec::new(), stats));
+            }
+            CommitLogFileDiscovery::Files(file_paths) => file_paths,
+        };
 
         let parallel_start = std::time::Instant::now();
         let file_metadata = collect_commit_log_metadata(
@@ -325,6 +313,19 @@ mod tests {
         let (files, stats) = result.unwrap();
         assert_eq!(files.len(), 0);
         assert_eq!(stats.total_files, 0);
+    }
+
+    #[test]
+    fn missing_directory_preserves_zero_total_load_time() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("missing");
+        let loader = CommitLogLoader::new(missing.to_string_lossy().to_string(), 1024 * 1024, true);
+
+        let (files, stats) = loader.load_optimized().unwrap();
+
+        assert!(files.is_empty());
+        assert_eq!(stats.total_files, 0);
+        assert_eq!(stats.total_load_time_ms, 0);
     }
 
     #[test]

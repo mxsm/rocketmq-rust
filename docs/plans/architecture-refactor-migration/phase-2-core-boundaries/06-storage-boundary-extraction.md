@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -631,3 +631,29 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03m 只迁移 CommitLog filesystem metadata/validation/empty-last filtering；目录枚举、mapped-file
   factory、position、append/parser/recovery、flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership 与持久
   格式仍未迁移。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03n CommitLog file discovery evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::load` 现唯一拥有 `CommitLogFileDiscovery` 与
+  `discover_commit_log_files`，负责目录缺失判定、根目录枚举、条目错误跳过、regular-file 过滤及按文件名 UTF-8
+  `Option` 比较的稳定排序；Store 仅通过两个私有 import 做 exhaustive adapter match。
+- [x] `[COMPAT]` `DirectoryMissing` 保留原 warning 并维持 `total_load_time_ms == 0`；`NoFiles` 保留原 info
+  并记录 elapsed；根 `read_dir` 错误继续传播，单条 entry 错误继续跳过，子目录继续排除，`"10" < "2"`、
+  non-UTF `None < Some` 排序语义均冻结。没有 Store public re-export、公开签名、持久格式或 feature 变化。
+- [x] `[TEST]` TDD RED 分别由 Local 缺少 discovery owner 的 E0432 与 contract owner 缺失证明；GREEN 后
+  Windows Local focused 41/41、Local 全量 144 项（9 doctests ignored）、Store loader 16/16、load integration
+  7 passed/1 ignored、recovery integration 19/19、Store lib 578/578；M06 contract 84/84，新增 10 个 Local 与
+  9 个 Store mutation 审查覆盖。
+- [x] `[REVIEW]` Local default/no-default/fast/safe/fast+safe/all，Store default/all 及真实
+  `local_file_store` owner 的 fast/safe/fast+safe 组合均通过。四个 raw Store no-default 组合仍各以 124 个既有
+  E0004 退出 101；BASE `a9b26f62bada1112d0875d4474672f6284b843a5` 对三个 owner/feature 文件为零 diff。
+- [x] `[PLATFORM]` WSL/Linux isolated target 实际通过 Local focused 42/42（含 non-UTF filename fixture）与
+  Store loader 16/16；`cargo clean --target-dir target/wsl-m06-03n` 已删除 5,920 files/3.4 GiB，Windows 根
+  `read_dir` error、缺失/空目录 timing 与稳定字符串排序也有独立覆盖。
+- [x] `[REV]` Local/Store/package 与 workspace Clippy、strict Local Rustdoc、Store Rustdoc、格式/diff、
+  AGENTS routing、架构 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+initial/final guard 全部通过。
+  BASE→candidate 直审均为 1,232 identities/3,375 occurrences、0 NEW/0 STALE/0 semantic changes；仅 9 个
+  既有 occurrence 的 line 元数据变化，baseline blob 与 BASE 相同且无需 relocation approval。
+- [x] `[SCOPE]` M06-03n 只迁移 CommitLog 目录发现、过滤与排序；metadata validation/empty-last 语义、
+  mapped-file factory、position、append/parser/recovery、flush/group commit、CQ/Index、HA、Timer/POP、runtime
+  ownership 与持久格式均未改变。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
