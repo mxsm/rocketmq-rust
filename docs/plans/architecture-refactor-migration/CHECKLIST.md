@@ -123,6 +123,7 @@
   - [x] M06-03n：迁移 CommitLog 目录发现、文件过滤与稳定文件名排序到 Local
   - [x] M06-03o：迁移 CommitLog append 值与最小 mapped-file config 到 Local
   - [x] M06-03p：迁移 MemoryLockManager 与 mlock/munlock 平台边界到 Local
+  - [x] M06-03q：迁移 TransientStorePool 到 Local 并保留 Store 公开类型身份
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

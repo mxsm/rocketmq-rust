@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -698,10 +698,11 @@ python scripts/arc_mut_guard.py
   平台实现。Local 新增普通 `rocketmq-error` 与可选 `rocketmq-observability` 依赖，并以 `observability` feature
   精确开启 `otel-metrics`；Store 的同名 feature 向 Local 转发。
 - [x] `[COMPAT]` Store 两个旧模块仅 direct exact re-export 已迁移的三个类型和两个函数；页大小、madvise、
-  prefetch、mincore 与常量仍由 Store 拥有。三个跨 crate seam 在迁移期保持 `#[doc(hidden)] pub`，供 Store 生产
-  `TransientStorePool` adapter、`DefaultMappedFile` range-lock adapter、CommitLog active-lock lifecycle 以及
-  Store/Local 确定性测试共同使用；Rustdoc 明确列出这些临时调用面。错误文本、strict/warn-only 预算语义、指标
-  label、计数器更新与原子内存序保持不变。
+  prefetch、mincore 与常量仍由 Store 拥有。M06-03p 交付时三个跨 crate seam 暂时保持 `#[doc(hidden)] pub`，
+  分别供当时的 Store `TransientStorePool`、`DefaultMappedFile` range-lock 与 CommitLog active-lock 生产 adapter
+  使用；M06-03q 移除最后一个 `lock_buffer_with` 跨 crate caller 后将其收窄为 `pub(crate)`，其余两个 seam
+  继续仅为 Store production adapter 临时公开。错误文本、strict/warn-only 预算语义、指标 label、计数器更新
+  与原子内存序保持不变。
 - [x] `[TEST]` TDD RED 先由缺失的 Local owner 文件与 feature/dependency contract 失败证明；GREEN 后 Local
   行为/并发 golden 5/5、Store↔Local 类型与函数 identity 2/2、Store 既有 pool/range/active-lock focused
   tests 4/4、2/2、2/2，Local 全量 161 项通过。Reviewer follow-up RED 证明旧的整文件粗 allowlist 无法拒绝新增
@@ -722,3 +723,32 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03p 不迁移或修复 `TransientStorePool`，也不迁移 `DefaultMappedFile`、CommitLog
   orchestration、flush/group commit、CQ/Index、HA、Timer/POP 或持久格式。PR-M06-03 父项、M06 Exit Checklist
   和 M06-04..12 保持未完成。
+
+## M06-03q TransientStorePool ownership evidence
+
+- [x] `[DEV]` `rocketmq-store-local::base::transient_store_pool::TransientStorePool` 现为唯一 canonical
+  owner；Store 原模块只保留对该类型的直接精确 `pub use`，没有 wrapper、type alias 或第二份实现。
+- [x] `[COMPAT]` 保留公开构造、初始化/销毁、借还 buffer、可用数量、memory-lock 统计和 real-commit
+  getter/setter 的签名与类型身份。跨 crate fixture 证明 Store 旧路径与 Local 新路径可双向赋值，并共享
+  queue 与 real-commit 状态。`lock_buffer_with` 已在最后一个 Store production caller 消失后收窄为
+  `pub(crate)`；只有 Local canonical pool 是其外部于 manager 的 production caller，`lock_region_with` 与
+  `unlock_region_with` 因 Store production adapter 仍保持 `#[doc(hidden)] pub`。
+- [x] `[SEMANTICS]` 原有生命周期语义未被顺带修复：重复 `init` 继续追加；借出使用 `pop_front`，归还允许
+  任意长度和超容量并使用 `push_front`；告警阈值仍为 `pool_size / 10 * 4`。`destroy` 只 drain 当前 available
+  queue，对每个 buffer 直接调用 `munlock(ptr, file_size)`，包括 lock 失败或预算跳过的 buffer；首个 unlock
+  错误停止后续 syscall，但 drain drop 仍清空剩余 queue；借出的 buffer 不处理，manager 统计不回退。
+- [x] `[TEST]` TDD RED 先由缺失 Local owner/module 和 Rust public fixture E0432 证明；GREEN 后 Local 公开
+  Clone/共享状态/并发归还契约 2/2、内部生命周期 8/8、Store 类型身份 1/1、旧 Store mapped-file round-trip
+  1/1、完整 Local 171 项及 M06 source/mutation contract 94/94 通过。mutation contract 拒绝 owner copy、facade
+  wrapper、共享字段/API/阈值/queue 顺序/drain/unlock/real-commit/Drop 漂移及公开 injection seam。
+- [x] `[FEATURE]` 未修改 Cargo manifest、feature 或依赖；Local 与 Store 各七组 feature closure、default/all
+  package Clippy、Local strict Rustdoc 均通过。Store 普通 Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。
+- [x] `[PLATFORM]` Windows 完成全部 focused/full 验证；WSL/Linux 隔离 target 通过公开契约 2/2、内部语义
+  8/8、Store identity 1/1 与 Local/Store observability 编译。隔离目录已清理 9,872 files/4.8 GiB 并确认不存在。
+- [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard 与 AGENTS routing
+  均通过。error hygiene 只复现未触及的 Broker/MCP 与两份缺失治理文档基线；本切片没有 runtime、错误架构、
+  manifest、feature 或 ArcMut 变更。M06 contract 精确拒绝 Store 或第二个 production caller 调用
+  `lock_buffer_with`，也拒绝将其重新扩大为跨 crate public seam。
+- [x] `[SCOPE]` M06-03q 只迁移 `TransientStorePool` owner；不修复其既有 lifecycle/accounting 行为，不迁移
+  `MappedFile`/`DefaultMappedFile`、CommitLog orchestration、flush/group commit、CQ/Index、HA、Timer/POP、
+  runtime ownership 或持久格式。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。

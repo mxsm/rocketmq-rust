@@ -13,3 +13,4 @@
 // limitations under the License.
 
 pub mod memory_lock_manager;
+pub mod transient_store_pool;

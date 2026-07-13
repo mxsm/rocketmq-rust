@@ -125,14 +125,13 @@ impl MemoryLockManager {
 
     /// Runs the lock operation through an injected compatibility callback.
     ///
-    /// During the storage-boundary migration, this hidden compatibility seam remains public for
-    /// the Store production `TransientStorePool` adapter and deterministic Store/Local tests.
+    /// The Local production `TransientStorePool` owner is the sole production caller. This seam
+    /// remains crate-private for deterministic Local tests during the storage-boundary migration.
     ///
     /// # Errors
     ///
     /// Returns the injected lock error when strict locking is enabled or budget reservation fails.
-    #[doc(hidden)]
-    pub fn lock_buffer_with<F>(&self, addr: *const u8, len: usize, mut locker: F) -> RocketMQResult<()>
+    pub(crate) fn lock_buffer_with<F>(&self, addr: *const u8, len: usize, mut locker: F) -> RocketMQResult<()>
     where
         F: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {

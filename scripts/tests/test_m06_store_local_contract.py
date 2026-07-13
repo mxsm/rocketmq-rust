@@ -72,6 +72,13 @@ MEMORY_LOCK_HANDLE_FIELDS = [
     ("len", "usize"),
     ("category", "MemoryLockCategory"),
 ]
+TRANSIENT_STORE_POOL_FIELDS = [
+    ("pool_size", "usize"),
+    ("file_size", "usize"),
+    ("available_buffers", "Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>"),
+    ("is_real_commit", "Arc<parking_lot::Mutex<bool>>"),
+    ("memory_lock_manager", "Arc<MemoryLockManager>"),
+]
 MEMORY_LOCK_SEAMS = {
     "lock_buffer_with",
     "lock_region_with",
@@ -83,7 +90,7 @@ MEMORY_LOCK_PRODUCTION_SEAM_COUNTS = {
         "lock_region_with": 2,
         "unlock_region_with": 1,
     },
-    Path("rocketmq-store/src/base/transient_store_pool.rs"): {"lock_buffer_with": 1},
+    Path("rocketmq-store-local/src/base/transient_store_pool.rs"): {"lock_buffer_with": 1},
     Path("rocketmq-store/src/log_file/commit_log.rs"): {
         "lock_region_with": 1,
         "unlock_region_with": 1,
@@ -3076,7 +3083,21 @@ def memory_lock_manager_owner_violations(source: str) -> list[str]:
         if signature not in compact:
             violations.append(f"missing compatibility API: {signature}")
 
-    for seam in sorted(MEMORY_LOCK_SEAMS):
+    if "pub(crate)fnlock_buffer_with" not in compact or "#[doc(hidden)]pubfnlock_buffer_with" in compact:
+        violations.append("lock_buffer_with must be crate-private after TransientStorePool moves to Local")
+    lock_buffer_declaration = re.search(
+        r"(?s)(?P<docs>(?:\s*///[^\n]*\n)+)\s*pub\(crate\)\s+fn\s+lock_buffer_with\b",
+        production,
+    )
+    if lock_buffer_declaration is None or "# Errors" not in lock_buffer_declaration.group("docs"):
+        violations.append("lock_buffer_with must document its crate-private error contract")
+    elif any(
+        marker not in lock_buffer_declaration.group("docs")
+        for marker in ("Local production", "TransientStorePool", "deterministic")
+    ):
+        violations.append("lock_buffer_with must document its sole production and test caller surface")
+
+    for seam in ("lock_region_with", "unlock_region_with"):
         if f"#[doc(hidden)]pubfn{seam}" not in compact:
             violations.append(f"{seam} must remain a doc(hidden) public compatibility seam")
         seam_declaration = re.search(
@@ -3089,7 +3110,6 @@ def memory_lock_manager_owner_violations(source: str) -> list[str]:
             violations.append(f"{seam} must document its error contract")
         else:
             required_doc_markers = {
-                "lock_buffer_with": ("production", "TransientStorePool", "deterministic"),
                 "lock_region_with": ("production", "DefaultMappedFile", "CommitLog", "deterministic"),
                 "unlock_region_with": ("production", "DefaultMappedFile", "CommitLog", "deterministic"),
             }[seam]
@@ -3136,6 +3156,113 @@ def memory_lock_manager_owner_violations(source: str) -> list[str]:
     for forbidden in ("rocketmq_common", "rocketmq_rust", "rocketmq_store::", "crate::base::transient_store_pool"):
         if forbidden in production:
             violations.append(f"canonical memory-lock owner gained forbidden dependency: {forbidden}")
+    return violations
+
+
+def transient_store_pool_owner_violations(source: str) -> list[str]:
+    production = re.split(r"#\[cfg\(test\)\]\s*mod\s+tests", source, maxsplit=1)[0]
+    compact = compact_rust(production)
+    violations: list[str] = []
+
+    if "#[derive(Clone)]pubstructTransientStorePool" not in compact:
+        violations.append("TransientStorePool must remain a Clone struct")
+    if active_struct_fields(production, "TransientStorePool") != TRANSIENT_STORE_POOL_FIELDS:
+        violations.append("TransientStorePool fields changed")
+
+    required_public_api = {
+        "pubfnnew(pool_size:usize,file_size:usize)->Self",
+        "pubfnnew_with_memory_lock_budget(pool_size:usize,file_size:usize,memory_lock_budget_bytes:u64)->Self",
+        "pubfninit(&self)->RocketMQResult<()>",
+        "pubfndestroy(&self)->RocketMQResult<()>",
+        "pubfnreturn_buffer(&self,buffer:Vec<u8>)",
+        "pubfnborrow_buffer(&self)->Option<Vec<u8>>",
+        "pubfnavailable_buffer_nums(&self)->usize",
+        "pubfnlocked_buffer_count(&self)->usize",
+        "pubfnlock_attempt_count(&self)->usize",
+        "pubfnlock_failed_buffer_count(&self)->usize",
+        "pubfnlock_skipped_buffer_count(&self)->usize",
+        "pubfnlocked_bytes(&self)->u64",
+        "pubfnlock_failed_bytes(&self)->u64",
+        "pubfnlock_skipped_bytes(&self)->u64",
+        "pubfnis_real_commit(&self)->bool",
+        "pubfnset_real_commit(&self,real_commit:bool)",
+    }
+    for signature in sorted(required_public_api):
+        if signature not in compact:
+            violations.append(f"missing TransientStorePool compatibility API: {signature}")
+
+    if "pub(crate)fninit_with_locker<F>" not in compact:
+        violations.append("init_with_locker must remain crate-private")
+    if "fndestroy_with_unlocker<F>" not in compact or "pubfndestroy_with_unlocker" in compact:
+        violations.append("destroy_with_unlocker must remain a private deterministic seam")
+    if re.search(r"#\[doc\(hidden\)\]\s*pub\s+fn\s+(?:init|destroy)_with_", production):
+        violations.append("TransientStorePool injection seams must not become cross-crate public")
+
+    exact_bodies = {
+        "new": "Self::new_with_memory_lock_budget(pool_size,file_size,0)",
+        "init": "self.init_with_locker(mlock)",
+        "init_with_locker": (
+            "letmutavailable_buffers=self.available_buffers.lock();"
+            "for_in0..self.pool_size{"
+            "letbuffer=vec![0u8;self.file_size];"
+            "self.memory_lock_manager.lock_buffer_with(buffer.as_ptr(),self.file_size,&mutlocker)?;"
+            "available_buffers.push_back(buffer);"
+            "}Ok(())"
+        ),
+        "destroy": "self.destroy_with_unlocker(munlock)",
+        "destroy_with_unlocker": (
+            "letmutavailable_buffers=self.available_buffers.lock();"
+            "foravailable_bufferinavailable_buffers.drain(0..){"
+            "unlocker(available_buffer.as_ptr(),self.file_size)?;"
+            "}Ok(())"
+        ),
+        "return_buffer": "letmutavailable_buffers=self.available_buffers.lock();available_buffers.push_front(buffer);",
+        "borrow_buffer": (
+            "letmutavailable_buffers=self.available_buffers.lock();"
+            "letbuffer=available_buffers.pop_front();"
+            "ifavailable_buffers.len()<self.pool_size/10*4{"
+            'warn!("TransientStorePoolonlyremain{}sheets.",available_buffers.len());'
+            "}buffer"
+        ),
+        "available_buffer_nums": "letavailable_buffers=self.available_buffers.lock();available_buffers.len()",
+        "is_real_commit": "letis_real_commit=self.is_real_commit.lock();*is_real_commit",
+        "set_real_commit": "letmutis_real_commit=self.is_real_commit.lock();*is_real_commit=real_commit;",
+    }
+    for function_name, expected_body in exact_bodies.items():
+        raw_body = named_raw_function_body(production, function_name)
+        if compact_rust(raw_body or "") != expected_body:
+            violations.append(f"TransientStorePool::{function_name} behavior changed")
+
+    constructor = compact_rust(named_raw_function_body(production, "new_with_memory_lock_budget") or "")
+    constructor_fragments = {
+        "letavailable_buffers=Arc::new(Mutex::new(VecDeque::with_capacity(pool_size)));",
+        "letis_real_commit=Arc::new(Mutex::new(true));",
+        "memory_lock_manager:Arc::new(MemoryLockManager::warn_only_with_budget(memory_lock_budget_bytes))",
+    }
+    if any(fragment not in constructor for fragment in constructor_fragments):
+        violations.append("TransientStorePool constructor sharing or warn-only semantics changed")
+
+    manager_getters = {
+        "locked_buffer_count": "self.memory_lock_manager.locked_buffer_count()",
+        "lock_attempt_count": "self.memory_lock_manager.lock_attempt_count()",
+        "lock_failed_buffer_count": "self.memory_lock_manager.lock_failed_buffer_count()",
+        "lock_skipped_buffer_count": "self.memory_lock_manager.lock_skipped_buffer_count()",
+        "locked_bytes": "self.memory_lock_manager.locked_bytes()",
+        "lock_failed_bytes": "self.memory_lock_manager.lock_failed_bytes()",
+        "lock_skipped_bytes": "self.memory_lock_manager.lock_skipped_bytes()",
+    }
+    for function_name, expected_body in manager_getters.items():
+        body = compact_rust(named_raw_function_body(production, function_name) or "")
+        if body != expected_body:
+            violations.append(f"TransientStorePool::{function_name} must remain an exact manager projection")
+
+    if re.search(r"\bimpl\s+Drop\s+for\s+TransientStorePool\b", active_rust_source(production)):
+        violations.append("TransientStorePool must not gain implicit Drop cleanup")
+    if "memory_lock_manager.unlock_region" in production or "MemoryLockHandle" in production:
+        violations.append("TransientStorePool destroy must not switch to manager handles")
+    for forbidden in ("rocketmq_store::", "rocketmq_common", "rocketmq_remoting", "rocketmq_rust", "rocketmq_broker"):
+        if forbidden in production:
+            violations.append(f"canonical TransientStorePool gained forbidden dependency: {forbidden}")
     return violations
 
 
@@ -3230,7 +3357,7 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
             "self.unlock_region_with(handle,munlock)",
         ),
         (
-            Path("rocketmq-store/src/base/transient_store_pool.rs"),
+            Path("rocketmq-store-local/src/base/transient_store_pool.rs"),
             "init_with_locker",
             "self.memory_lock_manager.lock_buffer_with(buffer.as_ptr(),self.file_size,&mutlocker)?",
         ),
@@ -3274,7 +3401,7 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
         normalized_body = re.sub(r"\s+", "", body or "")
         if expected_fragment not in normalized_body:
             violations.append(f"{path}: {function_name} no longer preserves its memory-lock seam delegation")
-        if path.parts[0] == "rocketmq-store" and re.search(
+        if path != Path("rocketmq-store-local/src/base/memory_lock_manager.rs") and re.search(
             r"\b(?:locker|unlocker|mlock|munlock)\s*\(",
             active_rust_source(body or ""),
         ):
@@ -5306,7 +5433,12 @@ struct DefaultMappedFile {
             source.replace("MEMORY_LOCK_BUDGET_EXHAUSTED_REASON", '"budget"', 1),
             source.replace("#[doc(hidden)]", "", 1),
             source.replace("record_linux_mlock_attempt", "record_linux_mlock_success", 1),
-            source.replace("Store production `TransientStorePool` adapter", "Store compatibility adapter", 1),
+            source.replace("Local production `TransientStorePool` owner", "Local compatibility adapter", 1),
+            source.replace(
+                "pub(crate) fn lock_buffer_with",
+                "#[doc(hidden)]\n    pub fn lock_buffer_with",
+                1,
+            ),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
@@ -5315,7 +5447,7 @@ struct DefaultMappedFile {
 
     def test_memory_lock_seam_contract_rejects_call_site_and_delegation_mutations(self) -> None:
         sources = memory_lock_seam_sources()
-        pool_path = Path("rocketmq-store/src/base/transient_store_pool.rs")
+        pool_path = Path("rocketmq-store-local/src/base/transient_store_pool.rs")
         pool_source = sources[pool_path]
         extra_production_call = pool_source.replace(
             "available_buffers.push_back(buffer);",
@@ -5366,11 +5498,80 @@ fn forbidden_extra_seam_call() {
             (mapped_file_path, mapped_file_source, wrong_manager_receiver),
             (local_test_path, local_test_source, extra_test_call),
         ]
-        for path, source, mutation in mutations:
-            with self.subTest(path=path):
+        for mutation_index, (path, source, mutation) in enumerate(mutations):
+            with self.subTest(mutation=mutation_index, path=path):
                 self.assertNotEqual(source, mutation)
                 mutated_sources = {**sources, path: mutation}
                 self.assertNotEqual([], memory_lock_seam_call_violations(mutated_sources))
+
+    def test_transient_store_pool_has_one_local_owner_and_exact_store_facade(self) -> None:
+        canonical_path = LOCAL_CRATE / "src" / "base" / "transient_store_pool.rs"
+        facade_path = STORE_CRATE / "src" / "base" / "transient_store_pool.rs"
+        canonical = canonical_path.read_text(encoding="utf-8")
+        facade = facade_path.read_text(encoding="utf-8")
+        sources = memory_lock_seam_sources()
+
+        self.assertEqual([], transient_store_pool_owner_violations(canonical))
+        self.assertEqual(
+            [(canonical_path.relative_to(ROOT), "struct")],
+            file_item_owner_occurrences(sources, "TransientStorePool"),
+        )
+        self.assertEqual(
+            [],
+            direct_exact_reexport_violations(
+                facade,
+                "rocketmq_store_local::base::transient_store_pool",
+                "TransientStorePool",
+            ),
+        )
+        self.assertEqual([], memory_lock_seam_call_violations(sources))
+
+        local_manifest = tomllib.loads((LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
+        store_manifest = tomllib.loads((STORE_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertNotIn("transient-store-pool", local_manifest["features"])
+        self.assertNotIn("transient-store-pool", store_manifest["features"])
+
+    def test_transient_store_pool_contract_rejects_behavior_and_facade_mutations(self) -> None:
+        canonical = (LOCAL_CRATE / "src" / "base" / "transient_store_pool.rs").read_text(encoding="utf-8")
+        facade = (STORE_CRATE / "src" / "base" / "transient_store_pool.rs").read_text(encoding="utf-8")
+        self.assertEqual([], transient_store_pool_owner_violations(canonical))
+
+        owner_mutations = [
+            canonical.replace("#[derive(Clone)]", "#[derive(Debug)]", 1),
+            canonical.replace("Mutex::new(true)", "Mutex::new(false)", 1),
+            canonical.replace("available_buffers.drain(0..)", "available_buffers.iter()", 1),
+            canonical.replace("unlocker(available_buffer.as_ptr(), self.file_size)?", "Ok(())?", 1),
+            canonical.replace("available_buffers.push_front(buffer)", "available_buffers.push_back(buffer)", 1),
+            canonical.replace("self.pool_size / 10 * 4", "self.pool_size * 4 / 10", 1),
+            canonical.replace("pub(crate) fn init_with_locker", "#[doc(hidden)]\n    pub fn init_with_locker", 1),
+            canonical.replace(
+                "#[cfg(test)]\nmod tests",
+                "impl Drop for TransientStorePool { fn drop(&mut self) {} }\n\n#[cfg(test)]\nmod tests",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(owner_mutations):
+            with self.subTest(owner_mutation=mutation_index):
+                self.assertNotEqual(canonical, mutation)
+                self.assertNotEqual([], transient_store_pool_owner_violations(mutation))
+
+        facade_mutations = [
+            facade.replace("pub use", "pub(crate) use", 1),
+            facade.replace("pub use", "pub type LegacyTransientStorePool =", 1),
+            facade.replace("::TransientStorePool;", "::{TransientStorePool};", 1),
+            facade.replace("::TransientStorePool;", "::*;", 1),
+        ]
+        for mutation_index, mutation in enumerate(facade_mutations):
+            with self.subTest(facade_mutation=mutation_index):
+                self.assertNotEqual(facade, mutation)
+                self.assertNotEqual(
+                    [],
+                    direct_exact_reexport_violations(
+                        mutation,
+                        "rocketmq_store_local::base::transient_store_pool",
+                        "TransientStorePool",
+                    ),
+                )
 
     def test_memory_lock_syscalls_have_one_local_owner_and_exact_store_facade(self) -> None:
         canonical = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")

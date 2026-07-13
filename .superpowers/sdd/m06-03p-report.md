@@ -26,11 +26,13 @@ its existing observability feature to `rocketmq-store-local/observability`.
 The old Store modules contain direct exact re-exports for only the migrated symbols. Cross-crate tests prove
 bidirectional identity for all three types and function-pointer identity for both syscalls.
 
-The three injection seams, `lock_buffer_with`, `lock_region_with`, and `unlock_region_with`, remain
-`#[doc(hidden)] pub` during the migration because Store production adapters still cross the crate boundary:
-`TransientStorePool` initialization, `DefaultMappedFile` range locking/unlocking, and the CommitLog active-lock
-lifecycle. Store and Local deterministic tests use the same temporary seams. Their Rustdoc identifies every
-production/test caller surface and documents errors.
+At the M06-03p delivery snapshot, the three injection seams, `lock_buffer_with`, `lock_region_with`, and
+`unlock_region_with`, remained `#[doc(hidden)] pub` because Store production adapters still crossed the crate
+boundary for `TransientStorePool` initialization, `DefaultMappedFile` range locking/unlocking, and the CommitLog
+active-lock lifecycle. M06-03q later moves `TransientStorePool` to Local and narrows `lock_buffer_with` to
+`pub(crate)` after its final Store production caller disappears. The other two seams remain temporarily public
+for their Store production adapters. Their Rustdoc identifies every current production/test caller surface and
+documents errors.
 
 The migration preserves:
 
