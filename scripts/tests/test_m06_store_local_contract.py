@@ -111,6 +111,11 @@ COMMIT_LOG_MAPPING_PLAN_ITEMS = {
     "CommitLogMappingPlan": "struct",
     "CommitLogMappingEntry": "struct",
 }
+COMMIT_LOG_HINT_ITEMS = {
+    "HintOutcome": "struct",
+    "record_mmap_advice": "fn",
+    "record_file_prefetch": "fn",
+}
 COMMIT_LOG_RECORD_PARSER_ITEMS = {
     "CommitLogRecordVersion": "enum",
     "CommitLogRecordBodyMode": "enum",
@@ -1859,9 +1864,9 @@ def store_commit_log_mapping_plan_violations(source: str) -> list[str]:
         "letmapping_plan=CommitLogMappingPlan::new(file_metadata,CommitLogMappingOptions{",
         "parallel_enabled:self.enable_parallel,",
         "lazy_mmap_enabled:self.lazy_mmap_enable,",
-        "let(mapped_files,mmap_advice_stats)=matchmapping_plan.execution(){",
-        "CommitLogMappingExecution::Parallel=>self.create_mapped_files_parallel(mapping_plan.entries())?",
-        "CommitLogMappingExecution::Sequential=>self.create_mapped_files_sequential(mapping_plan.entries())?",
+        "letmapped_files=matchmapping_plan.execution(){",
+        "CommitLogMappingExecution::Parallel=>{self.create_mapped_files_parallel(mapping_plan.entries(),&mutstats)?}",
+        "CommitLogMappingExecution::Sequential=>{self.create_mapped_files_sequential(mapping_plan.entries(),&mutstats)?}",
     ]
     positions = [load.find(fragment) for fragment in required_flow]
     if any(position == -1 for position in positions) or positions != sorted(positions):
@@ -1875,8 +1880,8 @@ def store_commit_log_mapping_plan_violations(source: str) -> list[str]:
     sequential = named_function_body(production, "create_mapped_files_sequential")
     create_one = named_function_body(production, "create_mapped_file")
     expected_signatures = [
-        "fncreate_mapped_files_parallel(&self,entries:&[CommitLogMappingEntry],)->io::Result<(Vec<Arc<DefaultMappedFile>>,LoadStatistics)>",
-        "fncreate_mapped_files_sequential(&self,entries:&[CommitLogMappingEntry],)->io::Result<(Vec<Arc<DefaultMappedFile>>,LoadStatistics)>",
+        "fncreate_mapped_files_parallel(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,)->io::Result<Vec<Arc<DefaultMappedFile>>>",
+        "fncreate_mapped_files_sequential(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,)->io::Result<Vec<Arc<DefaultMappedFile>>>",
         "fncreate_mapped_file(&self,entry:&CommitLogMappingEntry)->io::Result<DefaultMappedFile>",
     ]
     if any(signature not in normalized for signature in expected_signatures):
@@ -1906,6 +1911,255 @@ def store_commit_log_mapping_plan_violations(source: str) -> list[str]:
     )
     if create_normalized != expected_create:
         violations.append("Store create_mapped_file stopped following entry metadata/mode only")
+    return violations
+
+
+def _impl_body(source: str, item: str) -> str | None:
+    active = active_rust_source(source)
+    match = re.search(rf"\bimpl\s+{re.escape(item)}\s*\{{", active)
+    if match is None:
+        return None
+    opening_brace = active.find("{", match.start())
+    extracted = braced_body(active, opening_brace)
+    return None if extracted is None else extracted[0]
+
+
+def commit_log_hint_owner_violations(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", maxsplit=1)[0]
+    active = active_rust_source(production)
+    normalized = re.sub(r"\s+", "", active)
+    violations: list[str] = []
+
+    if active_struct_fields(production, "HintOutcome") != [
+        ("attempted", "bool"),
+        ("succeeded", "bool"),
+        ("elapsed", "Duration"),
+    ]:
+        violations.append("Local HintOutcome fields changed")
+    body = active_item_body(production, "struct", "HintOutcome")
+    if body is None or re.sub(r"\s+", "", body) != (
+        "attempted:bool,succeeded:bool,elapsed:Duration,"
+    ):
+        violations.append("Local HintOutcome fields must remain private")
+    derives = _derive_items(production, "struct", "HintOutcome")
+    if derives != {"Debug"}:
+        violations.append("Local HintOutcome must not be Default, Clone, or Copy")
+
+    impl_body = _impl_body(production, "HintOutcome")
+    if impl_body is None:
+        violations.append("Local HintOutcome constructors missing")
+    else:
+        public_methods = re.findall(r"\bpub\s+(?:const\s+)?fn\s+(\w+)", impl_body)
+        if public_methods != ["not_attempted", "success", "failure"]:
+            violations.append("Local HintOutcome public API changed")
+
+    signatures = {
+        "not_attempted": r"pub\s+fn\s+not_attempted\s*\(\s*\)\s*->\s*Self",
+        "success": r"pub\s+fn\s+success\s*\(\s*elapsed\s*:\s*Duration\s*\)\s*->\s*Self",
+        "failure": r"pub\s+fn\s+failure\s*\(\s*elapsed\s*:\s*Duration\s*\)\s*->\s*Self",
+    }
+    expected_bodies = {
+        "not_attempted": "Self{attempted:false,succeeded:false,elapsed:Duration::ZERO,}",
+        "success": "Self{attempted:true,succeeded:true,elapsed,}",
+        "failure": "Self{attempted:true,succeeded:false,elapsed,}",
+    }
+    for name, signature in signatures.items():
+        if re.search(signature, active) is None:
+            violations.append(f"Local HintOutcome {name} signature changed")
+        constructor = named_function_body(production, name)
+        if constructor is None or re.sub(r"\s+", "", constructor) != expected_bodies[name]:
+            violations.append(f"Local HintOutcome {name} invariant changed")
+
+    duration_body = named_function_body(production, "duration_to_millis")
+    if (
+        "fnduration_to_millis(duration:Duration)->u64" not in normalized
+        or duration_body is None
+        or re.sub(r"\s+", "", duration_body)
+        != "duration.as_millis().min(u128::from(u64::MAX))asu64"
+    ):
+        violations.append("Local hint duration conversion changed")
+
+    reducer_signatures = {
+        "record_mmap_advice": (
+            r"pub\s+fn\s+record_mmap_advice\s*\(\s*statistics\s*:\s*&mut\s+LoadStatistics\s*,\s*"
+            r"outcome\s*:\s*HintOutcome\s*,?\s*\)"
+        ),
+        "record_file_prefetch": (
+            r"pub\s+fn\s+record_file_prefetch\s*\(\s*statistics\s*:\s*&mut\s+LoadStatistics\s*,\s*"
+            r"outcome\s*:\s*HintOutcome\s*,?\s*\)"
+        ),
+    }
+    expected_reducers = {
+        "record_mmap_advice": (
+            "if!outcome.attempted{return;}"
+            "statistics.mmap_advice_attempts=statistics.mmap_advice_attempts.saturating_add(1);"
+            "ifoutcome.succeeded{statistics.mmap_advice_successes=statistics.mmap_advice_successes.saturating_add(1);}"
+            "else{statistics.mmap_advice_failures=statistics.mmap_advice_failures.saturating_add(1);}"
+            "statistics.mmap_advice_elapsed_ms=statistics.mmap_advice_elapsed_ms."
+            "saturating_add(duration_to_millis(outcome.elapsed));"
+        ),
+        "record_file_prefetch": (
+            "if!outcome.attempted{return;}"
+            "statistics.file_prefetch_attempts=statistics.file_prefetch_attempts.saturating_add(1);"
+            "ifoutcome.succeeded{statistics.file_prefetch_successes=statistics.file_prefetch_successes.saturating_add(1);}"
+            "else{statistics.file_prefetch_failures=statistics.file_prefetch_failures.saturating_add(1);}"
+            "statistics.file_prefetch_elapsed_ms=statistics.file_prefetch_elapsed_ms."
+            "saturating_add(duration_to_millis(outcome.elapsed));"
+        ),
+    }
+    for name, signature in reducer_signatures.items():
+        if re.search(signature, active) is None:
+            violations.append(f"Local {name} must consume HintOutcome by value")
+        reducer = named_function_body(production, name)
+        if reducer is None or re.sub(r"\s+", "", reducer) != expected_reducers[name]:
+            violations.append(f"Local {name} saturation or field isolation changed")
+
+    forbidden = [
+        "memmap2",
+        "prefetch_virtual_memory",
+        "DefaultMappedFile",
+        "cfg(unix)",
+        "cfg(windows)",
+    ]
+    if any(token in active for token in forbidden):
+        violations.append("Local hint reducer absorbed platform operations")
+    return violations
+
+
+def store_commit_log_hint_adapter_violations(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", maxsplit=1)[0]
+    active = active_rust_source(production)
+    normalized = re.sub(r"\s+", "", active)
+    violations: list[str] = []
+
+    hint_items = set(COMMIT_LOG_HINT_ITEMS)
+    private_imports: set[str] = set()
+    prefix = "rocketmq_store_local::commit_log::load::"
+    for visibility, body, _ in active_use_records(production):
+        if not body.startswith(prefix):
+            continue
+        item = body.removeprefix(prefix)
+        if item in hint_items:
+            if visibility:
+                violations.append("Store must not publicly re-export CommitLog hint kernel")
+            if " as " in body or "{" in body or "*" in body:
+                violations.append("Store CommitLog hint imports forbid alias/brace/glob")
+            private_imports.add(item)
+    if private_imports != hint_items:
+        violations.append("Store CommitLog hint imports changed")
+
+    if re.search(r"\bstruct\s+(?:HintResult|HintOutcome)\b", active):
+        violations.append("Store retained a private hint outcome copy")
+    if "fnduration_to_millis(" in normalized:
+        violations.append("Store retained hint duration conversion")
+    direct_counter = re.search(
+        r"\b(?:stats|statistics|mmap_advice_stats)\."
+        r"(?:mmap_advice|file_prefetch)_(?:attempts|successes|failures|elapsed_ms)\s*(?:\+=|=)",
+        active,
+    )
+    if direct_counter is not None:
+        violations.append("Store directly mutates canonical hint counters")
+
+    load = named_function_body(production, "load_optimized")
+    if load is None:
+        violations.append("CommitLogLoader load entrypoint missing")
+    else:
+        load_normalized = re.sub(r"\s+", "", load)
+        required = [
+            "CommitLogMappingExecution::Parallel=>{self.create_mapped_files_parallel(mapping_plan.entries(),&mutstats)?}",
+            "CommitLogMappingExecution::Sequential=>{self.create_mapped_files_sequential(mapping_plan.entries(),&mutstats)?}",
+        ]
+        if any(fragment not in load_normalized for fragment in required):
+            violations.append("Store load stopped passing canonical statistics to mapping adapters")
+
+    expected_signatures = [
+        "fncreate_mapped_files_parallel(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,)->io::Result<Vec<Arc<DefaultMappedFile>>>",
+        "fncreate_mapped_files_sequential(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,)->io::Result<Vec<Arc<DefaultMappedFile>>>",
+        "fnapply_memory_hints(&self,mapped_file:&DefaultMappedFile)->(HintOutcome,HintOutcome)",
+        "fnapply_mmap_advice(&self,mapped_file:&DefaultMappedFile)->HintOutcome",
+        "fnapply_file_prefetch(&self,mapped_file:&DefaultMappedFile)->HintOutcome",
+    ]
+    if any(signature not in normalized for signature in expected_signatures):
+        violations.append("Store hint adapter signatures changed")
+
+    parallel = named_function_body(production, "create_mapped_files_parallel")
+    sequential = named_function_body(production, "create_mapped_files_sequential")
+    memory_hints = named_function_body(production, "apply_memory_hints")
+    mmap = named_function_body(production, "apply_mmap_advice")
+    prefetch = named_function_body(production, "apply_file_prefetch")
+    if any(body is None for body in (parallel, sequential, memory_hints, mmap, prefetch)):
+        return violations + ["Store hint adapter body missing"]
+
+    parallel_normalized = re.sub(r"\s+", "", parallel)
+    sequential_normalized = re.sub(r"\s+", "", sequential)
+    if not all(
+        fragment in parallel_normalized
+        for fragment in [
+            ".par_iter().map(|entry|",
+            ".collect();",
+            "letresults=results?;",
+            "for(mapped_file,mmap_advice_outcome,file_prefetch_outcome)inresults{",
+            "record_mmap_advice(statistics,mmap_advice_outcome);",
+            "record_file_prefetch(statistics,file_prefetch_outcome);",
+        ]
+    ):
+        violations.append("Store parallel hint outcomes are not ordered then reduced sequentially")
+    if (
+        parallel_normalized.count("record_mmap_advice(") != 1
+        or parallel_normalized.count("record_file_prefetch(") != 1
+    ):
+        violations.append("Store parallel hint reducer count changed")
+    if not all(
+        fragment in sequential_normalized
+        for fragment in [
+            "forentryinentries{",
+            "record_mmap_advice(statistics,mmap_advice_outcome);",
+            "record_file_prefetch(statistics,file_prefetch_outcome);",
+        ]
+    ):
+        violations.append("Store sequential hint outcomes stopped using Local reducers")
+    if (
+        sequential_normalized.count("record_mmap_advice(") != 1
+        or sequential_normalized.count("record_file_prefetch(") != 1
+    ):
+        violations.append("Store sequential hint reducer count changed")
+
+    memory_normalized = re.sub(r"\s+", "", memory_hints)
+    if not all(
+        fragment in memory_normalized
+        for fragment in [
+            "ifmapped_file.is_lazy_mmap_enabled()&&!mapped_file.is_mapped(){return(HintOutcome::not_attempted(),HintOutcome::not_attempted());}",
+            "letmmap_advice_outcome=self.apply_mmap_advice(mapped_file);",
+            "letfile_prefetch_outcome=self.apply_file_prefetch(mapped_file);",
+            "(mmap_advice_outcome,file_prefetch_outcome)",
+        ]
+    ):
+        violations.append("Store lazy-unmapped hint skip changed")
+
+    mmap_normalized = re.sub(r"\s+", "", mmap)
+    mmap_required = [
+        "ifself.recovery_mmap_advice==RecoveryMmapAdvice::Disabled{returnHintOutcome::not_attempted();}",
+        "RecoveryMmapAdvice::Disabled=>HintOutcome::not_attempted(),",
+        "HintOutcome::failure(start.elapsed())",
+        "HintOutcome::success(start.elapsed())",
+        "HintOutcome::not_attempted()",
+        "mmap.advise(Advice::Sequential)",
+    ]
+    if any(fragment not in mmap_normalized for fragment in mmap_required):
+        violations.append("Store mmap platform outcome mapping changed")
+
+    prefetch_normalized = re.sub(r"\s+", "", prefetch)
+    prefetch_required = [
+        "ifself.recovery_file_prefetch==RecoveryFilePrefetch::Disabled{returnHintOutcome::not_attempted();}",
+        "RecoveryFilePrefetch::Disabled=>HintOutcome::not_attempted(),",
+        "Ok(true)=>HintOutcome::success(start.elapsed()),",
+        "Ok(false)=>HintOutcome::not_attempted(),",
+        "HintOutcome::failure(start.elapsed())",
+        "HintOutcome::not_attempted()",
+        "prefetch_virtual_memory(mmap.as_ptr(),mmap.len())",
+    ]
+    if any(fragment not in prefetch_normalized for fragment in prefetch_required):
+        violations.append("Store prefetch platform outcome mapping changed")
     return violations
 
 
@@ -2005,8 +2259,8 @@ def store_commit_log_file_validation_violations(source: str) -> list[str]:
             collect_position == -1
             or create_position == -1
             or collect_position >= create_position
-            or "self.create_mapped_files_parallel(mapping_plan.entries())?" not in normalized_load
-            or "self.create_mapped_files_sequential(mapping_plan.entries())?" not in normalized_load
+            or "self.create_mapped_files_parallel(mapping_plan.entries(),&mutstats)?" not in normalized_load
+            or "self.create_mapped_files_sequential(mapping_plan.entries(),&mutstats)?" not in normalized_load
         ):
             violations.append("Store mmap creation no longer follows complete metadata validation")
 
@@ -3546,6 +3800,82 @@ struct DefaultMappedFile {
             with self.subTest(mutation_index=mutation_index):
                 self.assertNotEqual(source, mutation)
                 self.assertNotEqual([], store_commit_log_mapping_plan_violations(mutation))
+
+    def test_commit_log_hint_kernel_has_one_local_owner_and_store_platform_adapter_only(self) -> None:
+        canonical_file = LOCAL_CRATE / "src" / "commit_log" / "load.rs"
+        rust_sources = {
+            path: path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        for item, item_kind in COMMIT_LOG_HINT_ITEMS.items():
+            self.assertEqual(
+                [(canonical_file, item_kind)],
+                file_item_owner_occurrences(rust_sources, item),
+                item,
+            )
+
+        canonical_source = canonical_file.read_text(encoding="utf-8")
+        self.assertEqual([], commit_log_hint_owner_violations(canonical_source))
+
+        loader_source = (
+            STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
+        ).read_text(encoding="utf-8")
+        self.assertEqual([], store_commit_log_hint_adapter_violations(loader_source))
+        facade = active_commit_log_facade_reexports(loader_source)
+        for item in COMMIT_LOG_HINT_ITEMS:
+            self.assertNotIn(item, facade)
+
+    def test_commit_log_hint_kernel_contract_rejects_invariant_and_reducer_mutations(self) -> None:
+        source = (LOCAL_CRATE / "src" / "commit_log" / "load.rs").read_text(encoding="utf-8")
+        self.assertEqual([], commit_log_hint_owner_violations(source))
+        mutations = [
+            source.replace("#[derive(Debug)]\npub struct HintOutcome", "#[derive(Debug, Default)]\npub struct HintOutcome", 1),
+            source.replace("attempted: bool", "pub attempted: bool", 1),
+            source.replace("attempted: true,\n            succeeded: true", "attempted: false,\n            succeeded: true", 1),
+            source.replace("attempted: true,\n            succeeded: false", "attempted: true,\n            succeeded: true", 1),
+            source.replace("elapsed: Duration::ZERO", "elapsed: Duration::MAX", 1),
+            source.replace("outcome: HintOutcome", "outcome: &HintOutcome", 1),
+            source.replace(".saturating_add(1)", " + 1", 1),
+            source.replace("statistics.mmap_advice_attempts", "statistics.file_prefetch_attempts", 1),
+            source.replace(".min(u128::from(u64::MAX))", "", 1),
+            source.replace("pub fn failure(elapsed: Duration) -> Self", "pub fn failed(elapsed: Duration) -> Self", 1),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
+                self.assertNotEqual([], commit_log_hint_owner_violations(mutation))
+
+    def test_store_commit_log_hint_contract_rejects_platform_and_aggregation_mutations(self) -> None:
+        path = STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
+        source = path.read_text(encoding="utf-8")
+        self.assertEqual([], store_commit_log_hint_adapter_violations(source))
+        mutations = [
+            source.replace(
+                "use rocketmq_store_local::commit_log::load::HintOutcome;",
+                "pub use rocketmq_store_local::commit_log::load::HintOutcome;",
+                1,
+            ),
+            source.replace(
+                "(HintOutcome::not_attempted(), HintOutcome::not_attempted())",
+                "(HintOutcome::success(Duration::ZERO), HintOutcome::not_attempted())",
+                1,
+            ),
+            source.replace("return HintOutcome::not_attempted();", "return HintOutcome::success(Duration::ZERO);", 1),
+            source.replace("Ok(false) => HintOutcome::not_attempted()", "Ok(false) => HintOutcome::failure(start.elapsed())", 1),
+            source.replace("HintOutcome::failure(start.elapsed())", "HintOutcome::success(start.elapsed())", 1),
+            source.replace(
+                "record_mmap_advice(statistics, mmap_advice_outcome);",
+                "statistics.mmap_advice_attempts += 1;",
+                1,
+            ),
+            source.replace("let results = results?;", "record_mmap_advice(statistics, HintOutcome::not_attempted());\n        let results = results?;", 1),
+            source.replace(") -> HintOutcome", ") -> &HintOutcome", 1),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
+                self.assertNotEqual([], store_commit_log_hint_adapter_violations(mutation))
 
     def test_commit_log_file_validation_contract_rejects_owner_mutations(self) -> None:
         source = (LOCAL_CRATE / "src" / "commit_log" / "load.rs").read_text(encoding="utf-8")

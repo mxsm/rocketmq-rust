@@ -133,6 +133,54 @@
       "from": "33c65fcf9bf85149d1d12b4e",
       "to": "1149181ee9e04595c8db7578",
       "reason": "Replacing the private loader metadata parameter with the canonical Local metadata type changed adjacent tokens around the existing DefaultMappedFile return type without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "2ac9ba9fffd71630303af555",
+      "to": "bb43af94bef98a26d1dac64a",
+      "reason": "Passing the Local mapping-plan entries and canonical statistics reducer target changed the fingerprint of the existing parallel DefaultMappedFile result type without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "80a665b77b920adaf46457ce",
+      "to": "e820ef0e7b9824b99ccb6182",
+      "reason": "Passing the Local mapping-plan entries and canonical statistics reducer target changed the fingerprint of the existing sequential DefaultMappedFile result type without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "1149181ee9e04595c8db7578",
+      "to": "1a54bcd9461bfdc5db574061",
+      "reason": "Replacing positional metadata, index, and count parameters with one Local mapping entry changed adjacent tokens around the existing DefaultMappedFile return type without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "6213960d38a7afa095b2f862",
+      "to": "06482c333cf283e2b50d7f9d",
+      "reason": "Following the Local entry mode instead of recomputing the lazy historical-file predicate changed adjacent tokens around the existing lazy DefaultMappedFile constructor without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "f35b4c661a7435b0506534ba",
+      "to": "fb223d4d74b6fe1c75435d2f",
+      "reason": "Following the Local entry mode instead of recomputing the eager final-file predicate changed adjacent tokens around the existing eager DefaultMappedFile constructor without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "da42e42bb50a5fb519f28750",
+      "to": "837094604bbc640a7c339b3a",
+      "reason": "Returning canonical Local HintOutcome values from the unchanged platform adapter changed adjacent tokens around the existing DefaultMappedFile parameter without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "e82261a89f8e3e040679481b",
+      "to": "9a6ddc98fa7af24d0f609721",
+      "reason": "Replacing the Store-private hint result with the canonical Local HintOutcome changed adjacent tokens around the existing mmap-advice DefaultMappedFile parameter without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "f0a39403be9e63ed5834b36f",
+      "to": "a2a8693a56e430fe111a4e97",
+      "reason": "Replacing the Store-private hint result with the canonical Local HintOutcome changed adjacent tokens around the existing file-prefetch DefaultMappedFile parameter without adding or moving an occurrence"
     }
   ]
 }

@@ -26,13 +26,14 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rayon::prelude::*;
 use tracing::info;
 use tracing::warn;
 
+use rocketmq_store_local::commit_log::load::record_file_prefetch;
+use rocketmq_store_local::commit_log::load::record_mmap_advice;
 use rocketmq_store_local::commit_log::load::validate_commit_log_file;
 use rocketmq_store_local::commit_log::load::CommitLogFileLoadDecision;
 use rocketmq_store_local::commit_log::load::CommitLogFileMetadata;
@@ -41,6 +42,7 @@ use rocketmq_store_local::commit_log::load::CommitLogMappingExecution;
 use rocketmq_store_local::commit_log::load::CommitLogMappingMode;
 use rocketmq_store_local::commit_log::load::CommitLogMappingOptions;
 use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;
+use rocketmq_store_local::commit_log::load::HintOutcome;
 pub use rocketmq_store_local::commit_log::load::LoadStatistics;
 pub use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
 pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
@@ -49,47 +51,6 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 #[cfg(windows)]
 use crate::utils::ffi::prefetch_virtual_memory;
-
-#[derive(Debug, Clone, Copy, Default)]
-struct HintResult {
-    attempted: bool,
-    succeeded: bool,
-    elapsed: Duration,
-}
-
-fn duration_to_millis(duration: Duration) -> u64 {
-    duration.as_millis().min(u128::from(u64::MAX)) as u64
-}
-
-fn record_mmap_advice(stats: &mut LoadStatistics, result: HintResult) {
-    if !result.attempted {
-        return;
-    }
-    stats.mmap_advice_attempts = stats.mmap_advice_attempts.saturating_add(1);
-    if result.succeeded {
-        stats.mmap_advice_successes = stats.mmap_advice_successes.saturating_add(1);
-    } else {
-        stats.mmap_advice_failures = stats.mmap_advice_failures.saturating_add(1);
-    }
-    stats.mmap_advice_elapsed_ms = stats
-        .mmap_advice_elapsed_ms
-        .saturating_add(duration_to_millis(result.elapsed));
-}
-
-fn record_file_prefetch(stats: &mut LoadStatistics, result: HintResult) {
-    if !result.attempted {
-        return;
-    }
-    stats.file_prefetch_attempts = stats.file_prefetch_attempts.saturating_add(1);
-    if result.succeeded {
-        stats.file_prefetch_successes = stats.file_prefetch_successes.saturating_add(1);
-    } else {
-        stats.file_prefetch_failures = stats.file_prefetch_failures.saturating_add(1);
-    }
-    stats.file_prefetch_elapsed_ms = stats
-        .file_prefetch_elapsed_ms
-        .saturating_add(duration_to_millis(result.elapsed));
-}
 
 /// Optimized loader for CommitLog files
 pub struct CommitLogLoader {
@@ -209,18 +170,14 @@ impl CommitLogLoader {
                 lazy_mmap_enabled: self.lazy_mmap_enable,
             },
         );
-        let (mapped_files, mmap_advice_stats) = match mapping_plan.execution() {
-            CommitLogMappingExecution::Parallel => self.create_mapped_files_parallel(mapping_plan.entries())?,
-            CommitLogMappingExecution::Sequential => self.create_mapped_files_sequential(mapping_plan.entries())?,
+        let mapped_files = match mapping_plan.execution() {
+            CommitLogMappingExecution::Parallel => {
+                self.create_mapped_files_parallel(mapping_plan.entries(), &mut stats)?
+            }
+            CommitLogMappingExecution::Sequential => {
+                self.create_mapped_files_sequential(mapping_plan.entries(), &mut stats)?
+            }
         };
-        stats.mmap_advice_attempts = mmap_advice_stats.mmap_advice_attempts;
-        stats.mmap_advice_successes = mmap_advice_stats.mmap_advice_successes;
-        stats.mmap_advice_failures = mmap_advice_stats.mmap_advice_failures;
-        stats.mmap_advice_elapsed_ms = mmap_advice_stats.mmap_advice_elapsed_ms;
-        stats.file_prefetch_attempts = mmap_advice_stats.file_prefetch_attempts;
-        stats.file_prefetch_successes = mmap_advice_stats.file_prefetch_successes;
-        stats.file_prefetch_failures = mmap_advice_stats.file_prefetch_failures;
-        stats.file_prefetch_elapsed_ms = mmap_advice_stats.file_prefetch_elapsed_ms;
 
         stats.total_load_time_ms = start.elapsed().as_millis();
         stats.log_summary();
@@ -300,7 +257,8 @@ impl CommitLogLoader {
     fn create_mapped_files_parallel(
         &self,
         entries: &[CommitLogMappingEntry],
-    ) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
+        statistics: &mut LoadStatistics,
+    ) -> io::Result<Vec<Arc<DefaultMappedFile>>> {
         // Parallel creation with ordered collection
         let results: Result<Vec<_>, io::Error> = entries
             .par_iter()
@@ -308,51 +266,42 @@ impl CommitLogLoader {
                 let mapped_file = self.create_mapped_file(entry)?;
 
                 // Apply memory hints for sequential access
-                let (mmap_advice_result, file_prefetch_result) = self.apply_memory_hints(&mapped_file);
+                let (mmap_advice_outcome, file_prefetch_outcome) = self.apply_memory_hints(&mapped_file);
 
                 // Set positions (all full since we're loading existing files)
                 mapped_file.set_wrote_position(self.mapped_file_size as i32);
                 mapped_file.set_flushed_position(self.mapped_file_size as i32);
                 mapped_file.set_committed_position(self.mapped_file_size as i32);
 
-                Ok((Arc::new(mapped_file), mmap_advice_result, file_prefetch_result))
+                Ok((Arc::new(mapped_file), mmap_advice_outcome, file_prefetch_outcome))
             })
             .collect();
 
         // Convert to sequential Vec (maintains order from par_iter)
         let results = results?;
-        let mut mmap_advice_stats = LoadStatistics {
-            recovery_mmap_advice: self.recovery_mmap_advice,
-            recovery_file_prefetch: self.recovery_file_prefetch,
-            ..LoadStatistics::default()
-        };
         let mut mapped_files = Vec::with_capacity(results.len());
-        for (mapped_file, mmap_advice_result, file_prefetch_result) in results {
-            record_mmap_advice(&mut mmap_advice_stats, mmap_advice_result);
-            record_file_prefetch(&mut mmap_advice_stats, file_prefetch_result);
+        for (mapped_file, mmap_advice_outcome, file_prefetch_outcome) in results {
+            record_mmap_advice(statistics, mmap_advice_outcome);
+            record_file_prefetch(statistics, file_prefetch_outcome);
             mapped_files.push(mapped_file);
         }
-        Ok((mapped_files, mmap_advice_stats))
+        Ok(mapped_files)
     }
 
     /// Fallback: sequential mapped file creation
     fn create_mapped_files_sequential(
         &self,
         entries: &[CommitLogMappingEntry],
-    ) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
+        statistics: &mut LoadStatistics,
+    ) -> io::Result<Vec<Arc<DefaultMappedFile>>> {
         let mut mapped_files = Vec::with_capacity(entries.len());
-        let mut mmap_advice_stats = LoadStatistics {
-            recovery_mmap_advice: self.recovery_mmap_advice,
-            recovery_file_prefetch: self.recovery_file_prefetch,
-            ..LoadStatistics::default()
-        };
 
         for entry in entries {
             let mapped_file = self.create_mapped_file(entry)?;
 
-            let (mmap_advice_result, file_prefetch_result) = self.apply_memory_hints(&mapped_file);
-            record_mmap_advice(&mut mmap_advice_stats, mmap_advice_result);
-            record_file_prefetch(&mut mmap_advice_stats, file_prefetch_result);
+            let (mmap_advice_outcome, file_prefetch_outcome) = self.apply_memory_hints(&mapped_file);
+            record_mmap_advice(statistics, mmap_advice_outcome);
+            record_file_prefetch(statistics, file_prefetch_outcome);
 
             mapped_file.set_wrote_position(self.mapped_file_size as i32);
             mapped_file.set_flushed_position(self.mapped_file_size as i32);
@@ -361,7 +310,7 @@ impl CommitLogLoader {
             mapped_files.push(Arc::new(mapped_file));
         }
 
-        Ok((mapped_files, mmap_advice_stats))
+        Ok(mapped_files)
     }
 
     fn create_mapped_file(&self, entry: &CommitLogMappingEntry) -> io::Result<DefaultMappedFile> {
@@ -384,19 +333,19 @@ impl CommitLogLoader {
     /// # Implementation
     /// Uses `memmap2::Mmap::advise()` to provide sequential access hints to the kernel,
     /// which can improve performance by optimizing readahead and page cache behavior.
-    fn apply_memory_hints(&self, mapped_file: &DefaultMappedFile) -> (HintResult, HintResult) {
+    fn apply_memory_hints(&self, mapped_file: &DefaultMappedFile) -> (HintOutcome, HintOutcome) {
         if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped() {
-            return (HintResult::default(), HintResult::default());
+            return (HintOutcome::not_attempted(), HintOutcome::not_attempted());
         }
 
-        let mmap_advice_result = self.apply_mmap_advice(mapped_file);
-        let file_prefetch_result = self.apply_file_prefetch(mapped_file);
-        (mmap_advice_result, file_prefetch_result)
+        let mmap_advice_outcome = self.apply_mmap_advice(mapped_file);
+        let file_prefetch_outcome = self.apply_file_prefetch(mapped_file);
+        (mmap_advice_outcome, file_prefetch_outcome)
     }
 
-    fn apply_mmap_advice(&self, mapped_file: &DefaultMappedFile) -> HintResult {
+    fn apply_mmap_advice(&self, mapped_file: &DefaultMappedFile) -> HintOutcome {
         if self.recovery_mmap_advice == RecoveryMmapAdvice::Disabled {
-            return HintResult::default();
+            return HintOutcome::not_attempted();
         }
 
         #[cfg(unix)]
@@ -407,7 +356,7 @@ impl CommitLogLoader {
             let start = std::time::Instant::now();
             let mmap = mapped_file.get_mapped_file();
             match self.recovery_mmap_advice {
-                RecoveryMmapAdvice::Disabled => HintResult::default(),
+                RecoveryMmapAdvice::Disabled => HintOutcome::not_attempted(),
                 RecoveryMmapAdvice::Sequential => {
                     if let Err(e) = mmap.advise(Advice::Sequential) {
                         // Non-fatal: madvise failure doesn't affect correctness
@@ -416,19 +365,11 @@ impl CommitLogLoader {
                             mapped_file.get_file_name(),
                             e
                         );
-                        HintResult {
-                            attempted: true,
-                            succeeded: false,
-                            elapsed: start.elapsed(),
-                        }
+                        HintOutcome::failure(start.elapsed())
                     } else {
                         #[cfg(debug_assertions)]
                         tracing::debug!("Applied MADV_SEQUENTIAL hint to {}", mapped_file.get_file_name());
-                        HintResult {
-                            attempted: true,
-                            succeeded: true,
-                            elapsed: start.elapsed(),
-                        }
+                        HintOutcome::success(start.elapsed())
                     }
                 }
             }
@@ -437,13 +378,13 @@ impl CommitLogLoader {
         #[cfg(not(unix))]
         {
             let _ = mapped_file;
-            HintResult::default()
+            HintOutcome::not_attempted()
         }
     }
 
-    fn apply_file_prefetch(&self, mapped_file: &DefaultMappedFile) -> HintResult {
+    fn apply_file_prefetch(&self, mapped_file: &DefaultMappedFile) -> HintOutcome {
         if self.recovery_file_prefetch == RecoveryFilePrefetch::Disabled {
-            return HintResult::default();
+            return HintOutcome::not_attempted();
         }
 
         #[cfg(windows)]
@@ -451,25 +392,17 @@ impl CommitLogLoader {
             let start = std::time::Instant::now();
             let mmap = mapped_file.get_mapped_file();
             match self.recovery_file_prefetch {
-                RecoveryFilePrefetch::Disabled => HintResult::default(),
+                RecoveryFilePrefetch::Disabled => HintOutcome::not_attempted(),
                 RecoveryFilePrefetch::Sequential => match prefetch_virtual_memory(mmap.as_ptr(), mmap.len()) {
-                    Ok(true) => HintResult {
-                        attempted: true,
-                        succeeded: true,
-                        elapsed: start.elapsed(),
-                    },
-                    Ok(false) => HintResult::default(),
+                    Ok(true) => HintOutcome::success(start.elapsed()),
+                    Ok(false) => HintOutcome::not_attempted(),
                     Err(error) => {
                         warn!(
                             "Failed to prefetch recovery mapped file {}: {}",
                             mapped_file.get_file_name(),
                             error
                         );
-                        HintResult {
-                            attempted: true,
-                            succeeded: false,
-                            elapsed: start.elapsed(),
-                        }
+                        HintOutcome::failure(start.elapsed())
                     }
                 },
             }
@@ -478,7 +411,7 @@ impl CommitLogLoader {
         #[cfg(not(windows))]
         {
             let _ = mapped_file;
-            HintResult::default()
+            HintOutcome::not_attempted()
         }
     }
 }

@@ -117,6 +117,7 @@
   - [x] M06-03h：迁移 normal recovery 双水位纯状态机，并接入 standard/optimized 两路径
   - [x] M06-03i：迁移 abnormal recovery 三水位纯状态机，并接入 standard/optimized、dup/controller 门控
   - [x] M06-03j：迁移 CommitLog 文件元数据与纯长度校验，并接入 parallel/sequential loader
+  - [x] M06-03k：迁移 CommitLog 映射计划与 mmap advice/prefetch 统计归约内核
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

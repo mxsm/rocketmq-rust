@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -546,3 +546,26 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03j 只迁移 CommitLog 文件长度验证边界；filesystem orchestration、mmap、append/parser/recovery、
   flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership 与持久格式均未迁移。PR-M06-03 父项和 M06 Exit
   Checklist 保持未完成。
+
+## M06-03k CommitLog mapping plan and hint statistics evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::load` 现拥有纯 `CommitLogMappingPlan`：它按已校验、已过滤的
+  metadata 顺序一次性决定 sequential/parallel 执行方式及 eager/lazy-read-only 映射模式。parallel 仅在选项启用且
+  过滤后文件数大于 4 时选择；lazy 仅用于选项启用时的非末尾文件。Store 不再按 index/count 重算这些决策。
+  同一 Local 模块也唯一拥有 `HintOutcome` 以及 mmap advice/file prefetch 两个饱和统计归约器。
+- [x] `[COMPAT]` Store 仍拥有目录与 filesystem metadata、rayon 调度、`DefaultMappedFile`/真实 mmap、平台 hint
+  系统调用、日志和最终 `LoadStatistics`。parallel hint outcome 先按映射顺序收集，再顺序归约到 canonical stats；
+  sequential 路径原位归约。disabled/unsupported/Windows `Ok(false)`、lazy-unmapped skip 均视为 not-attempted。
+  既有 `LoadStatistics`、两个 hint 函数 re-export、`CommitLogLoader` 构造/`with`/`load` 签名和模块可见性均未改变。
+- [x] `[TEST]` A/B 均先以缺失 Local owner 的编译失败建立 RED。最终 Local focused 23 项、Local 全量 124 项、
+  Store loader 15 项、load integration 7 项（另 1 项 ignored）、recovery integration 19 项和 Store lib 577 项通过。
+  hint goldens 覆盖 not-attempted、成功/失败隔离、sub-ms、`Duration::MAX` clamp 与所有计数/耗时饱和；映射 goldens
+  覆盖顺序、过滤后阈值、末尾 eager、历史 lazy，以及 Store raw 5/raw 6 行为兼容。
+- [x] `[REVIEW]` 81 项 mutation-resistant contract 锁定 Local plan/hint owner、精确字段与构造器、by-value outcome、
+  饱和归约、Store private import、一次性 plan、两条 collector 的有序归约和公开 API 兼容，并拒绝复制 owner、阈值/
+  mode/统计族篡改、别名与公开 re-export。架构 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard 通过。
+- [x] `[REV]` 五组 Local feature check、Local/Store/workspace Clippy、Local `-D warnings` Rustdoc、Store 普通
+  Rustdoc、格式与 diff 检查通过。8 个既有 governed occurrence 因 loader 参数/返回值及 hint outcome 边界相邻文本
+  变化发生直接一对一 relocation，均按 ADR-013 精确批准；promoted baseline 保持 1,232 identities/3,377 occurrences。
+- [x] `[SCOPE]` M06-03k 未迁移 filesystem 校验/删除、真实 mmap/平台系统调用、append/parser/recovery、flush/group
+  commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。PR-M06-03 父项和 M06 Exit Checklist 保持未完成。

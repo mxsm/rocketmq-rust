@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use thiserror::Error;
 use tracing::info;
@@ -157,6 +158,43 @@ impl CommitLogMappingEntry {
     }
 }
 
+/// Result of attempting one platform-specific recovery hint.
+#[derive(Debug)]
+pub struct HintOutcome {
+    attempted: bool,
+    succeeded: bool,
+    elapsed: Duration,
+}
+
+impl HintOutcome {
+    /// Reports that the hint was disabled, unsupported, or intentionally skipped.
+    pub fn not_attempted() -> Self {
+        Self {
+            attempted: false,
+            succeeded: false,
+            elapsed: Duration::ZERO,
+        }
+    }
+
+    /// Reports a successful platform hint attempt.
+    pub fn success(elapsed: Duration) -> Self {
+        Self {
+            attempted: true,
+            succeeded: true,
+            elapsed,
+        }
+    }
+
+    /// Reports a failed platform hint attempt.
+    pub fn failure(elapsed: Duration) -> Self {
+        Self {
+            attempted: true,
+            succeeded: false,
+            elapsed,
+        }
+    }
+}
+
 /// Statistics for load operation.
 #[derive(Debug, Clone, Default)]
 pub struct LoadStatistics {
@@ -202,6 +240,42 @@ impl LoadStatistics {
             self.file_prefetch_elapsed_ms
         );
     }
+}
+
+fn duration_to_millis(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+/// Records one mmap-advice outcome in the canonical load statistics.
+pub fn record_mmap_advice(statistics: &mut LoadStatistics, outcome: HintOutcome) {
+    if !outcome.attempted {
+        return;
+    }
+    statistics.mmap_advice_attempts = statistics.mmap_advice_attempts.saturating_add(1);
+    if outcome.succeeded {
+        statistics.mmap_advice_successes = statistics.mmap_advice_successes.saturating_add(1);
+    } else {
+        statistics.mmap_advice_failures = statistics.mmap_advice_failures.saturating_add(1);
+    }
+    statistics.mmap_advice_elapsed_ms = statistics
+        .mmap_advice_elapsed_ms
+        .saturating_add(duration_to_millis(outcome.elapsed));
+}
+
+/// Records one file-prefetch outcome in the canonical load statistics.
+pub fn record_file_prefetch(statistics: &mut LoadStatistics, outcome: HintOutcome) {
+    if !outcome.attempted {
+        return;
+    }
+    statistics.file_prefetch_attempts = statistics.file_prefetch_attempts.saturating_add(1);
+    if outcome.succeeded {
+        statistics.file_prefetch_successes = statistics.file_prefetch_successes.saturating_add(1);
+    } else {
+        statistics.file_prefetch_failures = statistics.file_prefetch_failures.saturating_add(1);
+    }
+    statistics.file_prefetch_elapsed_ms = statistics
+        .file_prefetch_elapsed_ms
+        .saturating_add(duration_to_millis(outcome.elapsed));
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
