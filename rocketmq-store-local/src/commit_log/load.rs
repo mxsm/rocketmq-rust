@@ -18,7 +18,6 @@ use std::time::Duration;
 use memmap2::MmapMut;
 use thiserror::Error;
 use tracing::info;
-use tracing::warn;
 
 /// Filesystem metadata required to validate and open one CommitLog segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,7 +327,7 @@ pub fn apply_recovery_mmap_advice(advice: RecoveryMmapAdvice, mmap: &MmapMut, fi
                 let result = mmap.advise(Advice::Sequential);
                 let elapsed = start.elapsed();
                 if let Err(error) = result {
-                    warn!(
+                    tracing::warn!(
                         target: "rocketmq_store::log_file::commit_log_loader",
                         "Failed to apply sequential memory hint for {}: {}",
                         file_name,
@@ -403,7 +402,7 @@ pub fn apply_recovery_file_prefetch(prefetch: RecoveryFilePrefetch, mmap: &MmapM
                 let result = prefetch_virtual_memory(mmap);
                 let elapsed = start.elapsed();
                 if let Err(error) = &result {
-                    warn!(
+                    tracing::warn!(
                         target: "rocketmq_store::log_file::commit_log_loader",
                         "Failed to prefetch recovery mapped file {}: {}",
                         file_name,

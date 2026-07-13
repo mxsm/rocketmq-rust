@@ -2065,6 +2065,12 @@ def commit_log_hint_owner_violations(source: str) -> list[str]:
     prefetch_normalized = re.sub(r"\s+", "", prefetch)
     mapper_normalized = re.sub(r"\s+", "", mapper)
     platform_normalized = re.sub(r"\s+", "", platform)
+    warn_imported = any(body == "tracing::warn" for _, body, _ in active_use_records(production))
+    unqualified_warn = re.compile(r"(?<!::)\bwarn!\s*\(")
+    if warn_imported and len(unqualified_warn.findall(active)) == (
+        len(unqualified_warn.findall(mmap)) + len(unqualified_warn.findall(prefetch))
+    ):
+        violations.append("Local hint boundary must not import cfg-specific warn unconditionally")
     mmap_required = [
         "RecoveryMmapAdvice::Disabled=>HintOutcome::not_attempted(),",
         "#[cfg(unix)]",
@@ -2116,14 +2122,14 @@ def commit_log_hint_owner_violations(source: str) -> list[str]:
     mmap_raw = named_raw_function_body(production, "apply_recovery_mmap_advice") or ""
     prefetch_raw = named_raw_function_body(production, "apply_recovery_file_prefetch") or ""
     mmap_warning = re.search(
-        r'warn!\s*\(\s*target\s*:\s*"rocketmq_store::log_file::commit_log_loader"\s*,'
+        r'tracing::warn!\s*\(\s*target\s*:\s*"rocketmq_store::log_file::commit_log_loader"\s*,'
         r'\s*"Failed to apply sequential memory hint for \{\}: \{\}"',
         mmap_raw,
     )
     if mmap_warning is None:
         violations.append("Local mmap-advice warning target/text changed")
     prefetch_warning = re.search(
-        r'warn!\s*\(\s*target\s*:\s*"rocketmq_store::log_file::commit_log_loader"\s*,'
+        r'tracing::warn!\s*\(\s*target\s*:\s*"rocketmq_store::log_file::commit_log_loader"\s*,'
         r'\s*"Failed to prefetch recovery mapped file \{\}: \{\}"',
         prefetch_raw,
     )
@@ -3976,8 +3982,8 @@ struct DefaultMappedFile {
             source.replace("Err(_) => HintOutcome::failure(elapsed),", "Err(_) => HintOutcome::not_attempted(),", 1),
             source.replace("#[cfg(unix)]\n            {", "#[cfg(windows)]\n            {", 1),
             source.replace(
-                'warn!(\n                        target: "rocketmq_store::log_file::commit_log_loader",',
-                'warn!(\n                        target: "rocketmq_store_local::commit_log::load",',
+                'tracing::warn!(\n                        target: "rocketmq_store::log_file::commit_log_loader",',
+                'tracing::warn!(\n                        target: "rocketmq_store_local::commit_log::load",',
                 1,
             ),
             source.replace(
@@ -3999,6 +4005,9 @@ struct DefaultMappedFile {
                 "Storage read failed for 'PrefetchVirtualMemory': {error}",
                 "PrefetchVirtualMemory failed: {error}",
                 1,
+            ),
+            source.replace("use tracing::info;", "use tracing::info;\nuse tracing::warn;", 1).replace(
+                "tracing::warn!", "warn!"
             ),
         ]
         for mutation_index, mutation in enumerate(mutations):

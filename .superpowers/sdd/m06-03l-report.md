@@ -48,11 +48,26 @@ manifest adds only the Windows APIs required by prefetch; `rocketmq-error` was n
 - The Store lazy test enables both hints and proves historical segments remain lazy/unmapped while only the eager
   final segment contributes the one attempt for the platform-supported hint family.
 
-The final contract has 82 cases. Thirty-four M06-03l reviewer mutations pass: 18 Local owner/reducer/platform, 12
+The final contract has 82 cases. Thirty-five M06-03l reviewer mutations pass: 19 Local owner/reducer/platform, 12
 Store adapter/skip/import/aggregation, and 4 Store ffi compatibility mutations. They cover false counted as
 success, error changed to skip or `?`, platform cfg swaps, target/text drift, skip deletion/movement after mmap
 access, adapter swaps, direct memmap use, duplicate owner, public/alias/brace/glob imports, reducer bypass, ordered
 aggregation drift, and ffi signature/body drift.
+
+## Final review follow-up
+
+Final review found that `use tracing::warn;` was unconditional even though both warning sites are platform-gated.
+That import is used on Unix or Windows but becomes unused on a target satisfying neither cfg, which would fail a
+`-D warnings` build. The focused owner contract first failed with the expected unconditional-import and
+non-qualified-warning findings. The fix removes the import and invokes both macros as `tracing::warn!`.
+
+The contract now checks the two adapter function bodies precisely. A new mutation restores the unconditional
+import and both bare macros and is rejected, while a future legitimate non-platform warning import elsewhere in
+the module is not rejected merely by name. Windows Local focused/full, Store loader focused, the complete 82-case
+contract, Local/Store Clippy, strict Local Rustdoc, routing, architecture baseline, Arc final, formatting and diff
+checks all pass after the review fix. Re-promoting directly from BASE 8596 with the existing scoped approval again
+produced exactly 1,232 identities/3,375 occurrences and was byte-for-byte identical to the canonical baseline;
+the review fix therefore adds no Arc relocation or baseline change.
 
 ## ArcMut audit
 
