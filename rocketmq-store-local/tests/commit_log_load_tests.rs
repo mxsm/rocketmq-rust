@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::error::Error;
+use std::fs;
+use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -20,6 +22,7 @@ use memmap2::MmapMut;
 use memmap2::MmapOptions;
 use rocketmq_store_local::commit_log::load::apply_recovery_file_prefetch;
 use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;
+use rocketmq_store_local::commit_log::load::collect_commit_log_metadata;
 use rocketmq_store_local::commit_log::load::record_file_prefetch;
 use rocketmq_store_local::commit_log::load::record_mmap_advice;
 use rocketmq_store_local::commit_log::load::validate_commit_log_file;
@@ -29,11 +32,15 @@ use rocketmq_store_local::commit_log::load::CommitLogMappingExecution;
 use rocketmq_store_local::commit_log::load::CommitLogMappingMode;
 use rocketmq_store_local::commit_log::load::CommitLogMappingOptions;
 use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;
+use rocketmq_store_local::commit_log::load::CommitLogMetadataCollectionOptions;
 use rocketmq_store_local::commit_log::load::HintOutcome;
 use rocketmq_store_local::commit_log::load::LoadStatistics;
 use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
 use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
 use tempfile::NamedTempFile;
+use tempfile::TempDir;
+
+const EXPECTED_FILE_SIZE: u64 = 8;
 
 fn mutable_mapping() -> (NamedTempFile, MmapMut) {
     let file = NamedTempFile::new().unwrap();
@@ -49,6 +56,173 @@ fn metadata(path: &str, size: u64) -> CommitLogFileMetadata {
         path: PathBuf::from(path),
         size,
     }
+}
+
+fn collection_options(parallel_enabled: bool) -> CommitLogMetadataCollectionOptions {
+    CommitLogMetadataCollectionOptions {
+        expected_file_size: EXPECTED_FILE_SIZE,
+        parallel_enabled,
+    }
+}
+
+fn create_commit_log_files(directory: &TempDir, count: usize, size: u64) -> Vec<PathBuf> {
+    (0..count)
+        .map(|index| {
+            let path = directory.path().join(format!("{index:020}"));
+            fs::write(&path, vec![index as u8; size as usize]).unwrap();
+            path
+        })
+        .collect()
+}
+
+#[test]
+fn metadata_collection_accepts_zero_paths() {
+    let metadata = collect_commit_log_metadata(&[], collection_options(true)).unwrap();
+
+    assert!(metadata.is_empty());
+}
+
+#[test]
+fn metadata_collection_accepts_one_path() {
+    let directory = TempDir::new().unwrap();
+    let paths = create_commit_log_files(&directory, 1, EXPECTED_FILE_SIZE);
+
+    let metadata = collect_commit_log_metadata(&paths, collection_options(true)).unwrap();
+
+    assert_eq!(
+        metadata,
+        vec![CommitLogFileMetadata {
+            path: paths[0].clone(),
+            size: EXPECTED_FILE_SIZE,
+        }]
+    );
+}
+
+#[test]
+fn metadata_collection_accepts_four_paths() {
+    let directory = TempDir::new().unwrap();
+    let paths = create_commit_log_files(&directory, 4, EXPECTED_FILE_SIZE);
+
+    let metadata = collect_commit_log_metadata(&paths, collection_options(true)).unwrap();
+
+    assert_eq!(
+        metadata.iter().map(|item| &item.path).collect::<Vec<_>>(),
+        paths.iter().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn metadata_collection_accepts_five_paths() {
+    let directory = TempDir::new().unwrap();
+    let paths = create_commit_log_files(&directory, 5, EXPECTED_FILE_SIZE);
+
+    let metadata = collect_commit_log_metadata(&paths, collection_options(true)).unwrap();
+
+    assert_eq!(
+        metadata.iter().map(|item| &item.path).collect::<Vec<_>>(),
+        paths.iter().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn disabled_parallel_collection_accepts_five_paths() {
+    let directory = TempDir::new().unwrap();
+    let paths = create_commit_log_files(&directory, 5, EXPECTED_FILE_SIZE);
+
+    let metadata = collect_commit_log_metadata(&paths, collection_options(false)).unwrap();
+
+    assert_eq!(
+        metadata.iter().map(|item| &item.path).collect::<Vec<_>>(),
+        paths.iter().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn raw_five_path_threshold_filters_the_empty_final_path_to_four() {
+    let directory = TempDir::new().unwrap();
+    let mut paths = create_commit_log_files(&directory, 4, EXPECTED_FILE_SIZE);
+    let empty_last = directory.path().join("00000000000000000004");
+    fs::write(&empty_last, []).unwrap();
+    paths.push(empty_last.clone());
+
+    let metadata = collect_commit_log_metadata(&paths, collection_options(true)).unwrap();
+
+    assert_eq!(metadata.len(), 4);
+    assert!(!empty_last.exists());
+}
+
+#[test]
+fn parallel_metadata_collection_preserves_input_order() {
+    let directory = TempDir::new().unwrap();
+    let paths = create_commit_log_files(&directory, 7, EXPECTED_FILE_SIZE);
+
+    let metadata = collect_commit_log_metadata(&paths, collection_options(true)).unwrap();
+
+    assert_eq!(metadata.into_iter().map(|item| item.path).collect::<Vec<_>>(), paths);
+}
+
+#[test]
+fn sequential_first_error_does_not_delete_a_later_empty_path() {
+    let directory = TempDir::new().unwrap();
+    let paths = create_commit_log_files(&directory, 5, EXPECTED_FILE_SIZE);
+    fs::write(&paths[0], vec![0; (EXPECTED_FILE_SIZE - 1) as usize]).unwrap();
+    let empty_last = paths[4].clone();
+    fs::write(&empty_last, []).unwrap();
+
+    let error = collect_commit_log_metadata(&paths, collection_options(false)).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(empty_last.exists());
+}
+
+#[test]
+fn empty_final_path_is_deleted_and_filtered() {
+    let directory = TempDir::new().unwrap();
+    let mut paths = create_commit_log_files(&directory, 1, EXPECTED_FILE_SIZE);
+    let empty_last = directory.path().join("00000000000000000001");
+    fs::write(&empty_last, []).unwrap();
+    paths.push(empty_last.clone());
+
+    let metadata = collect_commit_log_metadata(&paths, collection_options(false)).unwrap();
+
+    assert_eq!(metadata.len(), 1);
+    assert!(!empty_last.exists());
+}
+
+#[test]
+fn parallel_metadata_error_preserves_kind_and_exact_context() {
+    let directory = TempDir::new().unwrap();
+    let paths = create_commit_log_files(&directory, 5, EXPECTED_FILE_SIZE);
+    let missing = paths[1].clone();
+    fs::remove_file(&missing).unwrap();
+    let source_error = fs::metadata(&missing).unwrap_err();
+
+    let error = collect_commit_log_metadata(&paths, collection_options(true)).unwrap_err();
+
+    assert_eq!(error.kind(), source_error.kind());
+    assert_eq!(
+        error.to_string(),
+        format!("Failed to get metadata for {:?}: {}", missing, source_error)
+    );
+}
+
+#[test]
+fn metadata_validation_error_is_mapped_to_invalid_data() {
+    let directory = TempDir::new().unwrap();
+    let paths = create_commit_log_files(&directory, 1, EXPECTED_FILE_SIZE - 1);
+
+    let error = collect_commit_log_metadata(&paths, collection_options(false)).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "{} length {} not matched expected size {}, please check it manually",
+            paths[0].display(),
+            EXPECTED_FILE_SIZE - 1,
+            EXPECTED_FILE_SIZE
+        )
+    );
 }
 
 #[test]

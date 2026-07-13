@@ -100,8 +100,10 @@ COMMIT_LOG_CANONICAL_ITEMS = {
 }
 COMMIT_LOG_LOAD_OWNER_ITEMS = {
     "CommitLogFileMetadata": "struct",
+    "CommitLogMetadataCollectionOptions": "struct",
     "CommitLogFileLoadDecision": "enum",
     "CommitLogFileValidationError": "struct",
+    "collect_commit_log_metadata": "fn",
     "validate_commit_log_file": "fn",
 }
 COMMIT_LOG_MAPPING_PLAN_ITEMS = {
@@ -293,8 +295,11 @@ def named_raw_function_body(source: str, function_name: str) -> str | None:
     opening_brace = active.find("{", match.end())
     if opening_brace == -1:
         return None
-    extracted = braced_body(source, opening_brace)
-    return None if extracted is None else extracted[0]
+    extracted = braced_body(active, opening_brace)
+    if extracted is None:
+        return None
+    _, end = extracted
+    return source[opening_brace + 1:end - 1]
 
 
 def named_function_signature(source: str, function_name: str) -> str | None:
@@ -1712,16 +1717,147 @@ def commit_log_file_validation_owner_violations(source: str) -> list[str]:
         if normalized_body.count("CommitLogFileLoadDecision::") != 2:
             violations.append("Local CommitLog validation added decision paths")
 
+    validation_scope = body or ""
     forbidden = ["std::fs", "rayon", "cheetah", "DefaultMappedFile", "remove_file"]
-    if any(token in active for token in forbidden):
+    if any(token in validation_scope for token in forbidden):
         violations.append("Local CommitLog validation absorbed Store I/O or orchestration")
-    if any(
-        kind == "use" and (" as " in body or "{" in body or "*" in body)
-        for kind, _, body, _ in active_import_records(production)
-    ):
-        violations.append("Local CommitLog validation forbids alias/brace/glob imports")
     if normalized.count("fnvalidate_commit_log_file") != 1:
         violations.append("Local CommitLog validation owner count changed")
+
+    if active_struct_fields(production, "CommitLogMetadataCollectionOptions") != [
+        ("expected_file_size", "u64"),
+        ("parallel_enabled", "bool"),
+    ]:
+        violations.append("Local CommitLog metadata collection option fields changed")
+    options_body = active_item_body(
+        production, "struct", "CommitLogMetadataCollectionOptions"
+    )
+    if options_body is None or re.sub(r"\s+", "", options_body) != (
+        "pubexpected_file_size:u64,pubparallel_enabled:bool,"
+    ):
+        violations.append("Local CommitLog metadata collection option visibility changed")
+    if _derive_items(production, "struct", "CommitLogMetadataCollectionOptions") != {
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq",
+    }:
+        violations.append("Local CommitLog metadata collection option derives changed")
+
+    collect_signature = (
+        "pubfncollect_commit_log_metadata(paths:&[PathBuf],"
+        "options:CommitLogMetadataCollectionOptions,)->io::Result<Vec<CommitLogFileMetadata>>"
+    )
+    if collect_signature not in normalized:
+        violations.append("Local CommitLog metadata collection signature changed")
+    collect_body = named_function_body(production, "collect_commit_log_metadata")
+    expected_collect_body = (
+        "letlast_file_idx=paths.len().saturating_sub(1);"
+        "ifoptions.parallel_enabled&&paths.len()>4{"
+        "collect_metadata_parallel(paths,options.expected_file_size,last_file_idx)"
+        "}else{collect_metadata_sequential(paths,options.expected_file_size,last_file_idx)}"
+    )
+    if collect_body is None or re.sub(r"\s+", "", collect_body) != expected_collect_body:
+        violations.append("Local CommitLog raw collection strategy changed")
+
+    parallel = named_function_body(production, "collect_metadata_parallel")
+    sequential = named_function_body(production, "collect_metadata_sequential")
+    collect_one = named_function_body(production, "collect_file_metadata")
+    remove_empty = named_function_body(production, "remove_empty_last_file")
+    expected_private_signatures = [
+        "fncollect_metadata_parallel(paths:&[PathBuf],expected_size:u64,last_file_idx:usize,)->io::Result<Vec<CommitLogFileMetadata>>",
+        "fncollect_metadata_sequential(paths:&[PathBuf],expected_size:u64,last_file_idx:usize,)->io::Result<Vec<CommitLogFileMetadata>>",
+        "fncollect_file_metadata(path:&Path,size:u64,expected_size:u64,is_last:bool,)->io::Result<Option<CommitLogFileMetadata>>",
+        "fnremove_empty_last_file(path:&Path)",
+    ]
+    if any(signature not in normalized for signature in expected_private_signatures):
+        violations.append("Local CommitLog private metadata collector signatures changed")
+    if any(
+        re.search(rf"\bpub\s+fn\s+{name}\b", active)
+        for name in (
+            "collect_metadata_parallel",
+            "collect_metadata_sequential",
+            "collect_file_metadata",
+            "remove_empty_last_file",
+        )
+    ):
+        violations.append("Local CommitLog metadata helpers became public")
+    if None in (parallel, sequential, collect_one, remove_empty):
+        return violations + ["Local CommitLog private metadata collector missing"]
+
+    parallel_normalized = re.sub(r"\s+", "", parallel or "")
+    expected_parallel_fragments = [
+        "letresults:Result<Vec<_>,_>=paths.par_iter().enumerate().map(|(idx,path)|",
+        "letfile_metadata=fs::metadata(path).map_err(|error|{io::Error::new(error.kind(),format!(,path,error),)})?;",
+        "collect_file_metadata(path,file_metadata.len(),expected_size,idx==last_file_idx)",
+        ".collect();",
+        "results.map(|metadata|metadata.into_iter().flatten().collect())",
+    ]
+    if any(fragment not in parallel_normalized for fragment in expected_parallel_fragments):
+        violations.append("Local parallel CommitLog metadata collection changed")
+    if parallel_normalized.count("fs::metadata(path)") != 1:
+        violations.append("Local parallel CommitLog metadata I/O count changed")
+    parallel_raw = named_raw_function_body(production, "collect_metadata_parallel") or ""
+    if (
+        'format!("Failedtogetmetadatafor{:?}:{}",path,error)' not in re.sub(r"\s+", "", parallel_raw)
+    ):
+        violations.append("Local parallel CommitLog metadata error context changed")
+
+    sequential_normalized = re.sub(r"\s+", "", sequential or "")
+    expected_sequential = (
+        "letmutmetadata_list=Vec::with_capacity(paths.len());"
+        "for(idx,path)inpaths.iter().enumerate(){"
+        "letfile_metadata=fs::metadata(path)?;"
+        "ifletSome(metadata)=collect_file_metadata(path,file_metadata.len(),expected_size,idx==last_file_idx)?{"
+        "metadata_list.push(metadata);}}Ok(metadata_list)"
+    )
+    if sequential_normalized != expected_sequential:
+        violations.append("Local sequential CommitLog first-error collection changed")
+
+    collect_one_normalized = re.sub(r"\s+", "", collect_one or "")
+    expected_collect_one = (
+        "letmetadata=CommitLogFileMetadata{path:path.to_path_buf(),size,};"
+        "matchvalidate_commit_log_file(&metadata,expected_size,is_last){"
+        "Ok(CommitLogFileLoadDecision::Load)=>Ok(Some(metadata)),"
+        "Ok(CommitLogFileLoadDecision::RemoveEmptyLast)=>{remove_empty_last_file(path);Ok(None)}"
+        "Err(error)=>Err(io::Error::new(io::ErrorKind::InvalidData,error)),}"
+    )
+    if collect_one_normalized != expected_collect_one:
+        violations.append("Local CommitLog validation/filter adapter changed")
+
+    remove_normalized = re.sub(r"\s+", "", remove_empty or "")
+    remove_raw_normalized = re.sub(
+        r"\s+", "", named_raw_function_body(production, "remove_empty_last_file") or ""
+    )
+    expected_remove = (
+        "ifletErr(error)=fs::remove_file(path){tracing::warn!("
+        "target:\"rocketmq_store::log_file::commit_log_loader\","
+        "\"Failedtodeleteemptyfile{:?}:{}\",path,error);"
+        "}else{tracing::warn!(target:\"rocketmq_store::log_file::commit_log_loader\","
+        "\"{}sizeis0,autodeleted.\",path.display());}"
+    )
+    expected_remove_active = (
+        "ifletErr(error)=fs::remove_file(path){tracing::warn!(target:,,path,error);"
+        "}else{tracing::warn!(target:,,path.display());}"
+    )
+    if remove_normalized != expected_remove_active or remove_raw_normalized != expected_remove:
+        violations.append("Local CommitLog empty-last best-effort deletion changed")
+    if any(
+        token in remove_normalized
+        for token in ("returnErr(", "panic!(", ".unwrap(", ".expect(", "remove_file(path)?")
+    ):
+        violations.append("Local CommitLog empty-last deletion became fatal")
+
+    if normalized.count("fncollect_commit_log_metadata") != 1:
+        violations.append("Local CommitLog metadata collection owner count changed")
+    if "userayon::prelude::*;" not in normalized:
+        violations.append("Local CommitLog parallel collector lost rayon prelude")
+    collector_scope = "".join(
+        [collect_body or "", parallel or "", sequential or "", collect_one or "", remove_empty or ""]
+    )
+    if any(token in collector_scope for token in ("DefaultMappedFile", "CheetahString", "create_mapped")):
+        violations.append("Local CommitLog metadata collection absorbed mmap orchestration")
     return violations
 
 
@@ -1880,13 +2016,14 @@ def store_commit_log_mapping_plan_violations(source: str) -> list[str]:
         return violations + ["CommitLogLoader load entrypoint missing"]
     load = re.sub(r"\s+", "", load_body)
     required_flow = [
-        "letfile_metadata:Vec<CommitLogFileMetadata>=ifself.enable_parallel&&file_paths.len()>4",
+        "letparallel_start=std::time::Instant::now();",
+        "letfile_metadata=collect_commit_log_metadata(&file_paths,CommitLogMetadataCollectionOptions{"
+        "expected_file_size:self.mapped_file_size,parallel_enabled:self.enable_parallel,},)?;",
         "stats.parallel_load_time_ms=parallel_start.elapsed().as_millis();",
         "stats.total_files=file_metadata.len();",
         "stats.total_size_bytes=file_metadata.iter().map(|metadata|metadata.size).sum();",
-        "letmapping_plan=CommitLogMappingPlan::new(file_metadata,CommitLogMappingOptions{",
-        "parallel_enabled:self.enable_parallel,",
-        "lazy_mmap_enabled:self.lazy_mmap_enable,",
+        "letmapping_plan=CommitLogMappingPlan::new(file_metadata,CommitLogMappingOptions{"
+        "parallel_enabled:self.enable_parallel,lazy_mmap_enabled:self.lazy_mmap_enable,},);",
         "letmapped_files=matchmapping_plan.execution(){",
         "CommitLogMappingExecution::Parallel=>{self.create_mapped_files_parallel(mapping_plan.entries(),&mutstats)?}",
         "CommitLogMappingExecution::Sequential=>{self.create_mapped_files_sequential(mapping_plan.entries(),&mutstats)?}",
@@ -2354,11 +2491,7 @@ def store_commit_log_file_validation_violations(source: str) -> list[str]:
         if not visibility and item in COMMIT_LOG_LOAD_OWNER_ITEMS:
             private_imports.append(item)
     if sorted(private_imports) != sorted(
-        [
-            "validate_commit_log_file",
-            "CommitLogFileLoadDecision",
-            "CommitLogFileMetadata",
-        ]
+        ["collect_commit_log_metadata", "CommitLogMetadataCollectionOptions"]
     ):
         violations.append("Store CommitLog validation imports changed")
 
@@ -2376,9 +2509,12 @@ def store_commit_log_file_validation_violations(source: str) -> list[str]:
         violations.append("CommitLogLoader load entrypoint missing")
     else:
         normalized_load = re.sub(r"\s+", "", load_body)
-        collect_position = normalized_load.find(
-            "letfile_metadata:Vec<CommitLogFileMetadata>=ifself.enable_parallel&&file_paths.len()>4"
+        collect_call = (
+            "letfile_metadata=collect_commit_log_metadata(&file_paths,"
+            "CommitLogMetadataCollectionOptions{expected_file_size:self.mapped_file_size,"
+            "parallel_enabled:self.enable_parallel,},)?;"
         )
+        collect_position = normalized_load.find(collect_call)
         create_position = normalized_load.find("letmapping_plan=CommitLogMappingPlan::new(file_metadata")
         if (
             collect_position == -1
@@ -2399,102 +2535,25 @@ def store_commit_log_file_validation_violations(source: str) -> list[str]:
     if any(signature not in normalized for signature in expected_public_signatures):
         violations.append("CommitLogLoader public signatures changed")
 
-    parallel = named_function_body(production, "collect_metadata_parallel")
-    sequential = named_function_body(production, "collect_metadata_sequential")
-    if parallel is None or sequential is None:
-        violations.append("Store CommitLog metadata collectors missing")
-        return violations
-
-    parallel_normalized = re.sub(r"\s+", "", parallel)
-    sequential_normalized = re.sub(r"\s+", "", sequential)
-    parallel_closure = _closure_body(parallel, ".map(|(idx, path)|")
-    sequential_loop = _closure_body(sequential, "for (idx, path) in paths.iter().enumerate()")
-    collectors = [
-        ("parallel", parallel, parallel_normalized, parallel_closure, "idx==last_file_idx"),
-        ("sequential", sequential, sequential_normalized, sequential_loop, "idx==last_file_idx"),
+    forbidden_store_owners = [
+        "fncollect_metadata_parallel(",
+        "fncollect_metadata_sequential(",
+        "fncollect_file_metadata(",
+        "fnremove_empty_last_file(",
+        "validate_commit_log_file(",
+        "CommitLogFileLoadDecision::",
+        "fs::metadata(",
+        "fs::remove_file(",
+        "Failedtogetmetadatafor",
+        "Failedtodeleteemptyfile",
+        "sizeis0,autodeleted",
     ]
-    for name, body, body_normalized, scope, last_expression in collectors:
-        if scope is None:
-            violations.append(f"Store {name} CommitLog validation scope changed")
-            continue
-        scope_normalized = re.sub(r"\s+", "", scope)
-        call = (
-            "validate_commit_log_file(&metadata,expected_size,"
-            f"{last_expression})"
-        )
-        if scope_normalized.count(call) != 1 or body_normalized.count("validate_commit_log_file(") != 1:
-            violations.append(f"Store {name} CommitLog validation call changed")
-        metadata_build = "letmetadata=CommitLogFileMetadata{path:path.clone(),size,};"
-        positions = [
-            scope_normalized.find("fs::metadata(path)"),
-            scope_normalized.find(metadata_build),
-            scope_normalized.find(call),
-        ]
-        if any(position == -1 for position in positions) or positions != sorted(positions):
-            violations.append(f"Store {name} CommitLog validation ordering changed")
-        load_adapter = (
-            "Ok(CommitLogFileLoadDecision::Load)=>Ok(Some(metadata))"
-            if name == "parallel"
-            else "Ok(CommitLogFileLoadDecision::Load)=>metadata_list.push(metadata)"
-        )
-        error_adapter = (
-            "Err(error)=>Err(io::Error::new(io::ErrorKind::InvalidData,error))"
-            if name == "parallel"
-            else "Err(error)=>returnErr(io::Error::new(io::ErrorKind::InvalidData,error))"
-        )
-        required_decisions = [
-            load_adapter,
-            "Ok(CommitLogFileLoadDecision::RemoveEmptyLast)=>",
-            error_adapter,
-        ]
-        if any(decision not in scope_normalized for decision in required_decisions):
-            violations.append(f"Store {name} CommitLog validation decision adapter changed")
-        removal_arm = _decision_arm_body(scope, "RemoveEmptyLast")
-        removal_parts = None if removal_arm is None else _remove_file_if_let_parts(removal_arm)
-        if removal_arm is None or removal_parts is None:
-            violations.append(f"Store {name} empty-last removal semantics changed")
-            continue
-        delete_error_body, delete_success_body, removal_tail = removal_parts
-        active_delete_error = active_rust_source(delete_error_body)
-        forbidden_delete_failure = re.search(
-            r"\breturn\s+Err\s*\(|\bErr\s*\(|\bpanic\s*!|\.unwrap\s*\(|\.expect\s*\(|\?",
-            active_delete_error,
-        )
-        warn_only = re.fullmatch(
-            r"\s*warn\s*!\s*\(\s*,\s*path\s*,\s*error\s*\)\s*;\s*",
-            active_delete_error,
-        )
-        if forbidden_delete_failure is not None or warn_only is None:
-            violations.append(f"Store {name} empty-last delete failure is not warn-only")
-        if re.fullmatch(
-            r"\s*warn\s*!\s*\(\s*,\s*path\.display\s*\(\s*\)\s*\)\s*;\s*",
-            active_rust_source(delete_success_body),
-        ) is None:
-            violations.append(f"Store {name} empty-last delete success warning changed")
-        if name == "parallel":
-            if re.fullmatch(r"\s*Ok\s*\(\s*None\s*\)\s*", removal_tail) is None:
-                violations.append("Store parallel empty-last arm must finish with Ok(None)")
-        elif removal_tail.strip():
-            violations.append("Store sequential empty-last arm must continue after filtering")
-
-    if not all(
-        token in parallel_normalized
-        for token in [
-            ".par_iter().enumerate().map(|(idx,path)|",
-            ".collect();",
-            "results.map(|metadata|metadata.into_iter().flatten().collect())",
-        ]
-    ):
-        violations.append("Store parallel CommitLog order or flatten contract changed")
-    if "for(idx,path)inpaths.iter().enumerate()" not in sequential_normalized:
-        violations.append("Store sequential CommitLog first-error traversal changed")
-
-    expected_private_signatures = [
-        "fncollect_metadata_parallel(&self,paths:&[PathBuf])->io::Result<Vec<CommitLogFileMetadata>>",
-        "fncollect_metadata_sequential(&self,paths:&[PathBuf])->io::Result<Vec<CommitLogFileMetadata>>",
-    ]
-    if any(signature not in normalized for signature in expected_private_signatures):
-        violations.append("Store canonical CommitLog metadata flow changed")
+    if any(token in normalized for token in forbidden_store_owners):
+        violations.append("Store retained CommitLog metadata collection ownership")
+    if normalized.count("collect_commit_log_metadata(") != 1:
+        violations.append("Store CommitLog metadata adapter call count changed")
+    if normalized.count("CommitLogMetadataCollectionOptions{") != 1:
+        violations.append("Store CommitLog metadata options construction changed")
     return violations
 
 
@@ -3541,6 +3600,7 @@ struct DefaultMappedFile {
             local_manifest["features"],
         )
         self.assertNotIn("tokio-uring", local_manifest.get("dependencies", {}))
+        self.assertEqual("1.12", local_manifest["dependencies"]["rayon"])
         self.assertTrue(has_linux_only_optional_tokio_uring(local_manifest))
         self.assertTrue(has_unix_only_normal_libc(local_manifest))
         store_manifest = tomllib.loads((STORE_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
@@ -3549,6 +3609,7 @@ struct DefaultMappedFile {
         self.assertEqual(["rocketmq-store-local/safe-load"], store_manifest["features"]["safe-load"])
         self.assertEqual(["rocketmq-store-local/io_uring"], store_manifest["features"]["io_uring"])
         self.assertIn("rocketmq-store-local", store_manifest["dependencies"])
+        self.assertEqual("1.12", store_manifest["dependencies"]["rayon"])
         self.assertNotIn("tokio-uring", store_manifest.get("dependencies", {}))
         self.assertNotIn("tokio-uring", store_manifest.get("target", {}).get("cfg(target_os = \"linux\")", {}).get("dependencies", {}))
 
@@ -3883,11 +3944,19 @@ struct DefaultMappedFile {
         self.assertEqual([], commit_log_mapping_plan_owner_violations(source))
         mutations = [
             source.replace("metadata.len() > 4", "metadata.len() >= 4", 1),
-            source.replace("options.parallel_enabled &&", "!options.parallel_enabled &&", 1),
+            source.replace(
+                "options.parallel_enabled && metadata.len() > 4",
+                "!options.parallel_enabled && metadata.len() > 4",
+                1,
+            ),
             source.replace("options.lazy_mmap_enabled && index < last_index", "options.lazy_mmap_enabled", 1),
-            source.replace(".into_iter()", ".into_iter().rev()", 1),
+            source.replace("metadata\n            .into_iter()", "metadata\n            .into_iter().rev()", 1),
             source.replace("CommitLogMappingEntry { metadata, mode }", "CommitLogMappingEntry { metadata: CommitLogFileMetadata { path: metadata.path, size: 0 }, mode }", 1),
-            source.replace("parallel_enabled: bool", "parallel_enabled: usize", 1),
+            source.replace(
+                "pub struct CommitLogMappingOptions {\n    /// Whether mapping may use the parallel execution path.\n    pub parallel_enabled: bool",
+                "pub struct CommitLogMappingOptions {\n    /// Whether mapping may use the parallel execution path.\n    pub parallel_enabled: usize",
+                1,
+            ),
             source.replace("execution: CommitLogMappingExecution", "pub execution: CommitLogMappingExecution", 1),
             source.replace("#[derive(Debug)]\npub struct CommitLogMappingPlan", "#[derive(Debug, Clone)]\npub struct CommitLogMappingPlan", 1),
             source.replace(
@@ -3906,9 +3975,16 @@ struct DefaultMappedFile {
         source = path.read_text(encoding="utf-8")
         self.assertEqual([], store_commit_log_mapping_plan_violations(source))
         mutations = [
-            source.replace("file_paths.len() > 4", "file_paths.len() > 5", 1),
-            source.replace("parallel_enabled: self.enable_parallel", "parallel_enabled: false", 1),
-            source.replace("lazy_mmap_enabled: self.lazy_mmap_enable", "lazy_mmap_enabled: false", 1),
+            source.replace(
+                "CommitLogMappingOptions {\n                parallel_enabled: self.enable_parallel",
+                "CommitLogMappingOptions {\n                parallel_enabled: false",
+                1,
+            ),
+            source.replace(
+                "CommitLogMappingOptions {\n                parallel_enabled: self.enable_parallel,\n                lazy_mmap_enabled: self.lazy_mmap_enable",
+                "CommitLogMappingOptions {\n                parallel_enabled: self.enable_parallel,\n                lazy_mmap_enabled: false",
+                1,
+            ),
             source.replace("match mapping_plan.execution()", "if self.enable_parallel", 1),
             source.replace("mapping_plan.entries()", "&[]", 1),
             source.replace(".par_iter()\n            .map(|entry|", ".par_iter()\n            .enumerate()\n            .map(|(_, entry)|", 1),
@@ -4112,9 +4188,43 @@ struct DefaultMappedFile {
                 "CommitLogFileLoadDecision::Load",
                 1,
             ),
-            source.replace("use std::path::PathBuf;", "use std::{fs, path::PathBuf};", 1),
             source.replace("please check it manually", "check it later", 1),
             source.replace("pub actual: u64,", "actual: u64,", 1),
+            source.replace(
+                "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub struct CommitLogMetadataCollectionOptions",
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub struct CommitLogMetadataCollectionOptions",
+                1,
+            ),
+            source.replace("paths.len() > 4", "paths.len() >= 4", 1),
+            source.replace("paths.len().saturating_sub(1)", "paths.len() - 1", 1),
+            source.replace(
+                "collect_metadata_parallel(paths, options.expected_file_size, last_file_idx)",
+                "collect_metadata_sequential(paths, options.expected_file_size, last_file_idx)",
+                1,
+            ),
+            source.replace(".par_iter()\n        .enumerate()", ".iter()\n        .enumerate()", 1),
+            source.replace(
+                "Failed to get metadata for {:?}: {}",
+                "metadata failed for {:?}: {}",
+                1,
+            ),
+            source.replace(
+                ".into_iter().flatten().collect()",
+                ".into_iter().filter_map(|item| item).collect()",
+                1,
+            ),
+            source.replace("io::ErrorKind::InvalidData, error", "io::ErrorKind::Other, error", 1),
+            source.replace(
+                'target: "rocketmq_store::log_file::commit_log_loader",',
+                'target: "rocketmq_store_local::commit_log",',
+                1,
+            ),
+            source.replace(
+                '"Failed to delete empty file {:?}: {}"',
+                '"Could not remove {:?}: {}"',
+                1,
+            ),
+            source.replace("fn collect_metadata_parallel(", "pub fn collect_metadata_parallel(", 1),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
@@ -4125,70 +4235,35 @@ struct DefaultMappedFile {
         path = STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
         source = path.read_text(encoding="utf-8")
         self.assertEqual([], store_commit_log_file_validation_violations(source))
-        delete_warning = 'warn!("Failed to delete empty file {:?}: {}", path, error);'
-        fatal_delete = (
-            delete_warning
-            + "\n                        return Err(io::Error::new(io::ErrorKind::Other, error));"
-        )
-        parallel_fatal_delete = source.replace(delete_warning, fatal_delete, 1)
-        first_warning = source.find(delete_warning)
-        second_warning = source.find(delete_warning, first_warning + len(delete_warning))
-        self.assertGreaterEqual(first_warning, 0)
-        self.assertGreater(second_warning, first_warning)
-        sequential_fatal_delete = source[:second_warning] + source[second_warning:].replace(
-            delete_warning,
-            fatal_delete,
-            1,
-        )
         mutations = [
-            source.replace("idx == last_file_idx", "idx != last_file_idx", 1),
             source.replace(
-                "match validate_commit_log_file(&metadata, expected_size, idx == last_file_idx)",
-                "match Ok(CommitLogFileLoadDecision::Load)",
-                1,
-            ),
-            source.replace("let size = file_metadata.len();", "let size = file_metadata.len(); if size == 0 {}", 1),
-            source.replace(
-                "Ok(CommitLogFileLoadDecision::Load) => Ok(Some(metadata))",
-                "Ok(CommitLogFileLoadDecision::Load) => Ok(None)",
+                "use rocketmq_store_local::commit_log::load::collect_commit_log_metadata;",
+                "pub use rocketmq_store_local::commit_log::load::collect_commit_log_metadata;",
                 1,
             ),
             source.replace(
-                "if let Err(error) = fs::remove_file(path)",
-                "if let Err(error) = fs::remove_file(path).map_err(io::Error::other)?",
-                1,
-            ),
-            source.replace("io::ErrorKind::InvalidData", "io::ErrorKind::Other", 1),
-            source.replace(
-                "io::ErrorKind::InvalidData, error",
-                'io::ErrorKind::InvalidData, format!("validation: {error}")',
+                "use rocketmq_store_local::commit_log::load::CommitLogMetadataCollectionOptions;",
+                "use rocketmq_store_local::commit_log::load::CommitLogMetadataCollectionOptions as Options;",
                 1,
             ),
             source.replace(
-                "match validate_commit_log_file(&metadata, expected_size, idx == last_file_idx)",
-                "match validation",
-                1,
-            ).replace(
-                "let results: Result<Vec<_>, _> = paths",
-                "let validation = validate_commit_log_file(&metadata, expected_size, false);\n"
-                "        let results: Result<Vec<_>, _> = paths",
-                1,
-            ),
-            source.replace(".par_iter()\n            .enumerate()", ".par_iter()", 1),
-            source.replace(".into_iter().flatten().collect()", ".into_iter().filter_map(|item| item).collect()", 1),
-            source.replace(
-                "use rocketmq_store_local::commit_log::load::CommitLogFileMetadata;",
-                "use rocketmq_store_local::commit_log::load::{CommitLogFileMetadata};",
+                "expected_file_size: self.mapped_file_size",
+                "expected_file_size: 0",
                 1,
             ),
             source.replace(
-                "use rocketmq_store_local::commit_log::load::CommitLogFileMetadata;",
-                "use rocketmq_store_local::commit_log::load::CommitLogFileMetadata as Metadata;",
+                "parallel_enabled: self.enable_parallel",
+                "parallel_enabled: false",
                 1,
             ),
             source.replace(
-                "use rocketmq_store_local::commit_log::load::CommitLogFileMetadata;",
-                "use rocketmq_store_local::commit_log::load::*;",
+                "let file_metadata = collect_commit_log_metadata(",
+                "let _legacy = fs::metadata(&file_paths[0]);\n        let file_metadata = collect_commit_log_metadata(",
+                1,
+            ),
+            source.replace(
+                "let file_metadata = collect_commit_log_metadata(",
+                "let file_metadata = collect_commit_log_metadata_old(",
                 1,
             ),
             source.replace(
@@ -4197,8 +4272,11 @@ struct DefaultMappedFile {
                 1,
             ),
             source.replace("Ok((mapped_files, stats))", "stats.files_removed += 1; Ok((mapped_files, stats))", 1),
-            parallel_fatal_delete,
-            sequential_fatal_delete,
+            source.replace(
+                "impl CommitLogLoader {",
+                "fn collect_metadata_parallel() {}\n\nimpl CommitLogLoader {",
+                1,
+            ),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):

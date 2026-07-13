@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fs;
+use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use memmap2::MmapMut;
+use rayon::prelude::*;
 use thiserror::Error;
 use tracing::info;
 
@@ -26,6 +30,15 @@ pub struct CommitLogFileMetadata {
     pub path: PathBuf,
     /// Current length of the CommitLog segment in bytes.
     pub size: u64,
+}
+
+/// Options controlling CommitLog filesystem metadata collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommitLogMetadataCollectionOptions {
+    /// Configured size of every non-empty CommitLog segment.
+    pub expected_file_size: u64,
+    /// Whether collections larger than four raw paths may run in parallel.
+    pub parallel_enabled: bool,
 }
 
 /// Store-side action selected after validating one CommitLog segment.
@@ -69,6 +82,102 @@ pub fn validate_commit_log_file(
         });
     }
     Ok(CommitLogFileLoadDecision::Load)
+}
+
+/// Collects and validates ordered filesystem metadata for CommitLog segments.
+///
+/// An empty final segment is removed on a best-effort basis and omitted from
+/// the returned metadata. Parallel execution is selected from the raw input
+/// count so filtering does not change the collection strategy.
+///
+/// # Errors
+///
+/// Returns the first filesystem error observed by the selected collector, or
+/// [`io::ErrorKind::InvalidData`] when a segment has an invalid length.
+pub fn collect_commit_log_metadata(
+    paths: &[PathBuf],
+    options: CommitLogMetadataCollectionOptions,
+) -> io::Result<Vec<CommitLogFileMetadata>> {
+    let last_file_idx = paths.len().saturating_sub(1);
+    if options.parallel_enabled && paths.len() > 4 {
+        collect_metadata_parallel(paths, options.expected_file_size, last_file_idx)
+    } else {
+        collect_metadata_sequential(paths, options.expected_file_size, last_file_idx)
+    }
+}
+
+fn collect_metadata_parallel(
+    paths: &[PathBuf],
+    expected_size: u64,
+    last_file_idx: usize,
+) -> io::Result<Vec<CommitLogFileMetadata>> {
+    let results: Result<Vec<_>, _> = paths
+        .par_iter()
+        .enumerate()
+        .map(|(idx, path)| {
+            let file_metadata = fs::metadata(path).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("Failed to get metadata for {:?}: {}", path, error),
+                )
+            })?;
+            collect_file_metadata(path, file_metadata.len(), expected_size, idx == last_file_idx)
+        })
+        .collect();
+
+    results.map(|metadata| metadata.into_iter().flatten().collect())
+}
+
+fn collect_metadata_sequential(
+    paths: &[PathBuf],
+    expected_size: u64,
+    last_file_idx: usize,
+) -> io::Result<Vec<CommitLogFileMetadata>> {
+    let mut metadata_list = Vec::with_capacity(paths.len());
+    for (idx, path) in paths.iter().enumerate() {
+        let file_metadata = fs::metadata(path)?;
+        if let Some(metadata) = collect_file_metadata(path, file_metadata.len(), expected_size, idx == last_file_idx)? {
+            metadata_list.push(metadata);
+        }
+    }
+    Ok(metadata_list)
+}
+
+fn collect_file_metadata(
+    path: &Path,
+    size: u64,
+    expected_size: u64,
+    is_last: bool,
+) -> io::Result<Option<CommitLogFileMetadata>> {
+    let metadata = CommitLogFileMetadata {
+        path: path.to_path_buf(),
+        size,
+    };
+    match validate_commit_log_file(&metadata, expected_size, is_last) {
+        Ok(CommitLogFileLoadDecision::Load) => Ok(Some(metadata)),
+        Ok(CommitLogFileLoadDecision::RemoveEmptyLast) => {
+            remove_empty_last_file(path);
+            Ok(None)
+        }
+        Err(error) => Err(io::Error::new(io::ErrorKind::InvalidData, error)),
+    }
+}
+
+fn remove_empty_last_file(path: &Path) {
+    if let Err(error) = fs::remove_file(path) {
+        tracing::warn!(
+            target: "rocketmq_store::log_file::commit_log_loader",
+            "Failed to delete empty file {:?}: {}",
+            path,
+            error
+        );
+    } else {
+        tracing::warn!(
+            target: "rocketmq_store::log_file::commit_log_loader",
+            "{} size is 0, auto deleted.",
+            path.display()
+        );
+    }
 }
 
 /// Loader options used to decide how validated CommitLog segments are mapped.
@@ -458,5 +567,13 @@ mod tests {
         assert!(failure.attempted);
         assert!(!failure.succeeded);
         assert_eq!(failure.elapsed, Duration::from_millis(7));
+    }
+
+    #[test]
+    fn empty_last_delete_failure_is_non_fatal() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let missing = directory.path().join("missing");
+
+        remove_empty_last_file(&missing);
     }
 }

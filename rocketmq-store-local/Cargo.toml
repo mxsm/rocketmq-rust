@@ -34,6 +34,7 @@ io_uring = ["dep:tokio-uring"]
 bytes.workspace = true
 memmap2 = "0.9.10"
 parking_lot.workspace = true
+rayon = "1.12"
 thiserror.workspace = true
 tracing.workspace = true
 

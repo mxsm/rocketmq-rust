@@ -119,6 +119,7 @@
   - [x] M06-03j：迁移 CommitLog 文件元数据与纯长度校验，并接入 parallel/sequential loader
   - [x] M06-03k：迁移 CommitLog 映射计划与 mmap advice/prefetch 统计归约内核
   - [x] M06-03l：迁移 CommitLog recovery memory hint 平台执行到 Local
+  - [x] M06-03m：迁移 CommitLog filesystem metadata 收集、校验与空尾删除到 Local
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -599,3 +599,35 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03l 不迁移 filesystem、rayon mapping/factory、position、append/parser/recovery、flush/group
   commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。PR-M06-03 父项、M06 Exit Checklist 与
   M06-04..12 保持未完成。
+
+## M06-03m CommitLog filesystem metadata collection evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::load` 现唯一拥有
+  `CommitLogMetadataCollectionOptions` 与 `collect_commit_log_metadata`。公开入口按 raw path 数量决定执行方式：
+  仅在 parallel 启用且 raw count 大于 4 时进入 indexed rayon collector；raw last index 在过滤前计算。parallel
+  结果按输入顺序 flatten，sequential 以 `fs::metadata(path)?` 保持 first-error；两路均将长度 mismatch 精确映射为
+  `InvalidData`。空尾删除为私有 best-effort helper，失败只使用既有 target 和逐字 warning，不传播错误。
+- [x] `[COMPAT]` Store loader 仅私有导入 Local collector/options，并删除两条旧 metadata collector、validator/decision/
+  metadata import。Store 仍拥有目录 read/filter/sort、metadata timing 与 totals、`files_removed = 0` 兼容统计、映射计划、
+  rayon mapped-file factory、memory hints、position 更新和公开 loader API。mapping threshold 继续依据过滤后 metadata，
+  filesystem collection threshold 继续依据 raw paths；feature 定义、持久格式和错误文本均未改变。
+- [x] `[TEST]` RED 先证明 Local API/owner 缺失；GREEN 后 Windows 与 WSL/Linux Local focused 均为 36/36，Store
+  loader 均为 15/15。Windows Local 全量 139 项、Store load 7 项（另 1 项 ignored）、recovery 19 项、Store lib
+  577 项通过。新增 goldens 覆盖 0/1/4/5 paths、parallel disabled、raw-five 空尾过滤、ordered parallel、sequential
+  first-error 不删除后续空尾、单 missing-path parallel error context、InvalidData 与 delete-failure non-fatal。
+- [x] `[REVIEW]` 82 项 contract 锁定两个新增 Local owner、options 字段/derive/可见性、公开 API、四个私有 helper、
+  raw threshold/last-index、indexed order/flatten、sequential `?`、shared validation/filter adapter、原 error context、
+  warning target/text 和非致命删除；Store 只允许两个精确 private import 与一次 adapter call，且禁止保留旧 collector、
+  `fs::metadata`/remove/validator owner。Local 15 个及 Store 9 个 focused mutation 均被拒绝。
+- [x] `[PLATFORM]` Local default/no-default/fast/safe/fast+safe/all 六组 check 通过；Store default/all，以及显式
+  `local_file_store` owner 下的 fast、safe、fast+safe 组合通过。Store raw no-default、raw fast/safe/fast+safe 仍因既有
+  空 `GenericMessageStore` 产生 124 个 E0004 和 unused `ArcMut`，未标记为通过；BASE→HEAD 对
+  `message_store.rs`、Store/root manifest 的 diff 为零，证明本切片未引入该基线问题。
+- [x] `[REV]` Local/Store/workspace all-target/all-feature Clippy、Local strict Rustdoc、Store 普通 Rustdoc、routing、
+  架构 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、格式和 diff 检查通过。WSL 隔离 target 的
+  focused/default 编译通过后已清理 8,386 files/4.2 GiB。ArcMut BASE→candidate 保持 1,232 identities/3,375
+  occurrences，0 NEW/0 STALE；仅 9 个既有 occurrence 的 line 元数据变化，id/fingerprint/item 全部不变，因此没有
+  relocation approval，canonical baseline 保持零 diff。
+- [x] `[SCOPE]` M06-03m 只迁移 CommitLog filesystem metadata/validation/empty-last filtering；目录枚举、mapped-file
+  factory、position、append/parser/recovery、flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership 与持久
+  格式仍未迁移。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。

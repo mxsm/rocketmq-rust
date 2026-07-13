@@ -34,16 +34,15 @@ use tracing::warn;
 
 use rocketmq_store_local::commit_log::load::apply_recovery_file_prefetch;
 use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;
+use rocketmq_store_local::commit_log::load::collect_commit_log_metadata;
 use rocketmq_store_local::commit_log::load::record_file_prefetch;
 use rocketmq_store_local::commit_log::load::record_mmap_advice;
-use rocketmq_store_local::commit_log::load::validate_commit_log_file;
-use rocketmq_store_local::commit_log::load::CommitLogFileLoadDecision;
-use rocketmq_store_local::commit_log::load::CommitLogFileMetadata;
 use rocketmq_store_local::commit_log::load::CommitLogMappingEntry;
 use rocketmq_store_local::commit_log::load::CommitLogMappingExecution;
 use rocketmq_store_local::commit_log::load::CommitLogMappingMode;
 use rocketmq_store_local::commit_log::load::CommitLogMappingOptions;
 use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;
+use rocketmq_store_local::commit_log::load::CommitLogMetadataCollectionOptions;
 use rocketmq_store_local::commit_log::load::HintOutcome;
 pub use rocketmq_store_local::commit_log::load::LoadStatistics;
 pub use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
@@ -153,11 +152,13 @@ impl CommitLogLoader {
         }
 
         let parallel_start = std::time::Instant::now();
-        let file_metadata: Vec<CommitLogFileMetadata> = if self.enable_parallel && file_paths.len() > 4 {
-            self.collect_metadata_parallel(&file_paths)?
-        } else {
-            self.collect_metadata_sequential(&file_paths)?
-        };
+        let file_metadata = collect_commit_log_metadata(
+            &file_paths,
+            CommitLogMetadataCollectionOptions {
+                expected_file_size: self.mapped_file_size,
+                parallel_enabled: self.enable_parallel,
+            },
+        )?;
 
         stats.parallel_load_time_ms = parallel_start.elapsed().as_millis();
         stats.total_files = file_metadata.len();
@@ -183,74 +184,6 @@ impl CommitLogLoader {
         stats.log_summary();
 
         Ok((mapped_files, stats))
-    }
-
-    /// Collect metadata in parallel using rayon
-    ///
-    /// # Safety
-    /// Uses rayon's thread pool for parallel fs::metadata calls.
-    /// Each call is independent and thread-safe.
-    fn collect_metadata_parallel(&self, paths: &[PathBuf]) -> io::Result<Vec<CommitLogFileMetadata>> {
-        let expected_size = self.mapped_file_size;
-        let last_file_idx = paths.len().saturating_sub(1);
-
-        let results: Result<Vec<_>, _> = paths
-            .par_iter()
-            .enumerate()
-            .map(|(idx, path)| {
-                let file_metadata = fs::metadata(path)
-                    .map_err(|e| io::Error::new(e.kind(), format!("Failed to get metadata for {:?}: {}", path, e)))?;
-
-                let size = file_metadata.len();
-                let metadata = CommitLogFileMetadata {
-                    path: path.clone(),
-                    size,
-                };
-                match validate_commit_log_file(&metadata, expected_size, idx == last_file_idx) {
-                    Ok(CommitLogFileLoadDecision::Load) => Ok(Some(metadata)),
-                    Ok(CommitLogFileLoadDecision::RemoveEmptyLast) => {
-                        if let Err(error) = fs::remove_file(path) {
-                            warn!("Failed to delete empty file {:?}: {}", path, error);
-                        } else {
-                            warn!("{} size is 0, auto deleted.", path.display());
-                        }
-                        Ok(None)
-                    }
-                    Err(error) => Err(io::Error::new(io::ErrorKind::InvalidData, error)),
-                }
-            })
-            .collect();
-
-        results.map(|metadata| metadata.into_iter().flatten().collect())
-    }
-
-    /// Fallback: sequential metadata collection
-    fn collect_metadata_sequential(&self, paths: &[PathBuf]) -> io::Result<Vec<CommitLogFileMetadata>> {
-        let mut metadata_list = Vec::with_capacity(paths.len());
-        let expected_size = self.mapped_file_size;
-        let last_file_idx = paths.len().saturating_sub(1);
-
-        for (idx, path) in paths.iter().enumerate() {
-            let file_metadata = fs::metadata(path)?;
-            let size = file_metadata.len();
-            let metadata = CommitLogFileMetadata {
-                path: path.clone(),
-                size,
-            };
-            match validate_commit_log_file(&metadata, expected_size, idx == last_file_idx) {
-                Ok(CommitLogFileLoadDecision::Load) => metadata_list.push(metadata),
-                Ok(CommitLogFileLoadDecision::RemoveEmptyLast) => {
-                    if let Err(error) = fs::remove_file(path) {
-                        warn!("Failed to delete empty file {:?}: {}", path, error);
-                    } else {
-                        warn!("{} size is 0, auto deleted.", path.display());
-                    }
-                }
-                Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidData, error)),
-            }
-        }
-
-        Ok(metadata_list)
     }
 
     /// Create mapped files in parallel (with synchronization for Vec::push)
