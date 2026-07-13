@@ -38,7 +38,16 @@ KERNEL_ITEMS = {
     "ReferenceResource": "trait",
     "ReferenceResourceBase": "struct",
     "ReferenceResourceCounter": "struct",
+    "OS_PAGE_SIZE": "const",
 }
+MAPPED_FILE_KERNEL_PATH = Path("rocketmq-store-local/src/mapped_file/kernel.rs")
+DEFAULT_MAPPED_FILE_PATH = Path(
+    "rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"
+)
+MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush", "is_able_to_commit")
+MAPPED_FILE_POLICY_REFERENCE = re.compile(
+    r"(?:\.|::)\s*(is_able_to_flush|is_able_to_commit)\b"
+)
 FILE_ITEMS = {
     "MappedFileStorage": "struct",
     "FilePreallocateOutcome": "enum",
@@ -1750,7 +1759,7 @@ def kernel_item_owner_occurrences(
 ) -> list[tuple[Path, str]]:
     declaration = re.compile(
         rf"\b(?:pub(?:\s*\([^)]*\))?\s+)?"
-        rf"(?P<kind>struct|trait|type|enum|union|mod)\s+{re.escape(item)}\b"
+        rf"(?P<kind>struct|trait|type|enum|union|const|mod)\s+{re.escape(item)}\b"
     )
     aliased_import = re.compile(rf"\bas\s+{re.escape(item)}\b")
     occurrences: list[tuple[Path, str]] = []
@@ -1768,6 +1777,96 @@ def kernel_item_owner_occurrences(
             if re.search(r"\buse\b", statement) and aliased_import.search(statement)
         )
     return occurrences
+
+
+def mapped_file_progress_policy_violations(source: str) -> list[str]:
+    production = re.split(r"#\[cfg\(test\)\]\s*mod\s+tests", source, maxsplit=1)[0]
+    compact = compact_rust(production)
+    violations: list[str] = []
+
+    if "pubconstOS_PAGE_SIZE:u64=1024*4;" not in compact:
+        violations.append("OS_PAGE_SIZE owner, type, or fixed expression changed")
+
+    expected_signatures = {
+        "is_able_to_flush": (
+            "pubfnis_able_to_flush(&self,read_position:i32,flush_least_pages:i32)->bool"
+        ),
+        "is_able_to_commit": (
+            "pubfnis_able_to_commit(&self,commit_least_pages:i32)->bool"
+        ),
+    }
+    expected_bodies = {
+        "is_able_to_flush": (
+            "ifself.is_full(){returntrue;}letflush=self.flushed_position();"
+            "ifflush_least_pages>0{return(read_position-flush)/OS_PAGE_SIZEasi32"
+            ">=flush_least_pages;}read_position>flush"
+        ),
+        "is_able_to_commit": (
+            "ifself.is_full(){returntrue;}letcommitted=self.committed_position();"
+            "letwrite=self.wrote_position();ifcommit_least_pages>0{return(write-committed)"
+            "/OS_PAGE_SIZEasi32>=commit_least_pages;}write>committed"
+        ),
+    }
+    for function_name in MAPPED_FILE_POLICY_METHODS:
+        if expected_signatures[function_name] not in compact:
+            violations.append(f"MappedFileProgress::{function_name} signature changed")
+        body = compact_rust(named_raw_function_body(production, function_name) or "")
+        if body != expected_bodies[function_name]:
+            violations.append(f"MappedFileProgress::{function_name} behavior changed")
+    return violations
+
+
+def mapped_file_progress_adapter_violations(
+    canonical_source: str,
+    default_mapped_file_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    violations = mapped_file_progress_policy_violations(canonical_source)
+    violations.extend(
+        direct_exact_reexport_violations(
+            default_mapped_file_source,
+            "rocketmq_store_local::mapped_file::kernel",
+            "OS_PAGE_SIZE",
+        )
+    )
+
+    expected_wrappers = {
+        "is_able_to_flush": (
+            "self.progress.is_able_to_flush(self.get_read_position(),flush_least_pages)"
+        ),
+        "is_able_to_commit": "self.progress.is_able_to_commit(commit_least_pages)",
+    }
+    default_production = re.split(
+        r"#\[cfg\(test\)\]\s*mod\s+tests",
+        default_mapped_file_source,
+        maxsplit=1,
+    )[0]
+    for function_name, expected_body in expected_wrappers.items():
+        body = compact_rust(named_raw_function_body(default_production, function_name) or "")
+        if body != expected_body:
+            violations.append(f"Store {function_name} wrapper must be an exact Local delegation")
+
+    references_by_path: dict[Path, list[str]] = {}
+    for path, source in production_sources.items():
+        production = re.split(r"#\[cfg\(test\)\]\s*mod\s+tests", source, maxsplit=1)[0]
+        references = MAPPED_FILE_POLICY_REFERENCE.findall(active_rust_source(production))
+        if references:
+            references_by_path[path] = references
+    expected_references = {
+        DEFAULT_MAPPED_FILE_PATH: [
+            "is_able_to_flush",
+            "is_able_to_commit",
+            "is_able_to_flush",
+            "is_able_to_commit",
+        ]
+    }
+    if references_by_path != expected_references:
+        violations.append(f"mapped-file policy production references changed: {references_by_path}")
+
+    default_active = active_rust_source(default_production)
+    if default_active.count("OS_PAGE_SIZE") != 1:
+        violations.append("Store DefaultMappedFile retained or duplicated page-threshold arithmetic")
+    return violations
 
 
 def active_struct_body(source: str, struct_name: str) -> str:
@@ -4728,6 +4827,10 @@ struct DefaultMappedFile {
         self.assertEqual(
             [
                 (
+                    facade_dir / "default_mapped_file_impl.rs",
+                    "pub use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE",
+                ),
+                (
                     facade_dir / "reference_resource.rs",
                     "pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResource",
                 ),
@@ -4749,6 +4852,110 @@ struct DefaultMappedFile {
         self.assertEqual(
             [],
             default_mapped_file_progress_violations(default_mapped_file),
+        )
+
+    def test_mapped_file_progress_policy_has_one_local_owner_and_exact_store_adapter(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        self.assertEqual(
+            [],
+            mapped_file_progress_adapter_violations(
+                canonical,
+                default_mapped_file,
+                production_sources,
+            ),
+        )
+
+    def test_mapped_file_progress_policy_contract_rejects_semantic_and_boundary_mutations(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual([], mapped_file_progress_policy_violations(canonical))
+
+        canonical_mutations = [
+            canonical.replace("pub const OS_PAGE_SIZE: u64", "pub const OS_PAGE_SIZE: usize", 1),
+            canonical.replace("1024 * 4", "1024 * 8", 1),
+            canonical.replace("if self.is_full()", "if false", 1),
+            canonical.replace("flush_least_pages > 0", "flush_least_pages >= 0", 1),
+            canonical.replace("read_position - flush", "flush - read_position", 1),
+            canonical.replace(">= flush_least_pages", "> flush_least_pages", 1),
+            canonical.replace("read_position > flush", "read_position >= flush", 1),
+            canonical.replace("let write = self.wrote_position();", "let write = self.committed_position();", 1),
+            canonical.replace("write - committed", "write.saturating_sub(committed)", 1),
+            canonical.replace("commit_least_pages > 0", "commit_least_pages >= 0", 1),
+            canonical.replace(">= commit_least_pages", "> commit_least_pages", 1),
+            canonical.replace("write > committed", "write >= committed", 1),
+            canonical.replace("OS_PAGE_SIZE as i32", "page_size::get() as i32", 1),
+        ]
+        for mutation_index, mutation in enumerate(canonical_mutations):
+            with self.subTest(canonical_mutation=mutation_index):
+                self.assertNotEqual(canonical, mutation)
+                self.assertNotEqual([], mapped_file_progress_policy_violations(mutation))
+
+        adapter_mutations = [
+            default_mapped_file.replace(
+                "pub use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE;",
+                "pub const OS_PAGE_SIZE: u64 = 1024 * 4;",
+                1,
+            ),
+            default_mapped_file.replace(
+                "self.get_read_position(), flush_least_pages",
+                "self.get_wrote_position(), flush_least_pages",
+                1,
+            ),
+            default_mapped_file.replace(
+                "self.progress.is_able_to_commit(commit_least_pages)",
+                "(self.get_wrote_position() - self.get_committed_position()) / 4096 >= commit_least_pages",
+                1,
+            ),
+            default_mapped_file.replace(
+                "self.progress\n            .is_able_to_flush",
+                "self\n            .is_able_to_flush",
+                1,
+            ),
+            default_mapped_file.replace(
+                "pub use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE;",
+                "pub use rocketmq_store_local::mapped_file::kernel::{OS_PAGE_SIZE};",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(adapter_mutations):
+            with self.subTest(adapter_mutation=mutation_index):
+                self.assertNotEqual(default_mapped_file, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_progress_adapter_violations(
+                        canonical,
+                        mutation,
+                        mutated_sources,
+                    ),
+                )
+
+        extra_caller_sources = dict(production_sources)
+        extra_caller_sources[Path("rocketmq-store/src/base/swappable.rs")] += (
+            "\nfn forbidden_policy_caller(progress: &MappedFileProgress) {\n"
+            "    let _ = progress.is_able_to_commit(1);\n"
+            "}\n"
+        )
+        self.assertNotEqual(
+            [],
+            mapped_file_progress_adapter_violations(
+                canonical,
+                default_mapped_file,
+                extra_caller_sources,
+            ),
         )
 
     def test_mapped_file_storage_has_one_owner_exact_platform_reexports_and_no_store_state_copy(self) -> None:

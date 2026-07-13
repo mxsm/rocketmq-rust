@@ -21,6 +21,7 @@ use rocketmq_store_local::mapped_file::kernel::MappedFileProgress;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResourceBase;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResourceCounter;
+use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE;
 
 #[test]
 fn progress_starts_with_legacy_defaults() {
@@ -82,6 +83,48 @@ fn append_commit_and_timestamps_keep_legacy_setter_semantics() {
     assert_eq!(progress.store_timestamp(), 1_700_000_000_123);
     assert_eq!(progress.start_timestamp(), 101);
     assert_eq!(progress.stop_timestamp(), 202);
+}
+
+#[test]
+fn page_threshold_policy_preserves_exact_legacy_boundaries() {
+    assert_eq!(OS_PAGE_SIZE, 1024 * 4);
+
+    let progress = MappedFileProgress::new(OS_PAGE_SIZE * 4);
+    progress.set_flushed_position(0);
+
+    assert!(!progress.is_able_to_flush(4095, 1));
+    assert!(progress.is_able_to_flush(4096, 1));
+    assert!(!progress.is_able_to_flush(8191, 2));
+    assert!(progress.is_able_to_flush(8192, 2));
+    assert!(progress.is_able_to_flush(1, 0));
+    assert!(progress.is_able_to_flush(1, -1));
+    assert!(!progress.is_able_to_flush(0, 0));
+
+    progress.set_flushed_position(4096);
+    assert!(!progress.is_able_to_flush(4096, 0));
+    assert!(!progress.is_able_to_flush(4095, 0));
+    assert!(!progress.is_able_to_flush(4095, 1));
+
+    progress.set_wrote_position(4095);
+    progress.set_committed_position(0);
+    assert!(!progress.is_able_to_commit(1));
+    progress.set_wrote_position(4096);
+    assert!(progress.is_able_to_commit(1));
+    assert!(progress.is_able_to_commit(0));
+    progress.set_committed_position(4096);
+    assert!(!progress.is_able_to_commit(0));
+    assert!(!progress.is_able_to_commit(-1));
+}
+
+#[test]
+fn full_segment_short_circuits_flush_and_commit_thresholds() {
+    let progress = MappedFileProgress::new(OS_PAGE_SIZE);
+    progress.set_wrote_position(OS_PAGE_SIZE as i32);
+    progress.set_committed_position(OS_PAGE_SIZE as i32);
+    progress.set_flushed_position(OS_PAGE_SIZE as i32);
+
+    assert!(progress.is_able_to_flush(0, i32::MAX));
+    assert!(progress.is_able_to_commit(i32::MAX));
 }
 
 #[test]

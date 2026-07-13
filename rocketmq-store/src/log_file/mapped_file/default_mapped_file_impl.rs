@@ -72,7 +72,7 @@ use crate::utils::ffi::mlock as lock_memory;
 use crate::utils::ffi::munlock as unlock_memory;
 use crate::utils::ffi::MADV_WILLNEED;
 
-pub const OS_PAGE_SIZE: u64 = 1024 * 4;
+pub use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE;
 
 static TOTAL_MAPPED_VIRTUAL_MEMORY: AtomicI64 = AtomicI64::new(0);
 static TOTAL_MAPPED_FILES: AtomicI32 = AtomicI32::new(0);
@@ -1402,28 +1402,13 @@ impl DefaultMappedFile {
 
     #[inline]
     fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
-        if self.is_full() {
-            return true;
-        }
-        let flush = self.progress.flushed_position();
-        let write = self.get_read_position();
-        if flush_least_pages > 0 {
-            return (write - flush) / OS_PAGE_SIZE as i32 >= flush_least_pages;
-        }
-        write > flush
+        self.progress
+            .is_able_to_flush(self.get_read_position(), flush_least_pages)
     }
 
     #[inline]
     fn is_able_to_commit(&self, commit_least_pages: i32) -> bool {
-        if self.is_full() {
-            return true;
-        }
-        let committed = self.progress.committed_position();
-        let write = self.progress.wrote_position();
-        if commit_least_pages > 0 {
-            return (write - committed) / OS_PAGE_SIZE as i32 >= commit_least_pages;
-        }
-        write > committed
+        self.progress.is_able_to_commit(commit_least_pages)
     }
 
     #[inline]

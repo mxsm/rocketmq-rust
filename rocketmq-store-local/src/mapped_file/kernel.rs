@@ -23,6 +23,12 @@ use std::time::UNIX_EPOCH;
 
 use parking_lot::Mutex;
 
+/// Fixed legacy page unit used by mapped-file flush and commit thresholds.
+///
+/// This value intentionally remains 4 KiB on every platform. It is a compatibility unit rather
+/// than a query of the host operating system's current page size.
+pub const OS_PAGE_SIZE: u64 = 1024 * 4;
+
 #[inline(always)]
 fn current_millis() -> u64 {
     SystemTime::now()
@@ -178,6 +184,40 @@ impl MappedFileProgress {
         } else {
             self.wrote_position()
         }
+    }
+
+    /// Returns whether the readable progress has reached the legacy flush threshold.
+    ///
+    /// `read_position` must be the committed position when a transient store pool is active and
+    /// the wrote position otherwise. Positions are expected to satisfy the mapped-file progress
+    /// invariants and remain within the configured segment size.
+    #[inline]
+    pub fn is_able_to_flush(&self, read_position: i32, flush_least_pages: i32) -> bool {
+        if self.is_full() {
+            return true;
+        }
+        let flush = self.flushed_position();
+        if flush_least_pages > 0 {
+            return (read_position - flush) / OS_PAGE_SIZE as i32 >= flush_least_pages;
+        }
+        read_position > flush
+    }
+
+    /// Returns whether wrote progress has reached the legacy commit threshold.
+    ///
+    /// Positions are expected to satisfy the mapped-file progress invariants and remain within
+    /// the configured segment size.
+    #[inline]
+    pub fn is_able_to_commit(&self, commit_least_pages: i32) -> bool {
+        if self.is_full() {
+            return true;
+        }
+        let committed = self.committed_position();
+        let write = self.wrote_position();
+        if commit_least_pages > 0 {
+            return (write - committed) / OS_PAGE_SIZE as i32 >= commit_least_pages;
+        }
+        write > committed
     }
 }
 

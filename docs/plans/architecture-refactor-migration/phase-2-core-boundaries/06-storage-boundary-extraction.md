@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -758,3 +758,30 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03q 只迁移 `TransientStorePool` owner；不修复其既有 lifecycle/accounting 行为，不迁移
   `MappedFile`/`DefaultMappedFile`、CommitLog orchestration、flush/group commit、CQ/Index、HA、Timer/POP、
   runtime ownership 或持久格式。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03r mapped-file page/progress threshold policy evidence
+
+- [x] `[DEV]` `rocketmq-store-local::mapped_file::kernel` 现为固定页阈值策略的 canonical owner：公开
+  `OS_PAGE_SIZE: u64 = 1024 * 4`，并由 `MappedFileProgress::is_able_to_flush` 与
+  `MappedFileProgress::is_able_to_commit` 执行判定。Store 原 `default_mapped_file_impl::OS_PAGE_SIZE` 路径仅
+  直接精确 `pub use` Local 常量；两个 Store 私有 helper 只委托 Local progress policy，实际 flush/commit I/O
+  仍由 Store 拥有，`StoreCheckpoint` import 保持不变。
+- [x] `[COMPAT/SEMANTICS]` 完整冻结旧语义：固定 4096-byte 页；full segment 无条件可推进；正阈值使用
+  `(source - progress) / 4096 >= least_pages` 的原生 `i32` 算术；零或负阈值退化为 `source > progress`；flush
+  source 仍是 read position，commit source 仍是 wrote position。4095/4096 与 8191/8192 边界、相等/倒退
+  progress、零/负阈值和 full short-circuit 均有回归覆盖；没有 checked/saturating 算术或动态 OS page lookup。
+- [x] `[TEST]` TDD RED 先记录 Local focused Rust fixture 的 18 个缺失常量/方法编译错误，以及 source
+  contract 的 11 个 owner/adapter 违规；GREEN 后 Local focused 8/8、Store 旧常量路径 1/1、既有
+  `DefaultMappedFile` focused 30/30、完整 Local 173 项、Store lib 568/568 和 M06 source/mutation contract
+  97/97 通过。mutation contract 拒绝常量类型/表达式、full short-circuit、正/非正分支、比较符、flush read
+  source、commit wrote source、saturating/dynamic page、Store wrapper/re-export及额外 caller 漂移。
+- [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Local 与 Store 各七组 feature closure、
+  default/all-feature all-target Clippy、root workspace all-feature Clippy 和 Local strict Rustdoc 均通过；Store
+  普通 Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。WSL/Linux 隔离 target 通过 Local focused 8/8、
+  Store 旧路径 1/1 及两 crate all-feature check；隔离目录已清理 9,397 files/6.1 GiB 并确认不存在。
+- [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard 与 AGENTS routing
+  均通过。error hygiene 仅复现未触及的 Broker source-stringification、MCP anyhow 和两份缺失治理文档基线；
+  本切片没有 runtime、unsafe、错误架构、manifest、feature、ArcMut、observability 或持久格式变更。
+- [x] `[SCOPE]` M06-03r 只迁移 mapped-file 固定页/进度阈值 policy，不迁移 `MappedFile` trait 或
+  `DefaultMappedFile` owner/factory/builder，不迁移 config、flush/group-commit I/O、CQ/Index、HA、Timer/POP，
+  不改变 runtime ownership 或持久格式。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
