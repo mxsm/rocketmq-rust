@@ -5,8 +5,8 @@
 Completed the abnormal CommitLog recovery decision boundary without changing the public recovery signatures or
 normal recovery. `rocketmq-store-local` now owns the pure standard/optimized abnormal reducer: three watermarks,
 dispatch eligibility, segment/end actions, and checked offset arithmetic. Store remains the orchestration owner
-for recovery windows, mapped files, parsing and CRC, fresh confirm limits, dispatch and statistics, ConsumeQueue
-cleanup, controller clamp, and physical truncation.
+for recovery windows, mapped files, parsing and CRC, bounded-mode fresh confirm limits, dispatch and statistics,
+ConsumeQueue cleanup, controller clamp, and physical truncation.
 
 The reducer separates the encoded physical-offset plus raw input-size confirm candidate from the validated record
 size used for physical progress. Negative encoded offsets, addition overflow, and values above `i64::MAX` now stop
@@ -19,8 +19,9 @@ fail-closed safety tightening for corrupt input; valid persisted bytes and route
   stop on invalid/source-end input.
 - Optimized recovery keeps absolute frame-end progress and continues to the next segment for blank,
   invalid-record, and source-end input.
-- Ungated, duplication-bounded, and controller-bounded paths obtain the confirm limit for every accepted record.
-  An ineligible record advances physical recovery but does not dispatch.
+- Duplication-bounded and controller-bounded paths obtain a fresh confirm limit for every valid accepted record;
+  the ungated path does not read a confirm limit. An ineligible record advances physical recovery but does not
+  dispatch.
 - Controller completion clamps from `confirm_valid_offset`; non-controller completion preserves the route-specific
   `last_valid_offset`. ConsumeQueue compatibility includes the legacy negative-max-offset behavior.
 - The normal recovery APIs and implementation, recovery-window selection, checkpoint layout, CommitLog bytes,
@@ -35,9 +36,13 @@ fail-closed safety tightening for corrupt input; valid persisted bytes and route
   first frame dispatches, the second frame is skipped, and both frames remain in the physical truncate watermark.
 - The controller golden proves the first encoded input end is eligible, the second is not, and both Standard and
   Optimized routes clamp the final confirm checkpoint to the first input end.
-- The 70-case source contract includes 22 reviewer mutations for gate comparisons, stale limits, raw-versus-
+- The 72-case source contract includes 24 reviewer mutations for gate comparisons, stale limits, raw-versus-
   validated sizes, skip dispatch, blank dispatch, stats, seed selection, summaries, controller branches,
-  ConsumeQueue truncation, unchecked arithmetic, aliases, and Store-side policy duplication.
+  ConsumeQueue truncation, unchecked arithmetic, aliases, and Store-side policy duplication. The follow-up
+  active-Rust checks require optimized parsing to precede candidate construction, gate selection, and reducer
+  application. They also require `file_processed = true` immediately after the complete successful
+  `MessageAccepted` action match, outside both dispatch action arms, with the statistics increment controlled by
+  the corresponding guard.
 - The real gate fixtures reuse the existing Store constructor without adding any governed `ArcMut` or
   `LocalFileMessageStore` occurrence; the final ArcMut guard reports `ARC_MUT_GUARD_OK`.
 
@@ -45,17 +50,17 @@ fail-closed safety tightening for corrupt input; valid persisted bytes and route
 
 Passed:
 
-- `cargo test -p rocketmq-store-local` — 101 tests passed; 9 doctests ignored
+- `cargo test -p rocketmq-store-local`: 101 tests passed; 9 doctests ignored
 - the five Local no-default/default/feature checks
-- `cargo test -p rocketmq-store --test commitlog_recovery_tests` — 19 passed
-- `cargo test -p rocketmq-store --lib` — 573 passed
+- `cargo test -p rocketmq-store --test commitlog_recovery_tests`: 19 passed
+- `cargo test -p rocketmq-store --lib`: 573 passed
 - focused load, fail-closed record, compatibility, CQ formula, and typed candidate tests
-- `python -m unittest scripts.tests.test_m06_store_local_contract` — 70 passed
+- `python -m unittest scripts.tests.test_m06_store_local_contract`: 72 passed
 - Local and Store all-target/all-feature Clippy
 - `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings`
 - `RUSTDOCFLAGS="-D warnings" cargo doc -p rocketmq-store-local --no-deps`
-- architecture dependency guard — 35 unit tests, fixtures, and baseline mode
-- ArcMut guard — 63 unit tests, 24 fixtures, and final repository guard
+- architecture dependency guard: 35 unit tests, fixtures, and baseline mode
+- ArcMut guard: 63 unit tests, 24 fixtures, and final repository guard
 - `cargo fmt --all -- --check` and `git diff --check`
 
 Windows emitted informational MSVC linker-library messages during successful builds. They do not fail the

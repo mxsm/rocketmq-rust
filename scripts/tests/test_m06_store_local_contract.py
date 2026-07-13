@@ -326,6 +326,37 @@ def normal_recovery_event_match_body(function_body: str, event: str) -> str | No
     return None
 
 
+def abnormal_recovery_event_match(
+    function_body: str, event: str
+) -> tuple[int, str, int] | None:
+    active = active_rust_source(function_body)
+    match = re.search(
+        rf"\bmatch\s+abnormal_recovery\.apply\s*\(\s*AbnormalRecoveryEvent::{re.escape(event)}\b",
+        active,
+    )
+    if match is None:
+        return None
+    call_open = active.find("(", match.start())
+    if call_open == -1:
+        return None
+    depth = 0
+    for index in range(call_open, len(active)):
+        if active[index] == "(":
+            depth += 1
+        elif active[index] == ")":
+            depth -= 1
+            if depth == 0:
+                match_open = active.find("{", index + 1)
+                if match_open == -1:
+                    return None
+                extracted = braced_body(active, match_open)
+                if extracted is None:
+                    return None
+                match_body, match_end = extracted
+                return match.start(), match_body, match_end
+    return None
+
+
 def normal_recovery_state_boundary_violations(source: str) -> list[str]:
     production = source.split("#[cfg(test)]", maxsplit=1)[0]
     active = active_rust_source(production)
@@ -704,8 +735,27 @@ def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
             "Ok(AbnormalRecoveryAction::DispatchMessage)=>{"
             "self.on_commit_log_dispatch(&mutdispatch_request,do_dispatch,true,false);}"
         )
-        if dispatch_arm not in normalized or "Ok(AbnormalRecoveryAction::SkipMessageDispatch)=>{}" not in normalized:
+        message_match = abnormal_recovery_event_match(body, "MessageAccepted")
+        if message_match is None:
+            violations.append(f"{name} MessageAccepted action match is missing")
+            message_action_body = ""
+            message_match_end = -1
+        else:
+            _, message_action_body, message_match_end = message_match
+        normalized_message_actions = re.sub(r"\s+", "", message_action_body)
+        if (
+            dispatch_arm not in normalized_message_actions
+            or "Ok(AbnormalRecoveryAction::SkipMessageDispatch)=>{}" not in normalized_message_actions
+        ):
             violations.append(f"{name} must obey Local message dispatch actions")
+        if any(
+            fragment not in normalized_message_actions
+            for fragment in [
+                "Ok(action)=>{warn!();break'segments;}",
+                "Err(error)=>{warn!();break'segments;}",
+            ]
+        ):
+            violations.append(f"{name} must stop after non-message actions or reducer errors")
         blank_hook = (
             "Ok(AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment)=>{"
             "self.on_commit_log_dispatch(&mutdispatch_request,do_dispatch,true,true);"
@@ -717,8 +767,50 @@ def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
             if normalized.count(checked_cursor) != 1 or "current_pos+input_size" in normalized:
                 violations.append(f"{name} raw input cursor advancement changed")
         else:
-            if "file_processed=true;" not in normalized or "recovery_ctx.stats.files_processed+=1;" not in normalized:
-                violations.append(f"{name} skipped valid messages must remain counted")
+            process_message = (
+                "letmutdispatch_request="
+                "recovery_ctx.process_message(&mutmsg_bytes,absolute_offset);"
+            )
+            ordered_message_flow = [
+                process_message,
+                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,msg_size)",
+                "letdispatch_gate=",
+                "matchabnormal_recovery.apply(AbnormalRecoveryEvent::MessageAccepted{",
+            ]
+            positions = [normalized.find(fragment) for fragment in ordered_message_flow]
+            if (
+                normalized.count(process_message) != 1
+                or any(position == -1 for position in positions)
+                or positions != sorted(positions)
+            ):
+                violations.append(
+                    f"{name} must parse each message before candidate, gate, and reducer application"
+                )
+
+            active_body = active_rust_source(body)
+            if "file_processed" in message_action_body:
+                violations.append(f"{name} file-processed marker must be outside dispatch action arms")
+            match_tail = "" if message_match_end == -1 else active_body[message_match_end:]
+            if re.match(r"\s*file_processed\s*=\s*true\s*;", match_tail) is None:
+                violations.append(
+                    f"{name} must mark the file immediately after a successful message action match"
+                )
+            if len(re.findall(r"\bfile_processed\s*=\s*true\s*;", active_body)) != 1:
+                violations.append(f"{name} must mark each file from one accepted-message site")
+
+            stats_increment = "recovery_ctx.stats.files_processed+=1;"
+            if normalized.count(stats_increment) != 1:
+                violations.append(f"{name} must increment file statistics exactly once")
+            stats_guard = re.search(r"\bif\s+file_processed\s*\{", active_body)
+            if stats_guard is None:
+                violations.append(f"{name} file statistics must be guarded by file_processed")
+            else:
+                stats_open = active_body.find("{", stats_guard.start())
+                stats_body = braced_body(active_body, stats_open)
+                if stats_body is None or re.sub(r"\s+", "", stats_body[0]) != stats_increment:
+                    violations.append(f"{name} file statistics guard changed")
+            if len(re.findall(r"\bfile_processed\b", active_body)) != 3:
+                violations.append(f"{name} file-processed marker escaped its structural contract")
         required_final = [
             "letsummary=abnormal_recovery.summary();",
             "i64::try_from(summary.last_valid_offset)",
@@ -1869,6 +1961,49 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
     def test_store_abnormal_recovery_adapters_use_local_state(self) -> None:
         source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
         self.assertEqual([], store_abnormal_recovery_adapter_violations(source))
+
+    def test_store_abnormal_recovery_contract_rejects_late_process_message(self) -> None:
+        source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
+        optimized_start = source.index("pub async fn recover_abnormally_optimized")
+        prefix = source[:optimized_start]
+        optimized = source[optimized_start:]
+        process_message = (
+            "                let mut dispatch_request = "
+            "recovery_ctx.process_message(&mut msg_bytes, absolute_offset);\n\n"
+        )
+        self.assertIn(process_message, optimized)
+        mutation = optimized.replace(process_message, "", 1).replace(
+            "                    let validated_size = match u64::try_from(dispatch_request.msg_size) {",
+            process_message
+            + "                    let validated_size = match u64::try_from(dispatch_request.msg_size) {",
+            1,
+        )
+        self.assertNotEqual(source, prefix + mutation)
+        self.assertNotEqual([], store_abnormal_recovery_adapter_violations(prefix + mutation))
+
+    def test_store_abnormal_recovery_contract_rejects_dispatch_only_file_processed(self) -> None:
+        source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
+        optimized_start = source.index("pub async fn recover_abnormally_optimized")
+        prefix = source[:optimized_start]
+        optimized = source[optimized_start:]
+        dispatch = (
+            "                        Ok(AbnormalRecoveryAction::DispatchMessage) => {\n"
+            "                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);\n"
+            "                        }"
+        )
+        dispatch_only = dispatch.replace(
+            "                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);",
+            "                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);\n"
+            "                            file_processed = true;",
+            1,
+        )
+        mutation = optimized.replace(
+            "                    file_processed = true;\n",
+            "",
+            1,
+        ).replace(dispatch, dispatch_only, 1)
+        self.assertNotEqual(source, prefix + mutation)
+        self.assertNotEqual([], store_abnormal_recovery_adapter_violations(prefix + mutation))
 
     def test_store_abnormal_recovery_contract_rejects_review_mutations(self) -> None:
         source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
