@@ -14,8 +14,10 @@
 
 use tracing::info;
 
+mod consume_queue;
 mod normal_window;
 
+pub use consume_queue::should_truncate_recovery_consume_queue;
 pub use normal_window::plan_normal_recovery_file_window;
 pub use normal_window::NormalRecoveryFileWindow;
 

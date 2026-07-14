@@ -53,6 +53,9 @@ STORE_CHECKPOINT_PATH = Path("rocketmq-store/src/base/store_checkpoint.rs")
 NORMAL_RECOVERY_WINDOW_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/normal_window.rs"
 )
+RECOVERY_CONSUME_QUEUE_PATH = Path(
+    "rocketmq-store-local/src/commit_log/recovery/consume_queue.rs"
+)
 MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush", "is_able_to_commit")
 MAPPED_FILE_POLICY_REFERENCE = re.compile(
     r"(?:\.|::)\s*(is_able_to_flush|is_able_to_commit)\b"
@@ -1500,11 +1503,14 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
     ):
         violations.append("Store normal recovery imports forbid alias/brace/glob")
 
-    truncate_helper = named_function_body(commit_log, "should_truncate_normal_recovery_consume_queue")
-    if truncate_helper is None or re.sub(r"\s+", "", truncate_helper) != (
-        "max<0||u64::try_from(max).is_ok_and(|value|value>=truncate)"
-    ):
-        violations.append("Store normal recovery ConsumeQueue predicate changed")
+    truncate_policy = "should_truncate_recovery_consume_queue"
+    truncate_imports = [
+        body
+        for kind, _, body, _ in active_import_records(commit_log)
+        if kind == "use" and truncate_policy in body
+    ]
+    if truncate_imports != [recovery_prefix + truncate_policy]:
+        violations.append("Store normal recovery ConsumeQueue policy import changed")
 
     expected_events = ["SegmentStarted", "MessageAccepted", "Blank", "InvalidRecord", "SourceEnded"]
     for name, policy in [
@@ -1593,7 +1599,7 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
             "letsummary=normal_recovery.summary();",
             "letlast_valid_offset=matchi64::try_from(summary.last_valid_offset)",
             "letprocess_offset=matchi64::try_from(summary.truncate_offset)",
-            "should_truncate_normal_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
+            "should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
             "self.set_confirm_offset(last_valid_offset)",
             "message_store.truncate_dirty_logic_files(process_offset)",
             "self.mapped_file_queue.set_flushed_where(process_offset)",
@@ -1609,7 +1615,7 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
             violations.append(f"{name} final recovery writes must flow from Local summary")
         if "NormalRecoverySummary{" in normalized_body:
             violations.append(f"{name} must not construct a Store-owned recovery summary")
-        if body.count("should_truncate_normal_recovery_consume_queue(") != 1:
+        if body.count("should_truncate_recovery_consume_queue(") != 1:
             violations.append(f"{name} must use the shared ConsumeQueue predicate exactly once")
         if re.search(r"\b(?:last_valid_msg_phy_offset|mapped_file_offset)\b", body):
             violations.append(f"{name} copied Local recovery watermark state")
@@ -1659,11 +1665,14 @@ def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
         if fragment not in normalized_candidate:
             violations.append("Store abnormal confirm candidate helper changed")
             break
-    cq_helper = named_function_body(commit_log, "should_truncate_abnormal_recovery_consume_queue")
-    if cq_helper is None or re.sub(r"\s+", "", cq_helper) != (
-        "max<0||u64::try_from(max).is_ok_and(|value|value>=truncate)"
-    ):
-        violations.append("Store abnormal recovery ConsumeQueue predicate changed")
+    truncate_policy = "should_truncate_recovery_consume_queue"
+    truncate_imports = [
+        body
+        for kind, _, body, _ in active_import_records(commit_log)
+        if kind == "use" and truncate_policy in body
+    ]
+    if truncate_imports != [recovery_prefix + truncate_policy]:
+        violations.append("Store abnormal recovery ConsumeQueue policy import changed")
 
     for name, policy in [
         ("recover_abnormally", "Standard"),
@@ -1790,7 +1799,7 @@ def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
             "i64::try_from(summary.truncate_offset)",
             "self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(),confirm_valid_offset)",
             "self.set_confirm_offset(last_valid_offset)",
-            "should_truncate_abnormal_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
+            "should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
             "message_store.truncate_dirty_logic_files(process_offset)",
             "self.mapped_file_queue.set_flushed_where(process_offset)",
             "self.mapped_file_queue.set_committed_where(process_offset)",
@@ -6552,6 +6561,218 @@ def store_normal_recovery_file_window_violations(
     return violations
 
 
+def recovery_consume_queue_policy_records(
+    production_sources: dict[Path, str],
+) -> list[tuple[WarmupFunctionRecord, str]]:
+    records = [
+        record
+        for path, source in production_sources.items()
+        if path.parts[:2]
+        in {
+            ("rocketmq-store-local", "src"),
+            ("rocketmq-store", "src"),
+        }
+        for record in warmup_function_records(path, source)
+    ]
+    negative_helpers: set[str] = set()
+    converted_helpers: set[str] = set()
+    direct: list[tuple[WarmupFunctionRecord, str]] = []
+
+    for record in records:
+        aliases = IdentifierAliases(record.body)
+        negative_roles: set[int] = set()
+        for match in re.finditer(
+            rf"(?:(?P<left>{WARMUP_IDENTIFIER})<0|0>(?P<right>{WARMUP_IDENTIFIER}))",
+            record.body,
+        ):
+            candidate = match.group("left") or match.group("right")
+            for index, parameter in enumerate(record.parameters):
+                if aliases.equivalent(candidate, parameter):
+                    negative_roles.add(index)
+
+        converted_roles: set[tuple[int, int]] = set()
+        conversion = re.compile(
+            rf"u64::try_from\((?P<input>{WARMUP_IDENTIFIER})\)"
+            rf"\.is_ok_and\(\|(?P<value>{WARMUP_IDENTIFIER})\|"
+            rf"(?P=value)>=(?P<truncate>{WARMUP_IDENTIFIER})\)"
+        )
+        for match in conversion.finditer(record.body):
+            for max_index, max_parameter in enumerate(record.parameters):
+                if not aliases.equivalent(match.group("input"), max_parameter):
+                    continue
+                for truncate_index, truncate_parameter in enumerate(record.parameters):
+                    if max_index != truncate_index and aliases.equivalent(
+                        match.group("truncate"), truncate_parameter
+                    ):
+                        converted_roles.add((max_index, truncate_index))
+
+        if 0 in negative_roles and len(record.parameters) == 1:
+            negative_helpers.add(record.name)
+        if (0, 1) in converted_roles and len(record.parameters) == 2:
+            converted_helpers.add(record.name)
+        if any(
+            max_index in negative_roles
+            for max_index, _ in converted_roles
+        ) and "||" in record.body:
+            direct.append((record, "direct"))
+
+    findings = list(direct)
+    if negative_helpers and converted_helpers:
+        for record in records:
+            aliases = IdentifierAliases(record.body)
+            if len(record.parameters) < 2 or "||" not in record.body:
+                continue
+            imported = dict(record.imports)
+            negative_names = negative_helpers | {
+                alias
+                for alias, target in imported.items()
+                if target.split("::")[-1] in negative_helpers
+            }
+            converted_names = converted_helpers | {
+                alias
+                for alias, target in imported.items()
+                if target.split("::")[-1] in converted_helpers
+            }
+            max_parameter, truncate_parameter = record.parameters[:2]
+            has_negative_call = any(
+                re.search(
+                    rf"\b{re.escape(name)}\(\(?{re.escape(max_parameter)}\)?\)",
+                    record.body,
+                )
+                for name in negative_names
+            )
+            has_converted_call = any(
+                re.search(
+                    rf"\b{re.escape(name)}\(\(?{re.escape(max_parameter)}\)?,"
+                    rf"\(?{re.escape(truncate_parameter)}\)?\)",
+                    record.body,
+                )
+                for name in converted_names
+            )
+            if has_negative_call and has_converted_call:
+                findings.append((record, "split"))
+    return findings
+
+
+def recovery_consume_queue_owner_violations(
+    source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    masked_sources = {
+        path: source_without_cfg_test_items(candidate)
+        for path, candidate in production_sources.items()
+    }
+    violations: list[str] = []
+    owner = "should_truncate_recovery_consume_queue"
+    if file_item_owner_occurrences(masked_sources, owner) != [
+        (RECOVERY_CONSUME_QUEUE_PATH, "fn")
+    ]:
+        violations.append("recovery ConsumeQueue truncation policy must have one Local owner")
+    expected = (
+        "pubfnshould_truncate_recovery_consume_queue("
+        "max_phy_offset:i64,truncate_offset:u64)->bool{"
+        "max_phy_offset<0||u64::try_from(max_phy_offset)"
+        ".is_ok_and(|value|value>=truncate_offset)}"
+    )
+    if expected not in compact:
+        violations.append("recovery ConsumeQueue truncation owner signature or semantics changed")
+    if re.search(
+        r"#\s*\[\s*(?:cfg|cfg_attr)\b[^\]]*\]\s*"
+        r"pub\s+fn\s+should_truncate_recovery_consume_queue",
+        active,
+        re.DOTALL,
+    ):
+        violations.append("recovery ConsumeQueue truncation owner must not be cfg-gated")
+    if any(
+        token in active
+        for token in (
+            "MessageStoreConfig",
+            "MappedFile",
+            "std::fs",
+            "tokio",
+            "tracing",
+            "Vec<",
+            "Box<",
+            ".collect(",
+        )
+    ):
+        violations.append("recovery ConsumeQueue truncation policy absorbed allocation or Store orchestration")
+    canonical_identity = (
+        RECOVERY_CONSUME_QUEUE_PATH,
+        "should_truncate_recovery_consume_queue",
+    )
+    for record, kind in recovery_consume_queue_policy_records(production_sources):
+        if (record.path, record.name) != canonical_identity:
+            violations.append(
+                "recovery ConsumeQueue truncation policy copied outside canonical owner: "
+                f"{record.path.as_posix()}::{record.name} ({kind})"
+            )
+    return violations
+
+
+def store_recovery_consume_queue_adapter_violations(
+    commit_log: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(commit_log)
+    active = active_rust_source(production)
+    owner = "should_truncate_recovery_consume_queue"
+    violations: list[str] = []
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use" and owner in body
+    ]
+    if imports != [f"rocketmq_store_local::commit_log::recovery::{owner}"]:
+        violations.append("Store recovery ConsumeQueue truncation import must be direct and exact")
+    for legacy in (
+        "should_truncate_normal_recovery_consume_queue",
+        "should_truncate_abnormal_recovery_consume_queue",
+    ):
+        if re.search(rf"\b{legacy}\b", active):
+            violations.append(f"Store retained legacy recovery ConsumeQueue helper: {legacy}")
+
+    references = {
+        path: len(re.findall(rf"\b{owner}\b", active_rust_source(source_without_cfg_test_items(source))))
+        for path, source in production_sources.items()
+        if re.search(rf"\b{owner}\b", source)
+    }
+    expected_path = Path("rocketmq-store/src/log_file/commit_log.rs")
+    if references != {expected_path: 5}:
+        violations.append(f"Store recovery ConsumeQueue truncation references changed: {references}")
+    expected_call = (
+        "should_truncate_recovery_consume_queue("
+        "max_phy_offset_of_consume_queue,summary.truncate_offset)"
+    )
+    for function_name in (
+        "recover_normally_optimized",
+        "recover_normally",
+        "recover_abnormally_optimized",
+        "recover_abnormally",
+    ):
+        body = named_function_body(production, function_name)
+        normalized = compact_rust(body or "")
+        if body is None or normalized.count(expected_call) != 1:
+            violations.append(f"{function_name} must directly call the Local truncation policy once")
+        if normalized.count(f"if{expected_call}{{") != 1:
+            violations.append(f"{function_name} truncation decision control flow changed")
+    for function_name in (
+        "should_truncate_normal_recovery_consume_queue",
+        "should_truncate_abnormal_recovery_consume_queue",
+    ):
+        if named_function_body(production, function_name) is not None:
+            violations.append(f"Store legacy wrapper remains: {function_name}")
+    for record, kind in recovery_consume_queue_policy_records(production_sources):
+        if record.path.parts[:2] == ("rocketmq-store", "src"):
+            violations.append(
+                f"Store duplicates recovery ConsumeQueue truncation policy: {record.path.as_posix()}::{record.name} ({kind})"
+            )
+    return violations
+
+
 def transient_store_pool_destroy_seam_reference_violations(sources: dict[Path, str]) -> list[str]:
     violations: list[str] = []
     for path, source in sources.items():
@@ -6730,6 +6951,175 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
+
+    def test_recovery_consume_queue_truncation_has_one_local_owner_and_rejects_policy_mutations(self) -> None:
+        canonical_path = ROOT / RECOVERY_CONSUME_QUEUE_PATH
+        canonical = canonical_path.read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            recovery_consume_queue_owner_violations(canonical, production_sources),
+        )
+
+        recovery_root = (LOCAL_CRATE / "src" / "commit_log" / "recovery.rs").read_text(
+            encoding="utf-8"
+        )
+        relevant = [
+            statement
+            for kind, _, body, statement in active_import_records(recovery_root)
+            if kind == "use" and "should_truncate_recovery_consume_queue" in body
+        ]
+        self.assertEqual(
+            ["pub use consume_queue::should_truncate_recovery_consume_queue"],
+            relevant,
+        )
+        self.assertRegex(active_rust_source(recovery_root), r"\bmod\s+consume_queue\s*;")
+
+        mutations = [
+            canonical.replace("max_phy_offset < 0", "max_phy_offset <= 0", 1),
+            canonical.replace("max_phy_offset < 0", "max_phy_offset >= 0", 1),
+            canonical.replace("max_phy_offset < 0 ||", "", 1),
+            canonical.replace("u64::try_from(max_phy_offset)", "max_phy_offset as u64", 1),
+            canonical.replace("value >= truncate_offset", "value > truncate_offset", 1),
+            canonical.replace("value >= truncate_offset", "value <= truncate_offset", 1),
+            canonical.replace("value >= truncate_offset", "truncate_offset >= value", 1),
+            canonical.replace("u64::try_from(max_phy_offset)", "u64::try_from(truncate_offset)", 1),
+            canonical.replace("value >= truncate_offset", "value >= max_phy_offset as u64", 1),
+            canonical.replace(
+                "pub fn should_truncate_recovery_consume_queue",
+                "#[cfg(any())]\npub fn should_truncate_recovery_consume_queue",
+                1,
+            ),
+            canonical.replace(
+                "pub fn should_truncate_recovery_consume_queue",
+                "#[cfg_attr(any(), cfg(any()))]\npub fn should_truncate_recovery_consume_queue",
+                1,
+            ),
+            canonical
+            + "\npub fn should_truncate_recovery_consume_queue(_: i64, _: u64) -> bool { false }\n",
+            canonical
+            + "\n#[cfg(test)]\nmod tests {}\n"
+            + "pub fn should_truncate_recovery_consume_queue(_: i64, _: u64) -> bool { false }\n",
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation=mutation_index):
+                self.assertNotEqual(canonical, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[RECOVERY_CONSUME_QUEUE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    recovery_consume_queue_owner_violations(mutation, mutated_sources),
+                )
+
+        renamed_copy = """
+fn copied_truncation(highest: i64, boundary: u64) -> bool {
+    let signed = highest;
+    let limit = boundary;
+    signed < 0 || u64::try_from(signed).is_ok_and(|converted| converted >= limit)
+}
+"""
+        copied_sources = dict(production_sources)
+        copied_sources[Path("rocketmq-store-local/src/copied_truncation.rs")] = renamed_copy
+        self.assertNotEqual(
+            [],
+            recovery_consume_queue_owner_violations(canonical, copied_sources),
+        )
+
+        split_sources = dict(production_sources)
+        split_sources[Path("rocketmq-store-local/src/negative_offset.rs")] = """
+fn is_negative(value: i64) -> bool { value < 0 }
+"""
+        split_sources[Path("rocketmq-store-local/src/converted_offset.rs")] = """
+fn converted_reaches(value: i64, boundary: u64) -> bool {
+    u64::try_from(value).is_ok_and(|converted| converted >= boundary)
+}
+"""
+        split_sources[Path("rocketmq-store-local/src/copied_split.rs")] = """
+use crate::negative_offset::is_negative as below_zero;
+use crate::converted_offset::converted_reaches as reaches;
+
+fn copied_split(highest: i64, boundary: u64) -> bool {
+    below_zero(highest) || reaches(highest, boundary)
+}
+"""
+        self.assertNotEqual(
+            [],
+            recovery_consume_queue_owner_violations(canonical, split_sources),
+        )
+
+        incomplete_sources = dict(production_sources)
+        incomplete_sources[Path("rocketmq-store-local/src/incomplete_truncation.rs")] = """
+fn negative_only(value: i64) -> bool { value < 0 }
+fn conversion_only(value: i64) -> Option<u64> { u64::try_from(value).ok() }
+fn unrelated_threshold(value: u64, boundary: u64) -> bool { value >= boundary }
+"""
+        self.assertEqual(
+            [],
+            recovery_consume_queue_owner_violations(canonical, incomplete_sources),
+        )
+
+        test_decoy = canonical + """
+#[cfg(test)]
+mod tests {
+    fn should_truncate_recovery_consume_queue(_: i64, _: u64) -> bool { false }
+}
+"""
+        test_sources = dict(production_sources)
+        test_sources[RECOVERY_CONSUME_QUEUE_PATH] = test_decoy
+        self.assertEqual(
+            [],
+            recovery_consume_queue_owner_violations(test_decoy, test_sources),
+        )
+
+    def test_store_recovery_consume_queue_paths_delegate_once_and_reject_adapter_mutations(self) -> None:
+        commit_log_path = Path("rocketmq-store/src/log_file/commit_log.rs")
+        commit_log = (ROOT / commit_log_path).read_text(encoding="utf-8")
+        store_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for path in STORE_CRATE.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            store_recovery_consume_queue_adapter_violations(commit_log, store_sources),
+        )
+        mutations = [
+            commit_log.replace(
+                "use rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue;",
+                "use rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue as should_truncate;",
+                1,
+            ),
+            commit_log.replace(
+                "max_phy_offset_of_consume_queue, summary.truncate_offset",
+                "summary.truncate_offset as i64, max_phy_offset_of_consume_queue as u64",
+                1,
+            ),
+            commit_log.replace(
+                "max_phy_offset_of_consume_queue, summary.truncate_offset",
+                "max_phy_offset_of_consume_queue, process_offset as u64",
+                1,
+            ),
+            commit_log.replace("should_truncate_recovery_consume_queue(", "false && should_truncate_recovery_consume_queue(", 1),
+            commit_log.replace("should_truncate_recovery_consume_queue(", "should_truncate_recovery_consume_queue_old(", 1),
+            commit_log
+            + "\nfn extra_recovery_adapter(maximum: i64, truncate: u64) -> bool {\n"
+            + "    should_truncate_recovery_consume_queue(maximum, truncate)\n}\n",
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(adapter_mutation=mutation_index):
+                self.assertNotEqual(commit_log, mutation)
+                mutated_sources = dict(store_sources)
+                mutated_sources[commit_log_path] = mutation
+                self.assertNotEqual(
+                    [],
+                    store_recovery_consume_queue_adapter_violations(
+                        mutation,
+                        mutated_sources,
+                    ),
+                )
 
     def test_normal_recovery_file_window_has_one_local_owner_and_rejects_policy_mutations(self) -> None:
         canonical_path = ROOT / NORMAL_RECOVERY_WINDOW_PATH

@@ -111,6 +111,7 @@ use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordErrorKind;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
 use rocketmq_store_local::commit_log::recovery::plan_normal_recovery_file_window;
+use rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryAction;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryEvent;
@@ -128,14 +129,6 @@ pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 const DEFAULT_COMMITLOG_ACTIVE_WINDOW_LOCK_BYTES: usize = 128 * 1024 * 1024;
-
-fn should_truncate_normal_recovery_consume_queue(max: i64, truncate: u64) -> bool {
-    max < 0 || u64::try_from(max).is_ok_and(|value| value >= truncate)
-}
-
-fn should_truncate_abnormal_recovery_consume_queue(max: i64, truncate: u64) -> bool {
-    max < 0 || u64::try_from(max).is_ok_and(|value| value >= truncate)
-}
 
 #[derive(Debug, thiserror::Error)]
 enum AbnormalRecoveryAdapterOffsetError {
@@ -1710,7 +1703,7 @@ impl CommitLog {
         }
 
         // Clear ConsumeQueue redundant data
-        if should_truncate_normal_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
+        if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
             warn!(
                 "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                 max_phy_offset_of_consume_queue, process_offset
@@ -1912,7 +1905,7 @@ impl CommitLog {
             }
 
             // Clear ConsumeQueue redundant data
-            if should_truncate_normal_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
+            if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
                 warn!(
                     "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                     max_phy_offset_of_consume_queue, process_offset
@@ -2248,7 +2241,7 @@ impl CommitLog {
         }
 
         // Clear ConsumeQueue redundant data
-        if should_truncate_abnormal_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
+        if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
             warn!(
                 "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                 max_phy_offset_of_consume_queue, process_offset
@@ -2497,8 +2490,7 @@ impl CommitLog {
                 self.set_confirm_offset(last_valid_offset);
             }
 
-            if should_truncate_abnormal_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset)
-            {
+            if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
                 warn!(
                     "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                     max_phy_offset_of_consume_queue, process_offset
@@ -3194,24 +3186,6 @@ mod tests {
     use rocketmq_common::CRC32Utils::crc32;
     use rocketmq_common::MessageDecoder::create_crc32;
     use rocketmq_common::TimeUtils::current_millis;
-
-    #[test]
-    fn normal_recovery_consume_queue_truncation_preserves_signed_legacy_semantics() {
-        assert!(should_truncate_normal_recovery_consume_queue(-1, 10));
-        assert!(!should_truncate_normal_recovery_consume_queue(0, 10));
-        assert!(!should_truncate_normal_recovery_consume_queue(9, 10));
-        assert!(should_truncate_normal_recovery_consume_queue(10, 10));
-        assert!(should_truncate_normal_recovery_consume_queue(11, 10));
-    }
-
-    #[test]
-    fn abnormal_recovery_consume_queue_truncation_preserves_signed_legacy_semantics() {
-        assert!(should_truncate_abnormal_recovery_consume_queue(-1, 10));
-        assert!(!should_truncate_abnormal_recovery_consume_queue(0, 10));
-        assert!(!should_truncate_abnormal_recovery_consume_queue(9, 10));
-        assert!(should_truncate_abnormal_recovery_consume_queue(10, 10));
-        assert!(should_truncate_abnormal_recovery_consume_queue(11, 10));
-    }
 
     #[test]
     fn abnormal_recovery_confirm_candidate_is_checked_and_fail_closed() {

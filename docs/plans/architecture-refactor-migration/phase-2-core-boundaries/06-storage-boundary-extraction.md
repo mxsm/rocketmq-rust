@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -935,3 +935,37 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03u 只迁移 normal recovery 文件扫描窗口纯 planner；config owner、mapped-file I/O、
   parser/recovery state、错误/可观测性、async/runtime、flush/group commit、CQ/Index、HA、Timer/POP 均未迁移。
   PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03v recovery ConsumeQueue truncation policy evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::recovery::should_truncate_recovery_consume_queue` 现为
+  recovery 后 ConsumeQueue truncate 纯判定的唯一 canonical owner，并由 `recovery.rs` 直接精确 re-export。
+  Store 删除 normal/abnormal 两个同义私有 helper 与两份重复单测；standard/optimized 的 normal/abnormal 四条
+  recovery 路径各直接调用同一个 Local 函数一次，不保留 wrapper、alias 或第二份实现。
+- [x] `[COMPAT/SEMANTICS]` 完整冻结旧判定：任意负 `max_phy_offset`（含 `i64::MIN`）均返回 `true`；非负值只经
+  `u64::try_from` 后按 `>= truncate_offset` 判断。`0/0` 为 true，`0/10`、`9/10` 为 false，`10/10`、`11/10`
+  为 true，`i64::MAX/u64::MAX` 为 false；未改为严格大于、反向比较、负值 false、`as` 强转或将 truncate
+  先收窄到 `i64`。四条调用附近 warning 文本/参数、`truncate_dirty_logic_files(process_offset)`、水位写回及
+  其余 normal/abnormal recovery 编排保持不变，M06-03u normal window planner 未受影响。
+- [x] `[TEST]` contract-first RED 先由缺失 canonical 文件和 Store direct adapter 产生 source contract 失败，
+  Local fixture 同时复现 unresolved import；GREEN 后新增 Local signed-boundary fixture 1/1、Local recovery
+  state/window/truncation 18/18、Store recovery focused 29/29、integration 19/19 与 Store lib 564/564 通过。
+  Local default/all-feature 全量均通过；完整 M06 source/mutation contract 从 103 增至 105 项并 105/105 通过。
+- [x] `[CONTRACT]` contract 固定唯一 Local owner、公开精确签名/body、`recovery.rs` module/re-export、无
+  Store/config/I/O/log/async/alloc 依赖；Store 只允许一条直接精确 import 和四条 direct call，并锁定 normal/
+  abnormal、standard/optimized 分布、参数角色与 `if` 控制流，同时禁止两个旧 helper、额外 caller 和 Store
+  算法副本。mutation 覆盖负值分支、等值边界、比较方向/操作数、`try_from`/unchecked cast、wrong argument、
+  只迁一路/额外调用、import alias、cfg/cfg_attr、duplicate、post-test production、变量改名完整复制以及
+  direct/use-alias/split helper 复制；仅含负值、转换或阈值片段的不完整近似保持零误报。
+- [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Local 与 Store 各七组有效 feature closure、
+  两 crate default/all-feature package Clippy、root workspace exact all-target/all-feature Clippy 和 Local strict
+  Rustdoc 均通过；Store normal Rustdoc 只复现 4 个未触及的 invalid-HTML warning。Windows 固定隔离 target
+  通过 Local 1/1、Store recovery 19/19 及两 crate all-feature check，cleanup 删除 9,698 files/9.1 GiB 并确认
+  路径不存在；WSL/Linux 同一矩阵通过，cleanup 删除 9,543 files/6.4 GiB 并确认路径不存在。
+- [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、AGENTS routing 与
+  workspace fmt/diff 检查均通过。error hygiene 只复现未触及的 Broker source-stringification、MCP anyhow 和
+  两份缺失治理文档基线；本切片没有 runtime ownership、unsafe、public error mapping、manifest、feature、
+  ArcMut、I/O、observability、flush/group commit 或持久格式变更。
+- [x] `[SCOPE]` M06-03v 只迁移 recovery ConsumeQueue truncate 纯判定；config owner、mapped-file I/O、
+  parser/recovery state/window、错误/可观测性、async/runtime、flush/group commit、CQ/Index、HA、Timer/POP 均未
+  迁移。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
