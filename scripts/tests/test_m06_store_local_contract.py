@@ -5742,6 +5742,319 @@ def transient_store_pool_owner_violations(source: str) -> list[str]:
     return violations
 
 
+def normal_window_integer_value(
+    expression: str,
+    integer_aliases: dict[str, int],
+    identifier_aliases: IdentifierAliases,
+) -> int | None:
+    expression = strip_outer_parentheses(expression)
+    identifier = warmup_identifier_expression(expression)
+    if identifier is not None:
+        return next(
+            (
+                value
+                for alias, value in integer_aliases.items()
+                if identifier_aliases.equivalent(identifier, alias)
+            ),
+            None,
+        )
+    return rust_integer_expression_value(expression, integer_aliases)
+
+
+def normal_window_parameter_index(
+    record: WarmupFunctionRecord,
+    identifier: str,
+    aliases: IdentifierAliases,
+) -> int | None:
+    return next(
+        (
+            index
+            for index, parameter in enumerate(record.parameters)
+            if aliases.equivalent(parameter, identifier)
+        ),
+        None,
+    )
+
+
+def normal_window_selector_assignments(
+    record: WarmupFunctionRecord,
+    integer_aliases: dict[str, int],
+) -> list[tuple[str | None, int, bool]]:
+    aliases = IdentifierAliases(record.body)
+    selectors: list[tuple[str | None, int, bool]] = []
+    selector = re.compile(
+        rf"(?:(?:let(?:mut)?(?P<target>{WARMUP_IDENTIFIER})(?:\:[^=;]+)?=))?"
+        r"if(?P<condition>[^\{;]+)\{(?P<zero_branch>[^\{\};]+)\}"
+        r"else\{(?P<explicit_branch>[^\{\};]+)\};?"
+    )
+    for match in selector.finditer(record.body):
+        condition_parts = split_top_level_expression(
+            strip_outer_parentheses(match.group("condition")),
+            "==",
+        )
+        if len(condition_parts) != 2:
+            continue
+        left, right = condition_parts
+        configured: str | None = None
+        if normal_window_integer_value(left, integer_aliases, aliases) == 0:
+            configured = warmup_identifier_expression(right)
+        elif normal_window_integer_value(right, integer_aliases, aliases) == 0:
+            configured = warmup_identifier_expression(left)
+        if configured is None:
+            continue
+        explicit = warmup_identifier_expression(match.group("explicit_branch"))
+        if explicit is None or not aliases.equivalent(explicit, configured):
+            continue
+        if normal_window_integer_value(match.group("zero_branch"), integer_aliases, aliases) != 3:
+            continue
+        configured_index = normal_window_parameter_index(record, configured, aliases)
+        if configured_index is None:
+            continue
+
+        target = match.group("target")
+        suffix = record.body[match.end():]
+        returns_selector = suffix in {"", ";"}
+        if target is not None:
+            target = aliases.find(target)
+            suffix_identifier = warmup_identifier_expression(suffix.removeprefix("return").removesuffix(";"))
+            returns_selector = suffix_identifier is not None and aliases.equivalent(
+                suffix_identifier,
+                target,
+            )
+        selectors.append((target, configured_index, returns_selector))
+    return selectors
+
+
+def normal_window_saturating_subtractions(
+    record: WarmupFunctionRecord,
+) -> list[tuple[str, str]]:
+    subtractions: list[tuple[str, str]] = []
+    pattern = re.compile(
+        rf"(?<![.A-Za-z0-9_])(?P<count>\(*{WARMUP_IDENTIFIER}\)*)\.saturating_sub\("
+    )
+    for match in pattern.finditer(record.body):
+        opening = match.end() - 1
+        closing = closing_parenthesis(record.body, opening)
+        count = warmup_identifier_expression(match.group("count"))
+        if closing is not None and count is not None:
+            subtractions.append((count, record.body[opening + 1:closing]))
+    return subtractions
+
+
+def normal_window_call_expressions(body: str) -> list[tuple[str, list[str]]]:
+    calls: list[tuple[str, list[str]]] = []
+    call_start = re.compile(
+        rf"(?<![.A-Za-z0-9_:])(?P<path>(?:::)?{WARMUP_IDENTIFIER}"
+        rf"(?:::{WARMUP_IDENTIFIER})*)\("
+    )
+    for match in call_start.finditer(body):
+        opening = match.end() - 1
+        closing = closing_parenthesis(body, opening)
+        if closing is None:
+            continue
+        call = warmup_call_expression(body[match.start():closing + 1])
+        if call is not None:
+            calls.append(call)
+    return calls
+
+
+def normal_window_resolve_item(
+    record: WarmupFunctionRecord,
+    call_path: str,
+    extern_crates: dict[str, str],
+    known_items: set[WarmupItemIdentity],
+) -> WarmupItemIdentity | None:
+    if call_path.startswith("Self::"):
+        call_path = call_path.removeprefix("Self::")
+    return warmup_resolve_item(record, call_path, extern_crates, known_items)
+
+
+def normal_window_expression_effective_config_roles(
+    record: WarmupFunctionRecord,
+    expression: str,
+    aliases: IdentifierAliases,
+    effective_identifiers: dict[str, set[int]],
+    selector_helpers: dict[WarmupItemIdentity, set[int]],
+    extern_crates: dict[str, str],
+    known_items: set[WarmupItemIdentity],
+) -> set[int]:
+    identifier = warmup_identifier_expression(expression)
+    if identifier is not None:
+        return set(effective_identifiers.get(aliases.find(identifier), set()))
+    call = warmup_call_expression(expression)
+    if call is None:
+        return set()
+    helper_path, arguments = call
+    helper = normal_window_resolve_item(
+        record,
+        helper_path,
+        extern_crates,
+        known_items,
+    )
+    if helper is None:
+        return set()
+    configured_roles: set[int] = set()
+    for configured_index in selector_helpers.get(helper, set()):
+        if configured_index >= len(arguments):
+            continue
+        argument = warmup_identifier_expression(arguments[configured_index])
+        caller_index = (
+            None
+            if argument is None
+            else normal_window_parameter_index(record, argument, aliases)
+        )
+        configured_roles.add(-1 if caller_index is None else caller_index)
+    return configured_roles
+
+
+def normal_recovery_window_duplicate_policy_violations(
+    production_sources: dict[Path, str],
+) -> list[str]:
+    scoped_sources = {
+        path: source
+        for path, source in production_sources.items()
+        if path.parts[:2]
+        in {
+            ("rocketmq-store-local", "src"),
+            ("rocketmq-store", "src"),
+        }
+    }
+    records = [
+        record
+        for path, source in scoped_sources.items()
+        for record in warmup_function_records(path, source)
+    ]
+    known_items = {warmup_item_identity(record) for record in records}
+    extern_crates = {
+        crate.replace("-", "_"): crate
+        for crate in {path.parts[0] for path in scoped_sources}
+    }
+    file_integer_aliases = {
+        path: resolved_integer_aliases(source_without_cfg_test_items(source))
+        for path, source in scoped_sources.items()
+    }
+    canonical_identity = WarmupItemIdentity(
+        "rocketmq-store-local",
+        ("commit_log", "recovery", "normal_window"),
+        "plan_normal_recovery_file_window",
+    )
+
+    selector_facts: dict[WarmupItemIdentity, list[tuple[str | None, int, bool]]] = {}
+    selector_helpers: dict[WarmupItemIdentity, set[int]] = {}
+    subtraction_helpers: dict[WarmupItemIdentity, set[tuple[int, int]]] = {}
+    for record in records:
+        identity = warmup_item_identity(record)
+        aliases = IdentifierAliases(record.body)
+        selectors = normal_window_selector_assignments(
+            record,
+            file_integer_aliases.get(record.path, {}),
+        )
+        selector_facts[identity] = selectors
+        for _, configured_index, returns_selector in selectors:
+            if returns_selector and identity != canonical_identity:
+                selector_helpers.setdefault(identity, set()).add(configured_index)
+        if identity == canonical_identity:
+            continue
+        for count, limit in normal_window_saturating_subtractions(record):
+            limit_identifier = warmup_identifier_expression(limit)
+            if limit_identifier is None:
+                continue
+            count_index = normal_window_parameter_index(record, count, aliases)
+            limit_index = normal_window_parameter_index(record, limit_identifier, aliases)
+            if count_index is not None and limit_index is not None and count_index != limit_index:
+                subtraction_helpers.setdefault(identity, set()).add((count_index, limit_index))
+
+    violations: list[str] = []
+    for record in records:
+        identity = warmup_item_identity(record)
+        if identity == canonical_identity:
+            continue
+        aliases = IdentifierAliases(record.body)
+        effective_identifiers: dict[str, set[int]] = {}
+        for target, configured_index, _ in selector_facts.get(identity, []):
+            if target is not None:
+                effective_identifiers.setdefault(aliases.find(target), set()).add(
+                    configured_index
+                )
+        let_assignment = re.compile(
+            rf"let(?:mut)?(?P<target>{WARMUP_IDENTIFIER})(?:\:[^=;]+)?="
+            rf"(?P<expression>[^;]+);"
+        )
+        for assignment in let_assignment.finditer(record.body):
+            configured_roles = normal_window_expression_effective_config_roles(
+                record,
+                assignment.group("expression"),
+                aliases,
+                effective_identifiers,
+                selector_helpers,
+                extern_crates,
+                known_items,
+            )
+            if configured_roles:
+                effective_identifiers.setdefault(
+                    aliases.find(assignment.group("target")),
+                    set(),
+                ).update(configured_roles)
+
+        complete_policy = False
+        for count, limit in normal_window_saturating_subtractions(record):
+            count_index = normal_window_parameter_index(record, count, aliases)
+            configured_roles = normal_window_expression_effective_config_roles(
+                record,
+                limit,
+                aliases,
+                effective_identifiers,
+                selector_helpers,
+                extern_crates,
+                known_items,
+            )
+            if count_index is not None and configured_roles and count_index not in configured_roles:
+                complete_policy = True
+                break
+        if not complete_policy:
+            for helper_path, arguments in normal_window_call_expressions(record.body):
+                helper = normal_window_resolve_item(
+                    record,
+                    helper_path,
+                    extern_crates,
+                    known_items,
+                )
+                if helper is None:
+                    continue
+                for count_index, limit_index in subtraction_helpers.get(helper, set()):
+                    if max(count_index, limit_index) >= len(arguments):
+                        continue
+                    configured_roles = normal_window_expression_effective_config_roles(
+                        record,
+                        arguments[limit_index],
+                        aliases,
+                        effective_identifiers,
+                        selector_helpers,
+                        extern_crates,
+                        known_items,
+                    )
+                    count_argument = warmup_identifier_expression(arguments[count_index])
+                    caller_count_index = (
+                        None
+                        if count_argument is None
+                        else normal_window_parameter_index(record, count_argument, aliases)
+                    )
+                    if configured_roles and (
+                        caller_count_index is None
+                        or caller_count_index not in configured_roles
+                    ):
+                        complete_policy = True
+                        break
+                if complete_policy:
+                    break
+        if complete_policy:
+            violations.append(
+                "normal recovery file-window policy copied outside canonical owner: "
+                f"{record.path.as_posix()}::{record.name}"
+            )
+    return violations
+
+
 def normal_recovery_file_window_owner_violations(
     source: str,
     production_sources: dict[Path, str],
@@ -5773,6 +6086,9 @@ def normal_recovery_file_window_owner_violations(
                 and function_name != "plan_normal_recovery_file_window"
             ):
                 violations.append(f"{path}: normal recovery file-window alias/helper is forbidden")
+    violations.extend(
+        normal_recovery_window_duplicate_policy_violations(production_sources)
+    )
 
     if active_struct_fields(production, "NormalRecoveryFileWindow") != [
         ("start_index", "usize"),
@@ -5886,6 +6202,9 @@ def store_normal_recovery_file_window_violations(
         violations.append("Store must contain one planner import and exactly two direct calls")
     if any("NormalRecoveryFileWindow{" in compact_rust(source) for source in normalized_sources.values()):
         violations.append("Store must not construct the Local normal recovery window")
+    violations.extend(
+        normal_recovery_window_duplicate_policy_violations(store_production_sources)
+    )
 
     for function_name, mode_suffix in (
         ("recover_normally_optimized", " (optimized)"),
@@ -5908,10 +6227,6 @@ def store_normal_recovery_file_window_violations(
             violations.append(f"{function_name} normal recovery window dataflow changed")
         if len(re.findall(rf"\b{planner}\s*\(", body)) != 1:
             violations.append(f"{function_name} must call the Local planner exactly once")
-        if "saturating_sub" in body or re.search(
-            r"max_recovery_commit_log_files\s*==\s*0", body
-        ):
-            violations.append(f"{function_name} retained normal recovery window policy")
         expected_log = (
             "Starting normal recovery from file index {} using up to {} commitlog files"
             + mode_suffix
@@ -6207,6 +6522,106 @@ class StoreLocalContractTests(unittest.TestCase):
             normal_recovery_file_window_owner_violations(test_decoy, test_sources),
         )
 
+        renamed_policy = """
+fn copied_scan_start(mapped_total: usize, configured: usize) -> usize {
+    let requested = configured;
+    let fallback = 3usize;
+    let effective = if requested == 0 { fallback } else { requested };
+    mapped_total.saturating_sub(effective)
+}
+"""
+        local_direct = dict(production_sources)
+        local_direct[Path("rocketmq-store-local/src/commit_log/load.rs")] += renamed_policy
+        self.assertNotEqual(
+            [],
+            normal_recovery_file_window_owner_violations(canonical, local_direct),
+        )
+
+        renamed_variants = [
+            "#[cfg(any())]\n" + renamed_policy,
+            "#[cfg_attr(any(), allow(dead_code))]\n" + renamed_policy,
+            "#[cfg(test)]\nmod tests { fn hidden() {} }\n" + renamed_policy,
+            "struct CopiedWindow;\nimpl CopiedWindow {\n" + renamed_policy + "}\n",
+        ]
+        for variant_index, variant in enumerate(renamed_variants):
+            with self.subTest(renamed_policy_variant=variant_index):
+                variant_sources = dict(production_sources)
+                variant_sources[
+                    Path(f"rocketmq-store-local/src/copied_variant_{variant_index}.rs")
+                ] = variant
+                self.assertNotEqual(
+                    [],
+                    normal_recovery_file_window_owner_violations(canonical, variant_sources),
+                )
+
+        same_file_split = dict(production_sources)
+        same_file_split[Path("rocketmq-store-local/src/copied_same_file.rs")] = """
+fn selected_limit(configured: usize) -> usize {
+    if configured == 0 { 3 } else { configured }
+}
+
+fn subtract_limit(mapped_total: usize, selected: usize) -> usize {
+    mapped_total.saturating_sub(selected)
+}
+
+fn copied_window(mapped_total: usize, configured: usize) -> usize {
+    subtract_limit(mapped_total, selected_limit(configured))
+}
+"""
+        self.assertNotEqual(
+            [],
+            normal_recovery_file_window_owner_violations(canonical, same_file_split),
+        )
+
+        split_policy = dict(production_sources)
+        split_policy[Path("rocketmq-store-local/src/copied_limit.rs")] = """
+fn selected_limit(configured: usize) -> usize {
+    let input = configured;
+    if input == 0 { 3 } else { input }
+}
+"""
+        split_policy[Path("rocketmq-store-local/src/copied_subtract.rs")] = """
+fn subtract_limit(mapped_total: usize, selected: usize) -> usize {
+    mapped_total.saturating_sub(selected)
+}
+"""
+        split_policy[Path("rocketmq-store-local/src/copied_window.rs")] = """
+use crate::copied_limit::selected_limit;
+use crate::copied_subtract::subtract_limit;
+
+fn copied_window(mapped_total: usize, configured: usize) -> usize {
+    subtract_limit(mapped_total, selected_limit(configured))
+}
+"""
+        self.assertNotEqual(
+            [],
+            normal_recovery_file_window_owner_violations(canonical, split_policy),
+        )
+
+        incomplete_sources = dict(production_sources)
+        incomplete_sources[Path("rocketmq-store-local/src/incomplete_policy.rs")] = """
+fn fallback_only(configured: usize) -> usize {
+    if configured == 0 { 3 } else { configured }
+}
+
+fn subtraction_only(mapped_total: usize, selected: usize) -> usize {
+    mapped_total.saturating_sub(selected)
+}
+
+fn literal_only() -> usize {
+    3
+}
+
+fn same_role_is_not_a_window(configured: usize) -> usize {
+    let selected = if configured == 0 { 3 } else { configured };
+    configured.saturating_sub(selected)
+}
+"""
+        self.assertEqual(
+            [],
+            normal_recovery_file_window_owner_violations(canonical, incomplete_sources),
+        )
+
     def test_store_normal_recovery_paths_delegate_once_and_reject_window_mutations(self) -> None:
         commit_log_path = Path("rocketmq-store/src/log_file/commit_log.rs")
         commit_log = (ROOT / commit_log_path).read_text(encoding="utf-8")
@@ -6274,6 +6689,37 @@ class StoreLocalContractTests(unittest.TestCase):
                     [],
                     store_normal_recovery_file_window_violations(mutation, mutated_sources),
                 )
+
+        renamed_policy = """
+fn copied_scan_start(mapped_total: usize, configured: usize) -> usize {
+    let requested = configured;
+    let fallback = 3usize;
+    let effective = if requested == 0 { fallback } else { requested };
+    mapped_total.saturating_sub(effective)
+}
+"""
+        store_direct = dict(store_sources)
+        store_direct[commit_log_path] += renamed_policy
+        self.assertNotEqual(
+            [],
+            store_normal_recovery_file_window_violations(commit_log, store_direct),
+        )
+
+        unrelated_subtraction = commit_log.replace(
+            "let mut index = recovery_window.start_index;",
+            "let mut index = recovery_window.start_index;\n"
+            "        let _remaining = mapped_files_inner.len().saturating_sub(index);",
+            1,
+        )
+        unrelated_sources = dict(store_sources)
+        unrelated_sources[commit_log_path] = unrelated_subtraction
+        self.assertEqual(
+            [],
+            store_normal_recovery_file_window_violations(
+                unrelated_subtraction,
+                unrelated_sources,
+            ),
+        )
 
     def test_reexport_scanner_ignores_comments_and_strings(self) -> None:
         source = '''
