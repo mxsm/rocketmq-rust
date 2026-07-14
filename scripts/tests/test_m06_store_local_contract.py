@@ -4257,6 +4257,18 @@ def flattened_or_clauses(condition: str) -> list[str]:
     ]
 
 
+def flattened_and_clauses(condition: str) -> list[str]:
+    condition = strip_outer_parentheses(condition)
+    parts = split_top_level_expression(condition, "&&")
+    if len(parts) == 1:
+        return [condition]
+    return [
+        clause
+        for part in parts
+        for clause in flattened_and_clauses(part)
+    ]
+
+
 def comparison_operands(clause: str) -> tuple[str, str, str] | None:
     clause = strip_outer_parentheses(clause)
     parenthesis_depth = 0
@@ -4864,6 +4876,24 @@ def cache_range_suffix_roles(
         if file_size is None:
             continue
         position = match.group("position")
+        expression_start = max(
+            compact_body.rfind(delimiter, 0, match.start())
+            for delimiter in (";", "{", "}")
+        )
+        expression_end_candidates = [
+            end
+            for delimiter in (";", "{", "}")
+            if (end := compact_body.find(delimiter, match.end())) != -1
+        ]
+        expression_end = min(expression_end_candidates, default=len(compact_body))
+        logical_expression = compact_body[expression_start + 1:expression_end]
+        logical_expression = logical_expression.removeprefix("return")
+        assignment = re.match(
+            rf"let(?:mut)?{CACHE_RANGE_IDENTIFIER}(?:\:[^=;]+)?=",
+            logical_expression,
+        )
+        if assignment is not None:
+            logical_expression = logical_expression[assignment.end():]
         has_start_boundary = any(
             (
                 operator == "<"
@@ -4879,10 +4909,7 @@ def cache_range_suffix_roles(
                 and aliases.equivalent(left_identifier, file_size)
                 and aliases.equivalent(right_identifier, position)
             )
-            for comparison_text in re.findall(
-                rf"\(*{CACHE_RANGE_IDENTIFIER}\)*[<>]\(*{CACHE_RANGE_IDENTIFIER}\)*",
-                compact_body,
-            )
+            for comparison_text in flattened_and_clauses(logical_expression)
             if (comparison := cache_range_comparison(comparison_text)) is not None
             for left, operator, right in (comparison,)
             for left_identifier, right_identifier in (
@@ -12557,6 +12584,16 @@ fn non_false_empty_guard(file_size: usize, position: i64, size: usize) -> bool {
     let position = position as usize;
     position < file_size
         && position.checked_add(size).is_some_and(|end| end <= file_size)
+}
+
+fn observed_start_boundary_only(file_size: u64, position: i64, size: usize) -> bool {
+    if position < 0 || size == 0 {
+        return false;
+    }
+    let file_size = file_size as usize;
+    let position = position as usize;
+    let _observed_only = position < file_size;
+    position.checked_add(size).is_some_and(|end| end <= file_size)
 }
 """
         self.assertEqual(

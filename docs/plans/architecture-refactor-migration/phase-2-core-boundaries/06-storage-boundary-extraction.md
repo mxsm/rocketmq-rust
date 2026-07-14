@@ -1058,12 +1058,14 @@ python scripts/arc_mut_guard.py
 - [x] `[TEST]` TDD RED 由 Local fixture 的 8 个 E0599 证明 owner 缺失；GREEN 后 Local cache-range focused
   1/1、完整 mapped-file kernel 14/14、Local lib 69/69 与 all-feature 全量通过，Store invalid-range 1/1 和
   `DefaultMappedFile` 30/30 通过。M06 source/mutation contract 新增 owner/adapter 两项，从 109 增至 111 项，
-  focused 2/2 与完整 111/111（463.581s）均通过。
+  focused 2/2 与完整 111/111（463.581s）均通过；独立审查修复 detached-boundary near miss 后再次完整运行
+  111/111（416.541s）通过。
 - [x] `[CONTRACT]` contract 锁定 Local 精确签名/body/statement order、唯一非 cfg owner、Store 私有 exact
   wrapper、Linux/Windows/macOS 三个 caller 和四个 production reference。mutation 覆盖 negative/zero/start/end、
   `checked_add`、wrong operands、overflow、`as usize`/`try_from`/saturating/wrapping、wrapper visibility/extra logic/
   missing caller、cfg/cfg_attr/duplicate/post-test，以及变量改名、alias chain、跨文件 direct copy 与 split-helper
-  use-alias 重构；无 guard 的无关 `checked_add` 和返回 true 的 zero-range near miss 保持零误报。
+  use-alias 重构；无 guard 的无关 `checked_add`、返回 true 的 zero-range，以及仅把 `position < file_size` 赋给
+  未参与返回值的 `_observed_only` near miss 均保持零误报，起点边界必须与 `checked_add` 位于同一布尔链。
 - [x] `[FEATURE/PLATFORM]` 未修改 manifest、feature 或依赖。Local 七组与 Store 七组有效 feature closure、两
   crate all-target/all-feature package Clippy、root exact workspace Clippy、Local strict Rustdoc 均通过；Store
   普通 Rustdoc只复现 4 个未触及的 invalid-HTML warning。裸 Store `--no-default-features` 继续复现既有空 backend
