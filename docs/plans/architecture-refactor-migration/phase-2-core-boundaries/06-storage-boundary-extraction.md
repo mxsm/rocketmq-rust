@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -808,3 +808,37 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03r 只迁移 mapped-file 固定页/进度阈值 policy，不迁移 `MappedFile` trait 或
   `DefaultMappedFile` owner/factory/builder，不迁移 config、flush/group-commit I/O、CQ/Index、HA、Timer/POP，
   不改变 runtime ownership 或持久格式。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03s mapped-file memory-lock range policy evidence
+
+- [x] `[DEV]` `rocketmq-store-local::mapped_file::kernel::MappedFileProgress::lock_region_range` 现为 mapped-file
+  内存锁范围裁剪的 canonical owner，返回平台宽度的 `(offset, len)`；Store 私有
+  `DefaultMappedFile::lock_region_address_and_len` 只精确委托 Local，再将返回 offset 通过 mapped-file base pointer
+  的 `wrapping_add` 投影为地址。Store 仍拥有实际 `mlock`/`munlock` 调用和 memory-lock manager 交互。
+- [x] `[COMPAT/SEMANTICS]` 完整冻结旧机械语义：`requested_len == 0` 或 `offset >= file_size` 返回 `None`；
+  remaining 使用 `file_size.saturating_sub(offset)`；len 使用
+  `min(requested_len, usize::try_from(remaining).unwrap_or(usize::MAX))`；裁剪后零长度返回 `None`；最后才以
+  `usize::try_from(offset).ok()?` 转换 offset。Store 只对 Local 返回的 offset 使用 `as_ptr().wrapping_add`，传给
+  manager 的是裁剪后 len，不是请求 len。
+- [x] `[TEST]` TDD RED 先记录 source contract 的 6 个 owner/adapter 违规和 Local focused fixture 的 6 个缺失
+  方法编译错误，明确证明 Local 尚无 owner 且 Store 仍保留裁剪算法。GREEN 后新增 2 个 focused
+  source/mutation contract、Local range fixture 1/1、Store `DefaultMappedFile` 30/30 与 `lock_region` 2/2 通过；
+  完整 M06 contract 99/99，Local 全量 174 项通过，另 9 个既有 doctest ignored。
+- [x] `[CONTRACT]` contract 复用既有 item-span masking 与 inherent-method 解析，精确约束 Local 公开签名/body、
+  Store 私有 wrapper body、唯一 production owner、唯一 Store caller/reference，并禁止 Store 重新出现
+  `saturating_sub(offset)` range clipping。mutation 覆盖零长度、边界比较、min/max、`saturating_sub`、remaining
+  与 offset 的 `usize` 转换、转换顺序、`wrapping_add`、requested/clamped len、method/impl
+  `cfg`/`cfg_attr`、duplicate、post-test production 以及跨文件 caller/算法回流。
+- [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Windows 上 Local 与 Store 各七组 feature
+  closure、两 crate all-target/all-feature Clippy、root workspace all-target/all-feature Clippy、Local strict
+  Rustdoc 均通过；Store 普通 Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。Windows 隔离 target 通过
+  Local 1/1、Store 2/2 及两 crate all-feature check，清理 9,537 files/8.6 GiB；WSL/Linux 隔离 target 通过
+  同组验证，随后单独清理 9,381 files/6.2 GiB；两个隔离路径均确认不存在。
+- [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、AGENTS routing 与
+  workspace fmt/diff 检查均通过。error hygiene 仅复现未触及的 Broker source-stringification、MCP anyhow 和
+  两份缺失治理文档基线；本切片没有 runtime、unsafe、error mapping、manifest、feature、ArcMut、动态页/锁
+  accounting、strict/warn 行为、CommitLog active-lock lifecycle 或持久格式变更。
+- [x] `[SCOPE]` M06-03s 只迁移 `DefaultMappedFile::lock_region_address_and_len` 的纯裁剪 policy；既有
+  `MemoryLockManager::lock_region_with`/`unlock_region_with` hidden public seam、CommitLog active-lock
+  orchestration、flush/group commit、CQ/Index、HA、Timer/POP 均保持未完成。PR-M06-03 父项、M06 Exit
+  Checklist 和 M06-04..12 保持未完成。

@@ -186,6 +186,27 @@ impl MappedFileProgress {
         }
     }
 
+    /// Clips a requested memory-lock range to this mapped-file segment.
+    ///
+    /// Returns the platform-sized byte offset and clipped non-zero length, or `None` when the
+    /// request is empty, begins outside the segment, or its offset cannot be represented by
+    /// `usize` on the current platform.
+    #[inline]
+    pub fn lock_region_range(&self, offset: u64, requested_len: usize) -> Option<(usize, usize)> {
+        if requested_len == 0 || offset >= self.file_size() {
+            return None;
+        }
+
+        let remaining = self.file_size().saturating_sub(offset);
+        let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        if len == 0 {
+            return None;
+        }
+
+        let offset = usize::try_from(offset).ok()?;
+        Some((offset, len))
+    }
+
     /// Returns whether the readable progress has reached the legacy flush threshold.
     ///
     /// `read_position` must be the committed position when a transient store pool is active and

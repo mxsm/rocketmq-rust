@@ -52,6 +52,12 @@ MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush", "is_able_to_commit")
 MAPPED_FILE_POLICY_REFERENCE = re.compile(
     r"(?:\.|::)\s*(is_able_to_flush|is_able_to_commit)\b"
 )
+MAPPED_FILE_LOCK_RANGE_METHODS = ("lock_region_range",)
+MAPPED_FILE_LOCK_RANGE_REFERENCE = re.compile(r"(?:\.|::)\s*lock_region_range\b")
+STORE_LOCK_RANGE_HELPER_METHODS = ("lock_region_address_and_len",)
+STORE_LOCK_RANGE_HELPER_REFERENCE = re.compile(
+    r"(?:\.|::)\s*lock_region_address_and_len\b"
+)
 FILE_ITEMS = {
     "MappedFileStorage": "struct",
     "FilePreallocateOutcome": "enum",
@@ -2515,6 +2521,119 @@ def mapped_file_progress_adapter_violations(
 
     if default_active.count("OS_PAGE_SIZE") != 1:
         violations.append("Store DefaultMappedFile retained or duplicated page-threshold arithmetic")
+    return violations
+
+
+def mapped_file_lock_range_policy_violations(source: str) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active_production = active_rust_source(production)
+    violations: list[str] = []
+    expected_signature = (
+        "pubfnlock_region_range(&self,offset:u64,requested_len:usize)"
+        "->Option<(usize,usize)>"
+    )
+    expected_body = (
+        "ifrequested_len==0||offset>=self.file_size(){returnNone;}"
+        "letremaining=self.file_size().saturating_sub(offset);"
+        "letlen=requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));"
+        "iflen==0{returnNone;}letoffset=usize::try_from(offset).ok()?;"
+        "Some((offset,len))"
+    )
+    records = inherent_method_records(
+        production,
+        "MappedFileProgress",
+        MAPPED_FILE_LOCK_RANGE_METHODS,
+    )["lock_region_range"]
+    if len(re.findall(r"\bfn\s+lock_region_range\b", active_production)) != 1:
+        violations.append("MappedFileProgress::lock_region_range production definition count changed")
+    if len(records) != 1:
+        violations.append("MappedFileProgress::lock_region_range must have exactly one inherent definition")
+        return violations
+    record = records[0]
+    if record.cfg_gated:
+        violations.append("MappedFileProgress::lock_region_range must not be cfg gated")
+    if record.signature != expected_signature:
+        violations.append("MappedFileProgress::lock_region_range signature changed")
+    if record.body != expected_body:
+        violations.append("MappedFileProgress::lock_region_range behavior changed")
+    return violations
+
+
+def mapped_file_lock_range_adapter_violations(
+    canonical_source: str,
+    default_mapped_file_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    violations = mapped_file_lock_range_policy_violations(canonical_source)
+    default_production = source_without_cfg_test_items(default_mapped_file_source)
+    default_active = active_rust_source(default_production)
+    records = inherent_method_records(
+        default_production,
+        "DefaultMappedFile",
+        STORE_LOCK_RANGE_HELPER_METHODS,
+    )["lock_region_address_and_len"]
+    expected_signature = (
+        "fnlock_region_address_and_len(&self,offset:u64,requested_len:usize)"
+        "->Option<(*constu8,usize)>"
+    )
+    expected_body = (
+        "let(offset,len)=self.progress.lock_region_range(offset,requested_len)?;"
+        "Some((self.get_mapped_file().as_ptr().wrapping_add(offset),len))"
+    )
+    if len(re.findall(r"\bfn\s+lock_region_address_and_len\b", default_active)) != 1:
+        violations.append("Store lock_region_address_and_len production definition count changed")
+    if len(records) != 1:
+        violations.append("Store lock_region_address_and_len must have exactly one inherent definition")
+    else:
+        record = records[0]
+        if record.cfg_gated:
+            violations.append("Store lock_region_address_and_len wrapper must not be cfg gated")
+        if record.visibility:
+            violations.append("Store lock_region_address_and_len wrapper must remain private")
+        if record.signature != expected_signature:
+            violations.append("Store lock_region_address_and_len wrapper signature changed")
+        if record.body != expected_body:
+            violations.append("Store lock_region_address_and_len must be an exact Local delegation")
+
+    range_definitions: list[Path] = []
+    helper_definitions: list[Path] = []
+    range_references: dict[Path, int] = {}
+    helper_references: dict[Path, int] = {}
+    for path, source in production_sources.items():
+        production = (
+            default_production
+            if path == DEFAULT_MAPPED_FILE_PATH
+            else source_without_cfg_test_items(source)
+        )
+        active = active_rust_source(production)
+        range_definitions.extend(
+            [path] * len(re.findall(r"\bfn\s+lock_region_range\b", active))
+        )
+        helper_definitions.extend(
+            [path] * len(re.findall(r"\bfn\s+lock_region_address_and_len\b", active))
+        )
+        range_reference_count = len(MAPPED_FILE_LOCK_RANGE_REFERENCE.findall(active))
+        if range_reference_count:
+            range_references[path] = range_reference_count
+        helper_reference_count = len(STORE_LOCK_RANGE_HELPER_REFERENCE.findall(active))
+        if helper_reference_count:
+            helper_references[path] = helper_reference_count
+        if (
+            path.parts[:2] == ("rocketmq-store", "src")
+            and re.search(r"\.saturating_sub\s*\(\s*offset\s*\)", active)
+        ):
+            violations.append(f"{path.as_posix()}: Store retained mapped-file range clipping arithmetic")
+
+    if range_definitions != [MAPPED_FILE_KERNEL_PATH]:
+        violations.append(f"lock_region_range production definitions changed: {range_definitions}")
+    if helper_definitions != [DEFAULT_MAPPED_FILE_PATH]:
+        violations.append(f"lock_region_address_and_len production definitions changed: {helper_definitions}")
+    if range_references != {DEFAULT_MAPPED_FILE_PATH: 1}:
+        violations.append(f"lock_region_range production references changed: {range_references}")
+    if helper_references != {DEFAULT_MAPPED_FILE_PATH: 1}:
+        violations.append(
+            f"lock_region_address_and_len production references changed: {helper_references}"
+        )
     return violations
 
 
@@ -5518,6 +5637,308 @@ struct DefaultMappedFile {
                 canonical,
                 default_mapped_file,
                 production_sources,
+            ),
+        )
+
+    def test_mapped_file_lock_range_policy_has_one_local_owner_and_exact_store_adapter(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        self.assertEqual(
+            [],
+            mapped_file_lock_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                production_sources,
+            ),
+        )
+
+    def test_mapped_file_lock_range_contract_rejects_semantic_and_boundary_mutations(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        canonical_mutations = [
+            canonical.replace("requested_len == 0", "requested_len != 0", 1),
+            canonical.replace("offset >= self.file_size()", "offset > self.file_size()", 1),
+            canonical.replace(".saturating_sub(offset)", ".wrapping_sub(offset)", 1),
+            canonical.replace("requested_len.min(", "requested_len.max(", 1),
+            canonical.replace("usize::try_from(remaining)", "usize::try_from(offset)", 1),
+            canonical.replace(".unwrap_or(usize::MAX)", ".unwrap_or(0)", 1),
+            canonical.replace("if len == 0", "if requested_len == 0", 1),
+            canonical.replace("usize::try_from(offset).ok()?", "offset as usize", 1),
+            canonical.replace(
+                "let offset = usize::try_from(offset).ok()?;\n        Some((offset, len))",
+                "let offset = usize::try_from(offset).ok()?;\n        Some((offset, requested_len))",
+                1,
+            ),
+            canonical.replace(
+                "        let remaining = self.file_size().saturating_sub(offset);\n"
+                "        let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));\n"
+                "        if len == 0 {\n"
+                "            return None;\n"
+                "        }\n\n"
+                "        let offset = usize::try_from(offset).ok()?;",
+                "        let offset = usize::try_from(offset).ok()?;\n"
+                "        let remaining = self.file_size().saturating_sub(offset as u64);\n"
+                "        let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));\n"
+                "        if len == 0 {\n"
+                "            return None;\n"
+                "        }",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(canonical_mutations):
+            with self.subTest(canonical_mutation=mutation_index):
+                self.assertNotEqual(canonical, mutation)
+                self.assertNotEqual([], mapped_file_lock_range_policy_violations(mutation))
+
+        raw_body = """        if requested_len == 0 || offset >= self.file_size() {
+            return None;
+        }
+        let remaining = self.file_size().saturating_sub(offset);
+        let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        if len == 0 {
+            return None;
+        }
+        let offset = usize::try_from(offset).ok()?;
+        Some((offset, len))"""
+        owner_mutations = (
+            cfg_decoy_method_mutation(canonical, "lock_region_range", raw_body),
+            duplicate_method_mutation(canonical, "lock_region_range", raw_body),
+            cfg_attr_method_mutation(canonical, "lock_region_range"),
+            canonical.replace(
+                "impl MappedFileProgress {",
+                "#[cfg_attr(any(), cfg(any()))]\nimpl MappedFileProgress {",
+                1,
+            ),
+        )
+        for mutation_kind, mutation in zip(
+            ("cfg_decoy", "duplicate", "cfg_attr", "impl_cfg_attr"),
+            owner_mutations,
+            strict=True,
+        ):
+            with self.subTest(owner_mutation=mutation_kind):
+                self.assertNotEqual(canonical, mutation)
+                self.assertNotEqual([], mapped_file_lock_range_policy_violations(mutation))
+
+        post_test_base = canonical + """
+
+#[cfg(test)]
+mod lock_range_tests {
+    use super::MappedFileProgress;
+
+    impl MappedFileProgress {
+        pub fn lock_region_range(
+            &self,
+            _offset: u64,
+            _requested_len: usize,
+        ) -> Option<(usize, usize)> {
+            None
+        }
+    }
+}
+"""
+        signature = (
+            "pub fn lock_region_range(&self, offset: u64, requested_len: usize) "
+            "-> Option<(usize, usize)>"
+        )
+        test_only_decoy = post_test_method_impl_mutation(
+            post_test_base,
+            "MappedFileProgress",
+            signature,
+            "test_only_impl",
+        )
+        self.assertEqual([], mapped_file_lock_range_policy_violations(test_only_decoy))
+        for mutation_kind in (
+            "method_cfg",
+            "method_cfg_attr",
+            "impl_cfg",
+            "impl_cfg_attr",
+            "active_duplicate",
+            "active_where_duplicate",
+        ):
+            mutation = post_test_method_impl_mutation(
+                post_test_base,
+                "MappedFileProgress",
+                signature,
+                mutation_kind,
+            )
+            with self.subTest(post_test_mutation=mutation_kind):
+                self.assertNotEqual([], mapped_file_lock_range_policy_violations(mutation))
+
+        wrapper_mutations = [
+            default_mapped_file.replace(
+                ".wrapping_add(offset)",
+                ".add(offset)",
+                1,
+            ),
+            default_mapped_file.replace(
+                ".wrapping_add(offset), len",
+                ".wrapping_add(offset), requested_len",
+                1,
+            ),
+            default_mapped_file.replace(
+                "self.progress.lock_region_range(offset, requested_len)?",
+                "self.progress.lock_region_range(offset, requested_len).unwrap()",
+                1,
+            ),
+            cfg_decoy_method_mutation(
+                default_mapped_file,
+                "lock_region_address_and_len",
+                "        None",
+            ),
+            cfg_attr_method_mutation(default_mapped_file, "lock_region_address_and_len"),
+            duplicate_method_mutation(
+                default_mapped_file,
+                "lock_region_address_and_len",
+                "        None",
+            ),
+        ]
+        for mutation_index, mutation in enumerate(wrapper_mutations):
+            with self.subTest(wrapper_mutation=mutation_index):
+                self.assertNotEqual(default_mapped_file, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_lock_range_adapter_violations(
+                        canonical,
+                        mutation,
+                        mutated_sources,
+                    ),
+                )
+
+        for visibility in (
+            "pub ",
+            "pub(crate) ",
+            "pub(super) ",
+            "pub(self) ",
+            "pub(in crate::log_file) ",
+        ):
+            mutation = default_mapped_file.replace(
+                "fn lock_region_address_and_len(",
+                f"{visibility}fn lock_region_address_and_len(",
+                1,
+            )
+            with self.subTest(wrapper_visibility=visibility.strip()):
+                self.assertNotEqual(default_mapped_file, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_lock_range_adapter_violations(
+                        canonical,
+                        mutation,
+                        mutated_sources,
+                    ),
+                )
+
+        default_post_test_base = default_mapped_file + """
+
+#[cfg(test)]
+mod lock_range_adapter_tests {
+    use super::DefaultMappedFile;
+
+    impl DefaultMappedFile {
+        fn lock_region_address_and_len(
+            &self,
+            _offset: u64,
+            _requested_len: usize,
+        ) -> Option<(*const u8, usize)> {
+            None
+        }
+    }
+}
+"""
+        wrapper_signature = (
+            "fn lock_region_address_and_len(&self, offset: u64, requested_len: usize) "
+            "-> Option<(*const u8, usize)>"
+        )
+        test_only_wrapper = post_test_method_impl_mutation(
+            default_post_test_base,
+            "DefaultMappedFile",
+            wrapper_signature,
+            "test_only_impl",
+        )
+        test_only_wrapper_sources = dict(production_sources)
+        test_only_wrapper_sources[DEFAULT_MAPPED_FILE_PATH] = test_only_wrapper
+        self.assertEqual(
+            [],
+            mapped_file_lock_range_adapter_violations(
+                canonical,
+                test_only_wrapper,
+                test_only_wrapper_sources,
+            ),
+        )
+        for mutation_kind in (
+            "method_cfg",
+            "method_cfg_attr",
+            "impl_cfg",
+            "impl_cfg_attr",
+            "active_duplicate",
+            "active_where_duplicate",
+        ):
+            mutation = post_test_method_impl_mutation(
+                default_post_test_base,
+                "DefaultMappedFile",
+                wrapper_signature,
+                mutation_kind,
+            )
+            with self.subTest(wrapper_post_test_mutation=mutation_kind):
+                mutated_sources = dict(production_sources)
+                mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_lock_range_adapter_violations(
+                        canonical,
+                        mutation,
+                        mutated_sources,
+                    ),
+                )
+
+        extra_caller_sources = dict(production_sources)
+        extra_caller_sources[Path("rocketmq-store/src/base/swappable.rs")] += """
+fn forbidden_lock_range_caller(progress: &MappedFileProgress) {
+    let _ = progress.lock_region_range(0, 1);
+}
+"""
+        self.assertNotEqual(
+            [],
+            mapped_file_lock_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                extra_caller_sources,
+            ),
+        )
+
+        cross_file_return_sources = dict(production_sources)
+        cross_file_return_sources[Path("rocketmq-store/src/base/swappable.rs")] += """
+fn forbidden_lock_range_copy(file_size: u64, offset: u64, requested_len: usize) -> Option<(usize, usize)> {
+    if requested_len == 0 || offset >= file_size {
+        return None;
+    }
+    let remaining = file_size.saturating_sub(offset);
+    let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+    let offset = usize::try_from(offset).ok()?;
+    Some((offset, len))
+}
+"""
+        self.assertNotEqual(
+            [],
+            mapped_file_lock_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                cross_file_return_sources,
             ),
         )
 

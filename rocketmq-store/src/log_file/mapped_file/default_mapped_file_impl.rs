@@ -1346,17 +1346,7 @@ impl DefaultMappedFile {
     }
 
     fn lock_region_address_and_len(&self, offset: u64, requested_len: usize) -> Option<(*const u8, usize)> {
-        if requested_len == 0 || offset >= self.progress.file_size() {
-            return None;
-        }
-
-        let remaining = self.progress.file_size().saturating_sub(offset);
-        let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
-        if len == 0 {
-            return None;
-        }
-
-        let offset = usize::try_from(offset).ok()?;
+        let (offset, len) = self.progress.lock_region_range(offset, requested_len)?;
         Some((self.get_mapped_file().as_ptr().wrapping_add(offset), len))
     }
 

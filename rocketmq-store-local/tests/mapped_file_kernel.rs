@@ -52,6 +52,27 @@ fn progress_preserves_segment_full_boundary_and_readable_rules() {
 }
 
 #[test]
+fn lock_region_range_preserves_legacy_empty_boundary_and_clipping_policy() {
+    let progress = MappedFileProgress::new(4096);
+
+    assert_eq!(progress.lock_region_range(0, 0), None);
+    assert_eq!(progress.lock_region_range(4096, 1), None);
+    assert_eq!(progress.lock_region_range(u64::MAX, usize::MAX), None);
+    assert_eq!(progress.lock_region_range(0, 1), Some((0, 1)));
+    assert_eq!(progress.lock_region_range(3072, 4096), Some((3072, 1024)));
+    assert_eq!(progress.lock_region_range(4095, usize::MAX), Some((4095, 1)));
+}
+
+#[cfg(target_pointer_width = "32")]
+#[test]
+fn lock_region_range_rejects_offsets_that_do_not_fit_usize_after_clipping() {
+    let progress = MappedFileProgress::new(u64::MAX);
+    let offset = usize::MAX as u64 + 1;
+
+    assert_eq!(progress.lock_region_range(offset, 1), None);
+}
+
+#[test]
 fn successful_flush_is_the_only_operation_that_advances_durable_progress() {
     let progress = MappedFileProgress::new(64);
     progress.set_wrote_position(24);
