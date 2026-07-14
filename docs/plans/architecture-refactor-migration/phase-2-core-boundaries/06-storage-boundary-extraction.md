@@ -839,6 +839,16 @@ python scripts/arc_mut_guard.py
   helper-owned 或 caller-owned boundary、`cfg`/`cfg_attr` impl、`impl ... where`、post-test active item 与纯测试
   decoy；独立 `saturating_sub`/`min` 正例证明不会误伤不完整的合法算术。增强后 focused 2/2 和 full M06
   contract 99/99 通过；inline duplicate 诊断携带其文件路径，split-helper 诊断同时携带 caller/helper 路径。
+- [x] `[REV-GUARD-DATAFLOW]` 第二轮独立审查证明第一轮 scanner 的 boundary 与 return 仍绑定表面语法；
+  contract-first RED 分别复现 request/offset 两个独立 `None` guard、带多层无副作用括号的 combined guard、
+  `file_size <= offset` 反向边界，以及 `(offset, len)` 经单层 tuple binding 后 `Some(result)`，四个完整等价
+  Local production copy 均得到空违规列表。GREEN 新增共享 guard parser：先按 balanced parentheses 提取
+  production `if` item 的精确 `return None` early-exit，再拆 top-level OR/comparison，将 combined/separate guard、
+  `offset >= file_size`/`file_size <= offset` 和任意无副作用外层括号归一到 request/offset/file-size 角色；inline、
+  split caller 与 remaining helper 共用同一分析。return dataflow 支持 direct `Some((offset, len))`、单层及有界
+  链式 tuple alias 后再 `Some(alias)`，仍精确绑定转换后的 offset 与裁剪后 len；缺少 len guard 的复制继续被
+  拒绝。mutation 同时覆盖 Local/Store、cross-file helper/alias、post-test active item 和测试 decoy；focused 2/2、
+  full M06 contract 99/99 通过，合法不完整近似仍保持零违规。
 - [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Windows 上 Local 与 Store 各七组 feature
   closure、两 crate all-target/all-feature Clippy、root workspace all-target/all-feature Clippy、Local strict
   Rustdoc 均通过；Store 普通 Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。Windows 隔离 target 通过

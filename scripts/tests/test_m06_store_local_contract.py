@@ -2565,35 +2565,217 @@ LOCK_RANGE_FILE_SIZE_EXPRESSION = (
 )
 
 
+def strip_outer_parentheses(expression: str) -> str:
+    stripped = expression
+    while stripped.startswith("("):
+        closing = closing_parenthesis(stripped, 0)
+        if closing != len(stripped) - 1:
+            break
+        stripped = stripped[1:-1]
+    return stripped
+
+
+def split_top_level_expression(expression: str, delimiter: str) -> list[str]:
+    parts: list[str] = []
+    start = 0
+    parenthesis_depth = 0
+    index = 0
+    while index < len(expression):
+        character = expression[index]
+        if character == "(":
+            parenthesis_depth += 1
+        elif character == ")":
+            parenthesis_depth -= 1
+        elif parenthesis_depth == 0 and expression.startswith(delimiter, index):
+            parts.append(expression[start:index])
+            start = index + len(delimiter)
+            index += len(delimiter) - 1
+        index += 1
+    parts.append(expression[start:])
+    return parts
+
+
+def flattened_or_clauses(condition: str) -> list[str]:
+    condition = strip_outer_parentheses(condition)
+    parts = split_top_level_expression(condition, "||")
+    if len(parts) == 1:
+        return [condition]
+    return [
+        clause
+        for part in parts
+        for clause in flattened_or_clauses(part)
+    ]
+
+
+def comparison_operands(clause: str) -> tuple[str, str, str] | None:
+    clause = strip_outer_parentheses(clause)
+    parenthesis_depth = 0
+    for index, character in enumerate(clause):
+        if character == "(":
+            parenthesis_depth += 1
+            continue
+        if character == ")":
+            parenthesis_depth -= 1
+            continue
+        if parenthesis_depth != 0:
+            continue
+        for operator in ("==", ">=", "<="):
+            if clause.startswith(operator, index):
+                return (
+                    strip_outer_parentheses(clause[:index]),
+                    operator,
+                    strip_outer_parentheses(clause[index + len(operator):]),
+                )
+    return None
+
+
+def none_early_return_conditions(
+    compact_body: str,
+    before: int,
+) -> list[str]:
+    conditions: list[str] = []
+    for if_match in re.finditer(r"(?<![A-Za-z0-9_])if", compact_body[:before]):
+        condition_start = if_match.end()
+        parenthesis_depth = 0
+        opening_brace: int | None = None
+        for index in range(condition_start, before):
+            character = compact_body[index]
+            if character == "(":
+                parenthesis_depth += 1
+            elif character == ")":
+                parenthesis_depth -= 1
+            elif character == "{" and parenthesis_depth == 0:
+                opening_brace = index
+                break
+        if opening_brace is None:
+            continue
+        extracted = braced_body(compact_body, opening_brace)
+        if extracted is None or extracted[1] > before:
+            continue
+        guard_body, _ = extracted
+        if guard_body == "returnNone;":
+            conditions.append(compact_body[condition_start:opening_brace])
+    return conditions
+
+
+def lock_range_guard_roles(
+    compact_body: str,
+    before: int,
+    request: str | None,
+    offset: str,
+    file_size: str,
+) -> tuple[bool, bool]:
+    request_is_zero = request is None
+    offset_is_out_of_range = False
+    for condition in none_early_return_conditions(compact_body, before):
+        for clause in flattened_or_clauses(condition):
+            comparison = comparison_operands(clause)
+            if comparison is None:
+                continue
+            left, operator, right = comparison
+            if request is not None and operator == "==" and {
+                left,
+                right,
+            } == {request, "0"}:
+                request_is_zero = True
+            if (
+                operator == ">="
+                and left == offset
+                and right == file_size
+            ) or (
+                operator == "<="
+                and left == file_size
+                and right == offset
+            ):
+                offset_is_out_of_range = True
+    return request_is_zero, offset_is_out_of_range
+
+
+def expression_is_lock_range_tuple(
+    expression: str,
+    native_offset: str,
+    length: str,
+    tuple_aliases: set[str],
+) -> bool:
+    expression = strip_outer_parentheses(expression)
+    tuple_parts = split_top_level_expression(expression, ",")
+    if len(tuple_parts) == 2:
+        return (
+            strip_outer_parentheses(tuple_parts[0]) == native_offset
+            and strip_outer_parentheses(tuple_parts[1]) == length
+        )
+    return expression in tuple_aliases
+
+
+def returns_lock_range_tuple(
+    compact_body: str,
+    after: int,
+    native_offset: str,
+    length: str,
+) -> bool:
+    tail = compact_body[after:]
+    tuple_aliases: set[str] = set()
+    assignments = re.compile(
+        rf"let(?:mut)?(?P<name>{LOCK_RANGE_IDENTIFIER})"
+        r"(?:\s*:\s*[^=;]+)?=(?P<expression>[^;]+);"
+    )
+    for assignment in assignments.finditer(tail):
+        if expression_is_lock_range_tuple(
+            assignment.group("expression"),
+            native_offset,
+            length,
+            tuple_aliases,
+        ):
+            tuple_aliases.add(assignment.group("name"))
+
+    for some_match in re.finditer(r"(?<![A-Za-z0-9_])Some\(", tail):
+        opening_parenthesis = some_match.end() - 1
+        closing = closing_parenthesis(tail, opening_parenthesis)
+        if closing is None:
+            continue
+        if expression_is_lock_range_tuple(
+            tail[opening_parenthesis + 1:closing],
+            native_offset,
+            length,
+            tuple_aliases,
+        ):
+            return True
+    return False
+
+
 def has_inline_mapped_file_lock_range_policy(body: str) -> bool:
     compact = compact_rust(body)
-    boundary = re.compile(
-        rf"if(?P<request>{LOCK_RANGE_IDENTIFIER})==0\|\|"
-        rf"(?P<offset>{LOCK_RANGE_IDENTIFIER})>="
-        rf"(?P<file_size>{LOCK_RANGE_FILE_SIZE_EXPRESSION})"
-        r"\{returnNone;\}"
+    subtraction = re.compile(
+        rf"let(?P<remaining>{LOCK_RANGE_IDENTIFIER})="
+        rf"(?P<file_size>{LOCK_RANGE_FILE_SIZE_EXPRESSION})\.saturating_sub\("
+        rf"(?P<offset>{LOCK_RANGE_IDENTIFIER})\);"
     )
-    for match in boundary.finditer(compact):
-        request = re.escape(match.group("request"))
-        offset = re.escape(match.group("offset"))
-        file_size = re.escape(match.group("file_size"))
-        remaining_match = re.search(
-            rf"let(?P<remaining>{LOCK_RANGE_IDENTIFIER})="
-            rf"{file_size}\.saturating_sub\({offset}\);",
-            compact[match.end():],
-        )
-        if remaining_match is None:
-            continue
-        remaining = re.escape(remaining_match.group("remaining"))
-        remaining_end = match.end() + remaining_match.end()
+    for subtraction_match in subtraction.finditer(compact):
+        file_size_role = subtraction_match.group("file_size")
+        offset_role = subtraction_match.group("offset")
+        remaining_role = subtraction_match.group("remaining")
+        remaining_end = subtraction_match.end()
         clamp_match = re.search(
-            rf"let(?P<length>{LOCK_RANGE_IDENTIFIER})={request}\.min\("
-            rf"usize::try_from\({remaining}\)\.unwrap_or\(usize::MAX\),?\);",
+            rf"let(?P<length>{LOCK_RANGE_IDENTIFIER})="
+            rf"(?P<request>{LOCK_RANGE_IDENTIFIER})\.min\("
+            rf"usize::try_from\({re.escape(remaining_role)}\)"
+            rf"\.unwrap_or\(usize::MAX\),?\);",
             compact[remaining_end:],
         )
         if clamp_match is None:
             continue
-        length = re.escape(clamp_match.group("length"))
+        request_role = clamp_match.group("request")
+        guards = lock_range_guard_roles(
+            compact,
+            subtraction_match.start(),
+            request_role,
+            offset_role,
+            file_size_role,
+        )
+        if guards != (True, True):
+            continue
+        length_role = clamp_match.group("length")
+        length = re.escape(length_role)
         clamp_end = remaining_end + clamp_match.end()
         empty_match = re.search(
             rf"if{length}==0\{{returnNone;\}}",
@@ -2606,16 +2788,18 @@ def has_inline_mapped_file_lock_range_policy(body: str) -> bool:
         )
         offset_match = re.search(
             rf"let(?P<native_offset>{LOCK_RANGE_IDENTIFIER})="
-            rf"usize::try_from\({offset}\)\.ok\(\)\?;",
+            rf"usize::try_from\({re.escape(offset_role)}\)\.ok\(\)\?;",
             compact[empty_end:],
         )
         if offset_match is None:
             continue
-        native_offset = re.escape(offset_match.group("native_offset"))
+        native_offset_role = offset_match.group("native_offset")
         offset_end = empty_end + offset_match.end()
-        if re.search(
-            rf"Some\(\({native_offset},{length}\)\)",
-            compact[offset_end:],
+        if returns_lock_range_tuple(
+            compact,
+            offset_end,
+            native_offset_role,
+            length_role,
         ):
             return True
     return False
@@ -2651,11 +2835,14 @@ def mapped_file_remaining_helper_arguments(
         )
     if not returned_directly and not returned_assignment:
         return None
-    boundary = re.search(
-        rf"if{re.escape(offset)}>={re.escape(file_size)}\{{returnNone;\}}",
+    _, has_boundary = lock_range_guard_roles(
         compact,
+        subtraction.start(),
+        None,
+        offset,
+        file_size,
     )
-    return file_size, offset, boundary is not None
+    return file_size, offset, has_boundary
 
 
 def has_split_mapped_file_lock_range_policy(
@@ -2663,10 +2850,6 @@ def has_split_mapped_file_lock_range_policy(
     remaining_helpers: dict[str, tuple[Path, bool]],
 ) -> tuple[bool, str | None]:
     compact = compact_rust(body)
-    zero_request = re.compile(
-        rf"if(?P<request>{LOCK_RANGE_IDENTIFIER})==0"
-        rf"(?P<tail>\|\|[^{{}}]+)?\{{returnNone;\}}"
-    )
     helper_call = re.compile(
         rf"let(?P<remaining>{LOCK_RANGE_IDENTIFIER})="
         rf"(?:(?:crate|self|super)::(?:{LOCK_RANGE_IDENTIFIER}::)*)?"
@@ -2674,57 +2857,61 @@ def has_split_mapped_file_lock_range_policy(
         rf"(?P<file_size>{LOCK_RANGE_FILE_SIZE_EXPRESSION}),"
         rf"(?P<offset>{LOCK_RANGE_IDENTIFIER})\)\??;"
     )
-    for zero_match in zero_request.finditer(compact):
-        request = re.escape(zero_match.group("request"))
-        for call_match in helper_call.finditer(compact, zero_match.end()):
-            helper_name = call_match.group("helper")
-            if helper_name not in remaining_helpers:
-                continue
-            helper_has_boundary = remaining_helpers[helper_name][1]
-            file_size = re.escape(call_match.group("file_size"))
-            remaining = re.escape(call_match.group("remaining"))
-            offset = re.escape(call_match.group("offset"))
-            caller_has_boundary = re.search(
-                rf"if{offset}>={file_size}\{{returnNone;\}}",
-                compact[zero_match.end():call_match.start()],
-            ) is not None or re.search(
-                rf"{offset}>={file_size}",
-                zero_match.group("tail") or "",
-            ) is not None
-            if not helper_has_boundary and not caller_has_boundary:
-                continue
-            clamp_match = re.search(
-                rf"let(?P<length>{LOCK_RANGE_IDENTIFIER})={request}\.min\("
-                rf"usize::try_from\({remaining}\)\.unwrap_or\(usize::MAX\),?\);",
-                compact[call_match.end():],
-            )
-            if clamp_match is None:
-                continue
-            length = re.escape(clamp_match.group("length"))
-            clamp_end = call_match.end() + clamp_match.end()
-            empty_match = re.search(
-                rf"if{length}==0\{{returnNone;\}}",
-                compact[clamp_end:],
-            )
-            empty_end = (
-                clamp_end
-                if empty_match is None
-                else clamp_end + empty_match.end()
-            )
-            offset_match = re.search(
-                rf"let(?P<native_offset>{LOCK_RANGE_IDENTIFIER})="
-                rf"usize::try_from\({offset}\)\.ok\(\)\?;",
-                compact[empty_end:],
-            )
-            if offset_match is None:
-                continue
-            native_offset = re.escape(offset_match.group("native_offset"))
-            offset_end = empty_end + offset_match.end()
-            if re.search(
-                rf"Some\(\({native_offset},{length}\)\)",
-                compact[offset_end:],
-            ):
-                return True, helper_name
+    for call_match in helper_call.finditer(compact):
+        helper_name = call_match.group("helper")
+        if helper_name not in remaining_helpers:
+            continue
+        helper_has_boundary = remaining_helpers[helper_name][1]
+        file_size_role = call_match.group("file_size")
+        remaining_role = call_match.group("remaining")
+        offset_role = call_match.group("offset")
+        clamp_match = re.search(
+            rf"let(?P<length>{LOCK_RANGE_IDENTIFIER})="
+            rf"(?P<request>{LOCK_RANGE_IDENTIFIER})\.min\("
+            rf"usize::try_from\({re.escape(remaining_role)}\)"
+            rf"\.unwrap_or\(usize::MAX\),?\);",
+            compact[call_match.end():],
+        )
+        if clamp_match is None:
+            continue
+        request_role = clamp_match.group("request")
+        request_guard, caller_has_boundary = lock_range_guard_roles(
+            compact,
+            call_match.start(),
+            request_role,
+            offset_role,
+            file_size_role,
+        )
+        if not request_guard or not (helper_has_boundary or caller_has_boundary):
+            continue
+        length_role = clamp_match.group("length")
+        length = re.escape(length_role)
+        clamp_end = call_match.end() + clamp_match.end()
+        empty_match = re.search(
+            rf"if{length}==0\{{returnNone;\}}",
+            compact[clamp_end:],
+        )
+        empty_end = (
+            clamp_end
+            if empty_match is None
+            else clamp_end + empty_match.end()
+        )
+        offset_match = re.search(
+            rf"let(?P<native_offset>{LOCK_RANGE_IDENTIFIER})="
+            rf"usize::try_from\({re.escape(offset_role)}\)\.ok\(\)\?;",
+            compact[empty_end:],
+        )
+        if offset_match is None:
+            continue
+        native_offset_role = offset_match.group("native_offset")
+        offset_end = empty_end + offset_match.end()
+        if returns_lock_range_tuple(
+            compact,
+            offset_end,
+            native_offset_role,
+            length_role,
+        ):
+            return True, helper_name
     return False, None
 
 
@@ -6218,6 +6405,7 @@ fn renamed_mapped_file_lock_range(
 """,
             ),
         }
+        local_copy = reviewer_escape_sources["local_exact_copy"][1]
         for mutation_name, (path, copied_policy) in reviewer_escape_sources.items():
             escaped_sources = dict(production_sources)
             escaped_sources[path] += copied_policy
@@ -6231,6 +6419,60 @@ fn renamed_mapped_file_lock_range(
                 self.assertTrue(
                     any(path.as_posix() in violation for violation in violations),
                     violations,
+                )
+
+        equivalent_guard_return_escapes = {
+            "separate_guards": local_copy.replace(
+                "    if requested_len == 0 || offset >= file_size {\n"
+                "        return None;\n"
+                "    }",
+                "    if requested_len == 0 {\n"
+                "        return None;\n"
+                "    }\n"
+                "    if offset >= file_size {\n"
+                "        return None;\n"
+                "    }",
+                1,
+            ),
+            "parenthesized_guard": local_copy.replace(
+                "if requested_len == 0 || offset >= file_size",
+                "if (((requested_len)) == (0) || ((offset) >= (file_size)))",
+                1,
+            ),
+            "reversed_boundary": local_copy.replace(
+                "offset >= file_size",
+                "file_size <= offset",
+                1,
+            ),
+            "tuple_alias": local_copy.replace(
+                "    Some((offset, len))",
+                "    let result = (offset, len);\n"
+                "    Some(result)",
+                1,
+            ),
+            "tuple_alias_chain": local_copy.replace(
+                "    Some((offset, len))",
+                "    let result = (offset, len);\n"
+                "    let next_result = result;\n"
+                "    let final_result = next_result;\n"
+                "    Some((final_result))",
+                1,
+            ),
+        }
+        local_escape_path = Path(
+            "rocketmq-store-local/src/base/memory_lock_manager.rs"
+        )
+        for mutation_name, copied_policy in equivalent_guard_return_escapes.items():
+            escaped_sources = dict(production_sources)
+            escaped_sources[local_escape_path] += copied_policy
+            with self.subTest(equivalent_guard_return_escape=mutation_name):
+                self.assertNotEqual(
+                    [],
+                    mapped_file_lock_range_adapter_violations(
+                        canonical,
+                        default_mapped_file,
+                        escaped_sources,
+                    ),
                 )
 
         split_helper_path = Path("rocketmq-store/src/base/swappable.rs")
@@ -6302,7 +6544,10 @@ fn copied_lock_range_through_raw_alias(
     request_offset: u64,
     request_bytes: usize,
 ) -> Option<(usize, usize)> {
-    if request_bytes == 0 || request_offset >= mapped_file_size {
+    if ((request_bytes)) == (0) {
+        return None;
+    }
+    if mapped_file_size <= request_offset {
         return None;
     }
     let available_bytes = raw_remaining_for_lock(mapped_file_size, request_offset);
@@ -6310,7 +6555,9 @@ fn copied_lock_range_through_raw_alias(
         usize::try_from(available_bytes).unwrap_or(usize::MAX),
     );
     let native_offset = usize::try_from(request_offset).ok()?;
-    Some((native_offset, clipped_bytes))
+    let result = (native_offset, clipped_bytes);
+    let final_result = result;
+    Some(final_result)
 }
 """
         raw_split_violations = mapped_file_lock_range_adapter_violations(
@@ -6327,7 +6574,6 @@ fn copied_lock_range_through_raw_alias(
             raw_split_violations,
         )
 
-        local_copy = reviewer_escape_sources["local_exact_copy"][1]
         cfg_variants = {
             "impl_cfg": "#[cfg(any())]",
             "impl_cfg_attr": "#[cfg_attr(any(), cfg(any()))]",
@@ -6367,13 +6613,17 @@ mod copied_lock_range_tests {
         offset: u64,
         requested_len: usize,
     ) -> Option<(usize, usize)> {
-        if requested_len == 0 || offset >= file_size {
+        if (requested_len == 0) {
+            return None;
+        }
+        if file_size <= offset {
             return None;
         }
         let remaining = file_size.saturating_sub(offset);
         let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
         let offset = usize::try_from(offset).ok()?;
-        Some((offset, len))
+        let result = (offset, len);
+        Some(result)
     }
 }
 """
@@ -6397,13 +6647,15 @@ where
         offset: u64,
         requested_len: usize,
     ) -> Option<(usize, usize)> {
-        if requested_len == 0 || offset >= file_size {
+        if ((requested_len == 0) || (file_size <= offset)) {
             return None;
         }
         let remaining = file_size.saturating_sub(offset);
         let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
         let offset = usize::try_from(offset).ok()?;
-        Some((offset, len))
+        let result = (offset, len);
+        let final_result = result;
+        Some(final_result)
     }
 }
 """
@@ -6435,6 +6687,34 @@ fn unrelated_min(limit: usize, available: usize) -> usize {
                 canonical,
                 default_mapped_file,
                 unrelated_arithmetic_sources,
+            ),
+        )
+
+        non_equivalent_guard_sources = dict(production_sources)
+        non_equivalent_guard_sources[local_escape_path] += """
+fn non_none_request_guard_is_not_the_lock_range_policy(
+    file_size: u64,
+    offset: u64,
+    requested_len: usize,
+) -> Option<(usize, usize)> {
+    if requested_len == 0 {
+        return Some((0, 0));
+    }
+    if offset >= file_size {
+        return None;
+    }
+    let remaining = file_size.saturating_sub(offset);
+    let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+    let offset = usize::try_from(offset).ok()?;
+    Some((offset, len))
+}
+"""
+        self.assertEqual(
+            [],
+            mapped_file_lock_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                non_equivalent_guard_sources,
             ),
         )
 
