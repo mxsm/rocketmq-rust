@@ -59,6 +59,10 @@ RECOVERY_CONSUME_QUEUE_PATH = Path(
 ABNORMAL_CONFIRM_CANDIDATE_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/confirm_candidate.rs"
 )
+COMMIT_LOG_MEMORY_LOCK_PATH = Path(
+    "rocketmq-store-local/src/commit_log/memory_lock.rs"
+)
+STORE_COMMIT_LOG_PATH = Path("rocketmq-store/src/log_file/commit_log.rs")
 MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush", "is_able_to_commit")
 MAPPED_FILE_POLICY_REFERENCE = re.compile(
     r"(?:\.|::)\s*(is_able_to_flush|is_able_to_commit)\b"
@@ -5982,6 +5986,336 @@ def compact_rust(source: str) -> str:
     return re.sub(r"\s+", "", rust_source_without_comments(source))
 
 
+def commit_log_memory_lock_copy_violations(
+    production_sources: dict[Path, str],
+) -> list[str]:
+    """Reject complete direct or helper-split copies of the Local planner."""
+    scoped_sources = {
+        path: source_without_cfg_test_items(source)
+        for path, source in production_sources.items()
+        if path.parts[:2]
+        in {
+            ("rocketmq-store-local", "src"),
+            ("rocketmq-store", "src"),
+        }
+    }
+    records = [
+        record
+        for path, source in scoped_sources.items()
+        for record in warmup_function_records(path, source)
+    ]
+    records_by_name: dict[str, list[WarmupFunctionRecord]] = {}
+    records_by_path_name: dict[tuple[Path, str], WarmupFunctionRecord] = {}
+    for record in records:
+        records_by_name.setdefault(record.name, []).append(record)
+        records_by_path_name[(record.path, record.name)] = record
+
+    canonical = (
+        COMMIT_LOG_MEMORY_LOCK_PATH,
+        "plan_commit_log_memory_lock_target",
+    )
+
+    def callees(record: WarmupFunctionRecord) -> list[WarmupFunctionRecord]:
+        resolved: list[WarmupFunctionRecord] = []
+        import_targets = dict(record.imports)
+        for called in set(re.findall(rf"\b({WARMUP_IDENTIFIER})\s*\(", record.body)):
+            same_file = records_by_path_name.get((record.path, called))
+            if same_file is not None:
+                resolved.append(same_file)
+                continue
+            imported_name = import_targets.get(called, "").split("::")[-1]
+            candidates = records_by_name.get(imported_name or called, [])
+            if len(candidates) == 1:
+                resolved.append(candidates[0])
+        return resolved
+
+    findings: list[str] = []
+    for root in records:
+        if (root.path, root.name) == canonical:
+            continue
+        closure: list[WarmupFunctionRecord] = []
+        pending = [root]
+        seen: set[tuple[Path, str]] = set()
+        while pending:
+            record = pending.pop()
+            identity = (record.path, record.name)
+            if identity in seen or identity == canonical:
+                continue
+            seen.add(identity)
+            closure.append(record)
+            pending.extend(callees(record))
+        corpus = "".join(record.body for record in closure)
+        if not corpus:
+            continue
+        path_constants = resolved_integer_aliases(
+            scoped_sources.get(root.path, ""),
+            top_level_only=True,
+        )
+        default_identifiers = {
+            name for name, value in path_constants.items() if value == 128 * 1024 * 1024
+        }
+        has_default = "128*1024*1024" in corpus or any(
+            re.search(rf"\b{re.escape(name)}\b", corpus)
+            for name in default_identifiers
+        )
+        required = (
+            re.search(r"==0\{returnNone", corpus) is not None,
+            re.search(r"::Off=>None", corpus) is not None,
+            re.search(r"::ActiveWindow=>", corpus) is not None,
+            re.search(r">=[A-Za-z_][A-Za-z0-9_]*\{returnNone", corpus) is not None,
+            has_default,
+            ".saturating_sub(" in corpus,
+            ".min(usize::try_from(" in corpus,
+            ".unwrap_or(usize::MAX)" in corpus,
+            "MemoryLockCategory::CommitLogActiveWindow" in corpus,
+            re.search(r"::ActiveFile=>", corpus) is not None,
+            ".ok()?" in corpus,
+            "MemoryLockCategory::CommitLogActiveFile" in corpus,
+            corpus.count(".then_some(") >= 2,
+        )
+        if all(required):
+            suffix = " (split)" if len(closure) > 1 else ""
+            findings.append(f"{root.path.as_posix()}::{root.name}{suffix}")
+    return sorted(set(findings))
+
+
+def commit_log_memory_lock_owner_violations(
+    source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    violations: list[str] = []
+    expected_owners = {
+        "CommitLogMemoryLockMode": "enum",
+        "CommitLogMemoryLockTarget": "struct",
+        "plan_commit_log_memory_lock_target": "fn",
+        "DEFAULT_ACTIVE_MEMORY_LOCK_WINDOW_BYTES": "const",
+    }
+    masked_sources = {
+        path: source_without_cfg_test_items(candidate)
+        for path, candidate in production_sources.items()
+    }
+    for item, kind in expected_owners.items():
+        if file_item_owner_occurrences(masked_sources, item) != [
+            (COMMIT_LOG_MEMORY_LOCK_PATH, kind)
+        ]:
+            violations.append(f"{item} must have one Local production owner")
+
+    commit_log_module = masked_sources.get(
+        Path("rocketmq-store-local/src/commit_log.rs"),
+        "",
+    )
+    if compact_rust(commit_log_module).count("pubmodmemory_lock;") != 1:
+        violations.append("Local commit_log must expose exactly one memory_lock module")
+    if _derive_items(production, "enum", "CommitLogMemoryLockMode") != {
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq",
+    }:
+        violations.append("CommitLog memory-lock mode derives changed")
+    if _derive_items(production, "struct", "CommitLogMemoryLockTarget") != {
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq",
+    }:
+        violations.append("CommitLog memory-lock target derives changed")
+    if "pubenumCommitLogMemoryLockMode{Off,ActiveWindow,ActiveFile,}" not in compact:
+        violations.append("CommitLog memory-lock mode variants or order changed")
+    if active_struct_fields(production, "CommitLogMemoryLockTarget") != [
+        ("category", "MemoryLockCategory"),
+        ("offset", "u64"),
+        ("len", "usize"),
+    ]:
+        violations.append("CommitLog memory-lock target fields changed")
+    for field, field_type in (
+        ("category", "MemoryLockCategory"),
+        ("offset", "u64"),
+        ("len", "usize"),
+    ):
+        if re.search(rf"\bpub\s+{field}\s*:\s*{field_type}\b", active) is None:
+            violations.append(f"CommitLog memory-lock target {field} must remain public")
+
+    if re.search(
+        r"(?m)^\s*const\s+DEFAULT_ACTIVE_MEMORY_LOCK_WINDOW_BYTES\s*:\s*usize\s*=\s*128\s*\*\s*1024\s*\*\s*1024\s*;",
+        active,
+    ) is None:
+        violations.append("CommitLog active-window default changed")
+    if re.search(r"\bpub(?:\s*\([^)]*\))?\s+const\s+DEFAULT_ACTIVE_MEMORY_LOCK", active):
+        violations.append("CommitLog active-window default must remain Local-private")
+
+    expected_function = (
+        "pubfnplan_commit_log_memory_lock_target("
+        "mode:CommitLogMemoryLockMode,active_window_bytes:usize,"
+        "wrote_position:u64,file_size:u64,)->Option<CommitLogMemoryLockTarget>{"
+        "iffile_size==0{returnNone;}matchmode{"
+        "CommitLogMemoryLockMode::Off=>None,"
+        "CommitLogMemoryLockMode::ActiveWindow=>{"
+        "ifwrote_position>=file_size{returnNone;}"
+        "letrequested_len=ifactive_window_bytes==0{"
+        "DEFAULT_ACTIVE_MEMORY_LOCK_WINDOW_BYTES}else{active_window_bytes};"
+        "letremaining=file_size.saturating_sub(wrote_position);"
+        "letlen=requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));"
+        "(len>0).then_some(CommitLogMemoryLockTarget{"
+        "category:MemoryLockCategory::CommitLogActiveWindow,"
+        "offset:wrote_position,len,})}"
+        "CommitLogMemoryLockMode::ActiveFile=>{"
+        "letlen=usize::try_from(file_size).ok()?;"
+        "(len>0).then_some(CommitLogMemoryLockTarget{"
+        "category:MemoryLockCategory::CommitLogActiveFile,offset:0,len,})}}}"
+    )
+    if expected_function not in compact:
+        violations.append("CommitLog memory-lock planner signature, order, or semantics changed")
+    owner_match = re.search(
+        r"\bpub\s+fn\s+plan_commit_log_memory_lock_target\b",
+        active,
+    )
+    if owner_match is None or attributes_have_cfg_gate(
+        contiguous_outer_attributes_before(active, owner_match.start())
+    ):
+        violations.append("CommitLog memory-lock planner must not be cfg-gated")
+    for declaration in (
+        "enum CommitLogMemoryLockMode",
+        "struct CommitLogMemoryLockTarget",
+    ):
+        declaration_match = re.search(
+            rf"(?P<attributes>(?:\s*#\[[^\n]*\]\s*)*)pub\s+{declaration}",
+            production,
+        )
+        if declaration_match is not None and re.search(
+            r"#\s*\[\s*(?:cfg|cfg_attr)\b",
+            declaration_match.group("attributes"),
+        ):
+            violations.append("CommitLog memory-lock public values must not be cfg-gated")
+    imports = [body for kind, _, body, _ in active_import_records(production) if kind == "use"]
+    if imports != ["crate::base::memory_lock_manager::MemoryLockCategory"]:
+        violations.append("CommitLog memory-lock planner dependencies changed")
+    if re.search(
+        r"\b(?:MessageStoreConfig|MappedFile|File|Read|Write|Vec|Box|String|HashMap|HashSet|Arc|Rc)\b|"
+        r"\b(?:std|core)::(?:fs|io|net|thread|sync)\b|"
+        r"\b(?:tokio|tracing|rocketmq_store|rocketmq_common)\b|"
+        r"\b(?:format|info|warn|error|debug|trace)!\s*\(|\.collect\s*\(|\basync\s+fn\b",
+        active,
+    ):
+        violations.append("CommitLog memory-lock planner absorbed allocation or Store orchestration")
+    if not violations:
+        violations.extend(
+            f"CommitLog memory-lock policy copied: {finding}"
+            for finding in commit_log_memory_lock_copy_violations(production_sources)
+        )
+    return violations
+
+
+def store_commit_log_memory_lock_adapter_violations(
+    commit_log: str,
+    store_production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(commit_log)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    violations: list[str] = []
+    expected_imports = {
+        "rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory",
+        "rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockMode",
+        "rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget",
+        "rocketmq_store_local::commit_log::memory_lock::plan_commit_log_memory_lock_target",
+    }
+    actual_imports = {
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use" and any(
+            item in body
+            for item in (
+                "MemoryLockCategory",
+                "CommitLogMemoryLockMode",
+                "CommitLogMemoryLockTarget",
+                "plan_commit_log_memory_lock_target",
+            )
+        )
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store CommitLog memory-lock imports must be direct and exact")
+    if re.search(
+        r"#\s*\[\s*(?:cfg|cfg_attr)\b[^\]]*\]\s*use\s+rocketmq_store_local::(?:base|commit_log)",
+        active,
+        re.DOTALL,
+    ):
+        violations.append("Store CommitLog memory-lock imports must not be cfg-gated")
+    for legacy in (
+        "DEFAULT_COMMITLOG_ACTIVE_WINDOW_LOCK_BYTES",
+        "CommitLogActiveMemoryLockTarget",
+    ):
+        if re.search(rf"\b{legacy}\b", active):
+            violations.append(f"Store retained legacy CommitLog memory-lock owner: {legacy}")
+
+    adapter = compact_rust(named_function_body(production, "active_memory_lock_target_for_config") or "")
+    expected_adapter = (
+        "letmode=matchmessage_store_config.effective_linux_memory_lock_mode(){"
+        "LinuxMemoryLockMode::Off=>CommitLogMemoryLockMode::Off,"
+        "LinuxMemoryLockMode::ActiveWindow=>CommitLogMemoryLockMode::ActiveWindow,"
+        "LinuxMemoryLockMode::ActiveFile=>CommitLogMemoryLockMode::ActiveFile,};"
+        "plan_commit_log_memory_lock_target("
+        "mode,message_store_config.linux_memory_lock_active_window_bytes,"
+        "wrote_position,file_size,)"
+    )
+    qualified_expected_adapter = expected_adapter.replace(
+        "LinuxMemoryLockMode::",
+        "crate::config::message_store_config::LinuxMemoryLockMode::",
+    )
+    if adapter not in {expected_adapter, qualified_expected_adapter}:
+        violations.append("Store CommitLog config adapter mapping or planner arguments changed")
+    target_adapter = compact_rust(named_function_body(production, "active_memory_lock_target") or "")
+    expected_target_adapter = (
+        "Self::active_memory_lock_target_for_config("
+        "self.message_store_config.as_ref(),"
+        "mapped_file.get_wrote_position().max(0)asu64,"
+        "mapped_file.get_file_size(),)"
+    )
+    if target_adapter != expected_target_adapter:
+        violations.append("Store CommitLog mapped-file target adapter changed")
+
+    normalized_sources = {
+        path: active_rust_source(source_without_cfg_test_items(source))
+        for path, source in store_production_sources.items()
+        if any(
+            token in source
+            for token in (
+                "plan_commit_log_memory_lock_target",
+                "CommitLogMemoryLockTarget",
+                "CommitLogMemoryLockMode",
+            )
+        )
+    }
+    planner_references = sum(
+        len(re.findall(r"\bplan_commit_log_memory_lock_target\b", source))
+        for source in normalized_sources.values()
+    )
+    if planner_references != 2:
+        violations.append("Store must contain one planner import and one config-adapter call")
+    if normalized_sources.keys() != {STORE_COMMIT_LOG_PATH}:
+        violations.append("Store CommitLog memory-lock planner consumers moved or multiplied")
+    if len(re.findall(r"\bCommitLogMemoryLockTarget\b", active)) != 5:
+        violations.append("Store CommitLog memory-lock target lifecycle flow changed")
+    for signature in (
+        "fnis_current(&self,file_from_offset:u64,target:CommitLogMemoryLockTarget)->bool",
+        "fnset_current(&mutself,file_from_offset:u64,target:CommitLogMemoryLockTarget,handle:MemoryLockHandle)",
+        "fnactive_memory_lock_target(&self,mapped_file:&DefaultMappedFile)->Option<CommitLogMemoryLockTarget>",
+    ):
+        if signature not in compact:
+            violations.append(f"Store CommitLog target lifecycle signature changed: {signature}")
+    if not violations:
+        violations.extend(
+            f"Store CommitLog memory-lock policy copied: {finding}"
+            for finding in commit_log_memory_lock_copy_violations(store_production_sources)
+        )
+    return violations
+
+
 def memory_lock_manager_owner_violations(source: str) -> list[str]:
     production = re.split(r"#\[cfg\(test\)\]\s*mod\s+tests", source, maxsplit=1)[0]
     compact = compact_rust(production)
@@ -7524,6 +7858,222 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
+
+    def test_commit_log_memory_lock_target_has_one_local_owner_and_rejects_policy_mutations(self) -> None:
+        canonical_path = ROOT / COMMIT_LOG_MEMORY_LOCK_PATH
+        canonical = canonical_path.read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            commit_log_memory_lock_owner_violations(canonical, production_sources),
+        )
+
+        owner_mutations = [
+            canonical.replace("128 * 1024 * 1024", "64 * 1024 * 1024", 1),
+            canonical.replace("    Off,", "    Disabled,", 1),
+            canonical.replace("pub offset: u64", "offset: u64", 1),
+            canonical.replace("pub len: usize", "pub len: u64", 1),
+            canonical.replace("if file_size == 0", "if file_size <= 1", 1),
+            canonical.replace("CommitLogMemoryLockMode::Off => None", "CommitLogMemoryLockMode::Off => Some(CommitLogMemoryLockTarget { category: MemoryLockCategory::CommitLogActiveFile, offset: 0, len: 1 })", 1),
+            canonical.replace("wrote_position >= file_size", "wrote_position > file_size", 1),
+            canonical.replace("active_window_bytes == 0", "active_window_bytes != 0", 1),
+            canonical.replace("file_size.saturating_sub(wrote_position)", "file_size - wrote_position", 1),
+            canonical.replace("requested_len.min", "requested_len.max", 1),
+            canonical.replace("unwrap_or(usize::MAX)", "unwrap_or(0)", 1),
+            canonical.replace("usize::try_from(file_size).ok()?", "file_size as usize", 1),
+            canonical.replace("offset: wrote_position", "offset: 0", 1),
+            canonical.replace("MemoryLockCategory::CommitLogActiveFile", "MemoryLockCategory::CommitLogActiveWindow", 1),
+            canonical.replace("(len > 0).then_some", "(len == 0).then_some", 1),
+            canonical.replace(
+                "pub fn plan_commit_log_memory_lock_target",
+                "#[cfg(any())]\npub fn plan_commit_log_memory_lock_target",
+                1,
+            ),
+            canonical.replace(
+                "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub struct CommitLogMemoryLockTarget",
+                "#[cfg_attr(any(), allow(dead_code))]\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub struct CommitLogMemoryLockTarget",
+                1,
+            ),
+            canonical + "\npub fn plan_commit_log_memory_lock_target(_: CommitLogMemoryLockMode, _: usize, _: u64, _: u64) -> Option<CommitLogMemoryLockTarget> { None }\n",
+            canonical
+            + "\n#[cfg(test)]\nmod tests {}\n"
+            + "pub fn plan_commit_log_memory_lock_target(_: CommitLogMemoryLockMode, _: usize, _: u64, _: u64) -> Option<CommitLogMemoryLockTarget> { None }\n",
+        ]
+        for mutation_index, mutation in enumerate(owner_mutations):
+            with self.subTest(owner_mutation=mutation_index):
+                self.assertNotEqual(canonical, mutation)
+                mutated_sources = {
+                    **production_sources,
+                    COMMIT_LOG_MEMORY_LOCK_PATH: mutation,
+                }
+                self.assertNotEqual(
+                    [],
+                    commit_log_memory_lock_owner_violations(mutation, mutated_sources),
+                )
+
+        renamed_copy = """
+const COPIED_ACTIVE_WINDOW_DEFAULT: usize = 128 * 1024 * 1024;
+fn copied_target(policy: CommitLogMemoryLockMode, configured: usize, cursor: u64, capacity: u64) -> Option<CommitLogMemoryLockTarget> {
+    if capacity == 0 { return None; }
+    match policy {
+        CommitLogMemoryLockMode::Off => None,
+        CommitLogMemoryLockMode::ActiveWindow => {
+            if cursor >= capacity { return None; }
+            let requested = if configured == 0 { COPIED_ACTIVE_WINDOW_DEFAULT } else { configured };
+            let available = capacity.saturating_sub(cursor);
+            let length = requested.min(usize::try_from(available).unwrap_or(usize::MAX));
+            (length > 0).then_some(CommitLogMemoryLockTarget { category: MemoryLockCategory::CommitLogActiveWindow, offset: cursor, len: length })
+        }
+        CommitLogMemoryLockMode::ActiveFile => {
+            let length = usize::try_from(capacity).ok()?;
+            (length > 0).then_some(CommitLogMemoryLockTarget { category: MemoryLockCategory::CommitLogActiveFile, offset: 0, len: length })
+        }
+    }
+}
+"""
+        split_copy = """
+const SPLIT_ACTIVE_WINDOW_DEFAULT: usize = 128 * 1024 * 1024;
+fn copied_window(configured: usize, cursor: u64, capacity: u64) -> Option<CommitLogMemoryLockTarget> {
+    if cursor >= capacity { return None; }
+    let requested = if configured == 0 { SPLIT_ACTIVE_WINDOW_DEFAULT } else { configured };
+    let available = capacity.saturating_sub(cursor);
+    let length = requested.min(usize::try_from(available).unwrap_or(usize::MAX));
+    (length > 0).then_some(CommitLogMemoryLockTarget { category: MemoryLockCategory::CommitLogActiveWindow, offset: cursor, len: length })
+}
+fn copied_file(capacity: u64) -> Option<CommitLogMemoryLockTarget> {
+    let length = usize::try_from(capacity).ok()?;
+    (length > 0).then_some(CommitLogMemoryLockTarget { category: MemoryLockCategory::CommitLogActiveFile, offset: 0, len: length })
+}
+fn copied_dispatch(policy: CommitLogMemoryLockMode, configured: usize, cursor: u64, capacity: u64) -> Option<CommitLogMemoryLockTarget> {
+    if capacity == 0 { return None; }
+    match policy {
+        CommitLogMemoryLockMode::Off => None,
+        CommitLogMemoryLockMode::ActiveWindow => copied_window(configured, cursor, capacity),
+        CommitLogMemoryLockMode::ActiveFile => copied_file(capacity),
+    }
+}
+"""
+        alias_split_copy = split_copy.replace(
+            "fn copied_dispatch",
+            "use self::copied_window as selected_window;\nfn copied_dispatch",
+            1,
+        ).replace(
+            "copied_window(configured, cursor, capacity)",
+            "selected_window(configured, cursor, capacity)",
+            1,
+        )
+        store_path = STORE_COMMIT_LOG_PATH
+        for copy_index, copy_source in enumerate((renamed_copy, split_copy, alias_split_copy)):
+            with self.subTest(policy_copy=copy_index):
+                copied_sources = {
+                    **production_sources,
+                    store_path: production_sources[store_path].replace(
+                        "#[cfg(test)]\nmod tests",
+                        copy_source + "\n#[cfg(test)]\nmod tests",
+                        1,
+                    ),
+                }
+                self.assertNotEqual([], commit_log_memory_lock_copy_violations(copied_sources))
+
+        near_miss = production_sources[store_path].replace(
+            "#[cfg(test)]\nmod tests",
+            """
+fn unrelated_platform_clamp(requested: usize, bytes: u64) -> usize {
+    requested.min(usize::try_from(bytes).unwrap_or(usize::MAX))
+}
+
+#[cfg(test)]
+mod tests""",
+            1,
+        )
+        self.assertEqual(
+            [],
+            commit_log_memory_lock_copy_violations(
+                {**production_sources, store_path: near_miss}
+            ),
+        )
+
+    def test_store_commit_log_memory_lock_config_adapter_is_exact_and_rejects_mutations(self) -> None:
+        commit_log_path = ROOT / STORE_COMMIT_LOG_PATH
+        commit_log = commit_log_path.read_text(encoding="utf-8")
+        store_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for path in STORE_CRATE.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            store_commit_log_memory_lock_adapter_violations(commit_log, store_sources),
+        )
+
+        mutations = [
+            commit_log.replace(
+                "message_store_config.effective_linux_memory_lock_mode()",
+                "message_store_config.linux_memory_lock_mode",
+                1,
+            ),
+            commit_log.replace(
+                "LinuxMemoryLockMode::Off => CommitLogMemoryLockMode::Off",
+                "LinuxMemoryLockMode::Off => CommitLogMemoryLockMode::ActiveWindow",
+                1,
+            ),
+            commit_log.replace(
+                "message_store_config.linux_memory_lock_active_window_bytes,",
+                "0,",
+                1,
+            ),
+            commit_log.replace(
+                "            wrote_position,\n            file_size,",
+                "            file_size,\n            wrote_position,",
+                1,
+            ),
+            commit_log.replace(
+                "mapped_file.get_wrote_position().max(0) as u64",
+                "mapped_file.get_wrote_position() as u64",
+                1,
+            ),
+            commit_log.replace(
+                "use rocketmq_store_local::commit_log::memory_lock::plan_commit_log_memory_lock_target;",
+                "use rocketmq_store_local::commit_log::memory_lock::plan_commit_log_memory_lock_target as plan_target;",
+                1,
+            ),
+            commit_log.replace(
+                "use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;",
+                "#[cfg(any())]\nuse rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;",
+                1,
+            ),
+            commit_log.replace(
+                "target: CommitLogMemoryLockTarget",
+                "target: crate::base::memory_lock_manager::MemoryLockHandle",
+                1,
+            ),
+            commit_log.replace(
+                "        plan_commit_log_memory_lock_target(\n            mode,",
+                "        missing_commit_log_memory_lock_target_planner(\n            mode,",
+                1,
+            ),
+            commit_log.replace(
+                "#[cfg(test)]\nmod tests",
+                "fn forbidden_extra_planner_call() { let _ = plan_commit_log_memory_lock_target(CommitLogMemoryLockMode::Off, 0, 0, 0); }\n\n#[cfg(test)]\nmod tests",
+                1,
+            ),
+            commit_log
+            + "\nfn forbidden_post_test_planner_call() { let _ = plan_commit_log_memory_lock_target(CommitLogMemoryLockMode::Off, 0, 0, 0); }\n",
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(adapter_mutation=mutation_index):
+                self.assertNotEqual(commit_log, mutation)
+                mutated_sources = {**store_sources, STORE_COMMIT_LOG_PATH: mutation}
+                self.assertNotEqual(
+                    [],
+                    store_commit_log_memory_lock_adapter_violations(
+                        mutation,
+                        mutated_sources,
+                    ),
+                )
 
     def test_abnormal_confirm_candidate_has_one_local_owner_and_rejects_policy_mutations(self) -> None:
         canonical_path = ROOT / ABNORMAL_CONFIRM_CANDIDATE_PATH
@@ -12039,7 +12589,7 @@ mod tests""",
         self.assert_local_crate_exists()
         canonical_dir = LOCAL_CRATE / "src" / "commit_log"
         self.assertEqual(
-            {"append.rs", "load.rs", "recovery.rs", "record.rs", "record_parser.rs"},
+            {"append.rs", "load.rs", "memory_lock.rs", "recovery.rs", "record.rs", "record_parser.rs"},
             {path.name for path in canonical_dir.glob("*.rs")},
         )
 

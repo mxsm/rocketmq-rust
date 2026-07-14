@@ -59,7 +59,6 @@ use crate::base::append_message_callback::DefaultAppendMessageCallback;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::flush_manager::FlushManager;
-use crate::base::memory_lock_manager::MemoryLockCategory;
 use crate::base::memory_lock_manager::MemoryLockHandle;
 use crate::base::memory_lock_manager::MemoryLockManager;
 use crate::base::message_encoder_pool;
@@ -105,6 +104,10 @@ use crate::utils::ffi::madvise;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::ffi::MADV_RANDOM;
 
+use rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory;
+use rocketmq_store_local::commit_log::memory_lock::plan_commit_log_memory_lock_target;
+use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockMode;
+use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;
 use rocketmq_store_local::commit_log::record_parser::decode_commit_log_record;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
@@ -129,7 +132,6 @@ pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
 //CRC32 Format: [PROPERTY_CRC32 + NAME_VALUE_SEPARATOR + 10-digit fixed-length string +
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
-const DEFAULT_COMMITLOG_ACTIVE_WINDOW_LOCK_BYTES: usize = 128 * 1024 * 1024;
 
 fn log_abnormal_recovery_window(
     window: &crate::log_file::commit_log_recovery::AbnormalRecoveryWindow,
@@ -153,13 +155,6 @@ fn log_abnormal_recovery_window(
     );
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CommitLogActiveMemoryLockTarget {
-    category: MemoryLockCategory,
-    offset: u64,
-    len: usize,
-}
-
 #[derive(Debug)]
 struct CommitLogActiveMemoryLock {
     manager: MemoryLockManager,
@@ -180,7 +175,7 @@ impl CommitLogActiveMemoryLock {
         }
     }
 
-    fn is_current(&self, file_from_offset: u64, target: CommitLogActiveMemoryLockTarget) -> bool {
+    fn is_current(&self, file_from_offset: u64, target: CommitLogMemoryLockTarget) -> bool {
         let Some(handle) = self.handle else {
             return false;
         };
@@ -196,12 +191,7 @@ impl CommitLogActiveMemoryLock {
         }
     }
 
-    fn set_current(
-        &mut self,
-        file_from_offset: u64,
-        target: CommitLogActiveMemoryLockTarget,
-        handle: MemoryLockHandle,
-    ) {
+    fn set_current(&mut self, file_from_offset: u64, target: CommitLogMemoryLockTarget, handle: MemoryLockHandle) {
         self.handle = Some(handle);
         self.file_from_offset = Some(file_from_offset);
         self.region_offset = target.offset;
@@ -418,7 +408,7 @@ impl CommitLog {
         self.mapped_file_queue.allocate_mapped_file_service.is_some()
     }
 
-    fn active_memory_lock_target(&self, mapped_file: &DefaultMappedFile) -> Option<CommitLogActiveMemoryLockTarget> {
+    fn active_memory_lock_target(&self, mapped_file: &DefaultMappedFile) -> Option<CommitLogMemoryLockTarget> {
         Self::active_memory_lock_target_for_config(
             self.message_store_config.as_ref(),
             mapped_file.get_wrote_position().max(0) as u64,
@@ -430,39 +420,18 @@ impl CommitLog {
         message_store_config: &MessageStoreConfig,
         wrote_position: u64,
         file_size: u64,
-    ) -> Option<CommitLogActiveMemoryLockTarget> {
-        if file_size == 0 {
-            return None;
-        }
-
-        match message_store_config.effective_linux_memory_lock_mode() {
-            LinuxMemoryLockMode::Off => None,
-            LinuxMemoryLockMode::ActiveWindow => {
-                if wrote_position >= file_size {
-                    return None;
-                }
-                let requested_len = if message_store_config.linux_memory_lock_active_window_bytes == 0 {
-                    DEFAULT_COMMITLOG_ACTIVE_WINDOW_LOCK_BYTES
-                } else {
-                    message_store_config.linux_memory_lock_active_window_bytes
-                };
-                let remaining = file_size.saturating_sub(wrote_position);
-                let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
-                (len > 0).then_some(CommitLogActiveMemoryLockTarget {
-                    category: MemoryLockCategory::CommitLogActiveWindow,
-                    offset: wrote_position,
-                    len,
-                })
-            }
-            LinuxMemoryLockMode::ActiveFile => {
-                let len = usize::try_from(file_size).ok()?;
-                (len > 0).then_some(CommitLogActiveMemoryLockTarget {
-                    category: MemoryLockCategory::CommitLogActiveFile,
-                    offset: 0,
-                    len,
-                })
-            }
-        }
+    ) -> Option<CommitLogMemoryLockTarget> {
+        let mode = match message_store_config.effective_linux_memory_lock_mode() {
+            LinuxMemoryLockMode::Off => CommitLogMemoryLockMode::Off,
+            LinuxMemoryLockMode::ActiveWindow => CommitLogMemoryLockMode::ActiveWindow,
+            LinuxMemoryLockMode::ActiveFile => CommitLogMemoryLockMode::ActiveFile,
+        };
+        plan_commit_log_memory_lock_target(
+            mode,
+            message_store_config.linux_memory_lock_active_window_bytes,
+            wrote_position,
+            file_size,
+        )
     }
 
     fn ensure_active_mapped_file_locked(&self, mapped_file: &DefaultMappedFile) -> RocketMQResult<()> {
@@ -3385,25 +3354,6 @@ mod tests {
         assert_eq!(store.get_commit_log().calc_need_ack_nums(4), 3);
 
         let _ = std::fs::remove_dir_all(temp_root);
-    }
-
-    #[test]
-    fn active_window_memory_lock_target_uses_bounded_default_instead_of_full_file() {
-        let config = MessageStoreConfig {
-            mapped_file_size_commit_log: 1024 * 1024 * 1024,
-            linux_memory_lock_mode: LinuxMemoryLockMode::ActiveWindow,
-            linux_memory_lock_active_window_bytes: 0,
-            ..MessageStoreConfig::default()
-        };
-
-        let file_size = config.mapped_file_size_commit_log as u64;
-        let target = CommitLog::active_memory_lock_target_for_config(&config, 64, file_size)
-            .expect("active window should produce a target");
-
-        assert_eq!(target.category, MemoryLockCategory::CommitLogActiveWindow);
-        assert_eq!(target.offset, 64);
-        assert_eq!(target.len, 128 * 1024 * 1024);
-        assert_ne!(target.len as u64, file_size);
     }
 
     #[test]

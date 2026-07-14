@@ -1006,3 +1006,41 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03w 只迁移 abnormal recovery confirm-candidate 的纯 checked calculation；parser/recovery
   state/window、dispatch gate、warning/orchestration、config、mapped-file I/O、async/runtime、flush/group commit、
   CQ/Index、HA、Timer/POP 均未迁移。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03x CommitLog active memory-lock target planning evidence
+
+- [x] `[DEV]` 新增 `rocketmq-store-local::commit_log::memory_lock`，由公开 Copy/Eq
+  `CommitLogMemoryLockMode`、`CommitLogMemoryLockTarget` 与
+  `plan_commit_log_memory_lock_target` 唯一拥有 active CommitLog memory-lock target 纯规划。Store 删除私有
+  128 MiB 默认常量、target struct 与重复算法；`active_memory_lock_target_for_config` 只把
+  `effective_linux_memory_lock_mode()` 精确映射为三个 Local mode，并把 window bytes、wrote position 与 file size
+  各传入 planner 一次。实际 mapped-file 指针、mlock/munlock、budget/accounting、current-region 生命周期、错误与日志
+  仍归 Store/既有 Local `MemoryLockManager` 所有。
+- [x] `[COMPAT/SEMANTICS]` 完整冻结旧边界：任意 mode 的零长度文件均无 target；Off 无 target；ActiveWindow 在
+  `wrote_position >= file_size` 时无 target，配置 window 为零时使用 Local 私有 128 MiB 默认值，否则保留配置值，
+  remaining 继续 `saturating_sub`，长度继续以 `usize::try_from(remaining).unwrap_or(usize::MAX)` 裁剪，category/
+  offset 分别为 active-window 与 wrote position。ActiveFile 继续以 `usize::try_from(file_size).ok()?` 保留 32 位
+  fail-closed 语义，并产生 offset 0/active-file target；两路均拒绝零长度 target。Store mapped-file adapter 继续对
+  signed wrote position 执行 `max(0) as u64`，LowLatency effective-mode 覆盖和 lock/unlock/current fast path 未改变。
+- [x] `[TEST]` Local target fixture 3/3、Store effective-mode/present 2/2、active-file lifecycle/strict-init 2/2、
+  Store lib 562/562、Local default 与 all-feature 全量均通过。新增 owner 与 Store adapter 两项 source/mutation
+  contract；缺 owner/adapter、边界和复制 mutation 保留 RED 证据，GREEN 后 focused 2/2，完整 M06 contract 从
+  107 增至 109 项并 109/109 通过。
+- [x] `[CONTRACT]` contract 锁定 Local module、唯一公开 mode/target/planner owner、私有 128 MiB 常量、精确字段/
+  签名/dataflow、无 alloc/I/O/log/async/config/Store 依赖；Store 只允许四条直接精确 import、一个 effective-mode
+  config adapter、一个 planner call 和既有 Local target lifecycle flow。mutation 覆盖 default/zero/Off、window/file、
+  wrote 等值与越界、remaining/min、两种 `try_from`、category/offset/len、effective-vs-raw mode、wrong config argument、
+  额外/缺失 caller、cfg/cfg_attr/duplicate/post-test owner，以及变量改名、direct/split/use-alias 完整算法副本；仅含
+  unrelated `min`/`try_from` 的合法近似保持零误报。
+- [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Local 与 Store 各七组有效 feature closure、
+  两 crate all-target/all-feature package Clippy、root exact workspace Clippy、Local strict Rustdoc 均通过；Store 普通
+  Rustdoc 只复现 4 个未触及的 invalid-HTML warning。Windows 固定隔离 target 通过 Local 3/3、Store 2/2+2/2
+  与两 crate all-feature check，cleanup 删除 9,516 files/8.6 GiB 并确认路径不存在；WSL/Linux 同一矩阵通过，
+  cleanup 删除 9,361 files/6.2 GiB 并确认固定 `/tmp/rocketmq-m06-03x-wsl` 不存在。
+- [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、AGENTS routing、workspace
+  fmt/diff 检查均通过。两个既有 `DefaultMappedFile` production occurrence 因 target 类型迁移和相邻 adapter 缩短
+  发生同 item 一对一 fingerprint 变化，按 ADR-013 精确批准；promoted baseline 保持 1,232 identities/3,375
+  occurrences。error hygiene 只复现未触及的 Broker source-stringification、MCP anyhow 与两份缺失治理文档基线。
+- [x] `[SCOPE]` M06-03x 只迁移 CommitLog active memory-lock target 纯 planner；不修改 config owner、实际 mlock/
+  munlock、budget/accounting、mapped-file I/O、unsafe、错误/可观测性、async/runtime、flush/group commit、CQ/Index、
+  HA、Timer/POP 或持久格式。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。

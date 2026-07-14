@@ -187,6 +187,18 @@
       "from": "ded036bc867beefc6db3270a",
       "to": "710eb3f2dd4a57100c5e0fe1",
       "reason": "Adding the two private Local recovery-hint adapter imports changed adjacent tokens around the existing DefaultMappedFile module import without adding or moving an occurrence"
+    },
+    {
+      "identity": "69d7cb8e17762e288dc07f00",
+      "from": "06ddb7bd0d982ea069a89269",
+      "to": "550badd855b2ecb12dd8eb81",
+      "reason": "Replacing the Store-private active memory-lock target return type with the canonical Local target changed adjacent tokens around the existing DefaultMappedFile parameter in the same active_memory_lock_target item without adding or moving an occurrence"
+    },
+    {
+      "identity": "69d7cb8e17762e288dc07f00",
+      "from": "1d5c7caace7e723e0aa27bec",
+      "to": "447ff463742ecb6680a5e405",
+      "reason": "Delegating active memory-lock target planning to Local shortened the preceding config adapter and changed adjacent tokens around the existing DefaultMappedFile parameter in the same ensure_active_mapped_file_locked item without adding or moving an occurrence"
     }
   ]
 }

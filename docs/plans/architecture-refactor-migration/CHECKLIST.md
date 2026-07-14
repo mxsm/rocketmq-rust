@@ -130,6 +130,7 @@
   - [x] M06-03u：迁移 normal recovery 文件扫描窗口 planner 到 Local，保留 Store recovery 编排、日志与状态机适配
   - [x] M06-03v：迁移 recovery ConsumeQueue truncate 纯判定到 Local，四条 Store recovery 路径直接共享同一策略
   - [x] M06-03w：迁移 abnormal recovery confirm-candidate checked calculation 到 Local，保留 Store 两条 raw-input adapter
+  - [x] M06-03x：迁移 CommitLog active memory-lock target 纯 planner 到 Local，保留 Store config 与锁生命周期适配
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer
