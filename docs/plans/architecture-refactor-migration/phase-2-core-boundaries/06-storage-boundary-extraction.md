@@ -865,3 +865,40 @@ python scripts/arc_mut_guard.py
   `MemoryLockManager::lock_region_with`/`unlock_region_with` hidden public seam、CommitLog active-lock
   orchestration、flush/group commit、CQ/Index、HA、Timer/POP 均保持未完成。PR-M06-03 父项、M06 Exit
   Checklist 和 M06-04..12 保持未完成。
+
+## M06-03t mapped-file warmup schedule policy evidence
+
+- [x] `[DEV]` `rocketmq-store-local::mapped_file::kernel::visit_mapped_file_warmup_schedule` 现为 mapped-file
+  warmup 调度的 canonical owner，以无分配 visitor 依次产出 `MappedFileWarmupOperation::Touch` 与 `Flush`。
+  Store `DefaultMappedFile::warm_mapped_file_with_ops` 只把 Local operation 投影为实际 `MmapMut` touch/flush；
+  `get_page_size`、`FlushDiskType`、madvise、错误/降级事件、warning、flush timestamp、metrics、文件身份和生命周期
+  仍归 Store 所有。
+- [x] `[COMPAT/SEMANTICS]` 完整冻结旧机械顺序：空文件零操作；`page_size` 与 `flush_every_pages` 均在 Local
+  `max(1)`；每个 `(0..file_size).step_by(page_size)` offset 先 Touch 再累计页数；Sync 每逢
+  `is_multiple_of(flush_every_pages)` 产生 periodic Flush，end 仍精确为 `(offset + 1).min(file_size)`，不是页尾；
+  schedule 不因 Store 真实 flush 成败改变 last offset；循环后仅 Sync 对 remainder 产生 final Flush；Async 只 Touch。
+  `Flush.final_flush` 区分 periodic 与 remainder，使 Store 分别保留旧 `Failed to flush warmed...` 和
+  `Failed to flush final warmed...` warning，真实 flush、降级 event 与成功 record-time 顺序不变。
+- [x] `[TEST]` contract-first RED 先由 source contract 证明 Local owner/Store delegation 缺失，并由 Local fixture
+  复现两个 unresolved import 编译错误。GREEN 后 Local 精确序列 4/4、Store degradation/position 旧路径 1/1、
+  `DefaultMappedFile` 30/30、Local default 与 all-feature 全量各 178/178（另各 9 doctest ignored）通过；完整
+  M06 source/mutation contract 从 99 增至 101 项并 101/101 通过。
+- [x] `[CONTRACT]` contract 精确约束公开 Copy/Eq operation enum、visitor 签名/body、唯一 production owner、
+  无 `Vec`/`collect` 分配、Store 唯一 caller/import/match adapter、Touch/Flush 参数和两种 warning 词汇，并禁止
+  Store production 保留 `step_by`、`is_multiple_of`、touched/last/flush-every 调度角色。mutation 覆盖空文件、
+  page/interval 归一化、touch 计数与顺序、sync/async、旧 `offset + 1`、periodic/final range 与标志、最终 remainder、
+  enum/function `cfg`/`cfg_attr`/duplicate/post-test decoy、Store 重复归一化/错误 flush 参数/反转 final flag/warning
+  词汇，以及跨 Store 文件复制 schedule token；合法测试 decoy 保持零误报。
+- [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Windows 隔离 target 上 Local 七组和有效
+  Store 七组 feature closure、两 crate package Clippy、root workspace exact all-target/all-feature Clippy、Local
+  strict Rustdoc 均通过；Store normal Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。额外 Store
+  `--no-default-features` 空后端探测仍复现既有 124 个 E0004 与 unused `ArcMut` 基线，未标记为通过。WSL/Linux
+  隔离 target 通过 Local 4/4、Store 1/1 及两 crate all-feature check；固定路径 cleanup 成功，删除 10,101 files/
+  6.5 GiB 并确认 target 不存在。Windows 隔离路径也清理 25,573 files/21.7 GiB 并确认不存在。
+- [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、AGENTS routing、workspace
+  fmt/diff 检查均通过。error hygiene 仅复现未触及的 Broker source-stringification、MCP anyhow 和两份缺失治理
+  文档基线；本切片没有 runtime ownership、unsafe、public error mapping、manifest、feature、ArcMut、动态内存锁
+  accounting 或持久格式变更。
+- [x] `[SCOPE]` M06-03t 只迁移 `DefaultMappedFile` warmup 的纯 operation schedule；实际 mapped-memory I/O、
+  flush/group commit orchestration、CQ/Index、HA、Timer/POP 仍保持未完成。PR-M06-03 父项、M06 Exit Checklist 和
+  M06-04..12 保持未完成。

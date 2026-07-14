@@ -37,11 +37,13 @@ LEAF_FILES = {
     "metrics.rs",
 }
 KERNEL_ITEMS = {
+    "MappedFileWarmupOperation": "enum",
     "MappedFileProgress": "struct",
     "ReferenceResource": "trait",
     "ReferenceResourceBase": "struct",
     "ReferenceResourceCounter": "struct",
     "OS_PAGE_SIZE": "const",
+    "visit_mapped_file_warmup_schedule": "fn",
 }
 MAPPED_FILE_KERNEL_PATH = Path("rocketmq-store-local/src/mapped_file/kernel.rs")
 DEFAULT_MAPPED_FILE_PATH = Path(
@@ -54,6 +56,8 @@ MAPPED_FILE_POLICY_REFERENCE = re.compile(
 )
 MAPPED_FILE_LOCK_RANGE_METHODS = ("lock_region_range",)
 MAPPED_FILE_LOCK_RANGE_REFERENCE = re.compile(r"(?:\.|::)\s*lock_region_range\b")
+MAPPED_FILE_WARMUP_OPERATION = "MappedFileWarmupOperation"
+MAPPED_FILE_WARMUP_VISITOR = "visit_mapped_file_warmup_schedule"
 STORE_LOCK_RANGE_HELPER_METHODS = ("lock_region_address_and_len",)
 STORE_LOCK_RANGE_HELPER_REFERENCE = re.compile(
     r"(?:\.|::)\s*lock_region_address_and_len\b"
@@ -2361,7 +2365,7 @@ def kernel_item_owner_occurrences(
 ) -> list[tuple[Path, str]]:
     declaration = re.compile(
         rf"\b(?:pub(?:\s*\([^)]*\))?\s+)?"
-        rf"(?P<kind>struct|trait|type|enum|union|const|mod)\s+{re.escape(item)}\b"
+        rf"(?P<kind>struct|trait|type|enum|union|const|fn|mod)\s+{re.escape(item)}\b"
     )
     aliased_import = re.compile(rf"\bas\s+{re.escape(item)}\b")
     occurrences: list[tuple[Path, str]] = []
@@ -2436,6 +2440,215 @@ def mapped_file_progress_policy_violations(source: str) -> list[str]:
             violations.append(f"MappedFileProgress::{function_name} signature changed")
         if record.body != expected_bodies[function_name]:
             violations.append(f"MappedFileProgress::{function_name} behavior changed")
+    return violations
+
+
+def mapped_file_warmup_policy_violations(source: str) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    violations: list[str] = []
+
+    enum_matches = list(
+        re.finditer(r"\bpub\s+enum\s+MappedFileWarmupOperation\b", active)
+    )
+    if len(enum_matches) != 1:
+        violations.append("MappedFileWarmupOperation production definition count changed")
+    else:
+        enum_match = enum_matches[0]
+        if attributes_have_cfg_gate(
+            contiguous_outer_attributes_before(active, enum_match.start())
+        ):
+            violations.append("MappedFileWarmupOperation must not be cfg gated")
+    if _derive_items(production, "enum", MAPPED_FILE_WARMUP_OPERATION) != {
+        "Debug",
+        "Clone",
+        "Copy",
+        "PartialEq",
+        "Eq",
+    }:
+        violations.append("MappedFileWarmupOperation derives changed")
+    enum_body = active_item_body(production, "enum", MAPPED_FILE_WARMUP_OPERATION)
+    if compact_rust(enum_body or "") != (
+        "Touch{offset:usize},Flush{offset:usize,len:usize,final_flush:bool,},"
+    ):
+        violations.append("MappedFileWarmupOperation variants changed")
+
+    function_matches = list(
+        re.finditer(r"\bpub\s+fn\s+visit_mapped_file_warmup_schedule\b", active)
+    )
+    if len(function_matches) != 1:
+        violations.append("warmup schedule visitor production definition count changed")
+    else:
+        function_match = function_matches[0]
+        if attributes_have_cfg_gate(
+            contiguous_outer_attributes_before(active, function_match.start())
+        ):
+            violations.append("warmup schedule visitor must not be cfg gated")
+
+    expected_signature = (
+        "pubfnvisit_mapped_file_warmup_schedule<F>(file_size:usize,page_size:usize,"
+        "flush_every_pages:usize,sync_flush:bool,mutvisitor:F,)whereF:FnMut("
+        "MappedFileWarmupOperation),"
+    )
+    signature_match = re.search(
+        r"\bpub\s+fn\s+visit_mapped_file_warmup_schedule\b[^{}]*\{",
+        active,
+    )
+    signature = (
+        compact_rust(signature_match.group(0)[:-1])
+        if signature_match is not None
+        else ""
+    )
+    if signature != expected_signature:
+        violations.append("warmup schedule visitor signature changed")
+
+    expected_body = (
+        "iffile_size==0{return;}letpage_size=page_size.max(1);"
+        "letflush_every_pages=flush_every_pages.max(1);letmuttouched_pages=0usize;"
+        "letmutlast_flush_offset=0usize;foroffsetin(0..file_size).step_by(page_size){"
+        "visitor(MappedFileWarmupOperation::Touch{offset});touched_pages+=1;"
+        "ifsync_flush&&touched_pages.is_multiple_of(flush_every_pages){"
+        "letend=(offset+1).min(file_size);visitor(MappedFileWarmupOperation::Flush{"
+        "offset:last_flush_offset,len:end-last_flush_offset,final_flush:false,});"
+        "last_flush_offset=end;}}"
+        "ifsync_flush&&last_flush_offset<file_size{visitor(MappedFileWarmupOperation::Flush{"
+        "offset:last_flush_offset,len:file_size-last_flush_offset,final_flush:true,});}"
+    )
+    body = compact_rust(named_raw_function_body(production, MAPPED_FILE_WARMUP_VISITOR) or "")
+    if body != expected_body:
+        violations.append("warmup schedule visitor behavior changed")
+    if any(token in body for token in ("Vec<", "vec![", ".collect(")):
+        violations.append("warmup schedule visitor must remain allocation-free")
+    return violations
+
+
+def mapped_file_warmup_store_adapter_violations(
+    default_mapped_file_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    raw_warmup_body = named_raw_function_body(
+        default_mapped_file_source,
+        "warm_mapped_file_with_ops",
+    ) or ""
+    default_production = source_without_cfg_test_items(default_mapped_file_source)
+    default_active = active_rust_source(default_production)
+    imports = [
+        body
+        for visibility, body, _ in active_use_records(default_production)
+        if visibility == "" and "mapped_file::kernel" in body
+    ]
+    expected_imports = [
+        "rocketmq_store_local::mapped_file::kernel::visit_mapped_file_warmup_schedule",
+        "rocketmq_store_local::mapped_file::kernel::MappedFileProgress",
+        "rocketmq_store_local::mapped_file::kernel::MappedFileWarmupOperation",
+    ]
+    if imports != expected_imports:
+        violations.append(f"Store warmup Local imports changed: {imports}")
+
+    warmup_body = compact_rust(
+        named_raw_function_body(default_production, "warm_mapped_file_with_ops") or ""
+    )
+    if warmup_body.count("visit_mapped_file_warmup_schedule(") != 1:
+        violations.append("Store warmup must delegate exactly once to Local schedule visitor")
+    required_fragments = (
+        "visit_mapped_file_warmup_schedule(file_size,get_page_size(),pages,"
+        "flush_disk_type==FlushDiskType::SyncFlush,|operation|",
+        "matchoperation{",
+        "MappedFileWarmupOperation::Touch{offset}=>",
+        "touch_page(mapped_ptr,offset)",
+        "MappedFileWarmupOperation::Flush{offset,len,final_flush,}=>",
+        "flush_range(mapped_file,offset,len)",
+        "iffinal_flush{",
+        "self.progress.record_flush_time();",
+    )
+    if any(fragment not in warmup_body for fragment in required_fragments):
+        violations.append("Store warmup adapter execution contract changed")
+    for warning in (
+        "Failed to flush final warmed mapped file range {}-{} for {}: {:?}",
+        "Failed to flush warmed mapped file range {}-{} for {}: {:?}",
+    ):
+        if raw_warmup_body.count(f'"{warning}"') != 1:
+            violations.append(f"Store warmup warning vocabulary changed: {warning}")
+    for retained in (
+        ".step_by(",
+        ".is_multiple_of(",
+        "touched_pages",
+        "last_flush_offset",
+        "flush_every_pages",
+    ):
+        if retained in warmup_body:
+            violations.append(f"Store warmup retained Local schedule policy: {retained}")
+
+    if default_active.count("MappedFileWarmupOperation::Touch") != 1:
+        violations.append("Store warmup Touch adapter count changed")
+    if default_active.count("MappedFileWarmupOperation::Flush") != 1:
+        violations.append("Store warmup Flush adapter count changed")
+    return violations
+
+
+def mapped_file_warmup_adapter_violations(
+    canonical_source: str,
+    default_mapped_file_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    violations = mapped_file_warmup_policy_violations(canonical_source)
+    violations.extend(
+        mapped_file_warmup_store_adapter_violations(default_mapped_file_source)
+    )
+    canonical_path = MAPPED_FILE_KERNEL_PATH
+    for item, kind in (
+        (MAPPED_FILE_WARMUP_OPERATION, "enum"),
+        (MAPPED_FILE_WARMUP_VISITOR, "fn"),
+    ):
+        occurrences = file_item_owner_occurrences(production_sources, item)
+        if occurrences != [(canonical_path, kind)]:
+            violations.append(f"{item} owner occurrences changed: {occurrences}")
+
+    default_production = source_without_cfg_test_items(default_mapped_file_source)
+
+    reference_paths: dict[Path, int] = {}
+    for path, source in production_sources.items():
+        production = (
+            default_production
+            if path == DEFAULT_MAPPED_FILE_PATH
+            else source_without_cfg_test_items(source)
+        )
+        count = len(
+            re.findall(
+                rf"\b{re.escape(MAPPED_FILE_WARMUP_VISITOR)}\b",
+                active_rust_source(production),
+            )
+        )
+        if count:
+            reference_paths[path] = count
+    expected_references = {
+        MAPPED_FILE_KERNEL_PATH: 1,
+        DEFAULT_MAPPED_FILE_PATH: 2,
+    }
+    if reference_paths != expected_references:
+        violations.append(f"warmup schedule visitor production references changed: {reference_paths}")
+
+    for path, source in production_sources.items():
+        if path.parts[:2] != ("rocketmq-store", "src"):
+            continue
+        production = (
+            default_production
+            if path == DEFAULT_MAPPED_FILE_PATH
+            else source_without_cfg_test_items(source)
+        )
+        active = active_rust_source(production)
+        for retained in (
+            ".step_by(",
+            ".is_multiple_of(",
+            "last_flush_offset",
+            "flush_every_pages",
+        ):
+            if retained in compact_rust(active):
+                violations.append(
+                    f"{path.as_posix()}: retained mapped-file warmup schedule token {retained}"
+                )
+
     return violations
 
 
@@ -6054,6 +6267,150 @@ struct DefaultMappedFile {
                 canonical,
                 default_mapped_file,
                 production_sources,
+            ),
+        )
+
+    def test_mapped_file_warmup_schedule_has_one_local_owner_and_store_adapter_only(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        self.assertEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                production_sources,
+            ),
+        )
+
+    def test_mapped_file_warmup_schedule_contract_rejects_policy_and_adapter_mutations(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        canonical_mutations = [
+            canonical.replace("Debug, Clone, Copy, PartialEq, Eq", "Debug, Clone, PartialEq, Eq", 1),
+            canonical.replace("Touch { offset: usize }", "Touch { offset: u64 }", 1),
+            canonical.replace("final_flush: bool", "final_flush: usize", 1),
+            canonical.replace("if file_size == 0", "if file_size == 1", 1),
+            canonical.replace("page_size.max(1)", "page_size.max(2)", 1),
+            canonical.replace("flush_every_pages.max(1)", "flush_every_pages.max(2)", 1),
+            canonical.replace("touched_pages += 1", "touched_pages += 2", 1),
+            canonical.replace(".step_by(page_size)", ".step_by(flush_every_pages)", 1),
+            canonical.replace("touched_pages.is_multiple_of(flush_every_pages)", "offset.is_multiple_of(flush_every_pages)", 1),
+            canonical.replace("(offset + 1).min(file_size)", "(offset + page_size).min(file_size)", 1),
+            canonical.replace("offset: last_flush_offset", "offset: 0", 1),
+            canonical.replace("len: end - last_flush_offset", "len: end", 1),
+            canonical.replace("final_flush: false", "final_flush: true", 1),
+            canonical.replace("last_flush_offset = end", "last_flush_offset += end", 1),
+            canonical.replace("last_flush_offset < file_size", "last_flush_offset <= file_size", 1),
+            canonical.replace("len: file_size - last_flush_offset", "len: file_size", 1),
+            canonical.replace("final_flush: true", "final_flush: false", 1),
+            canonical.replace("visitor(MappedFileWarmupOperation::Touch { offset });", "", 1),
+        ]
+        for mutation_index, mutation in enumerate(canonical_mutations):
+            with self.subTest(canonical_mutation=mutation_index):
+                self.assertNotEqual(canonical, mutation)
+                self.assertNotEqual([], mapped_file_warmup_policy_violations(mutation))
+
+        owner_mutations = [
+            canonical.replace(
+                "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum MappedFileWarmupOperation",
+                "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n#[cfg_attr(any(), cfg(any()))]\npub enum MappedFileWarmupOperation",
+                1,
+            ),
+            canonical.replace(
+                "pub fn visit_mapped_file_warmup_schedule",
+                "#[cfg_attr(any(), cfg(any()))]\npub fn visit_mapped_file_warmup_schedule",
+                1,
+            ),
+            canonical
+            + "\npub enum MappedFileWarmupOperation { Touch { offset: usize } }\n",
+            canonical
+            + "\npub fn visit_mapped_file_warmup_schedule<F>(_: usize, _: usize, _: usize, _: bool, _: F) where F: FnMut(MappedFileWarmupOperation) {}\n",
+        ]
+        for mutation_index, mutation in enumerate(owner_mutations):
+            with self.subTest(owner_mutation=mutation_index):
+                self.assertNotEqual(canonical, mutation)
+                self.assertNotEqual([], mapped_file_warmup_policy_violations(mutation))
+
+        test_only_decoy = canonical + """
+
+#[cfg(test)]
+pub fn visit_mapped_file_warmup_schedule<F>(
+    _: usize,
+    _: usize,
+    _: usize,
+    _: bool,
+    _: F,
+) where
+    F: FnMut(MappedFileWarmupOperation),
+{
+}
+"""
+        self.assertEqual([], mapped_file_warmup_policy_violations(test_only_decoy))
+
+        adapter_mutations = [
+            default_mapped_file.replace("get_page_size(),", "get_page_size().max(1),", 1),
+            default_mapped_file.replace(
+                "                pages,\n                flush_disk_type",
+                "                pages.max(1),\n                flush_disk_type",
+                1,
+            ),
+            default_mapped_file.replace(
+                "flush_disk_type == FlushDiskType::SyncFlush",
+                "flush_disk_type != FlushDiskType::SyncFlush",
+                1,
+            ),
+            default_mapped_file.replace(
+                "MappedFileWarmupOperation::Touch { offset }",
+                "MappedFileWarmupOperation::Touch { offset: _ }",
+                1,
+            ),
+            default_mapped_file.replace("touch_page(mapped_ptr, offset)", "touch_page(mapped_ptr, 0)", 1),
+            default_mapped_file.replace("final_flush,", "final_flush: _,", 1),
+            default_mapped_file.replace("flush_range(mapped_file, offset, len)", "flush_range(mapped_file, 0, len)", 1),
+            default_mapped_file.replace("if final_flush", "if !final_flush", 1),
+            default_mapped_file.replace("Failed to flush final warmed", "Failed to flush warmed", 1),
+            default_mapped_file.replace("self.progress.record_flush_time();", "", 1),
+        ]
+        for mutation_index, mutation in enumerate(adapter_mutations):
+            with self.subTest(adapter_mutation=mutation_index):
+                self.assertNotEqual(default_mapped_file, mutation)
+                self.assertNotEqual(
+                    [],
+                    mapped_file_warmup_store_adapter_violations(mutation),
+                )
+
+        duplicate_path = Path("rocketmq-store/src/base/swappable.rs")
+        duplicate_sources = dict(production_sources)
+        duplicate_sources[duplicate_path] += """
+
+fn copied_warmup_schedule(file_size: usize, page_size: usize, every: usize) {
+    let mut last_flush_offset = 0usize;
+    for offset in (0..file_size).step_by(page_size) {
+        if offset.is_multiple_of(every) {
+            last_flush_offset = (offset + 1).min(file_size);
+        }
+    }
+    let _ = last_flush_offset;
+}
+"""
+        self.assertNotEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                duplicate_sources,
             ),
         )
 

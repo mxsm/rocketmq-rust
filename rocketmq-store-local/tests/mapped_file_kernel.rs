@@ -17,11 +17,92 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 
+use rocketmq_store_local::mapped_file::kernel::visit_mapped_file_warmup_schedule;
 use rocketmq_store_local::mapped_file::kernel::MappedFileProgress;
+use rocketmq_store_local::mapped_file::kernel::MappedFileWarmupOperation;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResourceBase;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResourceCounter;
 use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE;
+
+fn warmup_schedule(
+    file_size: usize,
+    page_size: usize,
+    flush_every_pages: usize,
+    sync_flush: bool,
+) -> Vec<MappedFileWarmupOperation> {
+    let mut operations = Vec::new();
+    visit_mapped_file_warmup_schedule(file_size, page_size, flush_every_pages, sync_flush, |operation| {
+        operations.push(operation)
+    });
+    operations
+}
+
+#[test]
+fn warmup_schedule_preserves_touch_then_periodic_and_final_flush_order() {
+    assert_eq!(
+        warmup_schedule(10, 4, 2, true),
+        vec![
+            MappedFileWarmupOperation::Touch { offset: 0 },
+            MappedFileWarmupOperation::Touch { offset: 4 },
+            MappedFileWarmupOperation::Flush {
+                offset: 0,
+                len: 5,
+                final_flush: false,
+            },
+            MappedFileWarmupOperation::Touch { offset: 8 },
+            MappedFileWarmupOperation::Flush {
+                offset: 5,
+                len: 5,
+                final_flush: true,
+            },
+        ]
+    );
+}
+
+#[test]
+fn async_warmup_schedule_only_touches_each_page_start() {
+    assert_eq!(
+        warmup_schedule(10, 4, 2, false),
+        vec![
+            MappedFileWarmupOperation::Touch { offset: 0 },
+            MappedFileWarmupOperation::Touch { offset: 4 },
+            MappedFileWarmupOperation::Touch { offset: 8 },
+        ]
+    );
+}
+
+#[test]
+fn warmup_schedule_normalizes_zero_page_and_flush_intervals() {
+    assert_eq!(
+        warmup_schedule(3, 0, 0, true),
+        vec![
+            MappedFileWarmupOperation::Touch { offset: 0 },
+            MappedFileWarmupOperation::Flush {
+                offset: 0,
+                len: 1,
+                final_flush: false,
+            },
+            MappedFileWarmupOperation::Touch { offset: 1 },
+            MappedFileWarmupOperation::Flush {
+                offset: 1,
+                len: 1,
+                final_flush: false,
+            },
+            MappedFileWarmupOperation::Touch { offset: 2 },
+            MappedFileWarmupOperation::Flush {
+                offset: 2,
+                len: 1,
+                final_flush: false,
+            },
+        ]
+    );
+}
+
+#[test]
+fn warmup_schedule_emits_no_operations_for_an_empty_file() {
+    assert!(warmup_schedule(0, 0, 0, true).is_empty());
+}
 
 #[test]
 fn progress_starts_with_legacy_defaults() {

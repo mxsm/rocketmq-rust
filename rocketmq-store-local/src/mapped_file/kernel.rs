@@ -29,6 +29,65 @@ use parking_lot::Mutex;
 /// than a query of the host operating system's current page size.
 pub const OS_PAGE_SIZE: u64 = 1024 * 4;
 
+/// One ordered operation in the compatibility warmup schedule for a mapped file.
+///
+/// The schedule describes byte offsets and ranges only. Callers retain ownership of the mapped
+/// memory, platform I/O, error handling, metrics, and lifecycle behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MappedFileWarmupOperation {
+    /// Touch the page whose first scheduled byte is `offset`.
+    Touch { offset: usize },
+    /// Flush the byte range beginning at `offset`.
+    Flush {
+        offset: usize,
+        len: usize,
+        final_flush: bool,
+    },
+}
+
+/// Visits the legacy mapped-file warmup schedule without allocating an operation list.
+///
+/// `page_size` and `flush_every_pages` are normalized to at least one. Synchronous schedules
+/// preserve the historical periodic boundary of `offset + 1`; that boundary intentionally does
+/// not expand to the end of the page. An empty file emits no operations.
+pub fn visit_mapped_file_warmup_schedule<F>(
+    file_size: usize,
+    page_size: usize,
+    flush_every_pages: usize,
+    sync_flush: bool,
+    mut visitor: F,
+) where
+    F: FnMut(MappedFileWarmupOperation),
+{
+    if file_size == 0 {
+        return;
+    }
+    let page_size = page_size.max(1);
+    let flush_every_pages = flush_every_pages.max(1);
+    let mut touched_pages = 0usize;
+    let mut last_flush_offset = 0usize;
+    for offset in (0..file_size).step_by(page_size) {
+        visitor(MappedFileWarmupOperation::Touch { offset });
+        touched_pages += 1;
+        if sync_flush && touched_pages.is_multiple_of(flush_every_pages) {
+            let end = (offset + 1).min(file_size);
+            visitor(MappedFileWarmupOperation::Flush {
+                offset: last_flush_offset,
+                len: end - last_flush_offset,
+                final_flush: false,
+            });
+            last_flush_offset = end;
+        }
+    }
+    if sync_flush && last_flush_offset < file_size {
+        visitor(MappedFileWarmupOperation::Flush {
+            offset: last_flush_offset,
+            len: file_size - last_flush_offset,
+            final_flush: true,
+        });
+    }
+}
+
 #[inline(always)]
 fn current_millis() -> u64 {
     SystemTime::now()

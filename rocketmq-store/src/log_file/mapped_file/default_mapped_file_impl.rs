@@ -35,7 +35,9 @@ use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
 use rocketmq_store_local::mapped_file::file::MappedFileStorage;
+use rocketmq_store_local::mapped_file::kernel::visit_mapped_file_warmup_schedule;
 use rocketmq_store_local::mapped_file::kernel::MappedFileProgress;
+use rocketmq_store_local::mapped_file::kernel::MappedFileWarmupOperation;
 pub use rocketmq_store_local::mapped_file::mapping::LazyMmapStats;
 use rocketmq_store_local::mapped_file::mapping::MappedFileMapping;
 use tracing::debug;
@@ -1216,67 +1218,63 @@ impl DefaultMappedFile {
         A: FnMut(*const u8, usize, i32) -> io::Result<()>,
         R: FnMut(LinuxStorageDegradationEvent),
     {
-        let page_size = get_page_size().max(1);
         let file_size = self.progress.file_size() as usize;
         if file_size == 0 {
             return;
         }
 
         let warmup_started = Instant::now();
-        let flush_every_pages = pages.max(1);
-        let mut last_flush_offset = 0usize;
         {
             let mapped_file = self.get_mapped_file_mut();
-            let mut touched_pages = 0usize;
             let mapped_ptr = mapped_file.as_mut_ptr();
-            for offset in (0..file_size).step_by(page_size) {
-                if let Err(error) = touch_page(mapped_ptr, offset) {
-                    record_degradation(LinuxStorageDegradationEvent::new(
-                        LINUX_STORAGE_OP_PAGE_TOUCH,
-                        LINUX_STORAGE_REASON_FAILED,
-                        errno_from_io_error(&error),
-                    ));
-                    warn!(
-                        "Failed to touch warmed mapped file page at offset {} for {}: {:?}",
-                        offset, self.file_name, error
-                    );
-                }
-                touched_pages += 1;
-
-                if flush_disk_type == FlushDiskType::SyncFlush && touched_pages.is_multiple_of(flush_every_pages) {
-                    let end = (offset + 1).min(file_size);
-                    if let Err(error) = flush_range(mapped_file, last_flush_offset, end - last_flush_offset) {
-                        record_degradation(LinuxStorageDegradationEvent::new(
-                            LINUX_STORAGE_OP_PAGE_TOUCH,
-                            LINUX_STORAGE_REASON_FLUSH_FAILED,
-                            errno_from_io_error(&error),
-                        ));
-                        warn!(
-                            "Failed to flush warmed mapped file range {}-{} for {}: {:?}",
-                            last_flush_offset, end, self.file_name, error
-                        );
-                    } else {
-                        self.progress.record_flush_time();
+            visit_mapped_file_warmup_schedule(
+                file_size,
+                get_page_size(),
+                pages,
+                flush_disk_type == FlushDiskType::SyncFlush,
+                |operation| match operation {
+                    MappedFileWarmupOperation::Touch { offset } => {
+                        if let Err(error) = touch_page(mapped_ptr, offset) {
+                            record_degradation(LinuxStorageDegradationEvent::new(
+                                LINUX_STORAGE_OP_PAGE_TOUCH,
+                                LINUX_STORAGE_REASON_FAILED,
+                                errno_from_io_error(&error),
+                            ));
+                            warn!(
+                                "Failed to touch warmed mapped file page at offset {} for {}: {:?}",
+                                offset, self.file_name, error
+                            );
+                        }
                     }
-                    last_flush_offset = end;
-                }
-            }
-
-            if flush_disk_type == FlushDiskType::SyncFlush && last_flush_offset < file_size {
-                if let Err(error) = flush_range(mapped_file, last_flush_offset, file_size - last_flush_offset) {
-                    record_degradation(LinuxStorageDegradationEvent::new(
-                        LINUX_STORAGE_OP_PAGE_TOUCH,
-                        LINUX_STORAGE_REASON_FLUSH_FAILED,
-                        errno_from_io_error(&error),
-                    ));
-                    warn!(
-                        "Failed to flush final warmed mapped file range {}-{} for {}: {:?}",
-                        last_flush_offset, file_size, self.file_name, error
-                    );
-                } else {
-                    self.progress.record_flush_time();
-                }
-            }
+                    MappedFileWarmupOperation::Flush {
+                        offset,
+                        len,
+                        final_flush,
+                    } => {
+                        let end = offset + len;
+                        if let Err(error) = flush_range(mapped_file, offset, len) {
+                            record_degradation(LinuxStorageDegradationEvent::new(
+                                LINUX_STORAGE_OP_PAGE_TOUCH,
+                                LINUX_STORAGE_REASON_FLUSH_FAILED,
+                                errno_from_io_error(&error),
+                            ));
+                            if final_flush {
+                                warn!(
+                                    "Failed to flush final warmed mapped file range {}-{} for {}: {:?}",
+                                    offset, end, self.file_name, error
+                                );
+                            } else {
+                                warn!(
+                                    "Failed to flush warmed mapped file range {}-{} for {}: {:?}",
+                                    offset, end, self.file_name, error
+                                );
+                            }
+                        } else {
+                            self.progress.record_flush_time();
+                        }
+                    }
+                },
+            );
         }
 
         if let Err(error) = advise(self.get_mapped_file().as_ptr(), file_size, MADV_WILLNEED) {
