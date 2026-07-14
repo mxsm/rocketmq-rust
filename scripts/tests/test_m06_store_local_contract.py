@@ -1632,6 +1632,7 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
     return violations
 
 
+@functools.lru_cache(maxsize=2048)
 def confirm_candidate_function_records(
     path: Path,
     source: str,
@@ -1653,6 +1654,7 @@ def confirm_candidate_function_records(
     return records
 
 
+@functools.lru_cache(maxsize=4096)
 def confirm_candidate_semantic_stages(
     signature: str,
     body: str,
@@ -1663,28 +1665,170 @@ def confirm_candidate_semantic_stages(
     stages: set[str] = set()
     signed_parameters = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*i64\b", signature)
     size_parameters = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*usize\b", signature)
-    if any(
-        re.search(rf"\b{re.escape(parameter)}\s*<\s*0\b", active)
-        or re.search(rf"\b{re.escape(parameter)}\.is_negative\s*\(\s*\)", active)
-        for parameter in signed_parameters
-    ):
-        stages.add("negative")
-    has_signed_conversion = any(
-        f"{conversion_type}::try_from(" in compact
-        for conversion_type in signed_conversion_types
-    )
-    if has_signed_conversion and (
-        not size_parameters
-        or any(
-            f"{conversion_type}::try_from({parameter})" in compact
-            for conversion_type in signed_conversion_types
-            for parameter in size_parameters
+    if len(signed_parameters) != 1 or len(size_parameters) != 1:
+        return frozenset()
+    offset_parameter = signed_parameters[0]
+    size_parameter = size_parameters[0]
+    aliases = IdentifierAliases(compact)
+    if (
+        re.search(rf"\b{re.escape(offset_parameter)}\s*<\s*0\b", active)
+        or re.search(
+            rf"\b{re.escape(offset_parameter)}\.is_negative\s*\(\s*\)",
+            active,
         )
     ):
+        stages.add("negative")
+
+    conversion_type_pattern = "(?:" + "|".join(
+        re.escape(conversion_type) for conversion_type in signed_conversion_types
+    ) + ")"
+    converted_identifiers: set[str] = set()
+    for match in re.finditer(
+        rf"let(?:mut)?(?P<target>{WARMUP_IDENTIFIER})(?:\:[^=;]+)?="
+        rf"{conversion_type_pattern}::try_from\((?P<input>{WARMUP_IDENTIFIER})\)",
+        compact,
+    ):
+        if aliases.equivalent(match.group("input"), size_parameter):
+            converted_identifiers.add(match.group("target"))
+
+    for tuple_match in re.finditer(r"let\((?P<left>[^;]+?)\)=\((?P<right>.+?)\);", compact):
+        left_items = split_top_level_expression(tuple_match.group("left"), ",")
+        right_items = split_top_level_expression(tuple_match.group("right"), ",")
+        if len(left_items) != len(right_items):
+            continue
+        for left, right in zip(left_items, right_items):
+            left_identifier = warmup_identifier_expression(left)
+            right_identifier = warmup_identifier_expression(right)
+            if left_identifier is not None and right_identifier is not None:
+                aliases.union(left_identifier, right_identifier)
+        for left, right in zip(left_items, right_items):
+            left_identifier = warmup_identifier_expression(left)
+            conversion = re.match(
+                rf"{conversion_type_pattern}::try_from\((?P<input>{WARMUP_IDENTIFIER})\)",
+                right,
+            )
+            if (
+                left_identifier is not None
+                and conversion is not None
+                and aliases.equivalent(conversion.group("input"), size_parameter)
+            ):
+                converted_identifiers.add(left_identifier)
+
+    converted_roots = {
+        aliases.find(identifier) for identifier in converted_identifiers
+    }
+    if converted_roots:
         stages.add("conversion")
-    if ".checked_add(" in compact:
-        stages.add("addition")
+    for addition in re.finditer(
+        rf"(?P<base>{WARMUP_IDENTIFIER})\.checked_add\("
+        rf"(?P<size>{WARMUP_IDENTIFIER})\)",
+        compact,
+    ):
+        if (
+            aliases.equivalent(addition.group("base"), offset_parameter)
+            and aliases.find(addition.group("size")) in converted_roots
+        ):
+            stages.add("addition")
+            break
     return frozenset(stages)
+
+
+@functools.lru_cache(maxsize=4096)
+def confirm_candidate_parameter_entries(signature: str) -> tuple[tuple[str, str], ...]:
+    opening = signature.find("(")
+    if opening == -1:
+        return ()
+    closing = closing_parenthesis(signature, opening)
+    if closing is None:
+        return ()
+    entries: list[tuple[str, str]] = []
+    for parameter in split_top_level_expression(signature[opening + 1:closing], ","):
+        normalized = compact_rust(parameter)
+        match = re.match(
+            rf"(?:mut)?(?P<name>{WARMUP_IDENTIFIER}):(?P<type>.+)",
+            normalized,
+        )
+        if match is not None:
+            entries.append((match.group("name"), match.group("type")))
+    return tuple(entries)
+
+
+@functools.lru_cache(maxsize=4096)
+def confirm_candidate_role_preserving_call(
+    caller_path: Path,
+    caller_signature: str,
+    caller_body: str,
+    callee_path: Path,
+    callee_name: str,
+    callee_signature: str,
+    allow_unqualified: bool,
+) -> bool:
+    caller_entries = confirm_candidate_parameter_entries(caller_signature)
+    callee_entries = confirm_candidate_parameter_entries(callee_signature)
+    caller_offsets = [name for name, kind in caller_entries if kind == "i64"]
+    caller_sizes = [name for name, kind in caller_entries if kind == "usize"]
+    callee_offset_indices = [index for index, (_, kind) in enumerate(callee_entries) if kind == "i64"]
+    callee_size_indices = [index for index, (_, kind) in enumerate(callee_entries) if kind == "usize"]
+    if not (
+        len(caller_offsets) == len(caller_sizes) == 1
+        and len(callee_offset_indices) == len(callee_size_indices) == 1
+    ):
+        return False
+
+    active_body = active_rust_source(caller_body)
+    compact_body = compact_rust(active_body)
+    aliases = IdentifierAliases(compact_body)
+    caller_module = warmup_module_path(caller_path)
+    callee_module = warmup_module_path(callee_path)
+    call_pattern = re.compile(
+        rf"(?P<qualifier>(?:(?:{WARMUP_IDENTIFIER})::)*)"
+        rf"{re.escape(callee_name)}\s*\("
+    )
+    for call in call_pattern.finditer(active_body):
+        qualifier = tuple(
+            part for part in call.group("qualifier").split("::") if part
+        )
+        if qualifier:
+            resolved = list(caller_module)
+            remaining = list(qualifier)
+            if remaining[0] == "crate":
+                resolved = []
+                remaining.pop(0)
+            elif remaining[0] == "self":
+                remaining.pop(0)
+            else:
+                while remaining and remaining[0] == "super":
+                    if resolved:
+                        resolved.pop()
+                    remaining.pop(0)
+            resolved.extend(remaining)
+            if tuple(resolved) != callee_module:
+                continue
+        elif not allow_unqualified and caller_module != callee_module:
+            continue
+        opening = active_body.find("(", call.start())
+        closing = closing_parenthesis(active_body, opening)
+        if closing is None:
+            continue
+        arguments = split_top_level_expression(active_body[opening + 1:closing], ",")
+        offset_index = callee_offset_indices[0]
+        size_index = callee_size_indices[0]
+        if max(offset_index, size_index) >= len(arguments):
+            continue
+        offset_argument = warmup_identifier_expression(
+            strip_outer_parentheses(arguments[offset_index].strip())
+        )
+        size_argument = warmup_identifier_expression(
+            strip_outer_parentheses(arguments[size_index].strip())
+        )
+        if (
+            offset_argument is not None
+            and size_argument is not None
+            and aliases.equivalent(offset_argument, caller_offsets[0])
+            and aliases.equivalent(size_argument, caller_sizes[0])
+        ):
+            return True
+    return False
 
 
 def confirm_candidate_semantic_copies(
@@ -1693,8 +1837,12 @@ def confirm_candidate_semantic_copies(
     """Find complete or directly split copies of the three-stage checked calculation."""
     findings: list[str] = []
     canonical = (ABNORMAL_CONFIRM_CANDIDATE_PATH, "abnormal_confirm_candidate_end")
+    records: list[tuple[Path, str, str, str, frozenset[str]]] = []
     for path, source in production_sources.items():
-        if ".checked_add(" not in source or "::try_from(" not in source:
+        if not any(
+            token in source
+            for token in ("< 0", ".is_negative", "::try_from(", ".checked_add(")
+        ):
             continue
         active_source = active_rust_source(source_without_cfg_test_items(source))
         signed_conversion_types = {"i64"}
@@ -1712,25 +1860,52 @@ def confirm_candidate_semantic_copies(
             )
         )
         signed_types = frozenset(signed_conversion_types)
-        records = confirm_candidate_function_records(path, source)
-        by_name = {name: (signature, body) for _, name, signature, body in records}
-        for _, name, signature, body in records:
-            if (path, name) == canonical:
+        for _, name, signature, body in confirm_candidate_function_records(path, source):
+            records.append((path, name, signature, body, signed_types))
+
+    required_stages = frozenset({"negative", "conversion", "addition"})
+    records_by_name: dict[str, list[tuple[Path, str, str, str, frozenset[str]]]] = {}
+    for record in records:
+        records_by_name.setdefault(record[1], []).append(record)
+    for path, name, signature, body, signed_types in records:
+        if (path, name) == canonical:
+            continue
+        stages = confirm_candidate_semantic_stages(signature, body, signed_types)
+        if stages == required_stages:
+            findings.append(f"{path.as_posix()}::{name} (complete)")
+            continue
+        called_names = set(
+            re.findall(
+                rf"\b({WARMUP_IDENTIFIER})\s*\(",
+                active_rust_source(body),
+            )
+        )
+        for callee_name in called_names:
+            candidates = records_by_name.get(callee_name, [])
+            if callee_name == name:
                 continue
-            stages = confirm_candidate_semantic_stages(signature, body, signed_types)
-            if stages == frozenset({"negative", "conversion", "addition"}):
-                findings.append(f"{path.as_posix()}::{name} (complete)")
-                continue
-            for callee, (callee_signature, callee_body) in by_name.items():
-                if callee == name or re.search(rf"\b{re.escape(callee)}\s*\(", active_rust_source(body)) is None:
+            for callee_path, _, callee_signature, callee_body, callee_signed_types in candidates:
+                if (callee_path, callee_name) == canonical:
+                    continue
+                if not confirm_candidate_role_preserving_call(
+                    path,
+                    signature,
+                    body,
+                    callee_path,
+                    callee_name,
+                    callee_signature,
+                    len(candidates) == 1,
+                ):
                     continue
                 combined = stages | confirm_candidate_semantic_stages(
                     callee_signature,
                     callee_body,
-                    signed_types,
+                    callee_signed_types,
                 )
-                if combined == frozenset({"negative", "conversion", "addition"}):
-                    findings.append(f"{path.as_posix()}::{name}->{callee} (split)")
+                if combined == required_stages:
+                    findings.append(
+                        f"{path.as_posix()}::{name}->{callee_path.as_posix()}::{callee_name} (split)"
+                    )
     return findings
 
 
@@ -1757,6 +1932,36 @@ def abnormal_confirm_candidate_owner_violations(
         ]:
             violations.append(f"{item} must have one Local owner")
 
+    enum_matches = list(
+        re.finditer(
+            r"\bpub\s+enum\s+AbnormalRecoveryConfirmCandidateError\b",
+            active,
+        )
+    )
+    if len(enum_matches) != 1:
+        violations.append("abnormal confirm candidate error definition count changed")
+    elif attributes_have_cfg_gate(
+        contiguous_outer_attributes_before(active, enum_matches[0].start())
+    ):
+        violations.append("abnormal confirm candidate error must not be cfg-gated")
+    if _derive_items(
+        production,
+        "enum",
+        "AbnormalRecoveryConfirmCandidateError",
+    ) != {"Debug", "Clone", "Copy", "PartialEq", "Eq", "thiserror::Error"}:
+        violations.append("abnormal confirm candidate error derives changed")
+    enum_body = active_item_body(
+        production,
+        "enum",
+        "AbnormalRecoveryConfirmCandidateError",
+    )
+    if compact_rust(enum_body or "") != (
+        "#[error()]NegativeCommitLogOffset{offset:i64,},"
+        "#[error()]InputSizeExceedsI64{size:usize,},"
+        "#[error()]ConfirmCandidateOverflow{offset:i64,size:i64,},"
+    ):
+        violations.append("abnormal confirm candidate error variants or fields changed")
+
     expected_function = (
         "pubfnabnormal_confirm_candidate_end(commit_log_offset:i64,input_size:usize,)"
         "->Result<i64,AbnormalRecoveryConfirmCandidateError>{"
@@ -1776,10 +1981,8 @@ def abnormal_confirm_candidate_owner_violations(
         '#[error("input frame size {size} exceeds i64::MAX")]',
         '#[error("commitlog offset {offset} plus input frame size {size} overflowed")]',
     ):
-        if display not in source:
+        if source.count(display) != 1:
             violations.append(f"abnormal confirm candidate display changed: {display}")
-    if "#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]" not in source:
-        violations.append("abnormal confirm candidate error traits changed")
     if re.search(
         r"#\s*\[\s*(?:cfg|cfg_attr)\b[^\]]*\]\s*"
         r"pub\s+(?:enum\s+AbnormalRecoveryConfirmCandidateError|fn\s+abnormal_confirm_candidate_end)",
@@ -1787,20 +1990,27 @@ def abnormal_confirm_candidate_owner_violations(
         re.DOTALL,
     ):
         violations.append("abnormal confirm candidate owner must not be cfg-gated")
-    if any(
-        token in active
-        for token in (
-            "MessageStoreConfig",
-            "MappedFile",
-            "std::fs",
-            "tokio",
-            "tracing",
-            "Vec<",
-            "Box<",
-            ".collect(",
-            "async fn",
-        )
-    ):
+    allowed_imports = {
+        "core::convert::TryFrom",
+        "std::convert::TryFrom",
+        "thiserror::Error",
+    }
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use"
+    ]
+    forbidden_dependency = any(body not in allowed_imports for body in imports)
+    forbidden_dependency = forbidden_dependency or re.search(
+        r"\b(?:MessageStoreConfig|MappedFile|DispatchRequest|File|Read|Write|"
+        r"Vec|Box|String|HashMap|HashSet|BTreeMap|BTreeSet|Rc|Arc|Cow)\b|"
+        r"\b(?:std|core)::(?:fs|io|net|thread|sync)\b|"
+        r"\b(?:tokio|tracing|rocketmq_store|rocketmq_common)\b|"
+        r"\bvec!\s*[\[(]|\b(?:format|info|warn|error|debug|trace)!\s*\(|"
+        r"\.collect\s*\(|\basync\s+fn\b",
+        active,
+    ) is not None
+    if forbidden_dependency:
         violations.append("abnormal confirm candidate absorbed allocation or Store orchestration")
     if not violations:
         for finding in confirm_candidate_semantic_copies(production_sources):
@@ -1841,17 +2051,47 @@ def store_abnormal_confirm_candidate_adapter_violations(
         violations.append(f"Store abnormal confirm candidate references changed: {references}")
     expected_calls = {
         "recover_abnormally_optimized": (
-            "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,msg_size)"
+            "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,msg_size)",
+            "optimized abnormal recovery confirm candidate failed: {error}",
         ),
         "recover_abnormally": (
-            "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,input_size)"
+            "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,input_size)",
+            "standard abnormal recovery confirm candidate failed: {error}",
         ),
     }
-    for function_name, expected_call in expected_calls.items():
+    for function_name, (expected_call, expected_warning) in expected_calls.items():
         body = named_function_body(production, function_name)
-        normalized = compact_rust(body or "")
+        raw_body = named_raw_function_body(commit_log, function_name)
+        normalized = compact_rust(raw_body or "")
         if body is None or normalized.count(expected_call) != 1:
             violations.append(f"{function_name} must call Local candidate once with raw input size")
+            continue
+        expected_warning_statement = compact_rust(
+            'warn!("' + expected_warning + '");'
+        )
+        expected_error_match = (
+            f"letconfirm_candidate_end=match{expected_call}{{"
+            "Ok(candidate)=>candidate,Err(error)=>{"
+            f"{expected_warning_statement}"
+            "break'segments;}};"
+        )
+        if normalized.count(expected_error_match) != 1:
+            violations.append(
+                f"{function_name} candidate error warning or fail-closed action changed"
+            )
+            continue
+        ordered_flow = [
+            expected_error_match,
+            "letvalidated_size=matchu64::try_from(dispatch_request.msg_size){",
+            "letrelative_start=matchu64::try_from(",
+            "letdispatch_gate=",
+            "matchabnormal_recovery.apply(AbnormalRecoveryEvent::MessageAccepted{",
+        ]
+        positions = [normalized.find(fragment) for fragment in ordered_flow]
+        if any(position == -1 for position in positions) or positions != sorted(positions):
+            violations.append(
+                f"{function_name} candidate-to-message-event order changed"
+            )
     for function_name in ("recover_normally_optimized", "recover_normally"):
         body = named_function_body(production, function_name)
         if body is None or re.search(rf"\b{owner}\b", active_rust_source(body)):
@@ -7344,6 +7584,29 @@ class StoreLocalContractTests(unittest.TestCase):
             canonical
             + "\n#[cfg(test)]\nmod tests {}\n"
             + "pub fn abnormal_confirm_candidate_end(_: i64, _: usize) -> i64 { 0 }\n",
+            canonical.replace(
+                "/// Checked-arithmetic failure",
+                "use std::io::Read;\n\n/// Checked-arithmetic failure",
+                1,
+            ),
+            canonical + "\nfn forbidden_allocation() { let _ = vec![1_u8]; }\n",
+            canonical.replace(
+                "    ConfirmCandidateOverflow {\n"
+                "        /// Non-negative decoded CommitLog offset.\n"
+                "        offset: i64,\n"
+                "        /// Raw input-frame size after checked conversion to `i64`.\n"
+                "        size: i64,\n"
+                "    },\n",
+                "    ConfirmCandidateOverflow {\n"
+                "        /// Non-negative decoded CommitLog offset.\n"
+                "        offset: i64,\n"
+                "        /// Raw input-frame size after checked conversion to `i64`.\n"
+                "        size: i64,\n"
+                "    },\n"
+                "    #[error(\"other\")]\n"
+                "    Other,\n",
+                1,
+            ),
         ]
         for mutation_index, mutation in enumerate(owner_mutations):
             with self.subTest(owner_mutation=mutation_index):
@@ -7392,8 +7655,44 @@ fn copied_inner(offset: i64, frame_size: usize) -> Option<i64> {
     offset.checked_add(signed_size)
 }
 """
+        copied_cross_file_split = dict(production_sources)
+        copied_cross_file_split[Path("rocketmq-store/src/cross_file_candidate_outer.rs")] = """
+fn copied_cross_file_outer(offset: i64, frame_size: usize) -> Option<i64> {
+    if offset < 0 { return None; }
+    crate::cross_file_candidate_inner::copied_cross_file_inner(offset, frame_size)
+}
+"""
+        copied_cross_file_split[Path("rocketmq-store/src/cross_file_candidate_inner.rs")] = """
+pub(crate) fn copied_cross_file_inner(offset: i64, frame_size: usize) -> Option<i64> {
+    let signed_size = i64::try_from(frame_size).ok()?;
+    offset.checked_add(signed_size)
+}
+"""
+        copied_qualified_identity = dict(production_sources)
+        copied_qualified_identity[Path("rocketmq-store/src/qualified_candidate_outer.rs")] = """
+fn copied_qualified_outer(offset: i64, frame_size: usize) -> Option<i64> {
+    if offset < 0 { return None; }
+    crate::qualified_candidate_inner::shared_candidate_inner(offset, frame_size)
+}
+"""
+        copied_qualified_identity[Path("rocketmq-store/src/qualified_candidate_inner.rs")] = """
+pub(crate) fn shared_candidate_inner(offset: i64, frame_size: usize) -> Option<i64> {
+    let signed_size = i64::try_from(frame_size).ok()?;
+    offset.checked_add(signed_size)
+}
+"""
+        copied_qualified_identity[Path("rocketmq-store/src/decoy_candidate_inner.rs")] = """
+pub(crate) fn shared_candidate_inner(_: i64, _: usize) -> Option<i64> { None }
+"""
         for mutation_index, mutation in enumerate(
-            (copied_complete, copied_tuple_alias, copied_use_alias, copied_split)
+            (
+                copied_complete,
+                copied_tuple_alias,
+                copied_use_alias,
+                copied_split,
+                copied_cross_file_split,
+                copied_qualified_identity,
+            )
         ):
             with self.subTest(copy_mutation=mutation_index):
                 self.assertNotEqual(
@@ -7403,13 +7702,52 @@ fn copied_inner(offset: i64, frame_size: usize) -> Option<i64> {
 
         incomplete = dict(production_sources)
         incomplete[Path("rocketmq-store/src/unrelated_checked_offset.rs")] = """
-fn unrelated_offset(offset: i64, delta: i64) -> Option<i64> {
-    offset.checked_add(delta)
+fn unrelated_offset(offset: i64, frame_size: usize) -> Option<i64> {
+    if offset < 0 { return None; }
+    let signed_size = i64::try_from(frame_size).ok()?;
+    let unrelated_base = 7_i64;
+    unrelated_base.checked_add(signed_size)
 }
 """
         self.assertEqual(
             [],
             abnormal_confirm_candidate_owner_violations(canonical, incomplete),
+        )
+
+        qualified_near_miss = dict(production_sources)
+        qualified_near_miss[Path("rocketmq-store/src/qualified_near_miss_outer.rs")] = """
+fn qualified_near_miss_outer(offset: i64, frame_size: usize) -> Option<i64> {
+    if offset < 0 { return None; }
+    crate::decoy_near_miss_inner::same_named_inner(offset, frame_size)
+}
+"""
+        qualified_near_miss[Path("rocketmq-store/src/uncalled_near_miss_inner.rs")] = """
+pub(crate) fn same_named_inner(offset: i64, frame_size: usize) -> Option<i64> {
+    let signed_size = i64::try_from(frame_size).ok()?;
+    offset.checked_add(signed_size)
+}
+"""
+        qualified_near_miss[Path("rocketmq-store/src/decoy_near_miss_inner.rs")] = """
+pub(crate) fn same_named_inner(_: i64, _: usize) -> Option<i64> { None }
+"""
+        self.assertEqual(
+            [],
+            abnormal_confirm_candidate_owner_violations(canonical, qualified_near_miss),
+        )
+
+        allowed_std_conversion = canonical.replace(
+            "/// Checked-arithmetic failure",
+            "use std::convert::TryFrom;\n\n/// Checked-arithmetic failure",
+            1,
+        )
+        allowed_sources = dict(production_sources)
+        allowed_sources[ABNORMAL_CONFIRM_CANDIDATE_PATH] = allowed_std_conversion
+        self.assertEqual(
+            [],
+            abnormal_confirm_candidate_owner_violations(
+                allowed_std_conversion,
+                allowed_sources,
+            ),
         )
 
     def test_store_abnormal_confirm_candidate_adapter_is_exact_and_rejects_mutations(self) -> None:
@@ -7475,6 +7813,43 @@ fn unrelated_offset(offset: i64, delta: i64) -> Option<i64> {
                 "enum AbnormalRecoveryAdapterOffsetError { Invalid }\n\nfn log_abnormal_recovery_window",
                 1,
             ),
+            commit_log.replace(
+                'warn!("optimized abnormal recovery confirm candidate failed: {error}");',
+                'warn!("changed optimized candidate warning: {error}");',
+                1,
+            ),
+            commit_log.replace(
+                'warn!("standard abnormal recovery confirm candidate failed: {error}");',
+                'warn!("standard abnormal recovery confirm candidate failed");',
+                1,
+            ),
+            commit_log.replace(
+                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
+                "                                break 'segments;",
+                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
+                "                                continue;",
+                1,
+            ),
+            commit_log.replace(
+                'warn!("standard abnormal recovery confirm candidate failed: {error}");\n'
+                "                                    break 'segments;",
+                'warn!("standard abnormal recovery confirm candidate failed: {error}");\n'
+                "                                    return;",
+                1,
+            ),
+            commit_log.replace(
+                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
+                "                                break 'segments;",
+                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
+                "                                break 'files;",
+                1,
+            ),
+            commit_log.replace(
+                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
+                "                                break 'segments;",
+                'warn!("optimized abnormal recovery confirm candidate failed: {error}");',
+                1,
+            ),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(adapter_mutation=mutation_index):
@@ -7497,6 +7872,22 @@ fn copied_candidate(offset: i64, frame_size: usize) -> Option<i64> {
         self.assertNotEqual(
             [],
             store_abnormal_confirm_candidate_adapter_violations(commit_log, copied),
+        )
+
+        unrelated_warning = commit_log.replace(
+            "optimized abnormal recovery validated size conversion failed: {error}",
+            "changed unrelated validated size warning: {error}",
+            1,
+        )
+        self.assertNotEqual(commit_log, unrelated_warning)
+        unrelated_sources = dict(store_sources)
+        unrelated_sources[commit_log_path] = unrelated_warning
+        self.assertEqual(
+            [],
+            store_abnormal_confirm_candidate_adapter_violations(
+                unrelated_warning,
+                unrelated_sources,
+            ),
         )
 
     def test_recovery_consume_queue_truncation_has_one_local_owner_and_rejects_policy_mutations(self) -> None:
