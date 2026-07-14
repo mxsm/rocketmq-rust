@@ -2523,6 +2523,453 @@ def mapped_file_warmup_policy_violations(source: str) -> list[str]:
     return violations
 
 
+WARMUP_IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
+
+
+class WarmupFunctionRecord(NamedTuple):
+    path: Path
+    name: str
+    parameters: tuple[str, ...]
+    body: str
+
+
+class IdentifierAliases:
+    def __init__(self, source: str) -> None:
+        self.parent: dict[str, str] = {}
+        assignment = re.compile(
+            rf"let(?:mut)?(?P<left>{WARMUP_IDENTIFIER})"
+            rf"(?:\:[^=;]+)?=(?P<right>{WARMUP_IDENTIFIER});"
+        )
+        for match in assignment.finditer(source):
+            self.union(match.group("left"), match.group("right"))
+
+    def find(self, identifier: str) -> str:
+        parent = self.parent.setdefault(identifier, identifier)
+        if parent != identifier:
+            self.parent[identifier] = self.find(parent)
+        return self.parent[identifier]
+
+    def union(self, left: str, right: str) -> None:
+        left_root = self.find(left)
+        right_root = self.find(right)
+        if left_root != right_root:
+            self.parent[right_root] = left_root
+
+    def equivalent(self, left: str, right: str) -> bool:
+        return self.find(left) == self.find(right)
+
+
+def warmup_parameter_names(parameter_source: str) -> tuple[str, ...]:
+    names: list[str] = []
+    for parameter in split_top_level_expression(parameter_source, ","):
+        match = re.match(
+            rf"(?:mut)?(?P<name>{WARMUP_IDENTIFIER}):",
+            compact_rust(parameter),
+        )
+        if match is not None:
+            names.append(match.group("name"))
+    return tuple(names)
+
+
+def warmup_function_records(path: Path, source: str) -> list[WarmupFunctionRecord]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    records: list[WarmupFunctionRecord] = []
+    for function_match in re.finditer(
+        rf"\bfn\s+(?P<name>{WARMUP_IDENTIFIER})\b",
+        active,
+    ):
+        opening_parenthesis = active.find("(", function_match.end())
+        if opening_parenthesis == -1:
+            continue
+        closing = closing_parenthesis(active, opening_parenthesis)
+        if closing is None:
+            continue
+        opening_brace = active.find("{", closing)
+        semicolon = active.find(";", closing)
+        if opening_brace == -1 or (semicolon != -1 and semicolon < opening_brace):
+            continue
+        extracted = braced_body(active, opening_brace)
+        if extracted is None:
+            continue
+        body, _ = extracted
+        records.append(
+            WarmupFunctionRecord(
+                path=path,
+                name=function_match.group("name"),
+                parameters=warmup_parameter_names(
+                    active[opening_parenthesis + 1:closing]
+                ),
+                body=compact_rust(body),
+            )
+        )
+    return records
+
+
+def warmup_normalized_identifiers(
+    body: str,
+    aliases: IdentifierAliases,
+) -> set[str]:
+    normalized: set[str] = set()
+    pattern = re.compile(
+        rf"let(?:mut)?(?P<target>{WARMUP_IDENTIFIER})(?:\:[^=;]+)?="
+        rf"(?P<source>{WARMUP_IDENTIFIER})\.max\(1\);"
+    )
+    for match in pattern.finditer(body):
+        normalized.add(aliases.find(match.group("target")))
+        normalized.add(aliases.find(match.group("source")))
+    return normalized
+
+
+def warmup_zero_identifiers(
+    body: str,
+    aliases: IdentifierAliases,
+) -> set[str]:
+    return {
+        aliases.find(match.group("identifier"))
+        for match in re.finditer(
+            rf"letmut(?P<identifier>{WARMUP_IDENTIFIER})(?:\:[^=;]+)?=0(?:usize)?;",
+            body,
+        )
+    }
+
+
+def warmup_subtractions(body: str) -> list[tuple[str, str]]:
+    return [
+        (match.group("left"), match.group("right"))
+        for match in re.finditer(
+            rf"(?<![.A-Za-z0-9_])(?P<left>{WARMUP_IDENTIFIER})-"
+            rf"(?P<right>{WARMUP_IDENTIFIER})(?![A-Za-z0-9_])",
+            body,
+        )
+    ]
+
+
+def warmup_calls(body: str, function_name: str) -> list[list[str]]:
+    calls: list[list[str]] = []
+    for match in re.finditer(rf"\b{re.escape(function_name)}\(", body):
+        opening = match.end() - 1
+        closing = closing_parenthesis(body, opening)
+        if closing is None:
+            continue
+        calls.append(
+            [
+                strip_outer_parentheses(argument)
+                for argument in split_top_level_expression(
+                    body[opening + 1:closing],
+                    ",",
+                )
+            ]
+        )
+    return calls
+
+
+def warmup_boundary_helper_roles(
+    record: WarmupFunctionRecord,
+) -> tuple[int, int] | None:
+    aliases = IdentifierAliases(record.body)
+    for match in re.finditer(
+        rf"\(*\(?(?P<cursor>{WARMUP_IDENTIFIER})\+1\)?\)*\.min\("
+        rf"(?P<file>{WARMUP_IDENTIFIER})\)",
+        record.body,
+    ):
+        cursor_index = next(
+            (
+                index
+                for index, parameter in enumerate(record.parameters)
+                if aliases.equivalent(parameter, match.group("cursor"))
+            ),
+            None,
+        )
+        file_index = next(
+            (
+                index
+                for index, parameter in enumerate(record.parameters)
+                if aliases.equivalent(parameter, match.group("file"))
+            ),
+            None,
+        )
+        if cursor_index is not None and file_index is not None:
+            return cursor_index, file_index
+    return None
+
+
+def warmup_final_helper_roles(
+    record: WarmupFunctionRecord,
+) -> tuple[int, int, int] | None:
+    aliases = IdentifierAliases(record.body)
+    subtractions = warmup_subtractions(record.body)
+    guard = re.compile(
+        rf"if(?P<sync>{WARMUP_IDENTIFIER})&&(?P<last>{WARMUP_IDENTIFIER})"
+        rf"<(?P<file>{WARMUP_IDENTIFIER})\{{"
+    )
+    for match in guard.finditer(record.body):
+        last = match.group("last")
+        file_size = match.group("file")
+        if not any(
+            aliases.equivalent(left, file_size)
+            and aliases.equivalent(right, last)
+            for left, right in subtractions
+        ):
+            continue
+        role_indices: list[int] = []
+        for role in (match.group("sync"), last, file_size):
+            index = next(
+                (
+                    index
+                    for index, parameter in enumerate(record.parameters)
+                    if aliases.equivalent(parameter, role)
+                ),
+                None,
+            )
+            if index is None:
+                break
+            role_indices.append(index)
+        if len(role_indices) == 3:
+            return role_indices[0], role_indices[1], role_indices[2]
+    return None
+
+
+def warmup_boundary_assignments(
+    record: WarmupFunctionRecord,
+    helpers: dict[str, list[tuple[int, int]]],
+    cursor: str,
+    file_size: str,
+    aliases: IdentifierAliases,
+) -> set[str]:
+    boundaries: set[str] = set()
+    inline = re.compile(
+        rf"let(?:mut)?(?P<target>{WARMUP_IDENTIFIER})(?:\:[^=;]+)?="
+        rf"\(*\(?(?P<cursor>{WARMUP_IDENTIFIER})\+1\)?\)*\.min\("
+        rf"(?P<file>{WARMUP_IDENTIFIER})\);"
+    )
+    for match in inline.finditer(record.body):
+        if aliases.equivalent(match.group("cursor"), cursor) and aliases.equivalent(
+            match.group("file"), file_size
+        ):
+            boundaries.add(aliases.find(match.group("target")))
+
+    helper_assignment = re.compile(
+        rf"let(?:mut)?(?P<target>{WARMUP_IDENTIFIER})(?:\:[^=;]+)?="
+        rf"(?P<helper>{WARMUP_IDENTIFIER})\("
+    )
+    for assignment in helper_assignment.finditer(record.body):
+        helper_name = assignment.group("helper")
+        opening = assignment.end() - 1
+        closing = closing_parenthesis(record.body, opening)
+        if closing is None:
+            continue
+        arguments = [
+            strip_outer_parentheses(argument)
+            for argument in split_top_level_expression(
+                record.body[opening + 1:closing],
+                ",",
+            )
+        ]
+        for cursor_index, file_index in helpers.get(helper_name, []):
+            if max(cursor_index, file_index) >= len(arguments):
+                continue
+            if aliases.equivalent(arguments[cursor_index], cursor) and aliases.equivalent(
+                arguments[file_index], file_size
+            ):
+                boundaries.add(aliases.find(assignment.group("target")))
+    return boundaries
+
+
+def warmup_has_final_remainder(
+    record: WarmupFunctionRecord,
+    final_helpers: dict[str, list[tuple[int, int, int]]],
+    sync: str,
+    last: str,
+    file_size: str,
+    aliases: IdentifierAliases,
+) -> bool:
+    subtractions = warmup_subtractions(record.body)
+    inline_guards = re.finditer(
+        rf"if(?P<sync>{WARMUP_IDENTIFIER})&&(?P<last>{WARMUP_IDENTIFIER})"
+        rf"<(?P<file>{WARMUP_IDENTIFIER})\{{",
+        record.body,
+    )
+    for guard in inline_guards:
+        if not (
+            aliases.equivalent(guard.group("sync"), sync)
+            and aliases.equivalent(guard.group("last"), last)
+            and aliases.equivalent(guard.group("file"), file_size)
+        ):
+            continue
+        if any(
+            aliases.equivalent(left, file_size)
+            and aliases.equivalent(right, last)
+            for left, right in subtractions
+        ):
+            return True
+
+    for helper_name, roles in final_helpers.items():
+        for arguments in warmup_calls(record.body, helper_name):
+            for sync_index, last_index, file_index in roles:
+                if max(sync_index, last_index, file_index) >= len(arguments):
+                    continue
+                if (
+                    aliases.equivalent(arguments[sync_index], sync)
+                    and aliases.equivalent(arguments[last_index], last)
+                    and aliases.equivalent(arguments[file_index], file_size)
+                ):
+                    return True
+    return False
+
+
+def mapped_file_warmup_duplicate_policy_violations(
+    production_sources: dict[Path, str],
+) -> list[str]:
+    records = [
+        record
+        for path, source in production_sources.items()
+        if path.parts[:2] in {
+            ("rocketmq-store-local", "src"),
+            ("rocketmq-store", "src"),
+        }
+        for record in warmup_function_records(path, source)
+    ]
+    boundary_helpers: dict[str, list[tuple[int, int]]] = {}
+    final_helpers: dict[str, list[tuple[int, int, int]]] = {}
+    helper_paths: dict[str, set[Path]] = {}
+    for record in records:
+        boundary_roles = warmup_boundary_helper_roles(record)
+        if boundary_roles is not None:
+            boundary_helpers.setdefault(record.name, []).append(boundary_roles)
+            helper_paths.setdefault(record.name, set()).add(record.path)
+        final_roles = warmup_final_helper_roles(record)
+        if final_roles is not None:
+            final_helpers.setdefault(record.name, []).append(final_roles)
+            helper_paths.setdefault(record.name, set()).add(record.path)
+
+    violations: list[str] = []
+    loop_pattern = re.compile(
+        rf"for(?P<cursor>{WARMUP_IDENTIFIER})in\(0\.\."
+        rf"(?P<file>{WARMUP_IDENTIFIER})\)\.step_by\("
+        rf"(?P<page>{WARMUP_IDENTIFIER})\)\{{"
+    )
+    periodic_guard = re.compile(
+        rf"if(?P<sync>{WARMUP_IDENTIFIER})&&(?P<count>{WARMUP_IDENTIFIER})"
+        rf"\.is_multiple_of\((?P<every>{WARMUP_IDENTIFIER})\)\{{"
+    )
+    assignment = re.compile(
+        rf"(?<!let)(?P<left>{WARMUP_IDENTIFIER})=(?P<right>{WARMUP_IDENTIFIER});"
+    )
+    for record in records:
+        if record.path == MAPPED_FILE_KERNEL_PATH and record.name == MAPPED_FILE_WARMUP_VISITOR:
+            continue
+        aliases = IdentifierAliases(record.body)
+        normalized = warmup_normalized_identifiers(record.body, aliases)
+        zeroed = warmup_zero_identifiers(record.body, aliases)
+        increments = {
+            aliases.find(match.group("identifier"))
+            for match in re.finditer(
+                rf"(?P<identifier>{WARMUP_IDENTIFIER})\+=1;",
+                record.body,
+            )
+        }
+        subtractions = warmup_subtractions(record.body)
+        assignments = [
+            (match.group("left"), match.group("right"))
+            for match in assignment.finditer(record.body)
+        ]
+        for loop in loop_pattern.finditer(record.body):
+            cursor = loop.group("cursor")
+            file_size = loop.group("file")
+            page_size = loop.group("page")
+            if aliases.find(page_size) not in normalized:
+                continue
+            for guard in periodic_guard.finditer(record.body, loop.end()):
+                sync = guard.group("sync")
+                count = guard.group("count")
+                every = guard.group("every")
+                if aliases.find(every) not in normalized:
+                    continue
+                if aliases.find(count) not in zeroed or aliases.find(count) not in increments:
+                    continue
+                boundaries = warmup_boundary_assignments(
+                    record,
+                    boundary_helpers,
+                    cursor,
+                    file_size,
+                    aliases,
+                )
+                for boundary_root in boundaries:
+                    for left, right in subtractions:
+                        if aliases.find(left) != boundary_root:
+                            continue
+                        last = right
+                        if aliases.find(last) not in zeroed:
+                            continue
+                        if not any(
+                            aliases.equivalent(assigned, last)
+                            and aliases.find(value) == boundary_root
+                            for assigned, value in assignments
+                        ):
+                            continue
+                        if not warmup_has_final_remainder(
+                            record,
+                            final_helpers,
+                            sync,
+                            last,
+                            file_size,
+                            aliases,
+                        ):
+                            continue
+                        involved_paths = {record.path}
+                        for helper_name in set(boundary_helpers) | set(final_helpers):
+                            if re.search(rf"\b{re.escape(helper_name)}\(", record.body):
+                                involved_paths.update(helper_paths.get(helper_name, set()))
+                        paths = ", ".join(sorted(path.as_posix() for path in involved_paths))
+                        violations.append(
+                            f"mapped-file warmup schedule policy copied outside canonical owner: {paths}"
+                        )
+                        break
+                    else:
+                        continue
+                    break
+                else:
+                    continue
+                break
+    return violations
+
+
+def warmup_match_arm_body(compact_body: str, marker: str) -> str | None:
+    marker_index = compact_body.find(marker)
+    if marker_index == -1:
+        return None
+    opening_brace = compact_body.find("{", marker_index + len(marker))
+    if opening_brace == -1:
+        return None
+    extracted = braced_body(compact_body, opening_brace)
+    return None if extracted is None else extracted[0]
+
+
+def warmup_final_warning_branches(raw_body: str) -> tuple[str, str] | None:
+    active = active_rust_source(raw_body)
+    final_if = re.search(r"\bif\s+final_flush\s*\{", active)
+    if final_if is None:
+        return None
+    true_open = active.find("{", final_if.start(), final_if.end())
+    true_extracted = braced_body(active, true_open)
+    if true_extracted is None:
+        return None
+    _, true_end = true_extracted
+    else_match = re.match(r"\s*else\s*\{", active[true_end:])
+    if else_match is None:
+        return None
+    false_open = active.find("{", true_end, true_end + else_match.end())
+    false_extracted = braced_body(active, false_open)
+    if false_extracted is None:
+        return None
+    _, false_end = false_extracted
+    return (
+        raw_body[true_open + 1:true_end - 1],
+        raw_body[false_open + 1:false_end - 1],
+    )
+
+
 def mapped_file_warmup_store_adapter_violations(
     default_mapped_file_source: str,
 ) -> list[str]:
@@ -2564,6 +3011,63 @@ def mapped_file_warmup_store_adapter_violations(
     )
     if any(fragment not in warmup_body for fragment in required_fragments):
         violations.append("Store warmup adapter execution contract changed")
+
+    masked_raw_body = compact_rust(active_rust_source(raw_warmup_body))
+    touch_arm = warmup_match_arm_body(
+        masked_raw_body,
+        "MappedFileWarmupOperation::Touch{offset}=>",
+    )
+    expected_touch_arm = (
+        "ifletErr(error)=touch_page(mapped_ptr,offset){"
+        "record_degradation(LinuxStorageDegradationEvent::new("
+        "LINUX_STORAGE_OP_PAGE_TOUCH,LINUX_STORAGE_REASON_FAILED,"
+        "errno_from_io_error(&error),));"
+        "warn!(,offset,self.file_name,error);}"
+    )
+    if touch_arm != expected_touch_arm:
+        violations.append("Store warmup Touch error/event/warning contract changed")
+
+    flush_arm = warmup_match_arm_body(
+        masked_raw_body,
+        "MappedFileWarmupOperation::Flush{offset,len,final_flush,}=>",
+    )
+    expected_flush_arm = (
+        "letend=offset+len;"
+        "ifletErr(error)=flush_range(mapped_file,offset,len){"
+        "record_degradation(LinuxStorageDegradationEvent::new("
+        "LINUX_STORAGE_OP_PAGE_TOUCH,LINUX_STORAGE_REASON_FLUSH_FAILED,"
+        "errno_from_io_error(&error),));"
+        "iffinal_flush{warn!(,offset,end,self.file_name,error);}"
+        "else{warn!(,offset,end,self.file_name,error);}}"
+        "else{self.progress.record_flush_time();}"
+    )
+    if flush_arm != expected_flush_arm:
+        violations.append("Store warmup Flush error/event/warning contract changed")
+
+    touch_warning = (
+        'warn!("Failedtotouchwarmedmappedfilepageatoffset{}for{}:{:?}",'
+        "offset,self.file_name,error);"
+    )
+    if compact_rust(raw_warmup_body).count(touch_warning) != 1:
+        violations.append("Store warmup Touch warning vocabulary or arguments changed")
+
+    warning_branches = warmup_final_warning_branches(raw_warmup_body)
+    expected_final_warning = (
+        'warn!("Failedtoflushfinalwarmedmappedfilerange{}-{}for{}:{:?}",'
+        "offset,end,self.file_name,error);"
+    )
+    expected_periodic_warning = (
+        'warn!("Failedtoflushwarmedmappedfilerange{}-{}for{}:{:?}",'
+        "offset,end,self.file_name,error);"
+    )
+    if warning_branches is None:
+        violations.append("Store warmup periodic/final warning branches changed")
+    else:
+        final_warning, periodic_warning = warning_branches
+        if compact_rust(final_warning) != expected_final_warning:
+            violations.append("Store warmup final warning branch changed")
+        if compact_rust(periodic_warning) != expected_periodic_warning:
+            violations.append("Store warmup periodic warning branch changed")
     for warning in (
         "Failed to flush final warmed mapped file range {}-{} for {}: {:?}",
         "Failed to flush warmed mapped file range {}-{} for {}: {:?}",
@@ -2629,25 +3133,9 @@ def mapped_file_warmup_adapter_violations(
     if reference_paths != expected_references:
         violations.append(f"warmup schedule visitor production references changed: {reference_paths}")
 
-    for path, source in production_sources.items():
-        if path.parts[:2] != ("rocketmq-store", "src"):
-            continue
-        production = (
-            default_production
-            if path == DEFAULT_MAPPED_FILE_PATH
-            else source_without_cfg_test_items(source)
-        )
-        active = active_rust_source(production)
-        for retained in (
-            ".step_by(",
-            ".is_multiple_of(",
-            "last_flush_offset",
-            "flush_every_pages",
-        ):
-            if retained in compact_rust(active):
-                violations.append(
-                    f"{path.as_posix()}: retained mapped-file warmup schedule token {retained}"
-                )
+    violations.extend(
+        mapped_file_warmup_duplicate_policy_violations(production_sources)
+    )
 
     return violations
 
@@ -6382,6 +6870,44 @@ pub fn visit_mapped_file_warmup_schedule<F>(
             default_mapped_file.replace("if final_flush", "if !final_flush", 1),
             default_mapped_file.replace("Failed to flush final warmed", "Failed to flush warmed", 1),
             default_mapped_file.replace("self.progress.record_flush_time();", "", 1),
+            default_mapped_file.replace("let end = offset + len;", "let end = file_size;", 1),
+            default_mapped_file.replace(
+                """                                LINUX_STORAGE_OP_PAGE_TOUCH,
+                                LINUX_STORAGE_REASON_FAILED,
+                                errno_from_io_error(&error),""",
+                """                                LINUX_STORAGE_OP_MADVISE,
+                                LINUX_STORAGE_REASON_FAILED,
+                                errno_from_io_error(&error),""",
+                1,
+            ),
+            default_mapped_file.replace(
+                """                                LINUX_STORAGE_OP_PAGE_TOUCH,
+                                LINUX_STORAGE_REASON_FAILED,
+                                errno_from_io_error(&error),""",
+                """                                LINUX_STORAGE_OP_PAGE_TOUCH,
+                                LINUX_STORAGE_REASON_FLUSH_FAILED,
+                                errno_from_io_error(&error),""",
+                1,
+            ),
+            default_mapped_file.replace(
+                """                                LINUX_STORAGE_OP_PAGE_TOUCH,
+                                LINUX_STORAGE_REASON_FLUSH_FAILED,
+                                errno_from_io_error(&error),""",
+                """                                LINUX_STORAGE_OP_PAGE_TOUCH,
+                                LINUX_STORAGE_REASON_FAILED,
+                                errno_from_io_error(&error),""",
+                1,
+            ),
+            default_mapped_file.replace(
+                "offset, end, self.file_name, error\n                                );",
+                "len, end, self.file_name, error\n                                );",
+                1,
+            ),
+            default_mapped_file.replace(
+                "offset, end, self.file_name, error\n                                );",
+                "offset, len, self.file_name, error\n                                );",
+                1,
+            ),
         ]
         for mutation_index, mutation in enumerate(adapter_mutations):
             with self.subTest(adapter_mutation=mutation_index):
@@ -6405,12 +6931,239 @@ fn copied_warmup_schedule(file_size: usize, page_size: usize, every: usize) {
     let _ = last_flush_offset;
 }
 """
-        self.assertNotEqual(
+        self.assertEqual(
             [],
             mapped_file_warmup_adapter_violations(
                 canonical,
                 default_mapped_file,
                 duplicate_sources,
+            ),
+        )
+
+        local_duplicate_path = Path(
+            "rocketmq-store-local/src/mapped_file/copied_warmup.rs"
+        )
+        renamed_duplicate_sources = dict(production_sources)
+        renamed_duplicate_sources[local_duplicate_path] = """
+fn copied_schedule<F>(capacity: usize, stride: usize, cadence: usize, synchronous: bool, mut emit: F)
+where
+    F: FnMut(MappedFileWarmupOperation),
+{
+    if capacity == 0 {
+        return;
+    }
+    let stride = stride.max(1);
+    let cadence = cadence.max(1);
+    let mut visits = 0usize;
+    let mut durable = 0usize;
+    for cursor in (0..capacity).step_by(stride) {
+        emit(MappedFileWarmupOperation::Touch { offset: cursor });
+        visits += 1;
+        if synchronous && visits.is_multiple_of(cadence) {
+            let boundary = (cursor + 1).min(capacity);
+            emit(MappedFileWarmupOperation::Flush {
+                offset: durable,
+                len: boundary - durable,
+                final_flush: false,
+            });
+            durable = boundary;
+        }
+    }
+    if synchronous && durable < capacity {
+        emit(MappedFileWarmupOperation::Flush {
+            offset: durable,
+            len: capacity - durable,
+            final_flush: true,
+        });
+    }
+}
+"""
+        self.assertNotEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                renamed_duplicate_sources,
+            ),
+        )
+
+        alias_duplicate_sources = dict(production_sources)
+        alias_duplicate_sources[local_duplicate_path] = """
+fn copied_schedule_with_aliases<F>(size: usize, page: usize, every: usize, sync: bool, mut emit: F)
+where
+    F: FnMut(MappedFileWarmupOperation),
+{
+    let capacity = size;
+    let total = capacity;
+    let raw_stride = page;
+    let stride = raw_stride.max(1);
+    let raw_cadence = every;
+    let cadence = raw_cadence.max(1);
+    let mut count = 0usize;
+    let mut previous = 0usize;
+    for cursor in (0..total).step_by(stride) {
+        emit(MappedFileWarmupOperation::Touch { offset: cursor });
+        count += 1;
+        if sync && count.is_multiple_of(cadence) {
+            let end = (cursor + 1).min(total);
+            let boundary = end;
+            emit(MappedFileWarmupOperation::Flush {
+                offset: previous,
+                len: boundary - previous,
+                final_flush: false,
+            });
+            previous = boundary;
+        }
+    }
+    if sync && previous < total {
+        emit(MappedFileWarmupOperation::Flush {
+            offset: previous,
+            len: total - previous,
+            final_flush: true,
+        });
+    }
+}
+"""
+        self.assertNotEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                alias_duplicate_sources,
+            ),
+        )
+
+        split_caller_path = Path("rocketmq-store/src/base/warmup_copy.rs")
+        split_helper_path = Path("rocketmq-store-local/src/mapped_file/warmup_copy_helper.rs")
+        split_duplicate_sources = dict(production_sources)
+        split_duplicate_sources[split_caller_path] = """
+fn copied_schedule_split<F>(size: usize, page: usize, every: usize, sync: bool, mut emit: F)
+where
+    F: FnMut(MappedFileWarmupOperation),
+{
+    let page = page.max(1);
+    let every = every.max(1);
+    let mut touched = 0usize;
+    let mut last = 0usize;
+    for cursor in (0..size).step_by(page) {
+        emit(MappedFileWarmupOperation::Touch { offset: cursor });
+        touched += 1;
+        if sync && touched.is_multiple_of(every) {
+            let end = copied_periodic_end(cursor, size);
+            emit(MappedFileWarmupOperation::Flush {
+                offset: last,
+                len: end - last,
+                final_flush: false,
+            });
+            last = end;
+        }
+    }
+    copied_final_flush(sync, last, size, emit);
+}
+"""
+        split_duplicate_sources[split_helper_path] = """
+fn copied_periodic_end(cursor: usize, size: usize) -> usize {
+    (cursor + 1).min(size)
+}
+
+fn copied_final_flush<F>(sync: bool, last: usize, size: usize, mut emit: F)
+where
+    F: FnMut(MappedFileWarmupOperation),
+{
+    if sync && last < size {
+        emit(MappedFileWarmupOperation::Flush {
+            offset: last,
+            len: size - last,
+            final_flush: true,
+        });
+    }
+}
+"""
+        self.assertNotEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                split_duplicate_sources,
+            ),
+        )
+
+        unrelated_sources = dict(production_sources)
+        unrelated_sources[split_caller_path] = """
+fn take_alternating_values(values: &[usize]) -> usize {
+    values.iter().step_by(2).copied().sum()
+}
+"""
+        self.assertEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                unrelated_sources,
+            ),
+        )
+
+        test_only_duplicate_sources = dict(production_sources)
+        test_only_duplicate_sources[local_duplicate_path] = (
+            "#[cfg(test)]\nmod tests {\n"
+            + renamed_duplicate_sources[local_duplicate_path]
+            + "}\n"
+        )
+        self.assertEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                test_only_duplicate_sources,
+            ),
+        )
+
+        for attribute in (
+            "#[cfg(any())]",
+            "#[cfg_attr(any(), cfg(any()))]",
+        ):
+            cfg_duplicate_sources = dict(production_sources)
+            cfg_duplicate_sources[local_duplicate_path] = (
+                attribute
+                + "\n"
+                + renamed_duplicate_sources[local_duplicate_path]
+            )
+            with self.subTest(duplicate_attribute=attribute):
+                self.assertNotEqual(
+                    [],
+                    mapped_file_warmup_adapter_violations(
+                        canonical,
+                        default_mapped_file,
+                        cfg_duplicate_sources,
+                    ),
+                )
+
+        post_test_duplicate_sources = dict(production_sources)
+        post_test_duplicate_sources[local_duplicate_path] = (
+            "#[cfg(test)]\nmod tests { fn decoy() {} }\n"
+            + renamed_duplicate_sources[local_duplicate_path]
+        )
+        self.assertNotEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                post_test_duplicate_sources,
+            ),
+        )
+
+        method_duplicate_sources = dict(production_sources)
+        method_duplicate_sources[local_duplicate_path] = (
+            "struct CopiedWarmup;\nimpl CopiedWarmup {\n"
+            + renamed_duplicate_sources[local_duplicate_path]
+            + "}\n"
+        )
+        self.assertNotEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                method_duplicate_sources,
             ),
         )
 
