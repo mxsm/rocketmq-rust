@@ -5829,13 +5829,38 @@ def normal_window_saturating_subtractions(
     record: WarmupFunctionRecord,
 ) -> list[tuple[str, str]]:
     subtractions: list[tuple[str, str]] = []
-    pattern = re.compile(
-        rf"(?<![.A-Za-z0-9_])(?P<count>\(*{WARMUP_IDENTIFIER}\)*)\.saturating_sub\("
-    )
-    for match in pattern.finditer(record.body):
+    for match in re.finditer(r"\.saturating_sub\(", record.body):
+        cursor = match.start() - 1
+        if cursor < 0:
+            continue
+        if record.body[cursor] == ")":
+            depth = 0
+            receiver_start: int | None = None
+            for index in range(cursor, -1, -1):
+                character = record.body[index]
+                if character == ")":
+                    depth += 1
+                elif character == "(":
+                    depth -= 1
+                    if depth == 0:
+                        receiver_start = index
+                        break
+            if receiver_start is None:
+                continue
+        else:
+            receiver_start = cursor
+            while receiver_start >= 0 and (
+                record.body[receiver_start].isalnum()
+                or record.body[receiver_start] == "_"
+            ):
+                receiver_start -= 1
+            receiver_start += 1
+
         opening = match.end() - 1
         closing = closing_parenthesis(record.body, opening)
-        count = warmup_identifier_expression(match.group("count"))
+        count = warmup_identifier_expression(
+            record.body[receiver_start:match.start()]
+        )
         if closing is not None and count is not None:
             subtractions.append((count, record.body[opening + 1:closing]))
     return subtractions
@@ -5929,9 +5954,19 @@ def normal_recovery_window_duplicate_policy_violations(
         crate.replace("-", "_"): crate
         for crate in {path.parts[0] for path in scoped_sources}
     }
+    selector_candidates = [
+        record
+        for record in records
+        if "if" in record.body and "==" in record.body
+    ]
+    selector_paths = {record.path for record in selector_candidates}
     file_integer_aliases = {
-        path: resolved_integer_aliases(source_without_cfg_test_items(source))
+        path: resolved_integer_aliases(
+            source_without_cfg_test_items(source),
+            top_level_only=True,
+        )
         for path, source in scoped_sources.items()
+        if path in selector_paths
     }
     canonical_identity = WarmupItemIdentity(
         "rocketmq-store-local",
@@ -5942,19 +5977,27 @@ def normal_recovery_window_duplicate_policy_violations(
     selector_facts: dict[WarmupItemIdentity, list[tuple[str | None, int, bool]]] = {}
     selector_helpers: dict[WarmupItemIdentity, set[int]] = {}
     subtraction_helpers: dict[WarmupItemIdentity, set[tuple[int, int]]] = {}
-    for record in records:
+    for record in selector_candidates:
         identity = warmup_item_identity(record)
-        aliases = IdentifierAliases(record.body)
         selectors = normal_window_selector_assignments(
             record,
-            file_integer_aliases.get(record.path, {}),
+            resolved_integer_aliases(
+                record.raw_body,
+                file_integer_aliases.get(record.path, {}),
+            ),
         )
-        selector_facts[identity] = selectors
+        if selectors:
+            selector_facts[identity] = selectors
         for _, configured_index, returns_selector in selectors:
             if returns_selector and identity != canonical_identity:
                 selector_helpers.setdefault(identity, set()).add(configured_index)
+    for record in records:
+        if ".saturating_sub(" not in record.body:
+            continue
+        identity = warmup_item_identity(record)
         if identity == canonical_identity:
             continue
+        aliases = IdentifierAliases(record.body)
         for count, limit in normal_window_saturating_subtractions(record):
             limit_identifier = warmup_identifier_expression(limit)
             if limit_identifier is None:
@@ -5964,10 +6007,29 @@ def normal_recovery_window_duplicate_policy_violations(
             if count_index is not None and limit_index is not None and count_index != limit_index:
                 subtraction_helpers.setdefault(identity, set()).add((count_index, limit_index))
 
+    helper_names = {
+        helper.name
+        for helper in {*selector_helpers, *subtraction_helpers}
+    }
     violations: list[str] = []
     for record in records:
         identity = warmup_item_identity(record)
         if identity == canonical_identity:
+            continue
+        imported_helper_names = {
+            alias
+            for alias, target in record.imports
+            if target.split("::")[-1] in helper_names
+        }
+        references_helper = any(
+            re.search(rf"\b{re.escape(name)}\s*\(", record.body)
+            for name in helper_names | imported_helper_names
+        )
+        if (
+            identity not in selector_facts
+            and ".saturating_sub(" not in record.body
+            and not references_helper
+        ):
             continue
         aliases = IdentifierAliases(record.body)
         effective_identifiers: dict[str, set[int]] = {}
@@ -6537,6 +6599,20 @@ fn copied_scan_start(mapped_total: usize, configured: usize) -> usize {
             normal_recovery_file_window_owner_violations(canonical, local_direct),
         )
 
+        tuple_policy = """
+fn copied_tuple_window(mapped_total: usize, configured: usize) -> (usize, usize) {
+    let input = configured;
+    let selected = if (0usize) == (input) { 3 } else { ((input)) };
+    (((mapped_total)).saturating_sub(selected), selected)
+}
+"""
+        local_tuple = dict(production_sources)
+        local_tuple[Path("rocketmq-store-local/src/copied_tuple.rs")] = tuple_policy
+        self.assertNotEqual(
+            [],
+            normal_recovery_file_window_owner_violations(canonical, local_tuple),
+        )
+
         renamed_variants = [
             "#[cfg(any())]\n" + renamed_policy,
             "#[cfg_attr(any(), allow(dead_code))]\n" + renamed_policy,
@@ -6622,6 +6698,23 @@ fn same_role_is_not_a_window(configured: usize) -> usize {
             normal_recovery_file_window_owner_violations(canonical, incomplete_sources),
         )
 
+        local_scope_near_miss = dict(production_sources)
+        local_scope_near_miss[Path("rocketmq-store-local/src/scoped_fallback.rs")] = """
+fn unrelated_constant() -> usize {
+    let fallback = 3usize;
+    fallback
+}
+
+fn dynamic_fallback(mapped_total: usize, configured: usize, fallback: usize) -> usize {
+    let selected = if configured == 0 { fallback } else { configured };
+    mapped_total.saturating_sub(selected)
+}
+"""
+        self.assertEqual(
+            [],
+            normal_recovery_file_window_owner_violations(canonical, local_scope_near_miss),
+        )
+
     def test_store_normal_recovery_paths_delegate_once_and_reject_window_mutations(self) -> None:
         commit_log_path = Path("rocketmq-store/src/log_file/commit_log.rs")
         commit_log = (ROOT / commit_log_path).read_text(encoding="utf-8")
@@ -6703,6 +6796,35 @@ fn copied_scan_start(mapped_total: usize, configured: usize) -> usize {
         self.assertNotEqual(
             [],
             store_normal_recovery_file_window_violations(commit_log, store_direct),
+        )
+
+        store_scope_near_miss = dict(store_sources)
+        store_scope_near_miss[Path("rocketmq-store/src/scoped_fallback.rs")] = """
+fn dynamic_fallback(mapped_total: usize, configured: usize, fallback: usize) -> usize {
+    let selected = if configured == 0 { fallback } else { configured };
+    mapped_total.saturating_sub(selected)
+}
+
+fn unrelated_constant() -> usize {
+    let fallback = 3usize;
+    fallback
+}
+"""
+        self.assertEqual(
+            [],
+            store_normal_recovery_file_window_violations(commit_log, store_scope_near_miss),
+        )
+
+        store_tuple = dict(store_sources)
+        store_tuple[Path("rocketmq-store/src/copied_tuple.rs")] = """
+fn copied_tuple_window(mapped_total: usize, configured: usize) -> (usize, usize) {
+    let selected = if configured == 0 { 3 } else { configured };
+    (mapped_total.saturating_sub(selected), selected)
+}
+"""
+        self.assertNotEqual(
+            [],
+            store_normal_recovery_file_window_violations(commit_log, store_tuple),
         )
 
         unrelated_subtraction = commit_log.replace(
