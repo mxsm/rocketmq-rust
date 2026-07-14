@@ -2561,6 +2561,62 @@ def warmup_module_path(path: Path) -> tuple[str, ...]:
     return (*source_parts[:-1], Path(filename).stem)
 
 
+def warmup_use_tree_aliases(use_tree: str) -> dict[str, str]:
+    tokens = re.findall(r"::|[{},*]|[A-Za-z_][A-Za-z0-9_]*", use_tree)
+    aliases: dict[str, str] = {}
+
+    def parse_tree(index: int, prefix: tuple[str, ...]) -> int:
+        while index < len(tokens) and tokens[index] == "::":
+            index += 1
+        if index < len(tokens) and tokens[index] == "{":
+            return parse_group(index + 1, prefix)
+
+        path: list[str] = []
+        while index < len(tokens):
+            token = tokens[index]
+            if token in {"as", "{", "}", ",", "*", "::"}:
+                break
+            path.append(token)
+            index += 1
+            if index >= len(tokens) or tokens[index] != "::":
+                break
+            if index + 1 < len(tokens) and tokens[index + 1] == "{":
+                return parse_group(index + 2, (*prefix, *path))
+            index += 1
+
+        if index < len(tokens) and tokens[index] == "*":
+            return index + 1
+        target = prefix if path == ["self"] and prefix else (*prefix, *path)
+        alias = target[-1] if target else None
+        if index < len(tokens) and tokens[index] == "as":
+            index += 1
+            if index < len(tokens) and re.fullmatch(WARMUP_IDENTIFIER, tokens[index]):
+                alias = tokens[index]
+                index += 1
+        if alias is not None and target:
+            aliases[alias] = "::".join(target)
+        return index
+
+    def parse_group(index: int, prefix: tuple[str, ...]) -> int:
+        while index < len(tokens) and tokens[index] != "}":
+            next_index = parse_tree(index, prefix)
+            index = next_index if next_index > index else index + 1
+            if index < len(tokens) and tokens[index] == ",":
+                index += 1
+                continue
+            if index < len(tokens) and tokens[index] != "}":
+                index += 1
+        return index + 1 if index < len(tokens) else index
+
+    index = 0
+    while index < len(tokens):
+        next_index = parse_tree(index, ())
+        index = next_index if next_index > index else index + 1
+        if index < len(tokens) and tokens[index] == ",":
+            index += 1
+    return aliases
+
+
 def warmup_use_aliases(
     source: str,
     *,
@@ -2593,16 +2649,7 @@ def warmup_use_aliases(
         semicolon = active.find(";", index + 3)
         if semicolon == -1:
             break
-        declaration = active[index:semicolon + 1]
-        match = re.fullmatch(
-            rf"use\s+(?P<path>{WARMUP_IDENTIFIER}(?:\s*::\s*{WARMUP_IDENTIFIER})*)"
-            rf"(?:\s+as\s+(?P<alias>{WARMUP_IDENTIFIER}))?\s*;",
-            declaration,
-        )
-        if match is not None:
-            target = re.sub(r"\s*::\s*", "::", match.group("path"))
-            alias = match.group("alias") or target.rsplit("::", maxsplit=1)[-1]
-            aliases[alias] = target
+        aliases.update(warmup_use_tree_aliases(active[index + 3:semicolon]))
         index = semicolon + 1
     return aliases
 
@@ -2937,6 +2984,7 @@ def warmup_item_identity(record: WarmupFunctionRecord) -> WarmupItemIdentity:
 def warmup_resolve_item(
     record: WarmupFunctionRecord,
     call_path: str,
+    extern_crates: dict[str, str],
 ) -> WarmupItemIdentity | None:
     parts = call_path.split("::")
     imports = dict(record.imports)
@@ -2944,7 +2992,11 @@ def warmup_resolve_item(
         parts = imports[parts[0]].split("::") + parts[1:]
     crate = record.path.parts[0]
     module = list(record.module)
-    if parts[0] == "crate":
+    if parts[0] in extern_crates:
+        crate = extern_crates[parts[0]]
+        module = []
+        parts = parts[1:]
+    elif parts[0] == "crate":
         module = []
         parts = parts[1:]
     elif parts[0] == "self":
@@ -3026,6 +3078,7 @@ def warmup_boundary_assignments(
     record: WarmupFunctionRecord,
     body: str,
     helpers: dict[WarmupItemIdentity, list[tuple[int, int]]],
+    extern_crates: dict[str, str],
     cursor: str,
     file_size: str,
     aliases: IdentifierAliases,
@@ -3050,7 +3103,7 @@ def warmup_boundary_assignments(
         if call is None:
             continue
         helper_path, arguments = call
-        helper = warmup_resolve_item(record, helper_path)
+        helper = warmup_resolve_item(record, helper_path, extern_crates)
         if helper is None:
             continue
         for cursor_index, file_index in helpers.get(helper, []):
@@ -3072,6 +3125,7 @@ def warmup_boundary_assignments(
 def warmup_has_final_remainder(
     record: WarmupFunctionRecord,
     final_helpers: dict[WarmupItemIdentity, list[tuple[int, int, int]]],
+    extern_crates: dict[str, str],
     sync: str,
     last: str,
     file_size: str,
@@ -3105,7 +3159,7 @@ def warmup_has_final_remainder(
         if call is None:
             continue
         helper_path, arguments = call
-        helper = warmup_resolve_item(record, helper_path)
+        helper = warmup_resolve_item(record, helper_path, extern_crates)
         if helper is None:
             continue
         for sync_index, last_index, file_index in final_helpers.get(helper, []):
@@ -3127,6 +3181,16 @@ def warmup_has_final_remainder(
 def mapped_file_warmup_duplicate_policy_violations(
     production_sources: dict[Path, str],
 ) -> list[str]:
+    scanned_crates = {
+        path.parts[0]
+        for path in production_sources
+        if len(path.parts) >= 2
+        and path.parts[:2] in {
+            ("rocketmq-store-local", "src"),
+            ("rocketmq-store", "src"),
+        }
+    }
+    extern_crates = {crate.replace("-", "_"): crate for crate in scanned_crates}
     records = [
         record
         for path, source in production_sources.items()
@@ -3201,6 +3265,7 @@ def mapped_file_warmup_duplicate_policy_violations(
                     record,
                     loop_body,
                     boundary_helpers,
+                    extern_crates,
                     cursor,
                     file_size,
                     aliases,
@@ -3221,6 +3286,7 @@ def mapped_file_warmup_duplicate_policy_violations(
                         final_helper_matches = warmup_has_final_remainder(
                             record,
                             final_helpers,
+                            extern_crates,
                             sync,
                             last,
                             file_size,
@@ -7383,6 +7449,10 @@ where
 fn copied_periodic_end(cursor: usize, size: usize) -> usize {
     (cursor + 1).min(size)
 }
+
+fn unrelated_helper() -> usize {
+    0
+}
 """
         module_caller_template = """
 {imports}
@@ -7447,6 +7517,35 @@ where
                 "use crate::base::warmup_copy_helper::copied_periodic_end as end_of_page;",
                 "end_of_page",
             ),
+            (
+                Path("rocketmq-store/src/base/warmup_copy.rs"),
+                Path("rocketmq-store-local/src/mapped_file/warmup_copy_helper.rs"),
+                "",
+                "rocketmq_store_local::mapped_file::warmup_copy_helper::copied_periodic_end",
+            ),
+            (
+                Path("rocketmq-store/src/base/warmup_copy.rs"),
+                Path("rocketmq-store-local/src/mapped_file/warmup_copy_helper.rs"),
+                "use rocketmq_store_local::mapped_file::warmup_copy_helper::copied_periodic_end as end_of_page;",
+                "end_of_page",
+            ),
+            (
+                Path("rocketmq-store/src/base/warmup_copy.rs"),
+                Path("rocketmq-store/src/base/warmup_copy_helper.rs"),
+                """use crate::base::warmup_copy_helper::{
+    unrelated_helper,
+    copied_periodic_end as end_of_page,
+};""",
+                "end_of_page",
+            ),
+            (
+                Path("rocketmq-store/src/base/warmup_copy.rs"),
+                Path("rocketmq-store/src/base/warmup_copy_helper.rs"),
+                """use crate::base::{
+    warmup_copy_helper::{copied_periodic_end as end_of_page},
+};""",
+                "end_of_page",
+            ),
         ]
         for case_index, (caller_path, helper_path, import_source, helper_call) in enumerate(
             module_helper_cases
@@ -7489,6 +7588,35 @@ fn copied_periodic_end(cursor: usize, size: usize) -> usize {
                 canonical,
                 default_mapped_file,
                 colliding_sources,
+            ),
+        )
+
+        cross_crate_collision_sources = dict(production_sources)
+        cross_crate_collision_sources[colliding_caller_path] = (
+            module_caller_template.format(
+                imports="",
+                helper_call=(
+                    "rocketmq_store_local::mapped_file::warmup_copy_helper::"
+                    "copied_periodic_end"
+                ),
+            )
+        )
+        cross_crate_collision_sources[
+            Path("rocketmq-store-local/src/mapped_file/warmup_copy_helper.rs")
+        ] = """
+fn copied_periodic_end(cursor: usize, size: usize) -> usize {
+    (cursor + 2).min(size)
+}
+"""
+        cross_crate_collision_sources[
+            Path("rocketmq-store/src/base/warmup_copy_helper.rs")
+        ] = module_helper_body
+        self.assertEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                cross_crate_collision_sources,
             ),
         )
 
