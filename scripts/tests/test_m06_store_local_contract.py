@@ -6583,8 +6583,8 @@ def recovery_consume_queue_policy_records(
         record: NormalWindowLexicalBindings(record, {})
         for record in records
     }
-    negative_helpers: dict[WarmupItemIdentity, int] = {}
-    converted_helpers: dict[WarmupItemIdentity, tuple[int, int]] = {}
+    negative_helpers: dict[WarmupItemIdentity, set[int]] = {}
+    converted_helpers: dict[WarmupItemIdentity, set[tuple[int, int]]] = {}
     direct: list[tuple[WarmupFunctionRecord, str]] = []
 
     for record in records:
@@ -6665,10 +6665,10 @@ def recovery_consume_queue_policy_records(
                 converted_roles.add((max_index, truncate_index))
 
         identity = warmup_item_identity(record)
-        if 0 in negative_roles and len(record.parameters) == 1:
-            negative_helpers[identity] = 0
-        if (0, 1) in converted_roles and len(record.parameters) == 2:
-            converted_helpers[identity] = (0, 1)
+        if negative_roles:
+            negative_helpers[identity] = negative_roles
+        if converted_roles:
+            converted_helpers[identity] = converted_roles
         if any(
             max_index in negative_roles
             for max_index, _ in converted_roles
@@ -6691,8 +6691,9 @@ def recovery_consume_queue_policy_records(
                     known_items,
                 )
                 if helper in negative_helpers:
-                    helper_index = negative_helpers[helper]
-                    if helper_index < len(call.arguments):
+                    for helper_index in negative_helpers[helper]:
+                        if helper_index >= len(call.arguments):
+                            continue
                         argument = warmup_identifier_expression(
                             strip_outer_parentheses(call.arguments[helper_index])
                         )
@@ -6707,39 +6708,39 @@ def recovery_consume_queue_policy_records(
                         if caller_index is not None:
                             negative_caller_roles.add(caller_index)
                 if helper in converted_helpers:
-                    max_helper_index, truncate_helper_index = converted_helpers[helper]
-                    if max(max_helper_index, truncate_helper_index) >= len(call.arguments):
-                        continue
-                    max_argument = warmup_identifier_expression(
-                        strip_outer_parentheses(call.arguments[max_helper_index])
-                    )
-                    truncate_argument = warmup_identifier_expression(
-                        strip_outer_parentheses(call.arguments[truncate_helper_index])
-                    )
-                    max_caller_index = (
-                        None
-                        if max_argument is None
-                        else bindings.parameter_index(
-                            max_argument,
-                            call.argument_positions[max_helper_index],
+                    for max_helper_index, truncate_helper_index in converted_helpers[helper]:
+                        if max(max_helper_index, truncate_helper_index) >= len(call.arguments):
+                            continue
+                        max_argument = warmup_identifier_expression(
+                            strip_outer_parentheses(call.arguments[max_helper_index])
                         )
-                    )
-                    truncate_caller_index = (
-                        None
-                        if truncate_argument is None
-                        else bindings.parameter_index(
-                            truncate_argument,
-                            call.argument_positions[truncate_helper_index],
+                        truncate_argument = warmup_identifier_expression(
+                            strip_outer_parentheses(call.arguments[truncate_helper_index])
                         )
-                    )
-                    if (
-                        max_caller_index is not None
-                        and truncate_caller_index is not None
-                        and max_caller_index != truncate_caller_index
-                    ):
-                        converted_caller_roles.add(
-                            (max_caller_index, truncate_caller_index)
+                        max_caller_index = (
+                            None
+                            if max_argument is None
+                            else bindings.parameter_index(
+                                max_argument,
+                                call.argument_positions[max_helper_index],
+                            )
                         )
+                        truncate_caller_index = (
+                            None
+                            if truncate_argument is None
+                            else bindings.parameter_index(
+                                truncate_argument,
+                                call.argument_positions[truncate_helper_index],
+                            )
+                        )
+                        if (
+                            max_caller_index is not None
+                            and truncate_caller_index is not None
+                            and max_caller_index != truncate_caller_index
+                        ):
+                            converted_caller_roles.add(
+                                (max_caller_index, truncate_caller_index)
+                            )
             if any(
                 max_index in negative_caller_roles
                 for max_index, _ in converted_caller_roles
@@ -7184,6 +7185,30 @@ fn copied_alias_combiner(highest: i64, boundary: u64) -> bool {
             recovery_consume_queue_owner_violations(canonical, split_alias_sources),
         )
 
+        reordered_helper_sources = dict(production_sources)
+        reordered_helper_sources[
+            Path("rocketmq-store-local/src/reordered_helpers.rs")
+        ] = """
+fn neg(unused: u64, candidate: i64) -> bool { ((candidate)) < 0 }
+
+fn reaches(limit: u64, candidate: i64) -> bool {
+    u64::try_from(((candidate))).is_ok_and(|converted| ((limit)) <= ((converted)))
+}
+
+fn copied_reordered_combiner(highest: i64, boundary: u64) -> bool {
+    let signed = highest;
+    let limit = boundary;
+    neg(((limit)), ((signed))) || reaches(((limit)), ((signed)))
+}
+"""
+        self.assertNotEqual(
+            [],
+            recovery_consume_queue_owner_violations(
+                canonical,
+                reordered_helper_sources,
+            ),
+        )
+
         same_name_near_miss = dict(production_sources)
         same_name_near_miss[Path("rocketmq-store-local/src/negative_named.rs")] = """
 fn shared(value: i64) -> bool { value < 0 }
@@ -7207,6 +7232,47 @@ fn not_a_copy(highest: i64, boundary: u64) -> bool {
         self.assertEqual(
             [],
             recovery_consume_queue_owner_violations(canonical, same_name_near_miss),
+        )
+
+        wrong_argument_near_miss = dict(production_sources)
+        wrong_argument_near_miss[
+            Path("rocketmq-store-local/src/wrong_argument_near_miss.rs")
+        ] = """
+fn neg(value: i64) -> bool { value < 0 }
+
+fn reaches(boundary: u64, value: i64) -> bool {
+    u64::try_from(value).is_ok_and(|converted| converted >= boundary)
+}
+
+fn not_a_copy(highest: i64, other: i64, boundary: u64) -> bool {
+    neg(other) || reaches(boundary, highest)
+}
+"""
+        self.assertEqual(
+            [],
+            recovery_consume_queue_owner_violations(
+                canonical,
+                wrong_argument_near_miss,
+            ),
+        )
+
+        same_role_near_miss = dict(production_sources)
+        same_role_near_miss[
+            Path("rocketmq-store-local/src/same_role_near_miss.rs")
+        ] = """
+fn neg(value: i64) -> bool { value < 0 }
+
+fn reaches(boundary: u64, value: i64) -> bool {
+    u64::try_from(value).is_ok_and(|converted| converted >= boundary)
+}
+
+fn not_a_copy(highest: i64, boundary: u64) -> bool {
+    neg(highest) || reaches(highest, highest)
+}
+"""
+        self.assertEqual(
+            [],
+            recovery_consume_queue_owner_violations(canonical, same_role_near_miss),
         )
 
         incomplete_sources = dict(production_sources)
