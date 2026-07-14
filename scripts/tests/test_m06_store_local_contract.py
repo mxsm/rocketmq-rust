@@ -6574,42 +6574,101 @@ def recovery_consume_queue_policy_records(
         }
         for record in warmup_function_records(path, source)
     ]
-    negative_helpers: set[str] = set()
-    converted_helpers: set[str] = set()
+    known_items = {warmup_item_identity(record) for record in records}
+    extern_crates = {
+        crate.replace("-", "_"): crate
+        for crate in {record.path.parts[0] for record in records}
+    }
+    bindings_by_record = {
+        record: NormalWindowLexicalBindings(record, {})
+        for record in records
+    }
+    negative_helpers: dict[WarmupItemIdentity, int] = {}
+    converted_helpers: dict[WarmupItemIdentity, tuple[int, int]] = {}
     direct: list[tuple[WarmupFunctionRecord, str]] = []
 
     for record in records:
-        aliases = IdentifierAliases(record.body)
+        bindings = bindings_by_record[record]
         negative_roles: set[int] = set()
         for match in re.finditer(
-            rf"(?:(?P<left>{WARMUP_IDENTIFIER})<0|0>(?P<right>{WARMUP_IDENTIFIER}))",
+            rf"(?P<left>\(*{WARMUP_IDENTIFIER}\)*|\(*0(?:i64)?\)*)"
+            rf"(?P<operator><|>)"
+            rf"(?P<right>\(*{WARMUP_IDENTIFIER}\)*|\(*0(?:i64)?\)*)",
             record.body,
         ):
-            candidate = match.group("left") or match.group("right")
-            for index, parameter in enumerate(record.parameters):
-                if aliases.equivalent(candidate, parameter):
-                    negative_roles.add(index)
+            left = strip_outer_parentheses(match.group("left"))
+            right = strip_outer_parentheses(match.group("right"))
+            candidate: str | None = None
+            candidate_position = match.start("left")
+            if match.group("operator") == "<" and rust_integer_expression_value(right, {}) == 0:
+                candidate = warmup_identifier_expression(left)
+            elif match.group("operator") == ">" and rust_integer_expression_value(left, {}) == 0:
+                candidate = warmup_identifier_expression(right)
+                candidate_position = match.start("right")
+            if candidate is not None:
+                parameter_index = bindings.parameter_index(candidate, candidate_position)
+                if parameter_index is not None:
+                    negative_roles.add(parameter_index)
 
         converted_roles: set[tuple[int, int]] = set()
-        conversion = re.compile(
-            rf"u64::try_from\((?P<input>{WARMUP_IDENTIFIER})\)"
-            rf"\.is_ok_and\(\|(?P<value>{WARMUP_IDENTIFIER})\|"
-            rf"(?P=value)>=(?P<truncate>{WARMUP_IDENTIFIER})\)"
-        )
-        for match in conversion.finditer(record.body):
-            for max_index, max_parameter in enumerate(record.parameters):
-                if not aliases.equivalent(match.group("input"), max_parameter):
+        for conversion in re.finditer(r"\bu64::try_from\(", record.body):
+            input_opening = conversion.end() - 1
+            input_closing = closing_parenthesis(record.body, input_opening)
+            if input_closing is None:
+                continue
+            input_identifier = warmup_identifier_expression(
+                strip_outer_parentheses(record.body[input_opening + 1:input_closing])
+            )
+            max_index = (
+                None
+                if input_identifier is None
+                else bindings.parameter_index(input_identifier, input_opening + 1)
+            )
+            is_ok_and_prefix = ".is_ok_and("
+            if max_index is None or not record.body.startswith(is_ok_and_prefix, input_closing + 1):
+                continue
+            predicate_opening = input_closing + 1 + len(is_ok_and_prefix) - 1
+            predicate_closing = closing_parenthesis(record.body, predicate_opening)
+            if predicate_closing is None:
+                continue
+            predicate = record.body[predicate_opening + 1:predicate_closing]
+            predicate_match = re.fullmatch(
+                rf"\|(?P<value>{WARMUP_IDENTIFIER})\|(?P<comparison>.+)",
+                predicate,
+            )
+            if predicate_match is None:
+                continue
+            value = predicate_match.group("value")
+            comparison = strip_outer_parentheses(predicate_match.group("comparison"))
+            comparison_position = predicate_opening + 1 + predicate_match.start("comparison")
+            truncate_identifier: str | None = None
+            truncate_position = comparison_position
+            for operator in (">=", "<="):
+                parts = split_top_level_expression(comparison, operator)
+                if len(parts) != 2:
                     continue
-                for truncate_index, truncate_parameter in enumerate(record.parameters):
-                    if max_index != truncate_index and aliases.equivalent(
-                        match.group("truncate"), truncate_parameter
-                    ):
-                        converted_roles.add((max_index, truncate_index))
+                left = warmup_identifier_expression(strip_outer_parentheses(parts[0]))
+                right = warmup_identifier_expression(strip_outer_parentheses(parts[1]))
+                if operator == ">=" and left == value:
+                    truncate_identifier = right
+                    truncate_position += comparison.rfind(parts[1])
+                elif operator == "<=" and right == value:
+                    truncate_identifier = left
+                if truncate_identifier is not None:
+                    break
+            truncate_index = (
+                None
+                if truncate_identifier is None
+                else bindings.parameter_index(truncate_identifier, truncate_position)
+            )
+            if truncate_index is not None and max_index != truncate_index:
+                converted_roles.add((max_index, truncate_index))
 
+        identity = warmup_item_identity(record)
         if 0 in negative_roles and len(record.parameters) == 1:
-            negative_helpers.add(record.name)
+            negative_helpers[identity] = 0
         if (0, 1) in converted_roles and len(record.parameters) == 2:
-            converted_helpers.add(record.name)
+            converted_helpers[identity] = (0, 1)
         if any(
             max_index in negative_roles
             for max_index, _ in converted_roles
@@ -6619,37 +6678,72 @@ def recovery_consume_queue_policy_records(
     findings = list(direct)
     if negative_helpers and converted_helpers:
         for record in records:
-            aliases = IdentifierAliases(record.body)
             if len(record.parameters) < 2 or "||" not in record.body:
                 continue
-            imported = dict(record.imports)
-            negative_names = negative_helpers | {
-                alias
-                for alias, target in imported.items()
-                if target.split("::")[-1] in negative_helpers
-            }
-            converted_names = converted_helpers | {
-                alias
-                for alias, target in imported.items()
-                if target.split("::")[-1] in converted_helpers
-            }
-            max_parameter, truncate_parameter = record.parameters[:2]
-            has_negative_call = any(
-                re.search(
-                    rf"\b{re.escape(name)}\(\(?{re.escape(max_parameter)}\)?\)",
-                    record.body,
+            bindings = bindings_by_record[record]
+            negative_caller_roles: set[int] = set()
+            converted_caller_roles: set[tuple[int, int]] = set()
+            for call in normal_window_call_expressions(record.body):
+                helper = normal_window_resolve_item(
+                    record,
+                    call.path,
+                    extern_crates,
+                    known_items,
                 )
-                for name in negative_names
-            )
-            has_converted_call = any(
-                re.search(
-                    rf"\b{re.escape(name)}\(\(?{re.escape(max_parameter)}\)?,"
-                    rf"\(?{re.escape(truncate_parameter)}\)?\)",
-                    record.body,
-                )
-                for name in converted_names
-            )
-            if has_negative_call and has_converted_call:
+                if helper in negative_helpers:
+                    helper_index = negative_helpers[helper]
+                    if helper_index < len(call.arguments):
+                        argument = warmup_identifier_expression(
+                            strip_outer_parentheses(call.arguments[helper_index])
+                        )
+                        caller_index = (
+                            None
+                            if argument is None
+                            else bindings.parameter_index(
+                                argument,
+                                call.argument_positions[helper_index],
+                            )
+                        )
+                        if caller_index is not None:
+                            negative_caller_roles.add(caller_index)
+                if helper in converted_helpers:
+                    max_helper_index, truncate_helper_index = converted_helpers[helper]
+                    if max(max_helper_index, truncate_helper_index) >= len(call.arguments):
+                        continue
+                    max_argument = warmup_identifier_expression(
+                        strip_outer_parentheses(call.arguments[max_helper_index])
+                    )
+                    truncate_argument = warmup_identifier_expression(
+                        strip_outer_parentheses(call.arguments[truncate_helper_index])
+                    )
+                    max_caller_index = (
+                        None
+                        if max_argument is None
+                        else bindings.parameter_index(
+                            max_argument,
+                            call.argument_positions[max_helper_index],
+                        )
+                    )
+                    truncate_caller_index = (
+                        None
+                        if truncate_argument is None
+                        else bindings.parameter_index(
+                            truncate_argument,
+                            call.argument_positions[truncate_helper_index],
+                        )
+                    )
+                    if (
+                        max_caller_index is not None
+                        and truncate_caller_index is not None
+                        and max_caller_index != truncate_caller_index
+                    ):
+                        converted_caller_roles.add(
+                            (max_caller_index, truncate_caller_index)
+                        )
+            if any(
+                max_index in negative_caller_roles
+                for max_index, _ in converted_caller_roles
+            ):
                 findings.append((record, "split"))
     return findings
 
@@ -7029,6 +7123,26 @@ fn copied_truncation(highest: i64, boundary: u64) -> bool {
             recovery_consume_queue_owner_violations(canonical, copied_sources),
         )
 
+        reversed_comparison_copy = dict(production_sources)
+        reversed_comparison_copy[
+            Path("rocketmq-store-local/src/copied_reversed_truncation.rs")
+        ] = """
+fn copied_reversed_truncation(highest: i64, boundary: u64) -> bool {
+    let signed = highest;
+    let limit = boundary;
+    ((signed)) < 0
+        || u64::try_from(((signed)))
+            .is_ok_and(|converted| ((limit)) <= ((converted)))
+}
+"""
+        self.assertNotEqual(
+            [],
+            recovery_consume_queue_owner_violations(
+                canonical,
+                reversed_comparison_copy,
+            ),
+        )
+
         split_sources = dict(production_sources)
         split_sources[Path("rocketmq-store-local/src/negative_offset.rs")] = """
 fn is_negative(value: i64) -> bool { value < 0 }
@@ -7049,6 +7163,50 @@ fn copied_split(highest: i64, boundary: u64) -> bool {
         self.assertNotEqual(
             [],
             recovery_consume_queue_owner_violations(canonical, split_sources),
+        )
+
+        split_alias_sources = dict(production_sources)
+        split_alias_sources[Path("rocketmq-store-local/src/alias_helpers.rs")] = """
+fn neg(value: i64) -> bool { value < 0 }
+
+fn reaches(value: i64, boundary: u64) -> bool {
+    u64::try_from(value).is_ok_and(|converted| converted >= boundary)
+}
+
+fn copied_alias_combiner(highest: i64, boundary: u64) -> bool {
+    let signed = highest;
+    let limit = boundary;
+    neg(signed) || reaches(signed, limit)
+}
+"""
+        self.assertNotEqual(
+            [],
+            recovery_consume_queue_owner_violations(canonical, split_alias_sources),
+        )
+
+        same_name_near_miss = dict(production_sources)
+        same_name_near_miss[Path("rocketmq-store-local/src/negative_named.rs")] = """
+fn shared(value: i64) -> bool { value < 0 }
+"""
+        same_name_near_miss[Path("rocketmq-store-local/src/converted_named.rs")] = """
+fn shared(value: i64, boundary: u64) -> bool {
+    u64::try_from(value).is_ok_and(|converted| converted >= boundary)
+}
+"""
+        same_name_near_miss[Path("rocketmq-store-local/src/unrelated_named.rs")] = """
+fn shared(value: i64) -> bool { value == 0 }
+"""
+        same_name_near_miss[Path("rocketmq-store-local/src/same_name_near_miss.rs")] = """
+use crate::converted_named::shared as reaches;
+use crate::unrelated_named::shared as negative;
+
+fn not_a_copy(highest: i64, boundary: u64) -> bool {
+    negative(highest) || reaches(highest, boundary)
+}
+"""
+        self.assertEqual(
+            [],
+            recovery_consume_queue_owner_violations(canonical, same_name_near_miss),
         )
 
         incomplete_sources = dict(production_sources)
