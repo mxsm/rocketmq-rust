@@ -5742,46 +5742,203 @@ def transient_store_pool_owner_violations(source: str) -> list[str]:
     return violations
 
 
-def normal_window_integer_value(
-    expression: str,
-    integer_aliases: dict[str, int],
-    identifier_aliases: IdentifierAliases,
-) -> int | None:
-    expression = strip_outer_parentheses(expression)
-    identifier = warmup_identifier_expression(expression)
-    if identifier is not None:
+class NormalWindowBindingIdentity(NamedTuple):
+    scope: int
+    visible_from: int
+    name: str
+
+
+class NormalWindowBinding(NamedTuple):
+    identity: NormalWindowBindingIdentity
+    initializer: str | None
+    initializer_position: int
+    constant_value: int | None
+
+
+class NormalWindowAssignment(NamedTuple):
+    binding: NormalWindowBinding
+    expression: str
+    expression_position: int
+
+
+NORMAL_WINDOW_LOCAL_ASSIGNMENT = re.compile(
+    rf"\blet(?:mut)?(?P<target>{WARMUP_IDENTIFIER})"
+    rf"(?:\:[^=;]+)?=(?P<expression>[^;]+);"
+)
+
+
+class NormalWindowLexicalBindings:
+    def __init__(
+        self,
+        record: WarmupFunctionRecord,
+        module_integer_aliases: dict[str, int],
+    ) -> None:
+        self.body = record.body
+        self.scope_parents: list[int | None] = [None]
+        self.scope_at: list[int] = [0] * (len(self.body) + 1)
+        scope_stack = [0]
+        for position, character in enumerate(self.body):
+            self.scope_at[position] = scope_stack[-1]
+            if character == "{":
+                child_scope = len(self.scope_parents)
+                self.scope_parents.append(scope_stack[-1])
+                scope_stack.append(child_scope)
+            elif character == "}" and len(scope_stack) > 1:
+                scope_stack.pop()
+        self.scope_at[len(self.body)] = scope_stack[-1]
+
+        self.module_bindings = {
+            name: NormalWindowBinding(
+                NormalWindowBindingIdentity(-1, -1, name),
+                None,
+                -1,
+                value,
+            )
+            for name, value in module_integer_aliases.items()
+        }
+        self.parameter_bindings = tuple(
+            NormalWindowBinding(
+                NormalWindowBindingIdentity(0, -1, parameter),
+                None,
+                -1,
+                None,
+            )
+            for parameter in record.parameters
+        )
+        self.parameters_by_name = {
+            binding.identity.name: binding
+            for binding in self.parameter_bindings
+        }
+        self.local_bindings: dict[tuple[int, str], list[NormalWindowBinding]] = {}
+        assignments: list[NormalWindowAssignment] = []
+        for match in NORMAL_WINDOW_LOCAL_ASSIGNMENT.finditer(self.body):
+            scope = self.scope_at[match.start()]
+            binding = NormalWindowBinding(
+                NormalWindowBindingIdentity(
+                    scope,
+                    match.end(),
+                    match.group("target"),
+                ),
+                match.group("expression"),
+                match.start("expression"),
+                None,
+            )
+            self.local_bindings.setdefault(
+                (scope, binding.identity.name),
+                [],
+            ).append(binding)
+            assignments.append(
+                NormalWindowAssignment(
+                    binding,
+                    match.group("expression"),
+                    match.start("expression"),
+                )
+            )
+        self.assignments = tuple(assignments)
+        self.integer_cache: dict[NormalWindowBindingIdentity, int | None] = {}
+
+    def scope_for_position(self, position: int) -> int:
+        return self.scope_at[min(max(position, 0), len(self.body))]
+
+    def binding_at(self, identifier: str, position: int) -> NormalWindowBinding | None:
+        scope: int | None = self.scope_for_position(position)
+        while scope is not None:
+            candidates = self.local_bindings.get((scope, identifier), ())
+            for candidate in reversed(candidates):
+                if candidate.identity.visible_from <= position:
+                    return candidate
+            if scope == 0:
+                parameter = self.parameters_by_name.get(identifier)
+                if parameter is not None:
+                    return parameter
+            scope = self.scope_parents[scope]
+        return self.module_bindings.get(identifier)
+
+    def alias_identity(
+        self,
+        identifier: str,
+        position: int,
+        resolving: frozenset[NormalWindowBindingIdentity] = frozenset(),
+    ) -> NormalWindowBindingIdentity | None:
+        binding = self.binding_at(identifier, position)
+        if binding is None or binding.identity in resolving:
+            return None
+        initializer_identifier = (
+            None
+            if binding.initializer is None
+            else warmup_identifier_expression(binding.initializer)
+        )
+        if initializer_identifier is None:
+            return binding.identity
+        return self.alias_identity(
+            initializer_identifier,
+            binding.initializer_position,
+            resolving | {binding.identity},
+        )
+
+    def equivalent(
+        self,
+        left: str,
+        left_position: int,
+        right: str,
+        right_position: int,
+    ) -> bool:
+        left_identity = self.alias_identity(left, left_position)
+        return left_identity is not None and left_identity == self.alias_identity(
+            right,
+            right_position,
+        )
+
+    def parameter_index(self, identifier: str, position: int) -> int | None:
+        identity = self.alias_identity(identifier, position)
         return next(
             (
-                value
-                for alias, value in integer_aliases.items()
-                if identifier_aliases.equivalent(identifier, alias)
+                index
+                for index, parameter in enumerate(self.parameter_bindings)
+                if parameter.identity == identity
             ),
             None,
         )
-    return rust_integer_expression_value(expression, integer_aliases)
 
+    def integer_value(
+        self,
+        expression: str,
+        position: int,
+        resolving: frozenset[NormalWindowBindingIdentity] = frozenset(),
+    ) -> int | None:
+        expression = strip_outer_parentheses(expression)
+        identifier = warmup_identifier_expression(expression)
+        if identifier is not None:
+            binding = self.binding_at(identifier, position)
+            if binding is None or binding.identity in resolving:
+                return None
+            if binding.constant_value is not None:
+                return binding.constant_value
+            if binding.initializer is None:
+                return None
+            if binding.identity in self.integer_cache:
+                return self.integer_cache[binding.identity]
+            value = self.integer_value(
+                binding.initializer,
+                binding.initializer_position,
+                resolving | {binding.identity},
+            )
+            self.integer_cache[binding.identity] = value
+            return value
 
-def normal_window_parameter_index(
-    record: WarmupFunctionRecord,
-    identifier: str,
-    aliases: IdentifierAliases,
-) -> int | None:
-    return next(
-        (
-            index
-            for index, parameter in enumerate(record.parameters)
-            if aliases.equivalent(parameter, identifier)
-        ),
-        None,
-    )
+        aliases: dict[str, int] = {}
+        for name in set(re.findall(WARMUP_IDENTIFIER, expression)):
+            value = self.integer_value(name, position, resolving)
+            if value is not None:
+                aliases[name] = value
+        return rust_integer_expression_value(expression, aliases)
 
 
 def normal_window_selector_assignments(
     record: WarmupFunctionRecord,
-    integer_aliases: dict[str, int],
-) -> list[tuple[str | None, int, bool]]:
-    aliases = IdentifierAliases(record.body)
-    selectors: list[tuple[str | None, int, bool]] = []
+    bindings: NormalWindowLexicalBindings,
+) -> list[tuple[NormalWindowBindingIdentity | None, int, bool]]:
+    selectors: list[tuple[NormalWindowBindingIdentity | None, int, bool]] = []
     selector = re.compile(
         rf"(?:(?:let(?:mut)?(?P<target>{WARMUP_IDENTIFIER})(?:\:[^=;]+)?=))?"
         r"if(?P<condition>[^\{;]+)\{(?P<zero_branch>[^\{\};]+)\}"
@@ -5796,39 +5953,59 @@ def normal_window_selector_assignments(
             continue
         left, right = condition_parts
         configured: str | None = None
-        if normal_window_integer_value(left, integer_aliases, aliases) == 0:
+        condition_position = match.start("condition")
+        if bindings.integer_value(left, condition_position) == 0:
             configured = warmup_identifier_expression(right)
-        elif normal_window_integer_value(right, integer_aliases, aliases) == 0:
+        elif bindings.integer_value(right, condition_position) == 0:
             configured = warmup_identifier_expression(left)
         if configured is None:
             continue
         explicit = warmup_identifier_expression(match.group("explicit_branch"))
-        if explicit is None or not aliases.equivalent(explicit, configured):
+        if explicit is None or not bindings.equivalent(
+            explicit,
+            match.start("explicit_branch"),
+            configured,
+            condition_position,
+        ):
             continue
-        if normal_window_integer_value(match.group("zero_branch"), integer_aliases, aliases) != 3:
+        if bindings.integer_value(
+            match.group("zero_branch"),
+            match.start("zero_branch"),
+        ) != 3:
             continue
-        configured_index = normal_window_parameter_index(record, configured, aliases)
+        configured_index = bindings.parameter_index(configured, condition_position)
         if configured_index is None:
             continue
 
-        target = match.group("target")
+        target_name = match.group("target")
+        target = None
         suffix = record.body[match.end():]
         returns_selector = suffix in {"", ";"}
-        if target is not None:
-            target = aliases.find(target)
+        if target_name is not None:
+            target_binding = bindings.binding_at(target_name, match.end())
+            target = None if target_binding is None else target_binding.identity
             suffix_identifier = warmup_identifier_expression(suffix.removeprefix("return").removesuffix(";"))
-            returns_selector = suffix_identifier is not None and aliases.equivalent(
+            returns_selector = suffix_identifier is not None and bindings.equivalent(
                 suffix_identifier,
-                target,
+                match.end(),
+                target_name,
+                match.end(),
             )
         selectors.append((target, configured_index, returns_selector))
     return selectors
 
 
+class NormalWindowSubtraction(NamedTuple):
+    count: str
+    count_position: int
+    limit: str
+    limit_position: int
+
+
 def normal_window_saturating_subtractions(
     record: WarmupFunctionRecord,
-) -> list[tuple[str, str]]:
-    subtractions: list[tuple[str, str]] = []
+) -> list[NormalWindowSubtraction]:
+    subtractions: list[NormalWindowSubtraction] = []
     for match in re.finditer(r"\.saturating_sub\(", record.body):
         cursor = match.start() - 1
         if cursor < 0:
@@ -5862,12 +6039,25 @@ def normal_window_saturating_subtractions(
             record.body[receiver_start:match.start()]
         )
         if closing is not None and count is not None:
-            subtractions.append((count, record.body[opening + 1:closing]))
+            subtractions.append(
+                NormalWindowSubtraction(
+                    count,
+                    receiver_start,
+                    record.body[opening + 1:closing],
+                    opening + 1,
+                )
+            )
     return subtractions
 
 
-def normal_window_call_expressions(body: str) -> list[tuple[str, list[str]]]:
-    calls: list[tuple[str, list[str]]] = []
+class NormalWindowCall(NamedTuple):
+    path: str
+    arguments: tuple[str, ...]
+    argument_positions: tuple[int, ...]
+
+
+def normal_window_call_expressions(body: str) -> list[NormalWindowCall]:
+    calls: list[NormalWindowCall] = []
     call_start = re.compile(
         rf"(?<![.A-Za-z0-9_:])(?P<path>(?:::)?{WARMUP_IDENTIFIER}"
         rf"(?:::{WARMUP_IDENTIFIER})*)\("
@@ -5879,7 +6069,36 @@ def normal_window_call_expressions(body: str) -> list[tuple[str, list[str]]]:
             continue
         call = warmup_call_expression(body[match.start():closing + 1])
         if call is not None:
-            calls.append(call)
+            arguments_source = body[opening + 1:closing]
+            argument_parts: list[tuple[str, int]] = []
+            argument_start = 0
+            parenthesis_depth = 0
+            for index, character in enumerate(arguments_source):
+                if character == "(":
+                    parenthesis_depth += 1
+                elif character == ")":
+                    parenthesis_depth -= 1
+                elif character == "," and parenthesis_depth == 0:
+                    argument_parts.append(
+                        (arguments_source[argument_start:index], argument_start)
+                    )
+                    argument_start = index + 1
+            argument_parts.append(
+                (arguments_source[argument_start:], argument_start)
+            )
+            calls.append(
+                NormalWindowCall(
+                    call[0],
+                    tuple(
+                        strip_outer_parentheses(argument)
+                        for argument, _ in argument_parts
+                    ),
+                    tuple(
+                        opening + 1 + relative_position
+                        for _, relative_position in argument_parts
+                    ),
+                )
+            )
     return calls
 
 
@@ -5897,15 +6116,17 @@ def normal_window_resolve_item(
 def normal_window_expression_effective_config_roles(
     record: WarmupFunctionRecord,
     expression: str,
-    aliases: IdentifierAliases,
-    effective_identifiers: dict[str, set[int]],
+    expression_position: int,
+    bindings: NormalWindowLexicalBindings,
+    effective_identifiers: dict[NormalWindowBindingIdentity, set[int]],
     selector_helpers: dict[WarmupItemIdentity, set[int]],
     extern_crates: dict[str, str],
     known_items: set[WarmupItemIdentity],
 ) -> set[int]:
     identifier = warmup_identifier_expression(expression)
     if identifier is not None:
-        return set(effective_identifiers.get(aliases.find(identifier), set()))
+        identity = bindings.alias_identity(identifier, expression_position)
+        return set(effective_identifiers.get(identity, set()))
     call = warmup_call_expression(expression)
     if call is None:
         return set()
@@ -5926,7 +6147,7 @@ def normal_window_expression_effective_config_roles(
         caller_index = (
             None
             if argument is None
-            else normal_window_parameter_index(record, argument, aliases)
+            else bindings.parameter_index(argument, expression_position)
         )
         configured_roles.add(-1 if caller_index is None else caller_index)
     return configured_roles
@@ -5974,20 +6195,32 @@ def normal_recovery_window_duplicate_policy_violations(
         "plan_normal_recovery_file_window",
     )
 
-    selector_facts: dict[WarmupItemIdentity, list[tuple[str | None, int, bool]]] = {}
+    lexical_bindings: dict[WarmupFunctionRecord, NormalWindowLexicalBindings] = {}
+
+    def bindings_for(record: WarmupFunctionRecord) -> NormalWindowLexicalBindings:
+        bindings = lexical_bindings.get(record)
+        if bindings is None:
+            bindings = NormalWindowLexicalBindings(
+                record,
+                file_integer_aliases.get(record.path, {}),
+            )
+            lexical_bindings[record] = bindings
+        return bindings
+
+    selector_facts: dict[
+        WarmupFunctionRecord,
+        list[tuple[NormalWindowBindingIdentity | None, int, bool]],
+    ] = {}
     selector_helpers: dict[WarmupItemIdentity, set[int]] = {}
     subtraction_helpers: dict[WarmupItemIdentity, set[tuple[int, int]]] = {}
     for record in selector_candidates:
         identity = warmup_item_identity(record)
         selectors = normal_window_selector_assignments(
             record,
-            resolved_integer_aliases(
-                record.raw_body,
-                file_integer_aliases.get(record.path, {}),
-            ),
+            bindings_for(record),
         )
         if selectors:
-            selector_facts[identity] = selectors
+            selector_facts[record] = selectors
         for _, configured_index, returns_selector in selectors:
             if returns_selector and identity != canonical_identity:
                 selector_helpers.setdefault(identity, set()).add(configured_index)
@@ -5997,13 +6230,19 @@ def normal_recovery_window_duplicate_policy_violations(
         identity = warmup_item_identity(record)
         if identity == canonical_identity:
             continue
-        aliases = IdentifierAliases(record.body)
-        for count, limit in normal_window_saturating_subtractions(record):
-            limit_identifier = warmup_identifier_expression(limit)
+        bindings = bindings_for(record)
+        for subtraction in normal_window_saturating_subtractions(record):
+            limit_identifier = warmup_identifier_expression(subtraction.limit)
             if limit_identifier is None:
                 continue
-            count_index = normal_window_parameter_index(record, count, aliases)
-            limit_index = normal_window_parameter_index(record, limit_identifier, aliases)
+            count_index = bindings.parameter_index(
+                subtraction.count,
+                subtraction.count_position,
+            )
+            limit_index = bindings.parameter_index(
+                limit_identifier,
+                subtraction.limit_position,
+            )
             if count_index is not None and limit_index is not None and count_index != limit_index:
                 subtraction_helpers.setdefault(identity, set()).add((count_index, limit_index))
 
@@ -6026,27 +6265,24 @@ def normal_recovery_window_duplicate_policy_violations(
             for name in helper_names | imported_helper_names
         )
         if (
-            identity not in selector_facts
+            record not in selector_facts
             and ".saturating_sub(" not in record.body
             and not references_helper
         ):
             continue
-        aliases = IdentifierAliases(record.body)
-        effective_identifiers: dict[str, set[int]] = {}
-        for target, configured_index, _ in selector_facts.get(identity, []):
+        bindings = bindings_for(record)
+        effective_identifiers: dict[NormalWindowBindingIdentity, set[int]] = {}
+        for target, configured_index, _ in selector_facts.get(record, []):
             if target is not None:
-                effective_identifiers.setdefault(aliases.find(target), set()).add(
+                effective_identifiers.setdefault(target, set()).add(
                     configured_index
                 )
-        let_assignment = re.compile(
-            rf"let(?:mut)?(?P<target>{WARMUP_IDENTIFIER})(?:\:[^=;]+)?="
-            rf"(?P<expression>[^;]+);"
-        )
-        for assignment in let_assignment.finditer(record.body):
+        for assignment in bindings.assignments:
             configured_roles = normal_window_expression_effective_config_roles(
                 record,
-                assignment.group("expression"),
-                aliases,
+                assignment.expression,
+                assignment.expression_position,
+                bindings,
                 effective_identifiers,
                 selector_helpers,
                 extern_crates,
@@ -6054,17 +6290,21 @@ def normal_recovery_window_duplicate_policy_violations(
             )
             if configured_roles:
                 effective_identifiers.setdefault(
-                    aliases.find(assignment.group("target")),
+                    assignment.binding.identity,
                     set(),
                 ).update(configured_roles)
 
         complete_policy = False
-        for count, limit in normal_window_saturating_subtractions(record):
-            count_index = normal_window_parameter_index(record, count, aliases)
+        for subtraction in normal_window_saturating_subtractions(record):
+            count_index = bindings.parameter_index(
+                subtraction.count,
+                subtraction.count_position,
+            )
             configured_roles = normal_window_expression_effective_config_roles(
                 record,
-                limit,
-                aliases,
+                subtraction.limit,
+                subtraction.limit_position,
+                bindings,
                 effective_identifiers,
                 selector_helpers,
                 extern_crates,
@@ -6074,32 +6314,38 @@ def normal_recovery_window_duplicate_policy_violations(
                 complete_policy = True
                 break
         if not complete_policy:
-            for helper_path, arguments in normal_window_call_expressions(record.body):
+            for call in normal_window_call_expressions(record.body):
                 helper = normal_window_resolve_item(
                     record,
-                    helper_path,
+                    call.path,
                     extern_crates,
                     known_items,
                 )
                 if helper is None:
                     continue
                 for count_index, limit_index in subtraction_helpers.get(helper, set()):
-                    if max(count_index, limit_index) >= len(arguments):
+                    if max(count_index, limit_index) >= len(call.arguments):
                         continue
                     configured_roles = normal_window_expression_effective_config_roles(
                         record,
-                        arguments[limit_index],
-                        aliases,
+                        call.arguments[limit_index],
+                        call.argument_positions[limit_index],
+                        bindings,
                         effective_identifiers,
                         selector_helpers,
                         extern_crates,
                         known_items,
                     )
-                    count_argument = warmup_identifier_expression(arguments[count_index])
+                    count_argument = warmup_identifier_expression(
+                        call.arguments[count_index]
+                    )
                     caller_count_index = (
                         None
                         if count_argument is None
-                        else normal_window_parameter_index(record, count_argument, aliases)
+                        else bindings.parameter_index(
+                            count_argument,
+                            call.argument_positions[count_index],
+                        )
                     )
                     if configured_roles and (
                         caller_count_index is None
@@ -6715,6 +6961,86 @@ fn dynamic_fallback(mapped_total: usize, configured: usize, fallback: usize) -> 
             normal_recovery_file_window_owner_violations(canonical, local_scope_near_miss),
         )
 
+        local_block_scope_near_miss = dict(production_sources)
+        local_block_scope_near_miss[
+            Path("rocketmq-store-local/src/block_scoped_fallback.rs")
+        ] = """
+fn inner_binding_does_not_escape(
+    mapped_total: usize,
+    configured: usize,
+    runtime: usize,
+) -> usize {
+    {
+        let runtime = 3usize;
+        consume(runtime);
+    }
+    let selected = if configured == 0 { runtime } else { configured };
+    mapped_total.saturating_sub(selected)
+}
+
+fn later_binding_does_not_apply_early(
+    mapped_total: usize,
+    configured: usize,
+    runtime: usize,
+) -> usize {
+    let selected = if configured == 0 { runtime } else { configured };
+    let runtime = 3usize;
+    consume(runtime);
+    mapped_total.saturating_sub(selected)
+}
+
+fn inner_selector_alias_does_not_escape(
+    mapped_total: usize,
+    configured: usize,
+) -> usize {
+    let runtime = load_runtime_limit();
+    {
+        let runtime = configured;
+        consume(runtime);
+    }
+    let selected = if runtime == 0 { 3 } else { runtime };
+    mapped_total.saturating_sub(selected)
+}
+
+fn child_shadow_hides_outer_fallback(
+    mapped_total: usize,
+    configured: usize,
+    runtime: usize,
+) -> usize {
+    let fallback = 3usize;
+    {
+        let fallback = runtime;
+        let selected = if configured == 0 { fallback } else { configured };
+        return mapped_total.saturating_sub(selected);
+    }
+}
+"""
+        self.assertEqual(
+            [],
+            normal_recovery_file_window_owner_violations(
+                canonical,
+                local_block_scope_near_miss,
+            ),
+        )
+
+        local_outer_to_inner = dict(production_sources)
+        local_outer_to_inner[
+            Path("rocketmq-store-local/src/outer_scoped_fallback.rs")
+        ] = """
+fn copied_nested_window(mapped_total: usize, configured: usize) -> usize {
+    let requested = configured;
+    let fallback = 3usize;
+    {
+        let selected = if requested == 0 { fallback } else { requested };
+        mapped_total.saturating_sub(selected)
+    }
+}
+"""
+        self.assertNotEqual(
+            [],
+            normal_recovery_file_window_owner_violations(canonical, local_outer_to_inner),
+        )
+
     def test_store_normal_recovery_paths_delegate_once_and_reject_window_mutations(self) -> None:
         commit_log_path = Path("rocketmq-store/src/log_file/commit_log.rs")
         commit_log = (ROOT / commit_log_path).read_text(encoding="utf-8")
@@ -6813,6 +7139,87 @@ fn unrelated_constant() -> usize {
         self.assertEqual(
             [],
             store_normal_recovery_file_window_violations(commit_log, store_scope_near_miss),
+        )
+
+        store_block_scope_near_miss = dict(store_sources)
+        store_block_scope_near_miss[
+            Path("rocketmq-store/src/block_scoped_fallback.rs")
+        ] = """
+fn inner_binding_does_not_escape(
+    mapped_total: usize,
+    configured: usize,
+    runtime: usize,
+) -> usize {
+    {
+        let runtime = 3usize;
+        consume(runtime);
+    }
+    let selected = if configured == 0 { runtime } else { configured };
+    mapped_total.saturating_sub(selected)
+}
+
+fn later_binding_does_not_apply_early(
+    mapped_total: usize,
+    configured: usize,
+    runtime: usize,
+) -> usize {
+    let selected = if configured == 0 { runtime } else { configured };
+    let runtime = 3usize;
+    consume(runtime);
+    mapped_total.saturating_sub(selected)
+}
+
+fn inner_selector_alias_does_not_escape(
+    mapped_total: usize,
+    configured: usize,
+) -> usize {
+    let runtime = load_runtime_limit();
+    {
+        let runtime = configured;
+        consume(runtime);
+    }
+    let selected = if runtime == 0 { 3 } else { runtime };
+    mapped_total.saturating_sub(selected)
+}
+
+fn child_shadow_hides_outer_fallback(
+    mapped_total: usize,
+    configured: usize,
+    runtime: usize,
+) -> usize {
+    let fallback = 3usize;
+    {
+        let fallback = runtime;
+        let selected = if configured == 0 { fallback } else { configured };
+        return mapped_total.saturating_sub(selected);
+    }
+}
+"""
+        self.assertEqual(
+            [],
+            store_normal_recovery_file_window_violations(
+                commit_log,
+                store_block_scope_near_miss,
+            ),
+        )
+
+        store_outer_to_inner = dict(store_sources)
+        store_outer_to_inner[
+            Path("rocketmq-store/src/outer_scoped_fallback.rs")
+        ] = """
+const COPIED_DEFAULT: usize = 3;
+
+fn copied_nested_window(mapped_total: usize, configured: usize) -> usize {
+    let requested = configured;
+    {
+        let selected = if requested == 0 { COPIED_DEFAULT } else { requested };
+        mapped_total.saturating_sub(selected)
+    }
+}
+"""
+        self.assertNotEqual(
+            [],
+            store_normal_recovery_file_window_violations(commit_log, store_outer_to_inner),
         )
 
         store_tuple = dict(store_sources)
