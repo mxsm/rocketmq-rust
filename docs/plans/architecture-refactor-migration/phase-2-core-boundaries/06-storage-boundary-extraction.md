@@ -825,10 +825,20 @@ python scripts/arc_mut_guard.py
   source/mutation contract、Local range fixture 1/1、Store `DefaultMappedFile` 30/30 与 `lock_region` 2/2 通过；
   完整 M06 contract 99/99，Local 全量 174 项通过，另 9 个既有 doctest ignored。
 - [x] `[CONTRACT]` contract 复用既有 item-span masking 与 inherent-method 解析，精确约束 Local 公开签名/body、
-  Store 私有 wrapper body、唯一 production owner、唯一 Store caller/reference，并禁止 Store 重新出现
-  `saturating_sub(offset)` range clipping。mutation 覆盖零长度、边界比较、min/max、`saturating_sub`、remaining
+  Store 私有 wrapper body、唯一 production owner、唯一 Store caller/reference，并禁止 boundary adapter 重复
+  range clipping。mutation 覆盖零长度、边界比较、min/max、`saturating_sub`、remaining
   与 offset 的 `usize` 转换、转换顺序、`wrapping_add`、requested/clamped len、method/impl
   `cfg`/`cfg_attr`、duplicate、post-test production 以及跨文件 caller/算法回流。
+- [x] `[REV-FOLLOWUP]` 独立审查发现防回流扫描只检查 Store 且绑定变量名 `offset`；contract-first RED 证明
+  Local 跨文件完整复制和 Store 将 offset/file-size/request/remaining/len 全部改名后均得到空违规列表。GREEN
+  将扫描扩展至 `rocketmq-store-local/src` 与 `rocketmq-store/src` 全部 masked production function/method item，
+  以变量角色和赋值关系归一化验证 file-size boundary、`saturating_sub`、request `min`、remaining
+  `usize::try_from(...).unwrap_or(usize::MAX)`、offset `try_from(...).ok()?` 与最终 `(offset, len)` tuple dataflow；
+  canonical kernel exact owner 是唯一允许的完整 policy，Store exact adapter 仍只允许 Local delegation。
+  mutation 进一步覆盖 Local/Store 改名复制、带/不带零长度 guard、跨文件 remaining helper、direct/use-alias、
+  helper-owned 或 caller-owned boundary、`cfg`/`cfg_attr` impl、`impl ... where`、post-test active item 与纯测试
+  decoy；独立 `saturating_sub`/`min` 正例证明不会误伤不完整的合法算术。增强后 focused 2/2 和 full M06
+  contract 99/99 通过；inline duplicate 诊断携带其文件路径，split-helper 诊断同时携带 caller/helper 路径。
 - [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Windows 上 Local 与 Store 各七组 feature
   closure、两 crate all-target/all-feature Clippy、root workspace all-target/all-feature Clippy、Local strict
   Rustdoc 均通过；Store 普通 Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。Windows 隔离 target 通过

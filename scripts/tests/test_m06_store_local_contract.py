@@ -2559,6 +2559,237 @@ def mapped_file_lock_range_policy_violations(source: str) -> list[str]:
     return violations
 
 
+LOCK_RANGE_IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
+LOCK_RANGE_FILE_SIZE_EXPRESSION = (
+    rf"(?:self\.)?{LOCK_RANGE_IDENTIFIER}(?:\(\))?"
+)
+
+
+def has_inline_mapped_file_lock_range_policy(body: str) -> bool:
+    compact = compact_rust(body)
+    boundary = re.compile(
+        rf"if(?P<request>{LOCK_RANGE_IDENTIFIER})==0\|\|"
+        rf"(?P<offset>{LOCK_RANGE_IDENTIFIER})>="
+        rf"(?P<file_size>{LOCK_RANGE_FILE_SIZE_EXPRESSION})"
+        r"\{returnNone;\}"
+    )
+    for match in boundary.finditer(compact):
+        request = re.escape(match.group("request"))
+        offset = re.escape(match.group("offset"))
+        file_size = re.escape(match.group("file_size"))
+        remaining_match = re.search(
+            rf"let(?P<remaining>{LOCK_RANGE_IDENTIFIER})="
+            rf"{file_size}\.saturating_sub\({offset}\);",
+            compact[match.end():],
+        )
+        if remaining_match is None:
+            continue
+        remaining = re.escape(remaining_match.group("remaining"))
+        remaining_end = match.end() + remaining_match.end()
+        clamp_match = re.search(
+            rf"let(?P<length>{LOCK_RANGE_IDENTIFIER})={request}\.min\("
+            rf"usize::try_from\({remaining}\)\.unwrap_or\(usize::MAX\),?\);",
+            compact[remaining_end:],
+        )
+        if clamp_match is None:
+            continue
+        length = re.escape(clamp_match.group("length"))
+        clamp_end = remaining_end + clamp_match.end()
+        empty_match = re.search(
+            rf"if{length}==0\{{returnNone;\}}",
+            compact[clamp_end:],
+        )
+        empty_end = (
+            clamp_end
+            if empty_match is None
+            else clamp_end + empty_match.end()
+        )
+        offset_match = re.search(
+            rf"let(?P<native_offset>{LOCK_RANGE_IDENTIFIER})="
+            rf"usize::try_from\({offset}\)\.ok\(\)\?;",
+            compact[empty_end:],
+        )
+        if offset_match is None:
+            continue
+        native_offset = re.escape(offset_match.group("native_offset"))
+        offset_end = empty_end + offset_match.end()
+        if re.search(
+            rf"Some\(\({native_offset},{length}\)\)",
+            compact[offset_end:],
+        ):
+            return True
+    return False
+
+
+def mapped_file_remaining_helper_arguments(
+    body: str,
+) -> tuple[str, str, bool] | None:
+    compact = compact_rust(body)
+    subtraction = re.search(
+        rf"(?P<file_size>{LOCK_RANGE_FILE_SIZE_EXPRESSION})\.saturating_sub\("
+        rf"(?P<offset>{LOCK_RANGE_IDENTIFIER})\)",
+        compact,
+    )
+    if subtraction is None:
+        return None
+    file_size = subtraction.group("file_size")
+    offset = subtraction.group("offset")
+    subtraction_expression = re.escape(subtraction.group(0))
+    returned_directly = (
+        re.search(rf"Some\({subtraction_expression}\)", compact) is not None
+        or re.search(rf"{subtraction_expression}$", compact) is not None
+    )
+    assigned = re.search(
+        rf"let(?P<remaining>{LOCK_RANGE_IDENTIFIER})={subtraction_expression};",
+        compact,
+    )
+    returned_assignment = False
+    if assigned is not None:
+        remaining = re.escape(assigned.group("remaining"))
+        returned_assignment = (
+            re.search(rf"(?:Some\()?{remaining}\)?$", compact) is not None
+        )
+    if not returned_directly and not returned_assignment:
+        return None
+    boundary = re.search(
+        rf"if{re.escape(offset)}>={re.escape(file_size)}\{{returnNone;\}}",
+        compact,
+    )
+    return file_size, offset, boundary is not None
+
+
+def has_split_mapped_file_lock_range_policy(
+    body: str,
+    remaining_helpers: dict[str, tuple[Path, bool]],
+) -> tuple[bool, str | None]:
+    compact = compact_rust(body)
+    zero_request = re.compile(
+        rf"if(?P<request>{LOCK_RANGE_IDENTIFIER})==0"
+        rf"(?P<tail>\|\|[^{{}}]+)?\{{returnNone;\}}"
+    )
+    helper_call = re.compile(
+        rf"let(?P<remaining>{LOCK_RANGE_IDENTIFIER})="
+        rf"(?:(?:crate|self|super)::(?:{LOCK_RANGE_IDENTIFIER}::)*)?"
+        rf"(?P<helper>{LOCK_RANGE_IDENTIFIER})\("
+        rf"(?P<file_size>{LOCK_RANGE_FILE_SIZE_EXPRESSION}),"
+        rf"(?P<offset>{LOCK_RANGE_IDENTIFIER})\)\??;"
+    )
+    for zero_match in zero_request.finditer(compact):
+        request = re.escape(zero_match.group("request"))
+        for call_match in helper_call.finditer(compact, zero_match.end()):
+            helper_name = call_match.group("helper")
+            if helper_name not in remaining_helpers:
+                continue
+            helper_has_boundary = remaining_helpers[helper_name][1]
+            file_size = re.escape(call_match.group("file_size"))
+            remaining = re.escape(call_match.group("remaining"))
+            offset = re.escape(call_match.group("offset"))
+            caller_has_boundary = re.search(
+                rf"if{offset}>={file_size}\{{returnNone;\}}",
+                compact[zero_match.end():call_match.start()],
+            ) is not None or re.search(
+                rf"{offset}>={file_size}",
+                zero_match.group("tail") or "",
+            ) is not None
+            if not helper_has_boundary and not caller_has_boundary:
+                continue
+            clamp_match = re.search(
+                rf"let(?P<length>{LOCK_RANGE_IDENTIFIER})={request}\.min\("
+                rf"usize::try_from\({remaining}\)\.unwrap_or\(usize::MAX\),?\);",
+                compact[call_match.end():],
+            )
+            if clamp_match is None:
+                continue
+            length = re.escape(clamp_match.group("length"))
+            clamp_end = call_match.end() + clamp_match.end()
+            empty_match = re.search(
+                rf"if{length}==0\{{returnNone;\}}",
+                compact[clamp_end:],
+            )
+            empty_end = (
+                clamp_end
+                if empty_match is None
+                else clamp_end + empty_match.end()
+            )
+            offset_match = re.search(
+                rf"let(?P<native_offset>{LOCK_RANGE_IDENTIFIER})="
+                rf"usize::try_from\({offset}\)\.ok\(\)\?;",
+                compact[empty_end:],
+            )
+            if offset_match is None:
+                continue
+            native_offset = re.escape(offset_match.group("native_offset"))
+            offset_end = empty_end + offset_match.end()
+            if re.search(
+                rf"Some\(\({native_offset},{length}\)\)",
+                compact[offset_end:],
+            ):
+                return True, helper_name
+    return False, None
+
+
+def mapped_file_lock_range_duplicate_policy_violations(
+    production_sources: dict[Path, str],
+) -> list[str]:
+    functions: list[tuple[Path, str, str]] = []
+    aliases: dict[str, str] = {}
+    for path, source in production_sources.items():
+        production = source_without_cfg_test_items(source)
+        functions.extend(
+            (path, function_name, body)
+            for function_name, body in rust_function_bodies(production)
+        )
+        for _, import_body, _ in active_use_records(production):
+            alias_match = re.search(
+                rf"(?P<source>{LOCK_RANGE_IDENTIFIER})\s+as\s+"
+                rf"(?P<alias>{LOCK_RANGE_IDENTIFIER})$",
+                import_body,
+            )
+            if alias_match is not None:
+                aliases[alias_match.group("alias")] = alias_match.group("source")
+
+    helpers = {
+        function_name: (path, helper_arguments[2])
+        for path, function_name, body in functions
+        if (helper_arguments := mapped_file_remaining_helper_arguments(body))
+        is not None
+    }
+    changed = True
+    while changed:
+        changed = False
+        for alias, source_name in aliases.items():
+            if source_name in helpers and alias not in helpers:
+                helpers[alias] = helpers[source_name]
+                changed = True
+
+    violations: list[str] = []
+    canonical_owner_seen = False
+    for path, function_name, body in functions:
+        if has_inline_mapped_file_lock_range_policy(body):
+            if (
+                path == MAPPED_FILE_KERNEL_PATH
+                and function_name == "lock_region_range"
+                and not canonical_owner_seen
+            ):
+                canonical_owner_seen = True
+                continue
+            violations.append(
+                f"{path.as_posix()}: {function_name} duplicates mapped-file lock-range clipping policy"
+            )
+            continue
+        split_policy, helper_name = has_split_mapped_file_lock_range_policy(
+            body,
+            helpers,
+        )
+        if split_policy and helper_name is not None:
+            helper_path = helpers[helper_name][0]
+            violations.append(
+                f"{path.as_posix()}: {function_name} reconstructs mapped-file lock-range clipping "
+                f"through {helper_name} from {helper_path.as_posix()}"
+            )
+    return violations
+
+
 def mapped_file_lock_range_adapter_violations(
     canonical_source: str,
     default_mapped_file_source: str,
@@ -2618,11 +2849,10 @@ def mapped_file_lock_range_adapter_violations(
         helper_reference_count = len(STORE_LOCK_RANGE_HELPER_REFERENCE.findall(active))
         if helper_reference_count:
             helper_references[path] = helper_reference_count
-        if (
-            path.parts[:2] == ("rocketmq-store", "src")
-            and re.search(r"\.saturating_sub\s*\(\s*offset\s*\)", active)
-        ):
-            violations.append(f"{path.as_posix()}: Store retained mapped-file range clipping arithmetic")
+
+    violations.extend(
+        mapped_file_lock_range_duplicate_policy_violations(production_sources)
+    )
 
     if range_definitions != [MAPPED_FILE_KERNEL_PATH]:
         violations.append(f"lock_region_range production definitions changed: {range_definitions}")
@@ -5939,6 +6169,272 @@ fn forbidden_lock_range_copy(file_size: u64, offset: u64, requested_len: usize) 
                 canonical,
                 default_mapped_file,
                 cross_file_return_sources,
+            ),
+        )
+
+        reviewer_escape_sources = {
+            "local_exact_copy": (
+                Path("rocketmq-store-local/src/base/memory_lock_manager.rs"),
+                """
+fn copied_mapped_file_lock_range(
+    file_size: u64,
+    offset: u64,
+    requested_len: usize,
+) -> Option<(usize, usize)> {
+    if requested_len == 0 || offset >= file_size {
+        return None;
+    }
+    let remaining = file_size.saturating_sub(offset);
+    let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+    if len == 0 {
+        return None;
+    }
+    let offset = usize::try_from(offset).ok()?;
+    Some((offset, len))
+}
+""",
+            ),
+            "store_renamed_copy": (
+                Path("rocketmq-store/src/base/swappable.rs"),
+                """
+fn renamed_mapped_file_lock_range(
+    mapped_file_size: u64,
+    request_offset: u64,
+    request_bytes: usize,
+) -> Option<(usize, usize)> {
+    if request_bytes == 0 || request_offset >= mapped_file_size {
+        return None;
+    }
+    let available_bytes = mapped_file_size.saturating_sub(request_offset);
+    let clipped_bytes = request_bytes.min(
+        usize::try_from(available_bytes).unwrap_or(usize::MAX),
+    );
+    if clipped_bytes == 0 {
+        return None;
+    }
+    let native_offset = usize::try_from(request_offset).ok()?;
+    Some((native_offset, clipped_bytes))
+}
+""",
+            ),
+        }
+        for mutation_name, (path, copied_policy) in reviewer_escape_sources.items():
+            escaped_sources = dict(production_sources)
+            escaped_sources[path] += copied_policy
+            with self.subTest(reviewer_escape=mutation_name):
+                violations = mapped_file_lock_range_adapter_violations(
+                    canonical,
+                    default_mapped_file,
+                    escaped_sources,
+                )
+                self.assertNotEqual([], violations)
+                self.assertTrue(
+                    any(path.as_posix() in violation for violation in violations),
+                    violations,
+                )
+
+        split_helper_path = Path("rocketmq-store/src/base/swappable.rs")
+        split_caller_path = Path(
+            "rocketmq-store/src/base/allocate_mapped_file_service.rs"
+        )
+        split_helper_sources = dict(production_sources)
+        split_helper_sources[split_helper_path] += """
+pub(crate) fn mapped_file_lock_remaining(
+    mapped_file_size: u64,
+    request_offset: u64,
+) -> Option<u64> {
+    if request_offset >= mapped_file_size {
+        return None;
+    }
+    Some(mapped_file_size.saturating_sub(request_offset))
+}
+"""
+        split_helper_sources[split_caller_path] += """
+use crate::base::swappable::mapped_file_lock_remaining as remaining_for_lock;
+
+fn copied_lock_range_through_alias(
+    mapped_file_size: u64,
+    request_offset: u64,
+    request_bytes: usize,
+) -> Option<(usize, usize)> {
+    if request_bytes == 0 {
+        return None;
+    }
+    let available_bytes = remaining_for_lock(mapped_file_size, request_offset)?;
+    let clipped_bytes = request_bytes.min(
+        usize::try_from(available_bytes).unwrap_or(usize::MAX),
+    );
+    if clipped_bytes == 0 {
+        return None;
+    }
+    let native_offset = usize::try_from(request_offset).ok()?;
+    Some((native_offset, clipped_bytes))
+}
+"""
+        split_violations = mapped_file_lock_range_adapter_violations(
+            canonical,
+            default_mapped_file,
+            split_helper_sources,
+        )
+        self.assertTrue(
+            any(
+                split_helper_path.as_posix() in violation
+                and split_caller_path.as_posix() in violation
+                for violation in split_violations
+            ),
+            split_violations,
+        )
+
+        raw_helper_sources = dict(production_sources)
+        raw_helper_sources[split_helper_path] += """
+pub(crate) fn raw_mapped_file_lock_remaining(
+    mapped_file_size: u64,
+    request_offset: u64,
+) -> u64 {
+    mapped_file_size.saturating_sub(request_offset)
+}
+"""
+        raw_helper_sources[split_caller_path] += """
+use crate::base::swappable::raw_mapped_file_lock_remaining as raw_remaining_for_lock;
+
+fn copied_lock_range_through_raw_alias(
+    mapped_file_size: u64,
+    request_offset: u64,
+    request_bytes: usize,
+) -> Option<(usize, usize)> {
+    if request_bytes == 0 || request_offset >= mapped_file_size {
+        return None;
+    }
+    let available_bytes = raw_remaining_for_lock(mapped_file_size, request_offset);
+    let clipped_bytes = request_bytes.min(
+        usize::try_from(available_bytes).unwrap_or(usize::MAX),
+    );
+    let native_offset = usize::try_from(request_offset).ok()?;
+    Some((native_offset, clipped_bytes))
+}
+"""
+        raw_split_violations = mapped_file_lock_range_adapter_violations(
+            canonical,
+            default_mapped_file,
+            raw_helper_sources,
+        )
+        self.assertTrue(
+            any(
+                split_helper_path.as_posix() in violation
+                and split_caller_path.as_posix() in violation
+                for violation in raw_split_violations
+            ),
+            raw_split_violations,
+        )
+
+        local_copy = reviewer_escape_sources["local_exact_copy"][1]
+        cfg_variants = {
+            "impl_cfg": "#[cfg(any())]",
+            "impl_cfg_attr": "#[cfg_attr(any(), cfg(any()))]",
+        }
+        for mutation_name, attribute in cfg_variants.items():
+            cfg_sources = dict(production_sources)
+            cfg_sources[Path("rocketmq-store-local/src/base/memory_lock_manager.rs")] += (
+                f"\n{attribute}\n"
+                "impl MemoryLockManager\n"
+                "where\n"
+                "    MemoryLockManager: Sized,\n"
+                "{\n"
+                + local_copy.replace(
+                    "fn copied_mapped_file_lock_range(",
+                    "    fn copied_mapped_file_lock_range(",
+                    1,
+                )
+                + "}\n"
+            )
+            with self.subTest(full_copy_mutation=mutation_name):
+                self.assertNotEqual(
+                    [],
+                    mapped_file_lock_range_adapter_violations(
+                        canonical,
+                        default_mapped_file,
+                        cfg_sources,
+                    ),
+                )
+
+        post_test_path = Path("rocketmq-store/src/base/swappable.rs")
+        test_only_sources = dict(production_sources)
+        test_only_sources[post_test_path] += """
+#[cfg(test)]
+mod copied_lock_range_tests {
+    fn copied_mapped_file_lock_range(
+        file_size: u64,
+        offset: u64,
+        requested_len: usize,
+    ) -> Option<(usize, usize)> {
+        if requested_len == 0 || offset >= file_size {
+            return None;
+        }
+        let remaining = file_size.saturating_sub(offset);
+        let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        let offset = usize::try_from(offset).ok()?;
+        Some((offset, len))
+    }
+}
+"""
+        self.assertEqual(
+            [],
+            mapped_file_lock_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                test_only_sources,
+            ),
+        )
+
+        post_test_active_sources = dict(test_only_sources)
+        post_test_active_sources[post_test_path] += """
+impl Swappable
+where
+    Swappable: Sized,
+{
+    fn copied_lock_range_after_tests(
+        file_size: u64,
+        offset: u64,
+        requested_len: usize,
+    ) -> Option<(usize, usize)> {
+        if requested_len == 0 || offset >= file_size {
+            return None;
+        }
+        let remaining = file_size.saturating_sub(offset);
+        let len = requested_len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        let offset = usize::try_from(offset).ok()?;
+        Some((offset, len))
+    }
+}
+"""
+        self.assertNotEqual(
+            [],
+            mapped_file_lock_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                post_test_active_sources,
+            ),
+        )
+
+        unrelated_arithmetic_sources = dict(production_sources)
+        unrelated_arithmetic_sources[
+            Path("rocketmq-store-local/src/base/memory_lock_manager.rs")
+        ] += """
+fn unrelated_remaining(total: u64, consumed: u64) -> u64 {
+    total.saturating_sub(consumed)
+}
+"""
+        unrelated_arithmetic_sources[post_test_path] += """
+fn unrelated_min(limit: usize, available: usize) -> usize {
+    limit.min(available)
+}
+"""
+        self.assertEqual(
+            [],
+            mapped_file_lock_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                unrelated_arithmetic_sources,
             ),
         )
 
