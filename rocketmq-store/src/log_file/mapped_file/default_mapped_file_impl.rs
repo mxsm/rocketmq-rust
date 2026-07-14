@@ -349,13 +349,7 @@ impl DefaultMappedFile {
 
     #[inline]
     fn is_valid_cache_range(&self, position: i64, size: usize) -> bool {
-        if position < 0 || size == 0 {
-            return false;
-        }
-
-        let position = position as usize;
-        let file_size = self.progress.file_size() as usize;
-        position < file_size && position.checked_add(size).is_some_and(|end| end <= file_size)
+        self.progress.is_valid_cache_range(position, size)
     }
 
     fn try_flush_with<F>(&self, flush_least_pages: i32, flush: F) -> MappedFileResult<i32>
@@ -2197,5 +2191,9 @@ mod tests {
         assert!(!mapped_file.is_loaded(-1, 1));
         assert!(!mapped_file.is_loaded(0, 0));
         assert!(!mapped_file.is_loaded(mapped_file.get_file_size() as i64, 1));
+        assert!(!mapped_file.is_valid_cache_range(i64::MAX, usize::MAX));
+        assert!(mapped_file.is_valid_cache_range(0, mapped_file.get_file_size() as usize));
+        assert!(mapped_file.is_valid_cache_range(mapped_file.get_file_size() as i64 - 1, 1));
+        assert!(!mapped_file.is_valid_cache_range(mapped_file.get_file_size() as i64 - 1, 2));
     }
 }

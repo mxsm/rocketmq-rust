@@ -266,6 +266,21 @@ impl MappedFileProgress {
         Some((offset, len))
     }
 
+    /// Returns whether a non-empty cache-residency query fits in this mapped-file segment.
+    ///
+    /// The signed position is rejected before preserving the legacy platform-sized conversion.
+    /// The end boundary is checked without wrapping.
+    #[inline]
+    pub fn is_valid_cache_range(&self, position: i64, size: usize) -> bool {
+        if position < 0 || size == 0 {
+            return false;
+        }
+
+        let file_size = self.file_size() as usize;
+        let position = position as usize;
+        position < file_size && position.checked_add(size).is_some_and(|end| end <= file_size)
+    }
+
     /// Returns whether the readable progress has reached the legacy flush threshold.
     ///
     /// `read_position` must be the committed position when a transient store pool is active and

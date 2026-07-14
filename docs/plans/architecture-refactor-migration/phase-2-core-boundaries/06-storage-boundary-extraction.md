@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1043,4 +1043,38 @@ python scripts/arc_mut_guard.py
   occurrences。error hygiene 只复现未触及的 Broker source-stringification、MCP anyhow 与两份缺失治理文档基线。
 - [x] `[SCOPE]` M06-03x 只迁移 CommitLog active memory-lock target 纯 planner；不修改 config owner、实际 mlock/
   munlock、budget/accounting、mapped-file I/O、unsafe、错误/可观测性、async/runtime、flush/group commit、CQ/Index、
+  HA、Timer/POP 或持久格式。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03y mapped-file cache-residency range validation evidence
+
+- [x] `[DEV]` `MappedFileProgress::is_valid_cache_range(position, size)` 现为 cache-residency 纯范围校验的唯一
+  canonical owner；`DefaultMappedFile` 同名私有 helper 只精确委托一次。Linux `mincore` 页规划/分配、Windows 与
+  macOS 平台 adapter、mapped-memory 指针、指标与 cache hit/miss 编排仍归 Store 所有，三个 `is_loaded` caller
+  的 cfg 与调用流保持不变。
+- [x] `[COMPAT/SEMANTICS]` 冻结 signed position 在转换前拒绝负值、零 size 拒绝、start 等于 file size 拒绝、
+  end 等于 file size 接受、越界拒绝和 `checked_add` 溢出 fail-closed。file size 与 position 继续使用既有
+  `as usize` 顺序和 32 位截断语义；未改为 `try_from`、`saturating_add` 或 `wrapping_add`，也未修改平台实际
+  residency 探测算法。
+- [x] `[TEST]` TDD RED 由 Local fixture 的 8 个 E0599 证明 owner 缺失；GREEN 后 Local cache-range focused
+  1/1、完整 mapped-file kernel 14/14、Local lib 69/69 与 all-feature 全量通过，Store invalid-range 1/1 和
+  `DefaultMappedFile` 30/30 通过。M06 source/mutation contract 新增 owner/adapter 两项，从 109 增至 111 项，
+  focused 2/2 与完整 111/111（463.581s）均通过。
+- [x] `[CONTRACT]` contract 锁定 Local 精确签名/body/statement order、唯一非 cfg owner、Store 私有 exact
+  wrapper、Linux/Windows/macOS 三个 caller 和四个 production reference。mutation 覆盖 negative/zero/start/end、
+  `checked_add`、wrong operands、overflow、`as usize`/`try_from`/saturating/wrapping、wrapper visibility/extra logic/
+  missing caller、cfg/cfg_attr/duplicate/post-test，以及变量改名、alias chain、跨文件 direct copy 与 split-helper
+  use-alias 重构；无 guard 的无关 `checked_add` 和返回 true 的 zero-range near miss 保持零误报。
+- [x] `[FEATURE/PLATFORM]` 未修改 manifest、feature 或依赖。Local 七组与 Store 七组有效 feature closure、两
+  crate all-target/all-feature package Clippy、root exact workspace Clippy、Local strict Rustdoc 均通过；Store
+  普通 Rustdoc只复现 4 个未触及的 invalid-HTML warning。裸 Store `--no-default-features` 继续复现既有空 backend
+  enum 的 124 个 E0004 与 unused `ArcMut`，未标记为通过。Windows 固定隔离 target 通过 Local 1/1、Store 1/1
+  和两 crate all-feature check，cleanup 删除 9,554 files/8.6 GiB 并确认路径不存在。WSL/Linux 同一验证均通过；
+  首轮最后命令曾因 PowerShell 管道注入 `--all-features\r` 失败，cleanup 删除 6,737 files/3.6 GiB；以 LF base64
+  wrapper 重跑 Store all-feature check 后通过，第二次 cleanup 删除 3,623 files/2.9 GiB，固定路径最终不存在。
+- [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、AGENTS routing、workspace
+  fmt、Python compile 与 diff 检查均通过。一次误用 `arc_mut_guard.py --current-milestone M06` 只报告 642 个既有
+  M05 过期 baseline，未计为 gate；正确无参数 final guard 通过。error hygiene 只复现未触及的 Broker source
+  stringification、MCP anyhow 与两份缺失治理文档基线。
+- [x] `[SCOPE]` M06-03y 只迁移 cache-residency 纯范围校验；不迁移或修改 `mincore`/VirtualQuery、page planning、
+  allocation、pointer/unsafe、metrics、错误/可观测性、mapped-file I/O、async/runtime、flush/group commit、CQ/Index、
   HA、Timer/POP 或持久格式。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。

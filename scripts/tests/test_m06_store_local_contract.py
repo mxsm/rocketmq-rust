@@ -69,6 +69,10 @@ MAPPED_FILE_POLICY_REFERENCE = re.compile(
 )
 MAPPED_FILE_LOCK_RANGE_METHODS = ("lock_region_range",)
 MAPPED_FILE_LOCK_RANGE_REFERENCE = re.compile(r"(?:\.|::)\s*lock_region_range\b")
+MAPPED_FILE_CACHE_RANGE_METHODS = ("is_valid_cache_range",)
+MAPPED_FILE_CACHE_RANGE_REFERENCE = re.compile(
+    r"(?:\.|::)\s*is_valid_cache_range\b"
+)
 MAPPED_FILE_WARMUP_OPERATION = "MappedFileWarmupOperation"
 MAPPED_FILE_WARMUP_VISITOR = "visit_mapped_file_warmup_schedule"
 STORE_LOCK_RANGE_HELPER_METHODS = ("lock_region_address_and_len",)
@@ -4697,6 +4701,391 @@ def mapped_file_lock_range_adapter_violations(
         violations.append(
             f"lock_region_address_and_len production references changed: {helper_references}"
         )
+    return violations
+
+
+def mapped_file_cache_range_policy_violations(source: str) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    violations: list[str] = []
+    records = inherent_method_records(
+        production,
+        "MappedFileProgress",
+        MAPPED_FILE_CACHE_RANGE_METHODS,
+    )["is_valid_cache_range"]
+    expected_signature = (
+        "pubfnis_valid_cache_range(&self,position:i64,size:usize)->bool"
+    )
+    expected_body = (
+        "ifposition<0||size==0{returnfalse;}"
+        "letfile_size=self.file_size()asusize;"
+        "letposition=positionasusize;"
+        "position<file_size&&position.checked_add(size)"
+        ".is_some_and(|end|end<=file_size)"
+    )
+    if len(re.findall(r"\bfn\s+is_valid_cache_range\b", active)) != 1:
+        violations.append(
+            "MappedFileProgress::is_valid_cache_range production definition count changed"
+        )
+    if len(records) != 1:
+        violations.append(
+            "MappedFileProgress::is_valid_cache_range must have exactly one inherent definition"
+        )
+        return violations
+    record = records[0]
+    if record.cfg_gated:
+        violations.append("MappedFileProgress::is_valid_cache_range must not be cfg gated")
+    if record.signature != expected_signature:
+        violations.append("MappedFileProgress::is_valid_cache_range signature changed")
+    if record.body != expected_body:
+        violations.append("MappedFileProgress::is_valid_cache_range behavior changed")
+    return violations
+
+
+CACHE_RANGE_IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
+
+
+def cache_range_comparison(
+    expression: str,
+) -> tuple[str, str, str] | None:
+    expression = strip_outer_parentheses(expression)
+    parenthesis_depth = 0
+    for index, character in enumerate(expression):
+        if character == "(":
+            parenthesis_depth += 1
+            continue
+        if character == ")":
+            parenthesis_depth -= 1
+            continue
+        if parenthesis_depth != 0:
+            continue
+        for operator in ("<=", ">=", "==", "<", ">"):
+            if expression.startswith(operator, index):
+                return (
+                    strip_outer_parentheses(expression[:index]),
+                    operator,
+                    strip_outer_parentheses(expression[index + len(operator):]),
+                )
+    return None
+
+
+def cache_range_false_conditions(compact_body: str, before: int) -> list[str]:
+    conditions: list[str] = []
+    for if_match in re.finditer(r"(?<![A-Za-z0-9_])if", compact_body[:before]):
+        condition_start = if_match.end()
+        parenthesis_depth = 0
+        opening_brace: int | None = None
+        for index in range(condition_start, before):
+            character = compact_body[index]
+            if character == "(":
+                parenthesis_depth += 1
+            elif character == ")":
+                parenthesis_depth -= 1
+            elif character == "{" and parenthesis_depth == 0:
+                opening_brace = index
+                break
+        if opening_brace is None:
+            continue
+        extracted = braced_body(compact_body, opening_brace)
+        if extracted is None or extracted[1] > before:
+            continue
+        if extracted[0] == "returnfalse;":
+            conditions.append(compact_body[condition_start:opening_brace])
+    return conditions
+
+
+def cache_range_guard_roles(
+    compact_body: str,
+    before: int,
+    position: str,
+    size: str,
+    aliases: IdentifierAliases,
+) -> tuple[bool, bool]:
+    negative = False
+    empty = False
+    for condition in cache_range_false_conditions(compact_body, before):
+        for clause in flattened_or_clauses(condition):
+            comparison = cache_range_comparison(clause)
+            if comparison is None:
+                continue
+            left, operator, right = comparison
+            left_identifier = warmup_identifier_expression(left)
+            right_identifier = warmup_identifier_expression(right)
+            if operator == "==" and (
+                (
+                    left_identifier is not None
+                    and aliases.equivalent(left_identifier, size)
+                    and right == "0"
+                )
+                or (
+                    right_identifier is not None
+                    and aliases.equivalent(right_identifier, size)
+                    and left == "0"
+                )
+            ):
+                empty = True
+            if operator == "<" and (
+                left_identifier is not None
+                and aliases.equivalent(left_identifier, position)
+                and right == "0"
+            ):
+                negative = True
+            if (
+                operator == ">"
+                and left == "0"
+                and right_identifier is not None
+                and aliases.equivalent(right_identifier, position)
+            ):
+                negative = True
+    return negative, empty
+
+
+def cache_range_suffix_roles(
+    compact_body: str,
+) -> tuple[str, str, str, int] | None:
+    aliases = IdentifierAliases(compact_body)
+    checked = re.compile(
+        rf"(?P<position>{CACHE_RANGE_IDENTIFIER})\.checked_add\("
+        rf"(?P<size>{CACHE_RANGE_IDENTIFIER})\)\.is_some_and\(\|"
+        rf"(?P<end>{CACHE_RANGE_IDENTIFIER})\|(?P<condition>[^()]*)\)"
+    )
+    for match in checked.finditer(compact_body):
+        condition = cache_range_comparison(match.group("condition"))
+        if condition is None:
+            continue
+        left, operator, right = condition
+        end = match.group("end")
+        if operator == "<=" and left == end:
+            file_size = warmup_identifier_expression(right)
+        elif operator == ">=" and right == end:
+            file_size = warmup_identifier_expression(left)
+        else:
+            continue
+        if file_size is None:
+            continue
+        position = match.group("position")
+        has_start_boundary = any(
+            (
+                operator == "<"
+                and left_identifier is not None
+                and right_identifier is not None
+                and aliases.equivalent(left_identifier, position)
+                and aliases.equivalent(right_identifier, file_size)
+            )
+            or (
+                operator == ">"
+                and left_identifier is not None
+                and right_identifier is not None
+                and aliases.equivalent(left_identifier, file_size)
+                and aliases.equivalent(right_identifier, position)
+            )
+            for comparison_text in re.findall(
+                rf"\(*{CACHE_RANGE_IDENTIFIER}\)*[<>]\(*{CACHE_RANGE_IDENTIFIER}\)*",
+                compact_body,
+            )
+            if (comparison := cache_range_comparison(comparison_text)) is not None
+            for left, operator, right in (comparison,)
+            for left_identifier, right_identifier in (
+                (warmup_identifier_expression(left), warmup_identifier_expression(right)),
+            )
+        )
+        if has_start_boundary:
+            return position, match.group("size"), file_size, match.start()
+    return None
+
+
+def cache_range_cast_source(
+    compact_body: str,
+    target: str,
+    aliases: IdentifierAliases,
+) -> str | None:
+    for match in re.finditer(
+        rf"let(?P<target>{CACHE_RANGE_IDENTIFIER})(?:\:[^=;]+)?="
+        rf"(?P<source>{CACHE_RANGE_IDENTIFIER})asusize;",
+        compact_body,
+    ):
+        if aliases.equivalent(match.group("target"), target):
+            return match.group("source")
+    return None
+
+
+def has_inline_mapped_file_cache_range_policy(body: str) -> bool:
+    compact = compact_rust(body)
+    roles = cache_range_suffix_roles(compact)
+    if roles is None:
+        return False
+    native_position, size, _, suffix_start = roles
+    aliases = IdentifierAliases(compact)
+    signed_position = cache_range_cast_source(compact, native_position, aliases)
+    if signed_position is None:
+        return False
+    return cache_range_guard_roles(
+        compact,
+        suffix_start,
+        signed_position,
+        size,
+        aliases,
+    ) == (True, True)
+
+
+def mapped_file_cache_range_duplicate_policy_violations(
+    production_sources: dict[Path, str],
+) -> list[str]:
+    records = [
+        record
+        for path, source in production_sources.items()
+        for record in warmup_function_records(path, source)
+    ]
+    violations: list[str] = []
+    canonical_seen = False
+    for record in records:
+        if not has_inline_mapped_file_cache_range_policy(record.raw_body):
+            continue
+        if (
+            record.path == MAPPED_FILE_KERNEL_PATH
+            and record.name == "is_valid_cache_range"
+            and not canonical_seen
+        ):
+            canonical_seen = True
+            continue
+        violations.append(
+            f"{record.path.as_posix()}: {record.name} duplicates mapped-file cache-range validation policy"
+        )
+
+    helper_roles: dict[str, tuple[Path, tuple[int, int, int]]] = {}
+    for record in records:
+        suffix = cache_range_suffix_roles(record.body)
+        if suffix is None:
+            continue
+        aliases = IdentifierAliases(record.body)
+        role_indices: list[int] = []
+        for role in suffix[:3]:
+            matches = [
+                index
+                for index, parameter in enumerate(record.parameters)
+                if aliases.equivalent(parameter, role)
+            ]
+            if len(matches) != 1:
+                break
+            role_indices.append(matches[0])
+        if len(role_indices) == 3:
+            helper_roles[record.name] = (
+                record.path,
+                (role_indices[0], role_indices[1], role_indices[2]),
+            )
+
+    for record in records:
+        aliases = IdentifierAliases(record.body)
+        imported = dict(record.imports)
+        for call in re.finditer(
+            rf"(?<![.:A-Za-z0-9_])(?P<name>{CACHE_RANGE_IDENTIFIER})\("
+            rf"(?P<arguments>[^()]*)\)",
+            record.body,
+        ):
+            called_name = imported.get(call.group("name"), call.group("name")).split("::")[-1]
+            helper = helper_roles.get(called_name)
+            if helper is None:
+                continue
+            arguments = [
+                warmup_identifier_expression(argument)
+                for argument in split_top_level_expression(call.group("arguments"), ",")
+                if argument
+            ]
+            if any(argument is None for argument in arguments):
+                continue
+            position_index, size_index, file_index = helper[1]
+            if max(position_index, size_index, file_index) >= len(arguments):
+                continue
+            native_position = arguments[position_index]
+            size = arguments[size_index]
+            file_size = arguments[file_index]
+            assert native_position is not None and size is not None and file_size is not None
+            signed_position = cache_range_cast_source(record.body, native_position, aliases)
+            if signed_position is None:
+                continue
+            if cache_range_guard_roles(
+                record.body,
+                call.start(),
+                signed_position,
+                size,
+                aliases,
+            ) != (True, True):
+                continue
+            violations.append(
+                f"{record.path.as_posix()}: {record.name} reconstructs mapped-file cache-range validation "
+                f"through {called_name} from {helper[0].as_posix()}"
+            )
+    return violations
+
+
+def mapped_file_cache_range_adapter_violations(
+    canonical_source: str,
+    default_mapped_file_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    violations = mapped_file_cache_range_policy_violations(canonical_source)
+    default_production = source_without_cfg_test_items(default_mapped_file_source)
+    default_active = active_rust_source(default_production)
+    wrapper = inherent_method_records(
+        default_production,
+        "DefaultMappedFile",
+        MAPPED_FILE_CACHE_RANGE_METHODS,
+    )["is_valid_cache_range"]
+    if len(wrapper) != 1:
+        violations.append("Store is_valid_cache_range must have exactly one inherent definition")
+    else:
+        record = wrapper[0]
+        if record.cfg_gated:
+            violations.append("Store is_valid_cache_range wrapper must not be cfg gated")
+        if record.visibility:
+            violations.append("Store is_valid_cache_range wrapper must remain private")
+        if record.signature != "fnis_valid_cache_range(&self,position:i64,size:usize)->bool":
+            violations.append("Store is_valid_cache_range wrapper signature changed")
+        if record.body != "self.progress.is_valid_cache_range(position,size)":
+            violations.append("Store is_valid_cache_range must be an exact Local delegation")
+
+    definitions: list[Path] = []
+    references: dict[Path, int] = {}
+    normalized_sources = dict(production_sources)
+    normalized_sources[DEFAULT_MAPPED_FILE_PATH] = default_production
+    for path, source in normalized_sources.items():
+        production = source_without_cfg_test_items(source)
+        active = active_rust_source(production)
+        definitions.extend(
+            [path] * len(re.findall(r"\bfn\s+is_valid_cache_range\b", active))
+        )
+        count = len(MAPPED_FILE_CACHE_RANGE_REFERENCE.findall(active))
+        if count:
+            references[path] = count
+    if definitions != [MAPPED_FILE_KERNEL_PATH, DEFAULT_MAPPED_FILE_PATH]:
+        violations.append(f"is_valid_cache_range production definitions changed: {definitions}")
+    if references != {DEFAULT_MAPPED_FILE_PATH: 4}:
+        violations.append(f"is_valid_cache_range production references changed: {references}")
+
+    loaded_bodies = [
+        compact_rust(body)
+        for name, body in rust_function_bodies(default_production)
+        if name == "is_loaded"
+    ]
+    exact_delegations = sum(
+        body == "self.is_valid_cache_range(position,size)" for body in loaded_bodies
+    )
+    guarded_linux = sum(
+        "if!self.is_valid_cache_range(position,size){returnfalse;}" in body
+        and "mincore(" in body
+        for body in loaded_bodies
+    )
+    if len(loaded_bodies) != 3 or exact_delegations != 2 or guarded_linux != 1:
+        violations.append("Store platform is_loaded cache-range caller flow changed")
+    compact_default = compact_rust(default_mapped_file_source)
+    for target in ("linux", "windows", "macos"):
+        marker = f'#[cfg(target_os="{target}")]fnis_loaded'
+        if compact_default.count(marker) != 1:
+            violations.append(f"Store {target} is_loaded cfg boundary changed")
+
+    violations.extend(
+        mapped_file_cache_range_duplicate_policy_violations(normalized_sources)
+    )
     return violations
 
 
@@ -11898,6 +12287,284 @@ fn non_none_request_guard_is_not_the_lock_range_policy(
                 canonical,
                 default_mapped_file,
                 non_equivalent_guard_sources,
+            ),
+        )
+
+    def test_mapped_file_cache_range_policy_has_one_local_owner_and_three_store_callers(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        self.assertEqual(
+            [],
+            mapped_file_cache_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                production_sources,
+            ),
+        )
+
+    def test_mapped_file_cache_range_contract_rejects_semantic_and_boundary_mutations(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        canonical_mutations = [
+            canonical.replace("position < 0", "position <= 0", 1),
+            canonical.replace(
+                "if position < 0 || size == 0",
+                "if position < 0 || size != 0",
+                1,
+            ),
+            canonical.replace("position < file_size", "position <= file_size", 1),
+            canonical.replace("position.checked_add(size)", "position.checked_add(file_size)", 1),
+            canonical.replace("end <= file_size", "end < file_size", 1),
+            canonical.replace("position as usize", "usize::try_from(position).unwrap_or_default()", 1),
+            canonical.replace("self.file_size() as usize", "self.file_size() as u32 as usize", 1),
+            canonical.replace("checked_add(size)", "wrapping_add(size)", 1),
+            canonical.replace("checked_add(size)", "saturating_add(size)", 1),
+            canonical.replace(
+                "        let file_size = self.file_size() as usize;\n"
+                "        let position = position as usize;",
+                "        let position = position as usize;\n"
+                "        let file_size = self.file_size() as usize;",
+                1,
+            ),
+            canonical.replace("position.checked_add(size)", "size.checked_add(position)", 1),
+        ]
+        for index, mutation in enumerate(canonical_mutations):
+            with self.subTest(canonical_mutation=index):
+                self.assertNotEqual(canonical, mutation)
+                self.assertNotEqual([], mapped_file_cache_range_policy_violations(mutation))
+
+        raw_body = """        if position < 0 || size == 0 {
+            return false;
+        }
+        let file_size = self.file_size() as usize;
+        let position = position as usize;
+        position < file_size
+            && position.checked_add(size).is_some_and(|end| end <= file_size)"""
+        for kind, mutation in (
+            ("cfg_decoy", cfg_decoy_method_mutation(canonical, "is_valid_cache_range", raw_body)),
+            ("duplicate", duplicate_method_mutation(canonical, "is_valid_cache_range", raw_body)),
+            ("cfg_attr", cfg_attr_method_mutation(canonical, "is_valid_cache_range")),
+            (
+                "impl_cfg_attr",
+                canonical.replace(
+                    "impl MappedFileProgress {",
+                    "#[cfg_attr(any(), cfg(any()))]\nimpl MappedFileProgress {",
+                    1,
+                ),
+            ),
+        ):
+            with self.subTest(owner_mutation=kind):
+                self.assertNotEqual([], mapped_file_cache_range_policy_violations(mutation))
+
+        signature = "pub fn is_valid_cache_range(&self, position: i64, size: usize) -> bool"
+        post_test_base = canonical + """
+
+#[cfg(test)]
+mod cache_range_tests {
+    use super::MappedFileProgress;
+    impl MappedFileProgress {
+        pub fn is_valid_cache_range(&self, _position: i64, _size: usize) -> bool {
+            false
+        }
+    }
+}
+"""
+        test_only_decoy = post_test_method_impl_mutation(
+            post_test_base,
+            "MappedFileProgress",
+            signature,
+            "test_only_impl",
+        )
+        self.assertEqual([], mapped_file_cache_range_policy_violations(test_only_decoy))
+        for kind in (
+            "method_cfg",
+            "method_cfg_attr",
+            "impl_cfg",
+            "impl_cfg_attr",
+            "active_duplicate",
+            "active_where_duplicate",
+        ):
+            with self.subTest(post_test_owner_mutation=kind):
+                mutation = post_test_method_impl_mutation(
+                    post_test_base,
+                    "MappedFileProgress",
+                    signature,
+                    kind,
+                )
+                self.assertNotEqual([], mapped_file_cache_range_policy_violations(mutation))
+
+        wrapper_mutations = [
+            default_mapped_file.replace(
+                "self.progress.is_valid_cache_range(position, size)",
+                "self.progress.is_valid_cache_range(position, size) || size == 1",
+                1,
+            ),
+            default_mapped_file.replace(
+                "fn is_valid_cache_range(&self, position: i64, size: usize)",
+                "pub(crate) fn is_valid_cache_range(&self, position: i64, size: usize)",
+                1,
+            ),
+            cfg_attr_method_mutation(default_mapped_file, "is_valid_cache_range"),
+            duplicate_method_mutation(default_mapped_file, "is_valid_cache_range", "        false"),
+            default_mapped_file.replace(
+                "if !self.is_valid_cache_range(position, size) {",
+                "if position < 0 {",
+                1,
+            ),
+            default_mapped_file.replace(
+                "self.is_valid_cache_range(position, size)",
+                "size != 0",
+                1,
+            ),
+        ]
+        for index, mutation in enumerate(wrapper_mutations):
+            with self.subTest(wrapper_mutation=index):
+                self.assertNotEqual(default_mapped_file, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_cache_range_adapter_violations(
+                        canonical,
+                        mutation,
+                        mutated_sources,
+                    ),
+                )
+
+        copied_path = Path("rocketmq-store/src/base/swappable.rs")
+        renamed_copy = """
+fn copied_cache_window(mapped_bytes: u64, signed_start: i64, requested_bytes: usize) -> bool {
+    if signed_start < 0 {
+        return false;
+    }
+    if requested_bytes == 0 {
+        return false;
+    }
+    let available_end = mapped_bytes as usize;
+    let native_start = signed_start as usize;
+    native_start < available_end
+        && native_start
+            .checked_add(requested_bytes)
+            .is_some_and(|candidate_end| candidate_end <= available_end)
+}
+"""
+        for kind, copied_policy in (
+            ("renamed", renamed_copy),
+            ("cfg", "#[cfg(any())]\n" + renamed_copy),
+            (
+                "aliases",
+                renamed_copy.replace(
+                    "let native_start = signed_start as usize;",
+                    "let signed_alias = signed_start;\n"
+                    "    let native_start = signed_alias as usize;\n"
+                    "    let final_start = native_start;",
+                    1,
+                ).replace("native_start < available_end", "final_start < available_end", 1)
+                .replace("native_start\n            .checked_add", "final_start\n            .checked_add", 1),
+            ),
+        ):
+            with self.subTest(production_copy=kind):
+                copied_sources = dict(production_sources)
+                copied_sources[copied_path] += copied_policy
+                self.assertNotEqual(
+                    [],
+                    mapped_file_cache_range_adapter_violations(
+                        canonical,
+                        default_mapped_file,
+                        copied_sources,
+                    ),
+                )
+
+        helper_path = Path("rocketmq-store/src/base/swappable.rs")
+        caller_path = Path("rocketmq-store/src/base/allocate_mapped_file_service.rs")
+        split_sources = dict(production_sources)
+        split_sources[helper_path] += """
+pub(crate) fn cache_end_within(
+    native_start: usize,
+    requested_bytes: usize,
+    mapped_bytes: usize,
+) -> bool {
+    native_start < mapped_bytes
+        && native_start
+            .checked_add(requested_bytes)
+            .is_some_and(|candidate_end| candidate_end <= mapped_bytes)
+}
+"""
+        split_sources[caller_path] += """
+use crate::base::swappable::cache_end_within as within_mapped_cache;
+
+fn copied_cache_range_through_alias(
+    mapped_bytes: u64,
+    signed_start: i64,
+    requested_bytes: usize,
+) -> bool {
+    if signed_start < 0 || requested_bytes == 0 {
+        return false;
+    }
+    let mapped_end = mapped_bytes as usize;
+    let native_start = signed_start as usize;
+    within_mapped_cache(native_start, requested_bytes, mapped_end)
+}
+"""
+        split_violations = mapped_file_cache_range_adapter_violations(
+            canonical,
+            default_mapped_file,
+            split_sources,
+        )
+        self.assertTrue(
+            any(
+                helper_path.as_posix() in violation
+                and caller_path.as_posix() in violation
+                for violation in split_violations
+            ),
+            split_violations,
+        )
+
+        test_only_sources = dict(production_sources)
+        test_only_sources[copied_path] += (
+            "\n#[cfg(test)]\nmod copied_cache_tests {\n" + renamed_copy + "}\n"
+        )
+        self.assertEqual(
+            [],
+            mapped_file_cache_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                test_only_sources,
+            ),
+        )
+
+        near_miss_sources = dict(production_sources)
+        near_miss_sources[copied_path] += """
+fn unrelated_checked_add(start: usize, count: usize, limit: usize) -> bool {
+    start.checked_add(count).is_some_and(|end| end <= limit)
+}
+
+fn non_false_empty_guard(file_size: usize, position: i64, size: usize) -> bool {
+    if position < 0 || size == 0 {
+        return true;
+    }
+    let position = position as usize;
+    position < file_size
+        && position.checked_add(size).is_some_and(|end| end <= file_size)
+}
+"""
+        self.assertEqual(
+            [],
+            mapped_file_cache_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                near_miss_sources,
             ),
         )
 

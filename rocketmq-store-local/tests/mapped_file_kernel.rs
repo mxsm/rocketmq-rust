@@ -144,6 +144,28 @@ fn lock_region_range_preserves_legacy_empty_boundary_and_clipping_policy() {
     assert_eq!(progress.lock_region_range(4095, usize::MAX), Some((4095, 1)));
 }
 
+#[test]
+fn cache_range_validation_preserves_legacy_bounds_and_checked_overflow_policy() {
+    let progress = MappedFileProgress::new(10);
+
+    assert!(!progress.is_valid_cache_range(-1, 1));
+    assert!(!progress.is_valid_cache_range(0, 0));
+    assert!(!progress.is_valid_cache_range(10, 1));
+    assert!(progress.is_valid_cache_range(0, 10));
+    assert!(progress.is_valid_cache_range(9, 1));
+    assert!(!progress.is_valid_cache_range(9, 2));
+    assert!(!progress.is_valid_cache_range(i64::MAX, usize::MAX));
+    assert!(!MappedFileProgress::new(0).is_valid_cache_range(0, 1));
+}
+
+#[cfg(target_pointer_width = "32")]
+#[test]
+fn cache_range_validation_preserves_legacy_position_as_usize_conversion() {
+    let progress = MappedFileProgress::new(16);
+
+    assert!(progress.is_valid_cache_range(i64::from(u32::MAX) + 1, 1));
+}
+
 #[cfg(target_pointer_width = "32")]
 #[test]
 fn lock_region_range_rejects_offsets_that_do_not_fit_usize_after_clipping() {
