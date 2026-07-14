@@ -2528,9 +2528,83 @@ WARMUP_IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
 
 class WarmupFunctionRecord(NamedTuple):
     path: Path
+    module: tuple[str, ...]
     name: str
     parameters: tuple[str, ...]
+    raw_body: str
     body: str
+    imports: tuple[tuple[str, str], ...]
+
+
+class WarmupItemIdentity(NamedTuple):
+    crate: str
+    module: tuple[str, ...]
+    name: str
+
+
+def warmup_identifier_expression(expression: str) -> str | None:
+    expression = strip_outer_parentheses(expression)
+    if re.fullmatch(WARMUP_IDENTIFIER, expression) is None:
+        return None
+    return expression
+
+
+def warmup_module_path(path: Path) -> tuple[str, ...]:
+    source_parts = path.parts[2:]
+    if not source_parts:
+        return ()
+    filename = source_parts[-1]
+    if filename in {"lib.rs", "main.rs"}:
+        return tuple(source_parts[:-1])
+    if filename == "mod.rs":
+        return tuple(source_parts[:-1])
+    return (*source_parts[:-1], Path(filename).stem)
+
+
+def warmup_use_aliases(
+    source: str,
+    *,
+    top_level_only: bool,
+) -> dict[str, str]:
+    active = active_rust_source(source)
+    aliases: dict[str, str] = {}
+    brace_depth = 0
+    index = 0
+    while index < len(active):
+        character = active[index]
+        if character == "{":
+            brace_depth += 1
+            index += 1
+            continue
+        if character == "}":
+            brace_depth -= 1
+            index += 1
+            continue
+        if not (
+            active.startswith("use", index)
+            and (index == 0 or not (active[index - 1].isalnum() or active[index - 1] == "_"))
+            and (index + 3 == len(active) or not (
+                active[index + 3].isalnum() or active[index + 3] == "_"
+            ))
+            and (not top_level_only or brace_depth == 0)
+        ):
+            index += 1
+            continue
+        semicolon = active.find(";", index + 3)
+        if semicolon == -1:
+            break
+        declaration = active[index:semicolon + 1]
+        match = re.fullmatch(
+            rf"use\s+(?P<path>{WARMUP_IDENTIFIER}(?:\s*::\s*{WARMUP_IDENTIFIER})*)"
+            rf"(?:\s+as\s+(?P<alias>{WARMUP_IDENTIFIER}))?\s*;",
+            declaration,
+        )
+        if match is not None:
+            target = re.sub(r"\s*::\s*", "::", match.group("path"))
+            alias = match.group("alias") or target.rsplit("::", maxsplit=1)[-1]
+            aliases[alias] = target
+        index = semicolon + 1
+    return aliases
 
 
 class IdentifierAliases:
@@ -2538,10 +2612,12 @@ class IdentifierAliases:
         self.parent: dict[str, str] = {}
         assignment = re.compile(
             rf"let(?:mut)?(?P<left>{WARMUP_IDENTIFIER})"
-            rf"(?:\:[^=;]+)?=(?P<right>{WARMUP_IDENTIFIER});"
+            rf"(?:\:[^=;]+)?=(?P<right>[^;]+);"
         )
         for match in assignment.finditer(source):
-            self.union(match.group("left"), match.group("right"))
+            right = warmup_identifier_expression(match.group("right"))
+            if right is not None:
+                self.union(match.group("left"), right)
 
     def find(self, identifier: str) -> str:
         parent = self.parent.setdefault(identifier, identifier)
@@ -2571,9 +2647,11 @@ def warmup_parameter_names(parameter_source: str) -> tuple[str, ...]:
     return tuple(names)
 
 
+@functools.lru_cache(maxsize=1024)
 def warmup_function_records(path: Path, source: str) -> list[WarmupFunctionRecord]:
     production = source_without_cfg_test_items(source)
     active = active_rust_source(production)
+    module_imports = warmup_use_aliases(active, top_level_only=True)
     records: list[WarmupFunctionRecord] = []
     for function_match in re.finditer(
         rf"\bfn\s+(?P<name>{WARMUP_IDENTIFIER})\b",
@@ -2592,15 +2670,20 @@ def warmup_function_records(path: Path, source: str) -> list[WarmupFunctionRecor
         extracted = braced_body(active, opening_brace)
         if extracted is None:
             continue
-        body, _ = extracted
+        raw_body, _ = extracted
+        imports = dict(module_imports)
+        imports.update(warmup_use_aliases(raw_body, top_level_only=False))
         records.append(
             WarmupFunctionRecord(
                 path=path,
+                module=warmup_module_path(path),
                 name=function_match.group("name"),
                 parameters=warmup_parameter_names(
                     active[opening_parenthesis + 1:closing]
                 ),
-                body=compact_rust(body),
+                raw_body=raw_body,
+                body=compact_rust(raw_body),
+                imports=tuple(sorted(imports.items())),
             )
         )
     return records
@@ -2635,77 +2718,286 @@ def warmup_zero_identifiers(
 
 
 def warmup_subtractions(body: str) -> list[tuple[str, str]]:
+    subtractions: list[tuple[str, str]] = []
+    for match in re.finditer(
+        rf"(?<![.A-Za-z0-9_])(?P<left>\(*{WARMUP_IDENTIFIER}\)*)-"
+        rf"(?P<right>\(*{WARMUP_IDENTIFIER}\)*)(?![A-Za-z0-9_])",
+        body,
+    ):
+        left = warmup_identifier_expression(match.group("left"))
+        right = warmup_identifier_expression(match.group("right"))
+        if left is not None and right is not None:
+            subtractions.append((left, right))
+    return subtractions
+
+
+def warmup_equivalent_expression(
+    expression: str,
+    identifier: str,
+    aliases: IdentifierAliases,
+) -> bool:
+    expression_identifier = warmup_identifier_expression(expression)
+    return expression_identifier is not None and aliases.equivalent(
+        expression_identifier,
+        identifier,
+    )
+
+
+def warmup_adds_one_to(
+    expression: str,
+    identifier: str,
+    aliases: IdentifierAliases,
+) -> bool:
+    parts = split_top_level_expression(strip_outer_parentheses(expression), "+")
+    if len(parts) != 2:
+        return False
+    left, right = (strip_outer_parentheses(part) for part in parts)
+    return (
+        warmup_equivalent_expression(left, identifier, aliases)
+        and right in {"1", "1usize"}
+    ) or (
+        left in {"1", "1usize"}
+        and warmup_equivalent_expression(right, identifier, aliases)
+    )
+
+
+def warmup_is_boundary_expression(
+    expression: str,
+    cursor: str,
+    file_size: str,
+    aliases: IdentifierAliases,
+) -> bool:
+    expression = strip_outer_parentheses(expression)
+    parenthesis_depth = 0
+    method_index: int | None = None
+    for index, character in enumerate(expression):
+        if character == "(":
+            parenthesis_depth += 1
+        elif character == ")":
+            parenthesis_depth -= 1
+        elif parenthesis_depth == 0 and expression.startswith(".min(", index):
+            method_index = index
+            break
+    if method_index is None:
+        return False
+    opening = method_index + len(".min")
+    closing = closing_parenthesis(expression, opening)
+    if closing != len(expression) - 1:
+        return False
+    receiver = expression[:method_index]
+    argument = expression[opening + 1:closing]
+    return (
+        warmup_adds_one_to(receiver, cursor, aliases)
+        and warmup_equivalent_expression(argument, file_size, aliases)
+    ) or (
+        warmup_equivalent_expression(receiver, file_size, aliases)
+        and warmup_adds_one_to(argument, cursor, aliases)
+    )
+
+
+def warmup_if_conditions(body: str) -> list[str]:
+    conditions: list[str] = []
+    for if_match in re.finditer(r"(?<![A-Za-z0-9_])if", body):
+        parenthesis_depth = 0
+        opening_brace: int | None = None
+        for index in range(if_match.end(), len(body)):
+            character = body[index]
+            if character == "(":
+                parenthesis_depth += 1
+            elif character == ")":
+                parenthesis_depth -= 1
+            elif character == "{" and parenthesis_depth == 0:
+                opening_brace = index
+                break
+            elif character == ";" and parenthesis_depth == 0:
+                break
+        if opening_brace is not None:
+            conditions.append(body[if_match.end():opening_brace])
+    return conditions
+
+
+def warmup_and_clauses(condition: str) -> list[str]:
+    condition = strip_outer_parentheses(condition)
+    parts = split_top_level_expression(condition, "&&")
+    if len(parts) == 1:
+        return [condition]
     return [
-        (match.group("left"), match.group("right"))
-        for match in re.finditer(
-            rf"(?<![.A-Za-z0-9_])(?P<left>{WARMUP_IDENTIFIER})-"
-            rf"(?P<right>{WARMUP_IDENTIFIER})(?![A-Za-z0-9_])",
-            body,
-        )
+        clause
+        for part in parts
+        for clause in warmup_and_clauses(part)
     ]
 
 
-def warmup_calls(body: str, function_name: str) -> list[list[str]]:
-    calls: list[list[str]] = []
-    for match in re.finditer(rf"\b{re.escape(function_name)}\(", body):
-        opening = match.end() - 1
-        closing = closing_parenthesis(body, opening)
-        if closing is None:
+def warmup_comparison_operands(clause: str) -> tuple[str, str, str] | None:
+    clause = strip_outer_parentheses(clause)
+    parenthesis_depth = 0
+    for index, character in enumerate(clause):
+        if character == "(":
+            parenthesis_depth += 1
             continue
-        calls.append(
-            [
-                strip_outer_parentheses(argument)
-                for argument in split_top_level_expression(
-                    body[opening + 1:closing],
-                    ",",
-                )
-            ]
+        if character == ")":
+            parenthesis_depth -= 1
+            continue
+        if parenthesis_depth != 0:
+            continue
+        if character in {"<", ">"} and not (
+            index + 1 < len(clause) and clause[index + 1] == "="
+        ):
+            return (
+                strip_outer_parentheses(clause[:index]),
+                character,
+                strip_outer_parentheses(clause[index + 1:]),
+            )
+    return None
+
+
+def warmup_periodic_guard_roles(
+    condition: str,
+) -> tuple[str, str, str] | None:
+    sync_candidates: list[str] = []
+    cadence_candidates: list[tuple[str, str]] = []
+    for clause in warmup_and_clauses(condition):
+        identifier = warmup_identifier_expression(clause)
+        if identifier is not None:
+            sync_candidates.append(identifier)
+            continue
+        clause = strip_outer_parentheses(clause)
+        match = re.fullmatch(
+            rf"\(?(?P<count>{WARMUP_IDENTIFIER})\)?\.is_multiple_of\("
+            rf"(?P<every>.+)\)",
+            clause,
         )
-    return calls
+        if match is None:
+            continue
+        every = warmup_identifier_expression(match.group("every"))
+        if every is not None:
+            cadence_candidates.append((match.group("count"), every))
+    if len(sync_candidates) == 1 and len(cadence_candidates) == 1:
+        count, every = cadence_candidates[0]
+        return sync_candidates[0], count, every
+    return None
+
+
+def warmup_final_guard_roles(
+    condition: str,
+) -> tuple[str, str, str] | None:
+    sync_candidates: list[str] = []
+    remainder_candidates: list[tuple[str, str]] = []
+    for clause in warmup_and_clauses(condition):
+        identifier = warmup_identifier_expression(clause)
+        if identifier is not None:
+            sync_candidates.append(identifier)
+            continue
+        comparison = warmup_comparison_operands(clause)
+        if comparison is None:
+            continue
+        left, operator, right = comparison
+        left_identifier = warmup_identifier_expression(left)
+        right_identifier = warmup_identifier_expression(right)
+        if left_identifier is None or right_identifier is None:
+            continue
+        if operator == "<":
+            remainder_candidates.append((left_identifier, right_identifier))
+        else:
+            remainder_candidates.append((right_identifier, left_identifier))
+    if len(sync_candidates) == 1 and len(remainder_candidates) == 1:
+        last, file_size = remainder_candidates[0]
+        return sync_candidates[0], last, file_size
+    return None
+
+
+def warmup_call_expression(expression: str) -> tuple[str, list[str]] | None:
+    expression = strip_outer_parentheses(expression)
+    path_match = re.match(
+        rf"(?P<path>{WARMUP_IDENTIFIER}(?:::{WARMUP_IDENTIFIER})*)\(",
+        expression,
+    )
+    if path_match is None:
+        return None
+    opening = path_match.end() - 1
+    closing = closing_parenthesis(expression, opening)
+    if closing != len(expression) - 1:
+        return None
+    return (
+        path_match.group("path"),
+        [
+            strip_outer_parentheses(argument)
+            for argument in split_top_level_expression(
+                expression[opening + 1:closing],
+                ",",
+            )
+        ],
+    )
+
+
+def warmup_item_identity(record: WarmupFunctionRecord) -> WarmupItemIdentity:
+    return WarmupItemIdentity(record.path.parts[0], record.module, record.name)
+
+
+def warmup_resolve_item(
+    record: WarmupFunctionRecord,
+    call_path: str,
+) -> WarmupItemIdentity | None:
+    parts = call_path.split("::")
+    imports = dict(record.imports)
+    if parts[0] in imports:
+        parts = imports[parts[0]].split("::") + parts[1:]
+    crate = record.path.parts[0]
+    module = list(record.module)
+    if parts[0] == "crate":
+        module = []
+        parts = parts[1:]
+    elif parts[0] == "self":
+        parts = parts[1:]
+    else:
+        super_count = 0
+        while parts and parts[0] == "super":
+            super_count += 1
+            parts = parts[1:]
+        if super_count:
+            if super_count > len(module):
+                return None
+            module = module[:-super_count]
+        elif len(parts) > 1:
+            module = [*module, *parts[:-1]]
+            parts = parts[-1:]
+    if not parts:
+        return None
+    return WarmupItemIdentity(crate, tuple((*module, *parts[:-1])), parts[-1])
 
 
 def warmup_boundary_helper_roles(
     record: WarmupFunctionRecord,
 ) -> tuple[int, int] | None:
+    if ".min(" not in record.body or "+1" not in record.body:
+        return None
     aliases = IdentifierAliases(record.body)
-    for match in re.finditer(
-        rf"\(*\(?(?P<cursor>{WARMUP_IDENTIFIER})\+1\)?\)*\.min\("
-        rf"(?P<file>{WARMUP_IDENTIFIER})\)",
-        record.body,
-    ):
-        cursor_index = next(
-            (
-                index
-                for index, parameter in enumerate(record.parameters)
-                if aliases.equivalent(parameter, match.group("cursor"))
-            ),
-            None,
-        )
-        file_index = next(
-            (
-                index
-                for index, parameter in enumerate(record.parameters)
-                if aliases.equivalent(parameter, match.group("file"))
-            ),
-            None,
-        )
-        if cursor_index is not None and file_index is not None:
-            return cursor_index, file_index
+    for cursor_index, cursor in enumerate(record.parameters):
+        for file_index, file_size in enumerate(record.parameters):
+            if cursor_index == file_index:
+                continue
+            if warmup_is_boundary_expression(
+                record.body,
+                cursor,
+                file_size,
+                aliases,
+            ):
+                return cursor_index, file_index
     return None
 
 
 def warmup_final_helper_roles(
     record: WarmupFunctionRecord,
 ) -> tuple[int, int, int] | None:
+    if "&&" not in record.body or "-" not in record.body:
+        return None
     aliases = IdentifierAliases(record.body)
     subtractions = warmup_subtractions(record.body)
-    guard = re.compile(
-        rf"if(?P<sync>{WARMUP_IDENTIFIER})&&(?P<last>{WARMUP_IDENTIFIER})"
-        rf"<(?P<file>{WARMUP_IDENTIFIER})\{{"
-    )
-    for match in guard.finditer(record.body):
-        last = match.group("last")
-        file_size = match.group("file")
+    for condition in warmup_if_conditions(record.body):
+        roles = warmup_final_guard_roles(condition)
+        if roles is None:
+            continue
+        sync, last, file_size = roles
         if not any(
             aliases.equivalent(left, file_size)
             and aliases.equivalent(right, last)
@@ -2713,7 +3005,7 @@ def warmup_final_helper_roles(
         ):
             continue
         role_indices: list[int] = []
-        for role in (match.group("sync"), last, file_size):
+        for role in (sync, last, file_size):
             index = next(
                 (
                     index
@@ -2732,69 +3024,69 @@ def warmup_final_helper_roles(
 
 def warmup_boundary_assignments(
     record: WarmupFunctionRecord,
-    helpers: dict[str, list[tuple[int, int]]],
+    body: str,
+    helpers: dict[WarmupItemIdentity, list[tuple[int, int]]],
     cursor: str,
     file_size: str,
     aliases: IdentifierAliases,
-) -> set[str]:
-    boundaries: set[str] = set()
-    inline = re.compile(
+) -> dict[str, set[WarmupItemIdentity]]:
+    boundaries: dict[str, set[WarmupItemIdentity]] = {}
+    let_assignment = re.compile(
         rf"let(?:mut)?(?P<target>{WARMUP_IDENTIFIER})(?:\:[^=;]+)?="
-        rf"\(*\(?(?P<cursor>{WARMUP_IDENTIFIER})\+1\)?\)*\.min\("
-        rf"(?P<file>{WARMUP_IDENTIFIER})\);"
+        rf"(?P<expression>[^;]+);"
     )
-    for match in inline.finditer(record.body):
-        if aliases.equivalent(match.group("cursor"), cursor) and aliases.equivalent(
-            match.group("file"), file_size
+    for assignment in let_assignment.finditer(body):
+        target = aliases.find(assignment.group("target"))
+        expression = assignment.group("expression")
+        if warmup_is_boundary_expression(
+            expression,
+            cursor,
+            file_size,
+            aliases,
         ):
-            boundaries.add(aliases.find(match.group("target")))
-
-    helper_assignment = re.compile(
-        rf"let(?:mut)?(?P<target>{WARMUP_IDENTIFIER})(?:\:[^=;]+)?="
-        rf"(?P<helper>{WARMUP_IDENTIFIER})\("
-    )
-    for assignment in helper_assignment.finditer(record.body):
-        helper_name = assignment.group("helper")
-        opening = assignment.end() - 1
-        closing = closing_parenthesis(record.body, opening)
-        if closing is None:
+            boundaries.setdefault(target, set())
             continue
-        arguments = [
-            strip_outer_parentheses(argument)
-            for argument in split_top_level_expression(
-                record.body[opening + 1:closing],
-                ",",
-            )
-        ]
-        for cursor_index, file_index in helpers.get(helper_name, []):
+        call = warmup_call_expression(expression)
+        if call is None:
+            continue
+        helper_path, arguments = call
+        helper = warmup_resolve_item(record, helper_path)
+        if helper is None:
+            continue
+        for cursor_index, file_index in helpers.get(helper, []):
             if max(cursor_index, file_index) >= len(arguments):
                 continue
-            if aliases.equivalent(arguments[cursor_index], cursor) and aliases.equivalent(
-                arguments[file_index], file_size
+            if warmup_equivalent_expression(
+                arguments[cursor_index],
+                cursor,
+                aliases,
+            ) and warmup_equivalent_expression(
+                arguments[file_index],
+                file_size,
+                aliases,
             ):
-                boundaries.add(aliases.find(assignment.group("target")))
+                boundaries.setdefault(target, set()).add(helper)
     return boundaries
 
 
 def warmup_has_final_remainder(
     record: WarmupFunctionRecord,
-    final_helpers: dict[str, list[tuple[int, int, int]]],
+    final_helpers: dict[WarmupItemIdentity, list[tuple[int, int, int]]],
     sync: str,
     last: str,
     file_size: str,
     aliases: IdentifierAliases,
-) -> bool:
+) -> set[WarmupItemIdentity] | None:
     subtractions = warmup_subtractions(record.body)
-    inline_guards = re.finditer(
-        rf"if(?P<sync>{WARMUP_IDENTIFIER})&&(?P<last>{WARMUP_IDENTIFIER})"
-        rf"<(?P<file>{WARMUP_IDENTIFIER})\{{",
-        record.body,
-    )
-    for guard in inline_guards:
+    for condition in warmup_if_conditions(record.body):
+        roles = warmup_final_guard_roles(condition)
+        if roles is None:
+            continue
+        guard_sync, guard_last, guard_file = roles
         if not (
-            aliases.equivalent(guard.group("sync"), sync)
-            and aliases.equivalent(guard.group("last"), last)
-            and aliases.equivalent(guard.group("file"), file_size)
+            aliases.equivalent(guard_sync, sync)
+            and aliases.equivalent(guard_last, last)
+            and aliases.equivalent(guard_file, file_size)
         ):
             continue
         if any(
@@ -2802,20 +3094,34 @@ def warmup_has_final_remainder(
             and aliases.equivalent(right, last)
             for left, right in subtractions
         ):
-            return True
+            return set()
 
-    for helper_name, roles in final_helpers.items():
-        for arguments in warmup_calls(record.body, helper_name):
-            for sync_index, last_index, file_index in roles:
-                if max(sync_index, last_index, file_index) >= len(arguments):
-                    continue
-                if (
-                    aliases.equivalent(arguments[sync_index], sync)
-                    and aliases.equivalent(arguments[last_index], last)
-                    and aliases.equivalent(arguments[file_index], file_size)
-                ):
-                    return True
-    return False
+    call_pattern = re.compile(
+        rf"(?<![.A-Za-z0-9_:])(?P<call>{WARMUP_IDENTIFIER}"
+        rf"(?:::{WARMUP_IDENTIFIER})*\([^;]*\));"
+    )
+    for call_match in call_pattern.finditer(record.body):
+        call = warmup_call_expression(call_match.group("call"))
+        if call is None:
+            continue
+        helper_path, arguments = call
+        helper = warmup_resolve_item(record, helper_path)
+        if helper is None:
+            continue
+        for sync_index, last_index, file_index in final_helpers.get(helper, []):
+            if max(sync_index, last_index, file_index) >= len(arguments):
+                continue
+            if (
+                warmup_equivalent_expression(arguments[sync_index], sync, aliases)
+                and warmup_equivalent_expression(arguments[last_index], last, aliases)
+                and warmup_equivalent_expression(
+                    arguments[file_index],
+                    file_size,
+                    aliases,
+                )
+            ):
+                return {helper}
+    return None
 
 
 def mapped_file_warmup_duplicate_policy_violations(
@@ -2830,31 +3136,28 @@ def mapped_file_warmup_duplicate_policy_violations(
         }
         for record in warmup_function_records(path, source)
     ]
-    boundary_helpers: dict[str, list[tuple[int, int]]] = {}
-    final_helpers: dict[str, list[tuple[int, int, int]]] = {}
-    helper_paths: dict[str, set[Path]] = {}
+    boundary_helpers: dict[WarmupItemIdentity, list[tuple[int, int]]] = {}
+    final_helpers: dict[WarmupItemIdentity, list[tuple[int, int, int]]] = {}
+    helper_paths: dict[WarmupItemIdentity, set[Path]] = {}
     for record in records:
+        identity = warmup_item_identity(record)
         boundary_roles = warmup_boundary_helper_roles(record)
         if boundary_roles is not None:
-            boundary_helpers.setdefault(record.name, []).append(boundary_roles)
-            helper_paths.setdefault(record.name, set()).add(record.path)
+            boundary_helpers.setdefault(identity, []).append(boundary_roles)
+            helper_paths.setdefault(identity, set()).add(record.path)
         final_roles = warmup_final_helper_roles(record)
         if final_roles is not None:
-            final_helpers.setdefault(record.name, []).append(final_roles)
-            helper_paths.setdefault(record.name, set()).add(record.path)
+            final_helpers.setdefault(identity, []).append(final_roles)
+            helper_paths.setdefault(identity, set()).add(record.path)
 
     violations: list[str] = []
     loop_pattern = re.compile(
         rf"for(?P<cursor>{WARMUP_IDENTIFIER})in\(0\.\."
-        rf"(?P<file>{WARMUP_IDENTIFIER})\)\.step_by\("
-        rf"(?P<page>{WARMUP_IDENTIFIER})\)\{{"
-    )
-    periodic_guard = re.compile(
-        rf"if(?P<sync>{WARMUP_IDENTIFIER})&&(?P<count>{WARMUP_IDENTIFIER})"
-        rf"\.is_multiple_of\((?P<every>{WARMUP_IDENTIFIER})\)\{{"
+        rf"\(*(?P<file>{WARMUP_IDENTIFIER})\)*\)\.step_by\("
+        rf"\(*(?P<page>{WARMUP_IDENTIFIER})\)*\)\{{"
     )
     assignment = re.compile(
-        rf"(?<!let)(?P<left>{WARMUP_IDENTIFIER})=(?P<right>{WARMUP_IDENTIFIER});"
+        rf"(?<!let)(?P<left>{WARMUP_IDENTIFIER})=(?P<right>[^;]+);"
     )
     for record in records:
         if record.path == MAPPED_FILE_KERNEL_PATH and record.name == MAPPED_FILE_WARMUP_VISITOR:
@@ -2871,8 +3174,9 @@ def mapped_file_warmup_duplicate_policy_violations(
         }
         subtractions = warmup_subtractions(record.body)
         assignments = [
-            (match.group("left"), match.group("right"))
+            (match.group("left"), right)
             for match in assignment.finditer(record.body)
+            if (right := warmup_identifier_expression(match.group("right"))) is not None
         ]
         for loop in loop_pattern.finditer(record.body):
             cursor = loop.group("cursor")
@@ -2880,16 +3184,22 @@ def mapped_file_warmup_duplicate_policy_violations(
             page_size = loop.group("page")
             if aliases.find(page_size) not in normalized:
                 continue
-            for guard in periodic_guard.finditer(record.body, loop.end()):
-                sync = guard.group("sync")
-                count = guard.group("count")
-                every = guard.group("every")
+            loop_extracted = braced_body(record.body, loop.end() - 1)
+            if loop_extracted is None:
+                continue
+            loop_body, _ = loop_extracted
+            for condition in warmup_if_conditions(loop_body):
+                guard_roles = warmup_periodic_guard_roles(condition)
+                if guard_roles is None:
+                    continue
+                sync, count, every = guard_roles
                 if aliases.find(every) not in normalized:
                     continue
                 if aliases.find(count) not in zeroed or aliases.find(count) not in increments:
                     continue
                 boundaries = warmup_boundary_assignments(
                     record,
+                    loop_body,
                     boundary_helpers,
                     cursor,
                     file_size,
@@ -2908,19 +3218,20 @@ def mapped_file_warmup_duplicate_policy_violations(
                             for assigned, value in assignments
                         ):
                             continue
-                        if not warmup_has_final_remainder(
+                        final_helper_matches = warmup_has_final_remainder(
                             record,
                             final_helpers,
                             sync,
                             last,
                             file_size,
                             aliases,
-                        ):
+                        )
+                        if final_helper_matches is None:
                             continue
                         involved_paths = {record.path}
-                        for helper_name in set(boundary_helpers) | set(final_helpers):
-                            if re.search(rf"\b{re.escape(helper_name)}\(", record.body):
-                                involved_paths.update(helper_paths.get(helper_name, set()))
+                        matched_helpers = boundaries[boundary_root] | final_helper_matches
+                        for helper in matched_helpers:
+                            involved_paths.update(helper_paths.get(helper, set()))
                         paths = ", ".join(sorted(path.as_posix() for path in involved_paths))
                         violations.append(
                             f"mapped-file warmup schedule policy copied outside canonical owner: {paths}"
@@ -7033,8 +7344,156 @@ where
             ),
         )
 
+        equivalent_expression_mutations = [
+            renamed_duplicate_sources[local_duplicate_path].replace(
+                "(cursor + 1).min(capacity)",
+                "capacity.min(cursor + 1)",
+                1,
+            ),
+            renamed_duplicate_sources[local_duplicate_path].replace(
+                "(cursor + 1).min(capacity)",
+                "(cursor + 1).min((capacity))",
+                1,
+            ),
+            renamed_duplicate_sources[local_duplicate_path].replace(
+                "synchronous && durable < capacity",
+                "synchronous && capacity > durable",
+                1,
+            ),
+            renamed_duplicate_sources[local_duplicate_path].replace(
+                "synchronous && visits.is_multiple_of(cadence)",
+                "visits.is_multiple_of(cadence) && synchronous",
+                1,
+            ),
+        ]
+        for mutation_index, duplicate in enumerate(equivalent_expression_mutations):
+            equivalent_sources = dict(production_sources)
+            equivalent_sources[local_duplicate_path] = duplicate
+            with self.subTest(equivalent_expression_mutation=mutation_index):
+                self.assertNotEqual(
+                    [],
+                    mapped_file_warmup_adapter_violations(
+                        canonical,
+                        default_mapped_file,
+                        equivalent_sources,
+                    ),
+                )
+
+        module_helper_body = """
+fn copied_periodic_end(cursor: usize, size: usize) -> usize {
+    (cursor + 1).min(size)
+}
+"""
+        module_caller_template = """
+{imports}
+fn copied_schedule_with_module_helper<F>(size: usize, page: usize, every: usize, sync: bool, mut emit: F)
+where
+    F: FnMut(MappedFileWarmupOperation),
+{{
+    let page = page.max(1);
+    let every = every.max(1);
+    let mut touched = 0usize;
+    let mut last = 0usize;
+    for cursor in (0..size).step_by(page) {{
+        emit(MappedFileWarmupOperation::Touch {{ offset: cursor }});
+        touched += 1;
+        if sync && touched.is_multiple_of(every) {{
+            let end = {helper_call}(cursor, size);
+            emit(MappedFileWarmupOperation::Flush {{
+                offset: last,
+                len: end - last,
+                final_flush: false,
+            }});
+            last = end;
+        }}
+    }}
+    if sync && last < size {{
+        emit(MappedFileWarmupOperation::Flush {{
+            offset: last,
+            len: size - last,
+            final_flush: true,
+        }});
+    }}
+}}
+"""
+        module_helper_cases = [
+            (
+                Path("rocketmq-store/src/base/warmup_copy.rs"),
+                Path("rocketmq-store/src/base/warmup_copy_helper.rs"),
+                "",
+                "crate::base::warmup_copy_helper::copied_periodic_end",
+            ),
+            (
+                Path("rocketmq-store/src/base/warmup_copy.rs"),
+                Path("rocketmq-store/src/base/warmup_copy/helper.rs"),
+                "mod helper;",
+                "self::helper::copied_periodic_end",
+            ),
+            (
+                Path("rocketmq-store/src/base/warmup_copy.rs"),
+                Path("rocketmq-store/src/base/warmup_copy_helper.rs"),
+                "",
+                "super::warmup_copy_helper::copied_periodic_end",
+            ),
+            (
+                Path("rocketmq-store/src/base/warmup_copy.rs"),
+                Path("rocketmq-store/src/base/warmup_copy_helper.rs"),
+                "use crate::base::warmup_copy_helper::copied_periodic_end;",
+                "copied_periodic_end",
+            ),
+            (
+                Path("rocketmq-store/src/base/warmup_copy.rs"),
+                Path("rocketmq-store/src/base/warmup_copy_helper.rs"),
+                "use crate::base::warmup_copy_helper::copied_periodic_end as end_of_page;",
+                "end_of_page",
+            ),
+        ]
+        for case_index, (caller_path, helper_path, import_source, helper_call) in enumerate(
+            module_helper_cases
+        ):
+            module_sources = dict(production_sources)
+            module_sources[caller_path] = module_caller_template.format(
+                imports=import_source,
+                helper_call=helper_call,
+            )
+            module_sources[helper_path] = module_helper_body
+            expected = [
+                "mapped-file warmup schedule policy copied outside canonical owner: "
+                + ", ".join(sorted((caller_path.as_posix(), helper_path.as_posix())))
+            ]
+            with self.subTest(module_helper_case=case_index):
+                self.assertEqual(
+                    expected,
+                    mapped_file_warmup_adapter_violations(
+                        canonical,
+                        default_mapped_file,
+                        module_sources,
+                    ),
+                )
+
+        colliding_caller_path = Path("rocketmq-store/src/base/colliding_warmup.rs")
+        unrelated_helper_path = Path("rocketmq-store/src/unrelated/periodic.rs")
+        colliding_sources = dict(production_sources)
+        colliding_sources[colliding_caller_path] = module_caller_template.format(
+            imports="""
+fn copied_periodic_end(cursor: usize, size: usize) -> usize {
+    (cursor + 2).min(size)
+}
+""",
+            helper_call="copied_periodic_end",
+        )
+        colliding_sources[unrelated_helper_path] = module_helper_body
+        self.assertEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                colliding_sources,
+            ),
+        )
+
         split_caller_path = Path("rocketmq-store/src/base/warmup_copy.rs")
-        split_helper_path = Path("rocketmq-store-local/src/mapped_file/warmup_copy_helper.rs")
+        split_helper_path = Path("rocketmq-store/src/base/warmup_copy_helper.rs")
         split_duplicate_sources = dict(production_sources)
         split_duplicate_sources[split_caller_path] = """
 fn copied_schedule_split<F>(size: usize, page: usize, every: usize, sync: bool, mut emit: F)
@@ -7049,7 +7508,7 @@ where
         emit(MappedFileWarmupOperation::Touch { offset: cursor });
         touched += 1;
         if sync && touched.is_multiple_of(every) {
-            let end = copied_periodic_end(cursor, size);
+            let end = crate::base::warmup_copy_helper::copied_periodic_end(cursor, size);
             emit(MappedFileWarmupOperation::Flush {
                 offset: last,
                 len: end - last,
@@ -7058,7 +7517,7 @@ where
             last = end;
         }
     }
-    copied_final_flush(sync, last, size, emit);
+    crate::base::warmup_copy_helper::copied_final_flush(sync, last, size, emit);
 }
 """
         split_duplicate_sources[split_helper_path] = """
@@ -7100,6 +7559,22 @@ fn take_alternating_values(values: &[usize]) -> usize {
                 canonical,
                 default_mapped_file,
                 unrelated_sources,
+            ),
+        )
+
+        fixture_sources = dict(production_sources)
+        fixture_sources[Path("scripts/tests/fixtures/copied_warmup.rs")] = (
+            renamed_duplicate_sources[local_duplicate_path]
+        )
+        fixture_sources[Path("rocketmq-store/tests/fixtures/copied_warmup.rs")] = (
+            renamed_duplicate_sources[local_duplicate_path]
+        )
+        self.assertEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                fixture_sources,
             ),
         )
 
