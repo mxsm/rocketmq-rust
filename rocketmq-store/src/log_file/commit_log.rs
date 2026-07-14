@@ -110,6 +110,7 @@ use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordErrorKind;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
+use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;
 use rocketmq_store_local::commit_log::recovery::plan_normal_recovery_file_window;
 use rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryAction;
@@ -129,35 +130,6 @@ pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 const DEFAULT_COMMITLOG_ACTIVE_WINDOW_LOCK_BYTES: usize = 128 * 1024 * 1024;
-
-#[derive(Debug, thiserror::Error)]
-enum AbnormalRecoveryAdapterOffsetError {
-    #[error("commitlog offset {offset} is negative")]
-    NegativeCommitLogOffset { offset: i64 },
-    #[error("input frame size {size} exceeds i64::MAX")]
-    InputSizeExceedsI64 { size: usize },
-    #[error("commitlog offset {offset} plus input frame size {size} overflowed")]
-    ConfirmCandidateOverflow { offset: i64, size: i64 },
-}
-
-fn abnormal_confirm_candidate_end(
-    commit_log_offset: i64,
-    input_size: usize,
-) -> Result<i64, AbnormalRecoveryAdapterOffsetError> {
-    if commit_log_offset < 0 {
-        return Err(AbnormalRecoveryAdapterOffsetError::NegativeCommitLogOffset {
-            offset: commit_log_offset,
-        });
-    }
-    let input_size = i64::try_from(input_size)
-        .map_err(|_| AbnormalRecoveryAdapterOffsetError::InputSizeExceedsI64 { size: input_size })?;
-    commit_log_offset
-        .checked_add(input_size)
-        .ok_or(AbnormalRecoveryAdapterOffsetError::ConfirmCandidateOverflow {
-            offset: commit_log_offset,
-            size: input_size,
-        })
-}
 
 fn log_abnormal_recovery_window(
     window: &crate::log_file::commit_log_recovery::AbnormalRecoveryWindow,
@@ -3186,26 +3158,6 @@ mod tests {
     use rocketmq_common::CRC32Utils::crc32;
     use rocketmq_common::MessageDecoder::create_crc32;
     use rocketmq_common::TimeUtils::current_millis;
-
-    #[test]
-    fn abnormal_recovery_confirm_candidate_is_checked_and_fail_closed() {
-        assert_eq!(abnormal_confirm_candidate_end(7, 5).expect("valid candidate"), 12);
-        assert!(matches!(
-            abnormal_confirm_candidate_end(-1, 1),
-            Err(AbnormalRecoveryAdapterOffsetError::NegativeCommitLogOffset { offset: -1 })
-        ));
-        assert!(matches!(
-            abnormal_confirm_candidate_end(i64::MAX, 1),
-            Err(AbnormalRecoveryAdapterOffsetError::ConfirmCandidateOverflow {
-                offset: i64::MAX,
-                size: 1,
-            })
-        ));
-        assert!(matches!(
-            abnormal_confirm_candidate_end(0, usize::MAX),
-            Err(AbnormalRecoveryAdapterOffsetError::InputSizeExceedsI64 { size: usize::MAX })
-        ));
-    }
 
     #[test]
     fn put_message_lock_stats_records_totals_and_maxes() {

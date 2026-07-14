@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -969,3 +969,40 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03v 只迁移 recovery ConsumeQueue truncate 纯判定；config owner、mapped-file I/O、
   parser/recovery state/window、错误/可观测性、async/runtime、flush/group commit、CQ/Index、HA、Timer/POP 均未
   迁移。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03w abnormal recovery confirm-candidate checked calculation evidence
+
+- [x] `[DEV]` 新增
+  `rocketmq-store-local::commit_log::recovery::abnormal_confirm_candidate_end` 与
+  `AbnormalRecoveryConfirmCandidateError`，由 `recovery.rs` 直接精确 re-export，成为 abnormal recovery
+  confirm-candidate checked calculation 的唯一 canonical owner。Store 删除私有
+  `AbnormalRecoveryAdapterOffsetError`、同名 helper 与旧单测；optimized 路径继续传 raw `msg_size`，standard
+  路径继续传 raw `input_size`，两处 warning 文本和 `break 'segments` 失败控制流保持不变，normal recovery 零调用。
+- [x] `[COMPAT/SEMANTICS]` 完整冻结检查顺序与边界：先拒绝任意负 `commit_log_offset`（含 `i64::MIN`），再以
+  `i64::try_from` 转换 raw `usize` input size，最后以 `checked_add` 求 end。`(7, 5)` 为 `12`；
+  `(i64::MAX, 0)` 保持 `i64::MAX`；`(i64::MAX, 1)` 返回 overflow；64 位平台上 `i64::MAX + 1` 的 `usize`
+  返回 size conversion error。三个 error variant 的字段及逐字 Display 保持 Store 旧 warning 的可见文本。
+- [x] `[TEST]` TDD RED 先由 Local focused fixture 的两个 unresolved import 证明 owner/API 尚不存在；GREEN 后
+  Local fixture 3/3、Store abnormal recovery integration 7/7、Store lib 563/563 通过，Local default 与
+  all-feature 全量均通过。新增两项 owner/adapter mutation contract，连同既有 abnormal reducer focused 共
+  3/3；完整 M06 source/mutation contract 从 105 增至 107 项并 107/107 通过。
+- [x] `[CONTRACT]` contract 固定唯一 Local enum/function owner、公开签名、negative → size conversion →
+  checked-add 顺序、operand/variant field、三条 Display、无 cfg/cfg_attr 与无 Store/config/I/O/log/async/alloc
+  依赖；Store 只允许一条直接精确 import、optimized/standard 各一次 raw-input direct call、normal 零调用、无
+  legacy owner/error。mutation 覆盖 `<` 边界、检查重排、`as`、plain/saturating/wrapping add、wrong operand/
+  error field/variant、Display、只迁一路、额外/normal caller、alias/brace/cfg import、active post-test owner，及
+  renamed、tuple-alias、direct/split helper 完整副本；不完整的独立 checked-add 近似保持零误报。
+- [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Local 与 Store 各七组有效 feature closure、
+  两 crate all-target/all-feature package Clippy、root workspace exact all-target/all-feature Clippy、Local strict
+  Rustdoc 均通过；Store normal Rustdoc 只复现 4 个未触及的 invalid-HTML warning。Windows 固定隔离 target
+  通过 Local 3/3、Store abnormal 7/7 与两 crate all-feature check；cleanup 删除 9,710 files/9.1 GiB 并确认
+  路径不存在。WSL/Linux 同一矩阵通过；cleanup 删除 9,554 files/6.4 GiB 并确认路径不存在。额外 Store
+  空 backend `--no-default-features` 误命令只复现既有空 enum 的 124 个 E0004 与 unused import，不计通过；两次
+  未实际执行验证的 WSL wrapper 传参/PATH/CRLF 误命令同样不计通过，修正后的 login-shell 固定路径矩阵 exit 0。
+- [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、AGENTS routing、
+  workspace fmt/diff 检查均通过。error hygiene 只复现未触及的 Broker source-stringification、MCP anyhow 与
+  两份缺失治理文档基线；本切片没有 runtime ownership、unsafe、public error mapping、manifest、feature、
+  ArcMut、I/O、observability、flush/group commit 或持久格式变更。
+- [x] `[SCOPE]` M06-03w 只迁移 abnormal recovery confirm-candidate 的纯 checked calculation；parser/recovery
+  state/window、dispatch gate、warning/orchestration、config、mapped-file I/O、async/runtime、flush/group commit、
+  CQ/Index、HA、Timer/POP 均未迁移。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。

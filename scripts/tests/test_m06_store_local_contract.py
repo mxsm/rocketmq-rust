@@ -56,6 +56,9 @@ NORMAL_RECOVERY_WINDOW_PATH = Path(
 RECOVERY_CONSUME_QUEUE_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/consume_queue.rs"
 )
+ABNORMAL_CONFIRM_CANDIDATE_PATH = Path(
+    "rocketmq-store-local/src/commit_log/recovery/confirm_candidate.rs"
+)
 MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush", "is_able_to_commit")
 MAPPED_FILE_POLICY_REFERENCE = re.compile(
     r"(?:\.|::)\s*(is_able_to_flush|is_able_to_commit)\b"
@@ -1629,6 +1632,242 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
     return violations
 
 
+def confirm_candidate_function_records(
+    path: Path,
+    source: str,
+) -> list[tuple[Path, str, str, str]]:
+    """Return bounded free-function records for semantic-copy checks."""
+    production = active_rust_source(source_without_cfg_test_items(source))
+    records: list[tuple[Path, str, str, str]] = []
+    function = re.compile(
+        r"\bfn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
+        r"(?P<signature>\([^{};]*\)(?:\s*->\s*[^{};]+)?)\s*\{",
+        re.DOTALL,
+    )
+    for match in function.finditer(production):
+        extracted = braced_body(production, match.end() - 1)
+        if extracted is None:
+            continue
+        body, _ = extracted
+        records.append((path, match.group("name"), match.group("signature"), body))
+    return records
+
+
+def confirm_candidate_semantic_stages(
+    signature: str,
+    body: str,
+    signed_conversion_types: frozenset[str] = frozenset({"i64"}),
+) -> frozenset[str]:
+    active = active_rust_source(signature + body)
+    compact = compact_rust(active)
+    stages: set[str] = set()
+    signed_parameters = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*i64\b", signature)
+    size_parameters = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*usize\b", signature)
+    if any(
+        re.search(rf"\b{re.escape(parameter)}\s*<\s*0\b", active)
+        or re.search(rf"\b{re.escape(parameter)}\.is_negative\s*\(\s*\)", active)
+        for parameter in signed_parameters
+    ):
+        stages.add("negative")
+    has_signed_conversion = any(
+        f"{conversion_type}::try_from(" in compact
+        for conversion_type in signed_conversion_types
+    )
+    if has_signed_conversion and (
+        not size_parameters
+        or any(
+            f"{conversion_type}::try_from({parameter})" in compact
+            for conversion_type in signed_conversion_types
+            for parameter in size_parameters
+        )
+    ):
+        stages.add("conversion")
+    if ".checked_add(" in compact:
+        stages.add("addition")
+    return frozenset(stages)
+
+
+def confirm_candidate_semantic_copies(
+    production_sources: dict[Path, str],
+) -> list[str]:
+    """Find complete or directly split copies of the three-stage checked calculation."""
+    findings: list[str] = []
+    canonical = (ABNORMAL_CONFIRM_CANDIDATE_PATH, "abnormal_confirm_candidate_end")
+    for path, source in production_sources.items():
+        if ".checked_add(" not in source or "::try_from(" not in source:
+            continue
+        active_source = active_rust_source(source_without_cfg_test_items(source))
+        signed_conversion_types = {"i64"}
+        signed_conversion_types.update(
+            re.findall(
+                r"\buse\s+(?:std|core)::primitive::i64\s+as\s+"
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*;",
+                active_source,
+            )
+        )
+        signed_conversion_types.update(
+            re.findall(
+                r"\btype\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*i64\s*;",
+                active_source,
+            )
+        )
+        signed_types = frozenset(signed_conversion_types)
+        records = confirm_candidate_function_records(path, source)
+        by_name = {name: (signature, body) for _, name, signature, body in records}
+        for _, name, signature, body in records:
+            if (path, name) == canonical:
+                continue
+            stages = confirm_candidate_semantic_stages(signature, body, signed_types)
+            if stages == frozenset({"negative", "conversion", "addition"}):
+                findings.append(f"{path.as_posix()}::{name} (complete)")
+                continue
+            for callee, (callee_signature, callee_body) in by_name.items():
+                if callee == name or re.search(rf"\b{re.escape(callee)}\s*\(", active_rust_source(body)) is None:
+                    continue
+                combined = stages | confirm_candidate_semantic_stages(
+                    callee_signature,
+                    callee_body,
+                    signed_types,
+                )
+                if combined == frozenset({"negative", "conversion", "addition"}):
+                    findings.append(f"{path.as_posix()}::{name}->{callee} (split)")
+    return findings
+
+
+def abnormal_confirm_candidate_owner_violations(
+    source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    violations: list[str] = []
+    expected_owners = {
+        "AbnormalRecoveryConfirmCandidateError": "enum",
+        "abnormal_confirm_candidate_end": "fn",
+    }
+    for item, kind in expected_owners.items():
+        relevant_sources = {
+            path: candidate
+            for path, candidate in production_sources.items()
+            if item in candidate
+        }
+        if file_item_owner_occurrences(relevant_sources, item) != [
+            (ABNORMAL_CONFIRM_CANDIDATE_PATH, kind)
+        ]:
+            violations.append(f"{item} must have one Local owner")
+
+    expected_function = (
+        "pubfnabnormal_confirm_candidate_end(commit_log_offset:i64,input_size:usize,)"
+        "->Result<i64,AbnormalRecoveryConfirmCandidateError>{"
+        "ifcommit_log_offset<0{returnErr("
+        "AbnormalRecoveryConfirmCandidateError::NegativeCommitLogOffset{"
+        "offset:commit_log_offset,});}"
+        "letinput_size=i64::try_from(input_size).map_err(|_|"
+        "AbnormalRecoveryConfirmCandidateError::InputSizeExceedsI64{size:input_size})?;"
+        "commit_log_offset.checked_add(input_size).ok_or("
+        "AbnormalRecoveryConfirmCandidateError::ConfirmCandidateOverflow{"
+        "offset:commit_log_offset,size:input_size,})}"
+    )
+    if expected_function not in compact:
+        violations.append("abnormal confirm candidate signature, order, operands, or errors changed")
+    for display in (
+        '#[error("commitlog offset {offset} is negative")]',
+        '#[error("input frame size {size} exceeds i64::MAX")]',
+        '#[error("commitlog offset {offset} plus input frame size {size} overflowed")]',
+    ):
+        if display not in source:
+            violations.append(f"abnormal confirm candidate display changed: {display}")
+    if "#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]" not in source:
+        violations.append("abnormal confirm candidate error traits changed")
+    if re.search(
+        r"#\s*\[\s*(?:cfg|cfg_attr)\b[^\]]*\]\s*"
+        r"pub\s+(?:enum\s+AbnormalRecoveryConfirmCandidateError|fn\s+abnormal_confirm_candidate_end)",
+        active,
+        re.DOTALL,
+    ):
+        violations.append("abnormal confirm candidate owner must not be cfg-gated")
+    if any(
+        token in active
+        for token in (
+            "MessageStoreConfig",
+            "MappedFile",
+            "std::fs",
+            "tokio",
+            "tracing",
+            "Vec<",
+            "Box<",
+            ".collect(",
+            "async fn",
+        )
+    ):
+        violations.append("abnormal confirm candidate absorbed allocation or Store orchestration")
+    if not violations:
+        for finding in confirm_candidate_semantic_copies(production_sources):
+            violations.append(f"abnormal confirm candidate policy copied: {finding}")
+    return violations
+
+
+def store_abnormal_confirm_candidate_adapter_violations(
+    commit_log: str,
+    store_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(commit_log)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    owner = "abnormal_confirm_candidate_end"
+    violations: list[str] = []
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use" and owner in body
+    ]
+    if imports != [f"rocketmq_store_local::commit_log::recovery::{owner}"]:
+        violations.append("Store abnormal confirm candidate import must be direct and exact")
+    if re.search(
+        r"#\s*\[\s*(?:cfg|cfg_attr)\b[^\]]*\]\s*"
+        r"use\s+rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end",
+        active,
+        re.DOTALL,
+    ):
+        violations.append("Store abnormal confirm candidate import must not be cfg-gated")
+    references = {
+        path: len(re.findall(rf"\b{owner}\b", active_rust_source(source_without_cfg_test_items(source))))
+        for path, source in store_sources.items()
+        if re.search(rf"\b{owner}\b", source)
+    }
+    commit_log_path = Path("rocketmq-store/src/log_file/commit_log.rs")
+    if references != {commit_log_path: 3}:
+        violations.append(f"Store abnormal confirm candidate references changed: {references}")
+    expected_calls = {
+        "recover_abnormally_optimized": (
+            "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,msg_size)"
+        ),
+        "recover_abnormally": (
+            "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,input_size)"
+        ),
+    }
+    for function_name, expected_call in expected_calls.items():
+        body = named_function_body(production, function_name)
+        normalized = compact_rust(body or "")
+        if body is None or normalized.count(expected_call) != 1:
+            violations.append(f"{function_name} must call Local candidate once with raw input size")
+    for function_name in ("recover_normally_optimized", "recover_normally"):
+        body = named_function_body(production, function_name)
+        if body is None or re.search(rf"\b{owner}\b", active_rust_source(body)):
+            violations.append(f"{function_name} must not call the abnormal candidate calculation")
+    if named_function_body(production, owner) is not None:
+        violations.append("Store retained abnormal confirm candidate helper")
+    if re.search(r"\bAbnormalRecoveryAdapterOffsetError\b", active):
+        violations.append("Store retained legacy abnormal candidate error")
+    if compact.count("matchabnormal_confirm_candidate_end(") != 2:
+        violations.append("Store abnormal candidate failure control flow changed")
+    if not violations:
+        for finding in confirm_candidate_semantic_copies(store_sources):
+            violations.append(f"Store duplicates abnormal confirm candidate policy: {finding}")
+    return violations
+
+
 def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
     violations: list[str] = []
     recovery_prefix = "rocketmq_store_local::commit_log::recovery::"
@@ -1655,16 +1894,15 @@ def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
     ):
         violations.append("Store abnormal recovery imports forbid alias/brace/glob")
 
-    candidate_helper = named_function_body(commit_log, "abnormal_confirm_candidate_end")
-    normalized_candidate = "" if candidate_helper is None else re.sub(r"\s+", "", candidate_helper)
-    for fragment in [
-        "ifcommit_log_offset<0",
-        "i64::try_from(input_size)",
-        "commit_log_offset.checked_add(input_size)",
-    ]:
-        if fragment not in normalized_candidate:
-            violations.append("Store abnormal confirm candidate helper changed")
-            break
+    candidate_imports = [
+        body
+        for kind, _, body, _ in active_import_records(commit_log)
+        if kind == "use" and "abnormal_confirm_candidate_end" in body
+    ]
+    if candidate_imports != [recovery_prefix + "abnormal_confirm_candidate_end"]:
+        violations.append("Store abnormal confirm candidate import must be direct and exact")
+    if named_function_body(commit_log, "abnormal_confirm_candidate_end") is not None:
+        violations.append("Store retained abnormal confirm candidate helper")
     truncate_policy = "should_truncate_recovery_consume_queue"
     truncate_imports = [
         body
@@ -7046,6 +7284,220 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
+
+    def test_abnormal_confirm_candidate_has_one_local_owner_and_rejects_policy_mutations(self) -> None:
+        canonical_path = ROOT / ABNORMAL_CONFIRM_CANDIDATE_PATH
+        canonical = canonical_path.read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            abnormal_confirm_candidate_owner_violations(canonical, production_sources),
+        )
+
+        recovery_root = (LOCAL_CRATE / "src" / "commit_log" / "recovery.rs").read_text(
+            encoding="utf-8"
+        )
+        for item in (
+            "abnormal_confirm_candidate_end",
+            "AbnormalRecoveryConfirmCandidateError",
+        ):
+            relevant = [
+                statement
+                for kind, _, body, statement in active_import_records(recovery_root)
+                if kind == "use" and item in body
+            ]
+            self.assertEqual([f"pub use confirm_candidate::{item}"], relevant)
+        self.assertRegex(active_rust_source(recovery_root), r"\bmod\s+confirm_candidate\s*;")
+
+        owner_mutations = [
+            canonical.replace("commit_log_offset < 0", "commit_log_offset <= 0", 1),
+            canonical.replace("commit_log_offset < 0", "commit_log_offset > 0", 1),
+            canonical.replace("i64::try_from(input_size)", "input_size as i64", 1),
+            canonical.replace(".checked_add(input_size)", ".saturating_add(input_size)", 1),
+            canonical.replace(".checked_add(input_size)", ".wrapping_add(input_size)", 1),
+            canonical.replace(".checked_add(input_size)", "+ input_size", 1),
+            canonical.replace(".checked_add(input_size)", ".checked_add(commit_log_offset)", 1),
+            canonical.replace("offset: commit_log_offset", "offset: input_size", 1),
+            canonical.replace("size: input_size", "size: usize::MAX", 1),
+            canonical.replace(
+                "AbnormalRecoveryConfirmCandidateError::NegativeCommitLogOffset",
+                "AbnormalRecoveryConfirmCandidateError::ConfirmCandidateOverflow",
+                1,
+            ),
+            canonical.replace("commitlog offset {offset} is negative", "negative offset {offset}", 1),
+            canonical.replace(
+                "pub fn abnormal_confirm_candidate_end",
+                "#[cfg(any())]\npub fn abnormal_confirm_candidate_end",
+                1,
+            ),
+            canonical.replace(
+                "pub enum AbnormalRecoveryConfirmCandidateError",
+                "#[cfg_attr(any(), cfg(any()))]\npub enum AbnormalRecoveryConfirmCandidateError",
+                1,
+            ),
+            canonical.replace("pub fn abnormal_confirm_candidate_end", "pub async fn abnormal_confirm_candidate_end", 1),
+            canonical.replace("pub fn abnormal_confirm_candidate_end", "pub fn renamed_confirm_candidate", 1),
+            canonical
+            + "\n#[cfg(test)]\nmod tests {}\n"
+            + "pub fn abnormal_confirm_candidate_end(_: i64, _: usize) -> i64 { 0 }\n",
+        ]
+        for mutation_index, mutation in enumerate(owner_mutations):
+            with self.subTest(owner_mutation=mutation_index):
+                self.assertNotEqual(canonical, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[ABNORMAL_CONFIRM_CANDIDATE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    abnormal_confirm_candidate_owner_violations(mutation, mutated_sources),
+                )
+
+        copied_complete = dict(production_sources)
+        copied_complete[Path("rocketmq-store/src/copied_confirm_candidate.rs")] = """
+fn copied_candidate(offset: i64, frame_size: usize) -> Option<i64> {
+    if offset < 0 { return None; }
+    let signed_size = i64::try_from(frame_size).ok()?;
+    offset.checked_add(signed_size)
+}
+"""
+        copied_tuple_alias = dict(production_sources)
+        copied_tuple_alias[Path("rocketmq-store-local/src/copied_tuple_candidate.rs")] = """
+fn copied_tuple_candidate(offset: i64, frame_size: usize) -> Option<i64> {
+    if offset < 0 { return None; }
+    let (candidate_base, candidate_size) = (offset, i64::try_from(frame_size).ok()?);
+    candidate_base.checked_add(candidate_size)
+}
+"""
+        copied_use_alias = dict(production_sources)
+        copied_use_alias[Path("rocketmq-store/src/copied_use_alias_candidate.rs")] = """
+use std::primitive::i64 as SignedOffset;
+
+fn copied_use_alias_candidate(offset: i64, frame_size: usize) -> Option<i64> {
+    if offset < 0 { return None; }
+    let signed_size = SignedOffset::try_from(frame_size).ok()?;
+    offset.checked_add(signed_size)
+}
+"""
+        copied_split = dict(production_sources)
+        copied_split[Path("rocketmq-store/src/split_confirm_candidate.rs")] = """
+fn copied_outer(offset: i64, frame_size: usize) -> Option<i64> {
+    if offset < 0 { return None; }
+    copied_inner(offset, frame_size)
+}
+fn copied_inner(offset: i64, frame_size: usize) -> Option<i64> {
+    let signed_size = i64::try_from(frame_size).ok()?;
+    offset.checked_add(signed_size)
+}
+"""
+        for mutation_index, mutation in enumerate(
+            (copied_complete, copied_tuple_alias, copied_use_alias, copied_split)
+        ):
+            with self.subTest(copy_mutation=mutation_index):
+                self.assertNotEqual(
+                    [],
+                    abnormal_confirm_candidate_owner_violations(canonical, mutation),
+                )
+
+        incomplete = dict(production_sources)
+        incomplete[Path("rocketmq-store/src/unrelated_checked_offset.rs")] = """
+fn unrelated_offset(offset: i64, delta: i64) -> Option<i64> {
+    offset.checked_add(delta)
+}
+"""
+        self.assertEqual(
+            [],
+            abnormal_confirm_candidate_owner_violations(canonical, incomplete),
+        )
+
+    def test_store_abnormal_confirm_candidate_adapter_is_exact_and_rejects_mutations(self) -> None:
+        commit_log_path = Path("rocketmq-store/src/log_file/commit_log.rs")
+        commit_log = (ROOT / commit_log_path).read_text(encoding="utf-8")
+        store_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for path in STORE_CRATE.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            store_abnormal_confirm_candidate_adapter_violations(commit_log, store_sources),
+        )
+
+        mutations = [
+            commit_log.replace(
+                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, msg_size)",
+                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, validated_size as usize)",
+                1,
+            ),
+            commit_log.replace(
+                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, input_size)",
+                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, dispatch_request.msg_size as usize)",
+                1,
+            ),
+            commit_log.replace(
+                "match abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, msg_size)",
+                "match Ok(dispatch_request.commit_log_offset)",
+                1,
+            ),
+            commit_log.replace(
+                "match abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, input_size)",
+                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, input_size).unwrap();\n                            match Ok(dispatch_request.commit_log_offset)",
+                1,
+            ),
+            commit_log.replace(
+                "use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;",
+                "use rocketmq_store_local::commit_log::recovery::{abnormal_confirm_candidate_end};",
+                1,
+            ),
+            commit_log.replace(
+                "use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;",
+                "use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end as candidate_end;",
+                1,
+            ),
+            commit_log.replace(
+                "use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;",
+                "#[cfg(any())]\nuse rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;",
+                1,
+            ),
+            commit_log.replace(
+                "pub async fn recover_normally_optimized",
+                "fn forbidden_normal_candidate() { let _ = abnormal_confirm_candidate_end(0, 0); }\n\n    pub async fn recover_normally_optimized",
+                1,
+            ),
+            commit_log.replace(
+                "fn log_abnormal_recovery_window",
+                "fn abnormal_confirm_candidate_end(_: i64, _: usize) -> Option<i64> { None }\n\nfn log_abnormal_recovery_window",
+                1,
+            ),
+            commit_log.replace(
+                "fn log_abnormal_recovery_window",
+                "enum AbnormalRecoveryAdapterOffsetError { Invalid }\n\nfn log_abnormal_recovery_window",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(adapter_mutation=mutation_index):
+                self.assertNotEqual(commit_log, mutation)
+                mutated_sources = dict(store_sources)
+                mutated_sources[commit_log_path] = mutation
+                self.assertNotEqual(
+                    [],
+                    store_abnormal_confirm_candidate_adapter_violations(mutation, mutated_sources),
+                )
+
+        copied = dict(store_sources)
+        copied[Path("rocketmq-store/src/copied_confirm_candidate.rs")] = """
+fn copied_candidate(offset: i64, frame_size: usize) -> Option<i64> {
+    if offset < 0 { return None; }
+    let signed_size = i64::try_from(frame_size).ok()?;
+    offset.checked_add(signed_size)
+}
+"""
+        self.assertNotEqual(
+            [],
+            store_abnormal_confirm_candidate_adapter_violations(commit_log, copied),
+        )
 
     def test_recovery_consume_queue_truncation_has_one_local_owner_and_rejects_policy_mutations(self) -> None:
         canonical_path = ROOT / RECOVERY_CONSUME_QUEUE_PATH
