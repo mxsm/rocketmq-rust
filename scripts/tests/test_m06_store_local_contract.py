@@ -2534,6 +2534,7 @@ class WarmupFunctionRecord(NamedTuple):
     raw_body: str
     body: str
     imports: tuple[tuple[str, str], ...]
+    glob_imports: tuple[str, ...]
 
 
 class WarmupItemIdentity(NamedTuple):
@@ -2561,9 +2562,12 @@ def warmup_module_path(path: Path) -> tuple[str, ...]:
     return (*source_parts[:-1], Path(filename).stem)
 
 
-def warmup_use_tree_aliases(use_tree: str) -> dict[str, str]:
+def warmup_use_tree_bindings(
+    use_tree: str,
+) -> tuple[dict[str, str], tuple[str, ...]]:
     tokens = re.findall(r"::|[{},*]|[A-Za-z_][A-Za-z0-9_]*", use_tree)
     aliases: dict[str, str] = {}
+    glob_imports: list[str] = []
 
     def parse_tree(index: int, prefix: tuple[str, ...]) -> int:
         while index < len(tokens) and tokens[index] == "::":
@@ -2585,6 +2589,8 @@ def warmup_use_tree_aliases(use_tree: str) -> dict[str, str]:
             index += 1
 
         if index < len(tokens) and tokens[index] == "*":
+            if prefix or path:
+                glob_imports.append("::".join((*prefix, *path)))
             return index + 1
         target = prefix if path == ["self"] and prefix else (*prefix, *path)
         alias = target[-1] if target else None
@@ -2614,16 +2620,17 @@ def warmup_use_tree_aliases(use_tree: str) -> dict[str, str]:
         index = next_index if next_index > index else index + 1
         if index < len(tokens) and tokens[index] == ",":
             index += 1
-    return aliases
+    return aliases, tuple(dict.fromkeys(glob_imports))
 
 
-def warmup_use_aliases(
+def warmup_use_bindings(
     source: str,
     *,
     top_level_only: bool,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], tuple[str, ...]]:
     active = active_rust_source(source)
     aliases: dict[str, str] = {}
+    glob_imports: list[str] = []
     brace_depth = 0
     index = 0
     while index < len(active):
@@ -2649,9 +2656,13 @@ def warmup_use_aliases(
         semicolon = active.find(";", index + 3)
         if semicolon == -1:
             break
-        aliases.update(warmup_use_tree_aliases(active[index + 3:semicolon]))
+        tree_aliases, tree_globs = warmup_use_tree_bindings(
+            active[index + 3:semicolon]
+        )
+        aliases.update(tree_aliases)
+        glob_imports.extend(tree_globs)
         index = semicolon + 1
-    return aliases
+    return aliases, tuple(dict.fromkeys(glob_imports))
 
 
 class IdentifierAliases:
@@ -2698,7 +2709,10 @@ def warmup_parameter_names(parameter_source: str) -> tuple[str, ...]:
 def warmup_function_records(path: Path, source: str) -> list[WarmupFunctionRecord]:
     production = source_without_cfg_test_items(source)
     active = active_rust_source(production)
-    module_imports = warmup_use_aliases(active, top_level_only=True)
+    module_imports, module_globs = warmup_use_bindings(
+        active,
+        top_level_only=True,
+    )
     records: list[WarmupFunctionRecord] = []
     for function_match in re.finditer(
         rf"\bfn\s+(?P<name>{WARMUP_IDENTIFIER})\b",
@@ -2719,7 +2733,11 @@ def warmup_function_records(path: Path, source: str) -> list[WarmupFunctionRecor
             continue
         raw_body, _ = extracted
         imports = dict(module_imports)
-        imports.update(warmup_use_aliases(raw_body, top_level_only=False))
+        local_imports, local_globs = warmup_use_bindings(
+            raw_body,
+            top_level_only=False,
+        )
+        imports.update(local_imports)
         records.append(
             WarmupFunctionRecord(
                 path=path,
@@ -2731,6 +2749,7 @@ def warmup_function_records(path: Path, source: str) -> list[WarmupFunctionRecor
                 raw_body=raw_body,
                 body=compact_rust(raw_body),
                 imports=tuple(sorted(imports.items())),
+                glob_imports=tuple(dict.fromkeys((*module_globs, *local_globs))),
             )
         )
     return records
@@ -2956,7 +2975,7 @@ def warmup_final_guard_roles(
 def warmup_call_expression(expression: str) -> tuple[str, list[str]] | None:
     expression = strip_outer_parentheses(expression)
     path_match = re.match(
-        rf"(?P<path>{WARMUP_IDENTIFIER}(?:::{WARMUP_IDENTIFIER})*)\(",
+        rf"(?P<path>(?:::)?{WARMUP_IDENTIFIER}(?:::{WARMUP_IDENTIFIER})*)\(",
         expression,
     )
     if path_match is None:
@@ -2981,15 +3000,12 @@ def warmup_item_identity(record: WarmupFunctionRecord) -> WarmupItemIdentity:
     return WarmupItemIdentity(record.path.parts[0], record.module, record.name)
 
 
-def warmup_resolve_item(
+def warmup_resolve_qualified_item(
     record: WarmupFunctionRecord,
     call_path: str,
     extern_crates: dict[str, str],
 ) -> WarmupItemIdentity | None:
-    parts = call_path.split("::")
-    imports = dict(record.imports)
-    if parts[0] in imports:
-        parts = imports[parts[0]].split("::") + parts[1:]
+    parts = call_path.removeprefix("::").split("::")
     crate = record.path.parts[0]
     module = list(record.module)
     if parts[0] in extern_crates:
@@ -3016,6 +3032,49 @@ def warmup_resolve_item(
     if not parts:
         return None
     return WarmupItemIdentity(crate, tuple((*module, *parts[:-1])), parts[-1])
+
+
+def warmup_resolve_item(
+    record: WarmupFunctionRecord,
+    call_path: str,
+    extern_crates: dict[str, str],
+    known_items: set[WarmupItemIdentity],
+) -> WarmupItemIdentity | None:
+    call_path = call_path.removeprefix("::")
+    parts = call_path.split("::")
+    imports = dict(record.imports)
+    if len(parts) == 1:
+        local = WarmupItemIdentity(
+            record.path.parts[0],
+            record.module,
+            parts[0],
+        )
+        if local in known_items:
+            return local
+        if parts[0] in imports:
+            return warmup_resolve_qualified_item(
+                record,
+                imports[parts[0]],
+                extern_crates,
+            )
+        glob_candidates: set[WarmupItemIdentity] = set()
+        for glob_module in record.glob_imports:
+            candidate = warmup_resolve_qualified_item(
+                record,
+                f"{glob_module}::{parts[0]}",
+                extern_crates,
+            )
+            if candidate in known_items:
+                glob_candidates.add(candidate)
+        if len(glob_candidates) == 1:
+            return next(iter(glob_candidates))
+        if len(glob_candidates) > 1:
+            return None
+        return local
+
+    if parts[0] in imports:
+        call_path = "::".join((*imports[parts[0]].split("::"), *parts[1:]))
+    return warmup_resolve_qualified_item(record, call_path, extern_crates)
 
 
 def warmup_boundary_helper_roles(
@@ -3079,6 +3138,7 @@ def warmup_boundary_assignments(
     body: str,
     helpers: dict[WarmupItemIdentity, list[tuple[int, int]]],
     extern_crates: dict[str, str],
+    known_items: set[WarmupItemIdentity],
     cursor: str,
     file_size: str,
     aliases: IdentifierAliases,
@@ -3103,7 +3163,12 @@ def warmup_boundary_assignments(
         if call is None:
             continue
         helper_path, arguments = call
-        helper = warmup_resolve_item(record, helper_path, extern_crates)
+        helper = warmup_resolve_item(
+            record,
+            helper_path,
+            extern_crates,
+            known_items,
+        )
         if helper is None:
             continue
         for cursor_index, file_index in helpers.get(helper, []):
@@ -3126,6 +3191,7 @@ def warmup_has_final_remainder(
     record: WarmupFunctionRecord,
     final_helpers: dict[WarmupItemIdentity, list[tuple[int, int, int]]],
     extern_crates: dict[str, str],
+    known_items: set[WarmupItemIdentity],
     sync: str,
     last: str,
     file_size: str,
@@ -3151,7 +3217,7 @@ def warmup_has_final_remainder(
             return set()
 
     call_pattern = re.compile(
-        rf"(?<![.A-Za-z0-9_:])(?P<call>{WARMUP_IDENTIFIER}"
+        rf"(?<![.A-Za-z0-9_:])(?P<call>(?:::)?{WARMUP_IDENTIFIER}"
         rf"(?:::{WARMUP_IDENTIFIER})*\([^;]*\));"
     )
     for call_match in call_pattern.finditer(record.body):
@@ -3159,7 +3225,12 @@ def warmup_has_final_remainder(
         if call is None:
             continue
         helper_path, arguments = call
-        helper = warmup_resolve_item(record, helper_path, extern_crates)
+        helper = warmup_resolve_item(
+            record,
+            helper_path,
+            extern_crates,
+            known_items,
+        )
         if helper is None:
             continue
         for sync_index, last_index, file_index in final_helpers.get(helper, []):
@@ -3200,6 +3271,7 @@ def mapped_file_warmup_duplicate_policy_violations(
         }
         for record in warmup_function_records(path, source)
     ]
+    known_items = {warmup_item_identity(record) for record in records}
     boundary_helpers: dict[WarmupItemIdentity, list[tuple[int, int]]] = {}
     final_helpers: dict[WarmupItemIdentity, list[tuple[int, int, int]]] = {}
     helper_paths: dict[WarmupItemIdentity, set[Path]] = {}
@@ -3266,6 +3338,7 @@ def mapped_file_warmup_duplicate_policy_violations(
                     loop_body,
                     boundary_helpers,
                     extern_crates,
+                    known_items,
                     cursor,
                     file_size,
                     aliases,
@@ -3287,6 +3360,7 @@ def mapped_file_warmup_duplicate_policy_violations(
                             record,
                             final_helpers,
                             extern_crates,
+                            known_items,
                             sync,
                             last,
                             file_size,
@@ -7526,8 +7600,20 @@ where
             (
                 Path("rocketmq-store/src/base/warmup_copy.rs"),
                 Path("rocketmq-store-local/src/mapped_file/warmup_copy_helper.rs"),
+                "",
+                "::rocketmq_store_local::mapped_file::warmup_copy_helper::copied_periodic_end",
+            ),
+            (
+                Path("rocketmq-store/src/base/warmup_copy.rs"),
+                Path("rocketmq-store-local/src/mapped_file/warmup_copy_helper.rs"),
                 "use rocketmq_store_local::mapped_file::warmup_copy_helper::copied_periodic_end as end_of_page;",
                 "end_of_page",
+            ),
+            (
+                Path("rocketmq-store/src/base/warmup_copy.rs"),
+                Path("rocketmq-store-local/src/mapped_file/warmup_copy_helper.rs"),
+                "use rocketmq_store_local::mapped_file::warmup_copy_helper::*;",
+                "copied_periodic_end",
             ),
             (
                 Path("rocketmq-store/src/base/warmup_copy.rs"),
@@ -7617,6 +7703,51 @@ fn copied_periodic_end(cursor: usize, size: usize) -> usize {
                 canonical,
                 default_mapped_file,
                 cross_crate_collision_sources,
+            ),
+        )
+
+        glob_shadow_sources = dict(production_sources)
+        glob_shadow_sources[colliding_caller_path] = module_caller_template.format(
+            imports="""
+use rocketmq_store_local::mapped_file::warmup_copy_helper::*;
+fn copied_periodic_end(cursor: usize, size: usize) -> usize {
+    (cursor + 2).min(size)
+}
+""",
+            helper_call="copied_periodic_end",
+        )
+        glob_shadow_sources[
+            Path("rocketmq-store-local/src/mapped_file/warmup_copy_helper.rs")
+        ] = module_helper_body
+        self.assertEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                glob_shadow_sources,
+            ),
+        )
+
+        ambiguous_glob_sources = dict(production_sources)
+        ambiguous_glob_sources[colliding_caller_path] = module_caller_template.format(
+            imports="""
+use rocketmq_store_local::mapped_file::warmup_copy_helper::*;
+use crate::base::warmup_copy_helper::*;
+""",
+            helper_call="copied_periodic_end",
+        )
+        ambiguous_glob_sources[
+            Path("rocketmq-store-local/src/mapped_file/warmup_copy_helper.rs")
+        ] = module_helper_body
+        ambiguous_glob_sources[
+            Path("rocketmq-store/src/base/warmup_copy_helper.rs")
+        ] = module_helper_body
+        self.assertEqual(
+            [],
+            mapped_file_warmup_adapter_violations(
+                canonical,
+                default_mapped_file,
+                ambiguous_glob_sources,
             ),
         )
 
