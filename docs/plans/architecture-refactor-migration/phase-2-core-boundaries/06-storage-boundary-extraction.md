@@ -852,8 +852,11 @@ python scripts/arc_mut_guard.py
 - [x] `[FEATURE/PLATFORM]` 未修改 Cargo manifest、feature 或依赖。Windows 上 Local 与 Store 各七组 feature
   closure、两 crate all-target/all-feature Clippy、root workspace all-target/all-feature Clippy、Local strict
   Rustdoc 均通过；Store 普通 Rustdoc 仅复现 4 个未触及的 invalid-HTML warning。Windows 隔离 target 通过
-  Local 1/1、Store 2/2 及两 crate all-feature check，清理 9,537 files/8.6 GiB；WSL/Linux 隔离 target 通过
-  同组验证，随后单独清理 9,381 files/6.2 GiB；两个隔离路径均确认不存在。
+  Local 1/1、Store 2/2 及两 crate all-feature check，清理 9,537 files/8.6 GiB。WSL/Linux 隔离 target 的
+  Local 1/1、Store 2/2、Local/Store all-feature check 均通过；组合脚本只在全部验证结束后的 cleanup 阶段因
+  target-dir 变量为空以 exit 1 结束，验证本身均已通过。随后固定路径执行
+  `cargo clean --target-dir /tmp/rocketmq-m06-03s-wsl` 成功，删除 9,381 files/6.2 GiB，并确认该路径不存在；
+  Windows 隔离路径也确认不存在。
 - [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、AGENTS routing 与
   workspace fmt/diff 检查均通过。error hygiene 仅复现未触及的 Broker source-stringification、MCP anyhow 和
   两份缺失治理文档基线；本切片没有 runtime、unsafe、error mapping、manifest、feature、ArcMut、动态页/锁
