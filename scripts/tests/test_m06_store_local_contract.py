@@ -50,6 +50,9 @@ DEFAULT_MAPPED_FILE_PATH = Path(
     "rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"
 )
 STORE_CHECKPOINT_PATH = Path("rocketmq-store/src/base/store_checkpoint.rs")
+NORMAL_RECOVERY_WINDOW_PATH = Path(
+    "rocketmq-store-local/src/commit_log/recovery/normal_window.rs"
+)
 MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush", "is_able_to_commit")
 MAPPED_FILE_POLICY_REFERENCE = re.compile(
     r"(?:\.|::)\s*(is_able_to_flush|is_able_to_commit)\b"
@@ -5739,6 +5742,193 @@ def transient_store_pool_owner_violations(source: str) -> list[str]:
     return violations
 
 
+def normal_recovery_file_window_owner_violations(
+    source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    masked_sources = {
+        path: source_without_cfg_test_items(candidate)
+        for path, candidate in production_sources.items()
+    }
+    violations: list[str] = []
+
+    expected_owners = {
+        "NormalRecoveryFileWindow": "struct",
+        "plan_normal_recovery_file_window": "fn",
+        "DEFAULT_NORMAL_RECOVERY_COMMIT_LOG_FILES": "const",
+    }
+    for item, kind in expected_owners.items():
+        occurrences = file_item_owner_occurrences(masked_sources, item)
+        if occurrences != [(NORMAL_RECOVERY_WINDOW_PATH, kind)]:
+            violations.append(f"{item} must have one Local production owner")
+    for path, candidate in masked_sources.items():
+        if "normal_recovery_file_window" not in candidate:
+            continue
+        for function_name, _ in rust_function_bodies(candidate):
+            if (
+                "normal_recovery_file_window" in function_name
+                and function_name != "plan_normal_recovery_file_window"
+            ):
+                violations.append(f"{path}: normal recovery file-window alias/helper is forbidden")
+
+    if active_struct_fields(production, "NormalRecoveryFileWindow") != [
+        ("start_index", "usize"),
+        ("file_count_limit", "usize"),
+    ]:
+        violations.append("normal recovery file-window fields changed")
+    if "#[derive(Debug,Clone,Copy,PartialEq,Eq)]pubstructNormalRecoveryFileWindow" not in compact:
+        violations.append("normal recovery file-window derives or visibility changed")
+    for field in ("start_index", "file_count_limit"):
+        if re.search(rf"\bpub\s+{field}\s*:\s*usize\b", active) is None:
+            violations.append(f"normal recovery file-window {field} must remain public usize")
+
+    if re.search(
+        r"(?m)^\s*const\s+DEFAULT_NORMAL_RECOVERY_COMMIT_LOG_FILES\s*:\s*usize\s*=\s*3\s*;",
+        active,
+    ) is None:
+        violations.append("normal recovery default file-count limit changed")
+    if re.search(r"\bpub(?:\s*\([^)]*\))?\s+const\s+DEFAULT_NORMAL_RECOVERY", active):
+        violations.append("normal recovery default must remain Local-private")
+
+    expected_signature = (
+        "pubfnplan_normal_recovery_file_window("
+        "mapped_file_count:usize,max_recovery_commit_log_files:usize,"
+        ")->NormalRecoveryFileWindow"
+    )
+    function_match = re.search(
+        r"\bpub\s+fn\s+plan_normal_recovery_file_window\b(?P<signature>[^\{]+)\{",
+        active,
+    )
+    signature = "" if function_match is None else "pubfnplan_normal_recovery_file_window" + compact_rust(
+        function_match.group("signature")
+    )
+    if signature != expected_signature:
+        violations.append("normal recovery file-window planner signature changed")
+
+    body = named_function_body(production, "plan_normal_recovery_file_window")
+    expected_body = (
+        "letfile_count_limit=ifmax_recovery_commit_log_files==0{"
+        "DEFAULT_NORMAL_RECOVERY_COMMIT_LOG_FILES}else{max_recovery_commit_log_files};"
+        "NormalRecoveryFileWindow{"
+        "start_index:mapped_file_count.saturating_sub(file_count_limit),"
+        "file_count_limit,}"
+    )
+    if compact_rust(body or "") != expected_body:
+        violations.append("normal recovery file-window planner semantics changed")
+
+    if any(
+        token in active
+        for token in (
+            "MessageStoreConfig",
+            "MappedFile",
+            "std::fs",
+            "tokio",
+            "tracing",
+            "Vec<",
+            "Box<",
+            ".collect(",
+        )
+    ):
+        violations.append("normal recovery file-window planner absorbed allocation or Store orchestration")
+    if re.search(
+        r"#\s*\[\s*(?:cfg|cfg_attr)\b[^\]]*\]\s*"
+        r"(?:pub\s+)?(?:struct\s+NormalRecoveryFileWindow|fn\s+plan_normal_recovery_file_window)",
+        active,
+        re.DOTALL,
+    ):
+        violations.append("normal recovery file-window owner must not be cfg-gated")
+    return violations
+
+
+def store_normal_recovery_file_window_violations(
+    commit_log: str,
+    store_production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(commit_log)
+    active = active_rust_source(production)
+    violations: list[str] = []
+    planner = "plan_normal_recovery_file_window"
+    recovery_prefix = "rocketmq_store_local::commit_log::recovery::"
+
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use" and planner in body
+    ]
+    if imports != [recovery_prefix + planner]:
+        violations.append("Store normal recovery planner import must be direct and exact")
+
+    for legacy in (
+        "DEFAULT_NORMAL_RECOVERY_COMMIT_LOG_FILES",
+        "normal_recovery_file_count_limit",
+        "normal_recovery_start_index",
+    ):
+        if re.search(rf"\b{legacy}\b", active):
+            violations.append(f"Store retained legacy normal recovery window owner: {legacy}")
+
+    relevant_tokens = (
+        planner,
+        "NormalRecoveryFileWindow",
+        "DEFAULT_NORMAL_RECOVERY_COMMIT_LOG_FILES",
+        "normal_recovery_file_count_limit",
+        "normal_recovery_start_index",
+    )
+    normalized_sources = {
+        path: active_rust_source(source_without_cfg_test_items(source))
+        for path, source in store_production_sources.items()
+        if any(token in source for token in relevant_tokens)
+    }
+    references = sum(len(re.findall(rf"\b{planner}\b", source)) for source in normalized_sources.values())
+    if references != 3:
+        violations.append("Store must contain one planner import and exactly two direct calls")
+    if any("NormalRecoveryFileWindow{" in compact_rust(source) for source in normalized_sources.values()):
+        violations.append("Store must not construct the Local normal recovery window")
+
+    for function_name, mode_suffix in (
+        ("recover_normally_optimized", " (optimized)"),
+        ("recover_normally", ""),
+    ):
+        body = named_function_body(production, function_name)
+        raw_body = named_raw_function_body(commit_log, function_name)
+        if body is None or raw_body is None:
+            violations.append(f"{function_name} body missing")
+            continue
+        normalized = compact_rust(body)
+        expected_flow = (
+            "letrecovery_window=plan_normal_recovery_file_window("
+            "mapped_files_inner.len(),"
+            "self.message_store_config.max_recovery_commit_log_files,);"
+            "letrecovery_file_limit=recovery_window.file_count_limit;"
+            "letmutindex=recovery_window.start_index;"
+        )
+        if expected_flow not in normalized:
+            violations.append(f"{function_name} normal recovery window dataflow changed")
+        if len(re.findall(rf"\b{planner}\s*\(", body)) != 1:
+            violations.append(f"{function_name} must call the Local planner exactly once")
+        if "saturating_sub" in body or re.search(
+            r"max_recovery_commit_log_files\s*==\s*0", body
+        ):
+            violations.append(f"{function_name} retained normal recovery window policy")
+        expected_log = (
+            "Starting normal recovery from file index {} using up to {} commitlog files"
+            + mode_suffix
+        )
+        if expected_log not in raw_body:
+            violations.append(f"{function_name} start log changed")
+
+    standard_body = named_function_body(production, "recover_normally") or ""
+    if standard_body.count("recovery_file_limit") != 3:
+        violations.append("standard normal recovery must retain final limit diagnostic")
+    for function_name in ("recover_abnormally_optimized", "recover_abnormally"):
+        body = named_function_body(production, function_name) or ""
+        if planner in body:
+            violations.append(f"{function_name} must not use the normal recovery planner")
+    return violations
+
+
 def transient_store_pool_destroy_seam_reference_violations(sources: dict[Path, str]) -> list[str]:
     violations: list[str] = []
     for path, source in sources.items():
@@ -5917,6 +6107,173 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
+
+    def test_normal_recovery_file_window_has_one_local_owner_and_rejects_policy_mutations(self) -> None:
+        canonical_path = ROOT / NORMAL_RECOVERY_WINDOW_PATH
+        canonical = canonical_path.read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            normal_recovery_file_window_owner_violations(canonical, production_sources),
+        )
+
+        recovery_root = (LOCAL_CRATE / "src" / "commit_log" / "recovery.rs").read_text(
+            encoding="utf-8"
+        )
+        relevant = [
+            statement
+            for kind, _, body, statement in active_import_records(recovery_root)
+            if kind == "use"
+            and body
+            in {
+                "normal_window::NormalRecoveryFileWindow",
+                "normal_window::plan_normal_recovery_file_window",
+            }
+        ]
+        self.assertEqual(
+            [
+                "pub use normal_window::plan_normal_recovery_file_window",
+                "pub use normal_window::NormalRecoveryFileWindow",
+            ],
+            relevant,
+        )
+        self.assertRegex(active_rust_source(recovery_root), r"\bmod\s+normal_window\s*;")
+
+        mutations = [
+            canonical.replace("= 3;", "= 2;", 1),
+            canonical.replace("max_recovery_commit_log_files == 0", "max_recovery_commit_log_files == 1", 1),
+            canonical.replace(
+                "        max_recovery_commit_log_files\n    };",
+                "        DEFAULT_NORMAL_RECOVERY_COMMIT_LOG_FILES\n    };",
+                1,
+            ),
+            canonical.replace("saturating_sub(file_count_limit)", "saturating_sub(mapped_file_count)", 1),
+            canonical.replace("saturating_sub(file_count_limit)", "wrapping_sub(file_count_limit)", 1),
+            canonical.replace(
+                "saturating_sub(file_count_limit)",
+                "saturating_sub(file_count_limit.saturating_add(1))",
+                1,
+            ),
+            canonical.replace(
+                "start_index: mapped_file_count.saturating_sub(file_count_limit),\n        file_count_limit,",
+                "start_index: file_count_limit,\n        file_count_limit: mapped_file_count.saturating_sub(file_count_limit),",
+                1,
+            ),
+            canonical.replace("let file_count_limit =", "let effective_limit =", 1),
+            canonical.replace(
+                "pub fn plan_normal_recovery_file_window",
+                "#[cfg(any())]\npub fn plan_normal_recovery_file_window",
+                1,
+            ),
+            canonical.replace(
+                "pub struct NormalRecoveryFileWindow",
+                "#[cfg_attr(any(), allow(dead_code))]\npub struct NormalRecoveryFileWindow",
+                1,
+            ),
+            canonical
+            + "\nfn plan_normal_recovery_file_window_alias(count: usize, limit: usize) -> NormalRecoveryFileWindow {\n"
+            + "    plan_normal_recovery_file_window(count, limit)\n}\n",
+            canonical
+            + "\n#[cfg(any())]\npub fn plan_normal_recovery_file_window(count: usize, limit: usize) "
+            + "-> NormalRecoveryFileWindow { NormalRecoveryFileWindow { start_index: count, file_count_limit: limit } }\n",
+            canonical
+            + "\n#[cfg(test)]\nmod tests {}\n"
+            + "pub fn plan_normal_recovery_file_window(count: usize, limit: usize) "
+            + "-> NormalRecoveryFileWindow { NormalRecoveryFileWindow { start_index: count, file_count_limit: limit } }\n",
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation=mutation_index):
+                self.assertNotEqual(canonical, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[NORMAL_RECOVERY_WINDOW_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    normal_recovery_file_window_owner_violations(mutation, mutated_sources),
+                )
+
+        test_decoy = canonical + (
+            "\n#[cfg(test)]\nmod tests {\n"
+            "    fn plan_normal_recovery_file_window(_: usize, _: usize) {}\n"
+            "}\n"
+        )
+        test_sources = dict(production_sources)
+        test_sources[NORMAL_RECOVERY_WINDOW_PATH] = test_decoy
+        self.assertEqual(
+            [],
+            normal_recovery_file_window_owner_violations(test_decoy, test_sources),
+        )
+
+    def test_store_normal_recovery_paths_delegate_once_and_reject_window_mutations(self) -> None:
+        commit_log_path = Path("rocketmq-store/src/log_file/commit_log.rs")
+        commit_log = (ROOT / commit_log_path).read_text(encoding="utf-8")
+        store_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for path in STORE_CRATE.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            store_normal_recovery_file_window_violations(commit_log, store_sources),
+        )
+
+        mutations = [
+            commit_log.replace(
+                "let recovery_file_limit = recovery_window.file_count_limit;\n        let mut index = recovery_window.start_index;",
+                "let recovery_file_limit = recovery_window.start_index;\n        let mut index = recovery_window.file_count_limit;",
+                1,
+            ),
+            commit_log.replace("plan_normal_recovery_file_window(", "plan_abnormal_recovery_window(", 1),
+            commit_log.replace("let recovery_window =", "let selected_window =", 1),
+            commit_log.replace(
+                "let recovery_window = plan_normal_recovery_file_window(",
+                "let recovery_window = NormalRecoveryFileWindow { start_index: 0, file_count_limit: 3 };\n"
+                "        let _unused = plan_normal_recovery_file_window(",
+                1,
+            ),
+            commit_log.replace(
+                "Starting normal recovery from file index {} using up to {} commitlog files",
+                "Starting normal recovery from index {} with limit {}",
+                1,
+            ),
+            commit_log.replace(
+                "                        recovery_file_limit,",
+                "                        mapped_files_inner.len(),",
+                1,
+            ),
+            commit_log.replace(
+                "use rocketmq_store_local::commit_log::recovery::plan_normal_recovery_file_window;",
+                "use rocketmq_store_local::commit_log::recovery::{plan_normal_recovery_file_window};",
+                1,
+            ),
+            commit_log.replace(
+                "pub async fn recover_abnormally_optimized",
+                "fn forbidden_window() { let _ = plan_normal_recovery_file_window(5, 0); }\n\n"
+                "    pub async fn recover_abnormally_optimized",
+                1,
+            ),
+            commit_log.replace(
+                "pub async fn recover_abnormally_optimized",
+                "pub async fn recover_abnormally_optimized",
+                1,
+            ).replace(
+                "        use crate::log_file::commit_log_recovery::plan_abnormal_recovery_window;",
+                "        let _wrong_window = plan_normal_recovery_file_window(0, 0);\n"
+                "        use crate::log_file::commit_log_recovery::plan_abnormal_recovery_window;",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation=mutation_index):
+                self.assertNotEqual(commit_log, mutation)
+                mutated_sources = dict(store_sources)
+                mutated_sources[commit_log_path] = mutation
+                self.assertNotEqual(
+                    [],
+                    store_normal_recovery_file_window_violations(mutation, mutated_sources),
+                )
 
     def test_reexport_scanner_ignores_comments_and_strings(self) -> None:
         source = '''

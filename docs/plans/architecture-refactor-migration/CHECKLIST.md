@@ -127,6 +127,7 @@
   - [x] M06-03r：迁移 MappedFile 固定页阈值判定到 Local 并保留 Store 常量路径
   - [x] M06-03s：迁移 MappedFile 内存锁范围裁剪策略到 Local，保留 Store 指针适配并冻结全 production 角色/dataflow 防回流契约
   - [x] M06-03t：迁移 MappedFile warmup 调度策略到 Local，保留 Store 实际 I/O、错误与可观测性适配
+  - [x] M06-03u：迁移 normal recovery 文件扫描窗口 planner 到 Local，保留 Store recovery 编排、日志与状态机适配
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

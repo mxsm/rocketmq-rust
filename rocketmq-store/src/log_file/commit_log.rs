@@ -110,6 +110,7 @@ use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordErrorKind;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
+use rocketmq_store_local::commit_log::recovery::plan_normal_recovery_file_window;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryAction;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryEvent;
@@ -127,19 +128,6 @@ pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 const DEFAULT_COMMITLOG_ACTIVE_WINDOW_LOCK_BYTES: usize = 128 * 1024 * 1024;
-const DEFAULT_NORMAL_RECOVERY_COMMIT_LOG_FILES: usize = 3;
-
-fn normal_recovery_file_count_limit(max_recovery_commit_log_files: usize) -> usize {
-    if max_recovery_commit_log_files == 0 {
-        DEFAULT_NORMAL_RECOVERY_COMMIT_LOG_FILES
-    } else {
-        max_recovery_commit_log_files
-    }
-}
-
-fn normal_recovery_start_index(mapped_file_count: usize, max_recovery_commit_log_files: usize) -> usize {
-    mapped_file_count.saturating_sub(normal_recovery_file_count_limit(max_recovery_commit_log_files))
-}
 
 fn should_truncate_normal_recovery_consume_queue(max: i64, truncate: u64) -> bool {
     max < 0 || u64::try_from(max).is_ok_and(|value| value >= truncate)
@@ -1544,12 +1532,12 @@ impl CommitLog {
             return;
         }
 
-        let recovery_file_limit =
-            normal_recovery_file_count_limit(self.message_store_config.max_recovery_commit_log_files);
-        let mut index = normal_recovery_start_index(
+        let recovery_window = plan_normal_recovery_file_window(
             mapped_files_inner.len(),
             self.message_store_config.max_recovery_commit_log_files,
         );
+        let recovery_file_limit = recovery_window.file_count_limit;
+        let mut index = recovery_window.start_index;
         info!(
             "Starting normal recovery from file index {} using up to {} commitlog files (optimized)",
             index, recovery_file_limit
@@ -1751,12 +1739,12 @@ impl CommitLog {
         let mapped_files = self.mapped_file_queue.get_mapped_files();
         let mapped_files_inner = mapped_files.load();
         if !mapped_files_inner.is_empty() {
-            let recovery_file_limit =
-                normal_recovery_file_count_limit(self.message_store_config.max_recovery_commit_log_files);
-            let mut index = normal_recovery_start_index(
+            let recovery_window = plan_normal_recovery_file_window(
                 mapped_files_inner.len(),
                 self.message_store_config.max_recovery_commit_log_files,
             );
+            let recovery_file_limit = recovery_window.file_count_limit;
+            let mut index = recovery_window.start_index;
             info!(
                 "Starting normal recovery from file index {} using up to {} commitlog files",
                 index, recovery_file_limit
@@ -3206,23 +3194,6 @@ mod tests {
     use rocketmq_common::CRC32Utils::crc32;
     use rocketmq_common::MessageDecoder::create_crc32;
     use rocketmq_common::TimeUtils::current_millis;
-
-    #[test]
-    fn normal_recovery_file_limit_defaults_to_three_files() {
-        assert_eq!(normal_recovery_file_count_limit(0), 3);
-        assert_eq!(normal_recovery_start_index(0, 0), 0);
-        assert_eq!(normal_recovery_start_index(1, 0), 0);
-        assert_eq!(normal_recovery_start_index(3, 0), 0);
-        assert_eq!(normal_recovery_start_index(5, 0), 2);
-    }
-
-    #[test]
-    fn normal_recovery_file_limit_uses_explicit_value() {
-        assert_eq!(normal_recovery_file_count_limit(1), 1);
-        assert_eq!(normal_recovery_start_index(5, 1), 4);
-        assert_eq!(normal_recovery_start_index(5, 2), 3);
-        assert_eq!(normal_recovery_start_index(5, 10), 0);
-    }
 
     #[test]
     fn normal_recovery_consume_queue_truncation_preserves_signed_legacy_semantics() {

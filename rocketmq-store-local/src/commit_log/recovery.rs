@@ -14,6 +14,11 @@
 
 use tracing::info;
 
+mod normal_window;
+
+pub use normal_window::plan_normal_recovery_file_window;
+pub use normal_window::NormalRecoveryFileWindow;
+
 const MAX_SIGNED_OFFSET: u64 = 9_223_372_036_854_775_807;
 
 /// Compatibility policy for abnormal CommitLog recovery paths.
