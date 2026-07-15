@@ -110,6 +110,9 @@ use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome;
 use rocketmq_store_local::commit_log::memory_lock::plan_commit_log_memory_lock_target;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockMode;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;
+use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation;
+use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryRecord;
+use rocketmq_store_local::commit_log::normal_recovery::NormalRecoverySegmentOutcome;
 use rocketmq_store_local::commit_log::record::read_declared_frame;
 use rocketmq_store_local::commit_log::record_parser::decode_commit_log_record;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
@@ -124,8 +127,6 @@ use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryEvent;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
-use rocketmq_store_local::commit_log::recovery::NormalRecoveryAction;
-use rocketmq_store_local::commit_log::recovery::NormalRecoveryEvent;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
 
@@ -135,6 +136,13 @@ pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
 //CRC32 Format: [PROPERTY_CRC32 + NAME_VALUE_SEPARATOR + 10-digit fixed-length string +
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
+
+#[derive(Debug)]
+enum NormalRecoveryAdapterError {
+    FramePositionOverflow { position: usize, size: usize },
+    RelativeOffsetConversion(std::num::TryFromIntError),
+    MessageSizeConversion(std::num::TryFromIntError),
+}
 
 fn log_abnormal_recovery_window(
     window: &crate::log_file::commit_log_recovery::AbnormalRecoveryWindow,
@@ -1604,114 +1612,96 @@ impl CommitLog {
                 break;
             };
             let process_offset = mapped_file.get_file_from_offset();
-
-            if let Err(error) = normal_recovery.apply(NormalRecoveryEvent::SegmentStarted {
-                base_offset: process_offset,
-            }) {
-                warn!("normal optimized recovery offset state failed: {error}");
-                break;
-            }
-
-            info!(
-                "Recovering physics file: {} (optimized batch mode)",
-                mapped_file.get_file_name()
-            );
-
             let mut iterator = BatchMessageIterator::new(mapped_file);
             let mut file_processed = false;
-            let mut record_closed_segment = false;
-
-            while let Some((mut msg_bytes, absolute_offset, _msg_size)) = iterator.next_message() {
-                let mut dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
-
-                if dispatch_request.success && dispatch_request.msg_size > 0 {
-                    let relative_start = match u64::try_from(absolute_offset) {
-                        Ok(offset) => offset,
-                        Err(error) => {
-                            warn!("normal optimized recovery relative offset conversion failed: {error}");
-                            break 'segments;
-                        }
+            let outcome = normal_recovery.drive_segment(
+                process_offset,
+                || {
+                    let Some((mut msg_bytes, absolute_offset, _msg_size)) = iterator.next_message() else {
+                        return Ok(NormalRecoveryRecord::SourceEnded);
                     };
-                    let frame_size = match u64::try_from(dispatch_request.msg_size) {
-                        Ok(size) => size,
-                        Err(error) => {
-                            warn!("normal optimized recovery message size conversion failed: {error}");
-                            break 'segments;
-                        }
-                    };
-                    match normal_recovery.apply(NormalRecoveryEvent::MessageAccepted {
-                        segment_base: process_offset,
-                        relative_start,
-                        size: frame_size,
-                    }) {
-                        Ok(NormalRecoveryAction::ContinueRecord) => {}
-                        Ok(NormalRecoveryAction::ContinueNextSegment) => {
-                            record_closed_segment = true;
-                            break;
-                        }
-                        Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                        Err(error) => {
-                            warn!("normal optimized recovery offset state failed: {error}");
-                            break 'segments;
-                        }
+                    let dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
+                    if dispatch_request.success && dispatch_request.msg_size > 0 {
+                        let relative_start = u64::try_from(absolute_offset)
+                            .map_err(NormalRecoveryAdapterError::RelativeOffsetConversion)?;
+                        let frame_size = u64::try_from(dispatch_request.msg_size)
+                            .map_err(NormalRecoveryAdapterError::MessageSizeConversion)?;
+                        Ok(NormalRecoveryRecord::Message {
+                            relative_start,
+                            size: frame_size,
+                            record: dispatch_request,
+                        })
+                    } else if dispatch_request.success && dispatch_request.msg_size == 0 {
+                        Ok(NormalRecoveryRecord::Blank {
+                            record: dispatch_request,
+                        })
+                    } else {
+                        Ok(NormalRecoveryRecord::Invalid {
+                            relative_start: u64::try_from(absolute_offset).ok(),
+                            record: dispatch_request,
+                        })
                     }
-                    self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
-                    file_processed = true;
-                } else if dispatch_request.success && dispatch_request.msg_size == 0 {
-                    // End of file marker
-                    self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
-                    record_closed_segment = true;
-                    match normal_recovery.apply(NormalRecoveryEvent::Blank) {
-                        Ok(NormalRecoveryAction::ContinueRecord) => continue,
-                        Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                        Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                        Err(error) => {
-                            warn!("normal optimized recovery offset state failed: {error}");
-                            break 'segments;
-                        }
+                },
+                || {
+                    info!(
+                        "Recovering physics file: {} (optimized batch mode)",
+                        mapped_file.get_file_name()
+                    );
+                },
+                |observation, dispatch_request| match observation {
+                    NormalRecoveryObservation::MessageAccepted => {
+                        self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, false);
+                        file_processed = true;
                     }
-                } else {
-                    // Invalid message
-                    if dispatch_request.msg_size > 0 {
-                        let warning_offset = u64::try_from(absolute_offset)
-                            .ok()
-                            .and_then(|relative| process_offset.checked_add(relative));
-                        if let Some(warning_offset) = warning_offset {
-                            warn!("found a half message at {warning_offset}, it will be truncated.");
-                        } else {
-                            warn!("found a half message with an invalid offset; it will be truncated.");
-                        }
+                    NormalRecoveryObservation::Blank => {
+                        self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, true);
                     }
-                    info!("recover physics file end: {}", mapped_file.get_file_name());
-                    record_closed_segment = true;
-                    match normal_recovery.apply(NormalRecoveryEvent::InvalidRecord) {
-                        Ok(NormalRecoveryAction::ContinueRecord) => continue,
-                        Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                        Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                        Err(error) => {
-                            warn!("normal optimized recovery offset state failed: {error}");
-                            break 'segments;
+                    NormalRecoveryObservation::Invalid { relative_start } => {
+                        if dispatch_request.msg_size > 0 {
+                            let warning_offset =
+                                relative_start.and_then(|relative| process_offset.checked_add(relative));
+                            if let Some(warning_offset) = warning_offset {
+                                warn!("found a half message at {warning_offset}, it will be truncated.");
+                            } else {
+                                warn!("found a half message with an invalid offset; it will be truncated.");
+                            }
                         }
+                        info!("recover physics file end: {}", mapped_file.get_file_name());
                     }
+                },
+            );
+            match outcome {
+                NormalRecoverySegmentOutcome::ContinueNextSegment => {
+                    if file_processed {
+                        recovery_ctx.stats.files_processed += 1;
+                    }
+                    index += 1;
+                }
+                NormalRecoverySegmentOutcome::StopRecovery => break 'segments,
+                NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::RelativeOffsetConversion(
+                    error,
+                )) => {
+                    warn!("normal optimized recovery relative offset conversion failed: {error}");
+                    break 'segments;
+                }
+                NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::MessageSizeConversion(
+                    error,
+                )) => {
+                    warn!("normal optimized recovery message size conversion failed: {error}");
+                    break 'segments;
+                }
+                NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::FramePositionOverflow {
+                    position,
+                    size,
+                }) => {
+                    warn!("normal optimized recovery frame position overflow at {position} with size {size}");
+                    break 'segments;
+                }
+                NormalRecoverySegmentOutcome::StateFailed(error) => {
+                    warn!("normal optimized recovery offset state failed: {error}");
+                    break 'segments;
                 }
             }
-
-            if !record_closed_segment {
-                match normal_recovery.apply(NormalRecoveryEvent::SourceEnded) {
-                    Ok(NormalRecoveryAction::ContinueRecord | NormalRecoveryAction::ContinueNextSegment) => {}
-                    Ok(NormalRecoveryAction::StopRecovery) => break,
-                    Err(error) => {
-                        warn!("normal optimized recovery offset state failed: {error}");
-                        break;
-                    }
-                }
-            }
-
-            if file_processed {
-                recovery_ctx.stats.files_processed += 1;
-            }
-
-            index += 1;
         }
 
         let summary = normal_recovery.summary();
@@ -1803,118 +1793,114 @@ impl CommitLog {
                     break;
                 };
                 let process_offset = mapped_file.get_file_from_offset();
-                if let Err(error) = normal_recovery.apply(NormalRecoveryEvent::SegmentStarted {
-                    base_offset: process_offset,
-                }) {
-                    warn!("normal recovery offset state failed: {error}");
-                    break;
-                }
-
                 let mut current_pos = 0usize;
-                loop {
-                    let frame_position = current_pos;
-                    let (msg, size) =
-                        read_declared_frame(current_pos, |position, size| mapped_file.get_bytes(position, size));
-                    let Some(mut msg_bytes) = msg else {
-                        match normal_recovery.apply(NormalRecoveryEvent::SourceEnded) {
-                            Ok(NormalRecoveryAction::ContinueRecord) => continue,
-                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                            Err(error) => {
-                                warn!("normal recovery offset state failed: {error}");
-                                break 'segments;
-                            }
+                let outcome = normal_recovery.drive_segment(
+                    process_offset,
+                    || {
+                        let frame_position = current_pos;
+                        let (msg, size) =
+                            read_declared_frame(current_pos, |position, size| mapped_file.get_bytes(position, size));
+                        let Some(mut msg_bytes) = msg else {
+                            return Ok(NormalRecoveryRecord::SourceEnded);
+                        };
+                        let next_position =
+                            current_pos
+                                .checked_add(size)
+                                .ok_or(NormalRecoveryAdapterError::FramePositionOverflow {
+                                    position: current_pos,
+                                    size,
+                                })?;
+                        current_pos = next_position;
+                        let dispatch_request = check_message_and_return_size(
+                            &mut msg_bytes,
+                            check_crc_on_recover,
+                            check_dup_info,
+                            true,
+                            &message_store_config,
+                            max_delay_level,
+                            &delay_level_table,
+                        );
+                        if dispatch_request.success && dispatch_request.msg_size > 0 {
+                            let relative_start = u64::try_from(frame_position)
+                                .map_err(NormalRecoveryAdapterError::RelativeOffsetConversion)?;
+                            let frame_size = u64::try_from(dispatch_request.msg_size)
+                                .map_err(NormalRecoveryAdapterError::MessageSizeConversion)?;
+                            Ok(NormalRecoveryRecord::Message {
+                                relative_start,
+                                size: frame_size,
+                                record: dispatch_request,
+                            })
+                        } else if dispatch_request.success && dispatch_request.msg_size == 0 {
+                            Ok(NormalRecoveryRecord::Blank {
+                                record: dispatch_request,
+                            })
+                        } else {
+                            Ok(NormalRecoveryRecord::Invalid {
+                                relative_start: u64::try_from(frame_position).ok(),
+                                record: dispatch_request,
+                            })
                         }
-                    };
-                    let Some(next_position) = current_pos.checked_add(size) else {
-                        warn!("normal recovery frame position overflow at {current_pos} with size {size}");
+                    },
+                    || {},
+                    |observation, dispatch_request| match observation {
+                        NormalRecoveryObservation::MessageAccepted => {
+                            self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, false);
+                        }
+                        NormalRecoveryObservation::Blank => {
+                            self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, true);
+                        }
+                        NormalRecoveryObservation::Invalid { relative_start } => {
+                            if dispatch_request.msg_size > 0 {
+                                let warning_offset =
+                                    relative_start.and_then(|relative| process_offset.checked_add(relative));
+                                if let Some(warning_offset) = warning_offset {
+                                    warn!("found a half message at {warning_offset}, it will be truncated.");
+                                } else {
+                                    warn!("found a half message with an invalid offset; it will be truncated.");
+                                }
+                            }
+                            info!("recover physics file end,{} ", mapped_file.get_file_name());
+                        }
+                    },
+                );
+                match outcome {
+                    NormalRecoverySegmentOutcome::ContinueNextSegment => {
+                        index += 1;
+                        if index < mapped_files_inner.len() {
+                            if let Some(next_file) = mapped_files_inner.get(index) {
+                                info!("recover next physics file:{}", next_file.get_file_name());
+                            }
+                        } else {
+                            info!(
+                                "recover last {} physics file over, last mapped file:{} ",
+                                recovery_file_limit,
+                                mapped_file.get_file_name(),
+                            );
+                        }
+                    }
+                    NormalRecoverySegmentOutcome::StopRecovery => break 'segments,
+                    NormalRecoverySegmentOutcome::AdapterFailed(
+                        NormalRecoveryAdapterError::FramePositionOverflow { position, size },
+                    ) => {
+                        warn!("normal recovery frame position overflow at {position} with size {size}");
                         break 'segments;
-                    };
-                    current_pos = next_position;
-                    let mut dispatch_request = check_message_and_return_size(
-                        &mut msg_bytes,
-                        check_crc_on_recover,
-                        check_dup_info,
-                        true,
-                        &message_store_config,
-                        max_delay_level,
-                        &delay_level_table,
-                    );
-                    if dispatch_request.success && dispatch_request.msg_size > 0 {
-                        let relative_start = match u64::try_from(frame_position) {
-                            Ok(offset) => offset,
-                            Err(error) => {
-                                warn!("normal recovery relative offset conversion failed: {error}");
-                                break 'segments;
-                            }
-                        };
-                        let frame_size = match u64::try_from(dispatch_request.msg_size) {
-                            Ok(frame_size) => frame_size,
-                            Err(error) => {
-                                warn!("normal recovery message size conversion failed: {error}");
-                                break 'segments;
-                            }
-                        };
-                        match normal_recovery.apply(NormalRecoveryEvent::MessageAccepted {
-                            segment_base: process_offset,
-                            relative_start,
-                            size: frame_size,
-                        }) {
-                            Ok(NormalRecoveryAction::ContinueRecord) => {}
-                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                            Err(error) => {
-                                warn!("normal recovery offset state failed: {error}");
-                                break 'segments;
-                            }
-                        }
-                        self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
-                    } else if dispatch_request.success && dispatch_request.msg_size == 0 {
-                        self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
-                        match normal_recovery.apply(NormalRecoveryEvent::Blank) {
-                            Ok(NormalRecoveryAction::ContinueRecord) => continue,
-                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                            Err(error) => {
-                                warn!("normal recovery offset state failed: {error}");
-                                break 'segments;
-                            }
-                        }
-                    } else {
-                        if dispatch_request.msg_size > 0 {
-                            let warning_offset = u64::try_from(frame_position)
-                                .ok()
-                                .and_then(|relative| process_offset.checked_add(relative));
-                            if let Some(warning_offset) = warning_offset {
-                                warn!("found a half message at {warning_offset}, it will be truncated.");
-                            } else {
-                                warn!("found a half message with an invalid offset; it will be truncated.");
-                            }
-                        }
-                        info!("recover physics file end,{} ", mapped_file.get_file_name());
-                        match normal_recovery.apply(NormalRecoveryEvent::InvalidRecord) {
-                            Ok(NormalRecoveryAction::ContinueRecord) => continue,
-                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                            Err(error) => {
-                                warn!("normal recovery offset state failed: {error}");
-                                break 'segments;
-                            }
-                        }
                     }
-                }
-
-                index += 1;
-                if index < mapped_files_inner.len() {
-                    if let Some(next_file) = mapped_files_inner.get(index) {
-                        info!("recover next physics file:{}", next_file.get_file_name());
+                    NormalRecoverySegmentOutcome::AdapterFailed(
+                        NormalRecoveryAdapterError::RelativeOffsetConversion(error),
+                    ) => {
+                        warn!("normal recovery relative offset conversion failed: {error}");
+                        break 'segments;
                     }
-                } else {
-                    info!(
-                        "recover last {} physics file over, last mapped file:{} ",
-                        recovery_file_limit,
-                        mapped_file.get_file_name(),
-                    );
+                    NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::MessageSizeConversion(
+                        error,
+                    )) => {
+                        warn!("normal recovery message size conversion failed: {error}");
+                        break 'segments;
+                    }
+                    NormalRecoverySegmentOutcome::StateFailed(error) => {
+                        warn!("normal recovery offset state failed: {error}");
+                        break 'segments;
+                    }
                 }
             }
 

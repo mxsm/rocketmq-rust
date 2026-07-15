@@ -141,6 +141,7 @@
   - [x] M06-03af0：修复 CommitLog EOF retry encoded buffer ownership，三条 callback 在 EndOfFile 前归还原 BytesMut
   - [x] M06-03af：迁移 CommitLog bounded append-attempt 编排到 Local，Store 保留 mapped-file、active-lock、计时/result 与后处理 adapter
   - [x] M06-03ag：迁移 CommitLog standard recovery declared-frame read owner 到 Local，Store normal/abnormal 各保留一条 MappedFile exact-read adapter
+  - [x] M06-03ah：迁移 CommitLog normal recovery 单 segment record-loop 编排到 Local，Store standard/optimized 仅保留 MappedFile、解析、dispatch、日志与统计 adapter
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

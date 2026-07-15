@@ -78,6 +78,9 @@ COMMIT_LOG_HEADER_PATH = Path(
 COMMIT_LOG_RECORD_PATH = Path(
     "rocketmq-store-local/src/commit_log/record.rs"
 )
+COMMIT_LOG_NORMAL_RECOVERY_PATH = Path(
+    "rocketmq-store-local/src/commit_log/normal_recovery.rs"
+)
 STORE_APPEND_CALLBACK_PATH = Path(
     "rocketmq-store/src/base/append_message_callback.rs"
 )
@@ -238,6 +241,10 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "read_declared_frame": ("fn", "record.rs"),
     "CommitLogFrameSource": ("trait", "record.rs"),
     "CommitLogFrameCursor": ("struct", "record.rs"),
+    "NormalRecoveryRecord": ("enum", "normal_recovery.rs"),
+    "NormalRecoveryObservation": ("enum", "normal_recovery.rs"),
+    "NormalRecoverySegmentOutcome": ("enum", "normal_recovery.rs"),
+    "drive_segment": ("fn", "normal_recovery.rs"),
 }
 COMMIT_LOG_LOAD_OWNER_ITEMS = {
     "CommitLogFileDiscovery": "enum",
@@ -1515,153 +1522,19 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
         if named_function_signature(commit_log, name) != expected:
             violations.append(f"{name} public signature changed")
 
-    recovery_prefix = "rocketmq_store_local::commit_log::recovery::"
-    recovery_imports = {
-        body.removeprefix(recovery_prefix)
-        for kind, _, body, _ in active_import_records(commit_log)
-        if kind == "use"
-        and body.startswith(recovery_prefix)
-        and body.removeprefix(recovery_prefix).startswith("Normal")
-    }
-    expected_recovery_imports = {
-        "NormalRecoveryAction",
-        "NormalRecoveryEvent",
-        "NormalRecoveryPolicy",
-        "NormalRecoveryState",
-    }
-    if recovery_imports != expected_recovery_imports:
-        violations.append("Store normal recovery imports must be exact Local imports")
-    if any(
-        kind == "use"
-        and body.startswith(recovery_prefix)
-        and (" as " in body or "{" in body or "*" in body)
-        for kind, _, body, _ in active_import_records(commit_log)
-    ):
-        violations.append("Store normal recovery imports forbid alias/brace/glob")
-
-    truncate_policy = "should_truncate_recovery_consume_queue"
-    truncate_imports = [
-        body
-        for kind, _, body, _ in active_import_records(commit_log)
-        if kind == "use" and truncate_policy in body
-    ]
-    if truncate_imports != [recovery_prefix + truncate_policy]:
-        violations.append("Store normal recovery ConsumeQueue policy import changed")
-
-    expected_events = ["SegmentStarted", "MessageAccepted", "Blank", "InvalidRecord", "SourceEnded"]
-    for name, policy in [
-        ("recover_normally", "Standard"),
-        ("recover_normally_optimized", "Optimized"),
-    ]:
-        body = named_function_body(commit_log, name)
-        if body is None:
-            violations.append(f"{name} body missing")
-            continue
-        if body.count(f"NormalRecoveryPolicy::{policy}") != 1:
-            violations.append(f"{name} Local policy construction changed")
-        if len(re.findall(r"\bmatch\s+NormalRecoveryState::try_new\s*\(", body)) != 1:
-            violations.append(f"{name} must explicitly handle fallible Local state construction")
-        constructor_match = re.search(
-            rf"let\s+mut\s+normal_recovery\s*=\s*match\s+NormalRecoveryState::try_new\s*\(\s*"
-            rf"initial_offset\s*,\s*NormalRecoveryPolicy::{policy}\s*\)\s*\{{\s*"
-            r"Ok\s*\(\s*state\s*\)\s*=>\s*state\s*,\s*"
-            r"Err\s*\(\s*error\s*\)\s*=>\s*\{(?P<error>.*?)\}\s*\}\s*;",
-            body,
-            re.DOTALL,
+    local = (ROOT / COMMIT_LOG_NORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
+    module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+    local_tests = (LOCAL_CRATE / "tests" / "normal_recovery_orchestration.rs").read_text(
+        encoding="utf-8"
+    )
+    violations.extend(
+        normal_recovery_segment_orchestration_contract_violations(
+            local,
+            module,
+            commit_log,
+            local_tests,
         )
-        if constructor_match is None or re.search(
-            r"\bwarn\s*!\s*\(.*?\)\s*;\s*return\s*;",
-            constructor_match.group("error"),
-            re.DOTALL,
-        ) is None:
-            violations.append(f"{name} must log and return on Local state construction error")
-        if "NormalRecoveryState::new" in body or re.search(r"\b(?:unwrap|expect|panic)\b", body):
-            violations.append(f"{name} uses forbidden Local construction or panic")
-        if re.search(r"\bmatch\s+NormalRecoveryPolicy\b", body):
-            violations.append(f"{name} copied Local recovery policy match")
-        for event in expected_events:
-            if body.count(f"NormalRecoveryEvent::{event}") != 1:
-                violations.append(f"{name} must route {event} through Local reducer")
-        if len(re.findall(r"\bnormal_recovery\.apply\s*\(", body)) != 5:
-            violations.append(f"{name} must apply exactly five Local recovery events")
-        if len(re.findall(r"\bmatch\s+normal_recovery\.apply\s*\(", body)) != 4:
-            violations.append(f"{name} must act on every record outcome from Local reducer")
-
-        message_match = normal_recovery_event_match_body(body, "MessageAccepted")
-        if message_match is None:
-            violations.append(f"{name} MessageAccepted action match missing")
-        else:
-            for action in ["ContinueRecord", "ContinueNextSegment", "StopRecovery"]:
-                if message_match.count(f"NormalRecoveryAction::{action}") != 1:
-                    violations.append(f"{name} MessageAccepted {action} action changed")
-            if re.search(
-                r"Ok\s*\(\s*NormalRecoveryAction::ContinueRecord\s*\)\s*=>\s*\{\s*\}",
-                message_match,
-            ) is None:
-                violations.append(f"{name} MessageAccepted ContinueRecord action changed")
-            if policy == "Standard":
-                continue_next = r"=>\s*break\s*,"
-            else:
-                continue_next = r"=>\s*\{\s*record_closed_segment\s*=\s*true\s*;\s*break\s*;\s*\}"
-            if re.search(
-                rf"Ok\s*\(\s*NormalRecoveryAction::ContinueNextSegment\s*\)\s*{continue_next}",
-                message_match,
-            ) is None:
-                violations.append(f"{name} MessageAccepted ContinueNextSegment action changed")
-            if re.search(
-                r"Ok\s*\(\s*NormalRecoveryAction::StopRecovery\s*\)\s*=>\s*break\s+'segments\s*,",
-                message_match,
-            ) is None:
-                violations.append(f"{name} MessageAccepted StopRecovery action changed")
-
-        if name == "recover_normally":
-            checked_position = re.search(
-                r"let\s+Some\s*\(\s*next_position\s*\)\s*=\s*"
-                r"current_pos\.checked_add\s*\(\s*size\s*\)\s*else\s*\{(?P<failure>.*?)\}\s*;",
-                body,
-                re.DOTALL,
-            )
-            if checked_position is None or re.search(r"\bbreak\s+'segments\s*;", checked_position.group("failure")) is None:
-                violations.append(f"{name} current_pos must checked_add and stop globally on error")
-            if re.search(r"\bcurrent_pos\s*\+\s*size\b", body):
-                violations.append(f"{name} current_pos uses unchecked addition")
-        elif "current_pos" in body:
-            violations.append(f"{name} copied standard current_pos state")
-
-        if body.count("normal_recovery.summary()") != 1:
-            violations.append(f"{name} must bind exactly one Local recovery summary")
-        normalized_body = re.sub(r"\s+", "", body)
-        required_summary_flow = [
-            "letsummary=normal_recovery.summary();",
-            "letlast_valid_offset=matchi64::try_from(summary.last_valid_offset)",
-            "letprocess_offset=matchi64::try_from(summary.truncate_offset)",
-            "should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
-            "self.set_confirm_offset(last_valid_offset)",
-            "message_store.truncate_dirty_logic_files(process_offset)",
-            "self.mapped_file_queue.set_flushed_where(process_offset)",
-            "self.mapped_file_queue.set_committed_where(process_offset)",
-            "self.mapped_file_queue.truncate_dirty_files(process_offset)",
-        ]
-        controller_confirm_offset = "process_offset" if policy == "Standard" else "last_valid_offset"
-        required_summary_flow.append(
-            "self.clamp_controller_recover_confirm_offset("
-            f"message_store.get_min_phy_offset(),{controller_confirm_offset})"
-        )
-        if any(fragment not in normalized_body for fragment in required_summary_flow):
-            violations.append(f"{name} final recovery writes must flow from Local summary")
-        if "NormalRecoverySummary{" in normalized_body:
-            violations.append(f"{name} must not construct a Store-owned recovery summary")
-        if body.count("should_truncate_recovery_consume_queue(") != 1:
-            violations.append(f"{name} must use the shared ConsumeQueue predicate exactly once")
-        if re.search(r"\b(?:last_valid_msg_phy_offset|mapped_file_offset)\b", body):
-            violations.append(f"{name} copied Local recovery watermark state")
-        mutable_names = re.findall(r"\blet\s+mut\s+([A-Za-z_][A-Za-z0-9_]*)\b", body)
-        if any("last_valid" in mutable_name or "truncate" in mutable_name for mutable_name in mutable_names):
-            violations.append(f"{name} copied Local recovery policy state")
-        empty_branch = body.find("mapped_files_inner.is_empty()")
-        state_creation = body.find("NormalRecoveryState::try_new")
-        if state_creation == -1 or (empty_branch != -1 and state_creation < empty_branch):
-            violations.append(f"{name} empty-file path must bypass Local reducer")
+    )
     return violations
 
 
@@ -10450,6 +10323,436 @@ def commit_log_append_attempt_contract_violations(
     return violations
 
 
+def normal_recovery_segment_orchestration_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+
+    expected_items = {
+        "NormalRecoveryRecord": (
+            "enum",
+            "Message{relative_start:u64,size:u64,record:R,},Blank{record:R,},"
+            "Invalid{relative_start:Option<u64>,record:R,},SourceEnded,",
+        ),
+        "NormalRecoveryObservation": (
+            "enum",
+            "MessageAccepted,Blank,Invalid{relative_start:Option<u64>,},",
+        ),
+        "NormalRecoverySegmentOutcome": (
+            "enum",
+            "ContinueNextSegment,StopRecovery,AdapterFailed(E),"
+            "StateFailed(NormalRecoveryOffsetError),",
+        ),
+    }
+    for item, (kind, expected_body) in expected_items.items():
+        declarations = re.findall(rf"\bpub\s+{kind}\s+{item}\b", active)
+        body = compact_rust(active_item_body(production, kind, item) or "")
+        if len(declarations) != 1 or body != expected_body:
+            violations.append(f"Local normal recovery item changed: {item}")
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+{kind}\s+{item}\b",
+            production,
+        ):
+            violations.append(f"Local normal recovery item is cfg-gated: {item}")
+
+    method_records = inherent_method_records(
+        production,
+        "NormalRecoveryState",
+        ("drive_segment",),
+    )["drive_segment"]
+    expected_signature = (
+        "pubfndrive_segment<R,E,Next,Started,Observe>(&mutself,segment_base:u64,"
+        "mutnext_record:Next,on_segment_started:Started,mutobserve:Observe,)"
+        "->NormalRecoverySegmentOutcome<E>whereNext:FnMut()->Result<NormalRecoveryRecord<R>,E>,"
+        "Started:FnOnce(),Observe:FnMut(NormalRecoveryObservation,&mutR),"
+    )
+    expected_body = (
+        "letstarted_action=matchself.apply(NormalRecoveryEvent::SegmentStarted{"
+        "base_offset:segment_base,}){Ok(action)=>action,Err(error)=>return"
+        "NormalRecoverySegmentOutcome::StateFailed(error),};on_segment_started();"
+        "matchstarted_action{NormalRecoveryAction::ContinueRecord=>{}"
+        "NormalRecoveryAction::ContinueNextSegment=>{return"
+        "NormalRecoverySegmentOutcome::ContinueNextSegment;}"
+        "NormalRecoveryAction::StopRecovery=>returnNormalRecoverySegmentOutcome::StopRecovery,}"
+        "loop{letrecord=matchnext_record(){Ok(record)=>record,Err(error)=>return"
+        "NormalRecoverySegmentOutcome::AdapterFailed(error),};matchrecord{"
+        "NormalRecoveryRecord::Message{relative_start,size,mutrecord,}=>{letaction=match"
+        "self.apply(NormalRecoveryEvent::MessageAccepted{segment_base,relative_start,size,})"
+        "{Ok(action)=>action,Err(error)=>returnNormalRecoverySegmentOutcome::StateFailed(error),};"
+        "matchaction{NormalRecoveryAction::ContinueRecord=>{observe("
+        "NormalRecoveryObservation::MessageAccepted,&mutrecord);}"
+        "NormalRecoveryAction::ContinueNextSegment=>{return"
+        "NormalRecoverySegmentOutcome::ContinueNextSegment;}"
+        "NormalRecoveryAction::StopRecovery=>{returnNormalRecoverySegmentOutcome::StopRecovery;}}}"
+        "NormalRecoveryRecord::Blank{mutrecord}=>{observe(NormalRecoveryObservation::Blank,"
+        "&mutrecord);matchself.apply(NormalRecoveryEvent::Blank){"
+        "Ok(NormalRecoveryAction::ContinueRecord)=>{}"
+        "Ok(NormalRecoveryAction::ContinueNextSegment)=>{return"
+        "NormalRecoverySegmentOutcome::ContinueNextSegment;}"
+        "Ok(NormalRecoveryAction::StopRecovery)=>{return"
+        "NormalRecoverySegmentOutcome::StopRecovery;}"
+        "Err(error)=>returnNormalRecoverySegmentOutcome::StateFailed(error),}}"
+        "NormalRecoveryRecord::Invalid{relative_start,mutrecord,}=>{observe("
+        "NormalRecoveryObservation::Invalid{relative_start},&mutrecord);match"
+        "self.apply(NormalRecoveryEvent::InvalidRecord){"
+        "Ok(NormalRecoveryAction::ContinueRecord)=>{}"
+        "Ok(NormalRecoveryAction::ContinueNextSegment)=>{return"
+        "NormalRecoverySegmentOutcome::ContinueNextSegment;}"
+        "Ok(NormalRecoveryAction::StopRecovery)=>{return"
+        "NormalRecoverySegmentOutcome::StopRecovery;}"
+        "Err(error)=>returnNormalRecoverySegmentOutcome::StateFailed(error),}}"
+        "NormalRecoveryRecord::SourceEnded=>matchself.apply(NormalRecoveryEvent::SourceEnded){"
+        "Ok(NormalRecoveryAction::ContinueRecord)=>{}"
+        "Ok(NormalRecoveryAction::ContinueNextSegment)=>{return"
+        "NormalRecoverySegmentOutcome::ContinueNextSegment;}"
+        "Ok(NormalRecoveryAction::StopRecovery)=>{return"
+        "NormalRecoverySegmentOutcome::StopRecovery;}"
+        "Err(error)=>returnNormalRecoverySegmentOutcome::StateFailed(error),},}}"
+    )
+    if (
+        len(method_records) != 1
+        or method_records[0].visibility != "pub"
+        or method_records[0].cfg_gated
+        or method_records[0].signature != expected_signature
+        or method_records[0].body != expected_body
+    ):
+        violations.append("Local drive_segment signature, ownership, or event order changed")
+
+    forbidden_local_tokens = (
+        "MappedFile",
+        "MessageExt",
+        "DispatchRequest",
+        "ArcMut",
+        "tokio",
+        "rocketmq_store",
+        "unsafe",
+    )
+    present_forbidden = [
+        token
+        for token in forbidden_local_tokens
+        if re.search(rf"\b{re.escape(token)}\b", active)
+    ]
+    if present_forbidden:
+        violations.append(f"Local normal recovery absorbed Store/runtime edges: {present_forbidden}")
+    if re.search(r"\bdyn\b", active) or any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local normal recovery uses dynamic ports or non-direct imports")
+    if re.search(
+        r"#\[derive\([^]]*\bClone\b[^]]*\)\]\s*pub\s+enum\s+"
+        r"(?:NormalRecoveryRecord|NormalRecoverySegmentOutcome)\b",
+        production,
+    ):
+        violations.append("Local record/outcome payload ownership gained Clone")
+
+    if active_rust_source(module).count("pub mod normal_recovery;") != 1:
+        violations.append("Local commit_log module must expose normal_recovery exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation",
+        "use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryRecord",
+        "use rocketmq_store_local::commit_log::normal_recovery::NormalRecoverySegmentOutcome",
+    }
+    actual_imports = {
+        statement
+        for kind, _, body, statement in active_import_records(store)
+        if kind == "use" and "commit_log::normal_recovery" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store normal recovery imports must be direct and exact")
+    expected_state_imports = {
+        "use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy",
+        "use rocketmq_store_local::commit_log::recovery::NormalRecoveryState",
+    }
+    actual_state_imports = {
+        statement
+        for kind, _, body, statement in active_import_records(store)
+        if kind == "use"
+        and body
+        in {
+            "rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy",
+            "rocketmq_store_local::commit_log::recovery::NormalRecoveryState",
+        }
+    }
+    if actual_state_imports != expected_state_imports:
+        violations.append("Store normal recovery state imports must be direct and exact")
+
+    store_production = source_without_cfg_test_items(store)
+    optimized = named_function_body(store_production, "recover_normally_optimized") or ""
+    standard = named_function_body(store_production, "recover_normally") or ""
+    abnormal_optimized = named_function_body(store_production, "recover_abnormally_optimized") or ""
+    abnormal_standard = named_function_body(store_production, "recover_abnormally") or ""
+    empty_cleanup = (
+        "warn!();self.mapped_file_queue.set_flushed_where(0);"
+        "self.mapped_file_queue.set_committed_where(0);"
+        "message_store.consume_queue_store_mut().destroy();"
+        "message_store.consume_queue_store_mut().load_after_destroy();"
+    )
+    for name, policy, body in (
+        ("recover_normally_optimized", "Optimized", optimized),
+        ("recover_normally", "Standard", standard),
+    ):
+        active_body = active_rust_source(body)
+        compact_body = compact_rust(body)
+        constructor = (
+            "NormalRecoveryState::try_new(initial_offset,"
+            f"NormalRecoveryPolicy::{policy})"
+        )
+        if compact_body.count(constructor) != 1:
+            violations.append(f"Store {name} normal recovery policy construction changed")
+        if len(re.findall(r"\bnormal_recovery\.drive_segment\s*\(", active_body)) != 1:
+            violations.append(f"Store {name} must call drive_segment exactly once")
+        if (
+            "normal_recovery.apply" in active_body
+            or "NormalRecoveryAction" in active_body
+            or "NormalRecoveryEvent" in active_body
+        ):
+            violations.append(f"Store {name} retained direct normal state policy")
+        for error_variant in (
+            "RelativeOffsetConversion",
+            "MessageSizeConversion",
+            "FramePositionOverflow",
+        ):
+            outcome = re.search(
+                r"NormalRecoverySegmentOutcome::AdapterFailed\s*\(\s*"
+                rf"NormalRecoveryAdapterError::{error_variant}\b",
+                active_body,
+            )
+            arrow = -1 if outcome is None else active_body.find("=>", outcome.end())
+            opening_brace = -1 if arrow == -1 else active_body.find("{", arrow)
+            arm = None if opening_brace == -1 else braced_body(active_body, opening_brace)
+            if (
+                outcome is None
+                or len(
+                    re.findall(
+                        r"NormalRecoverySegmentOutcome::AdapterFailed\s*\(\s*"
+                        rf"NormalRecoveryAdapterError::{error_variant}\b",
+                        active_body,
+                    )
+                )
+                != 1
+                or arm is None
+                or compact_rust(arm[0]) != "warn!();break'segments;"
+            ):
+                violations.append(f"Store {name} {error_variant} adapter failure handling changed")
+
+        empty_header = re.search(
+            r"\bif\s+" + (r"" if policy == "Optimized" else r"!\s*")
+            + r"mapped_files_inner\.is_empty\s*\(\s*\)\s*\{",
+            active_body,
+        )
+        empty_body = None
+        empty_branch = -1
+        non_empty_end = -1
+        if empty_header is not None:
+            empty_branch = empty_header.start()
+            opening_brace = active_body.find("{", empty_header.start(), empty_header.end())
+            extracted = braced_body(active_body, opening_brace)
+            if policy == "Optimized":
+                empty_body = extracted
+            elif extracted is not None:
+                non_empty_end = extracted[1]
+                else_header = re.match(r"\s*else\s*\{", active_body[non_empty_end:])
+                if else_header is not None:
+                    else_open = active_body.find(
+                        "{",
+                        non_empty_end + else_header.start(),
+                        non_empty_end + else_header.end(),
+                    )
+                    empty_body = braced_body(active_body, else_open)
+        expected_empty = empty_cleanup + ("return;" if policy == "Optimized" else "")
+        if empty_body is None or compact_rust(empty_body[0]) != expected_empty:
+            violations.append(f"Store {name} empty-file cleanup and exit changed")
+        if policy == "Standard" and empty_body is not None:
+            trailing = active_rust_source(active_body[empty_body[1]:]).strip()
+            if trailing:
+                violations.append("Store recover_normally empty-file branch must terminate the function")
+        state_creation = active_body.find("NormalRecoveryState::try_new")
+        if state_creation == -1 or empty_branch == -1 or state_creation < empty_branch:
+            violations.append(f"Store {name} empty-file path must bypass Local state construction")
+
+        summary_bindings: dict[str, re.Match[str]] = {}
+        for binding, field in (
+            ("last_valid_offset", "last_valid_offset"),
+            ("process_offset", "truncate_offset"),
+        ):
+            matches = list(
+                re.finditer(
+                    rf"\blet\s+{binding}\s*=\s*match\s+i64::try_from\s*\(\s*"
+                    rf"summary\.{field}\s*\)\s*\{{\s*Ok\s*\(\s*offset\s*\)\s*=>\s*"
+                    r"offset\s*,\s*Err\s*\(\s*error\s*\)\s*=>\s*\{"
+                    r"(?P<failure>.*?)\}\s*\}\s*;",
+                    active_body,
+                    re.DOTALL,
+                )
+            )
+            if len(matches) != 1 or compact_rust(matches[0].group("failure")) != "warn!();return;":
+                violations.append(f"Store {name} {binding} summary conversion must fail closed")
+            else:
+                summary_bindings[binding] = matches[0]
+        expected_binding_counts = {"last_valid_offset": 1, "process_offset": 2}
+        for binding, expected_count in expected_binding_counts.items():
+            count = len(re.findall(rf"\blet\s+(?:mut\s+)?{binding}\b", active_body))
+            if count != expected_count or re.search(rf"\blet\s+mut\s+{binding}\b", active_body):
+                violations.append(f"Store {name} {binding} binding ownership changed")
+
+        required_summary_flow = (
+            "letsummary=normal_recovery.summary();",
+            "letlast_valid_offset=matchi64::try_from(summary.last_valid_offset)",
+            "letprocess_offset=matchi64::try_from(summary.truncate_offset)",
+            "should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
+            "self.set_confirm_offset(last_valid_offset)",
+            "message_store.truncate_dirty_logic_files(process_offset)",
+            "self.mapped_file_queue.set_flushed_where(process_offset)",
+            "self.mapped_file_queue.set_committed_where(process_offset)",
+            "self.mapped_file_queue.truncate_dirty_files(process_offset)",
+        )
+        if any(fragment not in compact_body for fragment in required_summary_flow):
+            violations.append(f"Store {name} final recovery writes must flow from Local summary")
+        controller_confirm_offset = "process_offset" if policy == "Standard" else "last_valid_offset"
+        controller_flow = (
+            "self.clamp_controller_recover_confirm_offset("
+            f"message_store.get_min_phy_offset(),{controller_confirm_offset})"
+        )
+        if controller_flow not in compact_body:
+            violations.append(f"Store {name} controller confirm offset flow changed")
+        if compact_body.count("normal_recovery.summary()") != 1 or "NormalRecoverySummary{" in compact_body:
+            violations.append(f"Store {name} must use exactly one Local recovery summary")
+        process_binding = summary_bindings.get("process_offset")
+        if process_binding is not None:
+            final_tail = active_body[process_binding.end():]
+            if re.search(
+                r"\blet\s+(?:mut\s+)?(?:last_valid_offset|process_offset)\b"
+                r"|\b(?:last_valid_offset|process_offset)\s*=(?!=)",
+                final_tail,
+            ):
+                violations.append(f"Store {name} final summary offsets are shadowed or overwritten")
+            compact_tail = compact_rust(final_tail)
+            ordered_final_writes = (
+                controller_flow,
+                "self.set_confirm_offset(last_valid_offset)",
+                "should_truncate_recovery_consume_queue("
+                "max_phy_offset_of_consume_queue,summary.truncate_offset)",
+                "message_store.truncate_dirty_logic_files(process_offset)",
+                "self.mapped_file_queue.set_flushed_where(process_offset)",
+                "self.mapped_file_queue.set_committed_where(process_offset)",
+                "self.mapped_file_queue.truncate_dirty_files(process_offset)",
+            )
+            positions = [compact_tail.find(fragment) for fragment in ordered_final_writes]
+            if any(position == -1 for position in positions) or positions != sorted(positions):
+                violations.append(f"Store {name} final summary write order changed")
+    for name, body in (
+        ("recover_abnormally_optimized", abnormal_optimized),
+        ("recover_abnormally", abnormal_standard),
+    ):
+        if re.search(r"\bdrive_segment\s*\(", active_rust_source(body)):
+            violations.append(f"Store {name} must not use normal drive_segment")
+
+    compact_optimized = compact_rust(optimized)
+    optimized_contract = (
+        "letmutiterator=BatchMessageIterator::new(mapped_file);letmutfile_processed=false;"
+        "letoutcome=normal_recovery.drive_segment(process_offset,||{",
+        "letSome((mutmsg_bytes,absolute_offset,_msg_size))=iterator.next_message()else{"
+        "returnOk(NormalRecoveryRecord::SourceEnded);};",
+        "letdispatch_request=recovery_ctx.process_message(&mutmsg_bytes,absolute_offset);",
+        "letrelative_start=u64::try_from(absolute_offset).map_err("
+        "NormalRecoveryAdapterError::RelativeOffsetConversion)?;",
+        "letframe_size=u64::try_from(dispatch_request.msg_size).map_err("
+        "NormalRecoveryAdapterError::MessageSizeConversion)?;",
+        "NormalRecoveryRecord::Message{relative_start,size:frame_size,record:dispatch_request,}",
+        "NormalRecoveryRecord::Blank{record:dispatch_request,}",
+        "NormalRecoveryRecord::Invalid{relative_start:u64::try_from(absolute_offset).ok(),"
+        "record:dispatch_request,}",
+        "NormalRecoveryObservation::MessageAccepted=>{self.on_commit_log_dispatch("
+        "dispatch_request,do_dispatch,true,false);file_processed=true;}",
+        "NormalRecoveryObservation::Blank=>{self.on_commit_log_dispatch("
+        "dispatch_request,do_dispatch,true,true);}",
+        "NormalRecoveryObservation::Invalid{relative_start}=>{",
+        "relative_start.and_then(|relative|process_offset.checked_add(relative))",
+        "NormalRecoverySegmentOutcome::ContinueNextSegment=>{iffile_processed{"
+        "recovery_ctx.stats.files_processed+=1;}index+=1;}",
+        "NormalRecoverySegmentOutcome::StopRecovery=>break'segments",
+        "NormalRecoverySegmentOutcome::StateFailed(error)=>{warn!();break'segments;}",
+    )
+    for snippet in optimized_contract:
+        if snippet not in compact_optimized:
+            violations.append(f"Store optimized normal adapter changed: {snippet[:72]}")
+    if compact_optimized.count("recovery_ctx.stats.files_processed+=1") != 1:
+        violations.append("Store optimized files_processed must advance once on ContinueNext")
+    if compact_optimized.count("index+=1") != 1:
+        violations.append("Store optimized index must advance once on ContinueNext")
+
+    compact_standard = compact_rust(standard)
+    standard_contract = (
+        "letmutcurrent_pos=0usize;letoutcome=normal_recovery.drive_segment(process_offset,||{",
+        "letframe_position=current_pos;",
+        "read_declared_frame(current_pos,|position,size|mapped_file.get_bytes(position,size))",
+        "letSome(mutmsg_bytes)=msgelse{returnOk(NormalRecoveryRecord::SourceEnded);};",
+        "current_pos.checked_add(size).ok_or(NormalRecoveryAdapterError::FramePositionOverflow",
+        "current_pos=next_position;letdispatch_request=check_message_and_return_size(",
+        "letrelative_start=u64::try_from(frame_position).map_err("
+        "NormalRecoveryAdapterError::RelativeOffsetConversion)?;",
+        "letframe_size=u64::try_from(dispatch_request.msg_size).map_err("
+        "NormalRecoveryAdapterError::MessageSizeConversion)?;",
+        "NormalRecoveryRecord::Invalid{relative_start:u64::try_from(frame_position).ok(),"
+        "record:dispatch_request,}",
+        "NormalRecoveryObservation::MessageAccepted=>{self.on_commit_log_dispatch("
+        "dispatch_request,do_dispatch,true,false);}",
+        "NormalRecoveryObservation::Blank=>{self.on_commit_log_dispatch("
+        "dispatch_request,do_dispatch,true,true);}",
+        "NormalRecoveryObservation::Invalid{relative_start}=>{",
+        "relative_start.and_then(|relative|process_offset.checked_add(relative))",
+        "NormalRecoverySegmentOutcome::ContinueNextSegment=>{index+=1;ifindex<"
+        "mapped_files_inner.len()",
+        "NormalRecoverySegmentOutcome::StopRecovery=>break'segments",
+        "NormalRecoverySegmentOutcome::StateFailed(error)=>{warn!();break'segments;}",
+    )
+    for snippet in standard_contract:
+        if snippet not in compact_standard:
+            violations.append(f"Store standard normal adapter changed: {snippet[:72]}")
+    if compact_standard.count("index+=1") != 1:
+        violations.append("Store standard index must advance once on ContinueNext")
+    if "files_processed+=1" in compact_standard:
+        violations.append("Store standard adapter must not own optimized file statistics")
+
+    raw_optimized = named_raw_function_body(store, "recover_normally_optimized") or ""
+    raw_standard = named_raw_function_body(store, "recover_normally") or ""
+    for name, body, raw_body in (
+        ("optimized", compact_optimized, raw_optimized),
+        ("standard", compact_standard, raw_standard),
+    ):
+        for message in (
+            "found a half message at {warning_offset}, it will be truncated.",
+            "found a half message with an invalid offset; it will be truncated.",
+        ):
+            if message not in raw_body:
+                violations.append(f"Store {name} invalid-record warning changed")
+        driver_position = body.find("normal_recovery.drive_segment")
+        summary_position = body.find("letsummary=normal_recovery.summary()")
+        if driver_position == -1 or summary_position <= driver_position:
+            violations.append(f"Store {name} final summary moved before segment driver")
+
+    required_tests = (
+        "segment_started_state_error_skips_started_and_next",
+        "segment_started_runs_before_next_and_preserves_adapter_error_identity",
+        "standard_and_optimized_valid_then_source_ended_preserve_policy_outcomes",
+        "valid_then_blank_observes_each_payload_before_drop_and_stops_reading",
+        "invalid_some_and_none_are_observed_before_policy_action",
+        "message_state_overflow_skips_observe_drops_payload_and_stops_reading",
+        "source_ended_never_observes_and_stop_or_next_is_bounded",
+    )
+    for test_name in required_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local normal recovery orchestration regression changed: {test_name}")
+    return violations
+
+
 def commit_log_declared_frame_contract_violations(
     local: str,
     module: str,
@@ -10571,6 +10874,206 @@ def commit_log_declared_frame_contract_violations(
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
+
+    def test_normal_recovery_segment_orchestration_has_one_local_owner_and_two_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_NORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "normal_recovery_orchestration.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            [],
+            normal_recovery_segment_orchestration_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_normal_recovery_segment_orchestration_contract_rejects_owner_order_adapter_and_test_mutations(
+        self,
+    ) -> None:
+        local = (ROOT / COMMIT_LOG_NORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "normal_recovery_orchestration.rs").read_text(
+            encoding="utf-8"
+        )
+
+        def assert_rejected(
+            label: str,
+            *,
+            local_source: str = local,
+            module_source: str = module,
+            store_source: str = store,
+            test_source: str = local_tests,
+        ) -> None:
+            self.assertNotEqual(
+                [],
+                normal_recovery_segment_orchestration_contract_violations(
+                    local_source,
+                    module_source,
+                    store_source,
+                    test_source,
+                ),
+                label,
+            )
+
+        local_mutations = {
+            "cfg-gated owner": local.replace(
+                "    pub fn drive_segment",
+                "    #[cfg(any())]\n    pub fn drive_segment",
+                1,
+            ),
+            "payload Clone bound": local.replace(
+                "#[derive(Debug, PartialEq, Eq)]\npub enum NormalRecoveryRecord",
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum NormalRecoveryRecord",
+                1,
+            ),
+            "started callback before state": local.replace(
+                "        let started_action = match self.apply(",
+                "        on_segment_started();\n        let started_action = match self.apply(",
+                1,
+            ).replace("        on_segment_started();\n        match started_action", "        match started_action", 1),
+            "message observed before state": local.replace(
+                "                } => {\n                    let action = match self.apply(",
+                "                } => {\n                    observe(NormalRecoveryObservation::MessageAccepted, &mut record);\n                    let action = match self.apply(",
+                1,
+            ),
+            "blank observation after state": local.replace(
+                "                    observe(NormalRecoveryObservation::Blank, &mut record);\n                    match self.apply(NormalRecoveryEvent::Blank)",
+                "                    match self.apply(NormalRecoveryEvent::Blank)",
+                1,
+            ),
+            "source-ended observation": local.replace(
+                "                NormalRecoveryRecord::SourceEnded => match self.apply(",
+                "                NormalRecoveryRecord::SourceEnded => { observe(NormalRecoveryObservation::Blank, panic!()); match self.apply(",
+                1,
+            ),
+            "aliased recovery import": local.replace(
+                "use super::recovery::NormalRecoveryAction;",
+                "use super::recovery::NormalRecoveryAction as RecoveryAction;",
+                1,
+            ),
+            "dynamic adapter edge": local + "\nfn forbidden(_: &dyn Send) {}\n",
+            "Store type edge": local + "\nfn forbidden(_: &MappedFile) {}\n",
+        }
+        for label, mutation in local_mutations.items():
+            with self.subTest(mutation=label):
+                self.assertNotEqual(local, mutation, label)
+                assert_rejected(label, local_source=mutation)
+
+        normal_import = (
+            "use rocketmq_store_local::commit_log::normal_recovery::"
+            "NormalRecoveryObservation;"
+        )
+        optimized_marker = "pub async fn recover_normally_optimized("
+        optimized_start = store.index(optimized_marker)
+        optimized_open = store.index("{", optimized_start)
+        abnormal_marker = "pub async fn recover_abnormally_optimized("
+        abnormal_start = store.index(abnormal_marker)
+        abnormal_open = store.index("{", abnormal_start)
+        summary_before_driver = (
+            store[:optimized_open + 1]
+            + "\n        let summary = normal_recovery.summary();"
+            + store[optimized_open + 1:]
+        )
+        abnormal_delegate = (
+            store[:abnormal_open + 1]
+            + "\n        drive_segment();"
+            + store[abnormal_open + 1:]
+        )
+        store_mutations = {
+            "aliased normal import": store.replace(
+                normal_import,
+                normal_import.replace(";", " as Observation;"),
+                1,
+            ),
+            "optimized driver removed": store.replace(
+                "normal_recovery.drive_segment(",
+                "normal_recovery.drive_records(",
+                1,
+            ),
+            "normal state policy copied": store.replace(
+                "let outcome = normal_recovery.drive_segment(",
+                "let _ = normal_recovery.apply(event);\n            let outcome = normal_recovery.drive_segment(",
+                1,
+            ),
+            "optimized relative offset shifted": store.replace(
+                "u64::try_from(absolute_offset)\n",
+                "u64::try_from(absolute_offset + 1)\n",
+                1,
+            ),
+            "optimized accepted dispatch flag": store.replace(
+                "self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, false);",
+                "self.on_commit_log_dispatch(dispatch_request, do_dispatch, false, false);",
+                1,
+            ),
+            "standard frame cursor advance": store.replace(
+                "current_pos = next_position;",
+                "current_pos = size;",
+                1,
+            ),
+            "optimized empty-file short circuit": store.replace(
+                "if mapped_files_inner.is_empty() {",
+                "if mapped_files_inner.len() == usize::MAX {",
+                1,
+            ),
+            "optimized empty-file return removed": store.replace(
+                "message_store.consume_queue_store_mut().load_after_destroy();\n            return;",
+                "message_store.consume_queue_store_mut().load_after_destroy();",
+                1,
+            ),
+            "optimized adapter failure continues": store.replace(
+                "warn!(\"normal optimized recovery relative offset conversion failed: {error}\");\n"
+                "                    break 'segments;",
+                "warn!(\"normal optimized recovery relative offset conversion failed: {error}\");\n"
+                "                    continue 'segments;",
+                1,
+            ),
+            "optimized final confirm uses truncate offset": store.replace(
+                "self.set_confirm_offset(last_valid_offset);",
+                "self.set_confirm_offset(process_offset);",
+                1,
+            ),
+            "optimized controller confirm uses truncate offset": store.replace(
+                "self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), last_valid_offset);",
+                "self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), process_offset);",
+                1,
+            ),
+            "optimized truncate offset shadowed": store.replace(
+                "        };\n\n        if broker_config.enable_controller_mode {",
+                "        };\n        let process_offset = 0;\n\n        if broker_config.enable_controller_mode {",
+                1,
+            ),
+            "optimized summary before driver": summary_before_driver,
+            "abnormal path delegates": abnormal_delegate,
+            "invalid warning removed": store.replace(
+                "found a half message with an invalid offset; it will be truncated.",
+                "invalid recovery record",
+                1,
+            ),
+        }
+        for label, mutation in store_mutations.items():
+            with self.subTest(mutation=label):
+                self.assertNotEqual(store, mutation, label)
+                assert_rejected(label, store_source=mutation)
+
+        assert_rejected(
+            "normal recovery module hidden",
+            module_source=module.replace("pub mod normal_recovery;", "mod normal_recovery;", 1),
+        )
+        assert_rejected(
+            "drop-order regression removed",
+            test_source=local_tests.replace(
+                "fn message_state_overflow_skips_observe_drops_payload_and_stops_reading()",
+                "fn message_state_overflow_regression_removed()",
+                1,
+            ),
+        )
 
     def test_commit_log_declared_frame_has_one_local_owner_and_two_standard_store_adapters(self) -> None:
         local = (ROOT / COMMIT_LOG_RECORD_PATH).read_text(encoding="utf-8")
@@ -13318,26 +13821,29 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
     def test_store_normal_recovery_adapters_reject_branch_bypass_and_abnormal_mutations(self) -> None:
         source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
         self.assertEqual([], store_normal_recovery_adapter_violations(source))
+        abnormal_marker = "pub async fn recover_abnormally_optimized("
+        abnormal_start = source.index(abnormal_marker)
+        abnormal_open = source.index("{", abnormal_start)
         mutations = [
-            source.replace("NormalRecoveryEvent::Blank", "NormalRecoveryEvent::SourceEnded", 1),
-            source.replace("NormalRecoveryEvent::InvalidRecord", "NormalRecoveryEvent::Blank", 1),
-            source.replace("NormalRecoveryEvent::SourceEnded", "NormalRecoveryEvent::InvalidRecord", 1),
-            source.replace("normal_recovery.apply", "normal_recovery_bypass.apply", 1),
+            source.replace(
+                "use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation;",
+                "use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation as Observation;",
+                1,
+            ),
+            source.replace("normal_recovery.drive_segment", "normal_recovery.drive_records", 1),
             source.replace("NormalRecoveryPolicy::Standard", "NormalRecoveryPolicy::Optimized", 1),
             source.replace(
-                "let do_dispatch = false;",
-                "let mut last_valid_copy = 0;\n            match NormalRecoveryPolicy::Standard {"
-                " NormalRecoveryPolicy::Standard => last_valid_copy = 1, _ => {} }\n"
-                "            let do_dispatch = false;",
+                "NormalRecoveryObservation::Blank => {",
+                "NormalRecoveryObservation::MessageAccepted => {",
                 1,
             ),
             source.replace(
-                "let do_dispatch = false;",
-                "let mut truncate_offset_copy = 0;\n            truncate_offset_copy = 1;\n"
-                "            let do_dispatch = false;",
+                "let outcome = normal_recovery.drive_segment(",
+                "let _ = normal_recovery.apply(event);\n        let outcome = normal_recovery.drive_segment(",
                 1,
             ),
-            source.replace("match normal_recovery.apply", "let _ = normal_recovery.apply", 1),
+            source.replace("normal_recovery.summary()", "normal_recovery.summary_copy()", 1),
+            source[:abnormal_open + 1] + "\n        drive_segment();" + source[abnormal_open + 1:],
             source.replace(
                 "pub async fn recover_abnormally_optimized",
                 "pub async fn recover_abnormally_optimized_changed",
@@ -13346,16 +13852,14 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
                 self.assertNotEqual([], store_normal_recovery_adapter_violations(mutation))
 
-    def test_store_normal_recovery_contract_rejects_empty_message_action(self) -> None:
+    def test_store_normal_recovery_contract_rejects_continue_next_action_mutation(self) -> None:
         source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
         mutation = source.replace(
-            """Ok(NormalRecoveryAction::ContinueNextSegment) => {
-                            record_closed_segment = true;
-                            break;
-                        }""",
-            "Ok(NormalRecoveryAction::ContinueNextSegment) => {}",
+            "NormalRecoverySegmentOutcome::ContinueNextSegment => {",
+            "NormalRecoverySegmentOutcome::StopRecovery => {",
             1,
         )
         self.assertNotEqual(source, mutation)
@@ -13363,7 +13867,7 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
 
     def test_store_normal_recovery_contract_rejects_plain_current_position_addition(self) -> None:
         source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
-        mutation = source.replace("current_pos.checked_add(size)", "Some(current_pos + size)", 1)
+        mutation = source.replace(".checked_add(size)", "+ size", 1)
         self.assertNotEqual(source, mutation)
         self.assertNotEqual([], store_normal_recovery_adapter_violations(mutation))
 
@@ -17100,6 +17604,7 @@ mod tests""",
                 "load.rs",
                 "loader.rs",
                 "memory_lock.rs",
+                "normal_recovery.rs",
                 "recovery.rs",
                 "record.rs",
                 "record_parser.rs",

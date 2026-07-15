@@ -19,6 +19,7 @@ pub mod header;
 pub mod load;
 pub mod loader;
 pub mod memory_lock;
+pub mod normal_recovery;
 pub mod record;
 pub mod record_parser;
 pub mod recovery;

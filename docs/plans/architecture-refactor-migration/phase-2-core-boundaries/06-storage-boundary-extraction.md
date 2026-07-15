@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1445,3 +1445,39 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03ag 只迁移 standard recovery declared-frame read owner；不迁移或修改 optimized cursor、record
   parser、CRC/body validation、append、flush/group commit、CQ/Index、HA、Timer/POP、MappedFile lifecycle、runtime
   ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ah CommitLog normal recovery segment orchestration extraction evidence
+
+- [x] `[DEV/API]` 新增纯同步、runtime-neutral 的
+  `rocketmq-store-local::commit_log::normal_recovery`，由 `NormalRecoveryRecord<R>`、
+  `NormalRecoveryObservation`、`NormalRecoverySegmentOutcome<E>` 与
+  `NormalRecoveryState::drive_segment` 唯一拥有 normal recovery 单 segment record-loop 编排。driver 通过泛型
+  `Next/Started/Observe` closure 接收 adapter，不引入 `dyn`、`Clone`、`Send/Sync/'static`、`ArcMut`、
+  `MappedFile`、Store 类型或 `unsafe`。
+- [x] `[COMPAT/ORDER]` 冻结原 normal recovery 顺序和所有权：segment state transition 先于 started hook；Message
+  state transition 先于 observe；Blank/Invalid observe 先于 state transition；SourceEnded 不触发 observe；payload
+  由 driver 持有并在 observe 返回或 state rejection 后释放。adapter error 保留原错误身份，state error 独立返回，
+  Stop/ContinueNext 后不再读取下一条 record。
+- [x] `[DEV/ADAPTER]` Store `recover_normally_optimized` 与 `recover_normally` 各且仅各调用一次
+  `drive_segment`，不再直接调用 normal recovery `apply`。optimized 保留 `BatchMessageIterator`、
+  `RecoveryContext::process_message`、成功 message 后 `file_processed`、ContinueNext 后 `files_processed/index`
+  更新；standard 保留 `read_declared_frame`、checked cursor advance 与 parser。两条 abnormal recovery 路径不接入
+  该 driver；dispatch、warning、summary、checkpoint 与 truncate 顺序不变。
+- [x] `[TEST]` Local orchestration focused 7/7、Local all-feature test suite 与 Store CommitLog recovery 19/19 通过。
+  覆盖 segment-start state failure、started/next 顺序、adapter error identity、standard/optimized SourceEnded 分歧、
+  Message/Blank/Invalid observe/drop 顺序、offset overflow fail-closed、bounded next calls、跨 segment 水位、dirty-tail
+  truncate、controller/dup gate 与 RocksDB restart parity。
+- [x] `[CONTRACT]` dedicated baseline+mutation 6/6 与完整 M06 contract 124/124 通过（635.252s）。契约固定三个 enum、
+  `drive_segment` exact signature/body/closure bounds、唯一非 cfg owner、无动态/Store/runtime 边界、两条 normal Store
+  adapter 各一次调用、abnormal 零调用、policy construction、空文件短路、adapter error、summary/final write dataflow、
+  原 adapter 统计/日志顺序及七个 regression test。mutation matrix 拒绝 variant/field、transition/observe 顺序、
+  SourceEnded observe、error/outcome、closure bound、Clone/dyn、cfg/import alias、Store 直接 state policy、调用次数、
+  abnormal 接入、adapter/summary 顺序、空文件旁路、错误继续及 regression test 删除。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature、依赖、baseline、relocation approval、runtime ownership 或公开
+  wire/storage 格式。Local 与 Store package Clippy、workspace fmt、workspace all-target/all-feature Clippy、architecture
+  35/35+baseline、ArcMut 63/63+final guard、AGENTS routing、Python compile 与 diff check 均通过；ArcMut 未新增。
+  独立复审确认生产语义无 Critical/Important/Minor 问题，并将 summary、empty-file 与 adapter-error 三项结构缺口
+  补入 mutation contract。
+- [x] `[SCOPE]` M06-03ah 只迁移 normal recovery 单 segment record-loop 编排；不迁移实际 MappedFile I/O、record
+  parser、abnormal recovery 编排、CommitLog 根 owner、完整 append/load、flush/group commit、CQ/Index、HA、Timer/POP、
+  runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
