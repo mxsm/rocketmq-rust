@@ -31,6 +31,10 @@ use rocketmq_store_local::mapped_file::queue_index::file_index_by_timestamp;
 use rocketmq_store_local::mapped_file::queue_index::for_each_discontinuous_pair;
 use rocketmq_store_local::mapped_file::queue_index::overlapping_file_range;
 use rocketmq_store_local::mapped_file::queue_index::MappedFileQueueIndex;
+use rocketmq_store_local::mapped_file::queue_maintenance::mapped_file_queue_truncate_action;
+use rocketmq_store_local::mapped_file::queue_maintenance::plan_mapped_file_queue_reset;
+use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueResetLastFile;
+use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueTruncateAction;
 use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage;
 use tracing::error;
@@ -399,13 +403,18 @@ impl MappedFileQueue {
         let mut will_remove_files = Vec::new();
 
         for mapped_file in self.storage.mapped_files().load().iter() {
-            let file_tail_offset = mapped_file.get_file_from_offset() + self.storage.mapped_file_size();
-            if file_tail_offset as i64 > offset {
-                if offset >= mapped_file.get_file_from_offset() as i64 {
-                    mapped_file.set_wrote_position((offset % self.storage.mapped_file_size() as i64) as i32);
-                    mapped_file.set_committed_position((offset % self.storage.mapped_file_size() as i64) as i32);
-                    mapped_file.set_flushed_position((offset % self.storage.mapped_file_size() as i64) as i32);
-                } else {
+            match mapped_file_queue_truncate_action(
+                offset,
+                self.storage.mapped_file_size(),
+                mapped_file.get_file_from_offset(),
+            ) {
+                MappedFileQueueTruncateAction::Retain => {}
+                MappedFileQueueTruncateAction::Truncate(position) => {
+                    mapped_file.set_wrote_position(position);
+                    mapped_file.set_committed_position(position);
+                    mapped_file.set_flushed_position(position);
+                }
+                MappedFileQueueTruncateAction::Remove => {
                     mapped_file.destroy(1000);
                     will_remove_files.push(mapped_file.clone());
                 }
@@ -577,41 +586,33 @@ impl MappedFileQueue {
     /// # Returns
     /// true if reset succeeded, false if offset is too far back
     pub fn reset_offset(&mut self, offset: i64) -> bool {
-        // Check if offset is reasonable
-        if let Some(mapped_file_last) = self.get_last_mapped_file() {
-            let last_offset =
-                mapped_file_last.get_file_from_offset() as i64 + mapped_file_last.get_wrote_position() as i64;
-            let diff = last_offset - offset;
-            let max_diff = (self.storage.mapped_file_size() * 2) as i64;
+        let last_file = self.get_last_mapped_file().map(|mapped_file| {
+            MappedFileQueueResetLastFile::new(mapped_file.get_file_from_offset(), mapped_file.get_wrote_position())
+        });
 
-            if diff > max_diff {
-                return false;
-            }
-        }
-
-        // Load current files
         let current_files = self.storage.mapped_files().load();
-        let mut to_removes = Vec::new();
+        let Some(plan) = plan_mapped_file_queue_reset(
+            offset,
+            self.storage.mapped_file_size(),
+            last_file,
+            current_files.as_slice(),
+            |file| file.get_file_from_offset(),
+            |file| file.get_file_size(),
+        ) else {
+            return false;
+        };
 
-        // Iterate backwards
-        for i in (0..current_files.len()).rev() {
-            let mapped_file = &current_files[i];
-
-            if offset >= mapped_file.get_file_from_offset() as i64 {
-                let where_pos = (offset % mapped_file.get_file_size() as i64) as i32;
-                mapped_file.set_flushed_position(where_pos);
-                mapped_file.set_wrote_position(where_pos);
-                mapped_file.set_committed_position(where_pos);
-                break;
-            } else {
-                to_removes.push(i);
-            }
+        if let Some((index, position)) = plan.target() {
+            let mapped_file = &current_files[index];
+            mapped_file.set_flushed_position(position);
+            mapped_file.set_wrote_position(position);
+            mapped_file.set_committed_position(position);
         }
 
         // Remove files beyond the offset (copy-on-write update)
-        if !to_removes.is_empty() {
+        if !plan.remove_indices().is_empty() {
             let mut new_files = (**current_files).clone();
-            for &idx in to_removes.iter().rev() {
+            for &idx in plan.remove_indices().iter().rev() {
                 new_files.remove(idx);
             }
             self.storage.mapped_files().store(Arc::new(new_files));
@@ -1368,5 +1369,56 @@ mod tests {
         assert_eq!(progress.durable_before, 0);
         assert_eq!(progress.durable, 0);
         assert_eq!(progress.store_timestamp, 0);
+    }
+
+    #[test]
+    fn truncate_dirty_files_delegates_positions_and_removals_to_local_plan() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), 1024, None);
+        let first = queue.try_create_mapped_file(0).expect("first mapped file");
+        let target = queue.try_create_mapped_file(1024).expect("target mapped file");
+        let removed = queue.try_create_mapped_file(2048).expect("removed mapped file");
+        for file in [&first, &target, &removed] {
+            file.set_wrote_position(1024);
+            file.set_committed_position(1024);
+            file.set_flushed_position(1024);
+        }
+
+        queue.truncate_dirty_files(1536);
+
+        assert_eq!(queue.get_mapped_file_count(), 2);
+        assert_eq!(first.get_wrote_position(), 1024);
+        assert_eq!(target.get_wrote_position(), 512);
+        assert_eq!(target.get_committed_position(), 512);
+        assert_eq!(target.get_flushed_position(), 512);
+        assert!(!removed.is_available());
+        queue.destroy();
+    }
+
+    #[test]
+    fn reset_offset_delegates_target_and_removal_order_to_local_plan() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), 1024, None);
+        let first = queue.try_create_mapped_file(0).expect("first mapped file");
+        let target = queue.try_create_mapped_file(1024).expect("target mapped file");
+        let removed = queue.try_create_mapped_file(2048).expect("removed mapped file");
+
+        assert!(queue.reset_offset(1536));
+
+        assert_eq!(queue.get_mapped_file_count(), 2);
+        assert!(Arc::ptr_eq(
+            &queue.get_first_mapped_file().expect("first remains"),
+            &first
+        ));
+        assert!(Arc::ptr_eq(
+            &queue.get_last_mapped_file().expect("target remains"),
+            &target
+        ));
+        assert_eq!(target.get_wrote_position(), 512);
+        assert_eq!(target.get_committed_position(), 512);
+        assert_eq!(target.get_flushed_position(), 512);
+        assert!(removed.is_available());
+        removed.destroy(1000);
+        queue.destroy();
     }
 }

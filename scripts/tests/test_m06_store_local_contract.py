@@ -63,6 +63,9 @@ MAPPED_FILE_QUEUE_ALLOCATION_PATH = Path(
 MAPPED_FILE_QUEUE_INDEX_PATH = Path(
     "rocketmq-store-local/src/mapped_file/queue_index.rs"
 )
+MAPPED_FILE_QUEUE_MAINTENANCE_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_maintenance.rs"
+)
 MAPPED_FILE_QUEUE_STATE_PATH = Path(
     "rocketmq-store-local/src/mapped_file/queue_state.rs"
 )
@@ -292,11 +295,16 @@ CANONICAL_ITEMS = {
     "MappedFileQueueIndex": ("enum", "queue_index.rs"),
     "MappedFileQueueLastFile": ("struct", "queue_allocation.rs"),
     "MappedFileQueueRollFile": ("struct", "queue_allocation.rs"),
+    "MappedFileQueueTruncateAction": ("enum", "queue_maintenance.rs"),
+    "MappedFileQueueResetLastFile": ("struct", "queue_maintenance.rs"),
+    "MappedFileQueueResetPlan": ("struct", "queue_maintenance.rs"),
     "MappedFileQueueRuntimeState": ("struct", "queue_state.rs"),
     "MappedFileQueueStorage": ("struct", "queue_storage.rs"),
     "overlapping_file_range": ("fn", "queue_index.rs"),
     "plan_mapped_file_queue_creation": ("fn", "queue_allocation.rs"),
     "plan_mapped_file_queue_preallocation": ("fn", "queue_allocation.rs"),
+    "mapped_file_queue_truncate_action": ("fn", "queue_maintenance.rs"),
+    "plan_mapped_file_queue_reset": ("fn", "queue_maintenance.rs"),
     "io_uring_backend_status": ("fn", "io_uring_impl.rs"),
 }
 COMMIT_LOG_CANONICAL_ITEMS = {
@@ -7289,7 +7297,7 @@ def mapped_file_queue_storage_contract_violations(
             violations.append(f"Store mapped-file queue storage constructor changed: {constructor}")
     expected_accessor_counts = {
         "self.storage.mapped_files()": 37,
-        "self.storage.mapped_file_size()": 24,
+        "self.storage.mapped_file_size()": 21,
         "self.storage.store_path()": 6,
     }
     for accessor, expected_count in expected_accessor_counts.items():
@@ -7650,6 +7658,131 @@ def mapped_file_queue_allocation_contract_violations(
     ):
         if named_function_body(local_test_source, test_name) is None:
             violations.append(f"Local mapped-file queue allocation regression changed: {test_name}")
+    return violations
+
+
+def mapped_file_queue_maintenance_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+    compact = compact_rust(active)
+
+    if "pubenumMappedFileQueueTruncateAction{Retain,Truncate(i32),Remove,}" not in compact:
+        violations.append("Local mapped-file queue truncate action variants changed")
+    if active_struct_fields(production, "MappedFileQueueResetLastFile") != [
+        ("file_from_offset", "u64"),
+        ("wrote_position", "i32"),
+    ]:
+        violations.append("Local mapped-file queue reset last-file fields changed")
+    if active_struct_fields(production, "MappedFileQueueResetPlan") != [
+        ("target", "Option<(usize, i32)>"),
+        ("remove_indices", "Vec<usize>"),
+    ]:
+        violations.append("Local mapped-file queue reset plan fields changed")
+    expected_methods = {
+        "new": "Self{file_from_offset,wrote_position,}",
+        "target": "self.target",
+        "remove_indices": "&self.remove_indices",
+    }
+    for function_name, expected_body in expected_methods.items():
+        if compact_rust(named_function_body(production, function_name) or "") != expected_body:
+            violations.append(f"Local mapped-file queue maintenance API changed: {function_name}")
+
+    truncate_body = compact_rust(
+        named_function_body(production, "mapped_file_queue_truncate_action") or ""
+    )
+    for fragment in (
+        "letfile_tail_offset=file_from_offset+mapped_file_size",
+        "iffile_tail_offsetasi64<=offset{MappedFileQueueTruncateAction::Retain}",
+        "elseifoffset>=file_from_offsetasi64{MappedFileQueueTruncateAction::Truncate((offset%mapped_file_sizeasi64)asi32)}",
+        "else{MappedFileQueueTruncateAction::Remove}",
+    ):
+        if fragment not in truncate_body:
+            violations.append(f"Local mapped-file queue truncate semantics changed: {fragment}")
+
+    reset_body = compact_rust(named_function_body(production, "plan_mapped_file_queue_reset") or "")
+    for fragment in (
+        "letlast_offset=last_file.file_from_offsetasi64+last_file.wrote_positionasi64",
+        "letdiff=last_offset-offset",
+        "letmax_diff=(mapped_file_size*2)asi64",
+        "ifdiff>max_diff{returnNone;}",
+        "forindexin(0..files.len()).rev()",
+        "ifoffset>=file_from_offset(file)asi64",
+        "lettarget_position=(offset%file_size(file)asi64)asi32",
+        "target:Some((index,target_position)),remove_indices",
+        "remove_indices.push(index)",
+        "target:None,remove_indices",
+    ):
+        if fragment not in reset_body:
+            violations.append(f"Local mapped-file queue reset semantics changed: {fragment}")
+    if active_import_records(production):
+        violations.append("Local mapped-file queue maintenance planner must remain dependency-free")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(
+            r"\b(?:rocketmq_|ArcSwap|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b",
+            active,
+        )
+    ):
+        violations.append("Local mapped-file queue maintenance planner absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod queue_maintenance;") != 1:
+        violations.append("Local mapped_file module must expose queue_maintenance exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::mapped_file::queue_maintenance::mapped_file_queue_truncate_action",
+        "use rocketmq_store_local::mapped_file::queue_maintenance::plan_mapped_file_queue_reset",
+        "use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueResetLastFile",
+        "use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueTruncateAction",
+    }
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_maintenance" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store mapped-file queue maintenance imports must be direct and exact")
+    store_production = source_without_cfg_test_items(store_source)
+    store_compact = compact_rust(active_rust_source(store_production))
+    for fragment in (
+        "matchmapped_file_queue_truncate_action(offset,self.storage.mapped_file_size(),mapped_file.get_file_from_offset(),)",
+        "MappedFileQueueTruncateAction::Truncate(position)=>{mapped_file.set_wrote_position(position);mapped_file.set_committed_position(position);mapped_file.set_flushed_position(position);}",
+        "MappedFileQueueTruncateAction::Remove=>{mapped_file.destroy(1000);will_remove_files.push(mapped_file.clone());}",
+        "letlast_file=self.get_last_mapped_file().map(|mapped_file|{MappedFileQueueResetLastFile::new(mapped_file.get_file_from_offset(),mapped_file.get_wrote_position())})",
+        "letcurrent_files=self.storage.mapped_files().load()",
+        "letSome(plan)=plan_mapped_file_queue_reset(",
+        "ifletSome((index,position))=plan.target()",
+        "for&idxinplan.remove_indices().iter().rev(){new_files.remove(idx);}",
+    ):
+        if fragment not in store_compact:
+            violations.append(f"Store mapped-file queue maintenance adapter changed: {fragment}")
+    for legacy_fragment in (
+        "letfile_tail_offset=",
+        "letdiff=last_offset-offset",
+        "letmax_diff=(self.storage.mapped_file_size()*2)asi64",
+        "letmutto_removes=Vec::new()",
+    ):
+        if legacy_fragment in store_compact:
+            violations.append(f"Store retained mapped-file queue maintenance algorithm: {legacy_fragment}")
+
+    for test_name in (
+        "truncate_plan_retains_completed_segments_and_truncates_the_target",
+        "reset_plan_rejects_offsets_more_than_two_segments_behind",
+        "reset_plan_preserves_target_position_and_newest_to_oldest_removals",
+        "reset_plan_removes_every_file_when_offset_precedes_the_queue",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue maintenance regression changed: {test_name}")
+    for test_name in (
+        "truncate_dirty_files_delegates_positions_and_removals_to_local_plan",
+        "reset_offset_delegates_target_and_removal_order_to_local_plan",
+    ):
+        if named_function_body(store_source, test_name) is None:
+            violations.append(f"Store mapped-file queue maintenance adapter regression changed: {test_name}")
     return violations
 
 
@@ -12666,6 +12799,118 @@ class StoreLocalContractTests(unittest.TestCase):
                     ),
                 )
 
+    def test_mapped_file_queue_maintenance_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_MAINTENANCE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_maintenance.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_maintenance_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_maintenance_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_MAINTENANCE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_maintenance.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "truncate action changed",
+                local.replace("    Retain,", "    Keep,", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "tail boundary changed",
+                local.replace("if file_tail_offset as i64 <= offset {", "if file_tail_offset as i64 < offset {", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "reset window changed",
+                local.replace("let max_diff = (mapped_file_size * 2) as i64;", "let max_diff = (mapped_file_size * 3) as i64;", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "removal order changed",
+                local.replace("for index in (0..files.len()).rev() {", "for index in 0..files.len() {", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_maintenance;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store truncate bypassed",
+                local,
+                module,
+                store.replace(
+                    "match mapped_file_queue_truncate_action(",
+                    "match MappedFileQueueTruncateAction::Retain /* mapped_file_queue_truncate_action( */ {",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn reset_plan_preserves_target_position_and_newest_to_oldest_removals()",
+                    "fn reset_plan_regression_removed()",
+                    1,
+                ),
+            ),
+            (
+                "Store adapter regression renamed",
+                local,
+                module,
+                store.replace(
+                    "fn truncate_dirty_files_delegates_positions_and_removals_to_local_plan()",
+                    "fn truncate_dirty_files_adapter_regression_removed()",
+                    1,
+                ),
+                local_tests,
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_maintenance_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
     def test_mapped_file_queue_index_has_one_local_owner_and_exact_store_adapters(self) -> None:
         local = (ROOT / MAPPED_FILE_QUEUE_INDEX_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
@@ -17233,6 +17478,7 @@ struct DefaultMappedFile {
                 "memory.rs",
                 "queue_allocation.rs",
                 "queue_index.rs",
+                "queue_maintenance.rs",
                 "queue_state.rs",
                 "queue_storage.rs",
                 "raw.rs",

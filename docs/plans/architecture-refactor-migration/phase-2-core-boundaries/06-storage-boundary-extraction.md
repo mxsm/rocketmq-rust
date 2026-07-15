@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1821,3 +1821,31 @@ python scripts/arc_mut_guard.py
   worker lifecycle、TransientStorePool 实体、实际 mmap/create、MappedFileQueue load/delete/flush/CQ timestamp、CommitLog 或
   持久格式。顶层 PR-M06-03 仍需收口 CommitLog 根结构、MappedFileQueue I/O/allocate adapter 及剩余算法、append/
   recovery 方法 owner 与 Store facade；82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03at mapped-file queue dirty-tail and reset planning evidence
+
+- [x] `[DEV/OWNER]` Local 新增无 Store/runtime 依赖的 `mapped_file::queue_maintenance`；
+  `mapped_file_queue_truncate_action` 唯一拥有 completed/target/later-segment dirty-tail 分类与 target modulo position，
+  `plan_mapped_file_queue_reset` 唯一拥有 two-segment 回退窗口、reverse target scan、reset position 和 removal-index 规划。
+- [x] `[DEV/ADAPTER]` Store `truncate_dirty_files` 逐文件投影 offset 后按 Local enum 执行 position 更新或
+  destroy/collection removal；`reset_offset` 先独立捕获 last-file offset/wrote snapshot，再加载当前 ArcSwap collection，
+  将 Local plan 的 target position 和 newest-to-oldest removal indices 按原顺序应用。Local 不持有或返回
+  `DefaultMappedFile`、Arc/ArcSwap、mmap、destroy 或 tracing 类型。
+- [x] `[COMPAT]` truncate 仍以 `file_from + segment_size <= offset` 保留完整段、用
+  `offset % segment_size` 同步 wrote/committed/flushed position，并 destroy 后续段。reset 仍只拒绝
+  `last_offset - offset > segment_size * 2`，保留 last/current 两次独立集合观察、目标文件自身 size 的 modulo、
+  reverse scan 与 legacy removal index 的 newest-to-oldest 生成/Store reverse 应用顺序；未顺带修复或改变既有边界行为。
+- [x] `[TEST]` Local 新增 truncate 三分类、two-segment 拒绝、target/removal order 与 offset-before-queue 4/4；
+  Store 新增真实 mapped-file truncate/reset adapter 2/2，验证 position、destroy availability、Arc identity 和集合结果；
+  Local all-features 全量及 Store lib 539/539 通过。
+- [x] `[CONTRACT]` 新增 baseline+8 类 mutation 两项契约，冻结 Local enum、last snapshot、plan fields/API、truncate/reset
+  算法、无依赖 owner、四条 Store direct imports、两条副作用 adapter 与六组回归；定向 2/2，完整 M06 contract
+  148/148 通过（630.047s）。canonical file/item 集合同步加入 `queue_maintenance.rs` 的三个 value owner 与两个 function；
+  MappedFileQueue storage accessor 更新为 collection/size/path = 37/21/6。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing、
+  ArcMut guard 与 enforcing runtime audit 通过；error architecture 与既有基线一致，仍为 1 处 Broker source
+  stringification、8 处 MCP `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03at 未迁移 MappedFileQueue load/create/time/offset delete/swap/shutdown/destroy、
+  flush/commit/CQ timestamp，未迁移 AllocateMappedFileService worker/request lifecycle、CommitLog 根 owner 或持久格式。
+  顶层 PR-M06-03 仍需收口上述 MappedFileQueue I/O/剩余算法、CommitLog 根结构、append/recovery 方法 owner 与 Store facade；
+  82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
