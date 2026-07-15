@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_local::commit_log::append_frame::AppendBatchFrameCursor;
 use rocketmq_store_local::commit_log::append_frame::AppendFrameCrcPlan;
 use rocketmq_store_local::commit_log::append_frame::AppendFrameKernel;
 use rocketmq_store_local::commit_log::append_frame::HostWidth;
@@ -109,4 +110,112 @@ fn blank_marker_declares_the_whole_remainder_but_contains_only_eight_bytes() {
     assert_eq!(marker.bytes().len(), 8);
     assert_eq!(marker.declared_wrote_bytes(), 4096);
     assert_eq!(marker.bytes(), &[0, 0, 0x10, 0, 0xCB, 0xD4, 0x31, 0x94]);
+}
+
+#[test]
+fn declared_frame_length_reads_only_the_big_endian_prefix() {
+    assert_eq!(AppendFrameKernel::declared_frame_length(&[0, 0, 0, 12]), 12);
+    assert_eq!(
+        AppendFrameKernel::declared_frame_length(&[0xFF, 0xFF, 0xFF, 0xF8, 1, 2, 3]),
+        -8
+    );
+}
+
+#[test]
+#[should_panic]
+fn declared_frame_length_keeps_the_short_slice_panic() {
+    let _ = AppendFrameKernel::declared_frame_length(&[0, 0, 1]);
+}
+
+#[test]
+fn batch_cursor_preserves_cumulative_descriptor_and_state_order() {
+    let mut frames = vec![0xA5; 20];
+    frames[0..4].copy_from_slice(&8_i32.to_be_bytes());
+    frames[8..12].copy_from_slice(&12_i32.to_be_bytes());
+    let mut cursor = AppendBatchFrameCursor::new();
+
+    let first = cursor.next(&frames).expect("first frame");
+    assert_eq!(first.declared_len(), 8);
+    assert_eq!(first.start(), 0);
+    assert_eq!(first.end(), 8);
+    assert_eq!(first.index(), 0);
+    assert_eq!(first.cumulative_len(), 8);
+    assert_eq!(first.physical_offset(100), 100);
+    assert_eq!(cursor.total_msg_len(), 8);
+    assert_eq!(cursor.msg_num(), 0);
+    cursor.finish_frame(first.declared_len());
+
+    let second = cursor.next(&frames).expect("second frame");
+    assert_eq!(second.declared_len(), 12);
+    assert_eq!(second.start(), 8);
+    assert_eq!(second.end(), 20);
+    assert_eq!(second.index(), 1);
+    assert_eq!(second.cumulative_len(), 20);
+    assert_eq!(second.physical_offset(100), 108);
+    assert_eq!(cursor.msg_num(), 1);
+    cursor.finish_frame(second.declared_len());
+
+    assert!(cursor.next(&frames).is_none());
+    assert_eq!(cursor.total_msg_len(), 20);
+    assert_eq!(cursor.msg_num(), 2);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic]
+fn first_batch_frame_keeps_left_associated_physical_offset_overflow() {
+    let mut frames = vec![0; 8];
+    frames[0..4].copy_from_slice(&8_i32.to_be_bytes());
+    let mut cursor = AppendBatchFrameCursor::new();
+
+    let first = cursor.next(&frames).expect("first frame");
+    assert_eq!(first.cumulative_len(), first.declared_len());
+    let _ = first.physical_offset(i64::MAX);
+}
+
+#[test]
+fn zero_length_batch_frame_keeps_legacy_non_progress() {
+    let frames = [0; 4];
+    let mut cursor = AppendBatchFrameCursor::new();
+
+    let first = cursor.next(&frames).expect("legacy zero-length descriptor");
+    cursor.finish_frame(first.declared_len());
+    let second = cursor.next(&frames).expect("legacy zero-length descriptor repeats");
+    cursor.finish_frame(second.declared_len());
+    assert_eq!(first.cumulative_len(), 0);
+    assert_eq!(second.cumulative_len(), 0);
+    assert_eq!(first.start(), 0);
+    assert_eq!(second.start(), 0);
+    assert_eq!(cursor.total_msg_len(), 0);
+    assert_eq!(cursor.msg_num(), 2);
+}
+
+#[test]
+fn rolling_malformed_frame_does_not_advance_or_evaluate_lazy_offsets() {
+    let mut frames = vec![0; 12];
+    frames[0..4].copy_from_slice(&8_i32.to_be_bytes());
+    frames[8..12].copy_from_slice(&(-1_i32).to_be_bytes());
+    let mut cursor = AppendBatchFrameCursor::new();
+
+    let first = cursor.next(&frames).expect("first frame");
+    cursor.finish_frame(first.declared_len());
+    let rolling = cursor.next(&frames).expect("rolling descriptor");
+
+    assert_eq!(rolling.declared_len(), -1);
+    assert_eq!(rolling.start(), 8);
+    assert_eq!(rolling.index(), 1);
+    assert_eq!(rolling.cumulative_len(), 7);
+    assert_eq!(
+        AppendFrameKernel::segment_append_decision(rolling.cumulative_len(), 0),
+        SegmentAppendDecision::Roll
+    );
+    assert_eq!(cursor.total_msg_len(), 7);
+    assert_eq!(cursor.msg_num(), 1);
+}
+
+#[test]
+#[should_panic]
+fn malformed_batch_tail_keeps_legacy_index_panic() {
+    let mut cursor = AppendBatchFrameCursor::new();
+    let _ = cursor.next(&[0, 0, 0]);
 }

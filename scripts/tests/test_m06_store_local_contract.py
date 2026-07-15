@@ -8927,6 +8927,7 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
 
 
 APPEND_FRAME_KERNEL_METHODS = (
+    "declared_frame_length",
     "segment_append_decision",
     "blank_marker",
     "finalize_frame",
@@ -8950,6 +8951,8 @@ def append_frame_kernel_owner_violations(
         "AppendFrameCrcPlan": "enum",
         "BlankMarker": "struct",
         "SegmentAppendDecision": "enum",
+        "AppendBatchFrame": "struct",
+        "AppendBatchFrameCursor": "struct",
         "AppendFrameKernel": "struct",
     }
     for item, item_kind in expected_owners.items():
@@ -8984,6 +8987,12 @@ def append_frame_kernel_owner_violations(
             "bytes:[u8;BLANK_MARKER_LENGTH],declared_wrote_bytes:i32,"
         ),
         ("enum", "SegmentAppendDecision"): "Append,Roll,",
+        ("struct", "AppendBatchFrame"): (
+            "declared_len:i32,start:usize,index:usize,cumulative_len:i32,"
+        ),
+        ("struct", "AppendBatchFrameCursor"): (
+            "total_msg_len:i32,msg_pos:usize,index:usize,msg_num:i32,"
+        ),
     }
     for (item_kind, item), expected_body in expected_items.items():
         body = compact_rust(active_item_body(production, item_kind, item) or "")
@@ -8998,6 +9007,7 @@ def append_frame_kernel_owner_violations(
         APPEND_FRAME_KERNEL_METHODS,
     )
     expected_signatures = {
+        "declared_frame_length": "pubfndeclared_frame_length(frame:&[u8])->i32",
         "segment_append_decision": (
             "pubfnsegment_append_decision(encoded_len:i32,max_blank:i32)"
             "->SegmentAppendDecision"
@@ -9018,6 +9028,7 @@ def append_frame_kernel_owner_violations(
         ),
     }
     expected_bodies = {
+        "declared_frame_length": "i32::from_be_bytes(frame[0..4].try_into().unwrap())",
         "segment_append_decision": (
             "ifencoded_len+END_FILE_MIN_BLANK_LENGTH>max_blank{"
             "SegmentAppendDecision::Roll}else{"
@@ -9063,6 +9074,146 @@ def append_frame_kernel_owner_violations(
             violations.append(f"AppendFrameKernel::{method_name} visibility changed")
         if record.body != expected_bodies[method_name]:
             violations.append(f"AppendFrameKernel::{method_name} behavior changed")
+
+    declared_position = source.find("pub fn declared_frame_length")
+    declared_panics = source.rfind("/// # Panics", 0, declared_position)
+    kernel_impl = source.rfind("impl AppendFrameKernel", 0, declared_position)
+    if not kernel_impl < declared_panics < declared_position:
+        violations.append("AppendFrameKernel::declared_frame_length must document its panic seam")
+
+    descriptor_methods = (
+        "declared_len",
+        "start",
+        "end",
+        "index",
+        "cumulative_len",
+        "physical_offset",
+    )
+    descriptor_records = inherent_method_records(
+        production,
+        "AppendBatchFrame",
+        descriptor_methods,
+    )
+    descriptor_signatures = {
+        "declared_len": "pubfndeclared_len(&self)->i32",
+        "start": "pubfnstart(&self)->usize",
+        "end": "pubfnend(&self)->usize",
+        "index": "pubfnindex(&self)->usize",
+        "cumulative_len": "pubfncumulative_len(&self)->i32",
+        "physical_offset": "pubfnphysical_offset(&self,wrote_offset:i64)->i64",
+    }
+    descriptor_bodies = {
+        "declared_len": "self.declared_len",
+        "start": "self.start",
+        "end": "self.start+self.declared_lenasusize",
+        "index": "self.index",
+        "cumulative_len": "self.cumulative_len",
+        "physical_offset": (
+            "wrote_offset+self.cumulative_lenas i64-self.declared_lenas i64".replace(" ", "")
+        ),
+    }
+    for method_name in descriptor_methods:
+        method_records = descriptor_records[method_name]
+        if len(method_records) != 1:
+            violations.append(f"AppendBatchFrame::{method_name} definition count changed")
+            continue
+        record = method_records[0]
+        if record.signature != descriptor_signatures[method_name]:
+            violations.append(f"AppendBatchFrame::{method_name} signature changed")
+        if record.visibility != "pub" or record.cfg_gated:
+            violations.append(f"AppendBatchFrame::{method_name} visibility changed")
+        if record.body != descriptor_bodies[method_name]:
+            violations.append(f"AppendBatchFrame::{method_name} behavior changed")
+
+    physical_position = source.find("pub fn physical_offset")
+    physical_panics = source.rfind("/// # Panics", 0, physical_position)
+    descriptor_impl = source.rfind("impl AppendBatchFrame", 0, physical_position)
+    if not descriptor_impl < physical_panics < physical_position:
+        violations.append("AppendBatchFrame::physical_offset must document its panic seam")
+
+    cursor_methods = ("new", "next", "finish_frame", "total_msg_len", "msg_num")
+    cursor_records = inherent_method_records(
+        production,
+        "AppendBatchFrameCursor",
+        cursor_methods,
+    )
+    cursor_signatures = {
+        "new": "pubfnnew()->Self",
+        "next": "pubfnnext(&mutself,frames:&[u8])->Option<AppendBatchFrame>",
+        "finish_frame": "pubfnfinish_frame(&mutself,declared_len:i32)",
+        "total_msg_len": "pubfntotal_msg_len(&self)->i32",
+        "msg_num": "pubfnmsg_num(&self)->i32",
+    }
+    cursor_bodies = {
+        "new": (
+            "Self{total_msg_len:0,msg_pos:0,index:0,msg_num:0,}"
+        ),
+        "next": (
+            "ifself.total_msg_len<frames.len()asi32{"
+            "letdeclared_len=AppendFrameKernel::declared_frame_length("
+            "&frames[self.total_msg_lenasusize..(self.total_msg_len+4)asusize],);"
+            "self.total_msg_len+=declared_len;letframe=AppendBatchFrame{declared_len,"
+            "start:self.msg_pos,index:self.index,cumulative_len:self.total_msg_len,};"
+            "Some(frame)}else{None}"
+        ),
+        "finish_frame": (
+            "self.msg_num+=1;self.msg_pos+=declared_lenasusize;self.index+=1;"
+        ),
+        "total_msg_len": "self.total_msg_len",
+        "msg_num": "self.msg_num",
+    }
+    for method_name in cursor_methods:
+        method_records = cursor_records[method_name]
+        if len(method_records) != 1:
+            violations.append(f"AppendBatchFrameCursor::{method_name} definition count changed")
+            continue
+        record = method_records[0]
+        if record.signature != cursor_signatures[method_name]:
+            violations.append(f"AppendBatchFrameCursor::{method_name} signature changed")
+        if record.visibility != "pub" or record.cfg_gated:
+            violations.append(f"AppendBatchFrameCursor::{method_name} visibility changed")
+        if record.body != cursor_bodies[method_name]:
+            violations.append(f"AppendBatchFrameCursor::{method_name} behavior changed")
+    cursor_default = compact_rust(
+        active_trait_impl_body(
+            production,
+            r"\bimpl\s+Default\s+for\s+AppendBatchFrameCursor\b",
+        )
+        or ""
+    )
+    if cursor_default != "fndefault()->Self{Self::new()}":
+        violations.append("AppendBatchFrameCursor default initialization changed")
+
+    cursor_position = source.find("pub struct AppendBatchFrameCursor")
+    cursor_doc_start = source.rfind("/// Stateful traversal", 0, cursor_position)
+    cursor_docs = source[cursor_doc_start:cursor_position]
+    next_position = source.find("pub fn next", cursor_position)
+    next_doc_start = source.rfind("/// Decodes", cursor_position, next_position)
+    next_docs = source[next_doc_start:next_position]
+    finish_position = source.find("pub fn finish_frame", next_position)
+    finish_doc_start = source.rfind("/// Advances", next_position, finish_position)
+    finish_docs = source[finish_doc_start:finish_position]
+    total_position = source.find("pub fn total_msg_len", finish_position)
+    total_doc_start = source.rfind("/// Returns", finish_position, total_position)
+    total_docs = source[total_doc_start:total_position]
+    msg_num_position = source.find("pub fn msg_num", total_position)
+    msg_num_doc_start = source.rfind("/// Returns", total_position, msg_num_position)
+    msg_num_docs = source[msg_num_doc_start:msg_num_position]
+    required_cursor_docs = (
+        (cursor_docs, "decoded cumulative state advanced by [`Self::next`]"),
+        (cursor_docs, "finished consumed state advanced only by [`Self::finish_frame`]"),
+        (next_docs, "advances only the decoded cumulative state"),
+        (next_docs, "does not advance the finished `msg_pos`, `index`, or `msg_num` state"),
+        (finish_docs, "most recently decoded non-roll frame"),
+        (finish_docs, "exactly once with that descriptor's declared length"),
+        (finish_docs, "only after the frame is fully consumed and its context is updated"),
+        (finish_docs, "A roll path must not call this method"),
+        (total_docs, "decoded cumulative signed length"),
+        (msg_num_docs, "frames whose consumption has been finished"),
+    )
+    for docs, fragment in required_cursor_docs:
+        if fragment not in docs:
+            violations.append(f"AppendBatchFrameCursor documentation changed: {fragment}")
 
     timestamp_body = compact_rust(
         named_function_body(production, "store_timestamp_position") or ""
@@ -9133,6 +9284,7 @@ def append_frame_store_adapter_violations(source: str) -> list[str]:
     violations: list[str] = []
 
     required_imports = {
+        "rocketmq_store_local::commit_log::append_frame::AppendBatchFrameCursor",
         "rocketmq_store_local::commit_log::append_frame::AppendFrameCrcPlan",
         "rocketmq_store_local::commit_log::append_frame::AppendFrameKernel",
         "rocketmq_store_local::commit_log::append_frame::BLANK_MARKER_LENGTH",
@@ -9148,6 +9300,7 @@ def append_frame_store_adapter_violations(source: str) -> list[str]:
         violations.append(f"Store append-frame imports changed: {sorted(imports)}")
 
     required_counts = {
+        "AppendFrameKernel::declared_frame_length(pre_encode_buffer.as_ref())": 2,
         "AppendFrameKernel::segment_append_decision(": 3,
         "AppendFrameKernel::finalize_frame(": 2,
         "AppendFrameKernel::finalize_batch_frame(": 1,
@@ -9164,7 +9317,7 @@ def append_frame_store_adapter_violations(source: str) -> list[str]:
             violations.append(f"Store append-frame adapter count changed: {fragment}")
     exact_decision_calls = {
         "AppendFrameKernel::segment_append_decision(msg_len,max_blank)": 2,
-        "AppendFrameKernel::segment_append_decision(total_msg_len,max_blank)": 1,
+        "AppendFrameKernel::segment_append_decision(frame.cumulative_len(),max_blank)": 1,
     }
     for fragment, count in exact_decision_calls.items():
         if compact.count(fragment) != count:
@@ -9180,6 +9333,8 @@ def append_frame_store_adapter_violations(source: str) -> list[str]:
         ".put_i32(max_blank)",
         "msg_len+8>max_blank",
         "total_msg_len+8>max_blank",
+        "i32::from_be_bytes",
+        "[0..4]",
     )
     for fragment in forbidden_store_fragments:
         if fragment in compact:
@@ -9238,6 +9393,7 @@ def append_frame_store_adapter_violations(source: str) -> list[str]:
         "standard append",
         standard,
         (
+            "AppendFrameKernel::declared_frame_length(pre_encode_buffer.as_ref())",
             "MessageSysFlag::get_transaction_value",
             "AppendFrameKernel::segment_append_decision(",
             "self.msg_store_item_memory.lock()",
@@ -9253,26 +9409,48 @@ def append_frame_store_adapter_violations(source: str) -> list[str]:
     batch = batch_bodies[0]
     exact_batch_finalizer = (
         "let_crc_plan=AppendFrameKernel::finalize_batch_frame("
-        "&mutmessages_byte_buffer[msg_pos..frame_end],queue_offset,phy_pos,"
+        "&mutmessages_byte_buffer[frame.start()..frame.end()],queue_offset,phy_pos,"
         "msg_batch.message_ext_broker_inner.store_timestamp(),born_host_width,);"
     )
     if batch.count(exact_batch_finalizer) != 1:
         violations.append("batch append finalizer arguments changed")
     if batch.count("mapped_file.write_bytes_segment(") != 1:
         violations.append("batch append EOF scratch write changed")
+    exact_batch_fragments = {
+        "letmutcursor=AppendBatchFrameCursor::new();": 1,
+        "whileletSome(frame)=cursor.next(messages_byte_buffer.as_ref())": 1,
+        "letmsg_len=frame.declared_len();": 1,
+        "letphy_pos=frame.physical_offset(wrote_offset);": 1,
+        "frame.end()": 1,
+        "put_message_context.get_phy_pos_mut()[frame.index()]=phy_pos;": 1,
+        "cursor.finish_frame(msg_len);": 1,
+        "wrote_bytes:cursor.total_msg_len(),": 1,
+        "msg_num:cursor.msg_num(),": 1,
+    }
+    for fragment, count in exact_batch_fragments.items():
+        if batch.count(fragment) != count:
+            violations.append(f"Store batch cursor adapter changed: {fragment}")
+    if re.search(r"letmut(?:total_msg_len|msg_pos|index|msg_num)=", batch):
+        violations.append("Store retained manual batch cursor state")
     require_order(
         "batch append",
         batch,
         (
             "letbegin_time_mills=Instant::now();",
-            "AppendFrameKernel::segment_append_decision(",
+            "letmutcursor=AppendBatchFrameCursor::new();",
+            "whileletSome(frame)=cursor.next(messages_byte_buffer.as_ref())",
+            "letmsg_len=frame.declared_len();",
+            "AppendFrameKernel::segment_append_decision(frame.cumulative_len(),max_blank)",
             "self.msg_store_item_memory.lock()",
             "bytes.clear();",
             "AppendFrameKernel::blank_marker(max_blank)",
             "bytes.put_slice(marker.bytes());",
             "mapped_file.write_bytes_segment(",
+            "letphy_pos=frame.physical_offset(wrote_offset);",
             "AppendFrameKernel::finalize_batch_frame(",
-            "put_message_context.get_phy_pos_mut()[index]=phy_pos;",
+            "ifenabled_append_prop_crc{let_check_size=msg_len-self.crc32_reserved_length;}",
+            "put_message_context.get_phy_pos_mut()[frame.index()]=phy_pos;",
+            "cursor.finish_frame(msg_len);",
             "mapped_file.append_message_bytes_no_position_update(&bytes);",
         ),
     )
@@ -9319,6 +9497,7 @@ def append_frame_store_adapter_violations(source: str) -> list[str]:
         "zero-copy append",
         zero_copy,
         (
+            "AppendFrameKernel::declared_frame_length(pre_encode_buffer.as_ref())",
             "MessageSysFlag::get_transaction_value",
             "AppendFrameKernel::segment_append_decision(",
             "self.msg_store_item_memory.lock()",
@@ -11147,6 +11326,55 @@ pub use {module}::{item};
         )
         owner_mutations = [
             append_frame_source.replace(
+                "i32::from_be_bytes(frame[0..4].try_into().unwrap())",
+                "i32::from_le_bytes(frame[0..4].try_into().unwrap())",
+                1,
+            ),
+            append_frame_source.replace(
+                "i32::from_be_bytes(frame[0..4].try_into().unwrap())",
+                "i32::from_be_bytes(frame[1..5].try_into().unwrap())",
+                1,
+            ),
+            append_frame_source.replace(
+                "if self.total_msg_len < frames.len() as i32",
+                "if self.total_msg_len <= frames.len() as i32",
+                1,
+            ),
+            append_frame_source.replace(
+                "self.total_msg_len += declared_len;",
+                "self.total_msg_len = self.total_msg_len.saturating_add(declared_len);",
+                1,
+            ),
+            append_frame_source.replace(
+                "wrote_offset + self.cumulative_len as i64 - self.declared_len as i64",
+                "wrote_offset + (self.cumulative_len as i64 - self.declared_len as i64)",
+                1,
+            ),
+            append_frame_source.replace(
+                "wrote_offset + self.cumulative_len as i64 - self.declared_len as i64",
+                "wrote_offset.checked_add(self.cumulative_len as i64).unwrap() - self.declared_len as i64",
+                1,
+            ),
+            append_frame_source.replace(
+                "wrote_offset + self.cumulative_len as i64 - self.declared_len as i64",
+                "wrote_offset.saturating_add(self.cumulative_len as i64).saturating_sub(self.declared_len as i64)",
+                1,
+            ),
+            append_frame_source.replace(
+                "A roll path must not call this method.",
+                "A roll path may call this method.",
+                1,
+            ),
+            append_frame_source.replace(
+                "self.msg_num += 1;\n"
+                "        self.msg_pos += declared_len as usize;\n"
+                "        self.index += 1;",
+                "self.msg_pos += declared_len as usize;\n"
+                "        self.msg_num += 1;\n"
+                "        self.index += 1;",
+                1,
+            ),
+            append_frame_source.replace(
                 "encoded_len + END_FILE_MIN_BLANK_LENGTH > max_blank",
                 "encoded_len + END_FILE_MIN_BLANK_LENGTH >= max_blank",
                 1,
@@ -11259,6 +11487,46 @@ fn copied_roll(encoded_len: i32, max_blank: i32) -> bool {
             )
 
         adapter_mutations = [
+            callback_source.replace(
+                "let phy_pos = frame.physical_offset(wrote_offset);",
+                "let phy_pos = wrote_offset + frame.cumulative_len() as i64 - frame.declared_len() as i64;",
+                1,
+            ),
+            callback_source.replace(
+                "AppendFrameKernel::declared_frame_length(pre_encode_buffer.as_ref())",
+                "i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap())",
+                1,
+            ),
+            callback_source.replace(
+                "        let mut cursor = AppendBatchFrameCursor::new();",
+                "        let _prefix = &messages_byte_buffer[0..4];\n"
+                "        let mut cursor = AppendBatchFrameCursor::new();",
+                1,
+            ),
+            callback_source.replace(
+                "        let mut cursor = AppendBatchFrameCursor::new();",
+                "        let mut total_msg_len = 0;\n"
+                "        let mut cursor = AppendBatchFrameCursor::new();",
+                1,
+            ),
+            callback_source.replace(
+                "            put_message_context.get_phy_pos_mut()[frame.index()] = phy_pos;\n"
+                "            cursor.finish_frame(msg_len);",
+                "            cursor.finish_frame(msg_len);\n"
+                "            put_message_context.get_phy_pos_mut()[frame.index()] = phy_pos;",
+                1,
+            ),
+            callback_source.replace(
+                "            cursor.finish_frame(msg_len);\n",
+                "",
+                1,
+            ),
+            callback_source.replace(
+                "            let msg_len = frame.declared_len();\n",
+                "            let msg_len = frame.declared_len();\n"
+                "            let _premature_end = frame.end();\n",
+                1,
+            ),
             callback_source.replace(
                 "AppendFrameKernel::segment_append_decision(msg_len, max_blank)",
                 "AppendFrameKernel::segment_append_decision(msg_len - 1, max_blank)",

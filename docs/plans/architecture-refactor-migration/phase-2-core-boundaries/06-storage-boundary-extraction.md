@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1251,3 +1251,50 @@ python scripts/arc_mut_guard.py
   mapped-file I/O、CRC32 算法执行、message/config/topic/transaction/result/context/timing/metrics、flush/
   group commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/
   TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ad CommitLog append TOTALSIZE and batch traversal extraction evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::append_frame::AppendFrameKernel::declared_frame_length`
+  现为 CommitLog append `TOTALSIZE` offset-zero big-endian 解码的唯一 owner；公开 seam 明确记录短 slice
+  的 `# Panics`，并保留 `[0..4]`、`try_into`、`unwrap` 与 signed `i32` 语义。命名
+  `AppendBatchFrameCursor` 唯一持有 `total_msg_len/msg_pos/index/msg_num`，命名 `AppendBatchFrame`
+  只暴露 declared length、start/end、index、cumulative length 与命名 `physical_offset(wrote_offset)`；后者
+  精确保留 `wrote_offset + cumulative as i64 - declared as i64` 的旧左结合和 debug overflow seam。
+- [x] `[COMPAT/ORDER]` batch cursor 采用两阶段推进：`next` 只执行 strict `<` gate、Local length decode、
+  普通 `i32 +=` cumulative update 与 descriptor 构造；Store 先用 cumulative length 判定 roll，之后才求
+  physical offset/end、patch frame、保留 batch CRC no-op、更新 context，最后调用 `finish_frame`，并按旧顺序执行
+  `msg_num += 1; msg_pos += declared_len as usize; index += 1`。因此 roll 路径不触发 lazy end/physical
+  calculation 或 consumed-state advance；成功结果仍取 cursor 的 cumulative bytes 与 message count。
+- [x] `[TEST]` TDD RED 以 1 个 E0432 与 3 个 E0599 证明 Local cursor/decoder seam 尚不存在；GREEN 后
+  Local golden/panic/legacy anomaly fixture 14/14 通过，覆盖正负 big-endian prefix、短 prefix panic、两帧
+  cumulative/physical offset、zero-length non-progress、malformed tail、malformed rolling frame 的 lazy order，
+  以及第一帧 `cumulative == declared` 时 `physical_offset(i64::MAX)` 在旧式第一步 addition 上 debug panic。
+  Store callback 既有 focused 2/2 保持通过。未新增 Store runtime batch fixture：直接复用
+  `DefaultMappedFile` 会新增 transitive ArcMut wrapper occurrence，而为两条断言引入完整 fake 会扩大高触达 callback
+  测试模块与范围；因此 batch success parity、second-frame roll 和 context/finish order 由 Local golden 与精确 Store
+  adapter/mutation contract 联合验证。初审修复后关联 owner/adapter/mutation contract 2/2（87.897s）通过；
+  修复前候选快照完整 M06 contract 曾为 117/117（527.592s），本次初审修复后的完整 117 项复跑留主线程完成。
+- [x] `[CONTRACT]` Local contract 锁定 decoder、descriptor、cursor 字段、签名、精确 body、Default delegation、
+  lazy end、左结合 physical offset 与 `next -> Store consume -> finish_frame` 顺序；Store contract 锁定标准/zero-copy
+  各一次 Local decoder、唯一 batch cursor、cumulative roll、physical/finalizer/CRC/context/finish 顺序及成功结果来源。
+  mutation 拒绝 BE→LE、`[0..4]`→`[1..5]`、`<`→`<=`、checked/saturating cumulative、physical offset
+  括号重组、checked/saturating physical arithmetic、finish 内推进重排、Store 直接 `from_be_bytes`/固定 prefix、
+  手写 cursor/physical arithmetic、提前/遗漏 finish 与 roll 前求 end。
+- [x] `[REVIEW FIX]` 初审 Critical/Important/Minor = 0/1/1。Important 指出“Local 先算 relative delta、Store
+  再加 wrote offset”会把旧左结合改成 `wrote + (cumulative - declared)`，从而改变 overflow 行为；现由 Local
+  `physical_offset` 单点拥有原表达式，并由 golden、debug-overflow 与 regroup/checked/saturating/Store-handwrite
+  mutations 冻结。Minor 指出公开 cursor 文档混淆 decoded cumulative 与 finished consumed state，并把 `msg_num`
+  误写为 yielded count；现已明确 `next` 只推进 decoded total，非-roll frame 完整消费且 context 更新后才以最近
+  descriptor length 恰好调用一次 `finish_frame`，roll 禁止调用，`msg_num` 只统计 finished frame。修复后 Local
+  focused 14/14、最终完整 M06 contract 117/117（554.074s）通过；原 reviewer 复放 regroup/checked/saturating/
+  Store-handwrite mutations 后以 Critical/Important/Minor = 0/0/0 Approved。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature 或依赖。Local default/all-feature 全量测试与 Store
+  default/all-feature check 通过；两 crate all-target/all-feature package Clippy、root exact workspace Clippy、
+  workspace fmt、Python compile、diff check 与 Local strict Rustdoc 通过，Store 普通 Rustdoc 只复现四条未触及的
+  invalid-HTML warning。architecture 35/35+fixtures+baseline、ArcMut 63/63+24 fixtures+final guard 与 AGENTS
+  routing 通过；本切片新增 ArcMut 为 0，未新增 relocation approval 或 baseline 债务。新增 cursor 初次 package
+  Clippy 精确暴露 `new_without_default`，以 `Default -> Self::new()` 修复后复跑通过。
+- [x] `[SCOPE]` M06-03ad 只迁移 append TOTALSIZE 解码与 batch frame traversal owner；Store 继续持有
+  message/config/topic/transaction、CRC 执行/no-op、context、message-id、timer/result 与 MappedFile I/O。
+  recovery/header/encoder、MappedFile raw/flush、CQ/Index、HA、Timer/POP、runtime ownership 与持久格式均未修改。
+  PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。

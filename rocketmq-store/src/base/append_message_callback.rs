@@ -20,6 +20,7 @@ use bytes::BufMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use rocketmq_store_local::commit_log::append_frame::AppendBatchFrameCursor;
 use rocketmq_store_local::commit_log::append_frame::AppendFrameCrcPlan;
 use rocketmq_store_local::commit_log::append_frame::AppendFrameKernel;
 use rocketmq_store_local::commit_log::append_frame::HostWidth;
@@ -151,7 +152,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
     ) -> AppendMessageResult {
         let mut pre_encode_buffer = msg_inner.encoded_buff.take().unwrap(); // Assuming get_encoded_buff returns Option<ByteBuffer>
 
-        let msg_len = i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap());
+        let msg_len = AppendFrameKernel::declared_frame_length(pre_encode_buffer.as_ref());
         //physic offset
         let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
         let addr = msg_inner.message_ext_inner.store_host;
@@ -271,18 +272,12 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         let phy_ops = put_message_context.get_phy_pos().to_vec();
         let msg_id_supplier =
             move || -> String { build_batch_message_id(addr, store_host_length, batch_size as usize, &phy_ops) };
-        let mut total_msg_len = 0;
-        let mut msg_num = 0;
-        let mut msg_pos = 0;
-        let mut index = 0;
-        while total_msg_len < messages_byte_buffer.len() as i32 {
-            let msg_len = i32::from_be_bytes(
-                messages_byte_buffer[total_msg_len as usize..(total_msg_len + 4) as usize]
-                    .try_into()
-                    .unwrap(),
-            );
-            total_msg_len += msg_len;
-            if let SegmentAppendDecision::Roll = AppendFrameKernel::segment_append_decision(total_msg_len, max_blank) {
+        let mut cursor = AppendBatchFrameCursor::new();
+        while let Some(frame) = cursor.next(messages_byte_buffer.as_ref()) {
+            let msg_len = frame.declared_len();
+            if let SegmentAppendDecision::Roll =
+                AppendFrameKernel::segment_append_decision(frame.cumulative_len(), max_blank)
+            {
                 let mut bytes = self.msg_store_item_memory.lock();
                 bytes.clear();
                 let marker = AppendFrameKernel::blank_marker(max_blank);
@@ -304,10 +299,9 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                     ..Default::default()
                 };
             }
-            let phy_pos = wrote_offset + total_msg_len as i64 - msg_len as i64;
-            let frame_end = msg_pos + msg_len as usize;
+            let phy_pos = frame.physical_offset(wrote_offset);
             let _crc_plan = AppendFrameKernel::finalize_batch_frame(
-                &mut messages_byte_buffer[msg_pos..frame_end],
+                &mut messages_byte_buffer[frame.start()..frame.end()],
                 queue_offset,
                 phy_pos,
                 msg_batch.message_ext_broker_inner.store_timestamp(),
@@ -316,10 +310,8 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             if enabled_append_prop_crc {
                 let _check_size = msg_len - self.crc32_reserved_length;
             }
-            put_message_context.get_phy_pos_mut()[index] = phy_pos;
-            msg_num += 1;
-            msg_pos += msg_len as usize;
-            index += 1;
+            put_message_context.get_phy_pos_mut()[frame.index()] = phy_pos;
+            cursor.finish_frame(msg_len);
         }
 
         let bytes = messages_byte_buffer.freeze();
@@ -327,12 +319,12 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         AppendMessageResult {
             status: AppendMessageStatus::PutOk,
             wrote_offset,
-            wrote_bytes: total_msg_len,
+            wrote_bytes: cursor.total_msg_len(),
             msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
             store_timestamp: msg_batch.message_ext_broker_inner.store_timestamp(),
             logics_offset: begin_queue_offset,
             page_cache_rt: begin_time_mills.elapsed().as_millis() as i64,
-            msg_num,
+            msg_num: cursor.msg_num(),
             ..Default::default()
         }
     }
@@ -358,7 +350,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         // Extract pre-encoded buffer (still contains metadata we need)
         let pre_encode_buffer = msg_inner.encoded_buff.take().unwrap();
 
-        let msg_len = i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap());
+        let msg_len = AppendFrameKernel::declared_frame_length(pre_encode_buffer.as_ref());
 
         // Calculate physical offset
         let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
