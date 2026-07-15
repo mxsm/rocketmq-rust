@@ -45,6 +45,16 @@ use rocketmq_store_local::mapped_file::queue_maintenance::mapped_file_queue_trun
 use rocketmq_store_local::mapped_file::queue_maintenance::plan_mapped_file_queue_reset;
 use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueResetLastFile;
 use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueTruncateAction;
+use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_available_memory_size;
+use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_fall_behind;
+use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_lazy_mmap_stats;
+use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_max_offset;
+use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_max_wrote_position;
+use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_min_offset;
+use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_should_roll;
+use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_total_size;
+use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_warmup_stats;
+pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileWarmupStats;
 use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage;
 use tracing::error;
@@ -71,14 +81,6 @@ pub struct FlushProgress {
     pub durable_before: i64,
     pub durable: i64,
     pub store_timestamp: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct MappedFileWarmupStats {
-    pub operations: u64,
-    pub bytes: u64,
-    pub total_millis: u64,
-    pub last_millis: u64,
 }
 
 impl Default for MappedFileQueue {
@@ -280,30 +282,12 @@ impl MappedFileQueue {
 
     pub fn warmup_stats(&self) -> MappedFileWarmupStats {
         let mapped_files = self.storage.mapped_files().load();
-        let mut stats = MappedFileWarmupStats::default();
-        for mapped_file in mapped_files.iter() {
-            let Some(metrics) = mapped_file.get_metrics() else {
-                continue;
-            };
-            let operations = metrics.warm_operations();
-            if operations == 0 {
-                continue;
-            }
-            stats.operations = stats.operations.saturating_add(operations);
-            stats.bytes = stats.bytes.saturating_add(metrics.warm_bytes());
-            stats.total_millis = stats.total_millis.saturating_add(metrics.total_warm_millis());
-            stats.last_millis = metrics.last_warm_millis();
-        }
-        stats
+        mapped_file_queue_warmup_stats(mapped_files.as_slice())
     }
 
     pub fn lazy_mmap_stats(&self) -> LazyMmapStats {
         let mapped_files = self.storage.mapped_files().load();
-        let mut stats = LazyMmapStats::default();
-        for mapped_file in mapped_files.iter() {
-            stats.saturating_add_assign(mapped_file.lazy_mmap_stats());
-        }
-        stats
+        mapped_file_queue_lazy_mmap_stats(mapped_files.as_slice())
     }
 
     #[inline]
@@ -349,10 +333,8 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn get_max_offset(&self) -> i64 {
-        match self.get_last_mapped_file() {
-            None => 0,
-            Some(file) => file.get_file_from_offset() as i64 + file.get_read_position() as i64,
-        }
+        let last = self.get_last_mapped_file();
+        mapped_file_queue_max_offset(last.as_ref())
     }
 
     #[inline]
@@ -482,10 +464,8 @@ impl MappedFileQueue {
     /// Check if list is empty or current file is full
     #[inline]
     pub fn is_empty_or_current_file_full(&self) -> bool {
-        match self.get_last_mapped_file() {
-            None => true,
-            Some(file) => file.is_full(),
-        }
+        let last = self.get_last_mapped_file();
+        mapped_file_queue_should_roll(last.as_ref(), 0)
     }
 
     /// Check if should roll to next file
@@ -497,17 +477,8 @@ impl MappedFileQueue {
     /// true if should create new file
     #[inline]
     pub fn should_roll(&self, msg_size: i32) -> bool {
-        if self.is_empty_or_current_file_full() {
-            return true;
-        }
-
-        if let Some(mapped_file_last) = self.get_last_mapped_file() {
-            if mapped_file_last.get_wrote_position() + msg_size > mapped_file_last.get_file_size() as i32 {
-                return true;
-            }
-        }
-
-        false
+        let last = self.get_last_mapped_file();
+        mapped_file_queue_should_roll(last.as_ref(), msg_size)
     }
 
     /// Get minimum offset in the queue
@@ -515,12 +486,8 @@ impl MappedFileQueue {
     /// Returns -1 if no mapped files exist
     #[inline]
     pub fn get_min_offset(&self) -> i64 {
-        if !self.storage.mapped_files().load().is_empty() {
-            if let Some(first) = self.get_first_mapped_file() {
-                return first.get_file_from_offset() as i64;
-            }
-        }
-        -1
+        let first = self.get_first_mapped_file();
+        mapped_file_queue_min_offset(first.as_ref())
     }
 
     /// Get total mapped memory size
@@ -529,13 +496,7 @@ impl MappedFileQueue {
     #[inline]
     pub fn get_mapped_memory_size(&self) -> i64 {
         let files = self.storage.mapped_files().load();
-        let mut size = 0i64;
-        for mapped_file in files.iter() {
-            if mapped_file.is_available() {
-                size += self.storage.mapped_file_size() as i64;
-            }
-        }
-        size
+        mapped_file_queue_available_memory_size(files.as_slice(), self.storage.mapped_file_size())
     }
 
     /// Get how much data has fallen behind
@@ -543,19 +504,8 @@ impl MappedFileQueue {
     /// Returns the difference between max wrote position and flushed position
     #[inline]
     pub fn how_much_fall_behind(&self) -> i64 {
-        if self.storage.mapped_files().load().is_empty() {
-            return 0;
-        }
-
-        let committed = self.get_flushed_where();
-        if committed != 0 {
-            if let Some(mapped_file) = self.get_last_mapped_file() {
-                return (mapped_file.get_file_from_offset() as i64 + mapped_file.get_wrote_position() as i64)
-                    - committed;
-            }
-        }
-
-        0
+        let last = self.get_last_mapped_file();
+        mapped_file_queue_fall_behind(last.as_ref(), self.get_flushed_where())
     }
 
     /// Gracefully shutdown all mapped files
@@ -656,7 +606,7 @@ impl MappedFileQueue {
     #[inline]
     pub fn get_total_file_size(&self) -> i64 {
         let files = self.storage.mapped_files().load();
-        (files.len() as i64) * (self.storage.mapped_file_size() as i64)
+        mapped_file_queue_total_size(files.len(), self.storage.mapped_file_size())
     }
 
     /// Get the number of mapped files
@@ -911,11 +861,8 @@ impl MappedFileQueue {
     }
     #[inline]
     fn get_max_wrote_position(&self) -> i64 {
-        let mapped_file = self.get_last_mapped_file();
-        match mapped_file {
-            None => 0,
-            Some(file) => file.get_file_from_offset() as i64 + file.get_wrote_position() as i64,
-        }
+        let last = self.get_last_mapped_file();
+        mapped_file_queue_max_wrote_position(last.as_ref())
     }
 
     /// Gets a consume queue mapped file by timestamp.

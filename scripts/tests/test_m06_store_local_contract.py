@@ -72,6 +72,9 @@ MAPPED_FILE_QUEUE_LIFECYCLE_PATH = Path(
 MAPPED_FILE_QUEUE_MAINTENANCE_PATH = Path(
     "rocketmq-store-local/src/mapped_file/queue_maintenance.rs"
 )
+MAPPED_FILE_QUEUE_METRICS_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_metrics.rs"
+)
 MAPPED_FILE_QUEUE_STATE_PATH = Path(
     "rocketmq-store-local/src/mapped_file/queue_state.rs"
 )
@@ -313,9 +316,19 @@ CANONICAL_ITEMS = {
     "clean_swapped_mapped_file_queue": ("fn", "queue_lifecycle.rs"),
     "shutdown_mapped_file_queue": ("fn", "queue_lifecycle.rs"),
     "destroy_mapped_file_queue": ("fn", "queue_lifecycle.rs"),
+    "mapped_file_queue_warmup_stats": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_lazy_mmap_stats": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_max_offset": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_max_wrote_position": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_should_roll": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_min_offset": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_available_memory_size": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_fall_behind": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_total_size": ("fn", "queue_metrics.rs"),
     "MappedFileQueueIndex": ("enum", "queue_index.rs"),
     "MappedFileQueueLoadOutcome": ("struct", "queue_io.rs"),
     "MappedFileQueueDeletion": ("struct", "queue_lifecycle.rs"),
+    "MappedFileWarmupStats": ("struct", "queue_metrics.rs"),
     "MappedFileQueueLastFile": ("struct", "queue_allocation.rs"),
     "MappedFileQueueRollFile": ("struct", "queue_allocation.rs"),
     "MappedFileQueueTruncateAction": ("enum", "queue_maintenance.rs"),
@@ -7319,7 +7332,7 @@ def mapped_file_queue_storage_contract_violations(
         if store_compact.count(constructor) != 1:
             violations.append(f"Store mapped-file queue storage constructor changed: {constructor}")
     expected_accessor_counts = {
-        "self.storage.mapped_files()": 36,
+        "self.storage.mapped_files()": 34,
         "self.storage.mapped_file_size()": 16,
         "self.storage.store_path()": 6,
     }
@@ -8225,6 +8238,164 @@ def mapped_file_queue_lifecycle_contract_violations(
     ):
         if named_function_body(local_test_source, test_name) is None:
             violations.append(f"Local mapped-file queue lifecycle regression changed: {test_name}")
+    return violations
+
+
+def mapped_file_queue_metrics_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+
+    if active_struct_fields(production, "MappedFileWarmupStats") != [
+        ("operations", "u64"),
+        ("bytes", "u64"),
+        ("total_millis", "u64"),
+        ("last_millis", "u64"),
+    ]:
+        violations.append("Local mapped-file queue warmup stats fields changed")
+    compact_active = compact_rust(active)
+    if "#[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]pubstructMappedFileWarmupStats" not in compact_active:
+        violations.append("Local mapped-file queue warmup stats traits changed")
+
+    function_names = (
+        "mapped_file_queue_warmup_stats",
+        "mapped_file_queue_lazy_mmap_stats",
+        "mapped_file_queue_max_offset",
+        "mapped_file_queue_max_wrote_position",
+        "mapped_file_queue_should_roll",
+        "mapped_file_queue_min_offset",
+        "mapped_file_queue_available_memory_size",
+        "mapped_file_queue_fall_behind",
+        "mapped_file_queue_total_size",
+    )
+    bodies = {
+        function_name: compact_rust(named_function_body(production, function_name) or "")
+        for function_name in function_names
+    }
+    for function_name, body in bodies.items():
+        if not body:
+            violations.append(f"Local mapped-file queue metrics owner changed: {function_name}")
+    expected_fragments = {
+        "mapped_file_queue_warmup_stats": (
+            "letSome(metrics)=mapped_file.get_metrics()else{continue;};",
+            "ifoperations==0{continue;}",
+            "stats.operations=stats.operations.saturating_add(operations)",
+            "stats.bytes=stats.bytes.saturating_add(metrics.warm_bytes())",
+            "stats.total_millis=stats.total_millis.saturating_add(metrics.total_warm_millis())",
+            "stats.last_millis=metrics.last_warm_millis()",
+        ),
+        "mapped_file_queue_lazy_mmap_stats": (
+            "stats.saturating_add_assign(mapped_file.lazy_mmap_stats())",
+        ),
+        "mapped_file_queue_max_offset": (
+            "file.get_file_from_offset()asi64+file.get_read_position()asi64",
+        ),
+        "mapped_file_queue_max_wrote_position": (
+            "file.get_file_from_offset()asi64+file.get_wrote_position()asi64",
+        ),
+        "mapped_file_queue_should_roll": (
+            "letSome(last)=lastelse{returntrue;}",
+            "last.is_full()||last.get_wrote_position()+message_size>last.get_file_size()asi32",
+        ),
+        "mapped_file_queue_min_offset": ("first.map_or(-1,|file|file.get_file_from_offset()asi64)",),
+        "mapped_file_queue_available_memory_size": (
+            "files.iter().filter(|file|file.is_available()).count()asi64*mapped_file_sizeasi64",
+        ),
+        "mapped_file_queue_fall_behind": (
+            "ifflushed_where==0{return0;}",
+            "file.get_file_from_offset()asi64+file.get_wrote_position()asi64-flushed_where",
+        ),
+        "mapped_file_queue_total_size": ("mapped_file_countasi64*mapped_file_sizeasi64",),
+    }
+    for function_name, fragments in expected_fragments.items():
+        for fragment in fragments:
+            if fragment not in bodies[function_name]:
+                violations.append(f"Local mapped-file queue metrics changed: {function_name}: {fragment}")
+
+    for forbidden in (
+        "rocketmq_store::",
+        "rocketmq_common",
+        "rocketmq_remoting",
+        "rocketmq_broker",
+        "rocketmq_tiered_store",
+        "ArcSwap",
+        "CommitLog",
+        "BoundaryType",
+        "crate::runtime",
+        "tokio::",
+        "async ",
+        ".await",
+        "ArcMut",
+    ):
+        if forbidden in active:
+            violations.append(f"Local mapped-file queue metrics absorbed forbidden edge: {forbidden}")
+    if active_rust_source(module_source).count("pub mod queue_metrics;") != 1:
+        violations.append("Local mapped_file module must expose queue_metrics exactly once")
+
+    expected_private_imports = {
+        f"use rocketmq_store_local::mapped_file::queue_metrics::{function_name}"
+        for function_name in function_names
+    }
+    actual_private_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_metrics" in body
+    }
+    if actual_private_imports != expected_private_imports:
+        violations.append("Store mapped-file queue metrics imports must be direct and exact")
+    exact_reexport = "pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileWarmupStats;"
+    if active_rust_source(store_source).count(exact_reexport) != 1:
+        violations.append("Store must exactly re-export Local MappedFileWarmupStats")
+    store_production = source_without_cfg_test_items(store_source)
+    if re.search(r"\bstruct\s+MappedFileWarmupStats\b", active_rust_source(store_production)):
+        violations.append("Store retained a copied mapped-file warmup stats owner")
+
+    store_expected_calls = {
+        "warmup_stats": "mapped_file_queue_warmup_stats(mapped_files.as_slice())",
+        "lazy_mmap_stats": "mapped_file_queue_lazy_mmap_stats(mapped_files.as_slice())",
+        "get_max_offset": "mapped_file_queue_max_offset(last.as_ref())",
+        "get_max_wrote_position": "mapped_file_queue_max_wrote_position(last.as_ref())",
+        "is_empty_or_current_file_full": "mapped_file_queue_should_roll(last.as_ref(),0)",
+        "should_roll": "mapped_file_queue_should_roll(last.as_ref(),msg_size)",
+        "get_min_offset": "mapped_file_queue_min_offset(first.as_ref())",
+        "get_mapped_memory_size": "mapped_file_queue_available_memory_size(files.as_slice(),self.storage.mapped_file_size())",
+        "how_much_fall_behind": "mapped_file_queue_fall_behind(last.as_ref(),self.get_flushed_where())",
+        "get_total_file_size": "mapped_file_queue_total_size(files.len(),self.storage.mapped_file_size())",
+    }
+    for method_name, expected_call in store_expected_calls.items():
+        body = compact_rust(named_function_body(store_production, method_name) or "")
+        if body.count(expected_call) != 1:
+            violations.append(f"Store mapped-file queue metrics adapter changed: {method_name}")
+    for method_name, forbidden_fragments in {
+        "warmup_stats": ("warm_operations", "saturating_add"),
+        "lazy_mmap_stats": ("saturating_add_assign",),
+        "get_max_offset": ("get_read_position",),
+        "get_max_wrote_position": ("get_wrote_position",),
+        "should_roll": ("get_wrote_position", "get_file_size"),
+        "get_mapped_memory_size": ("is_available",),
+        "how_much_fall_behind": ("get_wrote_position",),
+    }.items():
+        body = compact_rust(named_function_body(store_production, method_name) or "")
+        for fragment in forbidden_fragments:
+            if fragment in body:
+                violations.append(f"Store retained mapped-file queue metrics owner: {method_name}: {fragment}")
+
+    for test_name in (
+        "empty_queue_queries_preserve_legacy_sentinels",
+        "queue_position_and_roll_queries_use_the_last_file_snapshot",
+        "available_memory_and_total_size_keep_distinct_accounting",
+        "warmup_metrics_aggregate_with_saturating_totals_and_last_file_latency",
+        "lazy_mmap_metrics_aggregate_mapped_and_unmapped_files",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue metrics regression changed: {test_name}")
+    if named_function_body(store_source, "warmup_stats_aggregates_mapped_file_metrics") is None:
+        violations.append("Store mapped-file queue warmup facade regression changed")
     return violations
 
 
@@ -13820,6 +13991,144 @@ class StoreLocalContractTests(unittest.TestCase):
                     ),
                 )
 
+    def test_mapped_file_queue_metrics_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_METRICS_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_metrics.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_metrics_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_metrics_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_METRICS_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_metrics.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "warmup field type changed",
+                local.replace("    pub operations: u64,", "    pub operations: usize,", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "warmup saturation removed",
+                local.replace(
+                    "stats.operations.saturating_add(operations)",
+                    "stats.operations + operations",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "warmup last latency removed",
+                local.replace("stats.last_millis = metrics.last_warm_millis();", "", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "max offset uses wrote position",
+                local.replace("file.get_read_position()", "file.get_wrote_position()", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "roll exact boundary changed",
+                local.replace(
+                    "last.get_wrote_position() + message_size > last.get_file_size() as i32",
+                    "last.get_wrote_position() + message_size >= last.get_file_size() as i32",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "available filter removed",
+                local.replace(
+                    ".filter(|file| file.is_available())",
+                    ".filter(|_| true)",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_metrics;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store stats re-export hidden",
+                local,
+                module,
+                store.replace(
+                    "pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileWarmupStats;",
+                    "use rocketmq_store_local::mapped_file::queue_metrics::MappedFileWarmupStats;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store max offset adapter bypassed",
+                local,
+                module,
+                store.replace(
+                    "mapped_file_queue_max_offset(last.as_ref())",
+                    "store_owned_max_offset(last.as_ref())",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local metrics regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn queue_position_and_roll_queries_use_the_last_file_snapshot()",
+                    "fn queue_position_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_metrics_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
     def test_mapped_file_queue_maintenance_has_one_local_owner_and_exact_store_adapters(self) -> None:
         local = (ROOT / MAPPED_FILE_QUEUE_MAINTENANCE_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
@@ -18502,6 +18811,7 @@ struct DefaultMappedFile {
                 "queue_io.rs",
                 "queue_lifecycle.rs",
                 "queue_maintenance.rs",
+                "queue_metrics.rs",
                 "queue_state.rs",
                 "queue_storage.rs",
                 "raw.rs",

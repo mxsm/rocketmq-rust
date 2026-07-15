@@ -42,6 +42,8 @@ pub mod queue_lifecycle;
 #[doc(hidden)]
 pub mod queue_maintenance;
 #[doc(hidden)]
+pub mod queue_metrics;
+#[doc(hidden)]
 pub mod queue_state;
 #[doc(hidden)]
 pub mod queue_storage;
