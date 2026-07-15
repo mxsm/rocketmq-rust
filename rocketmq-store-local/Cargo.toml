@@ -45,6 +45,7 @@ rocketmq-error.workspace = true
 rocketmq-observability = { workspace = true, optional = true }
 serde.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

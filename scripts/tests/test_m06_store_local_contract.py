@@ -89,6 +89,9 @@ STORE_CHECKPOINT_PATH = Path("rocketmq-store/src/base/store_checkpoint.rs")
 STORE_MAPPED_FILE_QUEUE_PATH = Path(
     "rocketmq-store/src/consume_queue/mapped_file_queue.rs"
 )
+LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH = Path(
+    "rocketmq-store-local/src/base/allocate_mapped_file_service.rs"
+)
 STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH = Path(
     "rocketmq-store/src/base/allocate_mapped_file_service.rs"
 )
@@ -7319,7 +7322,8 @@ def mapped_file_queue_storage_contract_violations(
 def mapped_file_allocation_request_contract_violations(
     local_source: str,
     module_source: str,
-    store_source: str,
+    service_source: str,
+    facade_source: str,
     local_test_source: str,
 ) -> list[str]:
     violations: list[str] = []
@@ -7373,27 +7377,25 @@ def mapped_file_allocation_request_contract_violations(
     if active_rust_source(module_source).count("pub mod allocation_request;") != 1:
         violations.append("Local mapped_file module must expose allocation_request exactly once")
 
-    expected_import = (
-        "use rocketmq_store_local::mapped_file::allocation_request::MappedFileAllocationRequestKey"
-    )
+    expected_import = "use crate::mapped_file::allocation_request::MappedFileAllocationRequestKey"
     actual_imports = {
         statement
-        for kind, visibility, body, statement in active_import_records(store_source)
+        for kind, visibility, body, statement in active_import_records(service_source)
         if kind == "use" and not visibility and "mapped_file::allocation_request" in body
     }
     if actual_imports != {expected_import}:
-        violations.append("Store allocation request key import must be direct and exact")
-    expected_store_fields = [
+        violations.append("Local allocation service request key import must be direct and exact")
+    expected_service_fields = [
         ("key", "MappedFileAllocationRequestKey"),
         ("completion", "Arc<Notify>"),
         ("blocking_completion", "Arc<(StdMutex<()>, Condvar)>"),
         ("completed", "Arc<AtomicBool>"),
         ("mapped_file", "Arc<RwLock<Option<Arc<DefaultMappedFile>>>>"),
     ]
-    if active_struct_fields(store_source, "AllocateRequest") != expected_store_fields:
-        violations.append("Store AllocateRequest must retain only Local key and completion/result state")
-    store_production = source_without_cfg_test_items(store_source)
-    store_compact = compact_rust(active_rust_source(store_production))
+    if active_struct_fields(service_source, "AllocateRequest") != expected_service_fields:
+        violations.append("Local AllocateRequest must retain only key and completion/result state")
+    service_production = source_without_cfg_test_items(service_source)
+    service_compact = compact_rust(active_rust_source(service_production))
     for fragment in (
         "key:MappedFileAllocationRequestKey::new(file_path,file_size)",
         "fn file_path(&self)->&str{self.key.file_path()}",
@@ -7402,14 +7404,27 @@ def mapped_file_allocation_request_contract_violations(
         "impl PartialEq for AllocateRequest{fn eq(&self,other:&Self)->bool{self.key==other.key}}",
         "impl Ord for AllocateRequest{fn cmp(&self,other:&Self)->std::cmp::Ordering{self.key.cmp(&other.key)}}",
     ):
-        if compact_rust(fragment) not in store_compact:
-            violations.append(f"Store allocation request adapter changed: {fragment}")
-    allocate_fields = dict(active_struct_fields(store_source, "AllocateRequest"))
+        if compact_rust(fragment) not in service_compact:
+            violations.append(f"Local allocation request runtime shell changed: {fragment}")
+    allocate_fields = dict(active_struct_fields(service_source, "AllocateRequest"))
     for legacy_field in ("file_path", "file_size"):
         if legacy_field in allocate_fields:
-            violations.append(f"Store retained allocation request identity field: {legacy_field}")
-    if "rfind(std::path::MAIN_SEPARATOR)" in store_compact:
-        violations.append("Store retained allocation request offset parsing")
+            violations.append(f"Local service retained allocation request identity field: {legacy_field}")
+    if "rfind(std::path::MAIN_SEPARATOR)" in service_compact:
+        violations.append("Local allocation service retained request offset parsing")
+
+    facade_active = active_rust_source(source_without_cfg_test_items(facade_source))
+    facade_reexports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(facade_source)
+        if kind == "use" and visibility == "pub" and "AllocateMappedFileService" in body
+    }
+    if facade_reexports != {
+        "pub use rocketmq_store_local::base::allocate_mapped_file_service::AllocateMappedFileService"
+    }:
+        violations.append("Store allocation service facade must exact re-export the Local owner")
+    if re.search(r"\bstruct\s+(?:AllocateMappedFileService|AllocateRequest)\b", facade_active):
+        violations.append("Store allocation service facade copied a Local runtime owner")
 
     for test_name in (
         "allocation_request_key_preserves_identity_accessors_and_display",
@@ -7420,17 +7435,18 @@ def mapped_file_allocation_request_contract_violations(
         if named_function_body(local_test_source, test_name) is None:
             violations.append(f"Local mapped-file allocation request regression changed: {test_name}")
     if named_function_body(
-        store_source,
+        service_source,
         "allocate_request_delegates_identity_display_and_priority_to_local_key",
     ) is None:
-        violations.append("Store mapped-file allocation request adapter regression changed")
+        violations.append("Local mapped-file allocation request runtime regression changed")
     return violations
 
 
 def mapped_file_allocation_policy_contract_violations(
     local_source: str,
     module_source: str,
-    store_source: str,
+    service_source: str,
+    facade_source: str,
     local_test_source: str,
 ) -> list[str]:
     violations: list[str] = []
@@ -7492,39 +7508,50 @@ def mapped_file_allocation_policy_contract_violations(
         violations.append("Local mapped_file module must expose allocation_policy exactly once")
 
     expected_imports = {
-        "use rocketmq_store_local::mapped_file::allocation_policy::mapped_file_allocation_capacity",
-        "use rocketmq_store_local::mapped_file::allocation_policy::MappedFileAllocationPoolSnapshot",
-        "use rocketmq_store_local::mapped_file::allocation_policy::MappedFileWarmupConfig",
+        "use crate::mapped_file::allocation_policy::mapped_file_allocation_capacity",
+        "use crate::mapped_file::allocation_policy::MappedFileAllocationPoolSnapshot",
+        "use crate::mapped_file::allocation_policy::MappedFileWarmupConfig",
     }
     actual_imports = {
         statement
-        for kind, visibility, body, statement in active_import_records(store_source)
+        for kind, visibility, body, statement in active_import_records(service_source)
         if kind == "use" and not visibility and "mapped_file::allocation_policy" in body
     }
     if actual_imports != expected_imports:
-        violations.append("Store mapped-file allocation policy imports must be direct and exact")
-    store_production = source_without_cfg_test_items(store_source)
-    store_active = active_rust_source(store_production)
-    store_compact = compact_rust(store_active)
-    if re.search(r"\bstruct\s+(?:WarmMappedFileConfig|MappedFileWarmupConfig)\b", store_active):
-        violations.append("Store copied mapped-file warm-up configuration owner")
-    if dict(active_struct_fields(store_source, "AllocateMappedFileService")).get(
+        violations.append("Local allocation service policy imports must be direct and exact")
+    service_production = source_without_cfg_test_items(service_source)
+    service_active = active_rust_source(service_production)
+    service_compact = compact_rust(service_active)
+    if re.search(r"\bstruct\s+(?:WarmMappedFileConfig|MappedFileWarmupConfig)\b", service_active):
+        violations.append("Local allocation service copied mapped-file warm-up configuration owner")
+    if dict(active_struct_fields(service_source, "AllocateMappedFileService")).get(
         "warm_mapped_file_config"
     ) != "MappedFileWarmupConfig":
-        violations.append("Store service must hold the canonical Local warm-up configuration")
+        violations.append("Local allocation service must hold the canonical warm-up configuration")
     for fragment in (
         "warm_mapped_file_config:MappedFileWarmupConfig::disabled()",
-        "service.warm_mapped_file_config=MappedFileWarmupConfig::new(",
+        "service.warm_mapped_file_config=message_store_config.mapped_file_warmup_config()",
         "letmutcan_submit_requests=self.allocation_capacity(2)",
         "letcan_submit_request=self.allocation_capacity(1)>0",
         "MappedFileAllocationPoolSnapshot::new(available_buffers,queued_requests)",
         "mapped_file_allocation_capacity(default_capacity,self.transient_store_pool_enable,"
         "self.fast_fail_if_no_buffer,pool_snapshot,)",
     ):
-        if fragment not in store_compact:
-            violations.append(f"Store mapped-file allocation policy adapter changed: {fragment}")
-    if ".saturating_sub(queue_size)" in store_compact:
-        violations.append("Store retained mapped-file allocation capacity calculation")
+        if fragment not in service_compact:
+            violations.append(f"Local allocation service policy adapter changed: {fragment}")
+    if ".saturating_sub(queue_size)" in service_compact:
+        violations.append("Local allocation service retained duplicated capacity calculation")
+
+    facade_compact = compact_rust(active_rust_source(source_without_cfg_test_items(facade_source)))
+    for fragment in (
+        "implAllocateMappedFileServiceConfigforMessageStoreConfig",
+        "fnmapped_file_warmup_config(&self)->MappedFileWarmupConfig",
+        "MappedFileWarmupConfig::new(self.warm_mapped_file_enable,self.flush_disk_type,self.mapped_file_size_commit_log,self.flush_least_pages_when_warm_mapped_file,)",
+    ):
+        if fragment not in facade_compact:
+            violations.append(f"Store message config projection changed: {fragment}")
+    if re.search(r"\bstruct\s+(?:WarmMappedFileConfig|MappedFileWarmupConfig)\b", facade_compact):
+        violations.append("Store facade copied mapped-file warm-up configuration owner")
 
     for test_name in (
         "warmup_config_preserves_disabled_defaults",
@@ -7535,10 +7562,156 @@ def mapped_file_allocation_policy_contract_violations(
         if named_function_body(local_test_source, test_name) is None:
             violations.append(f"Local mapped-file allocation policy regression changed: {test_name}")
     if named_function_body(
-        store_source,
+        service_source,
         "allocation_capacity_delegates_runtime_snapshot_to_local_policy",
     ) is None:
-        violations.append("Store mapped-file allocation policy adapter regression changed")
+        violations.append("Local mapped-file allocation policy runtime regression changed")
+    if named_function_body(
+        facade_source,
+        "message_store_config_projects_the_local_warmup_policy",
+    ) is None:
+        violations.append("Store mapped-file allocation config projection regression changed")
+    return violations
+
+
+def allocate_mapped_file_service_contract_violations(
+    service_source: str,
+    base_module_source: str,
+    facade_source: str,
+    local_manifest_source: str,
+    mapped_file_queue_source: str,
+    production_sources: dict[Path, str],
+    check_global_owner: bool = True,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(service_source)
+    active = active_rust_source(production)
+    compact = compact_rust(active)
+    if check_global_owner:
+        masked_sources = {
+            path: source_without_cfg_test_items(source)
+            for path, source in production_sources.items()
+        }
+        if file_item_owner_occurrences(masked_sources, "AllocateMappedFileService") != [
+            (LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH, "struct")
+        ]:
+            violations.append("AllocateMappedFileService must have one Local production owner")
+        if file_item_owner_occurrences(masked_sources, "AllocateMappedFileServiceConfig") != [
+            (LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH, "trait")
+        ]:
+            violations.append("AllocateMappedFileServiceConfig must have one Local production owner")
+
+    expected_fields = [
+        ("request_table", "Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>"),
+        ("request_queue", "Arc<RwLock<BinaryHeap<Arc<AllocateRequest>>>>"),
+        ("has_exception", "Arc<AtomicBool>"),
+        ("stopped", "Arc<AtomicBool>"),
+        ("notify", "Arc<Notify>"),
+        ("worker_wakeup", "Arc<(StdMutex<()>, Condvar)>"),
+        ("worker_handle", "Arc<parking_lot::Mutex<Option<thread::JoinHandle<()>>>>"),
+        ("worker_completed", "Arc<AtomicBool>"),
+        ("worker_completion", "Arc<Notify>"),
+        ("transient_store_pool", "Option<Arc<TransientStorePool>>"),
+        ("transient_store_pool_enable", "bool"),
+        ("fast_fail_if_no_buffer", "bool"),
+        ("warm_mapped_file_config", "MappedFileWarmupConfig"),
+    ]
+    if active_struct_fields(production, "AllocateMappedFileService") != expected_fields:
+        violations.append("Local allocation service ownership fields changed")
+    if active_struct_fields(production, "WorkerCompletion") != [
+        ("completed", "Arc<AtomicBool>"),
+        ("notification", "Arc<Notify>"),
+    ]:
+        violations.append("Local allocation worker completion fields changed")
+    if compact_rust(named_function_body(production, "drop") or "") != (
+        "self.completed.store(true,Ordering::Release);self.notification.notify_one();"
+    ):
+        violations.append("Local allocation worker completion signal changed")
+
+    if active_rust_source(base_module_source).count("pub mod allocate_mapped_file_service;") != 1:
+        violations.append("Local base module must expose allocate_mapped_file_service exactly once")
+    forbidden_imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use"
+        and re.search(
+            r"^(?:rocketmq_store|rocketmq_common|rocketmq_remoting|rocketmq_broker|rocketmq_tieredstore)\b|"
+            r"^crate::(?:message_store|log_file|consume_queue|config::message_store_config)\b",
+            body,
+        )
+    ]
+    if forbidden_imports:
+        violations.append(f"Local allocation service imported facade/backend owners: {forbidden_imports}")
+    if any(token in compact for token in ("crate::runtime::", "spawn_blocking(", "block_on(")):
+        violations.append("Local allocation service bypassed worker completion ownership")
+    if compact.count("thread::Builder::new()") != 1:
+        violations.append("Local allocation service dedicated worker boundary changed")
+    for fragment in (
+        "self.worker_completed.store(false,Ordering::Release)",
+        "let_completion=WorkerCompletion{completed:worker_completed,notification:worker_completion,}",
+        "self.stopped.store(true,Ordering::Relaxed)",
+        "letcompletion=self.worker_completion.notified()",
+        "if!self.worker_completed.load(Ordering::Acquire){completion.await;}",
+        "while!handle.is_finished(){tokio::task::yield_now().await;}",
+        "ifhandle.join().is_err()",
+    ):
+        if fragment not in compact:
+            violations.append(f"Local allocation service lifecycle changed: {fragment}")
+
+    facade_active = active_rust_source(source_without_cfg_test_items(facade_source))
+    facade_imports = active_import_records(facade_source)
+    exact_reexports = {
+        statement
+        for kind, visibility, body, statement in facade_imports
+        if kind == "use" and visibility == "pub" and "AllocateMappedFileService" in body
+    }
+    if exact_reexports != {
+        "pub use rocketmq_store_local::base::allocate_mapped_file_service::AllocateMappedFileService"
+    }:
+        violations.append("Store allocation facade must exact re-export the Local service")
+    if re.search(r"\bstruct\s+AllocateMappedFileService\b", facade_active):
+        violations.append("Store allocation facade copied the Local service")
+    if compact_rust(facade_active).count("implAllocateMappedFileServiceConfigforMessageStoreConfig") != 1:
+        violations.append("Store allocation facade config projection changed")
+
+    try:
+        manifest = tomllib.loads(local_manifest_source)
+    except tomllib.TOMLDecodeError:
+        violations.append("Local manifest is not valid TOML")
+    else:
+        if manifest.get("dependencies", {}).get("tokio") != {"workspace": True}:
+            violations.append("Local allocation service must use the workspace Tokio dependency")
+
+    for test_name in (
+        "allocate_request_delegates_identity_display_and_priority_to_local_key",
+        "allocate_mapped_file_blocking_works_inside_runtime",
+        "worker_completion_guard_records_exit_and_notifies_waiter",
+        "warm_mapped_file_config_follows_commitlog_file_size_threshold",
+        "allocation_capacity_delegates_runtime_snapshot_to_local_policy",
+    ):
+        if named_function_body(service_source, test_name) is None:
+            violations.append(f"Local allocation service regression changed: {test_name}")
+    if named_function_body(
+        facade_source,
+        "message_store_config_projects_the_local_warmup_policy",
+    ) is None:
+        violations.append("Store allocation service config regression changed")
+    preallocation_test = named_function_body(
+        mapped_file_queue_source,
+        "trigger_pre_allocation_submits_background_request",
+    )
+    if preallocation_test is None:
+        violations.append("Store allocation service consumer regression changed")
+    else:
+        preallocation_compact = compact_rust(preallocation_test)
+        if (
+            "allocate_mapped_file_blocking(next_file_path.to_string_lossy().into_owned(),mapped_file_size)"
+            not in preallocation_compact
+            or "next_file_path.exists()" not in preallocation_compact
+        ):
+            violations.append("Store preallocation consumer no longer awaits the Local service result")
+        if "has_request(" in preallocation_compact:
+            violations.append("Store preallocation consumer retained the old private request-table hook")
     return violations
 
 
@@ -12472,7 +12645,8 @@ class StoreLocalContractTests(unittest.TestCase):
     def test_mapped_file_allocation_request_has_one_local_owner_and_exact_store_adapter(self) -> None:
         local = (ROOT / MAPPED_FILE_ALLOCATION_REQUEST_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
-        store = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
         local_tests = (
             LOCAL_CRATE / "tests" / "mapped_file_allocation_request.rs"
         ).read_text(encoding="utf-8")
@@ -12482,7 +12656,8 @@ class StoreLocalContractTests(unittest.TestCase):
             mapped_file_allocation_request_contract_violations(
                 local,
                 module,
-                store,
+                service,
+                facade,
                 local_tests,
             ),
         )
@@ -12490,7 +12665,8 @@ class StoreLocalContractTests(unittest.TestCase):
     def test_mapped_file_allocation_request_rejects_owner_adapter_and_test_mutations(self) -> None:
         local = (ROOT / MAPPED_FILE_ALLOCATION_REQUEST_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
-        store = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
         local_tests = (
             LOCAL_CRATE / "tests" / "mapped_file_allocation_request.rs"
         ).read_text(encoding="utf-8")
@@ -12500,14 +12676,16 @@ class StoreLocalContractTests(unittest.TestCase):
                 "Local size field changed",
                 local.replace("    file_size: i32,", "    file_size: u32,", 1),
                 module,
-                store,
+                service,
+                facade,
                 local_tests,
             ),
             (
                 "platform separator parsing changed",
                 local.replace("std::path::MAIN_SEPARATOR", "'/'", 1),
                 module,
-                store,
+                service,
+                facade,
                 local_tests,
             ),
             (
@@ -12518,50 +12696,64 @@ class StoreLocalContractTests(unittest.TestCase):
                     1,
                 ),
                 module,
-                store,
+                service,
+                facade,
                 local_tests,
             ),
             (
                 "module removed",
                 local,
                 module.replace("pub mod allocation_request;", "", 1),
-                store,
+                service,
+                facade,
                 local_tests,
             ),
             (
-                "Store retained path field",
+                "Local service retained path field",
                 local,
                 module,
-                store.replace(
+                service.replace(
                     "    key: MappedFileAllocationRequestKey,",
                     "    file_path: String,\n    key: MappedFileAllocationRequestKey,",
                     1,
                 ),
+                facade,
                 local_tests,
             ),
             (
-                "Store import aliased",
+                "Local service import aliased",
                 local,
                 module,
-                store.replace(
-                    "use rocketmq_store_local::mapped_file::allocation_request::MappedFileAllocationRequestKey;",
-                    "use rocketmq_store_local::mapped_file::allocation_request::MappedFileAllocationRequestKey as RequestKey;",
+                service.replace(
+                    "use crate::mapped_file::allocation_request::MappedFileAllocationRequestKey;",
+                    "use crate::mapped_file::allocation_request::MappedFileAllocationRequestKey as RequestKey;",
                     1,
                 ),
+                facade,
                 local_tests,
             ),
             (
-                "Store ordering bypassed",
+                "Local service ordering bypassed",
                 local,
                 module,
-                store.replace("self.key.cmp(&other.key)", "other.key.cmp(&self.key)", 1),
+                service.replace("self.key.cmp(&other.key)", "other.key.cmp(&self.key)", 1),
+                facade,
+                local_tests,
+            ),
+            (
+                "facade re-export hidden",
+                local,
+                module,
+                service,
+                facade.replace("pub use rocketmq_store_local", "use rocketmq_store_local", 1),
                 local_tests,
             ),
             (
                 "regression renamed",
                 local,
                 module,
-                store,
+                service,
+                facade,
                 local_tests.replace(
                     "fn allocation_request_key_orders_lower_offsets_first_in_binary_heap()",
                     "fn allocation_request_priority_regression_removed()",
@@ -12569,18 +12761,19 @@ class StoreLocalContractTests(unittest.TestCase):
                 ),
             ),
         )
-        for label, local_source, module_source, store_source, test_source in mutations:
+        for label, local_source, module_source, service_source, facade_source, test_source in mutations:
             with self.subTest(mutation=label):
                 self.assertNotEqual(
-                    (local, module, store, local_tests),
-                    (local_source, module_source, store_source, test_source),
+                    (local, module, service, facade, local_tests),
+                    (local_source, module_source, service_source, facade_source, test_source),
                 )
                 self.assertNotEqual(
                     [],
                     mapped_file_allocation_request_contract_violations(
                         local_source,
                         module_source,
-                        store_source,
+                        service_source,
+                        facade_source,
                         test_source,
                     ),
                 )
@@ -12588,7 +12781,8 @@ class StoreLocalContractTests(unittest.TestCase):
     def test_mapped_file_allocation_policy_has_one_local_owner_and_exact_store_adapter(self) -> None:
         local = (ROOT / MAPPED_FILE_ALLOCATION_POLICY_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
-        store = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
         local_tests = (
             LOCAL_CRATE / "tests" / "mapped_file_allocation_policy.rs"
         ).read_text(encoding="utf-8")
@@ -12598,7 +12792,8 @@ class StoreLocalContractTests(unittest.TestCase):
             mapped_file_allocation_policy_contract_violations(
                 local,
                 module,
-                store,
+                service,
+                facade,
                 local_tests,
             ),
         )
@@ -12606,7 +12801,8 @@ class StoreLocalContractTests(unittest.TestCase):
     def test_mapped_file_allocation_policy_rejects_owner_adapter_and_test_mutations(self) -> None:
         local = (ROOT / MAPPED_FILE_ALLOCATION_POLICY_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
-        store = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
         local_tests = (
             LOCAL_CRATE / "tests" / "mapped_file_allocation_policy.rs"
         ).read_text(encoding="utf-8")
@@ -12616,7 +12812,8 @@ class StoreLocalContractTests(unittest.TestCase):
                 "warm-up threshold type changed",
                 local.replace("    minimum_file_size: usize,", "    minimum_file_size: u64,", 1),
                 module,
-                store,
+                service,
+                facade,
                 local_tests,
             ),
             (
@@ -12627,39 +12824,52 @@ class StoreLocalContractTests(unittest.TestCase):
                     1,
                 ),
                 module,
-                store,
+                service,
+                facade,
                 local_tests,
             ),
             (
                 "module removed",
                 local,
                 module.replace("pub mod allocation_policy;", "", 1),
-                store,
+                service,
+                facade,
                 local_tests,
             ),
             (
-                "Store warm-up owner copied",
+                "Local service warm-up owner copied",
                 local,
                 module,
-                store.replace(
+                service.replace(
                     "pub struct AllocateMappedFileService {",
                     "struct WarmMappedFileConfig;\n\npub struct AllocateMappedFileService {",
                     1,
                 ),
+                facade,
                 local_tests,
             ),
             (
-                "Store capacity bypassed",
+                "Local service capacity bypassed",
                 local,
                 module,
-                store.replace("self.allocation_capacity(2)", "2", 1),
+                service.replace("self.allocation_capacity(2)", "2", 1),
+                facade,
+                local_tests,
+            ),
+            (
+                "Store config projection changed",
+                local,
+                module,
+                service,
+                facade.replace("self.mapped_file_size_commit_log", "usize::MAX", 1),
                 local_tests,
             ),
             (
                 "Local regression renamed",
                 local,
                 module,
-                store,
+                service,
+                facade,
                 local_tests.replace(
                     "fn allocation_capacity_saturates_available_buffers_by_queued_requests()",
                     "fn allocation_capacity_regression_removed()",
@@ -12667,30 +12877,178 @@ class StoreLocalContractTests(unittest.TestCase):
                 ),
             ),
             (
-                "Store adapter regression renamed",
+                "Local runtime regression renamed",
                 local,
                 module,
-                store.replace(
+                service.replace(
                     "fn allocation_capacity_delegates_runtime_snapshot_to_local_policy()",
                     "fn allocation_capacity_adapter_regression_removed()",
+                    1,
+                ),
+                facade,
+                local_tests,
+            ),
+            (
+                "Store projection regression renamed",
+                local,
+                module,
+                service,
+                facade.replace(
+                    "fn message_store_config_projects_the_local_warmup_policy()",
+                    "fn message_store_config_projection_regression_removed()",
                     1,
                 ),
                 local_tests,
             ),
         )
-        for label, local_source, module_source, store_source, test_source in mutations:
+        for label, local_source, module_source, service_source, facade_source, test_source in mutations:
             with self.subTest(mutation=label):
                 self.assertNotEqual(
-                    (local, module, store, local_tests),
-                    (local_source, module_source, store_source, test_source),
+                    (local, module, service, facade, local_tests),
+                    (local_source, module_source, service_source, facade_source, test_source),
                 )
                 self.assertNotEqual(
                     [],
                     mapped_file_allocation_policy_contract_violations(
                         local_source,
                         module_source,
-                        store_source,
+                        service_source,
+                        facade_source,
                         test_source,
+                    ),
+                )
+
+    def test_allocate_mapped_file_service_has_one_local_owner_and_exact_store_facade(self) -> None:
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        base_module = (LOCAL_CRATE / "src" / "base.rs").read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        manifest = (LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8")
+        mapped_file_queue = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for path in ROOT.glob("rocketmq-*/src/**/*.rs")
+        }
+
+        self.assertEqual(
+            [],
+            allocate_mapped_file_service_contract_violations(
+                service,
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue,
+                production_sources,
+            ),
+        )
+
+    def test_allocate_mapped_file_service_rejects_owner_lifecycle_facade_and_test_mutations(self) -> None:
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        base_module = (LOCAL_CRATE / "src" / "base.rs").read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        manifest = (LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8")
+        mapped_file_queue = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for path in ROOT.glob("rocketmq-*/src/**/*.rs")
+        }
+
+        mutations = (
+            (
+                "worker completion field removed",
+                service.replace("    worker_completion: Arc<Notify>,", "", 1),
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue,
+            ),
+            (
+                "completion notification broadened",
+                service.replace("self.notification.notify_one();", "self.notification.notify_waiters();", 1),
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue,
+            ),
+            (
+                "raw blocking task added",
+                service.replace(
+                    "pub async fn shutdown(&self) {",
+                    "pub async fn shutdown(&self) {\n        let _ = tokio::task::spawn_blocking(|| ());",
+                    1,
+                ),
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue,
+            ),
+            (
+                "Local base module removed",
+                service,
+                base_module.replace("pub mod allocate_mapped_file_service;", "", 1),
+                facade,
+                manifest,
+                mapped_file_queue,
+            ),
+            (
+                "facade re-export hidden",
+                service,
+                base_module,
+                facade.replace("pub use rocketmq_store_local", "use rocketmq_store_local", 1),
+                manifest,
+                mapped_file_queue,
+            ),
+            (
+                "Tokio dependency removed",
+                service,
+                base_module,
+                facade,
+                manifest.replace("tokio.workspace = true\n", "", 1),
+                mapped_file_queue,
+            ),
+            (
+                "consumer result wait removed",
+                service,
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue.replace(
+                    ".allocate_mapped_file_blocking(next_file_path.to_string_lossy().into_owned(), mapped_file_size)",
+                    ".allocate_mapped_file_blocking(String::new(), mapped_file_size)",
+                    1,
+                ),
+            ),
+            (
+                "completion regression renamed",
+                service.replace(
+                    "fn worker_completion_guard_records_exit_and_notifies_waiter()",
+                    "fn worker_completion_regression_removed()",
+                    1,
+                ),
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue,
+            ),
+        )
+        for label, service_source, base_source, facade_source, manifest_source, queue_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (service, base_module, facade, manifest, mapped_file_queue),
+                    (service_source, base_source, facade_source, manifest_source, queue_source),
+                )
+                mutated_sources = dict(production_sources)
+                mutated_sources[LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH] = service_source
+                mutated_sources[STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH] = facade_source
+                self.assertNotEqual(
+                    [],
+                    allocate_mapped_file_service_contract_violations(
+                        service_source,
+                        base_source,
+                        facade_source,
+                        manifest_source,
+                        queue_source,
+                        mutated_sources,
+                        check_global_owner=False,
                     ),
                 )
 

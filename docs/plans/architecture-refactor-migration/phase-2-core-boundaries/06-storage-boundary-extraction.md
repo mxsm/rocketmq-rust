@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1849,3 +1849,31 @@ python scripts/arc_mut_guard.py
   flush/commit/CQ timestamp，未迁移 AllocateMappedFileService worker/request lifecycle、CommitLog 根 owner 或持久格式。
   顶层 PR-M06-03 仍需收口上述 MappedFileQueue I/O/剩余算法、CommitLog 根结构、append/recovery 方法 owner 与 Store facade；
   82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03au AllocateMappedFileService canonical owner extraction evidence
+
+- [x] `[DEV/OWNER]` `rocketmq-store-local::base::allocate_mapped_file_service` 成为
+  `AllocateMappedFileService`、request table/BinaryHeap、async Notify、blocking Condvar、timeout、fast-fail、
+  `TransientStorePool`、mapped-file create/warm-up 及 worker thread 的唯一 owner；Store 中原有同名实现与
+  `services` 下的零字段占位 owner 已删除。
+- [x] `[DEV/FACADE]` Store 旧路径只精确 re-export Local canonical type，并为 `MessageStoreConfig` 实现隐藏的
+  Local config 投影 trait；既有 `new_with_message_store_config` 调用形态保持不变，Local 不依赖 Store config、
+  Store runtime、Broker/Common/Remoting/Tiered 类型或业务编排。
+- [x] `[LIFECYCLE]` Local worker 由 completion guard 在所有退出路径记录完成并唤醒 shutdown；shutdown 先等待完成通知，
+  再 yield 至线程可 join 并回收 handle。实现不引入 `tokio::spawn`、`spawn_blocking`、嵌套 runtime 或 detached task；
+  enforcing runtime audit 已将该专用 I/O thread 的合法边界从 Store 路径迁到 Local 路径。
+- [x] `[COMPAT]` request priority、path/size identity、timeout、fast-fail capacity、双文件预分配、warm-up 阈值与 mmap/create
+  语义保持不变；Store 精确类型身份 integration test 验证旧路径即 Local 类型。MappedFileQueue 预分配测试改为等待真实
+  allocation result，不再依赖 service 私有 request-table 观察。
+- [x] `[TEST]` Local allocation service focused 5/5、Store config facade 1/1、真实 MappedFileQueue consumer 1/1、
+  Store/Local type identity 1/1 通过；Local all-feature crate unit 104/104 及全部 integration/doctest、Store lib 536/536 通过。
+- [x] `[CONTRACT]` 原 allocation request/policy 契约已切换到 Local service owner；新增 service baseline 与 8 类 mutation
+  契约，冻结唯一 owner、字段、worker-completion、依赖、线程/lifecycle、Store exact facade/config projection、manifest Tokio
+  dependency 和回归测试。三组定向契约 6/6、完整 M06 contract 150/150 通过（698.545s）。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、diff check、architecture dependency guard、AGENTS routing、
+  ArcMut guard 与 enforcing runtime audit 通过；error architecture 仍仅复现历史 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03au 已关闭 mapped-file allocation service owner，但未迁移 MappedFileQueue
+  load/create/delete/swap/shutdown/destroy 与剩余 I/O/算法；flush/commit/CQ timestamp 属于后续 M06-04 边界。顶层
+  PR-M06-03 仍需收口 CommitLog 根结构、append/recovery composition owner 与 Store facade；82 个顶层工作包仍为
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成。

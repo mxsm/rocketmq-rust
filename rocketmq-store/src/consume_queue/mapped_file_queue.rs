@@ -1352,9 +1352,12 @@ mod tests {
         );
         queue.storage.mapped_files().store(Arc::new(vec![first_file]));
 
-        assert!(!service.has_request(next_file_path.to_string_lossy().as_ref()));
         assert!(queue.get_last_mapped_file_mut_start_offset(0, true).is_some());
-        assert!(service.has_request(next_file_path.to_string_lossy().as_ref()));
+        let preallocated = service
+            .allocate_mapped_file_blocking(next_file_path.to_string_lossy().into_owned(), mapped_file_size)
+            .expect("background preallocation completes");
+        assert_eq!(preallocated.get_file_from_offset(), mapped_file_size);
+        assert!(next_file_path.exists());
 
         service.shutdown().await;
     }
