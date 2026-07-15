@@ -66,6 +66,9 @@ MAPPED_FILE_QUEUE_INDEX_PATH = Path(
 MAPPED_FILE_QUEUE_IO_PATH = Path(
     "rocketmq-store-local/src/mapped_file/queue_io.rs"
 )
+MAPPED_FILE_QUEUE_LIFECYCLE_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_lifecycle.rs"
+)
 MAPPED_FILE_QUEUE_MAINTENANCE_PATH = Path(
     "rocketmq-store-local/src/mapped_file/queue_maintenance.rs"
 )
@@ -301,8 +304,18 @@ CANONICAL_ITEMS = {
     "load_mapped_file_queue_path": ("fn", "queue_io.rs"),
     "load_mapped_file_queue_files": ("fn", "queue_io.rs"),
     "create_mapped_file_for_queue": ("fn", "queue_io.rs"),
+    "destroy_last_mapped_file": ("fn", "queue_lifecycle.rs"),
+    "mapped_files_after_removal": ("fn", "queue_lifecycle.rs"),
+    "delete_expired_mapped_files_by_time": ("fn", "queue_lifecycle.rs"),
+    "delete_expired_mapped_files_by_offset": ("fn", "queue_lifecycle.rs"),
+    "retry_delete_first_mapped_file": ("fn", "queue_lifecycle.rs"),
+    "swap_mapped_file_queue": ("fn", "queue_lifecycle.rs"),
+    "clean_swapped_mapped_file_queue": ("fn", "queue_lifecycle.rs"),
+    "shutdown_mapped_file_queue": ("fn", "queue_lifecycle.rs"),
+    "destroy_mapped_file_queue": ("fn", "queue_lifecycle.rs"),
     "MappedFileQueueIndex": ("enum", "queue_index.rs"),
     "MappedFileQueueLoadOutcome": ("struct", "queue_io.rs"),
+    "MappedFileQueueDeletion": ("struct", "queue_lifecycle.rs"),
     "MappedFileQueueLastFile": ("struct", "queue_allocation.rs"),
     "MappedFileQueueRollFile": ("struct", "queue_allocation.rs"),
     "MappedFileQueueTruncateAction": ("enum", "queue_maintenance.rs"),
@@ -7306,7 +7319,7 @@ def mapped_file_queue_storage_contract_violations(
         if store_compact.count(constructor) != 1:
             violations.append(f"Store mapped-file queue storage constructor changed: {constructor}")
     expected_accessor_counts = {
-        "self.storage.mapped_files()": 37,
+        "self.storage.mapped_files()": 36,
         "self.storage.mapped_file_size()": 16,
         "self.storage.store_path()": 6,
     }
@@ -8010,6 +8023,208 @@ def mapped_file_queue_io_contract_violations(
     ):
         if named_function_body(store_source, test_name) is None:
             violations.append(f"Store mapped-file queue I/O adapter regression changed: {test_name}")
+    return violations
+
+
+def mapped_file_queue_lifecycle_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+
+    if active_struct_fields(production, "MappedFileQueueDeletion") != [
+        ("deleted_count", "i32"),
+        ("mapped_files", "Vec<Arc<DefaultMappedFile>>"),
+    ]:
+        violations.append("Local mapped-file queue deletion result fields changed")
+    for method_name, expected_body in (
+        ("deleted_count", "self.deleted_count"),
+        ("into_mapped_files", "self.mapped_files"),
+    ):
+        if compact_rust(named_function_body(production, method_name) or "") != expected_body:
+            violations.append(f"Local mapped-file queue deletion API changed: {method_name}")
+
+    function_names = (
+        "destroy_last_mapped_file",
+        "mapped_files_after_removal",
+        "delete_expired_mapped_files_by_time",
+        "delete_expired_mapped_files_by_offset",
+        "retry_delete_first_mapped_file",
+        "swap_mapped_file_queue",
+        "clean_swapped_mapped_file_queue",
+        "shutdown_mapped_file_queue",
+        "destroy_mapped_file_queue",
+    )
+    bodies = {
+        function_name: compact_rust(named_function_body(production, function_name) or "")
+        for function_name in function_names
+    }
+    for function_name, body in bodies.items():
+        if not body:
+            violations.append(f"Local mapped-file queue lifecycle owner changed: {function_name}")
+
+    expected_fragments = {
+        "destroy_last_mapped_file": (
+            "letlast_mapped_file=files.last()?.clone()",
+            "last_mapped_file.destroy(1000)",
+            "Some(last_mapped_file)",
+        ),
+        "mapped_files_after_removal": (
+            "filter(|candidate|current_files.contains(candidate))",
+            "filter(|mapped_file|!existing_candidates.contains(mapped_file))",
+            ".cloned().collect()",
+        ),
+        "delete_expired_mapped_files_by_time": (
+            "letcandidate_count=files.len().saturating_sub(1)",
+            "files.iter().enumerate().take(candidate_count)",
+            "now_millis()>=live_max_timestamp||clean_immediately",
+            "mapped_file.destroy(interval_forciblyasu64)",
+            "deleted_files.len()>=delete_file_batch_maxasusize",
+            "thread::sleep(Duration::from_millis(delete_files_intervalasu64))",
+            "MappedFileQueueDeletion::new(deleted_files.len()asi32,deleted_files)",
+        ),
+        "delete_expired_mapped_files_by_offset": (
+            "letcandidate_count=files.len().saturating_sub(1)",
+            "mapped_file.select_mapped_buffer((mapped_file_size-unit_sizeasu64)asi32,unit_size)",
+            "i64::from_be_bytes(buffer[0..8].try_into().unwrap_or([0;8]))",
+            "destroy=max_offset_in_logic_queue<offset",
+            "elseif!mapped_file.is_available()",
+            "ifdestroy&&mapped_file.destroy(1000*60)",
+        ),
+        "retry_delete_first_mapped_file": (
+            "first.filter(|mapped_file|!mapped_file.is_available())",
+            "first.destroy(interval_forciblyasu64)",
+            "MappedFileQueueDeletion::new(1,vec![first.clone()])",
+            "MappedFileQueueDeletion::new(0,Vec::new())",
+        ),
+        "swap_mapped_file_queue": (
+            "letreserve_num=reserve_num.max(3)",
+            "forindexin(0..=(files_len-reserve_num-1)).rev()",
+            "ifelapsed>force_swap_interval_ms",
+            "ifelapsed>normal_swap_interval_ms&&mapped_file.get_mapped_byte_buffer_access_count_since_last_swap()>0",
+        ),
+        "clean_swapped_mapped_file_queue": (
+            "letreserve_num=3",
+            "forindexin(0..=(files_len-reserve_num-1)).rev()",
+            "now_millis()-mapped_file.get_recent_swap_map_time()>force_clean_swap_interval_ms",
+        ),
+        "shutdown_mapped_file_queue": ("mapped_file.shutdown(interval_forcibly)",),
+        "destroy_mapped_file_queue": (
+            "mapped_file.destroy(1000*3)",
+            "letpath=Path::new(store_path)",
+            "ifpath.is_dir()",
+            "fs::remove_dir_all(path)",
+        ),
+    }
+    for function_name, fragments in expected_fragments.items():
+        for fragment in fragments:
+            if fragment not in bodies[function_name]:
+                violations.append(f"Local mapped-file queue lifecycle changed: {function_name}: {fragment}")
+
+    for forbidden in (
+        "rocketmq_store::",
+        "rocketmq_common",
+        "rocketmq_remoting",
+        "rocketmq_broker",
+        "rocketmq_tiered_store",
+        "ArcSwap",
+        "CommitLog",
+        "BoundaryType",
+        "crate::runtime",
+        "tokio::",
+        "async ",
+        ".await",
+        "ArcMut",
+    ):
+        if forbidden in active:
+            violations.append(f"Local mapped-file queue lifecycle absorbed forbidden edge: {forbidden}")
+    if active_rust_source(module_source).count("pub mod queue_lifecycle;") != 1:
+        violations.append("Local mapped_file module must expose queue_lifecycle exactly once")
+
+    expected_imports = {
+        f"use rocketmq_store_local::mapped_file::queue_lifecycle::{function_name}"
+        for function_name in function_names
+    }
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_lifecycle" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store mapped-file queue lifecycle imports must be direct and exact")
+
+    store_production = source_without_cfg_test_items(store_source)
+    store_bodies = {
+        function_name: compact_rust(named_function_body(store_production, function_name) or "")
+        for function_name in (
+            "delete_last_mapped_file",
+            "delete_expired_file",
+            "delete_expired_file_by_time",
+            "delete_expired_file_by_offset",
+            "retry_delete_first_file",
+            "swap_map",
+            "clean_swapped_map",
+            "shutdown",
+            "destroy",
+        )
+    }
+    store_expected = {
+        "delete_last_mapped_file": ("destroy_last_mapped_file(files.as_slice())", "self.delete_expired_file"),
+        "delete_expired_file": ("mapped_files_after_removal(current_files.as_slice(),&files)", ".store(Arc::new(new_files))"),
+        "delete_expired_file_by_time": (
+            "self.check_self()",
+            "delete_expired_mapped_files_by_time(",
+            "||current_millis()asi64",
+            "self.delete_expired_file(deletion.into_mapped_files())",
+        ),
+        "delete_expired_file_by_offset": (
+            "delete_expired_mapped_files_by_offset(&mfs,self.storage.mapped_file_size(),offset,unit_size)",
+            "self.delete_expired_file(deletion.into_mapped_files())",
+        ),
+        "retry_delete_first_file": (
+            "retry_delete_first_mapped_file(first.as_ref(),interval_forcibly)",
+            "self.delete_expired_file(deletion.into_mapped_files())",
+        ),
+        "swap_map": ("swap_mapped_file_queue(", "||current_millis()asi64"),
+        "clean_swapped_map": ("clean_swapped_mapped_file_queue(", "current_millis()asi64"),
+        "shutdown": ("shutdown_mapped_file_queue(files.as_slice(),interval_forcibly)",),
+        "destroy": (
+            "destroy_mapped_file_queue(files.as_slice(),self.storage.store_path())",
+            "self.storage.mapped_files().store(Arc::new(Vec::new()))",
+            "self.set_flushed_where(0)",
+        ),
+    }
+    for function_name, fragments in store_expected.items():
+        for fragment in fragments:
+            if fragment not in store_bodies[function_name]:
+                violations.append(f"Store mapped-file queue lifecycle adapter changed: {function_name}: {fragment}")
+    for function_name, forbidden_fragments in {
+        "delete_expired_file_by_time": (".destroy(", "thread::sleep", "live_max_timestamp"),
+        "delete_expired_file_by_offset": ("select_mapped_buffer", "max_offset_in_logic_queue", ".destroy("),
+        "retry_delete_first_file": (".destroy(", "is_available()"),
+        "swap_map": ("get_recent_swap_map_time", ".swap_map()"),
+        "clean_swapped_map": ("get_recent_swap_map_time", ".swap_map()"),
+        "shutdown": ("mapped_file.shutdown",),
+        "destroy": ("mapped_file.destroy", "fs::remove_dir_all"),
+    }.items():
+        for fragment in forbidden_fragments:
+            if fragment in store_bodies[function_name]:
+                violations.append(f"Store retained mapped-file queue lifecycle owner: {function_name}: {fragment}")
+
+    for test_name in (
+        "removal_filters_only_candidates_present_in_the_current_snapshot",
+        "destroy_last_returns_the_destroyed_newest_file",
+        "time_deletion_keeps_the_newest_file_and_honors_the_batch_limit",
+        "offset_deletion_stops_when_the_selected_file_cannot_finish_destroy",
+        "swap_reserves_three_newest_files_and_shutdown_releases_every_file",
+        "destroy_removes_every_file_and_the_queue_directory",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue lifecycle regression changed: {test_name}")
     return violations
 
 
@@ -13467,6 +13682,144 @@ class StoreLocalContractTests(unittest.TestCase):
                     ),
                 )
 
+    def test_mapped_file_queue_lifecycle_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_LIFECYCLE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_lifecycle.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_lifecycle_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_lifecycle_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_LIFECYCLE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_lifecycle.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "deletion count type changed",
+                local.replace("    deleted_count: i32,", "    deleted_count: u32,", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "newest file exclusion removed",
+                local.replace("files.len().saturating_sub(1)", "files.len()", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "batch boundary changed",
+                local.replace(
+                    "deleted_files.len() >= delete_file_batch_max as usize",
+                    "deleted_files.len() > delete_file_batch_max as usize",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "offset boundary changed",
+                local.replace(
+                    "destroy = max_offset_in_logic_queue < offset;",
+                    "destroy = max_offset_in_logic_queue <= offset;",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "retry availability gate inverted",
+                local.replace(
+                    "first.filter(|mapped_file| !mapped_file.is_available())",
+                    "first.filter(|mapped_file| mapped_file.is_available())",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "swap reserve floor changed",
+                local.replace("reserve_num.max(3)", "reserve_num.max(2)", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_lifecycle;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_file_queue;",
+                    "use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_file_queue as destroy_queue;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store time deletion bypassed",
+                local,
+                module,
+                store.replace(
+                    "let deletion = delete_expired_mapped_files_by_time(",
+                    "let deletion = store_owned_time_deletion(",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local lifecycle regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn time_deletion_keeps_the_newest_file_and_honors_the_batch_limit()",
+                    "fn time_deletion_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_lifecycle_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
     def test_mapped_file_queue_maintenance_has_one_local_owner_and_exact_store_adapters(self) -> None:
         local = (ROOT / MAPPED_FILE_QUEUE_MAINTENANCE_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
@@ -18147,6 +18500,7 @@ struct DefaultMappedFile {
                 "queue_allocation.rs",
                 "queue_index.rs",
                 "queue_io.rs",
+                "queue_lifecycle.rs",
                 "queue_maintenance.rs",
                 "queue_state.rs",
                 "queue_storage.rs",

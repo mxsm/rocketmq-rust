@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -33,6 +32,15 @@ use rocketmq_store_local::mapped_file::queue_io::create_mapped_file_for_queue;
 use rocketmq_store_local::mapped_file::queue_io::load_mapped_file_queue_files;
 use rocketmq_store_local::mapped_file::queue_io::load_mapped_file_queue_path;
 use rocketmq_store_local::mapped_file::queue_io::MappedFileQueueLoadOutcome;
+use rocketmq_store_local::mapped_file::queue_lifecycle::clean_swapped_mapped_file_queue;
+use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_offset;
+use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time;
+use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_last_mapped_file;
+use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_file_queue;
+use rocketmq_store_local::mapped_file::queue_lifecycle::mapped_files_after_removal;
+use rocketmq_store_local::mapped_file::queue_lifecycle::retry_delete_first_mapped_file;
+use rocketmq_store_local::mapped_file::queue_lifecycle::shutdown_mapped_file_queue;
+use rocketmq_store_local::mapped_file::queue_lifecycle::swap_mapped_file_queue;
 use rocketmq_store_local::mapped_file::queue_maintenance::mapped_file_queue_truncate_action;
 use rocketmq_store_local::mapped_file::queue_maintenance::plan_mapped_file_queue_reset;
 use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueResetLastFile;
@@ -40,8 +48,6 @@ use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueTruncat
 use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage;
 use tracing::error;
-use tracing::info;
-use tracing::warn;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::log_file::commit_log::CommitLog;
@@ -351,31 +357,17 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn delete_last_mapped_file(&mut self) {
-        if let Some(last_mapped_file) = self.get_last_mapped_file() {
-            last_mapped_file.destroy(1000);
-
-            // Write: copy-on-write update
-            let mut files = (**self.storage.mapped_files().load()).clone();
-            files.retain(|mf| mf.as_ref() != last_mapped_file.as_ref());
-            self.storage.mapped_files().store(Arc::new(files));
-
-            info!(
-                "on recover, destroy a logic mapped file {}",
-                last_mapped_file.get_file_name()
-            );
+        let files = self.storage.mapped_files().load();
+        if let Some(last_mapped_file) = destroy_last_mapped_file(files.as_slice()) {
+            self.delete_expired_file(vec![last_mapped_file]);
         }
     }
 
     #[inline]
     pub(crate) fn delete_expired_file(&self, files: Vec<Arc<DefaultMappedFile>>) {
-        let mut files = files;
         let current_files = self.storage.mapped_files().load();
         if !files.is_empty() {
-            files.retain(|mf| current_files.contains(mf));
-
-            // Write: copy-on-write update
-            let mut new_files = (**current_files).clone();
-            new_files.retain(|mf| !files.contains(mf));
+            let new_files = mapped_files_after_removal(current_files.as_slice(), &files);
             self.storage.mapped_files().store(Arc::new(new_files));
         }
     }
@@ -402,38 +394,19 @@ impl MappedFileQueue {
         delete_file_batch_max: i32,
     ) -> i32 {
         let mfs = (**self.storage.mapped_files().load()).clone();
-        let mfs_length = mfs.len().saturating_sub(1);
-        let mut delete_count = 0;
-        let mut files = Vec::new();
-
         // Check before deleting
         self.check_self();
-
-        for (i, mapped_file) in mfs.iter().enumerate().take(mfs_length) {
-            let live_max_timestamp = mapped_file.get_last_modified_timestamp() as i64 + expired_time;
-
-            if current_millis() as i64 >= live_max_timestamp || clean_immediately {
-                if mapped_file.destroy(interval_forcibly as u64) {
-                    files.push(mapped_file.clone());
-                    delete_count += 1;
-
-                    if files.len() >= delete_file_batch_max as usize {
-                        break;
-                    }
-
-                    if delete_files_interval > 0 && (i + 1) < mfs_length {
-                        std::thread::sleep(std::time::Duration::from_millis(delete_files_interval as u64));
-                    }
-                } else {
-                    break;
-                }
-            } else {
-                // Avoid deleting files in the middle
-                break;
-            }
-        }
-
-        self.delete_expired_file(files);
+        let deletion = delete_expired_mapped_files_by_time(
+            &mfs,
+            expired_time,
+            delete_files_interval,
+            interval_forcibly,
+            clean_immediately,
+            delete_file_batch_max,
+            || current_millis() as i64,
+        );
+        let delete_count = deletion.deleted_count();
+        self.delete_expired_file(deletion.into_mapped_files());
         delete_count
     }
 
@@ -449,46 +422,9 @@ impl MappedFileQueue {
     /// Number of files deleted
     pub fn delete_expired_file_by_offset(&self, offset: i64, unit_size: i32) -> i32 {
         let mfs = (**self.storage.mapped_files().load()).clone();
-        let mut files = Vec::new();
-        let mut delete_count = 0;
-        let mfs_length = mfs.len().saturating_sub(1);
-
-        for mapped_file in mfs.iter().take(mfs_length) {
-            let mut destroy = false;
-
-            if let Some(result) =
-                mapped_file.select_mapped_buffer((self.storage.mapped_file_size() - unit_size as u64) as i32, unit_size)
-            {
-                if let Some(ref buffer) = result.bytes {
-                    if buffer.len() >= 8 {
-                        let max_offset_in_logic_queue = i64::from_be_bytes(buffer[0..8].try_into().unwrap_or([0u8; 8]));
-                        destroy = max_offset_in_logic_queue < offset;
-
-                        if destroy {
-                            info!(
-                                "physic min offset {}, logics in current mappedFile max offset {}, delete it",
-                                offset, max_offset_in_logic_queue
-                            );
-                        }
-                    }
-                }
-            } else if !mapped_file.is_available() {
-                warn!("Found a hanged consume queue file, attempting to delete it.");
-                destroy = true;
-            } else {
-                warn!("this being not executed forever.");
-                break;
-            }
-
-            if destroy && mapped_file.destroy(1000 * 60) {
-                files.push(mapped_file.clone());
-                delete_count += 1;
-            } else {
-                break;
-            }
-        }
-
-        self.delete_expired_file(files);
+        let deletion = delete_expired_mapped_files_by_offset(&mfs, self.storage.mapped_file_size(), offset, unit_size);
+        let delete_count = deletion.deleted_count();
+        self.delete_expired_file(deletion.into_mapped_files());
         delete_count
     }
 
@@ -627,9 +563,8 @@ impl MappedFileQueue {
     /// # Arguments
     /// * `interval_forcibly` - Force shutdown interval (milliseconds)
     pub fn shutdown(&self, interval_forcibly: u64) {
-        for mapped_file in self.storage.mapped_files().load().iter() {
-            mapped_file.shutdown(interval_forcibly);
-        }
+        let files = self.storage.mapped_files().load();
+        shutdown_mapped_file_queue(files.as_slice(), interval_forcibly);
     }
 
     /// Create a snapshot of current mapped files
@@ -762,27 +697,11 @@ impl MappedFileQueue {
     /// # Returns
     /// true if deletion succeeded, false otherwise
     pub fn retry_delete_first_file(&mut self, interval_forcibly: i64) -> bool {
-        if let Some(first) = self.get_first_mapped_file() {
-            if !first.is_available() {
-                warn!(
-                    "The mappedFile was destroyed once, but still alive: {}",
-                    first.get_file_name()
-                );
-
-                let result = first.destroy(interval_forcibly as u64);
-                if result {
-                    info!("The mappedFile re-delete OK: {}", first.get_file_name());
-                    let files = vec![first];
-                    self.delete_expired_file(files);
-                } else {
-                    warn!("The mappedFile re-delete failed: {}", first.get_file_name());
-                }
-
-                return result;
-            }
-        }
-
-        false
+        let first = self.get_first_mapped_file();
+        let deletion = retry_delete_first_mapped_file(first.as_ref(), interval_forcibly);
+        let deleted = deletion.deleted_count() > 0;
+        self.delete_expired_file(deletion.into_mapped_files());
+        deleted
     }
 
     /// Swap mapped byte buffers to reduce memory pressure
@@ -807,40 +726,13 @@ impl MappedFileQueue {
     /// ```
     pub fn swap_map(&self, reserve_num: i32, force_swap_interval_ms: i64, normal_swap_interval_ms: i64) {
         let files = self.storage.mapped_files().load();
-
-        if files.is_empty() {
-            return;
-        }
-
-        // Ensure we reserve at least 3 files
-        let reserve_num = if reserve_num < 3 { 3 } else { reserve_num };
-
-        let files_len = files.len() as i32;
-
-        // Process files, skipping the most recent reserved files
-        // Iterates from (length-reserve-1) down to 0
-        for i in (0..=(files_len - reserve_num - 1)).rev() {
-            if i < 0 {
-                break;
-            }
-
-            let mapped_file = &files[i as usize];
-            let current_time = current_millis() as i64;
-            let recent_swap_time = mapped_file.get_recent_swap_map_time();
-
-            // Force swap if interval exceeded
-            if current_time - recent_swap_time > force_swap_interval_ms {
-                mapped_file.swap_map();
-                continue;
-            }
-
-            // Normal swap if accessed and interval exceeded
-            if current_time - recent_swap_time > normal_swap_interval_ms
-                && mapped_file.get_mapped_byte_buffer_access_count_since_last_swap() > 0
-            {
-                mapped_file.swap_map();
-            }
-        }
+        swap_mapped_file_queue(
+            files.as_slice(),
+            reserve_num,
+            force_swap_interval_ms,
+            normal_swap_interval_ms,
+            || current_millis() as i64,
+        );
     }
 
     /// Clean swapped mapped byte buffers
@@ -863,31 +755,9 @@ impl MappedFileQueue {
     /// ```
     pub fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64) {
         let files = self.storage.mapped_files().load();
-
-        if files.is_empty() {
-            return;
-        }
-
-        let reserve_num = 3;
-        let files_len = files.len() as i32;
-
-        // Process files, skipping the most recent reserved files
-        // Iterates from (length-reserve-1) down to 0
-        for i in (0..=(files_len - reserve_num - 1)).rev() {
-            if i < 0 {
-                break;
-            }
-
-            let mapped_file = &files[i as usize];
-            let current_time = current_millis() as i64;
-            let recent_swap_time = mapped_file.get_recent_swap_map_time();
-
-            if current_time - recent_swap_time > force_clean_swap_interval_ms {
-                // Note: clean_swapped_map method needs to be implemented in MappedFile
-                // For now, we can call swap_map again which has similar effect
-                let _ = mapped_file.swap_map();
-            }
-        }
+        clean_swapped_mapped_file_queue(files.as_slice(), force_clean_swap_interval_ms, || {
+            current_millis() as i64
+        });
     }
 
     /// Get mapped file by timestamp
@@ -942,15 +812,10 @@ impl MappedFileQueue {
     /// It should only be called during shutdown or cleanup operations.
     #[inline]
     pub fn destroy(&mut self) {
-        for mapped_file in self.storage.mapped_files().load().iter() {
-            mapped_file.destroy(1000 * 3);
-        }
+        let files = self.storage.mapped_files().load();
+        destroy_mapped_file_queue(files.as_slice(), self.storage.store_path());
         self.storage.mapped_files().store(Arc::new(Vec::new()));
         self.set_flushed_where(0);
-        let path = PathBuf::from(self.storage.store_path());
-        if path.is_dir() {
-            let _ = fs::remove_dir_all(path);
-        }
     }
 
     /// Find mapped file by offset
@@ -1145,6 +1010,8 @@ impl MappedFileQueue {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use cheetah_string::CheetahString;
 
     use super::*;

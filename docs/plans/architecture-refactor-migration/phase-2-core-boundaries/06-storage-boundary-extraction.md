@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au/M06-03av 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au/M06-03av/M06-03aw 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1904,3 +1904,31 @@ python scripts/arc_mut_guard.py
   swap/clean、shutdown/destroy 与剩余 lifecycle/统计算法仍需迁移；flush/commit/CQ timestamp 保留给 M06-04。顶层 PR-M06-03
   仍需收口 CommitLog 根结构、append/recovery composition owner 与 Store facade；82 个顶层工作包仍为 30 已完成、
   1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03aw mapped-file queue lifecycle owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增 `mapped_file::queue_lifecycle`，唯一拥有 recovery last-file destroy、collection removal
+  filtering、按时间/物理 offset 过期删除、first-file retry-delete、swap/clean reserve-window、全文件 shutdown/destroy 与目录删除。
+  `MappedFileQueueDeletion` 统一返回成功 destroy 数量和需由 collection owner 移除的对象。
+- [x] `[DEV/ADAPTER]` Store 删除路径只捕获 ArcSwap snapshot，time-delete 额外保留 `check_self` 与 `current_millis` 注入，
+  然后按 Local deletion result 更新 collection；swap/clean 只注入时间源，shutdown/destroy 只传 snapshot/path。Store production
+  不再读取 CQ tail bytes、执行 destroy/sleep/swap/shutdown 或删除目录；destroy adapter 在 Local 完成副作用后清空 collection 并归零
+  flushed watermark。
+- [x] `[COMPAT]` time-delete 继续永不删除最新文件、oldest-first、按 batch/interval 限制并在首个 live/destroy-failed 文件停止；
+  offset-delete 继续读取最后一个 CQ unit 的 big-endian physical offset、在首个 retained/失败对象停止。当前 select 后 destroy 失败即
+  返回 0 的既有行为由回归冻结，未在迁移中修复。retry-delete 仍只处理 unavailable first file；swap 仍至少保留 3 个最新文件并按
+  newest-to-oldest 反向候选顺序执行 force/normal interval。
+- [x] `[TEST]` Local lifecycle integration 6/6、Store MappedFileQueue focused 11/11 通过；Local all-feature crate 单测
+  104/104 及全部 integration/doctest、Store lib 537/537 通过。覆盖 current-snapshot removal、last destroy、time batch/newest
+  retention、offset destroy-failure stop、swap reserve/shutdown 与 directory destroy。
+- [x] `[CONTRACT]` 新增 lifecycle baseline 与 10 类 mutation 契约，冻结 deletion result、九个 Local function、时间/offset
+  删除顺序、retry gate、swap reserve、Store exact imports/adapters 与回归测试；canonical file/item 集合加入
+  `queue_lifecycle.rs`、一个 value owner 与九个 function。完整 M06 contract 154/154 通过（744.490s），storage accessor
+  更新为 collection/size/path = 36/16/6。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、diff check、architecture dependency guard、AGENTS routing、
+  ArcMut guard 与 enforcing runtime audit 通过；本切片未修改 typed error mapping 或敏感字段，最近 error architecture 结果仍仅为
+  历史 1 处 Broker source stringification、8 处 MCP `anyhow` 和 2 份缺失治理文档。
+- [x] `[INVENTORY/SCOPE]` M06-03aw 已关闭 MappedFileQueue deletion/swap/shutdown/destroy lifecycle owner；剩余
+  max/min/size/fall-behind/warmup/lazy-mmap 等统计/纯计算，以及 flush/commit/CQ timestamp 边界。后者保留给 M06-04/05。
+  顶层 PR-M06-03 仍需收口 CommitLog 根结构、append/recovery composition owner 与 Store facade；82 个顶层工作包仍为
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成。

@@ -174,6 +174,7 @@ append/recovery 方法 owner 与 facade 收口，因此尚未勾选父项。
   - [x] M06-03at：迁移 MappedFileQueue dirty-tail truncate 与 recovery reset 纯规划到 Local，Store 保留 position/destroy/ArcSwap 副作用及两快照观察顺序
   - [x] M06-03au：将 AllocateMappedFileService worker/request table/queue、通知、timeout、TransientStorePool 与 mapped-file create owner 整体迁到 Local，Store 仅保留 MessageStoreConfig 投影与精确 re-export
   - [x] M06-03av：迁移 MappedFileQueue 目录发现、排序/校验、尾部空文件清理、加载初始化与 service/sync create I/O owner 到 Local，Store 仅应用 load outcome 与 ArcSwap collection
+  - [x] M06-03aw：迁移 MappedFileQueue delete/retry-delete、swap/clean、shutdown/destroy lifecycle owner 到 Local，Store 仅保留 check/time-source 与 ArcSwap collection 应用
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer
