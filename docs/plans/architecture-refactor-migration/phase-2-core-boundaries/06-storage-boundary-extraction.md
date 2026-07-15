@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1338,3 +1338,37 @@ python scripts/arc_mut_guard.py
   M06-03ad cursor/TOTALSIZE、append CRC/body encoder、record parser bounded reader/error order、recovery scan loop、
   flush/group commit、CQ/Index、HA、Timer/POP、MappedFile lifecycle/I/O、checkpoint policy、runtime ownership 或持久格式。
   PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03af0 CommitLog EOF retry encoded buffer ownership evidence
+
+- [x] `[DEV/API]` `AppendMessageCallback` trait 现明确 EOF ownership：实现若 `take` message 的 encoded buffer，
+  返回 `AppendMessageStatus::EndOfFile` 前必须归还同一个 buffer，供 caller 在下一 CommitLog segment 重试；不得
+  clone 或 re-encode。`DefaultAppendMessageCallback` 的 standard、batch、zero-copy 三条 EOF branch 各只新增一条
+  `encoded_buff = Some(original_bytes_mut)`，位置严格在 blank-marker write 后、EOF result return 前；成功、error、
+  fallback 与其他字段/状态不变。
+- [x] `[TEST/RED]` 512B deterministic 端到端 RED 的实际编码尺寸与预分析一致：single 先写 340B seed，170B
+  message 因剩余 172B 不满足 `170 + 8` 而 roll；batch 先写 170B seed，两个 170B frame 的第一个已遍历、第二个
+  cumulative 340B 因剩余 342B 不满足 `340 + 8` 而 roll。基线 second callback 分别在
+  `do_append` 第 153 行和 `do_append_batch` 第 256 行的第二次 `take().unwrap()` panic（2 failed，46.4s）。
+  callback-level RED 同时证明 standard/batch/zero-copy EOF 后 buffer 均为 `None`（3 failed，28.0s）。
+- [x] `[TEST/GREEN]` 修复后端到端 single 精确得到 `PutOk/wrote_offset=512/wrote_bytes=170/msg_num=1`，batch
+  精确得到 `PutOk/wrote_offset=512/wrote_bytes=340/msg_num=2`；两次 public put 各只累计两次 lock acquire，证明
+  EOF retry 仍在同一次 put lock 临界区内完成。两条 focused 各 1/1 通过。callback 级复用既有
+  `DefaultMappedFile` fixture/fingerprint，在同一测试中分别验证 standard、batch、zero-copy EOF 后 buffer `Some`
+  且下一 segment retry `PutOk`，最终 1/1 通过。
+- [x] `[CONTRACT]` Store adapter contract 先结构化提取三条 `SegmentAppendDecision::Roll` branch，再逐条校验唯一
+  exact assignment、blank-marker write `<` restore `<` EOF return 的 branch-local 顺序，并禁止 restore region 的
+  clone/re-encode；不是全文件字符串计数。mutation matrix 对三条路径分别拒绝删除 restore、移到 return 后、写错
+  `msg_inner/msg_batch` 字段及 `BytesMut::clone`，并以负向 mutation 证明 trait ownership 文档 guard 可拒绝必需片段
+  退化；最终 focused contract 1/1 通过（127.606s），主线程完整 M06 contract 118/118 通过（674.963s）。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature、依赖、编码格式、CRC、cursor、queue/context、result 字段、
+  MappedFile I/O 或 runtime ownership。Store all-target/all-feature package Clippy、Local default/all-feature 全量测试、
+  workspace formatter与 diff check 通过。architecture 35/35+fixtures+baseline、ArcMut 63/63+24 fixtures+final guard、
+  AGENTS routing 均通过。初次 callback helper 新增显式 imports/返回类型造成 1 NEW/1 STALE import 与两个 transitive
+  `DefaultMappedFile` references，收敛后又剩一个 constructor reference；最终把三场景合并复用原测试函数内唯一既有
+  constructor fingerprint，新增 ArcMut occurrence 为 0，未修改 baseline 或 relocation approval。独立审查初次
+  Critical/Important/Minor = 0/0/1，仅指出 trait 文档 guard 缺少负向 mutation；补齐并复跑后最终 0/0/0 Approved。
+- [x] `[SCOPE]` M06-03af0 只修复 EOF retry encoded buffer 所有权并新增 focused tests/contract；不 clone、
+  re-encode 或改变其他 EOF 状态，不迁移 append/recovery owner，不修改 flush/group commit、CQ/Index、HA、Timer/POP、
+  MappedFile lifecycle、runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和
+  M06-04..12 保持未完成。

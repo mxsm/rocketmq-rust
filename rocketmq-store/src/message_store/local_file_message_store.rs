@@ -7991,6 +7991,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn single_put_retries_encoded_buffer_after_commitlog_eof_roll() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 512,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let topic = CheetahString::from_static_str("af0s");
+
+        let seed = store
+            .put_message(build_test_message(&topic, Bytes::from(vec![1_u8; 245])))
+            .await;
+        assert_eq!(seed.put_message_status(), PutMessageStatus::PutOk);
+        assert_eq!(seed.append_message_result().expect("seed append").wrote_bytes, 340);
+
+        let retried = store
+            .put_message(build_test_message(&topic, Bytes::from(vec![2_u8; 75])))
+            .await;
+
+        assert_eq!(retried.put_message_status(), PutMessageStatus::PutOk);
+        let append = retried.append_message_result().expect("retried append");
+        assert_eq!(append.wrote_offset, 512);
+        assert_eq!(append.wrote_bytes, 170);
+        assert_eq!(append.msg_num, 1);
+        assert_eq!(store.get_runtime_info()["putMessageLockAcquireTotal"], "2");
+    }
+
+    #[tokio::test]
+    async fn batch_put_retries_full_encoded_buffer_after_partial_frame_eof_roll() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 512,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let topic = CheetahString::from_static_str("af0b");
+
+        let seed = store
+            .put_message(build_test_message(&topic, Bytes::from(vec![3_u8; 75])))
+            .await;
+        assert_eq!(seed.put_message_status(), PutMessageStatus::PutOk);
+        assert_eq!(seed.append_message_result().expect("seed append").wrote_bytes, 170);
+
+        let batch = build_test_batch(&topic, &[Bytes::from(vec![4_u8; 75]), Bytes::from(vec![5_u8; 75])]);
+        let retried = store.put_messages(batch).await;
+
+        assert_eq!(retried.put_message_status(), PutMessageStatus::PutOk);
+        let append = retried.append_message_result().expect("retried batch append");
+        assert_eq!(append.wrote_offset, 512);
+        assert_eq!(append.wrote_bytes, 340);
+        assert_eq!(append.msg_num, 2);
+        assert_eq!(store.get_runtime_info()["putMessageLockAcquireTotal"], "2");
+    }
+
+    #[tokio::test]
     async fn store_stats_records_get_found_miss_and_transferred_counts() {
         let temp_dir = tempdir().unwrap();
         let mut store = new_async_flush_test_store(&temp_dir);

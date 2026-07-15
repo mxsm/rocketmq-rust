@@ -9551,6 +9551,18 @@ def append_frame_store_adapter_violations(source: str) -> list[str]:
     compact = compact_rust(production)
     violations: list[str] = []
 
+    trait_position = source.find("pub trait AppendMessageCallback")
+    trait_docs_start = source.rfind("/// Write messages callback interface", 0, trait_position)
+    trait_docs = source[trait_docs_start:trait_position]
+    for fragment in (
+        "restore that exact",
+        "AppendMessageStatus::EndOfFile",
+        "retries the same",
+        "must not clone or re-encode",
+    ):
+        if fragment not in trait_docs:
+            violations.append(f"AppendMessageCallback EOF ownership documentation changed: {fragment}")
+
     required_imports = {
         "rocketmq_store_local::commit_log::append_frame::AppendBatchFrameCursor",
         "rocketmq_store_local::commit_log::append_frame::AppendFrameCrcPlan",
@@ -9647,7 +9659,41 @@ def append_frame_store_adapter_violations(source: str) -> list[str]:
                 return
             cursor = next_position
 
+    def require_eof_buffer_restore(
+        label: str,
+        body: str,
+        decision: str,
+        expected_assignment: str,
+    ) -> None:
+        decision_position = body.find(decision)
+        opening_brace = body.find("{", decision_position + len(decision)) if decision_position != -1 else -1
+        extracted = braced_body(body, opening_brace) if opening_brace != -1 else None
+        if extracted is None:
+            violations.append(f"{label} EOF roll branch changed")
+            return
+        branch, _ = extracted
+        assignments = re.findall(
+            r"(?:msg_inner|msg_batch)\.encoded_buff=Some\([^;]+\);",
+            branch,
+        )
+        write_position = branch.find("mapped_file.write_bytes_segment(")
+        restore_position = branch.find(expected_assignment)
+        return_position = branch.find("returnAppendMessageResult{")
+        if assignments != [expected_assignment]:
+            violations.append(f"{label} EOF encoded-buffer assignment changed: {assignments}")
+        if not 0 <= write_position < restore_position < return_position:
+            violations.append(f"{label} must restore the encoded buffer after marker write and before EOF return")
+        restore_region = branch[write_position:return_position] if 0 <= write_position < return_position else branch
+        if ".clone(" in restore_region or "encode(" in restore_region:
+            violations.append(f"{label} EOF buffer must not be cloned or re-encoded")
+
     standard = standard_bodies[0]
+    require_eof_buffer_restore(
+        "standard append",
+        standard,
+        "ifletSegmentAppendDecision::Roll=AppendFrameKernel::segment_append_decision(msg_len,max_blank)",
+        "msg_inner.encoded_buff=Some(pre_encode_buffer);",
+    )
     exact_standard_finalizer = (
         "letcrc_plan=AppendFrameKernel::finalize_frame("
         "&mutpre_encode_buffer[..msg_lenasusize],queue_offset,wrote_offset,"
@@ -9675,6 +9721,13 @@ def append_frame_store_adapter_violations(source: str) -> list[str]:
         ),
     )
     batch = batch_bodies[0]
+    require_eof_buffer_restore(
+        "batch append",
+        batch,
+        "ifletSegmentAppendDecision::Roll=AppendFrameKernel::segment_append_decision("
+        "frame.cumulative_len(),max_blank)",
+        "msg_batch.encoded_buff=Some(messages_byte_buffer);",
+    )
     exact_batch_finalizer = (
         "let_crc_plan=AppendFrameKernel::finalize_batch_frame("
         "&mutmessages_byte_buffer[frame.start()..frame.end()],queue_offset,phy_pos,"
@@ -9725,6 +9778,12 @@ def append_frame_store_adapter_violations(source: str) -> list[str]:
     if "crc32(" in batch or "create_crc32(" in batch:
         violations.append("batch append CRC must remain a no-op")
     zero_copy = zero_copy_bodies[0]
+    require_eof_buffer_restore(
+        "zero-copy append",
+        zero_copy,
+        "ifletSegmentAppendDecision::Roll=AppendFrameKernel::segment_append_decision(msg_len,max_blank)",
+        "msg_inner.encoded_buff=Some(pre_encode_buffer);",
+    )
     exact_zero_copy_finalizer = (
         "letcrc_plan=AppendFrameKernel::finalize_frame("
         "&mutbuffer[..msg_lenasusize],queue_offset,wrote_offset,"
@@ -11747,14 +11806,115 @@ fn copied_roll(encoded_len: i32, max_blank: i32) -> bool {
             self.assertNotEqual(source, without_normal_timer)
             return replace_nth_occurrence(
                 without_normal_timer,
-                "            );\n            return AppendMessageResult {",
+                "            );\n"
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n"
+                "            return AppendMessageResult {",
                 "            );\n"
                 "            let instant = Instant::now();\n"
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n"
                 "            return AppendMessageResult {",
                 2,
             )
 
+        def move_restore_after_eof_return(
+            source: str,
+            assignment: str,
+            occurrence: int,
+            branch_end: str,
+        ) -> str:
+            assignment_position = -1
+            for _ in range(occurrence):
+                assignment_position = source.find(assignment, assignment_position + 1)
+            self.assertNotEqual(-1, assignment_position)
+            without_assignment = (
+                source[:assignment_position]
+                + source[assignment_position + len(assignment):]
+            )
+            branch_end_position = without_assignment.find(branch_end, assignment_position)
+            self.assertNotEqual(-1, branch_end_position)
+            return_position = branch_end_position + branch_end.find("\n")
+            return (
+                without_assignment[:return_position]
+                + "\n"
+                + assignment.rstrip("\n")
+                + without_assignment[return_position:]
+            )
+
         adapter_mutations = [
+            callback_source.replace(
+                "restore that exact",
+                "restore the original",
+                1,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n",
+                "",
+                1,
+            ),
+            callback_source.replace(
+                "                msg_batch.encoded_buff = Some(messages_byte_buffer);\n",
+                "",
+                1,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n",
+                "",
+                2,
+            ),
+            move_restore_after_eof_return(
+                callback_source,
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n",
+                1,
+                "            };\n        }",
+            ),
+            move_restore_after_eof_return(
+                callback_source,
+                "                msg_batch.encoded_buff = Some(messages_byte_buffer);\n",
+                1,
+                "                };\n            }",
+            ),
+            move_restore_after_eof_return(
+                callback_source,
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n",
+                2,
+                "            };\n        }",
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "msg_inner.encoded_buff = Some(pre_encode_buffer);",
+                "msg_batch.encoded_buff = Some(pre_encode_buffer);",
+                1,
+            ),
+            callback_source.replace(
+                "msg_batch.encoded_buff = Some(messages_byte_buffer);",
+                "msg_inner.encoded_buff = Some(messages_byte_buffer);",
+                1,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "msg_inner.encoded_buff = Some(pre_encode_buffer);",
+                "msg_batch.encoded_buff = Some(pre_encode_buffer);",
+                2,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "Some(pre_encode_buffer);",
+                "Some(pre_encode_buffer.clone());",
+                1,
+            ),
+            callback_source.replace(
+                "Some(messages_byte_buffer);",
+                "Some(messages_byte_buffer.clone());",
+                1,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "Some(pre_encode_buffer);",
+                "Some(pre_encode_buffer.clone());",
+                2,
+            ),
             callback_source.replace(
                 "let phy_pos = frame.physical_offset(wrote_offset);",
                 "let phy_pos = wrote_offset + frame.cumulative_len() as i64 - frame.declared_len() as i64;",
