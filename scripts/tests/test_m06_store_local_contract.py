@@ -99,10 +99,16 @@ COMMIT_LOG_ABNORMAL_RECOVERY_PATH = Path(
 COMMIT_LOG_LOAD_ORCHESTRATION_PATH = Path(
     "rocketmq-store-local/src/commit_log/load_orchestration.rs"
 )
+COMMIT_LOG_RECOVERY_ORCHESTRATION_PATH = Path(
+    "rocketmq-store-local/src/commit_log/recovery_orchestration.rs"
+)
 STORE_APPEND_CALLBACK_PATH = Path(
     "rocketmq-store/src/base/append_message_callback.rs"
 )
 STORE_COMMIT_LOG_PATH = Path("rocketmq-store/src/log_file/commit_log.rs")
+STORE_LOCAL_FILE_MESSAGE_STORE_PATH = Path(
+    "rocketmq-store/src/message_store/local_file_message_store.rs"
+)
 STORE_COMMIT_LOG_RECOVERY_PATH = Path(
     "rocketmq-store/src/log_file/commit_log_recovery.rs"
 )
@@ -274,6 +280,9 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "CommitLogLoadObservation": ("enum", "load_orchestration.rs"),
     "safe_load_requested": ("fn", "load_orchestration.rs"),
     "drive_commit_log_load": ("fn", "load_orchestration.rs"),
+    "CommitLogRecoveryStep": ("enum", "recovery_orchestration.rs"),
+    "optimized_recovery_requested": ("fn", "recovery_orchestration.rs"),
+    "drive_commit_log_recovery": ("fn", "recovery_orchestration.rs"),
 }
 COMMIT_LOG_LOAD_OWNER_ITEMS = {
     "CommitLogFileDiscovery": "enum",
@@ -10595,6 +10604,149 @@ def commit_log_load_orchestration_contract_violations(
     return violations
 
 
+def commit_log_recovery_route_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+
+    if len(re.findall(r"\bpub\s+enum\s+CommitLogRecoveryStep\b", active)) != 1 or compact_rust(
+        active_item_body(production, "enum", "CommitLogRecoveryStep") or ""
+    ) != "Optimized,Standard,":
+        violations.append("Local CommitLog recovery route item changed")
+    if re.search(
+        r"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+enum\s+CommitLogRecoveryStep\b",
+        production,
+    ):
+        violations.append("Local CommitLog recovery route item is cfg-gated")
+
+    expected_signatures = {
+        "optimized_recovery_requested": (
+            "pubfnoptimized_recovery_requested(value:Option<&str>)->bool"
+        ),
+        "drive_commit_log_recovery": (
+            "pubfndrive_commit_log_recovery<Execute,Output>(use_optimized:bool,"
+            "execute:Execute)->OutputwhereExecute:FnOnce(CommitLogRecoveryStep)->Output,"
+        ),
+    }
+    for function_name, expected_signature in expected_signatures.items():
+        if len(re.findall(rf"\bpub\s+fn\s+{function_name}\b", active)) != 1:
+            violations.append(f"Local CommitLog recovery function ownership changed: {function_name}")
+            continue
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+fn\s+{function_name}\b",
+            production,
+        ):
+            violations.append(f"Local CommitLog recovery function is cfg-gated: {function_name}")
+        function_start = active.find(f"pub fn {function_name}")
+        function_open = active.find("{", function_start)
+        if compact_rust(active[function_start:function_open]) != expected_signature:
+            violations.append(f"Local CommitLog recovery function signature changed: {function_name}")
+
+    if compact_rust(named_function_body(production, "optimized_recovery_requested") or "") != (
+        "value.and_then(|value|value.parse::<bool>().ok()).unwrap_or(true)"
+    ):
+        violations.append("Local optimized recovery legacy truth table changed")
+    if compact_rust(named_function_body(production, "drive_commit_log_recovery") or "") != (
+        "execute(ifuse_optimized{CommitLogRecoveryStep::Optimized}else{"
+        "CommitLogRecoveryStep::Standard})"
+    ):
+        violations.append("Local CommitLog recovery route decision changed")
+
+    forbidden = (
+        "MappedFile",
+        "LocalFileMessageStore",
+        "MessageStoreConfig",
+        "ArcMut",
+        "tokio",
+        "Future",
+        "rocketmq_store",
+        "dyn",
+        "async",
+        "unsafe",
+    )
+    if any(re.search(rf"\b{re.escape(token)}\b", active) for token in forbidden):
+        violations.append("Local CommitLog recovery route absorbed Store/runtime edges")
+    if re.search(r"\b(?:panic|unreachable|unwrap|expect)\s*!?\s*\(", active):
+        violations.append("Local CommitLog recovery route must not panic")
+    if any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local CommitLog recovery route forbids alias/brace/glob imports")
+    if active_rust_source(module).count("pub mod recovery_orchestration;") != 1:
+        violations.append("Local commit_log module must expose recovery_orchestration exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::commit_log::recovery_orchestration::drive_commit_log_recovery",
+        "use rocketmq_store_local::commit_log::recovery_orchestration::optimized_recovery_requested",
+        "use rocketmq_store_local::commit_log::recovery_orchestration::CommitLogRecoveryStep",
+    }
+    actual_imports = {
+        statement
+        for kind, _, body, statement in active_import_records(store)
+        if kind == "use" and "commit_log::recovery_orchestration" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store CommitLog recovery route imports must be direct and exact")
+
+    expected_store_bodies = {
+        "recover_normally": (
+            "letoptimized_recovery_value=std::env::var().ok();letuse_optimized="
+            "optimized_recovery_requested(optimized_recovery_value.as_deref());letmessage_store="
+            "matchself.message_store_arc_or_error(){Ok(message_store)=>message_store,Err(error)=>{"
+            "error!();return;}};drive_commit_log_recovery(use_optimized,|step|asyncmove{matchstep{"
+            "CommitLogRecoveryStep::Optimized=>{self.commit_log.recover_normally_optimized("
+            "max_phy_offset_of_consume_queue,message_store).await;}CommitLogRecoveryStep::Standard=>{"
+            "self.commit_log.recover_normally(max_phy_offset_of_consume_queue,message_store).await;}}}"
+            ").await;"
+        ),
+        "recover_abnormally": (
+            "letoptimized_recovery_value=std::env::var().ok();letuse_optimized="
+            "optimized_recovery_requested(optimized_recovery_value.as_deref());letmessage_store="
+            "matchself.message_store_arc_or_error(){Ok(message_store)=>message_store,Err(error)=>{"
+            "error!();return;}};drive_commit_log_recovery(use_optimized,|step|asyncmove{matchstep{"
+            "CommitLogRecoveryStep::Optimized=>{self.commit_log.recover_abnormally_optimized("
+            "max_phy_offset_of_consume_queue,message_store).await;}CommitLogRecoveryStep::Standard=>{"
+            "self.commit_log.recover_abnormally(max_phy_offset_of_consume_queue,message_store).await;}}}"
+            ").await;"
+        ),
+    }
+    expected_signatures = {
+        name: (
+            f"pubasyncfn{name}(&mutself,max_phy_offset_of_consume_queue:i64)"
+        )
+        for name in expected_store_bodies
+    }
+    for function_name, expected_body in expected_store_bodies.items():
+        if named_function_signature(store, function_name) != expected_signatures[function_name]:
+            violations.append(f"Store {function_name} public signature changed")
+        if compact_rust(named_function_body(store, function_name) or "") != expected_body:
+            violations.append(f"Store {function_name} recovery route adapter changed")
+        raw_body = named_raw_function_body(store, function_name) or ""
+        expected_error = (
+            "skip normal recovery: {error}"
+            if function_name == "recover_normally"
+            else "skip abnormal recovery: {error}"
+        )
+        if raw_body.count(expected_error) != 1:
+            violations.append(f"Store {function_name} missing-store logging changed")
+
+    required_tests = (
+        "optimized_recovery_value_preserves_legacy_truth_table",
+        "optimized_route_executes_exactly_once_and_returns_adapter_output",
+        "standard_route_executes_exactly_once_and_returns_adapter_output",
+    )
+    for test_name in required_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local CommitLog recovery route regression changed: {test_name}")
+    return violations
+
+
 def abnormal_recovery_segment_orchestration_contract_violations(
     local: str,
     module: str,
@@ -11415,6 +11567,125 @@ class StoreLocalContractTests(unittest.TestCase):
                 self.assertNotEqual(
                     [],
                     commit_log_load_orchestration_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_commit_log_recovery_route_has_one_local_owner_and_four_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_RECOVERY_ORCHESTRATION_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_LOCAL_FILE_MESSAGE_STORE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "commit_log_recovery_orchestration.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            commit_log_recovery_route_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_commit_log_recovery_route_rejects_owner_policy_adapter_and_test_mutations(
+        self,
+    ) -> None:
+        local = (ROOT / COMMIT_LOG_RECOVERY_ORCHESTRATION_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_LOCAL_FILE_MESSAGE_STORE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "commit_log_recovery_orchestration.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "cfg-gated driver",
+                local.replace(
+                    "pub fn drive_commit_log_recovery",
+                    "#[cfg(any())]\npub fn drive_commit_log_recovery",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "malformed values disable optimized",
+                local.replace("unwrap_or(true)", "unwrap_or(false)", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "optimized route swapped",
+                local.replace(
+                    "CommitLogRecoveryStep::Optimized\n    } else",
+                    "CommitLogRecoveryStep::Standard\n    } else",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod recovery_orchestration;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store driver renamed",
+                local,
+                module,
+                store.replace("drive_commit_log_recovery(", "drive_recovery_route(", 1),
+                local_tests,
+            ),
+            (
+                "Store copied direct policy",
+                local,
+                module,
+                store.replace(
+                    "        drive_commit_log_recovery(use_optimized, |step| async move {",
+                    "        if use_optimized { return; }\n"
+                    "        drive_commit_log_recovery(use_optimized, |step| async move {",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "normal optimized adapter swapped",
+                local,
+                module,
+                store.replace(".recover_normally_optimized(", ".recover_normally(", 1),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn optimized_recovery_value_preserves_legacy_truth_table()",
+                    "fn optimized_recovery_truth_table_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    commit_log_recovery_route_contract_violations(
                         local_source,
                         module_source,
                         store_source,
@@ -18294,6 +18565,7 @@ mod tests""",
                 "memory_lock.rs",
                 "normal_recovery.rs",
                 "recovery.rs",
+                "recovery_orchestration.rs",
                 "record.rs",
                 "record_parser.rs",
             },

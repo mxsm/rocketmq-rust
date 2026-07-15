@@ -25,3 +25,4 @@ pub mod normal_recovery;
 pub mod record;
 pub mod record_parser;
 pub mod recovery;
+pub mod recovery_orchestration;

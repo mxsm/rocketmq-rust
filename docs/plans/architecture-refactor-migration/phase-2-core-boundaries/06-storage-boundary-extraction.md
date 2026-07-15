@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1587,4 +1587,28 @@ python scripts/arc_mut_guard.py
   未触及的 Broker source-stringification 1 项、MCP anyhow 8 项与治理文档缺失 2 项，未将非零基线误记为通过。
 - [x] `[INVENTORY/SCOPE]` M06-03aj 关闭 CommitLog load 外层策略内部工作，但不关闭顶层 PR-M06-03：
   CommitLog 根结构、外层 append/recovery composition 与 Store facade 仍需最终收口。顶层统计保持 82 个工作包中
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
+
+## M06-03ak CommitLog recovery route extraction evidence
+
+- [x] `[DEV/API]` Local 新增 runtime-neutral `commit_log::recovery_orchestration`，由
+  `CommitLogRecoveryStep`、`optimized_recovery_requested` 与 `drive_commit_log_recovery` 唯一拥有
+  optimized/standard route 决策。同步泛型 driver 只调用一次 `FnOnce` 并原样返回 adapter output，不引入
+  Store、MappedFile、config、Future、async runtime、`dyn`、`ArcMut` 或 `unsafe` 边界。
+- [x] `[COMPAT]` `ROCKETMQ_USE_OPTIMIZED_RECOVERY` 保留原 Rust `bool` parse 语义：缺失、malformed、大小写不符
+  或带空格时默认 optimized，只有精确 `false` 选择 standard。normal/abnormal 缺失 self-reference 时继续使用原
+  `skip ... recovery: {error}` 日志并提前返回，公开 async 方法签名不变。
+- [x] `[DEV/ADAPTER]` Store `recover_normally` 与 `recover_abnormally` 各且仅各调用一次 Local driver；每条路径
+  只保留 optimized/standard 两个 async CommitLog adapter，不再直接解析 bool 或自行执行 `if use_optimized`。
+  四个 adapter 继续接收相同 consume-queue physical offset 与同一个 message-store reference。
+- [x] `[TEST/CONTRACT]` Local 新增 3 项 truth-table、exact-once route 与 output identity 测试；Local all-feature
+  全量、LocalFileMessageStore filtered lib 83/83、Store recovery integration 19/19 均通过。M06 contract 新增
+  owner/signature/truth-table/import/四 adapter/test mutation 约束；最终完整 contract 132/132 通过（598.898s），
+  import 位置调整后 3 项定向契约再次通过。
+- [x] `[QUALITY/ARCH]` `cargo fmt --all -- --check`、Local/Store all-target/all-feature package Clippy、
+  ArcMut final guard、architecture dependency baseline 与 AGENTS routing 均通过。新增 imports 曾改变既有 ArcMut
+  context fingerprint，恢复原邻接后 guard 重新通过，未修改 baseline/approval。error architecture guard 仍只复现
+  未触及的 Broker source-stringification 1 项、MCP anyhow 8 项与治理文档缺失 2 项。
+- [x] `[INVENTORY/SCOPE]` M06-03ak 关闭 optimized/standard recovery route 内部工作，但顶层 PR-M06-03 仍未关闭：
+  CommitLog 根结构、append/recovery 方法 owner 与 Store facade 仍需最终收口。顶层统计保持 82 个工作包中
   30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
