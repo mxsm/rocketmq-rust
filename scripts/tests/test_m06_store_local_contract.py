@@ -96,6 +96,9 @@ COMMIT_LOG_NORMAL_RECOVERY_PATH = Path(
 COMMIT_LOG_ABNORMAL_RECOVERY_PATH = Path(
     "rocketmq-store-local/src/commit_log/abnormal_recovery.rs"
 )
+COMMIT_LOG_LOAD_ORCHESTRATION_PATH = Path(
+    "rocketmq-store-local/src/commit_log/load_orchestration.rs"
+)
 STORE_APPEND_CALLBACK_PATH = Path(
     "rocketmq-store/src/base/append_message_callback.rs"
 )
@@ -267,6 +270,10 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "AbnormalRecoveryObservation": ("enum", "abnormal_recovery.rs"),
     "AbnormalRecoverySegmentOutcome": ("enum", "abnormal_recovery.rs"),
     "drive_abnormal_segment": ("fn", "abnormal_recovery.rs"),
+    "CommitLogLoadStep": ("enum", "load_orchestration.rs"),
+    "CommitLogLoadObservation": ("enum", "load_orchestration.rs"),
+    "safe_load_requested": ("fn", "load_orchestration.rs"),
+    "drive_commit_log_load": ("fn", "load_orchestration.rs"),
 }
 COMMIT_LOG_LOAD_OWNER_ITEMS = {
     "CommitLogFileDiscovery": "enum",
@@ -10402,6 +10409,192 @@ def commit_log_append_attempt_contract_violations(
     return violations
 
 
+def commit_log_load_orchestration_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+
+    expected_items = {
+        "CommitLogLoadStep": ("enum", "Optimized,Sequential,"),
+        "CommitLogLoadObservation": (
+            "enum",
+            "ForcedSequential,OptimizedLoaded,OptimizedRejected,"
+            "OptimizedFailed(E),SequentialFailed(E),",
+        ),
+    }
+    for item, (kind, expected_body) in expected_items.items():
+        if len(re.findall(rf"\bpub\s+{kind}\s+{item}\b", active)) != 1 or compact_rust(
+            active_item_body(production, kind, item) or ""
+        ) != expected_body:
+            violations.append(f"Local CommitLog load item changed: {item}")
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+{kind}\s+{item}\b",
+            production,
+        ):
+            violations.append(f"Local CommitLog load item is cfg-gated: {item}")
+
+    for function_name in ("safe_load_requested", "drive_commit_log_load"):
+        if len(re.findall(rf"\bpub\s+fn\s+{function_name}\b", active)) != 1:
+            violations.append(f"Local CommitLog load function ownership changed: {function_name}")
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+fn\s+{function_name}\b",
+            production,
+        ):
+            violations.append(f"Local CommitLog load function is cfg-gated: {function_name}")
+
+    safe_load_body = re.sub(
+        r"\s+",
+        "",
+        named_raw_function_body(local, "safe_load_requested") or "",
+    )
+    if safe_load_body != (
+        'value.is_some_and(|value|value=="1"||value.to_lowercase()=="true")'
+    ):
+        violations.append("Local safe-load legacy truth table changed")
+
+    expected_driver_signature = (
+        "pubfndrive_commit_log_load<E,Execute,Observe>(force_sequential:bool,"
+        "mutexecute:Execute,mutobserve:Observe,)->boolwhereExecute:FnMut("
+        "CommitLogLoadStep)->Result<bool,E>,Observe:FnMut(CommitLogLoadObservation<E>),"
+    )
+    driver_start = active.find("pub fn drive_commit_log_load")
+    driver_open = active.find("{", driver_start) if driver_start >= 0 else -1
+    actual_driver_signature = (
+        compact_rust(active[driver_start:driver_open])
+        if driver_start >= 0 and driver_open >= 0
+        else ""
+    )
+    if actual_driver_signature != expected_driver_signature:
+        violations.append("Local CommitLog load driver signature changed")
+
+    expected_driver_body = (
+        "ifforce_sequential{observe(CommitLogLoadObservation::ForcedSequential);"
+        "returnmatchexecute(CommitLogLoadStep::Sequential){Ok(loaded)=>loaded,"
+        "Err(error)=>{observe(CommitLogLoadObservation::SequentialFailed(error));false}};}"
+        "matchexecute(CommitLogLoadStep::Optimized){Ok(true)=>{observe("
+        "CommitLogLoadObservation::OptimizedLoaded);true}Ok(false)=>{observe("
+        "CommitLogLoadObservation::OptimizedRejected);false}Err(error)=>{observe("
+        "CommitLogLoadObservation::OptimizedFailed(error));matchexecute("
+        "CommitLogLoadStep::Sequential){Ok(loaded)=>loaded,Err(error)=>{observe("
+        "CommitLogLoadObservation::SequentialFailed(error));false}}}}"
+    )
+    actual_driver_body = compact_rust(
+        named_function_body(production, "drive_commit_log_load") or ""
+    )
+    if actual_driver_body != expected_driver_body:
+        violations.append("Local CommitLog load decision or observation order changed")
+    if re.search(
+        r"#\[derive\([^]]*\bClone\b[^]]*\)\]\s*pub\s+enum\s+CommitLogLoadObservation\b",
+        production,
+    ):
+        violations.append("Local CommitLog load error observation gained Clone ownership")
+
+    forbidden = (
+        "MappedFile",
+        "MessageStoreConfig",
+        "ArcMut",
+        "tokio",
+        "rocketmq_store",
+        "dyn",
+        "unsafe",
+    )
+    if any(re.search(rf"\b{re.escape(token)}\b", active) for token in forbidden):
+        violations.append("Local CommitLog load driver absorbed Store/runtime edges")
+    if re.search(r"\b(?:panic|unreachable|unwrap|expect)\s*!?\s*\(", active):
+        violations.append("Local CommitLog load driver must fail closed without panic")
+    if any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local CommitLog load driver forbids alias/brace/glob imports")
+    if active_rust_source(module).count("pub mod load_orchestration;") != 1:
+        violations.append("Local commit_log module must expose load_orchestration exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::commit_log::load_orchestration::drive_commit_log_load",
+        "use rocketmq_store_local::commit_log::load_orchestration::safe_load_requested",
+        "use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadObservation",
+        "use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadStep",
+    }
+    actual_imports = {
+        statement
+        for kind, _, body, statement in active_import_records(store)
+        if kind == "use" and "commit_log::load_orchestration" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store CommitLog load imports must be direct and exact")
+
+    expected_store_load_body = (
+        "letsafe_load_value=std::env::var().ok();letforce_sequential=safe_load_requested("
+        "safe_load_value.as_deref());drive_commit_log_load(force_sequential,|step|matchstep{"
+        "CommitLogLoadStep::Optimized=>self.load_optimized(),CommitLogLoadStep::Sequential=>"
+        "Ok(self.load_sequential()),},|observation|matchobservation{CommitLogLoadObservation::"
+        "ForcedSequential=>{info!();}CommitLogLoadObservation::OptimizedLoaded=>{info!();}"
+        "CommitLogLoadObservation::OptimizedRejected=>{error!();}CommitLogLoadObservation::"
+        "OptimizedFailed(error)=>{error!(,error);}CommitLogLoadObservation::SequentialFailed("
+        "error)=>{error!(,error);}},)"
+    )
+    actual_store_load_body = compact_rust(named_function_body(store, "load") or "")
+    if actual_store_load_body != expected_store_load_body:
+        violations.append("Store CommitLog load adapter or direct policy changed")
+
+    store_load_raw = named_raw_function_body(store, "load") or ""
+    expected_logs = (
+        "Using safe sequential CommitLog load (ROCKETMQ_SAFE_LOAD=true)",
+        "load commit log Ok (optimized)",
+        "load commit log failed (optimized)",
+        "Optimized load failed: {}, falling back to sequential load",
+        "Sequential CommitLog load adapter failed: {}",
+    )
+    if any(store_load_raw.count(message) != 1 for message in expected_logs):
+        violations.append("Store CommitLog load observation logging changed")
+
+    optimized_body = compact_rust(named_function_body(store, "load_optimized") or "")
+    check_self = "self.mapped_file_queue.check_self();"
+    stats_log = "info!(,stats.total_files"
+    optimized_success = "Ok(true)"
+    if (
+        optimized_body.count(check_self) != 1
+        or optimized_body.find(stats_log) < 0
+        or optimized_body.find(stats_log) > optimized_body.find(check_self)
+        or optimized_body.find(check_self) > optimized_body.find(optimized_success)
+    ):
+        violations.append("Store optimized load success validation order changed")
+
+    sequential_body = compact_rust(named_function_body(store, "load_sequential") or "")
+    if sequential_body != (
+        "letresult=self.mapped_file_queue.load();self.mapped_file_queue.check_self();"
+        "ifresult{info!();}else{error!();}result"
+    ):
+        violations.append("Store sequential load adapter changed")
+    sequential_raw = named_raw_function_body(store, "load_sequential") or ""
+    for message in (
+        "load commit log Ok (sequential fallback)",
+        "load commit log failed (sequential fallback)",
+    ):
+        if sequential_raw.count(message) != 1:
+            violations.append("Store sequential load legacy logging changed")
+            break
+
+    required_tests = (
+        "safe_load_value_preserves_legacy_truth_table",
+        "forced_sequential_never_attempts_optimized",
+        "optimized_success_is_terminal",
+        "optimized_rejection_does_not_fallback",
+        "optimized_error_observes_before_sequential_fallback",
+        "sequential_adapter_error_is_observed_and_fails_closed",
+    )
+    for test_name in required_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local CommitLog load regression changed: {test_name}")
+    return violations
+
+
 def abnormal_recovery_segment_orchestration_contract_violations(
     local: str,
     module: str,
@@ -11080,6 +11273,154 @@ def commit_log_declared_frame_contract_violations(
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
+
+    def test_commit_log_load_orchestration_has_one_local_owner_and_two_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_LOAD_ORCHESTRATION_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "commit_log_load_orchestration.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            commit_log_load_orchestration_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_commit_log_load_orchestration_rejects_owner_order_adapter_and_test_mutations(
+        self,
+    ) -> None:
+        local = (ROOT / COMMIT_LOG_LOAD_ORCHESTRATION_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "commit_log_load_orchestration.rs"
+        ).read_text(encoding="utf-8")
+
+        local_mutations = {
+            "cfg-gated driver": local.replace(
+                "pub fn drive_commit_log_load",
+                "#[cfg(any())]\npub fn drive_commit_log_load",
+                1,
+            ),
+            "error observation Clone": local.replace(
+                "#[derive(Debug, PartialEq, Eq)]\npub enum CommitLogLoadObservation",
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum CommitLogLoadObservation",
+                1,
+            ),
+            "forced path attempts optimized": local.replace(
+                "return match execute(CommitLogLoadStep::Sequential)",
+                "return match execute(CommitLogLoadStep::Optimized)",
+                1,
+            ),
+            "optimized rejection falls back": local.replace(
+                "            false\n        }\n        Err(error) => {",
+                "            execute(CommitLogLoadStep::Sequential).unwrap_or(false)\n"
+                "        }\n        Err(error) => {",
+                1,
+            ),
+            "fallback observation after execution": local.replace(
+                "        Err(error) => {\n"
+                "            observe(CommitLogLoadObservation::OptimizedFailed(error));\n"
+                "            match execute(CommitLogLoadStep::Sequential) {",
+                "        Err(error) => {\n"
+                "            let fallback = execute(CommitLogLoadStep::Sequential);\n"
+                "            observe(CommitLogLoadObservation::OptimizedFailed(error));\n"
+                "            match fallback {",
+                1,
+            ),
+            "safe-load truth table widened": local.replace('value == "1"', 'value == "yes"', 1),
+        }
+        for label, local_source in local_mutations.items():
+            with self.subTest(mutation=label):
+                self.assertNotEqual(local, local_source)
+                self.assertNotEqual(
+                    [],
+                    commit_log_load_orchestration_contract_violations(
+                        local_source,
+                        module,
+                        store,
+                        local_tests,
+                    ),
+                )
+
+        mutations = (
+            (
+                "module removed",
+                local,
+                module.replace("pub mod load_orchestration;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store driver renamed",
+                local,
+                module,
+                store.replace("drive_commit_log_load(", "drive_load_policy(", 1),
+                local_tests,
+            ),
+            (
+                "Store copied direct policy",
+                local,
+                module,
+                store.replace(
+                    "        drive_commit_log_load(\n",
+                    "        if force_sequential { let _ = self.load_sequential(); }\n"
+                    "        drive_commit_log_load(\n",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store optimized adapter swapped",
+                local,
+                module,
+                store.replace(
+                    "CommitLogLoadStep::Optimized => self.load_optimized()",
+                    "CommitLogLoadStep::Optimized => Ok(self.load_sequential())",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "optimized success validation removed",
+                local,
+                module,
+                store.replace("                self.mapped_file_queue.check_self();\n", "", 1),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn optimized_rejection_does_not_fallback()",
+                    "fn optimized_rejection_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    commit_log_load_orchestration_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
 
     def test_abnormal_recovery_segment_orchestration_has_one_local_owner_and_two_store_adapters(self) -> None:
         local = (ROOT / COMMIT_LOG_ABNORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
@@ -14189,8 +14530,7 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
         prefix = source[:optimized_start]
         optimized = source[optimized_start:]
         mutation = optimized.replace(
-            "AbnormalRecoveryObservation::DispatchMessage\n"
-            "                            | AbnormalRecoveryObservation::SkipMessageDispatch",
+            "AbnormalRecoveryObservation::DispatchMessage | AbnormalRecoveryObservation::SkipMessageDispatch",
             "AbnormalRecoveryObservation::DispatchMessage",
             1,
         )
@@ -17949,6 +18289,7 @@ mod tests""",
                 "append_frame.rs",
                 "header.rs",
                 "load.rs",
+                "load_orchestration.rs",
                 "loader.rs",
                 "memory_lock.rs",
                 "normal_recovery.rs",

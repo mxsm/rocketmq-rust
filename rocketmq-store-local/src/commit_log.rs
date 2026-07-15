@@ -18,6 +18,7 @@ pub mod append_attempt;
 pub mod append_frame;
 pub mod header;
 pub mod load;
+pub mod load_orchestration;
 pub mod loader;
 pub mod memory_lock;
 pub mod normal_recovery;

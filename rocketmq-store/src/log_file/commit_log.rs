@@ -111,6 +111,10 @@ use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAborted;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendCompleted;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome;
+use rocketmq_store_local::commit_log::load_orchestration::drive_commit_log_load;
+use rocketmq_store_local::commit_log::load_orchestration::safe_load_requested;
+use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadObservation;
+use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadStep;
 use rocketmq_store_local::commit_log::memory_lock::plan_commit_log_memory_lock_target;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockMode;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;
@@ -624,32 +628,32 @@ impl CommitLog {
     /// # Returns
     /// `true` if load succeeded, `false` otherwise
     pub fn load(&mut self) -> bool {
-        // Use environment variable to force fallback to safe sequential load
-        let force_sequential = std::env::var("ROCKETMQ_SAFE_LOAD")
-            .map(|v| v == "1" || v.to_lowercase() == "true")
-            .unwrap_or(false);
-
-        if force_sequential {
-            info!("Using safe sequential CommitLog load (ROCKETMQ_SAFE_LOAD=true)");
-            return self.load_sequential();
-        }
-
-        // Optimized parallel load path
-        match self.load_optimized() {
-            Ok(true) => {
-                self.mapped_file_queue.check_self();
-                info!("load commit log Ok (optimized)");
-                true
-            }
-            Ok(false) => {
-                error!("load commit log failed (optimized)");
-                false
-            }
-            Err(e) => {
-                error!("Optimized load failed: {}, falling back to sequential load", e);
-                self.load_sequential()
-            }
-        }
+        let safe_load_value = std::env::var("ROCKETMQ_SAFE_LOAD").ok();
+        let force_sequential = safe_load_requested(safe_load_value.as_deref());
+        drive_commit_log_load(
+            force_sequential,
+            |step| match step {
+                CommitLogLoadStep::Optimized => self.load_optimized(),
+                CommitLogLoadStep::Sequential => Ok(self.load_sequential()),
+            },
+            |observation| match observation {
+                CommitLogLoadObservation::ForcedSequential => {
+                    info!("Using safe sequential CommitLog load (ROCKETMQ_SAFE_LOAD=true)");
+                }
+                CommitLogLoadObservation::OptimizedLoaded => {
+                    info!("load commit log Ok (optimized)");
+                }
+                CommitLogLoadObservation::OptimizedRejected => {
+                    error!("load commit log failed (optimized)");
+                }
+                CommitLogLoadObservation::OptimizedFailed(error) => {
+                    error!("Optimized load failed: {}, falling back to sequential load", error);
+                }
+                CommitLogLoadObservation::SequentialFailed(error) => {
+                    error!("Sequential CommitLog load adapter failed: {}", error);
+                }
+            },
+        )
     }
 
     /// Optimized load implementation with parallel I/O and batching.
@@ -703,6 +707,7 @@ impl CommitLog {
                     stats.parallel_load_time_ms,
                     stats.total_load_time_ms
                 );
+                self.mapped_file_queue.check_self();
 
                 Ok(true)
             }

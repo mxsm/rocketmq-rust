@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1561,5 +1561,30 @@ python scripts/arc_mut_guard.py
   runtime ownership、ArcMut baseline 或 relocation approval。error architecture guard 仅复现未触及的 Broker
   source-stringification 1 项、MCP anyhow 8 项和治理文档缺失 2 项，未将非零基线误记为通过。
 - [x] `[INVENTORY/SCOPE]` M06-03ai 关闭 abnormal 单 segment 编排内部工作，但顶层 PR-M06-03 仍未关闭：
+  CommitLog 根结构、外层 append/recovery composition 与 Store facade 仍需最终收口。顶层统计保持 82 个工作包中
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
+
+## M06-03aj CommitLog load outer orchestration extraction evidence
+
+- [x] `[DEV/API]` Local 新增 runtime-neutral `commit_log::load_orchestration`，由
+  `CommitLogLoadStep`、`CommitLogLoadObservation<E>`、`safe_load_requested` 与
+  `drive_commit_log_load` 唯一拥有 CommitLog safe/optimized/sequential 外层决策。公开 seam 使用泛型
+  execute/observe closure，不引入 Store、MappedFile、config、runtime、`dyn`、`ArcMut` 或 `unsafe` 边界。
+- [x] `[COMPAT/ORDER]` `ROCKETMQ_SAFE_LOAD` 继续只接受 `1` 或大小写不敏感的 `true`，不 trim 或扩展
+  truth value。forced-safe 只执行 sequential；optimized `Ok(true)` 成功，`Ok(false)` 终止且不 fallback；
+  只有 optimized adapter error 先 observation、后执行 sequential fallback。sequential adapter error 以 typed
+  observation fail-closed 为 `false`，生产路径不 panic/unwrap/expect，也不要求 error `Clone`。
+- [x] `[DEV/ADAPTER]` Store `CommitLog::load` 只读取环境值，并把 `load_optimized` 与 `load_sequential`
+  映射为两个 exact step adapter；safe/optimized/rejected/fallback legacy 日志保持原文。optimized 成功路径在
+  统计日志后、返回 `Ok(true)` 前执行一次 `mapped_file_queue.check_self()`；sequential 的 load/check/log 顺序不变。
+- [x] `[TEST/CONTRACT]` Local 新增 6 项 truth-table、terminal outcome、fallback observation order 与 adapter-error
+  回归测试；Local all-feature 全量、Store CommitLog filtered lib 35/35、Store recovery integration 19/19 均通过。
+  M06 contract 新增 owner/signature/order/import/legacy-log/adapter/test mutation 约束，并修正一条旧 abnormal mutation
+  对 rustfmt 换行敏感的夹具；最终完整 contract 130/130 通过（599.364s）。
+- [x] `[QUALITY/ARCH]` `cargo fmt --all -- --check`、Local/Store all-target/all-feature package Clippy、
+  `git diff --check`、ArcMut final guard、architecture dependency baseline 与 AGENTS routing 均通过；未修改 manifest、
+  feature、runtime ownership、ArcMut baseline、持久格式或 relocation approval。error architecture guard 仍只复现
+  未触及的 Broker source-stringification 1 项、MCP anyhow 8 项与治理文档缺失 2 项，未将非零基线误记为通过。
+- [x] `[INVENTORY/SCOPE]` M06-03aj 关闭 CommitLog load 外层策略内部工作，但不关闭顶层 PR-M06-03：
   CommitLog 根结构、外层 append/recovery composition 与 Store facade 仍需最终收口。顶层统计保持 82 个工作包中
   30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
