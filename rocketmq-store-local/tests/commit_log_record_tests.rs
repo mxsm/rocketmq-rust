@@ -18,6 +18,7 @@ use std::rc::Rc;
 
 use bytes::Bytes;
 use rocketmq_store_local::commit_log::record::is_blank_message;
+use rocketmq_store_local::commit_log::record::read_declared_frame;
 use rocketmq_store_local::commit_log::record::CommitLogFrameCursor;
 use rocketmq_store_local::commit_log::record::CommitLogFrameSource;
 use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
@@ -96,6 +97,75 @@ fn collect(source: BytesSource) -> (Vec<(Bytes, usize, usize)>, usize) {
         frames.push(next);
     }
     (frames, cursor.current_offset())
+}
+
+#[test]
+fn read_declared_frame_missing_header_stops_after_exact_header_read() {
+    let mut calls = Vec::new();
+
+    let actual = read_declared_frame(7, |position, size| {
+        calls.push((position, size));
+        None
+    });
+
+    assert_eq!(actual, (None, 0));
+    assert_eq!(calls, vec![(7, 4)]);
+}
+
+#[test]
+#[should_panic]
+fn read_declared_frame_short_successful_header_panics() {
+    let _ = read_declared_frame(3, |_, _| Some(Bytes::from_static(&[0, 0, 8])));
+}
+
+#[test]
+fn read_declared_frame_non_positive_big_endian_size_stops_without_body_read() {
+    for declared_size in [0_i32, -1_i32] {
+        let mut calls = Vec::new();
+
+        let actual = read_declared_frame(11, |position, size| {
+            calls.push((position, size));
+            Some(Bytes::copy_from_slice(&declared_size.to_be_bytes()))
+        });
+
+        assert_eq!(actual, (None, 0));
+        assert_eq!(calls, vec![(11, 4)]);
+    }
+}
+
+#[test]
+fn read_declared_frame_missing_body_preserves_big_endian_declared_size() {
+    let mut calls = Vec::new();
+    let mut reads = 0;
+
+    let actual = read_declared_frame(13, |position, size| {
+        calls.push((position, size));
+        reads += 1;
+        (reads == 1).then(|| Bytes::copy_from_slice(&9_i32.to_be_bytes()))
+    });
+
+    assert_eq!(actual, (None, 9));
+    assert_eq!(calls, vec![(13, 4), (13, 9)]);
+}
+
+#[test]
+fn read_declared_frame_success_returns_body_and_uses_same_position_twice() {
+    let expected = Bytes::from_static(b"123456789");
+    let mut calls = Vec::new();
+    let mut reads = 0;
+
+    let actual = read_declared_frame(17, |position, size| {
+        calls.push((position, size));
+        reads += 1;
+        if reads == 1 {
+            Some(Bytes::copy_from_slice(&9_i32.to_be_bytes()))
+        } else {
+            Some(expected.clone())
+        }
+    });
+
+    assert_eq!(actual, (Some(expected), 9));
+    assert_eq!(calls, vec![(17, 4), (17, 9)]);
 }
 
 #[test]

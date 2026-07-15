@@ -75,6 +75,9 @@ COMMIT_LOG_APPEND_ATTEMPT_PATH = Path(
 COMMIT_LOG_HEADER_PATH = Path(
     "rocketmq-store-local/src/commit_log/header.rs"
 )
+COMMIT_LOG_RECORD_PATH = Path(
+    "rocketmq-store-local/src/commit_log/record.rs"
+)
 STORE_APPEND_CALLBACK_PATH = Path(
     "rocketmq-store/src/base/append_message_callback.rs"
 )
@@ -232,6 +235,7 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "MESSAGE_MAGIC_CODE_V2": ("const", "header.rs"),
     "BLANK_MAGIC_CODE": ("const", "record.rs"),
     "is_blank_message": ("fn", "record.rs"),
+    "read_declared_frame": ("fn", "record.rs"),
     "CommitLogFrameSource": ("trait", "record.rs"),
     "CommitLogFrameCursor": ("struct", "record.rs"),
 }
@@ -10446,9 +10450,292 @@ def commit_log_append_attempt_contract_violations(
     return violations
 
 
+def commit_log_declared_frame_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    local_production = source_without_cfg_test_items(local)
+    active_local = active_rust_source(local_production)
+    declaration_pattern = re.compile(r"\bpub\s+fn\s+read_declared_frame\b")
+    if len(declaration_pattern.findall(active_local)) != 1:
+        violations.append("read_declared_frame must have one active Local owner")
+    if re.search(
+        r"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+fn\s+read_declared_frame\b",
+        local_production,
+    ):
+        violations.append("read_declared_frame owner must not be cfg-gated")
+
+    signature = re.search(
+        r"\bpub\s+fn\s+read_declared_frame\s*<\s*F\s*>\s*"
+        r"\(\s*position\s*:\s*usize\s*,\s*mut\s+read\s*:\s*F\s*\)\s*"
+        r"->\s*\(\s*Option\s*<\s*Bytes\s*>\s*,\s*usize\s*\)\s*"
+        r"where\s+F\s*:\s*FnMut\s*\(\s*usize\s*,\s*usize\s*\)\s*"
+        r"->\s*Option\s*<\s*Bytes\s*>\s*,",
+        active_local,
+    )
+    if signature is None:
+        violations.append("read_declared_frame signature changed")
+
+    body = compact_rust(named_function_body(local_production, "read_declared_frame") or "")
+    expected_body = (
+        "letmutbytes=read(position,4);matchbytes{None=>(None,0),"
+        "Some(refmutinner)=>{letsize=inner.get_i32();ifsize<=0{return(None,0);}"
+        "letOk(size)=usize::try_from(size)else{return(None,0);};"
+        "(read(position,size),size)}}"
+    )
+    if body != expected_body:
+        violations.append("read_declared_frame declared-frame semantics changed")
+
+    declaration = local.find("pub fn read_declared_frame")
+    docs = "" if declaration == -1 else local[max(0, declaration - 1_200):declaration]
+    if (
+        "# Panics" not in docs
+        or "exactly the requested number of bytes" not in docs
+        or "fewer than four bytes" not in docs
+    ):
+        violations.append("read_declared_frame exact-read panic contract changed")
+
+    forbidden_local_tokens = (
+        "MappedFile",
+        "MessageExt",
+        "ArcMut",
+        "tokio",
+        "rocketmq_store",
+    )
+    present_forbidden = [
+        token
+        for token in forbidden_local_tokens
+        if re.search(rf"\b{re.escape(token)}\b", active_local)
+    ]
+    if present_forbidden:
+        violations.append(
+            f"Local declared-frame owner absorbed Store/runtime edges: {present_forbidden}"
+        )
+    if commit_log_record_boundary_violations(local_production):
+        violations.append("Local declared-frame owner uses forbidden imports or ports")
+
+    active_module = active_rust_source(module)
+    if len(re.findall(r"\bpub\s+mod\s+record\s*;", active_module)) != 1:
+        violations.append("Local commit_log module must expose record exactly once")
+
+    expected_import = "use rocketmq_store_local::commit_log::record::read_declared_frame"
+    relevant_imports = [
+        statement
+        for kind, _, body, statement in active_import_records(store)
+        if kind == "use" and "read_declared_frame" in body
+    ]
+    if relevant_imports != [expected_import]:
+        violations.append("Store declared-frame adapter import must be direct and exact")
+
+    store_production = source_without_cfg_test_items(store)
+    active_store = active_rust_source(store_production)
+    if named_function_body(store_production, "get_simple_message_bytes") is not None:
+        violations.append("Store legacy declared-frame reader remains")
+    if re.search(r"\.get_i32\s*\(", active_store) or re.search(
+        r"\.get_bytes\s*\([^,]+,\s*4\s*\)", active_store
+    ):
+        violations.append("Store copied declared-frame header policy")
+
+    adapter = (
+        "read_declared_frame(current_pos,|position,size|"
+        "mapped_file.get_bytes(position,size))"
+    )
+    for function_name in ("recover_normally", "recover_abnormally"):
+        function_body = named_function_body(store_production, function_name) or ""
+        compact_body = compact_rust(function_body)
+        if compact_body.count(adapter) != 1 or len(
+            re.findall(r"\bread_declared_frame\s*\(", active_rust_source(function_body))
+        ) != 1:
+            violations.append(f"Store {function_name} declared-frame adapter changed")
+    for function_name in ("recover_normally_optimized", "recover_abnormally_optimized"):
+        function_body = named_function_body(store_production, function_name) or ""
+        if re.search(r"\bread_declared_frame\s*\(", active_rust_source(function_body)):
+            violations.append(f"Store {function_name} must keep its optimized cursor path")
+
+    required_local_tests = (
+        "read_declared_frame_missing_header_stops_after_exact_header_read",
+        "read_declared_frame_short_successful_header_panics",
+        "read_declared_frame_non_positive_big_endian_size_stops_without_body_read",
+        "read_declared_frame_missing_body_preserves_big_endian_declared_size",
+        "read_declared_frame_success_returns_body_and_uses_same_position_twice",
+    )
+    for test_name in required_local_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local declared-frame regression changed: {test_name}")
+    return violations
+
+
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
+
+    def test_commit_log_declared_frame_has_one_local_owner_and_two_standard_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_RECORD_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_record_tests.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            [],
+            commit_log_declared_frame_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_commit_log_declared_frame_contract_rejects_reader_and_adapter_mutations(self) -> None:
+        local = (ROOT / COMMIT_LOG_RECORD_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_record_tests.rs").read_text(
+            encoding="utf-8"
+        )
+
+        def assert_rejected(
+            label: str,
+            *,
+            local_source: str = local,
+            module_source: str = module,
+            store_source: str = store,
+            test_source: str = local_tests,
+        ) -> None:
+            self.assertNotEqual(
+                [],
+                commit_log_declared_frame_contract_violations(
+                    local_source,
+                    module_source,
+                    store_source,
+                    test_source,
+                ),
+                label,
+            )
+
+        local_mutations = {
+            "header read length": local.replace(
+                "let mut bytes = read(position, 4);",
+                "let mut bytes = read(position, 8);",
+                1,
+            ),
+            "missing header size": local.replace(
+                "None => (None, 0),",
+                "None => (None, 1),",
+                1,
+            ),
+            "little-endian header": local.replace("inner.get_i32()", "inner.get_i32_le()", 1),
+            "zero size accepted": local.replace("if size <= 0", "if size < 0", 1),
+            "second read offset": local.replace(
+                "(read(position, size), size)",
+                "(read(position + 4, size), size)",
+                1,
+            ),
+            "second read length": local.replace(
+                "(read(position, size), size)",
+                "(read(position, 4), size)",
+                1,
+            ),
+            "missing body size reset": local.replace(
+                "(read(position, size), size)",
+                "(read(position, size), 0)",
+                1,
+            ),
+            "fallible short header": local.replace(
+                "let size = inner.get_i32();",
+                "if inner.len() < 4 { return (None, 0); }\n            let size = inner.get_i32();",
+                1,
+            ),
+            "cfg-gated owner": local.replace(
+                "pub fn read_declared_frame",
+                "#[cfg(any())]\npub fn read_declared_frame",
+                1,
+            ),
+            "duplicate owner": local
+            + "\npub fn read_declared_frame<F>(_: usize, _: F) -> (Option<Bytes>, usize) "
+            + "where F: FnMut(usize, usize) -> Option<Bytes> { (None, 0) }\n",
+            "aliased bytes import": local.replace(
+                "use bytes::Buf;",
+                "use bytes::Buf as ByteBuf;",
+                1,
+            ),
+            "Store type edge": local + "\nfn forbidden(_: &MappedFile) {}\n",
+        }
+        for label, mutation in local_mutations.items():
+            with self.subTest(mutation=label):
+                self.assertNotEqual(local, mutation, label)
+                assert_rejected(label, local_source=mutation)
+
+        import_line = "use rocketmq_store_local::commit_log::record::read_declared_frame;"
+        adapter = (
+            "read_declared_frame(current_pos, |position, size| "
+            "mapped_file.get_bytes(position, size))"
+        )
+        first_adapter_position = store.find(adapter)
+        last_adapter_position = store.rfind(adapter)
+        self.assertNotEqual(-1, first_adapter_position)
+        self.assertNotEqual(first_adapter_position, last_adapter_position)
+
+        abnormal_offset_mutation = (
+            store[:last_adapter_position]
+            + adapter.replace("get_bytes(position, size)", "get_bytes(position + 1, size)")
+            + store[last_adapter_position + len(adapter):]
+        )
+        optimized_marker = "pub async fn recover_normally_optimized("
+        optimized_start = store.index(optimized_marker)
+        optimized_open = store.index("{", optimized_start)
+        optimized_mutation = (
+            store[:optimized_open + 1]
+            + "\n        let _ = read_declared_frame(0, |_, _| None);"
+            + store[optimized_open + 1:]
+        )
+        store_mutations = {
+            "aliased adapter import": store.replace(
+                import_line,
+                "use rocketmq_store_local::commit_log::record::read_declared_frame as read_frame;",
+                1,
+            ),
+            "normal adapter position": store.replace(
+                adapter,
+                adapter.replace(
+                    "read_declared_frame(current_pos",
+                    "read_declared_frame(current_pos + 1",
+                ),
+                1,
+            ),
+            "abnormal adapter read position": abnormal_offset_mutation,
+            "adapter read size": store.replace(
+                adapter,
+                adapter.replace("get_bytes(position, size)", "get_bytes(position, 4)"),
+                1,
+            ),
+            "optimized path delegates": optimized_mutation,
+            "legacy helper retained": store
+            + "\nfn get_simple_message_bytes() -> (Option<Bytes>, usize) { (None, 0) }\n",
+            "Store policy copy": store
+            + "\nfn copied_policy(mut bytes: Bytes) { let _ = bytes.get_i32(); }\n",
+        }
+        for label, mutation in store_mutations.items():
+            with self.subTest(mutation=label):
+                self.assertNotEqual(store, mutation, label)
+                assert_rejected(label, store_source=mutation)
+
+        assert_rejected(
+            "record module hidden",
+            module_source=module.replace("pub mod record;", "mod record;", 1),
+        )
+        assert_rejected(
+            "missing body regression removed",
+            test_source=local_tests.replace(
+                "fn read_declared_frame_missing_body_preserves_big_endian_declared_size()",
+                "fn missing_body_regression_removed()",
+                1,
+            ),
+        )
 
     def test_commit_log_append_attempt_has_one_local_owner_and_two_store_adapters(self) -> None:
         local = (ROOT / COMMIT_LOG_APPEND_ATTEMPT_PATH).read_text(encoding="utf-8")

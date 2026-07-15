@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1417,3 +1417,31 @@ python scripts/arc_mut_guard.py
   active memory-lock syscall、topic/put lock、计时/日志/result mapping、warm/offset/stats/flush/HA。未迁移或修改
   append-frame/CRC、recovery、flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。
   PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ag CommitLog standard recovery declared-frame read owner extraction evidence
+
+- [x] `[DEV/API]` 在 Local `commit_log::record` 新增纯同步 `read_declared_frame(position, read)`；callback 为
+  `FnMut(usize, usize) -> Option<Bytes>`，返回 `(Option<Bytes>, usize)`。Local owner 只解释四字节 big-endian signed
+  frame size，不依赖 `MappedFile`、`MessageExt*`、Store、Tokio 或 `ArcMut`。
+- [x] `[COMPAT/ORDER]` 冻结原 standard recovery 一次性读取语义：先且仅先读 `(position, 4)`；缺头或非正长度返回
+  `(None, 0)` 且不读正文；successful short header 保持 `Buf::get_i32` exact-read 前置条件并按 Rustdoc `# Panics`
+  明示 panic；正长度再且仅再读 `(position, declared_size)`，缺正文仍返回 `(None, declared_size)`。不新增 body
+  length、format 或 CRC 校验，两次读取使用同一 position。
+- [x] `[DEV/ADAPTER]` 删除 Store `get_simple_message_bytes`；standard `recover_normally` 与 `recover_abnormally` 各保留
+  一条 `mapped_file.get_bytes(position, size)` closure adapter。`recover_normally_optimized`、
+  `recover_abnormally_optimized` 与 `CommitLogFrameCursor` 未修改；既有日志、SourceEnded/InvalidRecord、checked-add、
+  dispatch、checkpoint 与 truncate 顺序保持不变。
+- [x] `[TEST/RED/GREEN]` RED 先得到缺少 `read_declared_frame` 的 `E0432`。GREEN 后 Local focused 5/5 通过，覆盖
+  exact read events/参数、big-endian、缺失/短头、零/负长度、缺正文保留长度与成功读取；Store standard normal/abnormal
+  dirty-tail recovery 2/2 通过。Local 与 Store all-target/all-feature package Clippy 均通过。
+- [x] `[CONTRACT]` dedicated baseline+mutation 2/2、canonical owner/facade 2/2 通过。契约固定 Local 唯一非 cfg owner、
+  exact signature/body/panic 文档、无 Store/runtime 类型，以及 standard normal/abnormal 各一次和 optimized 零次调用；
+  mutation matrix 拒绝 header 长度、little-endian、`< 0`、第二次 offset/长度、缺正文 size 归零、short-header
+  fail-closed、cfg/duplicate/import alias、Store policy copy、adapter 参数、optimized 接入及回归测试删除。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature、依赖、baseline、relocation approval、公开 wire/storage 格式或 runtime
+  ownership。architecture 35/35+fixtures+baseline、ArcMut 63/63+24 fixtures+final guard 与 AGENTS routing 均通过；
+  ArcMut NEW/STALE 为 0/0。workspace fmt 与 diff check 通过；主线程完整 M06 contract 122/122 通过（608.436s）。
+  独立复审 Critical/Important/Minor = 0/0/0，确认两条 standard adapter 的 recovery 顺序与 optimized 零调用不变。
+- [x] `[SCOPE]` M06-03ag 只迁移 standard recovery declared-frame read owner；不迁移或修改 optimized cursor、record
+  parser、CRC/body validation、append、flush/group commit、CQ/Index、HA、Timer/POP、MappedFile lifecycle、runtime
+  ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。

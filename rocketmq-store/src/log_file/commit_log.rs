@@ -110,6 +110,7 @@ use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome;
 use rocketmq_store_local::commit_log::memory_lock::plan_commit_log_memory_lock_target;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockMode;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;
+use rocketmq_store_local::commit_log::record::read_declared_frame;
 use rocketmq_store_local::commit_log::record_parser::decode_commit_log_record;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
@@ -1812,7 +1813,8 @@ impl CommitLog {
                 let mut current_pos = 0usize;
                 loop {
                     let frame_position = current_pos;
-                    let (msg, size) = self.get_simple_message_bytes(current_pos, mapped_file.as_ref());
+                    let (msg, size) =
+                        read_declared_frame(current_pos, |position, size| mapped_file.get_bytes(position, size));
                     let Some(mut msg_bytes) = msg else {
                         match normal_recovery.apply(NormalRecoveryEvent::SourceEnded) {
                             Ok(NormalRecoveryAction::ContinueRecord) => continue,
@@ -1957,23 +1959,6 @@ impl CommitLog {
             self.mapped_file_queue.set_committed_where(0);
             message_store.consume_queue_store_mut().destroy();
             message_store.consume_queue_store_mut().load_after_destroy();
-        }
-    }
-
-    fn get_simple_message_bytes<MF: MappedFile>(&self, position: usize, mapped_file: &MF) -> (Option<Bytes>, usize) {
-        let mut bytes = mapped_file.get_bytes(position, 4);
-        match bytes {
-            None => (None, 0),
-            Some(ref mut inner) => {
-                let size = inner.get_i32();
-                if size <= 0 {
-                    return (None, 0);
-                }
-                let Ok(size) = usize::try_from(size) else {
-                    return (None, 0);
-                };
-                (mapped_file.get_bytes(position, size), size)
-            }
         }
     }
 
@@ -2352,7 +2337,8 @@ impl CommitLog {
                 let mut current_pos = 0usize;
                 loop {
                     let frame_position = current_pos;
-                    let (msg, input_size) = self.get_simple_message_bytes(current_pos, mapped_file.as_ref());
+                    let (msg, input_size) =
+                        read_declared_frame(current_pos, |position, size| mapped_file.get_bytes(position, size));
                     let Some(mut msg_bytes) = msg else {
                         match abnormal_recovery.apply(AbnormalRecoveryEvent::SourceEnded) {
                             Ok(AbnormalRecoveryAction::StopRecovery) => break 'segments,
