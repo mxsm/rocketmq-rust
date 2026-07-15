@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1771,3 +1771,27 @@ python scripts/arc_mut_guard.py
   load/delete/truncate/warmup/swap、flush/CQ timestamp、CommitLog 或持久格式。顶层 PR-M06-03 仍需收口 CommitLog
   根结构、MappedFileQueue I/O/allocate adapter 及剩余算法、append/recovery 方法 owner 与 Store facade；82 个顶层工作包
   仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03ar mapped-file allocation request identity owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增无依赖 `mapped_file::allocation_request::MappedFileAllocationRequestKey`，唯一持有
+  allocation request 的 full path 与 i32 file size，并成为 accessor、平台分隔符 file-offset 解析、legacy Display、
+  path+size Eq 及 offset-only reverse Ord 的 canonical owner。
+- [x] `[DEV/ADAPTER]` Store `AllocateRequest` 删除直接 `file_path`/`file_size` 字段和 offset 解析算法，只保留一个
+  Local key、async Notify、blocking Condvar、completed flag 与 mapped-file result；constructor/getter/Display/Eq/Ord
+  均窄委托 Local key，request table、BinaryHeap 和 worker lifecycle 继续由 Store 持有。
+- [x] `[COMPAT]` 保留 `MAIN_SEPARATOR` 之后 i64 解析、裸文件名/无效文件名回退 0、精确
+  `AllocateRequest[file_path=...,file_size=...]` 文本、path+size 完整相等与相同 offset 即排序相等的旧语义；BinaryHeap
+  仍使较小 offset 先出队，未顺带修正既有 Eq/Ord 差异。
+- [x] `[TEST]` Local 新增 identity/display、平台 path parsing、BinaryHeap 100/200/300 顺序与同 offset Eq/Ord 差异
+  4/4；Store adapter 1/1、allocation/CommitLog 相关 4/4、Local all-features 全量及 Store lib 536/536 通过。
+- [x] `[CONTRACT]` 新增 baseline+8 类 mutation 两项契约，冻结 Local fields/API/parser/Display/Eq/Ord、无依赖 owner、
+  direct exact import、Store 五字段 runtime shell、全部窄委托与五组回归测试；定向 3/3，完整 M06 contract 144/144
+  通过（625.228s）。canonical file/item 集合同步加入 `allocation_request.rs` 与 key owner。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing
+  与 ArcMut guard 通过；error architecture 与既有基线一致，仍为 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03ar 未迁移 AllocateMappedFileService request table/queue、Notify/Condvar、timeout/retry、
+  worker lifecycle、TransientStorePool、实际 mmap/create、MappedFileQueue load/delete/flush/CQ timestamp、CommitLog 或
+  持久格式。顶层 PR-M06-03 仍需收口 CommitLog 根结构、MappedFileQueue I/O/allocate adapter 及剩余算法、append/
+  recovery 方法 owner 与 Store facade；82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。

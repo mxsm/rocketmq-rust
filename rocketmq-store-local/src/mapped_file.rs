@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[doc(hidden)]
+pub mod allocation_request;
 mod contract;
 mod default_mapped_file;
 mod direct_io;

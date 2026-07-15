@@ -27,6 +27,7 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_error::RocketMQError;
+use rocketmq_store_local::mapped_file::allocation_request::MappedFileAllocationRequestKey;
 use tokio::sync::Notify;
 use tracing::error;
 use tracing::info;
@@ -318,7 +319,7 @@ impl AllocateMappedFileService {
         // Check if request still valid in table
         let expected_request = {
             let table = request_table.read();
-            table.get(&req.file_path).cloned()
+            table.get(req.file_path()).cloned()
         };
 
         let expected_request = match expected_request {
@@ -326,7 +327,8 @@ impl AllocateMappedFileService {
             None => {
                 warn!(
                     "this mmap request expired, maybe cause timeout {} {}",
-                    req.file_path, req.file_size
+                    req.file_path(),
+                    req.file_size()
                 );
                 return true;
             }
@@ -336,7 +338,8 @@ impl AllocateMappedFileService {
         if !Arc::ptr_eq(&expected_request, &req) {
             warn!(
                 "never expected here, maybe cause timeout {} {}",
-                req.file_path, req.file_size
+                req.file_path(),
+                req.file_size()
             );
             return true;
         }
@@ -362,7 +365,8 @@ impl AllocateMappedFileService {
             Err(e) => {
                 error!(
                     "AllocateMappedFileService: failed to create mapped file {}: {}",
-                    req.file_path, e
+                    req.file_path(),
+                    e
                 );
                 has_exception.store(true, Ordering::Relaxed);
 
@@ -386,8 +390,8 @@ impl AllocateMappedFileService {
         warm_mapped_file_config: WarmMappedFileConfig,
     ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
         let start = std::time::Instant::now();
-        let file_path = req.file_path.clone();
-        let file_size = req.file_size as u64;
+        let file_path = req.file_path().to_owned();
+        let file_size = req.file_size() as u64;
         let transient_pool = transient_store_pool.clone();
 
         let mapped_file = if let Some(pool) = transient_pool {
@@ -402,7 +406,7 @@ impl AllocateMappedFileService {
             DefaultMappedFile::try_new(CheetahString::from_string(file_path.clone()), file_size)
         }
         .map_err(|error| RocketMQError::StorageWriteFailed {
-            path: req.file_path.clone(),
+            path: req.file_path().to_owned(),
             reason: error.to_string(),
         })?;
 
@@ -420,8 +424,8 @@ impl AllocateMappedFileService {
                 "create mappedFile spent time(ms) {} queue size {} {} {}",
                 elapsed.as_millis(),
                 queue_size,
-                req.file_path,
-                req.file_size
+                req.file_path(),
+                req.file_size()
             );
         }
 
@@ -551,7 +555,7 @@ impl AllocateMappedFileService {
                     Ok(mapped_file)
                 }
                 Err(_) => {
-                    warn!("create mmap timeout {} {}", req.file_path, req.file_size);
+                    warn!("create mmap timeout {} {}", req.file_path(), req.file_size());
                     Ok(None)
                 }
             }
@@ -662,7 +666,7 @@ impl AllocateMappedFileService {
                 self.request_table.write().remove(&next_file_path);
                 Ok(req.mapped_file.read().clone())
             } else {
-                warn!("create mmap timeout {} {}", req.file_path, req.file_size);
+                warn!("create mmap timeout {} {}", req.file_path(), req.file_size());
                 Ok(None)
             }
         } else {
@@ -732,7 +736,7 @@ impl AllocateMappedFileService {
         let table = self.request_table.read();
         for req in table.values() {
             if let Some(ref mapped_file) = *req.mapped_file.read() {
-                info!("delete pre allocated mapped file, {}", req.file_path);
+                info!("delete pre allocated mapped file, {}", req.file_path());
                 mapped_file.destroy(1000);
             }
         }
@@ -755,13 +759,10 @@ impl AllocateMappedFileService {
 ///
 /// Corresponds to Java's AllocateRequest inner class:
 /// - Uses Notify + AtomicBool instead of CountDownLatch for async support
-/// - Implements Ord for priority queue ordering (by file offset)
+/// - Delegates request identity and priority ordering to the Local boundary
 struct AllocateRequest {
-    /// Full file path
-    file_path: String,
-
-    /// File size in bytes
-    file_size: i32,
+    /// Runtime-neutral path, size, and ordering identity.
+    key: MappedFileAllocationRequestKey,
 
     /// Completion notification (equivalent to Java's CountDownLatch)
     completion: Arc<Notify>,
@@ -779,13 +780,20 @@ struct AllocateRequest {
 impl AllocateRequest {
     fn new(file_path: String, file_size: i32) -> Self {
         Self {
-            file_path,
-            file_size,
+            key: MappedFileAllocationRequestKey::new(file_path, file_size),
             completion: Arc::new(Notify::new()),
             blocking_completion: Arc::new((StdMutex::new(()), Condvar::new())),
             completed: Arc::new(AtomicBool::new(false)),
             mapped_file: Arc::new(RwLock::new(None)),
         }
+    }
+
+    fn file_path(&self) -> &str {
+        self.key.file_path()
+    }
+
+    fn file_size(&self) -> i32 {
+        self.key.file_size()
     }
 
     /// Wait for allocation to complete (like CountDownLatch.await())
@@ -818,32 +826,18 @@ impl AllocateRequest {
         let (_, condvar) = &*self.blocking_completion;
         condvar.notify_all();
     }
-
-    /// Extract file offset from path for priority ordering
-    fn file_offset(&self) -> i64 {
-        if let Some(separator_idx) = self.file_path.rfind(std::path::MAIN_SEPARATOR) {
-            if let Ok(offset) = self.file_path[(separator_idx + 1)..].parse::<i64>() {
-                return offset;
-            }
-        }
-        0
-    }
 }
 
 impl Display for AllocateRequest {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "AllocateRequest[file_path={},file_size={}]",
-            self.file_path, self.file_size
-        )
+        self.key.fmt(f)
     }
 }
 
 // Implement Ord for priority queue (lower offsets have higher priority)
 impl PartialEq for AllocateRequest {
     fn eq(&self, other: &Self) -> bool {
-        self.file_path == other.file_path && self.file_size == other.file_size
+        self.key == other.key
     }
 }
 
@@ -857,8 +851,7 @@ impl PartialOrd for AllocateRequest {
 
 impl Ord for AllocateRequest {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Reverse ordering: smaller offsets come out first (min-heap behavior)
-        other.file_offset().cmp(&self.file_offset())
+        self.key.cmp(&other.key)
     }
 }
 
@@ -868,6 +861,27 @@ mod tests {
 
     use super::*;
     use crate::config::message_store_config::MessageStoreConfig;
+
+    #[test]
+    fn allocate_request_delegates_identity_display_and_priority_to_local_key() {
+        let lower_path = std::path::Path::new("root").join("00000000000000000100");
+        let higher_path = std::path::Path::new("root").join("00000000000000000200");
+        let lower = Arc::new(AllocateRequest::new(lower_path.to_string_lossy().into_owned(), 1024));
+        let higher = Arc::new(AllocateRequest::new(higher_path.to_string_lossy().into_owned(), 2048));
+        let mut requests = BinaryHeap::from([higher, lower.clone()]);
+
+        let first = requests.pop().expect("lower offset request");
+        assert!(Arc::ptr_eq(&first, &lower));
+        assert_eq!(lower.file_path(), lower_path.to_string_lossy().as_ref());
+        assert_eq!(lower.file_size(), 1024);
+        assert_eq!(
+            lower.to_string(),
+            format!(
+                "AllocateRequest[file_path={},file_size=1024]",
+                lower_path.to_string_lossy()
+            )
+        );
+    }
 
     #[tokio::test]
     async fn allocate_mapped_file_blocking_works_inside_runtime() {

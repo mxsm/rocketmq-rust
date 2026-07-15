@@ -51,6 +51,9 @@ MAPPED_FILE_KERNEL_PATH = Path("rocketmq-store-local/src/mapped_file/kernel.rs")
 MAPPED_FILE_RAW_PATH = Path("rocketmq-store-local/src/mapped_file/raw.rs")
 MAPPED_FILE_CONTRACT_PATH = Path("rocketmq-store-local/src/mapped_file/contract.rs")
 MAPPED_FILE_MEMORY_PATH = Path("rocketmq-store-local/src/mapped_file/memory.rs")
+MAPPED_FILE_ALLOCATION_REQUEST_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/allocation_request.rs"
+)
 MAPPED_FILE_QUEUE_ALLOCATION_PATH = Path(
     "rocketmq-store-local/src/mapped_file/queue_allocation.rs"
 )
@@ -79,6 +82,9 @@ STORE_DEFAULT_MAPPED_FILE_FACADE_PATH = Path(
 STORE_CHECKPOINT_PATH = Path("rocketmq-store/src/base/store_checkpoint.rs")
 STORE_MAPPED_FILE_QUEUE_PATH = Path(
     "rocketmq-store/src/consume_queue/mapped_file_queue.rs"
+)
+STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH = Path(
+    "rocketmq-store/src/base/allocate_mapped_file_service.rs"
 )
 NORMAL_RECOVERY_WINDOW_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/normal_window.rs"
@@ -273,6 +279,7 @@ CANONICAL_ITEMS = {
     "MappedFileError": ("enum", "mapped_file_error.rs"),
     "MappedFileMetrics": ("struct", "metrics.rs"),
     "MappedFileResult": ("type", "mapped_file_error.rs"),
+    "MappedFileAllocationRequestKey": ("struct", "allocation_request.rs"),
     "file_index_by_offset": ("fn", "queue_index.rs"),
     "file_index_by_timestamp": ("fn", "queue_index.rs"),
     "for_each_discontinuous_pair": ("fn", "queue_index.rs"),
@@ -7295,6 +7302,117 @@ def mapped_file_queue_storage_contract_violations(
     return violations
 
 
+def mapped_file_allocation_request_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+    if active_struct_fields(production, "MappedFileAllocationRequestKey") != [
+        ("file_path", "String"),
+        ("file_size", "i32"),
+    ]:
+        violations.append("Local mapped-file allocation request key fields changed")
+    expected_methods = {
+        "new": "Self{file_path,file_size}",
+        "file_path": "&self.file_path",
+        "file_size": "self.file_size",
+    }
+    for function_name, expected_body in expected_methods.items():
+        if compact_rust(named_function_body(production, function_name) or "") != expected_body:
+            violations.append(f"Local mapped-file allocation request API changed: {function_name}")
+    file_offset_body = compact_rust(named_function_body(production, "file_offset") or "")
+    for fragment in (
+        "self.file_path.rfind(std::path::MAIN_SEPARATOR)",
+        "self.file_path[(separator_index+1)..].parse::<i64>()",
+        "return offset",
+    ):
+        if compact_rust(fragment) not in file_offset_body:
+            violations.append(f"Local mapped-file allocation offset parsing changed: {fragment}")
+    if not file_offset_body.endswith("0"):
+        violations.append("Local mapped-file allocation invalid-offset fallback changed")
+    compact_active = compact_rust(active)
+    required_impl_fragments = (
+        "#[derive(Debug,Clone,PartialEq,Eq)]pub struct MappedFileAllocationRequestKey",
+        "impl PartialOrd for MappedFileAllocationRequestKey{fn partial_cmp(&self,other:&Self)->Option<std::cmp::Ordering>{Some(self.cmp(other))}}",
+        "impl Ord for MappedFileAllocationRequestKey{fn cmp(&self,other:&Self)->std::cmp::Ordering{other.file_offset().cmp(&self.file_offset())}}",
+    )
+    for fragment in required_impl_fragments:
+        if compact_rust(fragment) not in compact_active:
+            violations.append(f"Local mapped-file allocation identity/ordering changed: {fragment}")
+    display_fragment = '"AllocateRequest[file_path={},file_size={}]",self.file_path,self.file_size'
+    if compact_rust(display_fragment) not in compact_rust(local_source):
+        violations.append("Local mapped-file allocation request display changed")
+    if active_import_records(production):
+        violations.append("Local mapped-file allocation request key must remain dependency-free")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(
+            r"\b(?:rocketmq_|ArcSwap|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b",
+            active,
+        )
+    ):
+        violations.append("Local mapped-file allocation request key absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod allocation_request;") != 1:
+        violations.append("Local mapped_file module must expose allocation_request exactly once")
+
+    expected_import = (
+        "use rocketmq_store_local::mapped_file::allocation_request::MappedFileAllocationRequestKey"
+    )
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::allocation_request" in body
+    }
+    if actual_imports != {expected_import}:
+        violations.append("Store allocation request key import must be direct and exact")
+    expected_store_fields = [
+        ("key", "MappedFileAllocationRequestKey"),
+        ("completion", "Arc<Notify>"),
+        ("blocking_completion", "Arc<(StdMutex<()>, Condvar)>"),
+        ("completed", "Arc<AtomicBool>"),
+        ("mapped_file", "Arc<RwLock<Option<Arc<DefaultMappedFile>>>>"),
+    ]
+    if active_struct_fields(store_source, "AllocateRequest") != expected_store_fields:
+        violations.append("Store AllocateRequest must retain only Local key and completion/result state")
+    store_production = source_without_cfg_test_items(store_source)
+    store_compact = compact_rust(active_rust_source(store_production))
+    for fragment in (
+        "key:MappedFileAllocationRequestKey::new(file_path,file_size)",
+        "fn file_path(&self)->&str{self.key.file_path()}",
+        "fn file_size(&self)->i32{self.key.file_size()}",
+        "impl Display for AllocateRequest{fn fmt(&self,f:&mut Formatter<'_>)->std::fmt::Result{self.key.fmt(f)}}",
+        "impl PartialEq for AllocateRequest{fn eq(&self,other:&Self)->bool{self.key==other.key}}",
+        "impl Ord for AllocateRequest{fn cmp(&self,other:&Self)->std::cmp::Ordering{self.key.cmp(&other.key)}}",
+    ):
+        if compact_rust(fragment) not in store_compact:
+            violations.append(f"Store allocation request adapter changed: {fragment}")
+    allocate_fields = dict(active_struct_fields(store_source, "AllocateRequest"))
+    for legacy_field in ("file_path", "file_size"):
+        if legacy_field in allocate_fields:
+            violations.append(f"Store retained allocation request identity field: {legacy_field}")
+    if "rfind(std::path::MAIN_SEPARATOR)" in store_compact:
+        violations.append("Store retained allocation request offset parsing")
+
+    for test_name in (
+        "allocation_request_key_preserves_identity_accessors_and_display",
+        "allocation_request_key_preserves_platform_separator_offset_parsing",
+        "allocation_request_key_orders_lower_offsets_first_in_binary_heap",
+        "allocation_request_key_keeps_offset_only_ordering_and_full_identity_equality",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file allocation request regression changed: {test_name}")
+    if named_function_body(
+        store_source,
+        "allocate_request_delegates_identity_display_and_priority_to_local_key",
+    ) is None:
+        violations.append("Store mapped-file allocation request adapter regression changed")
+    return violations
+
+
 def mapped_file_queue_allocation_contract_violations(
     local_source: str,
     module_source: str,
@@ -12097,6 +12215,122 @@ class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
 
+    def test_mapped_file_allocation_request_has_one_local_owner_and_exact_store_adapter(self) -> None:
+        local = (ROOT / MAPPED_FILE_ALLOCATION_REQUEST_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_allocation_request.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_allocation_request_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_allocation_request_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_ALLOCATION_REQUEST_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_allocation_request.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "Local size field changed",
+                local.replace("    file_size: i32,", "    file_size: u32,", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "platform separator parsing changed",
+                local.replace("std::path::MAIN_SEPARATOR", "'/'", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "priority direction changed",
+                local.replace(
+                    "other.file_offset().cmp(&self.file_offset())",
+                    "self.file_offset().cmp(&other.file_offset())",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod allocation_request;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store retained path field",
+                local,
+                module,
+                store.replace(
+                    "    key: MappedFileAllocationRequestKey,",
+                    "    file_path: String,\n    key: MappedFileAllocationRequestKey,",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::allocation_request::MappedFileAllocationRequestKey;",
+                    "use rocketmq_store_local::mapped_file::allocation_request::MappedFileAllocationRequestKey as RequestKey;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store ordering bypassed",
+                local,
+                module,
+                store.replace("self.key.cmp(&other.key)", "other.key.cmp(&self.key)", 1),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn allocation_request_key_orders_lower_offsets_first_in_binary_heap()",
+                    "fn allocation_request_priority_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_allocation_request_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
     def test_mapped_file_queue_allocation_has_one_local_owner_and_exact_store_adapter(self) -> None:
         local = (ROOT / MAPPED_FILE_QUEUE_ALLOCATION_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
@@ -16759,6 +16993,7 @@ struct DefaultMappedFile {
         self.assertEqual(
             LEAF_FILES
             | {
+                "allocation_request.rs",
                 "contract.rs",
                 "default_mapped_file.rs",
                 "file.rs",

@@ -169,6 +169,7 @@ append/recovery 方法 owner 与 facade 收口，因此尚未勾选父项。
   - [x] M06-03ao：迁移 MappedFileQueue path/segment-size/collection 组合 owner 到 Local 泛型 storage，Store 注入 ArcSwap 后端并保留算法/allocate adapter
   - [x] M06-03ap：迁移 MappedFileQueue 相邻连续性、范围窗口、按时间与按 offset 索引算法到 Local，Store 保留 ArcSwap 快照、日志与对象适配
   - [x] M06-03aq：迁移 MappedFileQueue 80% 预分配与空/满 segment roll 纯决策到 Local，Store 保留两阶段状态观察及 allocate/create 副作用
+  - [x] M06-03ar：迁移 AllocateMappedFileService request path/size 身份、offset 解析、Display/Eq 与优先级排序到 Local key，Store request 只保留完成通知和结果状态
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer
