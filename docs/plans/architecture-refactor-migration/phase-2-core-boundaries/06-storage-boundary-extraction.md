@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1693,3 +1693,30 @@ python scripts/arc_mut_guard.py
   `try_flush`/`FlushProgress` 决策，不跨越 M06-04 flush/group-commit 边界。顶层 PR-M06-03 仍需收口 CommitLog 根结构、
   MappedFileQueue I/O/collection、append/recovery 方法 owner 与 Store facade；82 个顶层工作包仍为 30 已完成、
   1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03ao MappedFileQueue storage identity owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增无依赖泛型 `mapped_file::queue_storage::MappedFileQueueStorage<T>`，唯一持有
+  store path、segment size 与 mapped-file collection；Local 不依赖 ArcSwap、DefaultMappedFile、Store/Common、runtime
+  或 tracing，Store 继续选择 `ArcSwap<Vec<Arc<DefaultMappedFile>>>` 作为后端类型参数。
+- [x] `[DEV/ADAPTER]` Store `MappedFileQueue` 删除三个直接字段，只持 Local `storage`、Store
+  `AllocateMappedFileService` 与 Local `runtime_state` 三个根 owner。default/new 注入 path/size/ArcSwap；load/create/
+  delete/find/flush/CQ timestamp 等算法通过 37 次 collection、29 次 size、6 次 path accessor 委托，不复制状态。
+- [x] `[COMPAT]` Store 公开 `get_store_path`、`get_mapped_file_size_config`、`get_mapped_files` 返回语义保持不变；
+  `SingleConsumeQueue` 唯一直接读取旧 size 字段的 caller 改走既有 getter。ArcSwap copy-on-write 更新、segment 排序、
+  offset 计算、AllocateMappedFileService fallback 与错误/日志行为未更改。
+- [x] `[TEST]` Local 新增 path/size/collection identity 与 backend interior-mutability 2/2；
+  `cargo test -p rocketmq-store-local --all-features` 全量通过，`cargo test -p rocketmq-store --lib` 535/535 通过。
+- [x] `[CONTRACT]` 新增 baseline+8 类 mutation 两项契约，冻结 Local 三字段/构造/accessor、dependency-free、唯一
+  module/definition、Store direct import/单 owner/两个构造器/72 次 accessor，并拒绝旧字段、direct bypass、alias 与
+  regression 删除；canonical 文件全集同步加入 `queue_storage.rs`。定向 3/3、完整 M06 contract 138/138 通过
+  （610.352s）。
+- [x] `[REV/ARCMUT]` `python scripts/arc_mut_guard.py` 直接通过，无 identity/occurrence/fingerprint 变化，ledger
+  保持 1,171 identities / 3,233 occurrences，无需 ADR-013 relocation approval 或 baseline 更新。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing
+  与 ArcMut guard 通过；error architecture 与既有基线一致，仍为 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03ao 只迁移 MappedFileQueue storage identity/collection owner，不迁移或修改 queue
+  algorithms、AllocateMappedFileService、`try_flush`/`FlushProgress`、CQ timestamp 或 M06-04 flush/group-commit。
+  顶层 PR-M06-03 仍需收口 CommitLog 根结构、MappedFileQueue algorithms/allocate adapter、append/recovery 方法 owner
+  与 Store facade；82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。

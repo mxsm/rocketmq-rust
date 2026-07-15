@@ -54,6 +54,9 @@ MAPPED_FILE_MEMORY_PATH = Path("rocketmq-store-local/src/mapped_file/memory.rs")
 MAPPED_FILE_QUEUE_STATE_PATH = Path(
     "rocketmq-store-local/src/mapped_file/queue_state.rs"
 )
+MAPPED_FILE_QUEUE_STORAGE_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_storage.rs"
+)
 MAPPED_FILE_SELECT_RESULT_PATH = Path(
     "rocketmq-store-local/src/mapped_file/select_result.rs"
 )
@@ -265,6 +268,7 @@ CANONICAL_ITEMS = {
     "MappedFileMetrics": ("struct", "metrics.rs"),
     "MappedFileResult": ("type", "mapped_file_error.rs"),
     "MappedFileQueueRuntimeState": ("struct", "queue_state.rs"),
+    "MappedFileQueueStorage": ("struct", "queue_storage.rs"),
     "io_uring_backend_status": ("fn", "io_uring_impl.rs"),
 }
 COMMIT_LOG_CANONICAL_ITEMS = {
@@ -7188,6 +7192,94 @@ def commit_log_memory_lock_owner_violations(
     return violations
 
 
+def mapped_file_queue_storage_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+
+    expected_fields = [
+        ("store_path", "String"),
+        ("mapped_file_size", "u64"),
+        ("mapped_files", "T"),
+    ]
+    if active_struct_fields(production, "MappedFileQueueStorage") != expected_fields:
+        violations.append("Local mapped-file queue storage fields changed")
+    expected_methods = {
+        "new": "Self{store_path,mapped_file_size,mapped_files,}",
+        "store_path": "&self.store_path",
+        "mapped_file_size": "self.mapped_file_size",
+        "mapped_files": "&self.mapped_files",
+    }
+    for function_name, expected_body in expected_methods.items():
+        if compact_rust(named_function_body(production, function_name) or "") != expected_body:
+            violations.append(f"Local mapped-file queue storage behavior changed: {function_name}")
+    if active_import_records(production):
+        violations.append("Local mapped-file queue storage must remain dependency-free")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(
+            r"\b(?:rocketmq_|ArcSwap|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b",
+            active,
+        )
+    ):
+        violations.append("Local mapped-file queue storage absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod queue_storage;") != 1:
+        violations.append("Local mapped_file module must expose queue_storage exactly once")
+
+    store_active = active_rust_source(source_without_cfg_test_items(store_source))
+    expected_store_import = (
+        "use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage"
+    )
+    actual_store_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_storage" in body
+    }
+    if actual_store_imports != {expected_store_import}:
+        violations.append("Store mapped-file queue storage import must be direct and exact")
+    if re.search(r"\bstruct\s+MappedFileQueueStorage\b", store_active):
+        violations.append("Store copied mapped-file queue storage owner")
+
+    store_fields = dict(active_struct_fields(store_source, "MappedFileQueue"))
+    if store_fields.get("storage") != "MappedFileQueueStorage<ArcSwap<Vec<Arc<DefaultMappedFile>>>>":
+        violations.append("Store MappedFileQueue must hold one canonical Local storage owner")
+    for legacy_field in ("store_path", "mapped_file_size", "mapped_files"):
+        if legacy_field in store_fields:
+            violations.append(f"Store retained legacy MappedFileQueue storage field: {legacy_field}")
+    store_compact = compact_rust(store_active)
+    expected_constructors = (
+        "storage:MappedFileQueueStorage::new(String::new(),0,ArcSwap::from_pointee(Vec::new()))",
+        "storage:MappedFileQueueStorage::new(store_path,mapped_file_size,ArcSwap::from_pointee(Vec::new()))",
+    )
+    for constructor in expected_constructors:
+        if store_compact.count(constructor) != 1:
+            violations.append(f"Store mapped-file queue storage constructor changed: {constructor}")
+    expected_accessor_counts = {
+        "self.storage.mapped_files()": 37,
+        "self.storage.mapped_file_size()": 29,
+        "self.storage.store_path()": 6,
+    }
+    for accessor, expected_count in expected_accessor_counts.items():
+        if store_compact.count(accessor) != expected_count:
+            violations.append(f"Store mapped-file queue storage adapter count changed: {accessor}")
+    for legacy_access in ("self.mapped_files", "self.mapped_file_size", "self.store_path"):
+        if legacy_access in store_compact:
+            violations.append(f"Store bypassed Local mapped-file queue storage: {legacy_access}")
+
+    for test_name in (
+        "queue_storage_preserves_path_size_and_collection_identity",
+        "queue_storage_supports_backend_owned_interior_mutability",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue storage regression changed: {test_name}")
+    return violations
+
+
 def mapped_file_queue_runtime_state_contract_violations(
     local_source: str,
     module_source: str,
@@ -11792,6 +11884,123 @@ class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
 
+    def test_mapped_file_queue_storage_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_STORAGE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_storage.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_storage_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_storage_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_STORAGE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_storage.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "Local field ordering changed",
+                local.replace(
+                    "    store_path: String,\n    mapped_file_size: u64,",
+                    "    mapped_file_size: u64,\n    store_path: String,",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "Local constructor drops path",
+                local.replace("            store_path,", "            store_path: String::new(),", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "Local size getter changed",
+                local.replace("        self.mapped_file_size", "        0", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_storage;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store retained legacy collection field",
+                local,
+                module,
+                store.replace(
+                    "    storage: MappedFileQueueStorage<ArcSwap<Vec<Arc<DefaultMappedFile>>>>,",
+                    "    mapped_files: ArcSwap<Vec<Arc<DefaultMappedFile>>>,\n"
+                    "    storage: MappedFileQueueStorage<ArcSwap<Vec<Arc<DefaultMappedFile>>>>,",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store bypassed collection accessor",
+                local,
+                module,
+                store.replace("self.storage.mapped_files()", "self.mapped_files", 1),
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage;",
+                    "use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage as QueueStorage;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn queue_storage_supports_backend_owned_interior_mutability()",
+                    "fn queue_storage_interior_mutability_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_storage_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
     def test_mapped_file_queue_runtime_state_has_one_local_owner_and_exact_store_adapters(self) -> None:
         local = (ROOT / MAPPED_FILE_QUEUE_STATE_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
@@ -16145,6 +16354,7 @@ struct DefaultMappedFile {
                 "mapping.rs",
                 "memory.rs",
                 "queue_state.rs",
+                "queue_storage.rs",
                 "raw.rs",
                 "select_result.rs",
             },

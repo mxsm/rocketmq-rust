@@ -299,7 +299,8 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
         bytes_mut.put_i32(i32::MAX);
         bytes_mut.put_i64(0);
         let bytes = bytes_mut.freeze();
-        let until = (until_where % self.mapped_file_queue.mapped_file_size as i64) as i32 / CQ_STORE_UNIT_SIZE;
+        let until =
+            (until_where % self.mapped_file_queue.get_mapped_file_size_config() as i64) as i32 / CQ_STORE_UNIT_SIZE;
         for n in 0..until {
             mapped_file.append_message_bytes(&bytes);
         }

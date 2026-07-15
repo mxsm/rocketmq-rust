@@ -23,6 +23,7 @@ use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::offset_to_file_name;
 use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
+use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -36,12 +37,7 @@ use crate::log_file::mapped_file::MappedFileResult;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
 pub struct MappedFileQueue {
-    pub(crate) store_path: String,
-
-    pub(crate) mapped_file_size: u64,
-
-    /// Lock-free concurrent access using ArcSwap (equivalent to Java's CopyOnWriteArrayList)
-    pub(crate) mapped_files: ArcSwap<Vec<Arc<DefaultMappedFile>>>,
+    storage: MappedFileQueueStorage<ArcSwap<Vec<Arc<DefaultMappedFile>>>>,
 
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
@@ -67,9 +63,7 @@ pub struct MappedFileWarmupStats {
 impl Default for MappedFileQueue {
     fn default() -> Self {
         Self {
-            store_path: String::new(),
-            mapped_file_size: 0,
-            mapped_files: ArcSwap::from_pointee(Vec::new()),
+            storage: MappedFileQueueStorage::new(String::new(), 0, ArcSwap::from_pointee(Vec::new())),
             allocate_mapped_file_service: None,
             runtime_state: MappedFileQueueRuntimeState::default(),
         }
@@ -84,9 +78,7 @@ impl MappedFileQueue {
         allocate_mapped_file_service: Option<AllocateMappedFileService>,
     ) -> MappedFileQueue {
         MappedFileQueue {
-            store_path,
-            mapped_file_size,
-            mapped_files: ArcSwap::from_pointee(Vec::new()),
+            storage: MappedFileQueueStorage::new(store_path, mapped_file_size, ArcSwap::from_pointee(Vec::new())),
             allocate_mapped_file_service,
             runtime_state: MappedFileQueueRuntimeState::default(),
         }
@@ -97,7 +89,7 @@ impl MappedFileQueue {
     #[inline]
     pub fn load(&mut self) -> bool {
         //list dir files
-        let dir = Path::new(&self.store_path);
+        let dir = Path::new(self.storage.store_path());
         if let Ok(ls) = fs::read_dir(dir) {
             let files: Vec<_> = ls.filter_map(Result::ok).map(|entry| entry.path()).collect();
             return self.do_load(files);
@@ -134,14 +126,14 @@ impl MappedFileQueue {
     }
 
     pub fn check_self(&self) {
-        let mapped_files = self.mapped_files.load();
+        let mapped_files = self.storage.mapped_files().load();
         if !mapped_files.is_empty() {
             let mut iter = mapped_files.iter();
             let mut pre = iter.next();
 
             for cur in iter {
                 if let Some(pre_file) = pre {
-                    if cur.get_file_from_offset() - pre_file.get_file_from_offset() != self.mapped_file_size {
+                    if cur.get_file_from_offset() - pre_file.get_file_from_offset() != self.storage.mapped_file_size() {
                         error!(
                             "[BUG] The mappedFile queue's data is damaged, the adjacent mappedFile's offset don't \
                              match. pre file {}, cur file {}",
@@ -180,7 +172,7 @@ impl MappedFileQueue {
                 continue;
             }
 
-            if metadata.len() != self.mapped_file_size {
+            if metadata.len() != self.storage.mapped_file_size() {
                 warn!(
                     "{} length not matched message store config value, please check it manually",
                     file.display()
@@ -190,7 +182,7 @@ impl MappedFileQueue {
 
             let mapped_file = match DefaultMappedFile::try_new(
                 CheetahString::from_string(file.to_string_lossy().to_string()),
-                self.mapped_file_size,
+                self.storage.mapped_file_size(),
             ) {
                 Ok(mapped_file) => mapped_file,
                 Err(error) => {
@@ -199,26 +191,26 @@ impl MappedFileQueue {
                 }
             };
             // Set wrote, flushed, committed positions for mapped_file
-            mapped_file.set_wrote_position(self.mapped_file_size as i32);
-            mapped_file.set_flushed_position(self.mapped_file_size as i32);
-            mapped_file.set_committed_position(self.mapped_file_size as i32);
+            mapped_file.set_wrote_position(self.storage.mapped_file_size() as i32);
+            mapped_file.set_flushed_position(self.storage.mapped_file_size() as i32);
+            mapped_file.set_committed_position(self.storage.mapped_file_size() as i32);
 
             // Write: copy-on-write update
-            let mut files = (**self.mapped_files.load()).clone();
+            let mut files = (**self.storage.mapped_files().load()).clone();
             files.push(Arc::new(mapped_file));
-            self.mapped_files.store(Arc::new(files));
+            self.storage.mapped_files().store(Arc::new(files));
         }
         true
     }
 
     #[inline]
     pub fn get_last_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
-        self.mapped_files.load().last().cloned()
+        self.storage.mapped_files().load().last().cloned()
     }
 
     #[inline]
     pub fn get_first_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
-        self.mapped_files.load().first().cloned()
+        self.storage.mapped_files().load().first().cloned()
     }
 
     #[inline]
@@ -228,14 +220,14 @@ impl MappedFileQueue {
         need_create: bool,
     ) -> Option<Arc<DefaultMappedFile>> {
         let mut create_offset = -1i64;
-        let file_size = self.mapped_file_size as i64;
+        let file_size = self.storage.mapped_file_size() as i64;
         let mapped_file_last = self.get_last_mapped_file();
 
         if let Some(ref current_file) = mapped_file_last {
-            let usage_ratio = current_file.get_wrote_position() as f64 / self.mapped_file_size as f64;
+            let usage_ratio = current_file.get_wrote_position() as f64 / self.storage.mapped_file_size() as f64;
             if usage_ratio >= 0.8 && !current_file.is_full() {
                 // Pre-allocate next file in background
-                let next_offset = current_file.get_file_from_offset() + self.mapped_file_size;
+                let next_offset = current_file.get_file_from_offset() + self.storage.mapped_file_size();
                 self.trigger_pre_allocation(next_offset);
             }
         }
@@ -263,17 +255,22 @@ impl MappedFileQueue {
                 return;
             }
 
-            let next_file_path = PathBuf::from(self.store_path.clone()).join(offset_to_file_name(next_offset));
+            let next_file_path =
+                PathBuf::from(self.storage.store_path().to_owned()).join(offset_to_file_name(next_offset));
 
-            service.submit_request_in_background(next_file_path.to_string_lossy().to_string(), self.mapped_file_size);
+            service.submit_request_in_background(
+                next_file_path.to_string_lossy().to_string(),
+                self.storage.mapped_file_size(),
+            );
         }
     }
 
     #[inline]
     pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<Arc<DefaultMappedFile>> {
-        let next_file_path = PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
-        let next_next_file_path =
-            PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset + self.mapped_file_size));
+        let next_file_path =
+            PathBuf::from(self.storage.store_path().to_owned()).join(offset_to_file_name(create_offset));
+        let next_next_file_path = PathBuf::from(self.storage.store_path().to_owned())
+            .join(offset_to_file_name(create_offset + self.storage.mapped_file_size()));
         self.do_create_mapped_file(next_file_path, next_next_file_path)
     }
 
@@ -291,7 +288,7 @@ impl MappedFileQueue {
         next_file_path: PathBuf,
         next_next_file_path: PathBuf,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let is_first = self.mapped_files.load().is_empty();
+        let is_first = self.storage.mapped_files().load().is_empty();
 
         let mut arc_file = self.create_mapped_file_internal(next_file_path.clone(), next_next_file_path)?;
 
@@ -302,9 +299,9 @@ impl MappedFileQueue {
         }
 
         // Write: copy-on-write update
-        let mut files = (**self.mapped_files.load()).clone();
+        let mut files = (**self.storage.mapped_files().load()).clone();
         files.push(arc_file.clone());
-        self.mapped_files.store(Arc::new(files));
+        self.storage.mapped_files().store(Arc::new(files));
 
         Some(arc_file)
     }
@@ -320,12 +317,12 @@ impl MappedFileQueue {
         // Try async allocation if service available
         if let Some(ref service) = self.allocate_mapped_file_service {
             if service.is_started() {
-                match service.allocate_mapped_file_blocking(file_path_str.clone(), self.mapped_file_size) {
+                match service.allocate_mapped_file_blocking(file_path_str.clone(), self.storage.mapped_file_size()) {
                     Ok(pre_allocated) => {
                         // Trigger pre-allocation of N+2 file
                         service.submit_request_in_background(
                             next_file_path.to_string_lossy().to_string(),
-                            self.mapped_file_size,
+                            self.storage.mapped_file_size(),
                         );
                         // Return Arc directly
                         return Some(pre_allocated);
@@ -338,7 +335,10 @@ impl MappedFileQueue {
         }
 
         // Fallback: synchronous creation
-        match DefaultMappedFile::try_new(CheetahString::from_string(file_path_str.clone()), self.mapped_file_size) {
+        match DefaultMappedFile::try_new(
+            CheetahString::from_string(file_path_str.clone()),
+            self.storage.mapped_file_size(),
+        ) {
             Ok(mapped_file) => Some(Arc::new(mapped_file)),
             Err(error) => {
                 error!("Failed to create mapped file {}: {}", file_path_str, error);
@@ -349,16 +349,16 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn get_mapped_files(&self) -> &ArcSwap<Vec<Arc<DefaultMappedFile>>> {
-        &self.mapped_files
+        self.storage.mapped_files()
     }
 
     #[inline]
     pub fn get_mapped_files_size(&self) -> usize {
-        self.mapped_files.load().len()
+        self.storage.mapped_files().load().len()
     }
 
     pub fn warmup_stats(&self) -> MappedFileWarmupStats {
-        let mapped_files = self.mapped_files.load();
+        let mapped_files = self.storage.mapped_files().load();
         let mut stats = MappedFileWarmupStats::default();
         for mapped_file in mapped_files.iter() {
             let Some(metrics) = mapped_file.get_metrics() else {
@@ -377,7 +377,7 @@ impl MappedFileQueue {
     }
 
     pub fn lazy_mmap_stats(&self) -> LazyMmapStats {
-        let mapped_files = self.mapped_files.load();
+        let mapped_files = self.storage.mapped_files().load();
         let mut stats = LazyMmapStats::default();
         for mapped_file in mapped_files.iter() {
             stats.saturating_add_assign(mapped_file.lazy_mmap_stats());
@@ -403,13 +403,13 @@ impl MappedFileQueue {
     pub fn truncate_dirty_files(&mut self, offset: i64) {
         let mut will_remove_files = Vec::new();
 
-        for mapped_file in self.mapped_files.load().iter() {
-            let file_tail_offset = mapped_file.get_file_from_offset() + self.mapped_file_size;
+        for mapped_file in self.storage.mapped_files().load().iter() {
+            let file_tail_offset = mapped_file.get_file_from_offset() + self.storage.mapped_file_size();
             if file_tail_offset as i64 > offset {
                 if offset >= mapped_file.get_file_from_offset() as i64 {
-                    mapped_file.set_wrote_position((offset % self.mapped_file_size as i64) as i32);
-                    mapped_file.set_committed_position((offset % self.mapped_file_size as i64) as i32);
-                    mapped_file.set_flushed_position((offset % self.mapped_file_size as i64) as i32);
+                    mapped_file.set_wrote_position((offset % self.storage.mapped_file_size() as i64) as i32);
+                    mapped_file.set_committed_position((offset % self.storage.mapped_file_size() as i64) as i32);
+                    mapped_file.set_flushed_position((offset % self.storage.mapped_file_size() as i64) as i32);
                 } else {
                     mapped_file.destroy(1000);
                     will_remove_files.push(mapped_file.clone());
@@ -435,9 +435,9 @@ impl MappedFileQueue {
             last_mapped_file.destroy(1000);
 
             // Write: copy-on-write update
-            let mut files = (**self.mapped_files.load()).clone();
+            let mut files = (**self.storage.mapped_files().load()).clone();
             files.retain(|mf| mf.as_ref() != last_mapped_file.as_ref());
-            self.mapped_files.store(Arc::new(files));
+            self.storage.mapped_files().store(Arc::new(files));
 
             info!(
                 "on recover, destroy a logic mapped file {}",
@@ -449,14 +449,14 @@ impl MappedFileQueue {
     #[inline]
     pub(crate) fn delete_expired_file(&self, files: Vec<Arc<DefaultMappedFile>>) {
         let mut files = files;
-        let current_files = self.mapped_files.load();
+        let current_files = self.storage.mapped_files().load();
         if !files.is_empty() {
             files.retain(|mf| current_files.contains(mf));
 
             // Write: copy-on-write update
             let mut new_files = (**current_files).clone();
             new_files.retain(|mf| !files.contains(mf));
-            self.mapped_files.store(Arc::new(new_files));
+            self.storage.mapped_files().store(Arc::new(new_files));
         }
     }
 
@@ -481,7 +481,7 @@ impl MappedFileQueue {
         clean_immediately: bool,
         delete_file_batch_max: i32,
     ) -> i32 {
-        let mfs = (**self.mapped_files.load()).clone();
+        let mfs = (**self.storage.mapped_files().load()).clone();
         let mfs_length = mfs.len().saturating_sub(1);
         let mut delete_count = 0;
         let mut files = Vec::new();
@@ -528,7 +528,7 @@ impl MappedFileQueue {
     /// # Returns
     /// Number of files deleted
     pub fn delete_expired_file_by_offset(&self, offset: i64, unit_size: i32) -> i32 {
-        let mfs = (**self.mapped_files.load()).clone();
+        let mfs = (**self.storage.mapped_files().load()).clone();
         let mut files = Vec::new();
         let mut delete_count = 0;
         let mfs_length = mfs.len().saturating_sub(1);
@@ -537,7 +537,7 @@ impl MappedFileQueue {
             let mut destroy = false;
 
             if let Some(result) =
-                mapped_file.select_mapped_buffer((self.mapped_file_size - unit_size as u64) as i32, unit_size)
+                mapped_file.select_mapped_buffer((self.storage.mapped_file_size() - unit_size as u64) as i32, unit_size)
             {
                 if let Some(ref buffer) = result.bytes {
                     if buffer.len() >= 8 {
@@ -587,7 +587,7 @@ impl MappedFileQueue {
             let last_offset =
                 mapped_file_last.get_file_from_offset() as i64 + mapped_file_last.get_wrote_position() as i64;
             let diff = last_offset - offset;
-            let max_diff = (self.mapped_file_size * 2) as i64;
+            let max_diff = (self.storage.mapped_file_size() * 2) as i64;
 
             if diff > max_diff {
                 return false;
@@ -595,7 +595,7 @@ impl MappedFileQueue {
         }
 
         // Load current files
-        let current_files = self.mapped_files.load();
+        let current_files = self.storage.mapped_files().load();
         let mut to_removes = Vec::new();
 
         // Iterate backwards
@@ -619,7 +619,7 @@ impl MappedFileQueue {
             for &idx in to_removes.iter().rev() {
                 new_files.remove(idx);
             }
-            self.mapped_files.store(Arc::new(new_files));
+            self.storage.mapped_files().store(Arc::new(new_files));
         }
 
         true
@@ -628,7 +628,7 @@ impl MappedFileQueue {
     /// Check if mapped files list is empty
     #[inline]
     pub fn is_mapped_files_empty(&self) -> bool {
-        self.mapped_files.load().is_empty()
+        self.storage.mapped_files().load().is_empty()
     }
 
     /// Check if list is empty or current file is full
@@ -667,7 +667,7 @@ impl MappedFileQueue {
     /// Returns -1 if no mapped files exist
     #[inline]
     pub fn get_min_offset(&self) -> i64 {
-        if !self.mapped_files.load().is_empty() {
+        if !self.storage.mapped_files().load().is_empty() {
             if let Some(first) = self.get_first_mapped_file() {
                 return first.get_file_from_offset() as i64;
             }
@@ -680,11 +680,11 @@ impl MappedFileQueue {
     /// Only counts available (not destroyed) mapped files
     #[inline]
     pub fn get_mapped_memory_size(&self) -> i64 {
-        let files = self.mapped_files.load();
+        let files = self.storage.mapped_files().load();
         let mut size = 0i64;
         for mapped_file in files.iter() {
             if mapped_file.is_available() {
-                size += self.mapped_file_size as i64;
+                size += self.storage.mapped_file_size() as i64;
             }
         }
         size
@@ -695,7 +695,7 @@ impl MappedFileQueue {
     /// Returns the difference between max wrote position and flushed position
     #[inline]
     pub fn how_much_fall_behind(&self) -> i64 {
-        if self.mapped_files.load().is_empty() {
+        if self.storage.mapped_files().load().is_empty() {
             return 0;
         }
 
@@ -715,7 +715,7 @@ impl MappedFileQueue {
     /// # Arguments
     /// * `interval_forcibly` - Force shutdown interval (milliseconds)
     pub fn shutdown(&self, interval_forcibly: u64) {
-        for mapped_file in self.mapped_files.load().iter() {
+        for mapped_file in self.storage.mapped_files().load().iter() {
             mapped_file.shutdown(interval_forcibly);
         }
     }
@@ -737,7 +737,7 @@ impl MappedFileQueue {
     /// ```
     #[inline]
     pub fn snapshot(&self) -> Vec<Arc<DefaultMappedFile>> {
-        (**self.mapped_files.load()).clone()
+        (**self.storage.mapped_files().load()).clone()
     }
 
     /// Create an iterator over mapped files
@@ -795,7 +795,7 @@ impl MappedFileQueue {
     /// ```
     pub fn range(&self, from: i64, to: i64) -> Vec<Arc<DefaultMappedFile>> {
         let mut result = Vec::new();
-        let files = self.mapped_files.load();
+        let files = self.storage.mapped_files().load();
 
         for mapped_file in files.iter() {
             let file_from = mapped_file.get_file_from_offset() as i64;
@@ -824,8 +824,8 @@ impl MappedFileQueue {
     /// Total size in bytes
     #[inline]
     pub fn get_total_file_size(&self) -> i64 {
-        let files = self.mapped_files.load();
-        (files.len() as i64) * (self.mapped_file_size as i64)
+        let files = self.storage.mapped_files().load();
+        (files.len() as i64) * (self.storage.mapped_file_size() as i64)
     }
 
     /// Get the number of mapped files
@@ -834,7 +834,7 @@ impl MappedFileQueue {
     /// Count of mapped files in the queue
     #[inline]
     pub fn get_mapped_file_count(&self) -> usize {
-        self.mapped_files.load().len()
+        self.storage.mapped_files().load().len()
     }
 
     /// Get store path
@@ -843,7 +843,7 @@ impl MappedFileQueue {
     /// The storage directory path
     #[inline]
     pub fn get_store_path(&self) -> &str {
-        &self.store_path
+        self.storage.store_path()
     }
 
     /// Get mapped file size
@@ -852,7 +852,7 @@ impl MappedFileQueue {
     /// Size of each mapped file in bytes
     #[inline]
     pub fn get_mapped_file_size_config(&self) -> u64 {
-        self.mapped_file_size
+        self.storage.mapped_file_size()
     }
 
     /// Retry deleting the first file
@@ -910,7 +910,7 @@ impl MappedFileQueue {
     /// queue.swap_map(3, 1000 * 60 * 10, 1000 * 60 * 5);
     /// ```
     pub fn swap_map(&self, reserve_num: i32, force_swap_interval_ms: i64, normal_swap_interval_ms: i64) {
-        let files = self.mapped_files.load();
+        let files = self.storage.mapped_files().load();
 
         if files.is_empty() {
             return;
@@ -966,7 +966,7 @@ impl MappedFileQueue {
     /// queue.clean_swapped_map(1000 * 60 * 60);
     /// ```
     pub fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64) {
-        let files = self.mapped_files.load();
+        let files = self.storage.mapped_files().load();
 
         if files.is_empty() {
             return;
@@ -1034,7 +1034,7 @@ impl MappedFileQueue {
     /// # Returns
     /// Vector of mapped files, or None if insufficient files
     fn copy_mapped_files(&self, reserved_mapped_files: usize) -> Option<Vec<Arc<DefaultMappedFile>>> {
-        let files = self.mapped_files.load();
+        let files = self.storage.mapped_files().load();
 
         if files.len() <= reserved_mapped_files {
             return None;
@@ -1057,12 +1057,12 @@ impl MappedFileQueue {
     /// It should only be called during shutdown or cleanup operations.
     #[inline]
     pub fn destroy(&mut self) {
-        for mapped_file in self.mapped_files.load().iter() {
+        for mapped_file in self.storage.mapped_files().load().iter() {
             mapped_file.destroy(1000 * 3);
         }
-        self.mapped_files.store(Arc::new(Vec::new()));
+        self.storage.mapped_files().store(Arc::new(Vec::new()));
         self.set_flushed_where(0);
-        let path = PathBuf::from(&self.store_path);
+        let path = PathBuf::from(self.storage.store_path());
         if path.is_dir() {
             let _ = fs::remove_dir_all(path);
         }
@@ -1090,21 +1090,21 @@ impl MappedFileQueue {
         match (first_mapped_file, last_mapped_file) {
             (Some(first), Some(last)) => {
                 let first_offset = first.get_file_from_offset() as i64;
-                let last_offset = last.get_file_from_offset() as i64 + self.mapped_file_size as i64;
+                let last_offset = last.get_file_from_offset() as i64 + self.storage.mapped_file_size() as i64;
 
                 if offset < first_offset || offset >= last_offset {
                     return if return_first_on_not_found { Some(first) } else { None };
                 }
 
                 // Try direct index calculation (O(1) access)
-                let index = (offset as usize / self.mapped_file_size as usize)
-                    - (first_offset as usize / self.mapped_file_size as usize);
+                let index = (offset as usize / self.storage.mapped_file_size() as usize)
+                    - (first_offset as usize / self.storage.mapped_file_size() as usize);
 
-                let files = self.mapped_files.load();
+                let files = self.storage.mapped_files().load();
                 if let Some(file) = files.get(index).cloned() {
                     let file_offset = file.get_file_from_offset() as i64;
                     // Must check both lower and upper bounds
-                    if offset >= file_offset && offset < file_offset + self.mapped_file_size as i64 {
+                    if offset >= file_offset && offset < file_offset + self.storage.mapped_file_size() as i64 {
                         return Some(file);
                     }
                 }
@@ -1112,7 +1112,7 @@ impl MappedFileQueue {
                 // Fall back to linear search if direct indexing fails
                 for file in files.iter() {
                     let file_offset = file.get_file_from_offset() as i64;
-                    if offset >= file_offset && offset < file_offset + self.mapped_file_size as i64 {
+                    if offset >= file_offset && offset < file_offset + self.storage.mapped_file_size() as i64 {
                         return Some(file.clone());
                     }
                 }
@@ -1215,7 +1215,7 @@ impl MappedFileQueue {
         commit_log: &CommitLog,
         boundary_type: BoundaryType,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let mapped_files = self.mapped_files.load();
+        let mapped_files = self.storage.mapped_files().load();
         if mapped_files.is_empty() {
             return None;
         }
@@ -1243,7 +1243,7 @@ impl MappedFileQueue {
             }
 
             if i < mfs_len - 1 && mapped_file.get_stop_timestamp() < 0 {
-                let last_unit_offset = self.mapped_file_size as i32 - CQ_STORE_UNIT_SIZE;
+                let last_unit_offset = self.storage.mapped_file_size() as i32 - CQ_STORE_UNIT_SIZE;
                 if let Some(select_result) = mapped_file.select_mapped_buffer(last_unit_offset, CQ_STORE_UNIT_SIZE) {
                     if let Some(ref buffer) = select_result.bytes {
                         if buffer.len() >= 12 {
@@ -1290,12 +1290,9 @@ mod tests {
 
     #[test]
     fn test_load_empty_dir() {
-        let mut queue = MappedFileQueue {
-            store_path: String::from("/path/to/empty/dir"),
-            ..MappedFileQueue::default()
-        };
+        let mut queue = MappedFileQueue::new(String::from("/path/to/empty/dir"), 0, None);
         assert!(queue.load());
-        assert!(queue.mapped_files.load().is_empty());
+        assert!(queue.storage.mapped_files().load().is_empty());
     }
 
     #[test]
@@ -1306,12 +1303,9 @@ mod tests {
         fs::File::create(&file1_path).unwrap();
         fs::File::create(&file2_path).unwrap();
 
-        let mut queue = MappedFileQueue {
-            store_path: temp_dir.path().to_string_lossy().into_owned(),
-            ..MappedFileQueue::default()
-        };
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 0, None);
         assert!(queue.load());
-        assert_eq!(queue.mapped_files.load().len(), 1);
+        assert_eq!(queue.storage.mapped_files().load().len(), 1);
     }
 
     #[test]
@@ -1320,12 +1314,9 @@ mod tests {
         let file_path = temp_dir.path().join("1111");
         fs::File::create(&file_path).unwrap();
 
-        let mut queue = MappedFileQueue {
-            store_path: temp_dir.path().to_string_lossy().into_owned(),
-            ..MappedFileQueue::default()
-        };
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 0, None);
         assert!(queue.load());
-        assert!(queue.mapped_files.load().is_empty());
+        assert!(queue.storage.mapped_files().load().is_empty());
     }
 
     #[test]
@@ -1334,12 +1325,9 @@ mod tests {
         let file_path = temp_dir.path().join("invalid_file.txt");
         fs::write(&file_path, "Some data").unwrap();
 
-        let mut queue = MappedFileQueue {
-            store_path: temp_dir.path().to_string_lossy().into_owned(),
-            ..MappedFileQueue::default()
-        };
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 0, None);
         assert!(!queue.load());
-        assert!(queue.mapped_files.load().is_empty());
+        assert!(queue.storage.mapped_files().load().is_empty());
     }
 
     #[test]
@@ -1348,13 +1336,9 @@ mod tests {
         let file_path = temp_dir.path().join("1111");
         fs::write(&file_path, vec![0u8; 1024]).unwrap();
 
-        let mut queue = MappedFileQueue {
-            store_path: temp_dir.path().to_string_lossy().into_owned(),
-            mapped_file_size: 1024,
-            ..MappedFileQueue::default()
-        };
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 1024, None);
         assert!(queue.load());
-        assert_eq!(queue.mapped_files.load().len(), 1);
+        assert_eq!(queue.storage.mapped_files().load().len(), 1);
     }
 
     #[test]
@@ -1386,8 +1370,11 @@ mod tests {
             .record_warm_with_latency(2048, std::time::Duration::from_millis(5));
 
         let queue = MappedFileQueue {
-            mapped_file_size: 1024,
-            mapped_files: ArcSwap::from_pointee(vec![first_file, second_file]),
+            storage: MappedFileQueueStorage::new(
+                String::new(),
+                1024,
+                ArcSwap::from_pointee(vec![first_file, second_file]),
+            ),
             ..MappedFileQueue::default()
         };
 
@@ -1420,7 +1407,7 @@ mod tests {
             mapped_file_size,
             Some(service.clone()),
         );
-        queue.mapped_files.store(Arc::new(vec![first_file]));
+        queue.storage.mapped_files().store(Arc::new(vec![first_file]));
 
         assert!(!service.has_request(next_file_path.to_string_lossy().as_ref()));
         assert!(queue.get_last_mapped_file_mut_start_offset(0, true).is_some());

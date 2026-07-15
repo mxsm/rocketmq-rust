@@ -29,6 +29,8 @@ pub mod kernel;
 pub mod mapping;
 #[doc(hidden)]
 pub mod queue_state;
+#[doc(hidden)]
+pub mod queue_storage;
 pub mod raw;
 
 pub use contract::MappedFile;
