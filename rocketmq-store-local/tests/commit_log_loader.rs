@@ -24,6 +24,8 @@ use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
 use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
 use rocketmq_store_local::commit_log::loader::CommitLogLoadAdapter;
 use rocketmq_store_local::commit_log::loader::CommitLogLoader;
+use rocketmq_store_local::mapped_file::DefaultMappedFile;
+use rocketmq_store_local::mapped_file::MappedFile;
 use tempfile::TempDir;
 
 static VALIDATION_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -94,20 +96,20 @@ fn loader_handles_missing_empty_and_single_directories() {
     let directory = TempDir::new().unwrap();
     let missing = directory.path().join("missing");
     let loader = CommitLogLoader::new(missing.to_string_lossy().into_owned(), 16, false);
-    let (targets, statistics) = loader.load_optimized(fake_target_adapter()).unwrap();
+    let (targets, statistics) = loader.load_with_adapter(fake_target_adapter()).unwrap();
     assert!(targets.is_empty());
     assert_eq!(statistics.total_load_time_ms, 0);
 
     let empty = TempDir::new().unwrap();
     let loader = CommitLogLoader::new(empty.path().to_string_lossy().into_owned(), 16, false);
-    let (targets, statistics) = loader.load_optimized(fake_target_adapter()).unwrap();
+    let (targets, statistics) = loader.load_with_adapter(fake_target_adapter()).unwrap();
     assert!(targets.is_empty());
     assert_eq!(statistics.total_files, 0);
 
     let single = TempDir::new().unwrap();
     let path = create_segment(single.path(), "00000000000000000000", 16);
     let loader = CommitLogLoader::new(single.path().to_string_lossy().into_owned(), 16, false);
-    let (targets, statistics) = loader.load_optimized(fake_target_adapter()).unwrap();
+    let (targets, statistics) = loader.load_with_adapter(fake_target_adapter()).unwrap();
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].path, path);
     assert_eq!(targets[0].mode, CommitLogMappingMode::Eager);
@@ -131,7 +133,7 @@ fn parallel_loader_preserves_order_and_only_lazily_maps_historical_segments() {
     )
     .with_lazy_mmap(true);
 
-    let (targets, statistics) = loader.load_optimized(fake_target_adapter()).unwrap();
+    let (targets, statistics) = loader.load_with_adapter(fake_target_adapter()).unwrap();
     let actual_paths: Vec<_> = targets.iter().map(|target| target.path.clone()).collect();
     assert_eq!(actual_paths, expected_paths);
     assert!(targets[..5]
@@ -152,7 +154,7 @@ fn validation_and_empty_last_processing_finish_before_any_target_is_opened() {
     create_segment(invalid.path(), "00000000000000000016", 8);
     VALIDATION_OPEN_COUNT.store(0, Ordering::SeqCst);
     let loader = CommitLogLoader::new(invalid.path().to_string_lossy().into_owned(), 16, true);
-    let error = loader.load_optimized(counting_target_adapter()).unwrap_err();
+    let error = loader.load_with_adapter(counting_target_adapter()).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert_eq!(VALIDATION_OPEN_COUNT.load(Ordering::SeqCst), 0);
 
@@ -161,10 +163,39 @@ fn validation_and_empty_last_processing_finish_before_any_target_is_opened() {
     let removed = create_segment(empty_last.path(), "00000000000000000016", 0);
     VALIDATION_OPEN_COUNT.store(0, Ordering::SeqCst);
     let loader = CommitLogLoader::new(empty_last.path().to_string_lossy().into_owned(), 16, true);
-    let (targets, statistics) = loader.load_optimized(counting_target_adapter()).unwrap();
+    let (targets, statistics) = loader.load_with_adapter(counting_target_adapter()).unwrap();
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].0.path, retained);
     assert_eq!(statistics.total_files, 1);
     assert_eq!(VALIDATION_OPEN_COUNT.load(Ordering::SeqCst), 1);
     assert!(!removed.exists());
+}
+
+#[test]
+fn native_loader_owns_mapping_creation_and_lazy_history_policy() {
+    let directory = TempDir::new().unwrap();
+    let expected_paths: Vec<_> = (0..5)
+        .map(|index| create_segment(directory.path(), &format!("{index:020}"), 4096))
+        .collect();
+    let loader = CommitLogLoader::new(directory.path().to_string_lossy().into_owned(), 4096, true).with_lazy_mmap(true);
+
+    let (targets, statistics): (Vec<std::sync::Arc<DefaultMappedFile>>, _) = loader.load_optimized().unwrap();
+
+    assert_eq!(statistics.total_files, expected_paths.len());
+    assert_eq!(statistics.total_size_bytes, 4096 * expected_paths.len() as u64);
+    assert!(targets[..4]
+        .iter()
+        .all(|target| target.is_lazy_mmap_enabled() && !target.is_mapped()));
+    assert!(!targets[4].is_lazy_mmap_enabled());
+    assert!(targets[4].is_mapped());
+    assert!(targets.iter().all(|target| {
+        target.get_wrote_position() == 4096
+            && target.get_flushed_position() == 4096
+            && target.get_committed_position() == 4096
+    }));
+    let actual_paths: Vec<_> = targets
+        .iter()
+        .map(|target| PathBuf::from(target.get_file_name().as_str()))
+        .collect();
+    assert_eq!(actual_paths, expected_paths);
 }

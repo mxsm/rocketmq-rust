@@ -16,5 +16,6 @@ pub use super::MmapRegionSlice;
 pub use rocketmq_store_local::mapped_file::LazyMmapStats;
 pub use rocketmq_store_local::mapped_file::OS_PAGE_SIZE;
 
-/// Store compatibility specialization of the canonical Local mapped-file owner.
-pub type DefaultMappedFile = rocketmq_store_local::mapped_file::DefaultMappedFile<super::StoreMappedMemory>;
+/// Store compatibility name for the native Local mapped-file owner.
+pub type DefaultMappedFile =
+    rocketmq_store_local::mapped_file::DefaultMappedFile<rocketmq_store_local::mapped_file::NativeMappedMemory>;

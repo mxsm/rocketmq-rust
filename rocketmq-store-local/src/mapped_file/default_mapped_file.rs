@@ -40,6 +40,7 @@ use super::MappedFileMetrics;
 use super::MappedFileRawCore;
 use super::MappedFileResult;
 use super::MappedMemory;
+use super::NativeMappedMemory;
 use super::SelectMappedBufferCacheState;
 use super::SelectMappedBufferResult;
 use super::SelectMappedBufferSourceKind;
@@ -138,7 +139,7 @@ fn emit_linux_storage_degradation_observability(event: LinuxStorageDegradationEv
     let _ = event;
 }
 
-pub struct DefaultMappedFile<M: MappedMemory> {
+pub struct DefaultMappedFile<M: MappedMemory = NativeMappedMemory> {
     reference_resource: ReferenceResourceCounter,
     storage: MappedFileStorage,
     mapping: MappedFileMapping<M>,

@@ -1509,3 +1509,29 @@ python scripts/arc_mut_guard.py
   51 未开始，合计 52 个尚未完成；root workspace 为 28/32，尚缺 store-rocksdb 与 proxy-core/cluster/local
   四个目标 crate。本切片不关闭 PR-M06-03：CommitLog 根 append/load/recovery owner 与 facade 仍需收口；
   M06-04..12 的 flush/group commit、CQ/Index、HA、Timer/POP、RocksDB 与 Store facade，以及 M07..M12 均未勾选。
+
+## M06-03 native mmap and CommitLog loader owner extraction evidence
+
+- [x] `[DEV/API]` Local `mapped_file` 现直接拥有 `NativeMappedMemory` 与 `MmapRegionSlice`；
+  `DefaultMappedFile`、`SelectMappedBufferResult` 的默认 backend 均指向 native owner。Local
+  `CommitLogLoader::load_optimized` 直接创建 native mapping，泛型测试/扩展入口收敛为 `load_with_adapter`，
+  native open、lazy-read-only 历史文件策略与 fully-loaded position adapter 不再由 Store 构造。
+- [x] `[COMPAT/OWNER]` Store `mapped_file::memory` 仅精确 re-export native backend/region，原
+  `StoreMappedMemory` 名称通过明确 alias 保持；Store `DefaultMappedFile` 与 select result 继续以专用 type alias
+  保持既有类型推导。Store `commit_log_loader` production 区只保留 `LoadStatistics`、
+  `RecoveryFilePrefetch`、`RecoveryMmapAdvice`、`CommitLogLoader` 四条精确 re-export，原 wrapper、函数表 adapter、
+  文件发现、mapping 创建与 memory-hint 编排均已删除。
+- [x] `[TEST]` Local fake/native loader integration 4/4、Store loader compatibility 16/16、Local
+  DefaultMappedFile focused 30/30 与 `cargo test -p rocketmq-store-local --all-features` 全部通过；
+  `cargo check`、all-target/all-feature package Clippy（Local/Store）、workspace fmt、root workspace
+  all-target/all-feature Clippy及 Local strict Rustdoc 均通过。
+- [x] `[CONTRACT]` mapped-file/native owner、Store exact-facade、loader native adapter 与 alias-bypass mutation
+  契约已同步；修正测试从已删除 Store wrapper 转向精确 facade 所有权验证。最终完整 M06 contract
+  126/126 通过（603.347s）；合法 `NativeMappedMemory as StoreMappedMemory` facade 与 crate/module/glob alias
+  绕过检测均由独立 mutation 保持 fail-closed。
+- [x] `[ARC/ARCH]` 本切片未新增 `ArcMut` identity/occurrence 或 baseline/relocation approval；ArcMut final
+  guard、architecture dependency baseline 与 AGENTS routing 均通过。error architecture guard 仍仅复现未触及的
+  Broker source-stringification 1 项、MCP anyhow 8 项和治理文档缺失 2 项，未将非零基线误记为通过。
+- [x] `[INVENTORY/SCOPE]` 本切片关闭 native mmap/load owner 内部工作，但不关闭顶层 PR-M06-03；
+  CommitLog 根 append/load/recovery owner、Store facade 最终收口仍待完成。82 个顶层工作包统计保持
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。

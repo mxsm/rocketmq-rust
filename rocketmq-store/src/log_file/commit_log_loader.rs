@@ -21,114 +21,16 @@
 //! - Zero-copy buffer reuse
 //! - Platform-specific optimizations (madvise on Unix, PrefetchVirtualMemory on Windows)
 
-use std::io;
-use std::path::Path;
-use std::sync::Arc;
-
-use cheetah_string::CheetahString;
-use rocketmq_store_local::commit_log::load::CommitLogMappingMode;
 pub use rocketmq_store_local::commit_log::load::LoadStatistics;
 pub use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
 pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
-use rocketmq_store_local::commit_log::loader::CommitLogLoadAdapter;
-
-use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
-use crate::log_file::mapped_file::MappedFile;
-
-/// Legacy Store loader facade backed by the canonical Local orchestration owner.
-pub struct CommitLogLoader {
-    inner: rocketmq_store_local::commit_log::loader::CommitLogLoader,
-}
-
-impl CommitLogLoader {
-    /// Creates a loader with sequential mmap advice and file prefetch disabled.
-    pub fn new(store_path: String, mapped_file_size: u64, enable_parallel: bool) -> Self {
-        Self {
-            inner: rocketmq_store_local::commit_log::loader::CommitLogLoader::new(
-                store_path,
-                mapped_file_size,
-                enable_parallel,
-            ),
-        }
-    }
-
-    /// Creates a loader with explicit mmap advice and file prefetch disabled.
-    pub fn new_with_recovery_mmap_advice(
-        store_path: String,
-        mapped_file_size: u64,
-        enable_parallel: bool,
-        recovery_mmap_advice: RecoveryMmapAdvice,
-    ) -> Self {
-        Self {
-            inner: rocketmq_store_local::commit_log::loader::CommitLogLoader::new_with_recovery_mmap_advice(
-                store_path,
-                mapped_file_size,
-                enable_parallel,
-                recovery_mmap_advice,
-            ),
-        }
-    }
-
-    /// Creates a loader with explicit non-fatal recovery hints.
-    pub fn new_with_recovery_hints(
-        store_path: String,
-        mapped_file_size: u64,
-        enable_parallel: bool,
-        recovery_mmap_advice: RecoveryMmapAdvice,
-        recovery_file_prefetch: RecoveryFilePrefetch,
-    ) -> Self {
-        Self {
-            inner: rocketmq_store_local::commit_log::loader::CommitLogLoader::new_with_recovery_hints(
-                store_path,
-                mapped_file_size,
-                enable_parallel,
-                recovery_mmap_advice,
-                recovery_file_prefetch,
-            ),
-        }
-    }
-
-    /// Enables or disables lazy read-only mappings for historical segments.
-    pub fn with_lazy_mmap(self, lazy_mmap_enable: bool) -> Self {
-        Self {
-            inner: self.inner.with_lazy_mmap(lazy_mmap_enable),
-        }
-    }
-
-    /// Loads validated CommitLog files and returns them in filename order.
-    ///
-    /// # Errors
-    ///
-    /// Returns an I/O error forwarded from the Local loader owner.
-    pub fn load_optimized(&self) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
-        let adapter = CommitLogLoadAdapter {
-            open: Self::create_mapped_file,
-            recovery_mapping: |mapped_file| {
-                if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped() {
-                    return None;
-                }
-                Some((mapped_file.get_mapped_file(), mapped_file.get_file_name().as_str()))
-            },
-            mark_fully_loaded: |mapped_file, position| {
-                mapped_file.set_wrote_position(position);
-                mapped_file.set_flushed_position(position);
-                mapped_file.set_committed_position(position);
-            },
-        };
-        self.inner.load_optimized(adapter)
-    }
-
-    fn create_mapped_file(path: &Path, file_size: u64, mode: CommitLogMappingMode) -> io::Result<DefaultMappedFile> {
-        let file_name = CheetahString::from_string(path.to_string_lossy().to_string());
-        match mode {
-            CommitLogMappingMode::LazyReadOnly => DefaultMappedFile::try_new_lazy_read_only(file_name, file_size),
-            CommitLogMappingMode::Eager => DefaultMappedFile::try_new(file_name, file_size),
-        }
-    }
-}
+pub use rocketmq_store_local::commit_log::loader::CommitLogLoader;
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
+    use crate::log_file::mapped_file::MappedFile;
     use tempfile::TempDir;
 
     use super::*;

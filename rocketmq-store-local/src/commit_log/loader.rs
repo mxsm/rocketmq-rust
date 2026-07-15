@@ -18,6 +18,7 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rayon::prelude::*;
 
 use super::load::apply_recovery_file_prefetch;
@@ -37,6 +38,8 @@ use super::load::HintOutcome;
 use super::load::LoadStatistics;
 use super::load::RecoveryFilePrefetch;
 use super::load::RecoveryMmapAdvice;
+use crate::mapped_file::DefaultMappedFile;
+use crate::mapped_file::MappedFile;
 
 /// Function table connecting [`CommitLogLoader`] to one concrete mapped-file target.
 ///
@@ -141,7 +144,30 @@ impl CommitLogLoader {
     ///
     /// Returns an I/O error when directory discovery, metadata collection,
     /// validation, or target opening fails.
-    pub fn load_optimized<T: Send + Sync>(
+    pub fn load_optimized(&self) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
+        self.load_with_adapter(CommitLogLoadAdapter {
+            open: Self::create_native_mapped_file,
+            recovery_mapping: |mapped_file| {
+                if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped() {
+                    return None;
+                }
+                Some((mapped_file.get_mapped_file(), mapped_file.get_file_name().as_str()))
+            },
+            mark_fully_loaded: |mapped_file, position| {
+                mapped_file.set_wrote_position(position);
+                mapped_file.set_flushed_position(position);
+                mapped_file.set_committed_position(position);
+            },
+        })
+    }
+
+    /// Loads CommitLog files through an alternate mapped-file adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when directory discovery, metadata collection,
+    /// validation, or target opening fails.
+    pub fn load_with_adapter<T: Send + Sync>(
         &self,
         adapter: CommitLogLoadAdapter<T>,
     ) -> io::Result<(Vec<Arc<T>>, LoadStatistics)> {
@@ -206,6 +232,18 @@ impl CommitLogLoader {
         stats.log_summary();
 
         Ok((mapped_files, stats))
+    }
+
+    fn create_native_mapped_file(
+        path: &Path,
+        file_size: u64,
+        mode: CommitLogMappingMode,
+    ) -> io::Result<DefaultMappedFile> {
+        let file_name = CheetahString::from_string(path.to_string_lossy().to_string());
+        match mode {
+            CommitLogMappingMode::LazyReadOnly => DefaultMappedFile::try_new_lazy_read_only(file_name, file_size),
+            CommitLogMappingMode::Eager => DefaultMappedFile::try_new(file_name, file_size),
+        }
     }
 
     fn create_mapped_files_parallel<T: Send + Sync>(

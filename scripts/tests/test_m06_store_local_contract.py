@@ -2757,8 +2757,16 @@ def kernel_facade_boundary_uses(
     for path in sorted(records_by_path, key=str):
         for kind, visibility, body, statement in records_by_path[path]:
             rooted_at_local = body.removeprefix("::").startswith("rocketmq_store_local")
-            canonical_alias_or_tree = rooted_at_local and (
-                "{" in body or re.search(r"\bas\b", body)
+            exact_native_memory_facade = (
+                kind == "use"
+                and visibility == "pub"
+                and body
+                == "rocketmq_store_local::mapped_file::NativeMappedMemory as StoreMappedMemory"
+            )
+            canonical_alias_or_tree = (
+                rooted_at_local
+                and ("{" in body or re.search(r"\bas\b", body))
+                and not exact_native_memory_facade
             )
             public_use = kind == "use" and visibility.startswith("pub")
             public_glob = public_use and "*" in body
@@ -6346,7 +6354,9 @@ def commit_log_loader_owner_violations(source: str) -> list[str]:
         "pubfnnew_with_recovery_mmap_advice(store_path:String,mapped_file_size:u64,enable_parallel:bool,recovery_mmap_advice:RecoveryMmapAdvice,)->Self",
         "pubfnnew_with_recovery_hints(store_path:String,mapped_file_size:u64,enable_parallel:bool,recovery_mmap_advice:RecoveryMmapAdvice,recovery_file_prefetch:RecoveryFilePrefetch,)->Self",
         "pubfnwith_lazy_mmap(mutself,lazy_mmap_enable:bool)->Self",
-        "pubfnload_optimized<T:Send+Sync>(&self,adapter:CommitLogLoadAdapter<T>,)->io::Result<(Vec<Arc<T>>,LoadStatistics)>",
+        "pubfnload_optimized(&self)->io::Result<(Vec<Arc<DefaultMappedFile>>,LoadStatistics)>",
+        "pubfnload_with_adapter<T:Send+Sync>(&self,adapter:CommitLogLoadAdapter<T>,)->io::Result<(Vec<Arc<T>>,LoadStatistics)>",
+        "fncreate_native_mapped_file(path:&Path,file_size:u64,mode:CommitLogMappingMode,)->io::Result<DefaultMappedFile>",
         "fncreate_mapped_files_parallel<T:Send+Sync>(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,adapter:&CommitLogLoadAdapter<T>,)->io::Result<Vec<Arc<T>>>",
         "fncreate_mapped_files_sequential<T:Send+Sync>(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,adapter:&CommitLogLoadAdapter<T>,)->io::Result<Vec<Arc<T>>>",
         "fncreate_mapped_file<T>(&self,entry:&CommitLogMappingEntry,adapter:&CommitLogLoadAdapter<T>)->io::Result<T>",
@@ -6355,7 +6365,7 @@ def commit_log_loader_owner_violations(source: str) -> list[str]:
     if any(signature not in normalized for signature in required_signatures):
         violations.append("Local CommitLog loader signatures changed")
 
-    load = dict(rust_function_bodies(production)).get("load_optimized")
+    load = dict(rust_function_bodies(production)).get("load_with_adapter")
     if load is None:
         violations.append("Local CommitLog loader entrypoint missing")
     else:
@@ -6383,7 +6393,7 @@ def commit_log_loader_owner_violations(source: str) -> list[str]:
         final_elapsed = compact_load.rfind("stats.total_load_time_ms=start.elapsed().as_millis();")
         if final_elapsed == -1 or final_elapsed >= compact_load.find("stats.log_summary();"):
             violations.append("Local CommitLog final elapsed-time recording changed")
-        raw_load = named_raw_function_body(source, "load_optimized") or ""
+        raw_load = named_raw_function_body(source, "load_with_adapter") or ""
         expected_logs = [
             'target: "rocketmq_store::log_file::commit_log_loader",\n                    "CommitLog directory does not exist: {}"',
             'target: "rocketmq_store::log_file::commit_log_loader",\n                    "No commit log files found in {}"',
@@ -6414,6 +6424,26 @@ def commit_log_loader_owner_violations(source: str) -> list[str]:
         for name, expected in constructor_bodies.items()
     ):
         violations.append("Local CommitLog loader constructor defaults changed")
+    native_load = re.sub(r"\s+", "", bodies.get("load_optimized", ""))
+    expected_native_load = (
+        "self.load_with_adapter(CommitLogLoadAdapter{"
+        "open:Self::create_native_mapped_file,recovery_mapping:|mapped_file|{"
+        "ifmapped_file.is_lazy_mmap_enabled()&&!mapped_file.is_mapped(){returnNone;}"
+        "Some((mapped_file.get_mapped_file(),mapped_file.get_file_name().as_str()))},"
+        "mark_fully_loaded:|mapped_file,position|{mapped_file.set_wrote_position(position);"
+        "mapped_file.set_flushed_position(position);mapped_file.set_committed_position(position);},})"
+    )
+    if native_load != expected_native_load:
+        violations.append("Local native CommitLog load adapter changed")
+    native_open = re.sub(r"\s+", "", bodies.get("create_native_mapped_file", ""))
+    expected_native_open = (
+        "letfile_name=CheetahString::from_string(path.to_string_lossy().to_string());"
+        "matchmode{CommitLogMappingMode::LazyReadOnly=>DefaultMappedFile::"
+        "try_new_lazy_read_only(file_name,file_size),CommitLogMappingMode::Eager=>"
+        "DefaultMappedFile::try_new(file_name,file_size),}"
+    )
+    if native_open != expected_native_open:
+        violations.append("Local native CommitLog mapping target changed")
     parallel = re.sub(r"\s+", "", bodies.get("create_mapped_files_parallel", ""))
     sequential = re.sub(r"\s+", "", bodies.get("create_mapped_files_sequential", ""))
     create_one = re.sub(r"\s+", "", bodies.get("create_mapped_file", ""))
@@ -6454,7 +6484,7 @@ def commit_log_loader_owner_violations(source: str) -> list[str]:
     ]
     if any(fragment not in hints for fragment in hint_required):
         violations.append("Local CommitLog recovery mapping/hint boundary changed")
-    if any(token in active for token in ("DefaultMappedFile", "CheetahString", "ArcMut", "rocketmq_store::")):
+    if any(token in active for token in ("StoreMappedMemory", "ArcMut", "rocketmq_store::")):
         violations.append("Local CommitLog loader absorbed a Store representation")
     return violations
 
@@ -6481,26 +6511,8 @@ def commit_log_loader_copy_violations(
     if adapter_owners != [(canonical_path, "struct")]:
         violations.append("CommitLogLoadAdapter must have one Local production owner")
     loader_owners = file_item_owner_occurrences(masked_sources, "CommitLogLoader")
-    expected_loader_owners = [
-        (canonical_path, "struct"),
-        (
-            next(
-                (
-                    path
-                    for path in masked_sources
-                    if path.as_posix().endswith(
-                        "rocketmq-store/src/log_file/commit_log_loader.rs"
-                    )
-                ),
-                Path("missing-store-loader-adapter.rs"),
-            ),
-            "struct",
-        ),
-    ]
-    if loader_owners != expected_loader_owners:
-        violations.append(
-            "CommitLogLoader must have one Local owner and one Store narrow wrapper"
-        )
+    if loader_owners != [(canonical_path, "struct")]:
+        violations.append("CommitLogLoader must have one Local production owner")
 
     role_names = (
         "discover_commit_log_files",
@@ -6580,97 +6592,21 @@ def store_commit_log_loader_adapter_violations(source: str) -> list[str]:
     normalized = re.sub(r"\s+", "", active)
     violations: list[str] = []
 
-    local_loader = "rocketmq_store_local::commit_log::loader::CommitLogLoader"
-    expected_wrapper = f"pubstructCommitLogLoader{{inner:{local_loader},}}"
-    if normalized.count(expected_wrapper) != 1:
-        violations.append("Store CommitLog loader narrow wrapper changed")
-    if len(re.findall(r"\bstruct\s+CommitLogLoader\b", active)) != 1:
-        violations.append("Store CommitLog loader wrapper owner count changed")
-    if "userocketmq_store_local::commit_log::loader::CommitLogLoadAdapter;" not in normalized:
-        violations.append("Store CommitLog load adapter import changed")
-    if normalized.count(local_loader) != 4:
-        violations.append("Store CommitLog Local loader path usage changed")
-    if "userocketmq_store_local::commit_log::load::CommitLogMappingMode;" not in normalized:
-        violations.append("Store CommitLog mapping mode import changed")
-
-    method_names = (
-        "new",
-        "new_with_recovery_mmap_advice",
-        "new_with_recovery_hints",
-        "with_lazy_mmap",
-        "load_optimized",
-        "create_mapped_file",
+    expected_reexports = (
+        "pubuserocketmq_store_local::commit_log::load::LoadStatistics;"
+        "pubuserocketmq_store_local::commit_log::load::RecoveryFilePrefetch;"
+        "pubuserocketmq_store_local::commit_log::load::RecoveryMmapAdvice;"
+        "pubuserocketmq_store_local::commit_log::loader::CommitLogLoader;"
     )
-    methods = inherent_method_records(production, "CommitLogLoader", method_names)
-    expected_methods = {
-        "new": (
-            "pub",
-            "pubfnnew(store_path:String,mapped_file_size:u64,enable_parallel:bool)->Self",
-            f"Self{{inner:{local_loader}::new(store_path,mapped_file_size,enable_parallel,),}}",
-        ),
-        "new_with_recovery_mmap_advice": (
-            "pub",
-            "pubfnnew_with_recovery_mmap_advice(store_path:String,mapped_file_size:u64,"
-            "enable_parallel:bool,recovery_mmap_advice:RecoveryMmapAdvice,)->Self",
-            f"Self{{inner:{local_loader}::new_with_recovery_mmap_advice(store_path,"
-            "mapped_file_size,enable_parallel,recovery_mmap_advice,),}",
-        ),
-        "new_with_recovery_hints": (
-            "pub",
-            "pubfnnew_with_recovery_hints(store_path:String,mapped_file_size:u64,"
-            "enable_parallel:bool,recovery_mmap_advice:RecoveryMmapAdvice,"
-            "recovery_file_prefetch:RecoveryFilePrefetch,)->Self",
-            f"Self{{inner:{local_loader}::new_with_recovery_hints(store_path,mapped_file_size,"
-            "enable_parallel,recovery_mmap_advice,recovery_file_prefetch,),}",
-        ),
-        "with_lazy_mmap": (
-            "pub",
-            "pubfnwith_lazy_mmap(self,lazy_mmap_enable:bool)->Self",
-            "Self{inner:self.inner.with_lazy_mmap(lazy_mmap_enable),}",
-        ),
-        "load_optimized": (
-            "pub",
-            "pubfnload_optimized(&self)->io::Result<(Vec<Arc<DefaultMappedFile>>,"
-            "LoadStatistics)>",
-            "letadapter=CommitLogLoadAdapter{open:Self::create_mapped_file,"
-            "recovery_mapping:|mapped_file|{ifmapped_file.is_lazy_mmap_enabled()"
-            "&&!mapped_file.is_mapped(){returnNone;}Some((mapped_file.get_mapped_file(),"
-            "mapped_file.get_file_name().as_str()))},mark_fully_loaded:|mapped_file,"
-            "position|{mapped_file.set_wrote_position(position);mapped_file."
-            "set_flushed_position(position);mapped_file.set_committed_position(position);},};"
-            "self.inner.load_optimized(adapter)",
-        ),
-        "create_mapped_file": (
-            "",
-            "fncreate_mapped_file(path:&Path,file_size:u64,mode:CommitLogMappingMode)"
-            "->io::Result<DefaultMappedFile>",
-            "letfile_name=CheetahString::from_string(path.to_string_lossy().to_string());"
-            "matchmode{CommitLogMappingMode::LazyReadOnly=>DefaultMappedFile::"
-            "try_new_lazy_read_only(file_name,file_size),CommitLogMappingMode::Eager=>"
-            "DefaultMappedFile::try_new(file_name,file_size),}",
-        ),
-    }
-    for method_name, (visibility, signature, body) in expected_methods.items():
-        records = methods[method_name]
-        if len(re.findall(rf"\bfn\s+{re.escape(method_name)}\b", active)) != 1:
-            violations.append(f"Store CommitLog wrapper {method_name} function count changed")
-        if len(records) != 1:
-            violations.append(f"Store CommitLog wrapper {method_name} owner count changed")
-            continue
-        record = records[0]
-        if (
-            record.visibility != visibility
-            or record.signature != signature
-            or record.body != body
-            or record.cfg_gated
-        ):
-            violations.append(f"Store CommitLog wrapper {method_name} delegation changed")
-    if normalized.count("implCommitLogLoader{") != 1:
-        violations.append("Store CommitLog wrapper implementation count changed")
-    if normalized.count("CommitLogLoadAdapter{") != 1:
-        violations.append("Store CommitLog load adapter construction count changed")
-    if "implCommitLogLoadTarget" in normalized:
-        violations.append("Store retained the removed CommitLog target trait adapter")
+    if normalized != expected_reexports:
+        violations.append("Store CommitLog loader facade must remain exact Local re-exports")
+    if re.search(r"\b(?:struct|enum|trait)\s+CommitLogLoader\b", active):
+        violations.append("Store CommitLog loader facade regained type ownership")
+    if re.search(r"\bimpl\s+CommitLogLoader\b", active) or re.search(
+        r"\bfn\s+(?:load_optimized|load_with_adapter|create_native_mapped_file)\b",
+        active,
+    ):
+        violations.append("Store CommitLog loader facade regained implementation ownership")
 
     forbidden = [
         "discover_commit_log_files(",
@@ -6683,6 +6619,9 @@ def store_commit_log_loader_adapter_violations(source: str) -> list[str]:
         "record_file_prefetch(",
         "rayon::",
         "tracing::",
+        "CommitLogLoadAdapter",
+        "DefaultMappedFile",
+        "CheetahString",
     ]
     if any(token in normalized for token in forbidden):
         violations.append("Store retained CommitLog load orchestration")
@@ -10095,7 +10034,7 @@ def mapped_file_owner_violations(production_sources: dict[Path, str]) -> list[st
         MAPPED_FILE_SELECT_RESULT_PATH,
     )
     forbidden_local_owner_pattern = re.compile(
-        r"\b(?:ArcMut|MmapMut|rocketmq_common|rocketmq_rust|rocketmq_store)\b"
+        r"\b(?:ArcMut|rocketmq_common|rocketmq_rust|rocketmq_store)\b"
     )
     for path in local_owner_paths:
         if forbidden_local_owner_pattern.search(active_sources[path]):
@@ -10112,12 +10051,26 @@ def mapped_file_owner_violations(production_sources: dict[Path, str]) -> list[st
     store_default = compact_rust(active_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH])
     expected_alias = (
         "pubtypeDefaultMappedFile=rocketmq_store_local::mapped_file::"
-        "DefaultMappedFile<super::StoreMappedMemory>;"
+        "DefaultMappedFile<rocketmq_store_local::mapped_file::NativeMappedMemory>;"
     )
     if store_default.count(expected_alias) != 1:
         violations.append("Store DefaultMappedFile compatibility specialization changed")
     if re.search(r"\b(?:struct|enum|trait)\s+DefaultMappedFile\b", active_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH]):
         violations.append("Store DefaultMappedFile facade regained implementation ownership")
+
+    local_memory = compact_rust(active_sources[MAPPED_FILE_MEMORY_PATH])
+    required_native_owner = (
+        "pubstructNativeMappedMemory{mmap:Arc<MmapMut>,}"
+    )
+    if local_memory.count(required_native_owner) != 1:
+        violations.append("Local native mapped-memory owner changed")
+    store_memory = compact_rust(active_sources[STORE_MAPPED_FILE_MEMORY_PATH])
+    expected_store_memory = (
+        "pubuserocketmq_store_local::mapped_file::MmapRegionSlice;"
+        "pubuserocketmq_store_local::mapped_file::NativeMappedMemoryasStoreMappedMemory;"
+    )
+    if store_memory != expected_store_memory:
+        violations.append("Store mapped-memory facade must remain exact Local re-exports")
 
     mapped_file_module_sources = {
         path: source
@@ -15031,21 +14984,15 @@ struct DefaultMappedFile {
         mutations.append(copied_trait)
 
         backend_leak = dict(production_sources)
-        backend_leak[DEFAULT_MAPPED_FILE_PATH] = backend_leak[
-            DEFAULT_MAPPED_FILE_PATH
-        ].replace("use memmap2::MmapMut;", "", 1).replace(
-            "use std::fs::File;",
-            "use std::fs::File;\nuse memmap2::MmapMut;",
-            1,
-        )
+        backend_leak[DEFAULT_MAPPED_FILE_PATH] += "\nuse rocketmq_store::StoreFacade;\n"
         mutations.append(backend_leak)
 
         wrong_alias = dict(production_sources)
         wrong_alias[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH] = wrong_alias[
             STORE_DEFAULT_MAPPED_FILE_FACADE_PATH
         ].replace(
-            "DefaultMappedFile<super::StoreMappedMemory>",
-            "DefaultMappedFile<super::MmapRegionSlice>",
+            "DefaultMappedFile<rocketmq_store_local::mapped_file::NativeMappedMemory>",
+            "DefaultMappedFile<rocketmq_store_local::mapped_file::MmapRegionSlice>",
             1,
         )
         mutations.append(wrong_alias)
@@ -17750,7 +17697,8 @@ mod tests""",
         self.assertRegex(
             active_rust_source(facade),
             r"pub\s+type\s+DefaultMappedFile\s*=\s*"
-            r"rocketmq_store_local::mapped_file::DefaultMappedFile<super::StoreMappedMemory>\s*;",
+            r"rocketmq_store_local::mapped_file::DefaultMappedFile<"
+            r"rocketmq_store_local::mapped_file::NativeMappedMemory>\s*;",
         )
 
     def test_mapped_file_mapping_has_one_local_owner_and_exact_store_composition(self) -> None:
@@ -18027,7 +17975,7 @@ mod tests""",
             file_item_owner_occurrences(rust_sources, "CommitLogLoadAdapter"),
         )
         self.assertEqual(
-            [(canonical_file, "struct"), (store_adapter, "struct")],
+            [(canonical_file, "struct")],
             file_item_owner_occurrences(rust_sources, "CommitLogLoader"),
         )
         module_source = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
@@ -18091,6 +18039,21 @@ mod tests""",
                 "#[cfg_attr(any(), cfg(any()))]\npub struct CommitLogLoader {",
                 1,
             ),
+            canonical_source.replace(
+                "CommitLogMappingMode::LazyReadOnly => DefaultMappedFile::try_new_lazy_read_only",
+                "CommitLogMappingMode::LazyReadOnly => DefaultMappedFile::try_new",
+                1,
+            ),
+            canonical_source.replace(
+                "if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped()",
+                "if !mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped()",
+                1,
+            ),
+            canonical_source.replace(
+                "mapped_file.set_wrote_position(position);\n                mapped_file.set_flushed_position(position);",
+                "mapped_file.set_flushed_position(position);\n                mapped_file.set_wrote_position(position);",
+                1,
+            ),
         ]
         for mutation_index, mutation in enumerate(canonical_mutations):
             with self.subTest(owner_mutation_index=mutation_index):
@@ -18103,28 +18066,23 @@ mod tests""",
         self.assertEqual([], store_commit_log_loader_adapter_violations(adapter_source))
         adapter_mutations = [
             adapter_source.replace(
-                "inner: rocketmq_store_local::commit_log::loader::CommitLogLoader,",
-                "pub inner: rocketmq_store_local::commit_log::loader::CommitLogLoader,",
+                "pub use rocketmq_store_local::commit_log::loader::CommitLogLoader;",
+                "pub use rocketmq_store_local::commit_log::loader::CommitLogLoader as LocalCommitLogLoader;",
                 1,
             ),
             adapter_source.replace(
-                "inner: self.inner.with_lazy_mmap(lazy_mmap_enable)",
-                "inner: self.inner.with_lazy_mmap(false)",
+                "pub use rocketmq_store_local::commit_log::load::LoadStatistics;",
+                "pub type LoadStatistics = rocketmq_store_local::commit_log::load::LoadStatistics;",
                 1,
             ),
             adapter_source.replace(
-                "CommitLogMappingMode::LazyReadOnly => DefaultMappedFile::try_new_lazy_read_only",
-                "CommitLogMappingMode::LazyReadOnly => DefaultMappedFile::try_new",
+                "#[cfg(test)]",
+                "pub struct CommitLogLoader;\n\n#[cfg(test)]",
                 1,
             ),
             adapter_source.replace(
-                "if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped()",
-                "if !mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped()",
-                1,
-            ),
-            adapter_source.replace(
-                "mapped_file.set_wrote_position(position);\n                mapped_file.set_flushed_position(position);",
-                "mapped_file.set_flushed_position(position);\n                mapped_file.set_wrote_position(position);",
+                "#[cfg(test)]",
+                "fn load_optimized() {}\n\n#[cfg(test)]",
                 1,
             ),
             adapter_source.replace(
@@ -18272,23 +18230,23 @@ fn copied_loader_flow() {
         self.assertEqual([], store_commit_log_mapping_plan_violations(source))
         mutations = [
             source.replace(
-                "inner: rocketmq_store_local::commit_log::loader::CommitLogLoader,",
-                "pub inner: rocketmq_store_local::commit_log::loader::CommitLogLoader,",
-                1,
-            ),
-            source.replace(
-                "CommitLogMappingMode::LazyReadOnly => DefaultMappedFile::try_new_lazy_read_only",
-                "CommitLogMappingMode::LazyReadOnly => DefaultMappedFile::try_new",
-                1,
-            ),
-            source.replace(
-                "CommitLogMappingMode::Eager => DefaultMappedFile::try_new",
-                "CommitLogMappingMode::Eager => DefaultMappedFile::try_new_lazy_read_only",
+                "pub use rocketmq_store_local::commit_log::loader::CommitLogLoader;",
+                "pub use rocketmq_store_local::commit_log::loader::CommitLogLoader as LocalCommitLogLoader;",
                 1,
             ),
             source.replace(
                 "#[cfg(test)]",
                 "fn create_mapped_files_parallel() {}\n\n#[cfg(test)]",
+                1,
+            ),
+            source.replace(
+                "#[cfg(test)]",
+                "fn create_mapped_files_sequential() {}\n\n#[cfg(test)]",
+                1,
+            ),
+            source.replace(
+                "#[cfg(test)]",
+                "struct CommitLogMappingPlan;\n\n#[cfg(test)]",
                 1,
             ),
         ]
@@ -18396,28 +18354,28 @@ fn copied_loader_flow() {
         self.assertEqual([], store_commit_log_hint_adapter_violations(source))
         mutations = [
             source.replace(
-                "use rocketmq_store_local::commit_log::loader::CommitLogLoadAdapter;",
-                "use rocketmq_store_local::commit_log::loader::CommitLogLoadAdapter as Adapter;",
-                1,
-            ),
-            source.replace(
-                "if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped()",
-                "if !mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped()",
-                1,
-            ),
-            source.replace(
-                "Some((mapped_file.get_mapped_file(), mapped_file.get_file_name().as_str()))",
-                "None",
-                1,
-            ),
-            source.replace(
-                "mark_fully_loaded: |mapped_file, position|",
-                "mark_fully_loaded: |mapped_file, _position|",
+                "pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;",
+                "pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice as LocalRecoveryMmapAdvice;",
                 1,
             ),
             source.replace(
                 "#[cfg(test)]",
                 "fn apply_memory_hints() {}\n\n#[cfg(test)]",
+                1,
+            ),
+            source.replace(
+                "#[cfg(test)]",
+                "fn record_mmap_advice() {}\n\n#[cfg(test)]",
+                1,
+            ),
+            source.replace(
+                "#[cfg(test)]",
+                "struct CommitLogLoadAdapter;\n\n#[cfg(test)]",
+                1,
+            ),
+            source.replace(
+                "#[cfg(test)]",
+                "use crate::log_file::mapped_file::DefaultMappedFile;\n\n#[cfg(test)]",
                 1,
             ),
         ]
@@ -18543,18 +18501,8 @@ fn copied_loader_flow() {
         self.assertEqual([], store_commit_log_file_validation_violations(source))
         mutations = [
             source.replace(
-                "inner: rocketmq_store_local::commit_log::loader::CommitLogLoader,",
-                "pub inner: rocketmq_store_local::commit_log::loader::CommitLogLoader,",
-                1,
-            ),
-            source.replace(
-                "path.to_string_lossy().to_string()",
-                "String::new()",
-                1,
-            ),
-            source.replace(
-                "DefaultMappedFile::try_new(file_name, file_size)",
-                "DefaultMappedFile::try_new(file_name, 0)",
+                "pub use rocketmq_store_local::commit_log::load::LoadStatistics;",
+                "pub type LoadStatistics = rocketmq_store_local::commit_log::load::LoadStatistics;",
                 1,
             ),
             source.replace(
@@ -18564,7 +18512,17 @@ fn copied_loader_flow() {
             ),
             source.replace(
                 "#[cfg(test)]",
+                "fn create_native_mapped_file() {}\n\n#[cfg(test)]",
+                1,
+            ),
+            source.replace(
+                "#[cfg(test)]",
                 "struct CommitLogLoader;\n\n#[cfg(test)]",
+                1,
+            ),
+            source.replace(
+                "#[cfg(test)]",
+                "use rocketmq_store_local::mapped_file::DefaultMappedFile;\n\n#[cfg(test)]",
                 1,
             ),
         ]
@@ -18578,13 +18536,13 @@ fn copied_loader_flow() {
         self.assertEqual([], store_commit_log_file_discovery_violations(source))
         mutations = [
             source.replace(
-                "pub struct CommitLogLoader",
-                "struct CommitLogLoader",
+                "pub use rocketmq_store_local::commit_log::loader::CommitLogLoader;",
+                "pub type CommitLogLoader = rocketmq_store_local::commit_log::loader::CommitLogLoader;",
                 1,
             ),
             source.replace(
-                "use rocketmq_store_local::commit_log::load::CommitLogMappingMode;",
-                "use rocketmq_store_local::commit_log::load::CommitLogMappingMode as MappingMode;",
+                "pub use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;",
+                "pub use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch as LocalRecoveryFilePrefetch;",
                 1,
             ),
             source.replace(

@@ -16,4 +16,4 @@ pub use rocketmq_store_local::mapped_file::SelectMappedBufferCacheState;
 pub use rocketmq_store_local::mapped_file::SelectMappedBufferSourceKind;
 
 pub type SelectMappedBufferResult =
-    rocketmq_store_local::mapped_file::SelectMappedBufferResult<crate::log_file::mapped_file::StoreMappedMemory>;
+    rocketmq_store_local::mapped_file::SelectMappedBufferResult<rocketmq_store_local::mapped_file::NativeMappedMemory>;

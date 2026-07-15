@@ -14,6 +14,10 @@
 
 use std::fs::File;
 use std::io;
+use std::ops::Deref;
+use std::sync::Arc;
+
+use memmap2::MmapMut;
 
 /// Memory-mapping backend used by the canonical local mapped-file owner.
 ///
@@ -45,4 +49,79 @@ pub unsafe trait MappedMemory: Clone + Send + Sync + 'static {
 
     /// Creates an owned immutable view over one mapped range.
     fn region(&self, offset: usize, len: usize) -> Self::Region;
+}
+
+/// Native writable mmap backend used by the default Local mapped-file owner.
+#[derive(Clone)]
+pub struct NativeMappedMemory {
+    mmap: Arc<MmapMut>,
+}
+
+impl NativeMappedMemory {
+    /// Returns another owner for the live native mapping.
+    pub fn clone_mmap(&self) -> Arc<MmapMut> {
+        self.mmap.clone()
+    }
+}
+
+// SAFETY: construction maps an already-sized segment and `Arc` keeps that mapping alive across
+// cloned regions. Mutable access follows the mapped-file contract requiring callers to serialize
+// writes through the CommitLog/mapped-file ownership boundary.
+unsafe impl MappedMemory for NativeMappedMemory {
+    type Region = MmapRegionSlice;
+
+    fn map_mut(file: &File) -> io::Result<Self> {
+        // SAFETY: callers size the segment before mapping and do not resize it while the mapping is
+        // live. NativeMappedMemory keeps the mapping alive independently of the file handle.
+        let mmap = unsafe { MmapMut::map_mut(file)? };
+        Ok(Self { mmap: Arc::new(mmap) })
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        self.mmap.as_ref()
+    }
+
+    fn as_mut_ptr(&self) -> *mut u8 {
+        self.mmap.as_ptr().cast_mut()
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        self.mmap.flush()
+    }
+
+    fn flush_range(&self, offset: usize, len: usize) -> io::Result<()> {
+        self.mmap.flush_range(offset, len)
+    }
+
+    fn region(&self, offset: usize, len: usize) -> Self::Region {
+        MmapRegionSlice::new(self.mmap.clone(), offset, len)
+    }
+}
+
+/// Immutable owner for one region of a native mapping.
+pub struct MmapRegionSlice {
+    mmap: Arc<MmapMut>,
+    offset: usize,
+    len: usize,
+}
+
+impl MmapRegionSlice {
+    /// Creates a region backed by a live native mapping.
+    pub fn new(mmap: Arc<MmapMut>, offset: usize, len: usize) -> Self {
+        Self { mmap, offset, len }
+    }
+}
+
+impl Deref for MmapRegionSlice {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.mmap[self.offset..self.offset + self.len]
+    }
+}
+
+impl AsRef<[u8]> for MmapRegionSlice {
+    fn as_ref(&self) -> &[u8] {
+        self
+    }
 }

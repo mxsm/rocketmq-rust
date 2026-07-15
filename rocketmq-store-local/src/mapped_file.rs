@@ -43,6 +43,8 @@ pub use mapped_buffer::MappedBuffer;
 pub use mapped_file_error::MappedFileError;
 pub use mapped_file_error::MappedFileResult;
 pub use memory::MappedMemory;
+pub use memory::MmapRegionSlice;
+pub use memory::NativeMappedMemory;
 pub use metrics::MappedFileMetrics;
 pub use raw::MappedFileRawCore;
 pub use select_result::SelectMappedBufferCacheState;

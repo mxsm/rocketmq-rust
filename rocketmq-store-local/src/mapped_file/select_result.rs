@@ -19,6 +19,7 @@ use bytes::Bytes;
 use super::DefaultMappedFile;
 use super::MappedFile;
 use super::MappedMemory;
+use super::NativeMappedMemory;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectMappedBufferSourceKind {
@@ -44,7 +45,7 @@ impl SelectMappedBufferCacheState {
 }
 
 /// Represents the result of selecting a mapped buffer.
-pub struct SelectMappedBufferResult<M: MappedMemory> {
+pub struct SelectMappedBufferResult<M: MappedMemory = NativeMappedMemory> {
     /// The start offset.
     pub start_offset: u64,
     pub bytes: Option<Bytes>,
