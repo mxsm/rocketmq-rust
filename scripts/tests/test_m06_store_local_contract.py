@@ -51,6 +51,9 @@ MAPPED_FILE_KERNEL_PATH = Path("rocketmq-store-local/src/mapped_file/kernel.rs")
 MAPPED_FILE_RAW_PATH = Path("rocketmq-store-local/src/mapped_file/raw.rs")
 MAPPED_FILE_CONTRACT_PATH = Path("rocketmq-store-local/src/mapped_file/contract.rs")
 MAPPED_FILE_MEMORY_PATH = Path("rocketmq-store-local/src/mapped_file/memory.rs")
+MAPPED_FILE_QUEUE_INDEX_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_index.rs"
+)
 MAPPED_FILE_QUEUE_STATE_PATH = Path(
     "rocketmq-store-local/src/mapped_file/queue_state.rs"
 )
@@ -267,8 +270,13 @@ CANONICAL_ITEMS = {
     "MappedFileError": ("enum", "mapped_file_error.rs"),
     "MappedFileMetrics": ("struct", "metrics.rs"),
     "MappedFileResult": ("type", "mapped_file_error.rs"),
+    "file_index_by_offset": ("fn", "queue_index.rs"),
+    "file_index_by_timestamp": ("fn", "queue_index.rs"),
+    "for_each_discontinuous_pair": ("fn", "queue_index.rs"),
+    "MappedFileQueueIndex": ("enum", "queue_index.rs"),
     "MappedFileQueueRuntimeState": ("struct", "queue_state.rs"),
     "MappedFileQueueStorage": ("struct", "queue_storage.rs"),
+    "overlapping_file_range": ("fn", "queue_index.rs"),
     "io_uring_backend_status": ("fn", "io_uring_impl.rs"),
 }
 COMMIT_LOG_CANONICAL_ITEMS = {
@@ -7261,7 +7269,7 @@ def mapped_file_queue_storage_contract_violations(
             violations.append(f"Store mapped-file queue storage constructor changed: {constructor}")
     expected_accessor_counts = {
         "self.storage.mapped_files()": 37,
-        "self.storage.mapped_file_size()": 29,
+        "self.storage.mapped_file_size()": 25,
         "self.storage.store_path()": 6,
     }
     for accessor, expected_count in expected_accessor_counts.items():
@@ -7277,6 +7285,85 @@ def mapped_file_queue_storage_contract_violations(
     ):
         if named_function_body(local_test_source, test_name) is None:
             violations.append(f"Local mapped-file queue storage regression changed: {test_name}")
+    return violations
+
+
+def mapped_file_queue_index_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+    function_names = (
+        "for_each_discontinuous_pair",
+        "overlapping_file_range",
+        "file_index_by_timestamp",
+        "file_index_by_offset",
+    )
+    for function_name in function_names:
+        if named_function_body(production, function_name) is None:
+            violations.append(f"Local mapped-file queue index owner changed: {function_name}")
+    if active_import_records(production):
+        violations.append("Local mapped-file queue index owner must remain dependency-free")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(
+            r"\b(?:rocketmq_|ArcSwap|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b",
+            active,
+        )
+    ):
+        violations.append("Local mapped-file queue index owner absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod queue_index;") != 1:
+        violations.append("Local mapped_file module must expose queue_index exactly once")
+
+    expected_imports = {
+        f"use rocketmq_store_local::mapped_file::queue_index::{function_name}"
+        for function_name in function_names
+    }
+    expected_imports.add(
+        "use rocketmq_store_local::mapped_file::queue_index::MappedFileQueueIndex"
+    )
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_index" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store mapped-file queue index imports must be direct and exact")
+
+    store_production = source_without_cfg_test_items(store_source)
+    expected_method_calls = {
+        "check_self": "for_each_discontinuous_pair",
+        "range": "overlapping_file_range",
+        "get_mapped_file_by_time": "file_index_by_timestamp",
+        "find_mapped_file_by_offset": "file_index_by_offset",
+    }
+    for method_name, function_name in expected_method_calls.items():
+        body = active_rust_source(named_function_body(store_production, method_name) or "")
+        if len(re.findall(rf"\b{re.escape(function_name)}\s*\(", body)) != 1:
+            violations.append(f"Store mapped-file queue index adapter changed: {method_name}")
+    forbidden_store_algorithm_fragments = {
+        "check_self": "cur.get_file_from_offset()-pre_file.get_file_from_offset()",
+        "range": "for mapped_file in files.iter()",
+        "get_mapped_file_by_time": "for mapped_file in files.iter()",
+        "find_mapped_file_by_offset": "offset as usize / self.storage.mapped_file_size() as usize",
+    }
+    for method_name, fragment in forbidden_store_algorithm_fragments.items():
+        body = compact_rust(named_function_body(store_production, method_name) or "")
+        if compact_rust(fragment) in body:
+            violations.append(f"Store retained mapped-file queue index algorithm: {method_name}")
+
+    for test_name in (
+        "queue_index_reports_every_discontinuous_pair",
+        "queue_index_selects_overlapping_window",
+        "queue_index_selects_timestamp_or_last_file",
+        "queue_index_finds_offset_with_fallback_and_first_policy",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue index regression changed: {test_name}")
     return violations
 
 
@@ -11884,6 +11971,100 @@ class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
 
+    def test_mapped_file_queue_index_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_INDEX_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_index.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_index_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_index_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_INDEX_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_index.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "Local offset owner removed",
+                local.replace("pub fn file_index_by_offset<T>(", "fn removed_file_index_by_offset<T>(", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "Local owner absorbed Store type",
+                local.replace("//! Runtime-neutral index algorithms", "use ArcSwap;\n//! Runtime-neutral index algorithms", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_index;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::queue_index::file_index_by_offset;",
+                    "use rocketmq_store_local::mapped_file::queue_index::file_index_by_offset as find_index;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store range adapter bypassed",
+                local,
+                module,
+                store.replace("let range = overlapping_file_range(", "let range = store_owned_overlapping_file_range(", 1),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn queue_index_finds_offset_with_fallback_and_first_policy()",
+                    "fn queue_index_offset_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_index_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
     def test_mapped_file_queue_storage_has_one_local_owner_and_exact_store_adapters(self) -> None:
         local = (ROOT / MAPPED_FILE_QUEUE_STORAGE_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
@@ -16353,6 +16534,7 @@ struct DefaultMappedFile {
                 "kernel.rs",
                 "mapping.rs",
                 "memory.rs",
+                "queue_index.rs",
                 "queue_state.rs",
                 "queue_storage.rs",
                 "raw.rs",

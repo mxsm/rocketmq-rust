@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1720,3 +1720,28 @@ python scripts/arc_mut_guard.py
   algorithms、AllocateMappedFileService、`try_flush`/`FlushProgress`、CQ timestamp 或 M06-04 flush/group-commit。
   顶层 PR-M06-03 仍需收口 CommitLog 根结构、MappedFileQueue algorithms/allocate adapter、append/recovery 方法 owner
   与 Store facade；82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03ap MappedFileQueue index algorithm owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增 runtime-neutral `mapped_file::queue_index`，成为相邻 segment 连续性检查、offset
+  range overlap、last-modified timestamp lookup 与 direct-index/linear-fallback offset lookup 四类算法的唯一 owner；
+  模块不依赖 ArcSwap、DefaultMappedFile、Store/Common、runtime、tracing 或 allocate service。
+- [x] `[DEV/ADAPTER]` Store `MappedFileQueue` 的 `check_self`、`range`、`get_mapped_file_by_time` 与
+  `find_mapped_file_by_offset` 只负责读取 ArcSwap 快照、投影 DefaultMappedFile 字段、记录错误和克隆返回对象。
+  offset lookup 使用 Local `MappedFileQueueIndex::{First, Indexed}`，保留原实现分别捕获 first/last、再读取当前集合
+  的并发观察时序及 return-first fallback 对象身份。
+- [x] `[COMPAT]` 相邻损坏日志可继续报告全部 pair；range 仍为 `[from,to)`；timestamp lookup 仍选择首个
+  `last_modified >= timestamp`，否则返回最后文件；offset lookup 仍先 O(1) 直索引、再线性回退，并保持边界外/
+  gap/return-first 语义。storage accessor 当前冻结为 collection/size/path = 37/25/6。
+- [x] `[TEST]` Local 新增连续性、range、timestamp、direct/fallback/gap/first policy 4/4；Local all-features
+  全量与 Store lib 535/535 通过。
+- [x] `[CONTRACT]` 新增 baseline+6 类 mutation 两项契约，冻结四个 Local function、选择 enum、无依赖 owner、
+  direct exact imports、四个 Store adapter 与四组回归测试，并同步 canonical file/item 集合；定向 5/5，完整 M06
+  contract 140/140 通过（604.207s）。旧 M06-03ao storage contract 同步收紧为迁移后的 37/25/6 accessor。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing
+  与 ArcMut guard 通过；error architecture 与既有基线一致，仍为 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03ap 未迁移 load/create/delete/truncate/warmup/swap、AllocateMappedFileService、
+  `try_flush`/`FlushProgress`、CQ timestamp、CommitLog 或持久格式。顶层 PR-M06-03 仍需收口 CommitLog 根结构、
+  MappedFileQueue I/O/allocate adapter 及剩余算法、append/recovery 方法 owner 与 Store facade；82 个顶层工作包仍为
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成。

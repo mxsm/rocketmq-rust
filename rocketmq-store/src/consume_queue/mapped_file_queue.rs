@@ -22,6 +22,11 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::offset_to_file_name;
+use rocketmq_store_local::mapped_file::queue_index::file_index_by_offset;
+use rocketmq_store_local::mapped_file::queue_index::file_index_by_timestamp;
+use rocketmq_store_local::mapped_file::queue_index::for_each_discontinuous_pair;
+use rocketmq_store_local::mapped_file::queue_index::overlapping_file_range;
+use rocketmq_store_local::mapped_file::queue_index::MappedFileQueueIndex;
 use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage;
 use tracing::error;
@@ -127,24 +132,19 @@ impl MappedFileQueue {
 
     pub fn check_self(&self) {
         let mapped_files = self.storage.mapped_files().load();
-        if !mapped_files.is_empty() {
-            let mut iter = mapped_files.iter();
-            let mut pre = iter.next();
-
-            for cur in iter {
-                if let Some(pre_file) = pre {
-                    if cur.get_file_from_offset() - pre_file.get_file_from_offset() != self.storage.mapped_file_size() {
-                        error!(
-                            "[BUG] The mappedFile queue's data is damaged, the adjacent mappedFile's offset don't \
-                             match. pre file {}, cur file {}",
-                            pre_file.get_file_name(),
-                            cur.get_file_name()
-                        );
-                    }
-                }
-                pre = Some(cur);
-            }
-        }
+        for_each_discontinuous_pair(
+            mapped_files.as_slice(),
+            self.storage.mapped_file_size(),
+            |file| file.get_file_from_offset(),
+            |previous, current| {
+                error!(
+                    "[BUG] The mappedFile queue's data is damaged, the adjacent mappedFile's offset don't match. pre \
+                     file {}, cur file {}",
+                    mapped_files[previous].get_file_name(),
+                    mapped_files[current].get_file_name()
+                );
+            },
+        );
     }
 
     pub fn do_load(&mut self, mut files: Vec<std::path::PathBuf>) -> bool {
@@ -794,28 +794,12 @@ impl MappedFileQueue {
     /// }
     /// ```
     pub fn range(&self, from: i64, to: i64) -> Vec<Arc<DefaultMappedFile>> {
-        let mut result = Vec::new();
         let files = self.storage.mapped_files().load();
-
-        for mapped_file in files.iter() {
-            let file_from = mapped_file.get_file_from_offset() as i64;
-            let file_to = file_from + mapped_file.get_file_size() as i64;
-
-            // File ends before range starts - skip
-            if file_to <= from {
-                continue;
-            }
-
-            // File starts after range ends - break (files are sorted)
-            if file_from >= to {
-                break;
-            }
-
-            // File overlaps with range - include it
-            result.push(mapped_file.clone());
-        }
-
-        result
+        let range = overlapping_file_range(files.as_slice(), from, to, |file| {
+            let file_from = file.get_file_from_offset() as i64;
+            (file_from, file_from + file.get_file_size() as i64)
+        });
+        files[range].to_vec()
     }
 
     /// Get total file size (all mapped files combined)
@@ -1006,19 +990,8 @@ impl MappedFileQueue {
     /// The mapped file containing data for that timestamp, or the last file
     pub fn get_mapped_file_by_time(&self, timestamp: i64) -> Option<Arc<DefaultMappedFile>> {
         let files = self.snapshot();
-
-        if files.is_empty() {
-            return None;
-        }
-
-        for mapped_file in files.iter() {
-            if mapped_file.get_last_modified_timestamp() as i64 >= timestamp {
-                return Some(mapped_file.clone());
-            }
-        }
-
-        // Return last file if no match
-        files.last().cloned()
+        file_index_by_timestamp(&files, timestamp, |file| file.get_last_modified_timestamp() as i64)
+            .map(|index| files[index].clone())
     }
 
     // ============ Additional Helper Methods ============
@@ -1084,47 +1057,21 @@ impl MappedFileQueue {
         offset: i64,
         return_first_on_not_found: bool,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let first_mapped_file = self.get_first_mapped_file();
-        let last_mapped_file = self.get_last_mapped_file();
-
-        match (first_mapped_file, last_mapped_file) {
-            (Some(first), Some(last)) => {
-                let first_offset = first.get_file_from_offset() as i64;
-                let last_offset = last.get_file_from_offset() as i64 + self.storage.mapped_file_size() as i64;
-
-                if offset < first_offset || offset >= last_offset {
-                    return if return_first_on_not_found { Some(first) } else { None };
-                }
-
-                // Try direct index calculation (O(1) access)
-                let index = (offset as usize / self.storage.mapped_file_size() as usize)
-                    - (first_offset as usize / self.storage.mapped_file_size() as usize);
-
-                let files = self.storage.mapped_files().load();
-                if let Some(file) = files.get(index).cloned() {
-                    let file_offset = file.get_file_from_offset() as i64;
-                    // Must check both lower and upper bounds
-                    if offset >= file_offset && offset < file_offset + self.storage.mapped_file_size() as i64 {
-                        return Some(file);
-                    }
-                }
-
-                // Fall back to linear search if direct indexing fails
-                for file in files.iter() {
-                    let file_offset = file.get_file_from_offset() as i64;
-                    if offset >= file_offset && offset < file_offset + self.storage.mapped_file_size() as i64 {
-                        return Some(file.clone());
-                    }
-                }
-
-                // Not found in any file
-                if return_first_on_not_found {
-                    Some(first)
-                } else {
-                    None
-                }
-            }
-            _ => None,
+        let first = self.get_first_mapped_file()?;
+        let last = self.get_last_mapped_file()?;
+        let files = self.storage.mapped_files().load();
+        match file_index_by_offset(
+            files.as_slice(),
+            self.storage.mapped_file_size(),
+            offset,
+            return_first_on_not_found,
+            first.get_file_from_offset(),
+            last.get_file_from_offset(),
+            |file| file.get_file_from_offset(),
+        ) {
+            Some(MappedFileQueueIndex::First) => Some(first),
+            Some(MappedFileQueueIndex::Indexed(index)) => Some(files[index].clone()),
+            None => None,
         }
     }
 

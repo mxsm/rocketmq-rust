@@ -28,6 +28,8 @@ pub mod io_uring_impl;
 pub mod kernel;
 pub mod mapping;
 #[doc(hidden)]
+pub mod queue_index;
+#[doc(hidden)]
 pub mod queue_state;
 #[doc(hidden)]
 pub mod queue_storage;
