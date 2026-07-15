@@ -229,6 +229,12 @@
       "from": "fb223d4d74b6fe1c75435d2f",
       "to": "c59270c54abe9e31284a2f62",
       "reason": "Changing create_mapped_file to the Local adapter open signature changed adjacent tokens around the existing eager DefaultMappedFile constructor in the same create_mapped_file item without adding or moving an occurrence"
+    },
+    {
+      "identity": "22e398389b823d706a043784",
+      "from": "81eca711f4cbe249a0b296a7",
+      "to": "b8e648fe5c776531402846a3",
+      "reason": "Replacing the direct MappedFileProgress field with the Local MappedFileRawCore owner changed adjacent tokens around the existing DefaultMappedFile type reference in the same impl item without adding or moving an occurrence"
     }
   ]
 }

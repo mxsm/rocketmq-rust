@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1153,3 +1153,48 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03aa 只迁移 CommitLog loader 完整编排；不迁移 `DefaultMappedFile` representation、实际 mmap/
   prefetch 平台执行、CommitLog append/recovery state、flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership
   或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ab MappedFile raw byte/progress owner extraction evidence
+
+- [x] `[DEV]` `rocketmq-store-local::mapped_file::MappedFileRawCore` 现为 `MappedFileProgress` 与 mapped-file 原始字节/
+  范围算法的唯一 canonical owner，并由 `mapped_file` 根精确导出。Local core 不持有 mmap、文件、`ArcMut`、平台指针或
+  Store 类型；调用方通过 `FnOnce` provider 延迟借入 `&[u8]`/`&mut [u8]`。它统一拥有 file/full/read/write/commit/flush progress、normal/
+  transient readable position、copied/checked read、append update/no-update、direct range/commit、segment/indexed write、
+  raw/readable slice、append/flush/timestamp 记录以及 lock/cache 校验委托。
+- [x] `[COMPAT/SEMANTICS]` `DefaultMappedFile` 的 `progress: MappedFileProgress` 已替换为唯一
+  `raw_core: MappedFileRawCore`；原始读写方法把延迟 mmap provider 委托 Local，Local 先按旧顺序校验范围、再 materialize
+  mapping；有效 target 但无效 source 仍会先取得 mapping。provider 返回短 slice 时以 `None`/`false` fail-closed，不由安全
+  公开 API 索引 panic。callback append 的消息编排与 metrics
+  仍在 Store，成功结果继续由 core 记录 append progress/timestamp。迁移机械保留原 `+`、cast 与比较表达式，不引入
+  `checked_add` 或 overflow 行为修复；`get_slice` exact-end 仍拒绝，`put_slice` exact-end 仍允许，零长度规则与
+  `data.len() == length` 优先分支不变。公开操作以 update/no-update、normal/transient 等命名区分，不新增 positional bool。
+  `flush_range` 保持“范围校验→开始计时→transient committed 更新→mmap flush→metrics”顺序。
+- [x] `[TEST]` TDD RED 由 `cargo test -p rocketmq-store-local --test mapped_file_raw_core` 的 E0432 证明
+  `mapped_file::raw`/`MappedFileRawCore` owner 缺失；初始 GREEN 后 Local raw fixture 9/9、Local default/all-feature 全量和
+  `DefaultMappedFile` 30/30 均通过。独立审查的 lazy invalid-request 回归先稳定 RED，再由延迟 provider 修复为 GREEN；
+  Local provider/短 slice fixture 增至 10/10，Store `DefaultMappedFile` 增至 31/31。M06 source/mutation contract 新增 Local owner 与 Store adapter 两项，新增/关联
+  targeted 4/4 通过。首次完整 117 项运行（363.862s）发现 12 项旧契约仍匹配 Store `progress` 直连；将 owner/
+  reference 图与拒绝变异 fixture 精确同步为 `kernel -> raw core -> Store adapter` 后，lock/cache/warmup/progress-policy
+  的正向与反向门禁均通过，审查前完整 M06 contract 117/117（446.831s）通过；两项 Important 修复后最终 117/117
+  （451.885s）再次通过。
+- [x] `[CONTRACT]` contract 锁定唯一 Local struct/字段/import/root re-export、45 个公开命名操作、无 cfg/positional bool/
+  mmap/storage/platform owner，以及 copied/checked read、append、direct write、segment/indexed write、raw slice、commit 与
+  flush-range 的关键 body。Store contract 锁定唯一 raw-core 字段/初始化、纯 raw 方法的单次委托、选择/zero-copy/
+  flush adapter 的必要调用和延迟 provider，并拒绝 eager mmap 求值、短 slice 直接索引、exact-end、progress update、
+  `data.len() == length`、direct zero commit、导入别名、cfg、重复 owner、手写 Store raw policy 与 normal/transient 接错等 mutation。
+- [x] `[FEATURE/PLATFORM]` 未修改 manifest、feature 或依赖。Local 七组显式 closure 加 all-feature、Store default/
+  六组有效 closure 加 all-feature、两 crate all-target/all-feature package Clippy、root exact workspace Clippy 与 Local
+  strict Rustdoc 均通过；Store 普通 Rustdoc只复现 4 个未触及的 invalid-HTML warning。裸 Store
+  `--no-default-features` 继续精确复现既有空 backend enum 的 124 个 E0004 与 unused `ArcMut`，未标记为通过。
+  审查前 Windows 固定隔离 target 通过 Local 9/9、Store 30/30 和两 crate all-feature check，cleanup 删除 11,108 files/
+  14,262,496,513 bytes；WSL/Linux 同组验证通过，cleanup 删除 10,928 files/13,240,484,920 bytes，两固定路径最终均不存在。
+- [x] `[REV]` architecture baseline+35 tests、ArcMut 63 tests+24 fixtures+final guard、AGENTS routing、workspace fmt、
+  Python compile 与 diff 检查均通过。ArcMut 初扫只产生同 identity、同 `impl DefaultMappedFile` item 的 1 NEW/1 STALE；
+  按 ADR-013 完成一对一 relocation approval 与 monotonic promotion/compare，ledger 保持 1,232 identities/3,372
+  occurrences，无跨 item 新债务。error hygiene 只复现未触及的 Broker source stringification、MCP anyhow 与两份缺失
+  治理文档基线。首次独立审查以 Critical/Important/Minor = 0/2/0 要求修复 eager lazy-mmap 与短 slice panic；
+  两项均经 RED→GREEN 与 mutation contract 修复，同一审查者对最终快照签署 0/0/0、`Approved`。
+- [x] `[SCOPE]` M06-03ab 只迁移 `DefaultMappedFile` raw byte/progress owner；不迁移 select/result/`ArcMut` mapping、
+  storage/reference lifecycle、实际 mmap flush、平台 lock/warm/cache 探测、metrics、transient pool、公开 `MappedFile`
+  trait、flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、
+  M06 Exit Checklist 和 M06-04..12 保持未完成。

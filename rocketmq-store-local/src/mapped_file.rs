@@ -23,6 +23,7 @@ pub mod io_uring_impl;
 #[doc(hidden)]
 pub mod kernel;
 pub mod mapping;
+pub mod raw;
 
 pub use direct_io::DirectIoBuffer;
 pub use direct_io::DirectIoRequest;
@@ -34,3 +35,4 @@ pub use mapped_buffer::MappedBuffer;
 pub use mapped_file_error::MappedFileError;
 pub use mapped_file_error::MappedFileResult;
 pub use metrics::MappedFileMetrics;
+pub use raw::MappedFileRawCore;

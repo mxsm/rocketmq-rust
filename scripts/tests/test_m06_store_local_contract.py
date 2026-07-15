@@ -48,6 +48,7 @@ KERNEL_ITEMS = {
     "visit_mapped_file_warmup_schedule": "fn",
 }
 MAPPED_FILE_KERNEL_PATH = Path("rocketmq-store-local/src/mapped_file/kernel.rs")
+MAPPED_FILE_RAW_PATH = Path("rocketmq-store-local/src/mapped_file/raw.rs")
 DEFAULT_MAPPED_FILE_PATH = Path(
     "rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"
 )
@@ -3941,7 +3942,6 @@ def mapped_file_warmup_store_adapter_violations(
     ]
     expected_imports = [
         "rocketmq_store_local::mapped_file::kernel::visit_mapped_file_warmup_schedule",
-        "rocketmq_store_local::mapped_file::kernel::MappedFileProgress",
         "rocketmq_store_local::mapped_file::kernel::MappedFileWarmupOperation",
     ]
     if imports != expected_imports:
@@ -3961,7 +3961,7 @@ def mapped_file_warmup_store_adapter_violations(
         "MappedFileWarmupOperation::Flush{offset,len,final_flush,}=>",
         "flush_range(mapped_file,offset,len)",
         "iffinal_flush{",
-        "self.progress.record_flush_time();",
+        "self.raw_core.record_flush_time();",
     )
     if any(fragment not in warmup_body for fragment in required_fragments):
         violations.append("Store warmup adapter execution contract changed")
@@ -3993,7 +3993,7 @@ def mapped_file_warmup_store_adapter_violations(
         "errno_from_io_error(&error),));"
         "iffinal_flush{warn!(,offset,end,self.file_name,error);}"
         "else{warn!(,offset,end,self.file_name,error);}}"
-        "else{self.progress.record_flush_time();}"
+        "else{self.raw_core.record_flush_time();}"
     )
     if flush_arm != expected_flush_arm:
         violations.append("Store warmup Flush error/event/warning contract changed")
@@ -4115,9 +4115,9 @@ def mapped_file_progress_adapter_violations(
     }
     expected_wrapper_bodies = {
         "is_able_to_flush": (
-            "self.progress.is_able_to_flush(self.get_read_position(),flush_least_pages)"
+            "self.raw_core.is_able_to_flush(self.get_read_position(),flush_least_pages)"
         ),
-        "is_able_to_commit": "self.progress.is_able_to_commit(commit_least_pages)",
+        "is_able_to_commit": "self.raw_core.is_able_to_commit(commit_least_pages)",
     }
     wrapper_records = inherent_method_records(
         default_production,
@@ -4164,9 +4164,13 @@ def mapped_file_progress_adapter_violations(
         if references:
             references_by_path[path] = references
     expected_references = {
-        DEFAULT_MAPPED_FILE_PATH: [
+        MAPPED_FILE_RAW_PATH: [
             "is_able_to_flush",
             "is_able_to_commit",
+            "is_able_to_commit",
+        ],
+        DEFAULT_MAPPED_FILE_PATH: [
+            "is_able_to_flush",
             "is_able_to_flush",
             "is_able_to_commit",
         ]
@@ -4662,7 +4666,7 @@ def mapped_file_lock_range_adapter_violations(
         "->Option<(*constu8,usize)>"
     )
     expected_body = (
-        "let(offset,len)=self.progress.lock_region_range(offset,requested_len)?;"
+        "let(offset,len)=self.raw_core.lock_region_range(offset,requested_len)?;"
         "Some((self.get_mapped_file().as_ptr().wrapping_add(offset),len))"
     )
     if len(re.findall(r"\bfn\s+lock_region_address_and_len\b", default_active)) != 1:
@@ -4708,11 +4712,14 @@ def mapped_file_lock_range_adapter_violations(
         mapped_file_lock_range_duplicate_policy_violations(production_sources)
     )
 
-    if range_definitions != [MAPPED_FILE_KERNEL_PATH]:
+    if range_definitions != [MAPPED_FILE_KERNEL_PATH, MAPPED_FILE_RAW_PATH]:
         violations.append(f"lock_region_range production definitions changed: {range_definitions}")
     if helper_definitions != [DEFAULT_MAPPED_FILE_PATH]:
         violations.append(f"lock_region_address_and_len production definitions changed: {helper_definitions}")
-    if range_references != {DEFAULT_MAPPED_FILE_PATH: 1}:
+    if range_references != {
+        MAPPED_FILE_RAW_PATH: 1,
+        DEFAULT_MAPPED_FILE_PATH: 1,
+    }:
         violations.append(f"lock_region_range production references changed: {range_references}")
     if helper_references != {DEFAULT_MAPPED_FILE_PATH: 1}:
         violations.append(
@@ -5073,7 +5080,7 @@ def mapped_file_cache_range_adapter_violations(
             violations.append("Store is_valid_cache_range wrapper must remain private")
         if record.signature != "fnis_valid_cache_range(&self,position:i64,size:usize)->bool":
             violations.append("Store is_valid_cache_range wrapper signature changed")
-        if record.body != "self.progress.is_valid_cache_range(position,size)":
+        if record.body != "self.raw_core.is_valid_cache_range(position,size)":
             violations.append("Store is_valid_cache_range must be an exact Local delegation")
 
     definitions: list[Path] = []
@@ -5089,9 +5096,16 @@ def mapped_file_cache_range_adapter_violations(
         count = len(MAPPED_FILE_CACHE_RANGE_REFERENCE.findall(active))
         if count:
             references[path] = count
-    if definitions != [MAPPED_FILE_KERNEL_PATH, DEFAULT_MAPPED_FILE_PATH]:
+    if definitions != [
+        MAPPED_FILE_KERNEL_PATH,
+        MAPPED_FILE_RAW_PATH,
+        DEFAULT_MAPPED_FILE_PATH,
+    ]:
         violations.append(f"is_valid_cache_range production definitions changed: {definitions}")
-    if references != {DEFAULT_MAPPED_FILE_PATH: 4}:
+    if references != {
+        MAPPED_FILE_RAW_PATH: 1,
+        DEFAULT_MAPPED_FILE_PATH: 4,
+    }:
         violations.append(f"is_valid_cache_range production references changed: {references}")
 
     loaded_bodies = [
@@ -5779,13 +5793,20 @@ def default_mapped_file_progress_violations(source: str) -> list[str]:
         for name, field_type in fields
         if re.search(r"\bMappedFileProgress\b", field_type)
     ]
-    if [name for name, _ in progress_fields] != ["progress"]:
-        violations.append("MappedFileProgress fields must be exactly: progress")
+    if progress_fields:
+        violations.append("DefaultMappedFile must not directly own MappedFileProgress")
+    raw_core_fields = [
+        (name, field_type)
+        for name, field_type in fields
+        if re.search(r"\bMappedFileRawCore\b", field_type)
+    ]
+    if [name for name, _ in raw_core_fields] != ["raw_core"]:
+        violations.append("MappedFileRawCore fields must be exactly: raw_core")
     elif not re.fullmatch(
-        r"(?:[A-Za-z_][A-Za-z0-9_]*::)*MappedFileProgress",
-        progress_fields[0][1],
+        r"(?:[A-Za-z_][A-Za-z0-9_]*::)*MappedFileRawCore",
+        raw_core_fields[0][1],
     ):
-        violations.append("progress field must have exact MappedFileProgress type")
+        violations.append("raw_core field must have exact MappedFileRawCore type")
     return violations
 
 
@@ -8899,6 +8920,270 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
     return violations
 
 
+MAPPED_FILE_RAW_CORE_METHODS = (
+    "new",
+    "file_size",
+    "is_full",
+    "wrote_position",
+    "wrote_position_relaxed",
+    "set_wrote_position",
+    "advance_wrote_position",
+    "committed_position",
+    "set_committed_position",
+    "set_committed_position_release",
+    "flushed_position",
+    "set_flushed_position",
+    "normal_read_position",
+    "transient_read_position",
+    "copied_read_slice",
+    "copied_readable_slice",
+    "append_bytes_with_position_update",
+    "append_bytes_without_position_update",
+    "direct_write_range",
+    "commit_direct_write",
+    "write_bytes_segment",
+    "put_slice",
+    "raw_slice",
+    "readable_slice",
+    "is_readable_byte_range",
+    "is_readable_range",
+    "readable_tail_size",
+    "is_file_range",
+    "record_append",
+    "store_timestamp",
+    "set_store_timestamp",
+    "is_able_to_flush",
+    "record_flush_success",
+    "record_flush_time",
+    "last_flush_time",
+    "commit",
+    "is_able_to_commit",
+    "start_timestamp",
+    "set_start_timestamp",
+    "stop_timestamp",
+    "set_stop_timestamp",
+    "lock_region_range",
+    "is_valid_cache_range",
+    "prepare_flush_range",
+    "record_transient_flush_range",
+)
+
+
+def mapped_file_raw_core_owner_violations(
+    source: str,
+    module_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    violations: list[str] = []
+
+    occurrences = file_item_owner_occurrences(production_sources, "MappedFileRawCore")
+    if occurrences != [(MAPPED_FILE_RAW_PATH, "struct")]:
+        violations.append(f"MappedFileRawCore owner occurrences changed: {occurrences}")
+    struct_match = re.search(r"\bpub\s+struct\s+MappedFileRawCore\b", active)
+    if struct_match is None or attributes_have_cfg_gate(
+        contiguous_outer_attributes_before(active, struct_match.start())
+    ):
+        violations.append("MappedFileRawCore must be one public non-cfg owner")
+    if active_struct_fields(production, "MappedFileRawCore") != [
+        ("progress", "MappedFileProgress")
+    ]:
+        violations.append("MappedFileRawCore must own exactly one MappedFileProgress field")
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use"
+    ]
+    if imports != ["super::kernel::MappedFileProgress"]:
+        violations.append(f"MappedFileRawCore imports changed: {imports}")
+    if direct_exact_reexport_violations(
+        module_source,
+        "raw",
+        "MappedFileRawCore",
+    ):
+        violations.append("mapped_file root must exactly re-export MappedFileRawCore")
+    if len(re.findall(r"\bpub\s+mod\s+raw\s*;", active_rust_source(module_source))) != 1:
+        violations.append("mapped_file root must expose exactly one raw module")
+
+    method_names = tuple(re.findall(r"\bpub\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)\b", active))
+    if method_names != MAPPED_FILE_RAW_CORE_METHODS:
+        violations.append(f"MappedFileRawCore public method surface changed: {method_names}")
+    records = inherent_method_records(
+        production,
+        "MappedFileRawCore",
+        MAPPED_FILE_RAW_CORE_METHODS,
+    )
+    for method_name, method_records in records.items():
+        if len(method_records) != 1:
+            violations.append(f"MappedFileRawCore::{method_name} definition count changed")
+            continue
+        record = method_records[0]
+        if record.visibility != "pub":
+            violations.append(f"MappedFileRawCore::{method_name} visibility changed")
+        if record.cfg_gated:
+            violations.append(f"MappedFileRawCore::{method_name} must not be cfg-gated")
+
+    expected_bodies = {
+        "normal_read_position": "self.progress.wrote_position()",
+        "transient_read_position": "self.progress.committed_position()",
+        "copied_read_slice": (
+            "ifpos+size>self.file_size()asusize{returnNone;}"
+            "mapped().get(pos..pos+size)"
+        ),
+        "copied_readable_slice": (
+            "letend_position=pos+size;if(readable_positionasusize)<end_position||"
+            "end_position>self.file_size()asusize{returnNone;}"
+            "mapped().get(pos..end_position)"
+        ),
+        "append_bytes_with_position_update": (
+            "letcurrent_pos=self.wrote_position()asusize;"
+            "ifcurrent_pos+length<=self.file_size()asusize{"
+            "ifletSome(target)=mapped().get_mut(current_pos..current_pos+length){"
+            "ifletSome(data_slice)=data.get(offset..offset+length){"
+            "target.copy_from_slice(data_slice);self.advance_wrote_position(lengthasi32);"
+            "returntrue;}}}false"
+        ),
+        "append_bytes_without_position_update": (
+            "letcurrent_pos=self.wrote_position_relaxed()asusize;"
+            "ifcurrent_pos+length<=self.file_size()asusize{"
+            "ifletSome(target)=mapped().get_mut(current_pos..current_pos+length){"
+            "ifletSome(data_slice)=data.get(offset..offset+length){"
+            "target.copy_from_slice(data_slice);returntrue;}}}false"
+        ),
+        "direct_write_range": (
+            "letcurrent_pos=self.wrote_position()asusize;"
+            "ifcurrent_pos+required_space>self.file_size()asusize{returnNone;}"
+            "mapped().get_mut(current_pos..current_pos+required_space)"
+            ".map(|buffer|(buffer,current_pos))"
+        ),
+        "commit_direct_write": (
+            "ifbytes_written==0{returnfalse;}letcurrent_pos=self.wrote_position()asusize;"
+            "ifcurrent_pos+bytes_written>self.file_size()asusize{returnfalse;}"
+            "self.advance_wrote_position(bytes_writtenasi32);true"
+        ),
+        "write_bytes_segment": (
+            "ifstart+length<=self.file_size()asusize{"
+            "ifletSome(target)=mapped().get_mut(start..start+length){ifdata.len()==length{"
+            "target.copy_from_slice(data);returntrue;}"
+            "ifletSome(data_slice)=data.get(offset..offset+length){"
+            "target.copy_from_slice(data_slice);returntrue;}}}false"
+        ),
+        "put_slice": (
+            "letlength=data.len();letend_index=index+length;"
+            "iflength>0&&end_index<=self.file_size()asusize{"
+            "ifletSome(target)=mapped().get_mut(index..end_index){"
+            "target.copy_from_slice(data);returntrue;}}false"
+        ),
+        "raw_slice": (
+            "ifpos>=self.file_size()asusize||pos+size>=self.file_size()asusize{"
+            "returnNone;}mapped().get(pos..pos+size)"
+        ),
+        "readable_slice": (
+            "letend_position=pos+size;ifend_position>readable_positionasusize{"
+            "returnNone;}mapped().get(pos..end_position)"
+        ),
+        "commit": (
+            "ifself.progress.is_able_to_commit(commit_least_pages){"
+            "self.progress.commit_wrote_position();}self.progress.committed_position()"
+        ),
+        "prepare_flush_range": (
+            "ifstart>=end||end>self.file_size()asusize{returnNone;}"
+            "Some((start,end-start))"
+        ),
+        "record_transient_flush_range": "self.set_committed_position_release(endasi32);",
+    }
+    for method_name, expected_body in expected_bodies.items():
+        method_records = records[method_name]
+        if len(method_records) == 1 and method_records[0].body != expected_body:
+            violations.append(f"MappedFileRawCore::{method_name} behavior changed")
+
+    if re.search(r"\([^)]*:\s*bool\b", active, re.DOTALL):
+        violations.append("MappedFileRawCore must use named operations instead of positional bool")
+    if re.search(
+        r"\b(?:Mmap|MmapMut|ArcMut|MappedFileStorage|File|Bytes|BytesMut|unsafe|tracing)\b",
+        active,
+    ):
+        violations.append("MappedFileRawCore absorbed mapping, storage, allocation, or platform ownership")
+    return violations
+
+
+def mapped_file_raw_core_store_adapter_violations(source: str) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    violations = default_mapped_file_progress_violations(production)
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use" and "MappedFileRawCore" in body
+    ]
+    if imports != ["rocketmq_store_local::mapped_file::MappedFileRawCore"]:
+        violations.append(f"Store MappedFileRawCore import changed: {imports}")
+    if "MappedFileProgress" in active:
+        violations.append("Store must not directly reference MappedFileProgress")
+    if compact_rust(production).count("raw_core:MappedFileRawCore::new(file_size)") != 1:
+        violations.append("Store raw_core initialization changed")
+
+    expected_delegates = {
+        "get_bytes": (
+            "self.raw_core.copied_read_slice(||self.get_mapped_file(),pos,size)"
+            ".map(Bytes::copy_from_slice)"
+        ),
+        "get_bytes_readable_checked": (
+            "self.raw_core.copied_readable_slice(||self.get_mapped_file(),pos,size,"
+            "self.get_read_position()).map(Bytes::copy_from_slice)"
+        ),
+        "append_message_offset_length": (
+            "self.raw_core.append_bytes_with_position_update("
+            "||self.get_mapped_file_mut(),data,offset,length)"
+        ),
+        "append_message_no_position_update": (
+            "self.raw_core.append_bytes_without_position_update("
+            "||self.get_mapped_file_mut(),data,offset,length)"
+        ),
+        "get_direct_write_buffer": (
+            "self.raw_core.direct_write_range(||self.get_mapped_file_mut(),required_space)"
+        ),
+        "write_bytes_segment": (
+            "self.raw_core.write_bytes_segment("
+            "||self.get_mapped_file_mut(),data,start,offset,length)"
+        ),
+        "put_slice": "self.raw_core.put_slice(||self.get_mapped_file_mut(),data,index)",
+    }
+    for method_name, expected_body in expected_delegates.items():
+        body = named_function_body(production, method_name)
+        if re.sub(r"\s+", "", body or "") != expected_body:
+            violations.append(f"Store {method_name} must remain one raw_core delegation")
+
+    required_adapter_calls = {
+        "commit_direct_write": ".raw_core.commit_direct_write(",
+        "get_data": ".raw_core.readable_slice(||self.get_mapped_file(),",
+        "get_slice": ".raw_core.raw_slice(||self.get_mapped_file(),",
+        "get_bytes_zero_copy": ".raw_core.is_file_range(",
+        "flush_range": ".raw_core.prepare_flush_range(",
+    }
+    for method_name, call in required_adapter_calls.items():
+        body = re.sub(r"\s+", "", named_function_body(production, method_name) or "")
+        if body.count(call) != 1:
+            violations.append(f"Store {method_name} raw_core call changed")
+    flush_range_body = re.sub(
+        r"\s+", "", named_function_body(production, "flush_range") or ""
+    )
+    if flush_range_body.count(".raw_core.record_transient_flush_range(") != 1:
+        violations.append("Store transient flush-range progress call changed")
+
+    for copied_policy in (
+        "current_pos+length<=",
+        "data.len()==length",
+        "end_index<=",
+        "pos+size>=self.",
+        "mapped_file.write_all(",
+    ):
+        if copied_policy in compact_rust(production):
+            violations.append(f"Store retained raw byte policy: {copied_policy}")
+    return violations
+
+
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
@@ -10951,7 +11236,7 @@ pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResourceBase;
 '''
         owner = '''
 pub struct DefaultMappedFile {
-    progress: MappedFileProgress,
+    raw_core: MappedFileRawCore,
     // wrote_position: AtomicI32,
     text: &'static str,
 }
@@ -10962,7 +11247,7 @@ const TEXT: &str = "struct DefaultMappedFile { flushed_position: AtomicI32 }";
             ["pub(crate) use ReferenceResourceBase"],
             active_kernel_use_statements(facade),
         )
-        self.assertIn("progress: MappedFileProgress", active_struct_body(owner, "DefaultMappedFile"))
+        self.assertIn("raw_core: MappedFileRawCore", active_struct_body(owner, "DefaultMappedFile"))
         self.assertNotIn("wrote_position", active_struct_body(owner, "DefaultMappedFile"))
         self.assertEqual([], default_mapped_file_progress_violations(owner))
 
@@ -11417,7 +11702,7 @@ struct DefaultMappedFile {
 }
 """
         self.assertIn(
-            "MappedFileProgress fields must be exactly: progress",
+            "DefaultMappedFile must not directly own MappedFileProgress",
             default_mapped_file_progress_violations(source),
         )
 
@@ -11495,7 +11780,7 @@ struct DefaultMappedFile {
         canonical_dir = LOCAL_CRATE / "src" / "mapped_file"
         facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
         self.assertEqual(
-            LEAF_FILES | {"file.rs", "kernel.rs", "mapping.rs"},
+            LEAF_FILES | {"file.rs", "kernel.rs", "mapping.rs", "raw.rs"},
             {path.name for path in canonical_dir.glob("*.rs")},
         )
         self.assertTrue(all(not (facade_dir / name).exists() for name in LEAF_FILES))
@@ -11591,6 +11876,157 @@ struct DefaultMappedFile {
                 production_sources,
             ),
         )
+
+    def test_mapped_file_raw_core_has_one_local_owner_and_store_adapter_only(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_RAW_PATH).read_text(encoding="utf-8")
+        module_source = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        self.assertEqual(
+            [],
+            mapped_file_raw_core_owner_violations(
+                canonical,
+                module_source,
+                production_sources,
+            ),
+        )
+        self.assertEqual(
+            [],
+            mapped_file_raw_core_store_adapter_violations(default_mapped_file),
+        )
+
+    def test_mapped_file_raw_core_contract_rejects_owner_and_adapter_mutations(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_RAW_PATH).read_text(encoding="utf-8")
+        module_source = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        owner_mutations = [
+            canonical.replace("progress: MappedFileProgress", "shadow: MappedFileProgress", 1),
+            canonical.replace("pos + size >= self.file_size()", "pos + size > self.file_size()", 1),
+            canonical.replace("end_index <= self.file_size()", "end_index < self.file_size()", 1),
+            canonical.replace("data.len() == length", "data.len() != length", 1),
+            canonical.replace("self.advance_wrote_position(length as i32);", "", 1),
+            canonical.replace("if bytes_written == 0", "if bytes_written > 0", 1),
+            canonical.replace(
+                "mapped().get(pos..pos + size)",
+                "Some(&mapped()[pos..pos + size])",
+                1,
+            ),
+            canonical.replace(
+                "mapped().get_mut(current_pos..current_pos + length)",
+                "Some(&mut mapped()[current_pos..current_pos + length])",
+                1,
+            ),
+            canonical.replace(
+                "pub fn prepare_flush_range(&self, start: usize, end: usize)",
+                "pub fn prepare_flush_range(&self, start: usize, end: usize, transient: bool)",
+                1,
+            ),
+            canonical.replace(
+                "pub struct MappedFileRawCore",
+                "#[cfg(any())]\npub struct MappedFileRawCore",
+                1,
+            ),
+            canonical.replace(
+                "use super::kernel::MappedFileProgress;",
+                "use super::kernel::MappedFileProgress;\nuse memmap2::MmapMut;",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(owner_mutations):
+            with self.subTest(owner_mutation=mutation_index):
+                self.assertNotEqual(canonical, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[MAPPED_FILE_RAW_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_raw_core_owner_violations(
+                        mutation,
+                        module_source,
+                        mutated_sources,
+                    ),
+                )
+
+        module_mutation = module_source.replace(
+            "pub use raw::MappedFileRawCore;",
+            "pub(crate) use raw::MappedFileRawCore;",
+            1,
+        )
+        self.assertNotEqual(module_source, module_mutation)
+        self.assertNotEqual(
+            [],
+            mapped_file_raw_core_owner_violations(
+                canonical,
+                module_mutation,
+                production_sources,
+            ),
+        )
+
+        adapter_mutations = [
+            default_mapped_file.replace(
+                "raw_core: MappedFileRawCore",
+                "progress: MappedFileProgress",
+                1,
+            ),
+            default_mapped_file.replace(
+                "use rocketmq_store_local::mapped_file::MappedFileRawCore;",
+                "use rocketmq_store_local::mapped_file::MappedFileRawCore as RawCore;",
+                1,
+            ),
+            default_mapped_file.replace(
+                ".append_bytes_with_position_update(",
+                ".append_bytes_without_position_update(",
+                1,
+            ),
+            default_mapped_file.replace(
+                "|| self.get_mapped_file()",
+                "self.get_mapped_file()",
+                1,
+            ),
+            default_mapped_file.replace(
+                "|| self.get_mapped_file_mut()",
+                "self.get_mapped_file_mut()",
+                1,
+            ),
+            default_mapped_file.replace(
+                ".raw_slice(|| self.get_mapped_file(), pos, size)",
+                ".raw_slice(self.get_mapped_file(), pos, size)",
+                1,
+            ),
+            default_mapped_file.replace(
+                "fn put_slice(&self, data: &[u8], index: usize) -> bool {",
+                "fn put_slice(&self, data: &[u8], index: usize) -> bool {\n"
+                "        let end_index = index + data.len();",
+                1,
+            ),
+            default_mapped_file.replace(
+                "MappedFileRawCore::new(file_size)",
+                "MappedFileRawCore::new(file_size + 1)",
+                1,
+            ),
+            default_mapped_file.replace(
+                ".prepare_flush_range(start, end)",
+                ".record_transient_flush_range(end)",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(adapter_mutations):
+            with self.subTest(adapter_mutation=mutation_index):
+                self.assertNotEqual(default_mapped_file, mutation)
+                self.assertNotEqual(
+                    [],
+                    mapped_file_raw_core_store_adapter_violations(mutation),
+                )
 
     def test_mapped_file_warmup_schedule_has_one_local_owner_and_store_adapter_only(self) -> None:
         canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
@@ -11703,7 +12139,7 @@ pub fn visit_mapped_file_warmup_schedule<F>(
             default_mapped_file.replace("flush_range(mapped_file, offset, len)", "flush_range(mapped_file, 0, len)", 1),
             default_mapped_file.replace("if final_flush", "if !final_flush", 1),
             default_mapped_file.replace("Failed to flush final warmed", "Failed to flush warmed", 1),
-            default_mapped_file.replace("self.progress.record_flush_time();", "", 1),
+            default_mapped_file.replace("self.raw_core.record_flush_time();", "", 1),
             default_mapped_file.replace("let end = offset + len;", "let end = file_size;", 1),
             default_mapped_file.replace(
                 """                                LINUX_STORAGE_OP_PAGE_TOUCH,
@@ -12432,8 +12868,8 @@ mod lock_range_tests {
                 1,
             ),
             default_mapped_file.replace(
-                "self.progress.lock_region_range(offset, requested_len)?",
-                "self.progress.lock_region_range(offset, requested_len).unwrap()",
+                "self.raw_core.lock_region_range(offset, requested_len)?",
+                "self.raw_core.lock_region_range(offset, requested_len).unwrap()",
                 1,
             ),
             cfg_decoy_method_mutation(
@@ -13066,8 +13502,8 @@ mod cache_range_tests {
 
         wrapper_mutations = [
             default_mapped_file.replace(
-                "self.progress.is_valid_cache_range(position, size)",
-                "self.progress.is_valid_cache_range(position, size) || size == 1",
+                "self.raw_core.is_valid_cache_range(position, size)",
+                "self.raw_core.is_valid_cache_range(position, size) || size == 1",
                 1,
             ),
             default_mapped_file.replace(
@@ -14079,13 +14515,13 @@ mod tests""",
 
         flush_wrapper = """    #[inline]
     fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
-        self.progress
+        self.raw_core
             .is_able_to_flush(self.get_read_position(), flush_least_pages)
     }
 """
         commit_wrapper = """    #[inline]
     fn is_able_to_commit(&self, commit_least_pages: i32) -> bool {
-        self.progress.is_able_to_commit(commit_least_pages)
+        self.raw_core.is_able_to_commit(commit_least_pages)
     }
 """
         combined_cfg_bypass = default_mapped_file.replace(flush_wrapper, "", 1).replace(
@@ -14101,12 +14537,12 @@ mod policy_decoy {
 
     impl DefaultMappedFile {
         fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
-            self.progress
+            self.raw_core
                 .is_able_to_flush(self.get_read_position(), flush_least_pages)
         }
 
         fn is_able_to_commit(&self, commit_least_pages: i32) -> bool {
-            self.progress.is_able_to_commit(commit_least_pages)
+            self.raw_core.is_able_to_commit(commit_least_pages)
         }
     }
 }
@@ -14171,12 +14607,12 @@ mod tests""",
                 1,
             ),
             default_mapped_file.replace(
-                "self.progress.is_able_to_commit(commit_least_pages)",
+                "self.raw_core.is_able_to_commit(commit_least_pages)",
                 "(self.get_wrote_position() - self.get_committed_position()) / 4096 >= commit_least_pages",
                 1,
             ),
             default_mapped_file.replace(
-                "self.progress\n            .is_able_to_flush",
+                "self.raw_core\n            .is_able_to_flush",
                 "self\n            .is_able_to_flush",
                 1,
             ),
