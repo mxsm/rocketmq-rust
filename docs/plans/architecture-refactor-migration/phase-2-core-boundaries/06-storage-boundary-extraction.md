@@ -1795,3 +1795,29 @@ python scripts/arc_mut_guard.py
   worker lifecycle、TransientStorePool、实际 mmap/create、MappedFileQueue load/delete/flush/CQ timestamp、CommitLog 或
   持久格式。顶层 PR-M06-03 仍需收口 CommitLog 根结构、MappedFileQueue I/O/allocate adapter 及剩余算法、append/
   recovery 方法 owner 与 Store facade；82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03as mapped-file allocation and warm-up policy owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增 runtime-neutral `mapped_file::allocation_policy`，`MappedFileWarmupConfig` 唯一持有
+  warm enable、CommitLog file-size threshold、`FlushDiskType` 与 least-pages 值；`MappedFileAllocationPoolSnapshot`
+  与 `mapped_file_allocation_capacity` 唯一拥有 transient-pool/fast-fail 门控和 available-minus-queued 饱和容量决策。
+- [x] `[DEV/ADAPTER]` Store 删除私有 `WarmMappedFileConfig` 和两处 capacity 算法；构造时只把
+  `MessageStoreConfig` 值投影到 Local config，worker 创建文件时只读取 Local accessors。async 双文件提交与 background
+  单文件提交统一调用 `allocation_capacity`，该 adapter 只按原顺序读取 queue length、pool available buffers 并构造 Local
+  snapshot，不接管 Local 策略。
+- [x] `[COMPAT]` disabled 仍使用 AsyncFlush/`usize::MAX`/0 且永不预热；enabled 仍以
+  `file_size as usize >= mapped_file_size_commit_log` 为阈值。未启用 transient pool、未启用 fast-fail 或 pool 缺失时继续
+  返回入口默认容量；受约束时仍用 `available_buffers.saturating_sub(queued_requests)`，双提交容量为 2、background 容量为 1，
+  保留原 queue-before-pool 观察顺序和耗尽时的 warning/cleanup 行为。
+- [x] `[TEST]` Local 新增 disabled defaults、threshold/flush values、非约束 default 与饱和容量 4/4；Store 新增 runtime
+  snapshot adapter 1/1，AllocateMappedFileService/CommitLog 相关 5/5、Local all-features 全量及 Store lib 537/537 通过。
+- [x] `[CONTRACT]` 新增 baseline+7 类 mutation 两项契约，冻结 Local config/snapshot fields、accessors、容量语义、唯一
+  owner 与依赖、Store direct exact imports/field/constructor/两个入口 adapter 及五组回归；定向 2/2，完整 M06 contract
+  146/146 通过（613.440s）。canonical file/item 集合同步加入 `allocation_policy.rs`、两个 value owner 与 capacity function。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing、
+  ArcMut guard 与 enforcing runtime audit 通过；error architecture 与既有基线一致，仍为 1 处 Broker source
+  stringification、8 处 MCP `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03as 未迁移 AllocateMappedFileService request table/queue、Notify/Condvar、timeout/retry、
+  worker lifecycle、TransientStorePool 实体、实际 mmap/create、MappedFileQueue load/delete/flush/CQ timestamp、CommitLog 或
+  持久格式。顶层 PR-M06-03 仍需收口 CommitLog 根结构、MappedFileQueue I/O/allocate adapter 及剩余算法、append/
+  recovery 方法 owner 与 Store facade；82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。

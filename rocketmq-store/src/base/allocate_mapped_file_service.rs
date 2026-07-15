@@ -27,6 +27,9 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_error::RocketMQError;
+use rocketmq_store_local::mapped_file::allocation_policy::mapped_file_allocation_capacity;
+use rocketmq_store_local::mapped_file::allocation_policy::MappedFileAllocationPoolSnapshot;
+use rocketmq_store_local::mapped_file::allocation_policy::MappedFileWarmupConfig;
 use rocketmq_store_local::mapped_file::allocation_request::MappedFileAllocationRequestKey;
 use tokio::sync::Notify;
 use tracing::error;
@@ -34,45 +37,12 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::transient_store_pool::TransientStorePool;
-use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 
 /// Timeout for waiting on file allocation (matches Java: 5 seconds)
 const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
-
-#[derive(Clone, Copy)]
-struct WarmMappedFileConfig {
-    enabled: bool,
-    flush_disk_type: FlushDiskType,
-    mapped_file_size_commit_log: usize,
-    flush_least_pages_when_warm_mapped_file: usize,
-}
-
-impl WarmMappedFileConfig {
-    fn disabled() -> Self {
-        Self {
-            enabled: false,
-            flush_disk_type: FlushDiskType::AsyncFlush,
-            mapped_file_size_commit_log: usize::MAX,
-            flush_least_pages_when_warm_mapped_file: 0,
-        }
-    }
-
-    fn from_message_store_config(message_store_config: &MessageStoreConfig) -> Self {
-        Self {
-            enabled: message_store_config.warm_mapped_file_enable,
-            flush_disk_type: message_store_config.flush_disk_type,
-            mapped_file_size_commit_log: message_store_config.mapped_file_size_commit_log,
-            flush_least_pages_when_warm_mapped_file: message_store_config.flush_least_pages_when_warm_mapped_file,
-        }
-    }
-
-    fn should_warm(self, file_size: u64) -> bool {
-        self.enabled && file_size as usize >= self.mapped_file_size_commit_log
-    }
-}
 
 /// Background service for asynchronous MappedFile pre-allocation
 ///
@@ -113,7 +83,7 @@ pub struct AllocateMappedFileService {
     fast_fail_if_no_buffer: bool,
 
     /// CommitLog warm-up behavior copied from MessageStoreConfig.
-    warm_mapped_file_config: WarmMappedFileConfig,
+    warm_mapped_file_config: MappedFileWarmupConfig,
 }
 
 impl Clone for AllocateMappedFileService {
@@ -170,7 +140,7 @@ impl AllocateMappedFileService {
             transient_store_pool,
             transient_store_pool_enable,
             fast_fail_if_no_buffer,
-            warm_mapped_file_config: WarmMappedFileConfig::disabled(),
+            warm_mapped_file_config: MappedFileWarmupConfig::disabled(),
         }
     }
 
@@ -185,7 +155,12 @@ impl AllocateMappedFileService {
             transient_store_pool_enable,
             fast_fail_if_no_buffer,
         );
-        service.warm_mapped_file_config = WarmMappedFileConfig::from_message_store_config(message_store_config);
+        service.warm_mapped_file_config = MappedFileWarmupConfig::new(
+            message_store_config.warm_mapped_file_enable,
+            message_store_config.flush_disk_type,
+            message_store_config.mapped_file_size_commit_log,
+            message_store_config.flush_least_pages_when_warm_mapped_file,
+        );
         service
     }
 
@@ -261,7 +236,7 @@ impl AllocateMappedFileService {
         stopped: Arc<AtomicBool>,
         transient_store_pool: Option<Arc<TransientStorePool>>,
         worker_wakeup: Arc<(StdMutex<()>, Condvar)>,
-        warm_mapped_file_config: WarmMappedFileConfig,
+        warm_mapped_file_config: MappedFileWarmupConfig,
     ) {
         info!("AllocateMappedFileService: service started");
 
@@ -303,7 +278,7 @@ impl AllocateMappedFileService {
         request_queue: &Arc<RwLock<BinaryHeap<Arc<AllocateRequest>>>>,
         has_exception: &Arc<AtomicBool>,
         transient_store_pool: &Option<Arc<TransientStorePool>>,
-        warm_mapped_file_config: WarmMappedFileConfig,
+        warm_mapped_file_config: MappedFileWarmupConfig,
     ) -> bool {
         // Pop request from priority queue
         let req = {
@@ -387,7 +362,7 @@ impl AllocateMappedFileService {
     fn create_mapped_file(
         req: &AllocateRequest,
         transient_store_pool: &Option<Arc<TransientStorePool>>,
-        warm_mapped_file_config: WarmMappedFileConfig,
+        warm_mapped_file_config: MappedFileWarmupConfig,
     ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
         let start = std::time::Instant::now();
         let file_path = req.file_path().to_owned();
@@ -412,8 +387,8 @@ impl AllocateMappedFileService {
 
         if warm_mapped_file_config.should_warm(file_size) {
             mapped_file.warm_mapped_file(
-                warm_mapped_file_config.flush_disk_type,
-                warm_mapped_file_config.flush_least_pages_when_warm_mapped_file,
+                warm_mapped_file_config.flush_disk_type(),
+                warm_mapped_file_config.flush_least_pages(),
             );
         }
 
@@ -458,16 +433,7 @@ impl AllocateMappedFileService {
         file_size: i32,
     ) -> Result<Option<Arc<DefaultMappedFile>>, RocketMQError> {
         // Check available buffer capacity if using TransientStorePool
-        let mut can_submit_requests = 2;
-
-        if self.transient_store_pool_enable {
-            if let Some(ref pool) = self.transient_store_pool {
-                if self.fast_fail_if_no_buffer {
-                    let queue_size = self.request_queue.read().len();
-                    can_submit_requests = pool.available_buffer_nums().saturating_sub(queue_size);
-                }
-            }
-        }
+        let mut can_submit_requests = self.allocation_capacity(2);
 
         // Submit request for next file
         let next_req = Arc::new(AllocateRequest::new(next_file_path.clone(), file_size));
@@ -676,13 +642,7 @@ impl AllocateMappedFileService {
     }
 
     pub fn submit_request_in_background(&self, file_path: String, file_size: u64) {
-        let mut can_submit_request = true;
-        if self.transient_store_pool_enable && self.fast_fail_if_no_buffer {
-            if let Some(ref pool) = self.transient_store_pool {
-                let queue_size = self.request_queue.read().len();
-                can_submit_request = pool.available_buffer_nums().saturating_sub(queue_size) > 0;
-            }
-        }
+        let can_submit_request = self.allocation_capacity(1) > 0;
 
         if !can_submit_request {
             warn!(
@@ -711,6 +671,25 @@ impl AllocateMappedFileService {
             self.request_queue.write().push(req);
             self.notify_worker();
         }
+    }
+
+    fn allocation_capacity(&self, default_capacity: usize) -> usize {
+        let pool_snapshot = if self.transient_store_pool_enable && self.fast_fail_if_no_buffer {
+            self.transient_store_pool.as_ref().map(|pool| {
+                let queued_requests = self.request_queue.read().len();
+                let available_buffers = pool.available_buffer_nums();
+                MappedFileAllocationPoolSnapshot::new(available_buffers, queued_requests)
+            })
+        } else {
+            None
+        };
+
+        mapped_file_allocation_capacity(
+            default_capacity,
+            self.transient_store_pool_enable,
+            self.fast_fail_if_no_buffer,
+            pool_snapshot,
+        )
     }
 
     /// Shutdown the service - corresponds to Java's shutdown()
@@ -915,5 +894,23 @@ mod tests {
 
         assert!(!service.should_warm_mapped_file(1023));
         assert!(service.should_warm_mapped_file(1024));
+    }
+
+    #[test]
+    fn allocation_capacity_delegates_runtime_snapshot_to_local_policy() {
+        let pool = Arc::new(TransientStorePool::new(2, 16));
+        pool.return_buffer(vec![0; 16]);
+        pool.return_buffer(vec![0; 16]);
+        let service = AllocateMappedFileService::new_with_config(Some(pool), true, true);
+
+        assert_eq!(service.allocation_capacity(2), 2);
+        service.request_queue.write().push(Arc::new(AllocateRequest::new(
+            std::path::Path::new("root")
+                .join("00000000000000000100")
+                .to_string_lossy()
+                .into_owned(),
+            16,
+        )));
+        assert_eq!(service.allocation_capacity(2), 1);
     }
 }

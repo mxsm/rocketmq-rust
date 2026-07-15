@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #[doc(hidden)]
+pub mod allocation_policy;
+#[doc(hidden)]
 pub mod allocation_request;
 mod contract;
 mod default_mapped_file;

@@ -51,6 +51,9 @@ MAPPED_FILE_KERNEL_PATH = Path("rocketmq-store-local/src/mapped_file/kernel.rs")
 MAPPED_FILE_RAW_PATH = Path("rocketmq-store-local/src/mapped_file/raw.rs")
 MAPPED_FILE_CONTRACT_PATH = Path("rocketmq-store-local/src/mapped_file/contract.rs")
 MAPPED_FILE_MEMORY_PATH = Path("rocketmq-store-local/src/mapped_file/memory.rs")
+MAPPED_FILE_ALLOCATION_POLICY_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/allocation_policy.rs"
+)
 MAPPED_FILE_ALLOCATION_REQUEST_PATH = Path(
     "rocketmq-store-local/src/mapped_file/allocation_request.rs"
 )
@@ -279,6 +282,9 @@ CANONICAL_ITEMS = {
     "MappedFileError": ("enum", "mapped_file_error.rs"),
     "MappedFileMetrics": ("struct", "metrics.rs"),
     "MappedFileResult": ("type", "mapped_file_error.rs"),
+    "MappedFileWarmupConfig": ("struct", "allocation_policy.rs"),
+    "MappedFileAllocationPoolSnapshot": ("struct", "allocation_policy.rs"),
+    "mapped_file_allocation_capacity": ("fn", "allocation_policy.rs"),
     "MappedFileAllocationRequestKey": ("struct", "allocation_request.rs"),
     "file_index_by_offset": ("fn", "queue_index.rs"),
     "file_index_by_timestamp": ("fn", "queue_index.rs"),
@@ -7413,6 +7419,121 @@ def mapped_file_allocation_request_contract_violations(
     return violations
 
 
+def mapped_file_allocation_policy_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+    compact = compact_rust(active)
+
+    if active_struct_fields(production, "MappedFileWarmupConfig") != [
+        ("enabled", "bool"),
+        ("flush_disk_type", "FlushDiskType"),
+        ("minimum_file_size", "usize"),
+        ("flush_least_pages", "usize"),
+    ]:
+        violations.append("Local mapped-file warm-up configuration fields changed")
+    if active_struct_fields(production, "MappedFileAllocationPoolSnapshot") != [
+        ("available_buffers", "usize"),
+        ("queued_requests", "usize"),
+    ]:
+        violations.append("Local mapped-file allocation pool snapshot fields changed")
+    expected_method_bodies = {
+        "disabled": (
+            "Self{enabled:false,flush_disk_type:FlushDiskType::AsyncFlush,"
+            "minimum_file_size:usize::MAX,flush_least_pages:0,}"
+        ),
+        "should_warm": "self.enabled&&file_sizeasusize>=self.minimum_file_size",
+        "flush_disk_type": "self.flush_disk_type",
+        "flush_least_pages": "self.flush_least_pages",
+        "remaining_capacity": "self.available_buffers.saturating_sub(self.queued_requests)",
+    }
+    for function_name, expected_body in expected_method_bodies.items():
+        if compact_rust(named_function_body(production, function_name) or "") != expected_body:
+            violations.append(f"Local mapped-file allocation policy changed: {function_name}")
+    expected_capacity = (
+        "pubfnmapped_file_allocation_capacity(default_capacity:usize,"
+        "transient_store_pool_enabled:bool,fast_fail_if_no_buffer:bool,"
+        "pool_snapshot:Option<MappedFileAllocationPoolSnapshot>,)->usize{"
+        "iftransient_store_pool_enabled&&fast_fail_if_no_buffer{"
+        "pool_snapshot.map_or(default_capacity,MappedFileAllocationPoolSnapshot::remaining_capacity)"
+        "}else{default_capacity}}"
+    )
+    if expected_capacity not in compact:
+        violations.append("Local mapped-file allocation capacity semantics changed")
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use"
+    ]
+    if imports != ["crate::config::FlushDiskType"]:
+        violations.append("Local mapped-file allocation policy dependencies changed")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(
+            r"\b(?:MessageStoreConfig|ArcSwap|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b",
+            active,
+        )
+    ):
+        violations.append("Local mapped-file allocation policy absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod allocation_policy;") != 1:
+        violations.append("Local mapped_file module must expose allocation_policy exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::mapped_file::allocation_policy::mapped_file_allocation_capacity",
+        "use rocketmq_store_local::mapped_file::allocation_policy::MappedFileAllocationPoolSnapshot",
+        "use rocketmq_store_local::mapped_file::allocation_policy::MappedFileWarmupConfig",
+    }
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::allocation_policy" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store mapped-file allocation policy imports must be direct and exact")
+    store_production = source_without_cfg_test_items(store_source)
+    store_active = active_rust_source(store_production)
+    store_compact = compact_rust(store_active)
+    if re.search(r"\bstruct\s+(?:WarmMappedFileConfig|MappedFileWarmupConfig)\b", store_active):
+        violations.append("Store copied mapped-file warm-up configuration owner")
+    if dict(active_struct_fields(store_source, "AllocateMappedFileService")).get(
+        "warm_mapped_file_config"
+    ) != "MappedFileWarmupConfig":
+        violations.append("Store service must hold the canonical Local warm-up configuration")
+    for fragment in (
+        "warm_mapped_file_config:MappedFileWarmupConfig::disabled()",
+        "service.warm_mapped_file_config=MappedFileWarmupConfig::new(",
+        "letmutcan_submit_requests=self.allocation_capacity(2)",
+        "letcan_submit_request=self.allocation_capacity(1)>0",
+        "MappedFileAllocationPoolSnapshot::new(available_buffers,queued_requests)",
+        "mapped_file_allocation_capacity(default_capacity,self.transient_store_pool_enable,"
+        "self.fast_fail_if_no_buffer,pool_snapshot,)",
+    ):
+        if fragment not in store_compact:
+            violations.append(f"Store mapped-file allocation policy adapter changed: {fragment}")
+    if ".saturating_sub(queue_size)" in store_compact:
+        violations.append("Store retained mapped-file allocation capacity calculation")
+
+    for test_name in (
+        "warmup_config_preserves_disabled_defaults",
+        "warmup_config_applies_commitlog_size_threshold_and_flush_values",
+        "allocation_capacity_uses_default_without_an_active_fast_fail_pool",
+        "allocation_capacity_saturates_available_buffers_by_queued_requests",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file allocation policy regression changed: {test_name}")
+    if named_function_body(
+        store_source,
+        "allocation_capacity_delegates_runtime_snapshot_to_local_policy",
+    ) is None:
+        violations.append("Store mapped-file allocation policy adapter regression changed")
+    return violations
+
+
 def mapped_file_queue_allocation_contract_violations(
     local_source: str,
     module_source: str,
@@ -12331,6 +12452,115 @@ class StoreLocalContractTests(unittest.TestCase):
                     ),
                 )
 
+    def test_mapped_file_allocation_policy_has_one_local_owner_and_exact_store_adapter(self) -> None:
+        local = (ROOT / MAPPED_FILE_ALLOCATION_POLICY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_allocation_policy.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_allocation_policy_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_allocation_policy_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_ALLOCATION_POLICY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_allocation_policy.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "warm-up threshold type changed",
+                local.replace("    minimum_file_size: usize,", "    minimum_file_size: u64,", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "capacity stopped saturating",
+                local.replace(
+                    "self.available_buffers.saturating_sub(self.queued_requests)",
+                    "self.available_buffers - self.queued_requests",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod allocation_policy;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store warm-up owner copied",
+                local,
+                module,
+                store.replace(
+                    "pub struct AllocateMappedFileService {",
+                    "struct WarmMappedFileConfig;\n\npub struct AllocateMappedFileService {",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store capacity bypassed",
+                local,
+                module,
+                store.replace("self.allocation_capacity(2)", "2", 1),
+                local_tests,
+            ),
+            (
+                "Local regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn allocation_capacity_saturates_available_buffers_by_queued_requests()",
+                    "fn allocation_capacity_regression_removed()",
+                    1,
+                ),
+            ),
+            (
+                "Store adapter regression renamed",
+                local,
+                module,
+                store.replace(
+                    "fn allocation_capacity_delegates_runtime_snapshot_to_local_policy()",
+                    "fn allocation_capacity_adapter_regression_removed()",
+                    1,
+                ),
+                local_tests,
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_allocation_policy_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
     def test_mapped_file_queue_allocation_has_one_local_owner_and_exact_store_adapter(self) -> None:
         local = (ROOT / MAPPED_FILE_QUEUE_ALLOCATION_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
@@ -16993,6 +17223,7 @@ struct DefaultMappedFile {
         self.assertEqual(
             LEAF_FILES
             | {
+                "allocation_policy.rs",
                 "allocation_request.rs",
                 "contract.rs",
                 "default_mapped_file.rs",
