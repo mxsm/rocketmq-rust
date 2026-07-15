@@ -986,20 +986,20 @@ impl MappedFile for DefaultMappedFile {
             return false;
         }
 
-        let position = position as usize;
-        let page_size = get_page_size().max(1);
+        let page_size = get_page_size();
         let base_addr = self.get_mapped_file().as_ptr() as usize;
-        let start_addr = base_addr.saturating_add(position);
-        let aligned_start = start_addr / page_size * page_size;
-        let page_offset = start_addr - aligned_start;
-        let checked_len = page_offset.saturating_add(size);
-        let page_count = checked_len.div_ceil(page_size);
-        if page_count == 0 {
+        let Some(plan) = rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency(
+            base_addr, position, size, page_size,
+        ) else {
             return false;
-        }
+        };
 
-        let mut residency = vec![0u8; page_count];
-        let result = mincore(aligned_start as *const u8, checked_len, residency.as_mut_ptr());
+        let mut residency = vec![0u8; plan.page_count];
+        let result = mincore(
+            plan.aligned_start as *const u8,
+            plan.checked_len,
+            residency.as_mut_ptr(),
+        );
         result == 0 && residency.iter().all(|page| page & 1 == 1)
     }
 

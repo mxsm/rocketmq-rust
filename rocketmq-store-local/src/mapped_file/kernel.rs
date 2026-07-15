@@ -88,6 +88,50 @@ pub fn visit_mapped_file_warmup_schedule<F>(
     }
 }
 
+/// Platform-independent integer plan for one mapped-file cache-residency query.
+///
+/// The plan does not own or dereference mapped memory. Platform adapters retain responsibility
+/// for validating the requested file range and invoking the operating-system residency probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MappedFileCacheResidencyPlan {
+    /// Page-aligned integer address passed to the platform adapter.
+    pub aligned_start: usize,
+    /// Number of bytes checked from `aligned_start`, including the leading page offset.
+    pub checked_len: usize,
+    /// Number of page-residency result bytes required by the platform adapter.
+    pub page_count: usize,
+}
+
+/// Plans the aligned address range and residency-vector size for a mapped-file cache query.
+///
+/// This preserves the legacy platform-sized position conversion and saturating address/length
+/// arithmetic. `page_size` is normalized to at least one. Range validation intentionally remains
+/// the caller's responsibility.
+#[inline]
+pub fn plan_mapped_file_cache_residency(
+    base_addr: usize,
+    position: i64,
+    size: usize,
+    page_size: usize,
+) -> Option<MappedFileCacheResidencyPlan> {
+    let position = position as usize;
+    let page_size = page_size.max(1);
+    let start_addr = base_addr.saturating_add(position);
+    let aligned_start = start_addr / page_size * page_size;
+    let page_offset = start_addr - aligned_start;
+    let checked_len = page_offset.saturating_add(size);
+    let page_count = checked_len.div_ceil(page_size);
+    if page_count == 0 {
+        return None;
+    }
+
+    Some(MappedFileCacheResidencyPlan {
+        aligned_start,
+        checked_len,
+        page_count,
+    })
+}
+
 #[inline(always)]
 fn current_millis() -> u64 {
     SystemTime::now()

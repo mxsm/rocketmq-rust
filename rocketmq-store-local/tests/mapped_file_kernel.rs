@@ -17,7 +17,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 
+use rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency;
 use rocketmq_store_local::mapped_file::kernel::visit_mapped_file_warmup_schedule;
+use rocketmq_store_local::mapped_file::kernel::MappedFileCacheResidencyPlan;
 use rocketmq_store_local::mapped_file::kernel::MappedFileProgress;
 use rocketmq_store_local::mapped_file::kernel::MappedFileWarmupOperation;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
@@ -156,6 +158,91 @@ fn cache_range_validation_preserves_legacy_bounds_and_checked_overflow_policy() 
     assert!(!progress.is_valid_cache_range(9, 2));
     assert!(!progress.is_valid_cache_range(i64::MAX, usize::MAX));
     assert!(!MappedFileProgress::new(0).is_valid_cache_range(0, 1));
+}
+
+#[test]
+fn cache_residency_planner_preserves_legacy_alignment_and_saturating_policy() {
+    let plan =
+        |base_addr, position, size, page_size| plan_mapped_file_cache_residency(base_addr, position, size, page_size);
+
+    assert_eq!(
+        plan(0x2000, 0, 1, 4096),
+        Some(MappedFileCacheResidencyPlan {
+            aligned_start: 0x2000,
+            checked_len: 1,
+            page_count: 1,
+        })
+    );
+    assert_eq!(
+        plan(0x2000, 4095, 2, 4096),
+        Some(MappedFileCacheResidencyPlan {
+            aligned_start: 0x2000,
+            checked_len: 4097,
+            page_count: 2,
+        })
+    );
+    assert_eq!(
+        plan(0x2003, 1, 4096, 4096),
+        Some(MappedFileCacheResidencyPlan {
+            aligned_start: 0x2000,
+            checked_len: 4100,
+            page_count: 2,
+        })
+    );
+    assert_eq!(
+        plan(7, 0, 1, 0),
+        Some(MappedFileCacheResidencyPlan {
+            aligned_start: 7,
+            checked_len: 1,
+            page_count: 1,
+        })
+    );
+    assert_eq!(
+        plan(usize::MAX - 2, 10, 1, 4),
+        Some(MappedFileCacheResidencyPlan {
+            aligned_start: usize::MAX - 3,
+            checked_len: 4,
+            page_count: 1,
+        })
+    );
+    assert_eq!(
+        plan(usize::MAX, 0, usize::MAX, 4096),
+        Some(MappedFileCacheResidencyPlan {
+            aligned_start: usize::MAX - 4095,
+            checked_len: usize::MAX,
+            page_count: usize::MAX.div_ceil(4096),
+        })
+    );
+    assert_eq!(
+        plan(usize::MAX - 1, 0, 2, usize::MAX),
+        Some(MappedFileCacheResidencyPlan {
+            aligned_start: 0,
+            checked_len: usize::MAX,
+            page_count: 1,
+        })
+    );
+    assert_eq!(plan(0x2000, 0, 0, 4096), None);
+    assert_eq!(
+        plan(0x2001, 0, 0, 4096),
+        Some(MappedFileCacheResidencyPlan {
+            aligned_start: 0x2000,
+            checked_len: 1,
+            page_count: 1,
+        })
+    );
+}
+
+#[cfg(target_pointer_width = "32")]
+#[test]
+fn cache_residency_planner_preserves_legacy_position_as_usize_conversion() {
+    assert_eq!(
+        plan_mapped_file_cache_residency(0, i64::from(u32::MAX) + 1, 1, 4096),
+        Some(MappedFileCacheResidencyPlan {
+            aligned_start: 0,
+            checked_len: 1,
+            page_count: 1,
+        })
+    );
 }
 
 #[cfg(target_pointer_width = "32")]

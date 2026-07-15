@@ -37,12 +37,14 @@ LEAF_FILES = {
     "metrics.rs",
 }
 KERNEL_ITEMS = {
+    "MappedFileCacheResidencyPlan": "struct",
     "MappedFileWarmupOperation": "enum",
     "MappedFileProgress": "struct",
     "ReferenceResource": "trait",
     "ReferenceResourceBase": "struct",
     "ReferenceResourceCounter": "struct",
     "OS_PAGE_SIZE": "const",
+    "plan_mapped_file_cache_residency": "fn",
     "visit_mapped_file_warmup_schedule": "fn",
 }
 MAPPED_FILE_KERNEL_PATH = Path("rocketmq-store-local/src/mapped_file/kernel.rs")
@@ -73,6 +75,8 @@ MAPPED_FILE_CACHE_RANGE_METHODS = ("is_valid_cache_range",)
 MAPPED_FILE_CACHE_RANGE_REFERENCE = re.compile(
     r"(?:\.|::)\s*is_valid_cache_range\b"
 )
+MAPPED_FILE_CACHE_RESIDENCY_PLAN = "MappedFileCacheResidencyPlan"
+MAPPED_FILE_CACHE_RESIDENCY_PLANNER = "plan_mapped_file_cache_residency"
 MAPPED_FILE_WARMUP_OPERATION = "MappedFileWarmupOperation"
 MAPPED_FILE_WARMUP_VISITOR = "visit_mapped_file_warmup_schedule"
 STORE_LOCK_RANGE_HELPER_METHODS = ("lock_region_address_and_len",)
@@ -5112,6 +5116,431 @@ def mapped_file_cache_range_adapter_violations(
 
     violations.extend(
         mapped_file_cache_range_duplicate_policy_violations(normalized_sources)
+    )
+    return violations
+
+
+def mapped_file_cache_residency_plan_violations(source: str) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    violations: list[str] = []
+
+    if len(re.findall(r"\bstruct\s+MappedFileCacheResidencyPlan\b", active)) != 1:
+        violations.append("MappedFileCacheResidencyPlan production definition count changed")
+    if (
+        "#[derive(Debug,Clone,Copy,PartialEq,Eq)]"
+        "pubstructMappedFileCacheResidencyPlan{"
+        "pubaligned_start:usize,pubchecked_len:usize,pubpage_count:usize,}"
+    ) not in compact:
+        violations.append("MappedFileCacheResidencyPlan derive, visibility, or fields changed")
+    if active_struct_fields(production, MAPPED_FILE_CACHE_RESIDENCY_PLAN) != [
+        ("aligned_start", "usize"),
+        ("checked_len", "usize"),
+        ("page_count", "usize"),
+    ]:
+        violations.append("MappedFileCacheResidencyPlan field order or types changed")
+
+    struct_match = re.search(r"\bpub\s+struct\s+MappedFileCacheResidencyPlan\b", active)
+    if struct_match is None or attributes_have_cfg_gate(
+        contiguous_outer_attributes_before(active, struct_match.start())
+    ):
+        violations.append("MappedFileCacheResidencyPlan must be an unconditional public owner")
+
+    function_matches = list(
+        re.finditer(r"\bpub\s+fn\s+plan_mapped_file_cache_residency\b", active)
+    )
+    if len(function_matches) != 1:
+        violations.append("cache-residency planner production definition count changed")
+    else:
+        function_match = function_matches[0]
+        if attributes_have_cfg_gate(
+            contiguous_outer_attributes_before(active, function_match.start())
+        ):
+            violations.append("cache-residency planner must not be cfg gated")
+
+    expected_signature = (
+        "pubfnplan_mapped_file_cache_residency(base_addr:usize,position:i64,"
+        "size:usize,page_size:usize,)->Option<MappedFileCacheResidencyPlan>"
+    )
+    function_body = compact_rust(
+        named_raw_function_body(production, MAPPED_FILE_CACHE_RESIDENCY_PLANNER) or ""
+    )
+    expected_body = (
+        "letposition=positionasusize;"
+        "letpage_size=page_size.max(1);"
+        "letstart_addr=base_addr.saturating_add(position);"
+        "letaligned_start=start_addr/page_size*page_size;"
+        "letpage_offset=start_addr-aligned_start;"
+        "letchecked_len=page_offset.saturating_add(size);"
+        "letpage_count=checked_len.div_ceil(page_size);"
+        "ifpage_count==0{returnNone;}"
+        "Some(MappedFileCacheResidencyPlan{aligned_start,checked_len,page_count,})"
+    )
+    if compact.count(expected_signature) != 1:
+        violations.append("cache-residency planner signature changed")
+    if function_body != expected_body:
+        violations.append("cache-residency planner behavior or operation order changed")
+    return violations
+
+
+def cache_residency_assignment_records(
+    body: str,
+) -> tuple[
+    list[tuple[str, str]],
+    list[tuple[str, str]],
+    list[tuple[str, str, str]],
+    list[tuple[str, str, str]],
+    list[tuple[str, str, str]],
+    list[tuple[str, str, str]],
+    list[tuple[str, str, str]],
+]:
+    identifier = WARMUP_IDENTIFIER
+    casts = [
+        (match.group("target"), match.group("source"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<source>{identifier})asusize;",
+            body,
+        )
+    ]
+    normalizations = [
+        (match.group("target"), match.group("source"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<source>{identifier})\.max\(1\);",
+            body,
+        )
+    ]
+    additions = [
+        (match.group("target"), match.group("left"), match.group("right"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<left>{identifier})\.saturating_add\((?P<right>{identifier})\);",
+            body,
+        )
+    ]
+    alignments = [
+        (match.group("target"), match.group("start"), match.group("page"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<start>{identifier})/(?P<page>{identifier})\*(?P=page);",
+            body,
+        )
+    ]
+    subtractions = [
+        (match.group("target"), match.group("start"), match.group("aligned"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<start>{identifier})-(?P<aligned>{identifier});",
+            body,
+        )
+    ]
+    ceilings = [
+        (match.group("target"), match.group("len"), match.group("page"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<len>{identifier})\.div_ceil\((?P<page>{identifier})\);",
+            body,
+        )
+    ]
+    tuple_calls = [
+        (match.group("aligned"), match.group("offset"), match.group("callee"))
+        for match in re.finditer(
+            rf"let\((?P<aligned>{identifier}),(?P<offset>{identifier})\)="
+            rf"(?P<callee>{identifier})\([^;]+\);",
+            body,
+        )
+    ]
+    return casts, normalizations, additions, alignments, subtractions, ceilings, tuple_calls
+
+
+def cache_residency_zero_none_guard(body: str, page_count: str, aliases: IdentifierAliases) -> bool:
+    for match in re.finditer(
+        rf"if(?P<value>{WARMUP_IDENTIFIER})==0\{{returnNone;\}}",
+        body,
+    ):
+        if aliases.equivalent(match.group("value"), page_count):
+            return True
+    for match in re.finditer(
+        rf"if0==(?P<value>{WARMUP_IDENTIFIER})\{{returnNone;\}}",
+        body,
+    ):
+        if aliases.equivalent(match.group("value"), page_count):
+            return True
+    return False
+
+
+def cache_residency_has_plan_result(
+    body: str,
+    aligned: str,
+    checked_len: str,
+    page_count: str,
+    aliases: IdentifierAliases,
+) -> bool:
+    for match in re.finditer(r"Some\([^;]+\{(?P<fields>[^{}]+)\}\)", body):
+        field_identifiers = re.findall(WARMUP_IDENTIFIER, match.group("fields"))
+        if all(
+            any(aliases.equivalent(candidate, role) for candidate in field_identifiers)
+            for role in (aligned, checked_len, page_count)
+        ):
+            return True
+    return False
+
+
+def cache_residency_direct_copy(record: WarmupFunctionRecord) -> bool:
+    body = record.body
+    aliases = IdentifierAliases(body)
+    casts, normalizations, additions, alignments, subtractions, ceilings, _ = (
+        cache_residency_assignment_records(body)
+    )
+    parameters = set(record.parameters)
+    is_parameter = lambda role: any(aliases.equivalent(role, parameter) for parameter in parameters)
+    for native_position, signed_position in casts:
+        if not is_parameter(signed_position):
+            continue
+        for normalized_page, page_source in normalizations:
+            if not is_parameter(page_source):
+                continue
+            for start, base, added_position in additions:
+                if not is_parameter(base) or not aliases.equivalent(added_position, native_position):
+                    continue
+                for aligned, aligned_start, aligned_page in alignments:
+                    if not aliases.equivalent(aligned_start, start) or not aliases.equivalent(
+                        aligned_page, normalized_page
+                    ):
+                        continue
+                    for offset, offset_start, offset_aligned in subtractions:
+                        if not aliases.equivalent(offset_start, start) or not aliases.equivalent(
+                            offset_aligned, aligned
+                        ):
+                            continue
+                        for checked_len, add_left, size in additions:
+                            if not aliases.equivalent(add_left, offset) or not is_parameter(size):
+                                continue
+                            for page_count, ceil_len, ceil_page in ceilings:
+                                if not aliases.equivalent(ceil_len, checked_len) or not aliases.equivalent(
+                                    ceil_page, normalized_page
+                                ):
+                                    continue
+                                if cache_residency_zero_none_guard(body, page_count, aliases) and (
+                                    cache_residency_has_plan_result(
+                                        body,
+                                        aligned,
+                                        checked_len,
+                                        page_count,
+                                        aliases,
+                                    )
+                                ):
+                                    return True
+    return False
+
+
+def cache_residency_alignment_helper_roles(
+    record: WarmupFunctionRecord,
+) -> tuple[int, int] | None:
+    aliases = IdentifierAliases(record.body)
+    _, _, _, alignments, subtractions, _, _ = cache_residency_assignment_records(record.body)
+    for aligned, start, page in alignments:
+        for offset, offset_start, offset_aligned in subtractions:
+            if not aliases.equivalent(offset_start, start) or not aliases.equivalent(
+                offset_aligned, aligned
+            ):
+                continue
+            if not re.search(
+                rf"\((?:{aligned}|{offset}),(?:{aligned}|{offset})\)$",
+                record.body,
+            ):
+                continue
+            try:
+                return record.parameters.index(start), record.parameters.index(page)
+            except ValueError:
+                continue
+    return None
+
+
+def cache_residency_split_copy_violations(
+    records: list[WarmupFunctionRecord],
+) -> list[str]:
+    helpers = {
+        record.name: (record, roles)
+        for record in records
+        if (roles := cache_residency_alignment_helper_roles(record)) is not None
+    }
+    violations: list[str] = []
+    for caller in records:
+        body = caller.body
+        aliases = IdentifierAliases(body)
+        casts, normalizations, additions, _, _, ceilings, tuple_calls = (
+            cache_residency_assignment_records(body)
+        )
+        import_aliases = dict(caller.imports)
+        for aligned, offset, callee_alias in tuple_calls:
+            helper_name = import_aliases.get(callee_alias, callee_alias).split("::")[-1]
+            helper_entry = helpers.get(helper_name)
+            if helper_entry is None:
+                continue
+            helper, _ = helper_entry
+            call_match = re.search(
+                rf"let\({aligned},{offset}\)={callee_alias}\("
+                rf"(?P<start>{WARMUP_IDENTIFIER}),(?P<page>{WARMUP_IDENTIFIER})\);",
+                body,
+            )
+            if call_match is None:
+                continue
+            call_start = call_match.group("start")
+            call_page = call_match.group("page")
+            parameters = set(caller.parameters)
+            is_parameter = lambda role: any(
+                aliases.equivalent(role, parameter) for parameter in parameters
+            )
+            for native_position, signed_position in casts:
+                if not is_parameter(signed_position):
+                    continue
+                for normalized_page, page_source in normalizations:
+                    if not is_parameter(page_source) or not aliases.equivalent(call_page, normalized_page):
+                        continue
+                    for start, base, added_position in additions:
+                        if (
+                            not is_parameter(base)
+                            or not aliases.equivalent(added_position, native_position)
+                            or not aliases.equivalent(call_start, start)
+                        ):
+                            continue
+                        for checked_len, add_left, size in additions:
+                            if not aliases.equivalent(add_left, offset) or not is_parameter(size):
+                                continue
+                            for page_count, ceil_len, ceil_page in ceilings:
+                                if not aliases.equivalent(ceil_len, checked_len) or not aliases.equivalent(
+                                    ceil_page, normalized_page
+                                ):
+                                    continue
+                                if cache_residency_zero_none_guard(body, page_count, aliases) and (
+                                    cache_residency_has_plan_result(
+                                        body,
+                                        aligned,
+                                        checked_len,
+                                        page_count,
+                                        aliases,
+                                    )
+                                ):
+                                    violations.append(
+                                        "mapped-file cache-residency planning copied across "
+                                        f"{helper.path.as_posix()} and {caller.path.as_posix()}"
+                                    )
+    return violations
+
+
+def mapped_file_cache_residency_duplicate_policy_violations(
+    production_sources: dict[Path, str],
+) -> list[str]:
+    records = [
+        record
+        for path, source in production_sources.items()
+        for record in warmup_function_records(path, source)
+    ]
+    violations = [
+        f"{record.path.as_posix()}: {record.name} duplicates mapped-file cache-residency planning"
+        for record in records
+        if cache_residency_direct_copy(record)
+        and not (
+            record.path == MAPPED_FILE_KERNEL_PATH
+            and record.name == MAPPED_FILE_CACHE_RESIDENCY_PLANNER
+        )
+    ]
+    violations.extend(cache_residency_split_copy_violations(records))
+    return violations
+
+
+def cfg_target_function_body(source: str, target: str, function_name: str) -> str | None:
+    active = rust_source_without_comments(source)
+    declaration = re.search(
+        rf'#\[cfg\(target_os\s*=\s*"{re.escape(target)}"\)\]\s*'
+        rf'(?:#\[[^\]]+\]\s*)*fn\s+{re.escape(function_name)}\b',
+        active,
+    )
+    if declaration is None:
+        return None
+    opening_brace = active.find("{", declaration.end())
+    extracted = braced_body(active, opening_brace) if opening_brace != -1 else None
+    return None if extracted is None else extracted[0]
+
+
+def mapped_file_cache_residency_adapter_violations(
+    canonical_source: str,
+    default_mapped_file_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    violations = mapped_file_cache_residency_plan_violations(canonical_source)
+    default_production = source_without_cfg_test_items(default_mapped_file_source)
+
+    planner_imports = [
+        body
+        for _, body, _ in active_use_records(default_production)
+        if MAPPED_FILE_CACHE_RESIDENCY_PLANNER in body
+    ]
+    if planner_imports:
+        violations.append("Store cache-residency planner must remain a direct fully-qualified call")
+
+    linux_body = compact_rust(
+        cfg_target_function_body(default_mapped_file_source, "linux", "is_loaded") or ""
+    )
+    expected_linux_body = (
+        "if!self.is_valid_cache_range(position,size){returnfalse;}"
+        "letpage_size=get_page_size();"
+        "letbase_addr=self.get_mapped_file().as_ptr()asusize;"
+        "letSome(plan)=rocketmq_store_local::mapped_file::kernel::"
+        "plan_mapped_file_cache_residency(base_addr,position,size,page_size,)else{"
+        "returnfalse;};"
+        "letmutresidency=vec![0u8;plan.page_count];"
+        "letresult=mincore(plan.aligned_startas*constu8,plan.checked_len,"
+        "residency.as_mut_ptr(),);"
+        "result==0&&residency.iter().all(|page|page&1==1)"
+    )
+    if linux_body != expected_linux_body:
+        violations.append("Store Linux cache-residency adapter dataflow changed")
+    if linux_body.count("plan_mapped_file_cache_residency(") != 1:
+        violations.append("Store Linux cache-residency adapter must plan exactly once")
+
+    for target in ("windows", "macos"):
+        target_body = compact_rust(
+            cfg_target_function_body(default_mapped_file_source, target, "is_loaded") or ""
+        )
+        if MAPPED_FILE_CACHE_RESIDENCY_PLANNER in target_body:
+            violations.append(f"Store {target} is_loaded must not use the Linux residency planner")
+
+    normalized_sources = {
+        path: source_without_cfg_test_items(source)
+        for path, source in production_sources.items()
+    }
+    normalized_sources[DEFAULT_MAPPED_FILE_PATH] = default_production
+    for item, kind in (
+        (MAPPED_FILE_CACHE_RESIDENCY_PLAN, "struct"),
+        (MAPPED_FILE_CACHE_RESIDENCY_PLANNER, "fn"),
+    ):
+        occurrences = file_item_owner_occurrences(normalized_sources, item)
+        if occurrences != [(MAPPED_FILE_KERNEL_PATH, kind)]:
+            violations.append(f"{item} owner occurrences changed: {occurrences}")
+
+    reference_paths: dict[Path, int] = {}
+    for path, source in normalized_sources.items():
+        count = len(
+            re.findall(
+                rf"\b{re.escape(MAPPED_FILE_CACHE_RESIDENCY_PLANNER)}\b",
+                active_rust_source(source),
+            )
+        )
+        if count:
+            reference_paths[path] = count
+    expected_references = {
+        MAPPED_FILE_KERNEL_PATH: 1,
+        DEFAULT_MAPPED_FILE_PATH: 1,
+    }
+    if reference_paths != expected_references:
+        violations.append(f"cache-residency planner production references changed: {reference_paths}")
+
+    violations.extend(
+        mapped_file_cache_residency_duplicate_policy_violations(normalized_sources)
     )
     return violations
 
@@ -12353,7 +12782,12 @@ fn non_none_request_guard_is_not_the_lock_range_policy(
             canonical.replace("position < file_size", "position <= file_size", 1),
             canonical.replace("position.checked_add(size)", "position.checked_add(file_size)", 1),
             canonical.replace("end <= file_size", "end < file_size", 1),
-            canonical.replace("position as usize", "usize::try_from(position).unwrap_or_default()", 1),
+            canonical.replace(
+                "let file_size = self.file_size() as usize;\n        let position = position as usize;",
+                "let file_size = self.file_size() as usize;\n"
+                "        let position = usize::try_from(position).unwrap_or_default();",
+                1,
+            ),
             canonical.replace("self.file_size() as usize", "self.file_size() as u32 as usize", 1),
             canonical.replace("checked_add(size)", "wrapping_add(size)", 1),
             canonical.replace("checked_add(size)", "saturating_add(size)", 1),
@@ -12599,6 +13033,285 @@ fn observed_start_boundary_only(file_size: u64, position: i64, size: usize) -> b
         self.assertEqual(
             [],
             mapped_file_cache_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                near_miss_sources,
+            ),
+        )
+
+    def test_mapped_file_cache_residency_plan_has_one_local_owner_and_exact_linux_adapter(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        self.assertEqual([], mapped_file_cache_residency_plan_violations(canonical))
+        self.assertEqual(
+            [],
+            mapped_file_cache_residency_adapter_violations(
+                canonical,
+                default_mapped_file,
+                production_sources,
+            ),
+        )
+
+    def test_mapped_file_cache_residency_contract_rejects_semantic_boundary_and_copy_mutations(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        owner_mutations = [
+            canonical.replace(
+                "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub struct MappedFileCacheResidencyPlan",
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub struct MappedFileCacheResidencyPlan",
+                1,
+            ),
+            canonical.replace("pub aligned_start: usize", "aligned_start: usize", 1),
+            canonical.replace("pub checked_len: usize", "pub checked_len: u64", 1),
+            canonical.replace("pub page_count: usize", "pub page_count: u64", 1),
+            canonical.replace("position: i64", "position: u64", 1),
+            canonical.replace("let position = position as usize", "let position = usize::try_from(position).ok()?", 1),
+            canonical.replace(
+                "let page_size = page_size.max(1);\n    let start_addr",
+                "let page_size = page_size.max(2);\n    let start_addr",
+                1,
+            ),
+            canonical.replace("base_addr.saturating_add(position)", "base_addr.wrapping_add(position)", 1),
+            canonical.replace("start_addr / page_size * page_size", "start_addr / page_size", 1),
+            canonical.replace("start_addr - aligned_start", "start_addr.saturating_sub(aligned_start)", 1),
+            canonical.replace("page_offset.saturating_add(size)", "page_offset.checked_add(size)?", 1),
+            canonical.replace("checked_len.div_ceil(page_size)", "checked_len / page_size", 1),
+            canonical.replace("if page_count == 0", "if page_count <= 1", 1),
+            canonical.replace("aligned_start,\n        checked_len,", "aligned_start: start_addr,\n        checked_len,", 1),
+            canonical.replace("checked_len,\n        page_count,", "checked_len: size,\n        page_count,", 1),
+            canonical.replace("page_count,\n    })", "page_count: checked_len,\n    })", 1),
+            canonical.replace(
+                "pub fn plan_mapped_file_cache_residency(",
+                "#[cfg_attr(any(), cfg(any()))]\npub fn plan_mapped_file_cache_residency(",
+                1,
+            ),
+            canonical.replace(
+                "pub struct MappedFileCacheResidencyPlan",
+                "#[cfg(any())]\npub struct MappedFileCacheResidencyPlan",
+                1,
+            ),
+        ]
+        for index, mutation in enumerate(owner_mutations):
+            with self.subTest(owner_mutation=index):
+                self.assertNotEqual(canonical, mutation)
+                self.assertNotEqual([], mapped_file_cache_residency_plan_violations(mutation))
+
+        active_duplicate = canonical + """
+
+pub fn plan_mapped_file_cache_residency(
+    _base_addr: usize,
+    _position: i64,
+    _size: usize,
+    _page_size: usize,
+) -> Option<MappedFileCacheResidencyPlan> {
+    None
+}
+"""
+        self.assertNotEqual([], mapped_file_cache_residency_plan_violations(active_duplicate))
+        post_test_duplicate = canonical + """
+
+#[cfg(test)]
+mod cache_residency_plan_tests {
+    use super::{MappedFileCacheResidencyPlan, plan_mapped_file_cache_residency};
+
+    fn plan_mapped_file_cache_residency(
+        _base_addr: usize,
+        _position: i64,
+        _size: usize,
+        _page_size: usize,
+    ) -> Option<MappedFileCacheResidencyPlan> {
+        None
+    }
+}
+"""
+        self.assertEqual([], mapped_file_cache_residency_plan_violations(post_test_duplicate))
+
+        adapter_mutations = [
+            default_mapped_file.replace(
+                "rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency(",
+                "crate::mapped_file::kernel::plan_mapped_file_cache_residency(",
+                1,
+            ),
+            default_mapped_file.replace(
+                "use rocketmq_store_local::mapped_file::file::MappedFileStorage;",
+                "use rocketmq_store_local::mapped_file::file::MappedFileStorage;\n"
+                "use rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency;",
+                1,
+            ),
+            default_mapped_file.replace(
+                "base_addr, position, size, page_size,",
+                "base_addr, 0, size, page_size,",
+                1,
+            ),
+            default_mapped_file.replace(
+                "        let Some(plan) = rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency(\n",
+                "        let _ignored = rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency(\n"
+                "            base_addr, position, size, page_size,\n"
+                "        );\n"
+                "        let Some(plan) = rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency(\n",
+                1,
+            ),
+            default_mapped_file.replace("let page_size = get_page_size();", "let page_size = get_page_size().max(1);", 1),
+            default_mapped_file.replace("vec![0u8; plan.page_count]", "vec![0u8; plan.checked_len]", 1),
+            default_mapped_file.replace("plan.aligned_start as *const u8", "base_addr as *const u8", 1),
+            default_mapped_file.replace("plan.checked_len,", "size,", 1),
+            default_mapped_file.replace("residency.as_mut_ptr(),", "std::ptr::null_mut(),", 1),
+        ]
+        for index, mutation in enumerate(adapter_mutations):
+            with self.subTest(adapter_mutation=index):
+                self.assertNotEqual(default_mapped_file, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_cache_residency_adapter_violations(
+                        canonical,
+                        mutation,
+                        mutated_sources,
+                    ),
+                )
+
+        copied_path = Path("rocketmq-store/src/base/swappable.rs")
+        copied_plan = """
+#[derive(Clone, Copy)]
+struct CopiedCachePlan {
+    aligned: usize,
+    len: usize,
+    pages: usize,
+}
+
+fn copied_cache_plan(
+    mapped_base: usize,
+    signed_offset: i64,
+    requested_len: usize,
+    host_page: usize,
+) -> Option<CopiedCachePlan> {
+    let native_offset = signed_offset as usize;
+    let host_page = host_page.max(1);
+    let query_start = mapped_base.saturating_add(native_offset);
+    let aligned = query_start / host_page * host_page;
+    let in_page = query_start - aligned;
+    let len = in_page.saturating_add(requested_len);
+    let pages = len.div_ceil(host_page);
+    if pages == 0 {
+        return None;
+    }
+    Some(CopiedCachePlan { aligned, len, pages })
+}
+"""
+        copied_aliases = copied_plan.replace(
+            "let native_offset = signed_offset as usize;",
+            "let offset_alias = signed_offset;\n    let native_offset = offset_alias as usize;",
+            1,
+        ).replace(
+            "let query_start = mapped_base.saturating_add(native_offset);",
+            "let base_alias = mapped_base;\n    let query_start = base_alias.saturating_add(native_offset);\n    let start_alias = query_start;",
+            1,
+        ).replace("query_start / host_page", "start_alias / host_page", 1).replace(
+            "query_start - aligned", "start_alias - aligned", 1
+        )
+        for kind, copied in (
+            ("direct", copied_plan),
+            ("renamed_aliases", copied_aliases),
+            ("cfg", "#[cfg(any())]\n" + copied_plan),
+        ):
+            with self.subTest(copied_policy=kind):
+                copied_sources = dict(production_sources)
+                copied_sources[copied_path] += copied
+                self.assertNotEqual(
+                    [],
+                    mapped_file_cache_residency_adapter_violations(
+                        canonical,
+                        default_mapped_file,
+                        copied_sources,
+                    ),
+                )
+
+        helper_path = Path("rocketmq-store/src/base/swappable.rs")
+        caller_path = Path("rocketmq-store/src/base/allocate_mapped_file_service.rs")
+        split_sources = dict(production_sources)
+        split_sources[helper_path] += """
+pub(crate) fn align_cache_query(query_start: usize, host_page: usize) -> (usize, usize) {
+    let aligned = query_start / host_page * host_page;
+    let in_page = query_start - aligned;
+    (aligned, in_page)
+}
+"""
+        split_sources[caller_path] += """
+use crate::base::swappable::align_cache_query as cache_alignment;
+
+struct SplitCachePlan { aligned: usize, len: usize, pages: usize }
+
+fn copied_cache_plan_through_use_alias(
+    mapped_base: usize,
+    signed_offset: i64,
+    requested_len: usize,
+    host_page: usize,
+) -> Option<SplitCachePlan> {
+    let native_offset = signed_offset as usize;
+    let host_page = host_page.max(1);
+    let query_start = mapped_base.saturating_add(native_offset);
+    let (aligned, in_page) = cache_alignment(query_start, host_page);
+    let len = in_page.saturating_add(requested_len);
+    let pages = len.div_ceil(host_page);
+    if pages == 0 { return None; }
+    Some(SplitCachePlan { aligned, len, pages })
+}
+"""
+        split_violations = mapped_file_cache_residency_adapter_violations(
+            canonical,
+            default_mapped_file,
+            split_sources,
+        )
+        self.assertTrue(
+            any(
+                helper_path.as_posix() in violation and caller_path.as_posix() in violation
+                for violation in split_violations
+            ),
+            split_violations,
+        )
+
+        test_only_sources = dict(production_sources)
+        test_only_sources[copied_path] += "\n#[cfg(test)]\nmod copied_plan_tests {\n" + copied_plan + "}\n"
+        self.assertEqual(
+            [],
+            mapped_file_cache_residency_adapter_violations(
+                canonical,
+                default_mapped_file,
+                test_only_sources,
+            ),
+        )
+
+        near_miss_sources = dict(production_sources)
+        near_miss_sources[copied_path] += """
+fn unrelated_saturating_add(start: usize, len: usize) -> usize { start.saturating_add(len) }
+fn unrelated_alignment(start: usize, page: usize) -> usize { start / page * page }
+fn unrelated_page_count(len: usize, page: usize) -> usize { len.div_ceil(page) }
+
+fn incomplete_cache_plan(base: usize, position: i64, size: usize, page: usize) -> usize {
+    let position = position as usize;
+    let page = page.max(1);
+    let start = base.saturating_add(position);
+    let aligned = start / page * page;
+    let offset = start - aligned;
+    offset.saturating_add(size)
+}
+"""
+        self.assertEqual(
+            [],
+            mapped_file_cache_residency_adapter_violations(
                 canonical,
                 default_mapped_file,
                 near_miss_sources,

@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1080,3 +1080,36 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03y 只迁移 cache-residency 纯范围校验；不迁移或修改 `mincore`/VirtualQuery、page planning、
   allocation、pointer/unsafe、metrics、错误/可观测性、mapped-file I/O、async/runtime、flush/group commit、CQ/Index、
   HA、Timer/POP 或持久格式。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03z Linux mapped-file cache-residency page-planning evidence
+
+- [x] `[DEV]` `MappedFileCacheResidencyPlan` 与 `plan_mapped_file_cache_residency` 现为 Linux cache-residency
+  对齐地址、检查长度和 residency 页数的唯一 canonical owner；Local 只处理数值型地址与范围，不拥有或解引用
+  mapped-memory 指针。Store Linux adapter 保留 M06-03y 范围校验、`get_page_size`、mapped pointer 获取、`Vec`
+  分配、`mincore`、residency 结果判定与 metrics 编排，并以 fully-qualified path 精确调用 planner 一次；Windows 与
+  macOS adapter 未修改。
+- [x] `[COMPAT/SEMANTICS]` 冻结既有 `position as usize`、`page_size.max(1)`、base+position 和 page-offset+size
+  两处 `saturating_add`、向下 alignment、page offset、`div_ceil` 与零 page-count 返回 `None` 的顺序。极值输入保持
+  不 panic；未在 planner 重复增加 zero-size/range validation，因此 aligned zero-size 返回 `None`、misaligned
+  zero-size 仍产生既有非零原语义 plan，实际 Store caller 继续由 M06-03y 在调用前拒绝零 size。
+- [x] `[TEST]` Rust TDD RED 由 Local fixture 的 2 个 E0432 证明 owner/type 缺失；GREEN 后 planner focused 1/1、
+  mapped-file kernel 15/15、Local lib 69/69、Local default/all-feature 全量、Store invalid-range 1/1 与
+  `DefaultMappedFile` 30/30 均通过。M06 source/mutation contract 新增 owner/adapter 两项，从 111 增至 113 项，
+  focused 2/2（32.781s）与冻结候选完整 113/113（429.103s）均通过。
+- [x] `[CONTRACT]` contract 锁定 plan struct 的 `Copy/Eq`、公开字段顺序/类型、planner 签名/body/statement order/
+  visibility/cfg、唯一 Local owner，以及 Linux Store guard→page-size→base-address→单次 planner→allocation→`mincore`
+  →result 的精确 dataflow。mutation 覆盖 cast/max、两处 saturating add、alignment/subtraction、`div_ceil`、zero guard、
+  plan 字段映射与 Store 参数/字段消费，并覆盖 cfg/cfg_attr/duplicate/post-test、变量改名/alias、direct/cfg copy 和跨文件
+  split-helper use-alias 完整副本；单独 saturating-add/alignment/div-ceil 与缺少后续角色的 near miss 均保持零误报。
+- [x] `[FEATURE/PLATFORM]` 未修改 manifest、feature 或依赖。Local 与 Store 各七组有效 feature closure、两 crate
+  all-target/all-feature package Clippy、root exact workspace Clippy、Local strict Rustdoc 均通过；Store 普通 Rustdoc
+  只复现 4 个未触及的 invalid-HTML warning。WSL/Linux 固定隔离 target 通过 Local planner 1/1、Store invalid-range
+  1/1 和两 crate all-feature check，cleanup 删除 10,948 files/12.6 GiB 并确认固定路径不存在。
+- [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、AGENTS routing、workspace
+  fmt、Python compile 与 diff 检查均通过。初次 ArcMut final 因新增 import 的相邻上下文产生同 item 1 NEW/1 STALE；
+  Store 改用 fully-qualified planner 调用后复核通过，baseline 与 relocation approval 保持零改动。error hygiene 只复现
+  未触及的 Broker source stringification、MCP anyhow 与两份缺失治理文档基线。
+- [x] `[SCOPE]` M06-03z 只迁移 Linux cache-residency 纯整数 page planning；不迁移范围校验、实际 `mincore`、
+  allocation、pointer/unsafe、metrics、错误/可观测性、mapped-file I/O、Windows/macOS adapter、async/runtime、flush/
+  group commit、CQ/Index、HA、Timer/POP 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和
+  M06-04..12 保持未完成。
