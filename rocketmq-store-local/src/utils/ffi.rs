@@ -15,6 +15,100 @@
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 
+pub const MADV_NORMAL: i32 = 0;
+pub const MADV_RANDOM: i32 = 1;
+pub const MADV_SEQUENTIAL: i32 = 2;
+pub const MADV_WILLNEED: i32 = 3;
+pub const MADV_DONTNEED: i32 = 4;
+
+#[inline]
+pub fn get_page_size() -> usize {
+    page_size::get()
+}
+
+/// Advises the operating system how a valid mapped range will be used.
+pub fn madvise(addr: *const u8, len: usize, advice: i32) -> i32 {
+    #[cfg(unix)]
+    {
+        use std::ffi::c_void;
+
+        // SAFETY: this call does not transfer ownership. The caller supplies a live mapped range;
+        // the operating system validates the address, length, and advice value.
+        unsafe { libc::madvise(addr as *mut c_void, len, advice) }
+    }
+    #[cfg(windows)]
+    {
+        let _ = (addr, len, advice);
+        0
+    }
+}
+
+/// Requests best-effort prefetching for a valid process-local memory range.
+pub fn prefetch_virtual_memory(addr: *const u8, len: usize) -> RocketMQResult<bool> {
+    if len == 0 {
+        return Ok(false);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::ffi::c_void;
+
+        use windows::Win32::System::Memory::PrefetchVirtualMemory;
+        use windows::Win32::System::Memory::WIN32_MEMORY_RANGE_ENTRY;
+        use windows::Win32::System::Threading::GetCurrentProcess;
+
+        let range = WIN32_MEMORY_RANGE_ENTRY {
+            VirtualAddress: addr as *mut c_void,
+            NumberOfBytes: len,
+        };
+        // SAFETY: `addr..addr + len` is required to be a live process-local range. The API does
+        // not retain the range or transfer ownership.
+        unsafe { PrefetchVirtualMemory(GetCurrentProcess(), &[range], 0) }.map_err(|error| {
+            RocketMQError::StorageReadFailed {
+                path: "PrefetchVirtualMemory".to_string(),
+                reason: error.to_string(),
+            }
+        })?;
+        Ok(true)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (addr, len);
+        Ok(false)
+    }
+}
+
+/// Reports residency for each page in a valid mapped range.
+pub fn mincore(addr: *const u8, len: usize, vec: *mut u8) -> i32 {
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::c_void;
+
+        use libc::c_uchar;
+
+        // SAFETY: the caller provides a live mapped range and an output vector large enough for
+        // one residency byte per page. The operating system validates both pointers.
+        unsafe { libc::mincore(addr as *mut c_void, len, vec as *mut c_uchar) }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::c_void;
+
+        use libc::c_char;
+
+        // SAFETY: the caller provides a live mapped range and an output vector large enough for
+        // one residency byte per page. The operating system validates both pointers.
+        unsafe { libc::mincore(addr as *mut c_void, len, vec as *mut c_char) }
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = (addr, len, vec);
+        0
+    }
+}
+
 #[inline]
 /// Locks a process-local memory range into physical memory.
 ///

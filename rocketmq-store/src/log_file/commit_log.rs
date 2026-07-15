@@ -90,6 +90,7 @@ use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
+use crate::log_file::mapped_file::MappedFileAppend;
 use crate::message_store::local_file_message_store::CommitLogDispatcherDefault;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;

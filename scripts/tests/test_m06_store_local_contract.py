@@ -49,7 +49,19 @@ KERNEL_ITEMS = {
 }
 MAPPED_FILE_KERNEL_PATH = Path("rocketmq-store-local/src/mapped_file/kernel.rs")
 MAPPED_FILE_RAW_PATH = Path("rocketmq-store-local/src/mapped_file/raw.rs")
+MAPPED_FILE_CONTRACT_PATH = Path("rocketmq-store-local/src/mapped_file/contract.rs")
+MAPPED_FILE_MEMORY_PATH = Path("rocketmq-store-local/src/mapped_file/memory.rs")
+MAPPED_FILE_SELECT_RESULT_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/select_result.rs"
+)
 DEFAULT_MAPPED_FILE_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/default_mapped_file.rs"
+)
+STORE_MAPPED_FILE_PATH = Path("rocketmq-store/src/log_file/mapped_file.rs")
+STORE_MAPPED_FILE_MEMORY_PATH = Path(
+    "rocketmq-store/src/log_file/mapped_file/memory.rs"
+)
+STORE_DEFAULT_MAPPED_FILE_FACADE_PATH = Path(
     "rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"
 )
 STORE_CHECKPOINT_PATH = Path("rocketmq-store/src/base/store_checkpoint.rs")
@@ -89,6 +101,7 @@ STORE_COMMIT_LOG_RECOVERY_PATH = Path(
     "rocketmq-store/src/log_file/commit_log_recovery.rs"
 )
 MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush", "is_able_to_commit")
+DEFAULT_MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush",)
 MAPPED_FILE_POLICY_REFERENCE = re.compile(
     r"(?:\.|::)\s*(is_able_to_flush|is_able_to_commit)\b"
 )
@@ -170,7 +183,7 @@ MEMORY_LOCK_PRODUCTION_SEAM_COUNTS = {
         "lock_region_with": 1,
         "unlock_region_with": 1,
     },
-    Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"): {
+    Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"): {
         "lock_region_with": 2,
         "unlock_region_with": 2,
     },
@@ -185,7 +198,7 @@ MEMORY_LOCK_TEST_SEAM_COUNTS = {
         "lock_region_with": 4,
         "unlock_region_with": 1,
     },
-    Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"): {
+    Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"): {
         "lock_region_with": 3,
         "unlock_region_with": 1,
     },
@@ -199,7 +212,9 @@ DEFAULT_MAPPED_FILE_ALIAS_BRACE_USE_ALLOWLIST = {
     "use crate::utils::ffi::munlock as unlock_memory",
     "use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT}",
 }
-DEFAULT_MAPPED_FILE_TYPE_ALIAS_ALLOWLIST = {"type Target = [u8]"}
+DEFAULT_MAPPED_FILE_TYPE_ALIAS_ALLOWLIST = {
+    "type SelectResult = SelectMappedBufferResult<M>",
+}
 PROGRESS_FIELDS = {
     "file_size",
     "wrote_position",
@@ -551,7 +566,8 @@ def inherent_method_records(
     active = active_rust_source(source)
     records = {method_name: [] for method_name in method_names}
     impl_declaration = re.compile(
-        rf"(?m)^[ \t]*impl[ \t]+{re.escape(type_name)}\b"
+        rf"(?m)^[ \t]*impl(?:[ \t]*<[^{{}};]*>)?[ \t]+{re.escape(type_name)}"
+        rf"(?:[ \t]*<[^{{}};]*>)?(?=[ \t\r\n]|where\b|\{{)"
         rf"(?:[ \t\r\n]+where\b[^{{}}]*)?[ \t\r\n]*\{{"
     )
     method_declaration = re.compile(
@@ -985,7 +1001,10 @@ def store_production_mapped_file_policy_violations(
         )
         if path == STORE_CHECKPOINT_PATH:
             source_violations.extend(store_checkpoint_page_compatibility_violations(source))
-        elif path != DEFAULT_MAPPED_FILE_PATH and "OS_PAGE_SIZE" in active_rust_source(source):
+        elif (
+            path != STORE_DEFAULT_MAPPED_FILE_FACADE_PATH
+            and "OS_PAGE_SIZE" in active_rust_source(source)
+        ):
             source_violations.append("unexpected Store OS_PAGE_SIZE compatibility reference")
         violations.extend(f"{path.as_posix()}: {violation}" for violation in source_violations)
     return violations
@@ -3830,14 +3849,18 @@ def mapped_file_warmup_store_adapter_violations(
     imports = [
         body
         for visibility, body, _ in active_use_records(default_production)
-        if visibility == "" and "mapped_file::kernel" in body
+        if visibility == ""
+        and (
+            MAPPED_FILE_WARMUP_VISITOR in body
+            or MAPPED_FILE_WARMUP_OPERATION in body
+        )
     ]
     expected_imports = [
-        "rocketmq_store_local::mapped_file::kernel::visit_mapped_file_warmup_schedule",
-        "rocketmq_store_local::mapped_file::kernel::MappedFileWarmupOperation",
+        "crate::mapped_file::kernel::visit_mapped_file_warmup_schedule",
+        "crate::mapped_file::kernel::MappedFileWarmupOperation",
     ]
     if imports != expected_imports:
-        violations.append(f"Store warmup Local imports changed: {imports}")
+        violations.append(f"Local DefaultMappedFile warmup imports changed: {imports}")
 
     warmup_body = compact_rust(
         named_raw_function_body(default_production, "warm_mapped_file_with_ops") or ""
@@ -3996,28 +4019,36 @@ def mapped_file_progress_adapter_violations(
     violations.extend(
         direct_exact_reexport_violations(
             default_production,
-            "rocketmq_store_local::mapped_file::kernel",
+            "crate::mapped_file::kernel",
+            "OS_PAGE_SIZE",
+        )
+    )
+    store_facade = source_without_cfg_test_items(
+        production_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH]
+    )
+    violations.extend(
+        direct_exact_reexport_violations(
+            store_facade,
+            "rocketmq_store_local::mapped_file",
             "OS_PAGE_SIZE",
         )
     )
 
     expected_wrapper_signatures = {
         "is_able_to_flush": "fnis_able_to_flush(&self,flush_least_pages:i32)->bool",
-        "is_able_to_commit": "fnis_able_to_commit(&self,commit_least_pages:i32)->bool",
     }
     expected_wrapper_bodies = {
         "is_able_to_flush": (
             "self.raw_core.is_able_to_flush(self.get_read_position(),flush_least_pages)"
         ),
-        "is_able_to_commit": "self.raw_core.is_able_to_commit(commit_least_pages)",
     }
     wrapper_records = inherent_method_records(
         default_production,
         "DefaultMappedFile",
-        MAPPED_FILE_POLICY_METHODS,
+        DEFAULT_MAPPED_FILE_POLICY_METHODS,
     )
     default_active = active_rust_source(default_production)
-    for function_name in MAPPED_FILE_POLICY_METHODS:
+    for function_name in DEFAULT_MAPPED_FILE_POLICY_METHODS:
         global_definition_count = len(
             re.findall(rf"\bfn\s+{re.escape(function_name)}\b", default_active)
         )
@@ -4044,6 +4075,17 @@ def mapped_file_progress_adapter_violations(
     violations.extend(
         store_production_mapped_file_policy_violations(store_policy_sources)
     )
+    local_fixed_page_aliases = store_fixed_page_aliases(
+        {DEFAULT_MAPPED_FILE_PATH: default_production}
+    )
+    violations.extend(
+        f"{DEFAULT_MAPPED_FILE_PATH.as_posix()}: {violation}"
+        for violation in store_threshold_arithmetic_violations(
+            default_production,
+            local_fixed_page_aliases,
+            check_threshold_comparisons=True,
+        )
+    )
 
     references_by_path: dict[Path, list[str]] = {}
     for path, source in production_sources.items():
@@ -4061,11 +4103,7 @@ def mapped_file_progress_adapter_violations(
             "is_able_to_commit",
             "is_able_to_commit",
         ],
-        DEFAULT_MAPPED_FILE_PATH: [
-            "is_able_to_flush",
-            "is_able_to_flush",
-            "is_able_to_commit",
-        ]
+        DEFAULT_MAPPED_FILE_PATH: ["is_able_to_flush", "is_able_to_flush"],
     }
     if references_by_path != expected_references:
         violations.append(f"mapped-file policy production references changed: {references_by_path}")
@@ -4988,11 +5026,12 @@ def mapped_file_cache_range_adapter_violations(
         count = len(MAPPED_FILE_CACHE_RANGE_REFERENCE.findall(active))
         if count:
             references[path] = count
-    if definitions != [
+    expected_definitions = [
         MAPPED_FILE_KERNEL_PATH,
         MAPPED_FILE_RAW_PATH,
         DEFAULT_MAPPED_FILE_PATH,
-    ]:
+    ]
+    if sorted(definitions, key=str) != sorted(expected_definitions, key=str):
         violations.append(f"is_valid_cache_range production definitions changed: {definitions}")
     if references != {
         MAPPED_FILE_RAW_PATH: 1,
@@ -5560,8 +5599,8 @@ def mapped_file_cache_residency_adapter_violations(
         "if!self.is_valid_cache_range(position,size){returnfalse;}"
         "letpage_size=get_page_size();"
         "letbase_addr=self.get_mapped_file().as_ptr()asusize;"
-        "letSome(plan)=rocketmq_store_local::mapped_file::kernel::"
-        "plan_mapped_file_cache_residency(base_addr,position,size,page_size,)else{"
+        "letSome(plan)=crate::mapped_file::kernel::"
+        "plan_mapped_file_cache_residency(base_addr,position,size,page_size)else{"
         "returnfalse;};"
         "letmutresidency=vec![0u8;plan.page_count];"
         "letresult=mincore(plan.aligned_startas*constu8,plan.checked_len,"
@@ -5767,6 +5806,7 @@ def active_type_alias_statements(source: str) -> list[str]:
 
 
 def default_mapped_file_syntax_violations(source: str) -> list[str]:
+    source = source_without_cfg_test_items(source)
     violations: list[str] = []
     for kind, _, body, statement in active_import_records(source):
         if kind != "use" or (" as " not in body and "{" not in body):
@@ -5839,9 +5879,9 @@ def default_mapped_file_mapping_violations(source: str) -> list[str]:
         for name, field_type in fields
         if re.search(r"\bMappedFileMapping\b", field_type)
     ]
-    if mapping_fields != [("mapping", "MappedFileMapping<ArcMut<MmapMut>>")]:
+    if mapping_fields != [("mapping", "MappedFileMapping<M>")]:
         violations.append(
-            "MappedFileMapping fields must be exactly: mapping: MappedFileMapping<ArcMut<MmapMut>>"
+            "MappedFileMapping fields must be exactly: mapping: MappedFileMapping<M>"
         )
 
     legacy_names = {
@@ -5877,12 +5917,12 @@ def legacy_mapping_getter_signature_violations(source: str) -> list[str]:
         "is_lazy_mmap_enabled": r"pub\s+fn\s+is_lazy_mmap_enabled\s*\(\s*&self\s*\)\s*->\s*bool",
         "is_mapped": r"pub\s+fn\s+is_mapped\s*\(\s*&self\s*\)\s*->\s*bool",
         "lazy_mmap_stats": r"pub\s+fn\s+lazy_mmap_stats\s*\(\s*&self\s*\)\s*->\s*LazyMmapStats",
-        "get_mapped_file_mut": r"pub\s+fn\s+get_mapped_file_mut\s*\(\s*&self\s*\)\s*->\s*&mut\s+MmapMut",
-        "get_mapped_file": r"pub\s+fn\s+get_mapped_file\s*\(\s*&self\s*\)\s*->\s*&MmapMut",
-        "get_mapped_file_arcmut": (
-            r"pub\s+fn\s+get_mapped_file_arcmut\s*\(\s*&self\s*\)\s*"
-            r"->\s*ArcMut\s*<\s*MmapMut\s*>"
+        "mapped_file_mut_parts": (
+            r"pub\s+unsafe\s+fn\s+mapped_file_mut_parts\s*\(\s*&self\s*\)\s*"
+            r"->\s*\(\s*\*mut\s+u8\s*,\s*usize\s*\)"
         ),
+        "get_mapped_file": r"pub\s+fn\s+get_mapped_file\s*\(\s*&self\s*\)\s*->\s*&\[u8\]",
+        "get_mapped_memory": r"pub\s+fn\s+get_mapped_memory\s*\(\s*&self\s*\)\s*->\s*M",
     }
     return [name for name, pattern in signatures.items() if re.search(pattern, active) is None]
 
@@ -6278,13 +6318,15 @@ def commit_log_loader_owner_violations(source: str) -> list[str]:
     adapter_body = active_item_body(production, "struct", "CommitLogLoadAdapter")
     expected_adapter = (
         "pubopen:fn(path:&Path,file_size:u64,mode:CommitLogMappingMode)->io::Result<T>,"
-        "pubrecovery_mapping:for<'a>fn(&'aT)->Option<(&'aMmapMut,&'astr)>,"
+        "pubrecovery_mapping:RecoveryMapping<T>,"
         "pubmark_fully_loaded:fn(&T,position:i32),"
     )
     if adapter_body is None or re.sub(r"\s+", "", adapter_body) != expected_adapter:
         violations.append("Local CommitLog load adapter function table changed")
     if "pubstructCommitLogLoadAdapter<T>" not in normalized:
         violations.append("Local CommitLog load adapter owner changed")
+    if "pubtypeRecoveryMapping<T>=for<'a>fn(&'aT)->Option<(&'a[u8],&'astr)>;" not in normalized:
+        violations.append("Local CommitLog recovery mapping boundary changed")
 
     loader_body = active_item_body(production, "struct", "CommitLogLoader")
     expected_fields = (
@@ -6757,9 +6799,9 @@ def commit_log_hint_owner_violations(source: str) -> list[str]:
 
     expected_adapter_signatures = [
         r"pub\s+fn\s+apply_recovery_mmap_advice\s*\(\s*advice\s*:\s*RecoveryMmapAdvice\s*,"
-        r"\s*mmap\s*:\s*&MmapMut\s*,\s*file_name\s*:\s*&str\s*,?\s*\)\s*->\s*HintOutcome",
+        r"\s*mmap\s*:\s*&\[u8\]\s*,\s*file_name\s*:\s*&str\s*,?\s*\)\s*->\s*HintOutcome",
         r"pub\s+fn\s+apply_recovery_file_prefetch\s*\(\s*prefetch\s*:\s*RecoveryFilePrefetch\s*,"
-        r"\s*mmap\s*:\s*&MmapMut\s*,\s*file_name\s*:\s*&str\s*,?\s*\)\s*->\s*HintOutcome",
+        r"\s*mmap\s*:\s*&\[u8\]\s*,\s*file_name\s*:\s*&str\s*,?\s*\)\s*->\s*HintOutcome",
     ]
     if any(re.search(signature, active) is None for signature in expected_adapter_signatures):
         violations.append("Local recovery hint adapter signatures changed")
@@ -6788,7 +6830,8 @@ def commit_log_hint_owner_violations(source: str) -> list[str]:
     mmap_required = [
         "RecoveryMmapAdvice::Disabled=>HintOutcome::not_attempted(),",
         "#[cfg(unix)]",
-        "mmap.advise(Advice::Sequential)",
+        "crate::utils::ffi::madvise(mmap.as_ptr(),mmap.len(),crate::utils::ffi::MADV_SEQUENTIAL)",
+        "ifresult!=0",
         "HintOutcome::failure(elapsed)",
         "HintOutcome::success(elapsed)",
         "#[cfg(not(unix))]",
@@ -6819,19 +6862,17 @@ def commit_log_hint_owner_violations(source: str) -> list[str]:
         violations.append("Local prefetch result mapper changed")
     platform_required = [
         "ifmmap.is_empty(){returnOk(false);}",
-        "PrefetchVirtualMemory(GetCurrentProcess(),&[range],0)",
+        "crate::utils::ffi::prefetch_virtual_memory(mmap.as_ptr(),mmap.len())",
+        ".map_err(io::Error::other)",
     ]
-    platform_raw = named_raw_function_body(production, "prefetch_virtual_memory") or ""
     if (
-        "fnprefetch_virtual_memory(mmap:&MmapMut)->Result<bool,String>" not in normalized
+        "fnprefetch_virtual_memory(mmap:&[u8])->io::Result<bool>" not in normalized
+        or "fnprefetch_outcome_from_result(result:io::Result<bool>,elapsed:Duration)->HintOutcome" not in normalized
         or re.search(r"#\s*\[\s*cfg\s*\(\s*windows\s*\)\s*\]\s*fn\s+prefetch_virtual_memory", active)
         is None
         or any(fragment not in platform_normalized for fragment in platform_required)
-        or "Storage read failed for 'PrefetchVirtualMemory': {error}" not in platform_raw
     ):
         violations.append("Local Windows prefetch helper changed")
-    if "// SAFETY:" not in platform_raw:
-        violations.append("Local Windows prefetch unsafe call lacks its exact safety rationale")
 
     mmap_raw = named_raw_function_body(production, "apply_recovery_mmap_advice") or ""
     prefetch_raw = named_raw_function_body(production, "apply_recovery_file_prefetch") or ""
@@ -6867,18 +6908,18 @@ def store_prefetch_ffi_compatibility_violations(source: str) -> list[str]:
     if body is None:
         return violations + ["Store prefetch_virtual_memory body missing"]
     body_normalized = re.sub(r"\s+", "", body)
-    expected = (
-        "iflen==0{returnOk(false);}"
-        "#[cfg(windows)]{usestd::ffi::c_void;usewindows::Win32::System::Memory::PrefetchVirtualMemory;"
-        "usewindows::Win32::System::Memory::WIN32_MEMORY_RANGE_ENTRY;"
-        "usewindows::Win32::System::Threading::GetCurrentProcess;"
-        "letrange=WIN32_MEMORY_RANGE_ENTRY{VirtualAddress:addras*mutc_void,NumberOfBytes:len,};"
-        "unsafe{PrefetchVirtualMemory(GetCurrentProcess(),&[range],0)}.map_err(|error|{"
-        "RocketMQError::StorageReadFailed{path:\"PrefetchVirtualMemory\".to_string(),reason:error.to_string(),}})?;"
-        "Ok(true)}#[cfg(not(windows))]{let_=addr;let_=len;Ok(false)}"
+    required = (
+        "iflen==0{returnOk(false);}",
+        "#[cfg(windows)]",
+        "PrefetchVirtualMemory(GetCurrentProcess(),&[range],0)",
+        "RocketMQError::StorageReadFailed{path:\"PrefetchVirtualMemory\".to_string(),reason:error.to_string(),}",
+        "#[cfg(not(windows))]",
+        "Ok(false)",
     )
-    if body_normalized != expected:
+    if any(fragment not in body_normalized for fragment in required):
         violations.append("Store prefetch_virtual_memory behavior changed")
+    if "// SAFETY:" not in body:
+        violations.append("prefetch_virtual_memory unsafe call lacks a safety rationale")
     return violations
 
 
@@ -8692,8 +8733,12 @@ def memory_lock_ffi_owner_violations(source: str) -> list[str]:
     for fragment in sorted(required):
         if fragment not in compact:
             violations.append(f"memory-lock syscall contract changed: {fragment}")
-    unsafe_count = len(re.findall(r"\bunsafe\s*\{", production))
-    safety_count = production.count("// SAFETY:")
+    memory_lock_bodies = "\n".join(
+        named_raw_function_body(production, function_name) or ""
+        for function_name in ("mlock", "munlock")
+    )
+    unsafe_count = len(re.findall(r"\bunsafe\s*\{", memory_lock_bodies))
+    safety_count = memory_lock_bodies.count("// SAFETY:")
     if unsafe_count != 4 or safety_count < unsafe_count:
         violations.append("every platform memory-lock unsafe block needs an adjacent SAFETY rationale")
     return violations
@@ -8778,22 +8823,22 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
             "active_memory_lock.manager.unlock_region_with(handle,&mutunlocker)?",
         ),
         (
-            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"),
             "lock_region",
             "self.lock_region_with(memory_lock_manager,category,offset,len,crate::utils::ffi::mlock)",
         ),
         (
-            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"),
             "lock_region_with",
             "memory_lock_manager.lock_region_with(category,addr,len,locker)",
         ),
         (
-            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"),
             "unlock_region",
             "self.unlock_region_with(memory_lock_manager,handle,crate::utils::ffi::munlock)",
         ),
         (
-            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"),
             "unlock_region_with",
             "memory_lock_manager.unlock_region_with(handle,unlocker)",
         ),
@@ -9947,8 +9992,8 @@ def mapped_file_raw_core_store_adapter_violations(source: str) -> list[str]:
         for kind, _, body, _ in active_import_records(production)
         if kind == "use" and "MappedFileRawCore" in body
     ]
-    if imports != ["rocketmq_store_local::mapped_file::MappedFileRawCore"]:
-        violations.append(f"Store MappedFileRawCore import changed: {imports}")
+    if imports != ["super::MappedFileRawCore"]:
+        violations.append(f"Local DefaultMappedFile raw-core import changed: {imports}")
     if "MappedFileProgress" in active:
         violations.append("Store must not directly reference MappedFileProgress")
     if compact_rust(production).count("raw_core:MappedFileRawCore::new(file_size)") != 1:
@@ -9965,24 +10010,31 @@ def mapped_file_raw_core_store_adapter_violations(source: str) -> list[str]:
         ),
         "append_message_offset_length": (
             "self.raw_core.append_bytes_with_position_update("
-            "||self.get_mapped_file_mut(),data,offset,length)"
+            "||{let(ptr,len)=unsafe{self.mapped_file_mut_parts()};"
+            "unsafe{Self::mutable_slice_from_parts(ptr,len)}},data,offset,length,)"
         ),
         "append_message_no_position_update": (
             "self.raw_core.append_bytes_without_position_update("
-            "||self.get_mapped_file_mut(),data,offset,length)"
+            "||{let(ptr,len)=unsafe{self.mapped_file_mut_parts()};"
+            "unsafe{Self::mutable_slice_from_parts(ptr,len)}},data,offset,length,)"
         ),
         "get_direct_write_buffer": (
-            "self.raw_core.direct_write_range(||self.get_mapped_file_mut(),required_space)"
+            "self.raw_core.direct_write_range(||{let(ptr,len)=unsafe{self.mapped_file_mut_parts()};"
+            "unsafe{Self::mutable_slice_from_parts(ptr,len)}},required_space,)"
         ),
         "write_bytes_segment": (
             "self.raw_core.write_bytes_segment("
-            "||self.get_mapped_file_mut(),data,start,offset,length)"
+            "||{let(ptr,len)=unsafe{self.mapped_file_mut_parts()};"
+            "unsafe{Self::mutable_slice_from_parts(ptr,len)}},data,start,offset,length,)"
         ),
-        "put_slice": "self.raw_core.put_slice(||self.get_mapped_file_mut(),data,index)",
+        "put_slice": (
+            "self.raw_core.put_slice(||{let(ptr,len)=unsafe{self.mapped_file_mut_parts()};"
+            "unsafe{Self::mutable_slice_from_parts(ptr,len)}},data,index,)"
+        ),
     }
     for method_name, expected_body in expected_delegates.items():
         body = named_function_body(production, method_name)
-        if re.sub(r"\s+", "", body or "") != expected_body:
+        if compact_rust(body or "") != expected_body:
             violations.append(f"Store {method_name} must remain one raw_core delegation")
 
     required_adapter_calls = {
@@ -10011,6 +10063,74 @@ def mapped_file_raw_core_store_adapter_violations(source: str) -> list[str]:
     ):
         if copied_policy in compact_rust(production):
             violations.append(f"Store retained raw byte policy: {copied_policy}")
+    return violations
+
+
+def mapped_file_owner_violations(production_sources: dict[Path, str]) -> list[str]:
+    active_sources = {
+        path: active_rust_source(source_without_cfg_test_items(source))
+        for path, source in production_sources.items()
+    }
+    violations: list[str] = []
+
+    expected_owners = {
+        r"\bpub\s+trait\s+MappedFile\b": MAPPED_FILE_CONTRACT_PATH,
+        r"\bpub\s+struct\s+DefaultMappedFile\b": DEFAULT_MAPPED_FILE_PATH,
+        r"\bpub\s+unsafe\s+trait\s+MappedMemory\b": MAPPED_FILE_MEMORY_PATH,
+        r"\bpub\s+struct\s+SelectMappedBufferResult\b": MAPPED_FILE_SELECT_RESULT_PATH,
+    }
+    for pattern, expected_path in expected_owners.items():
+        owners = [
+            path
+            for path, source in active_sources.items()
+            if re.search(pattern, source)
+        ]
+        if owners != [expected_path]:
+            violations.append(f"mapped-file canonical owner changed: {pattern} -> {owners}")
+
+    local_owner_paths = (
+        MAPPED_FILE_CONTRACT_PATH,
+        DEFAULT_MAPPED_FILE_PATH,
+        MAPPED_FILE_MEMORY_PATH,
+        MAPPED_FILE_SELECT_RESULT_PATH,
+    )
+    forbidden_local_owner_pattern = re.compile(
+        r"\b(?:ArcMut|MmapMut|rocketmq_common|rocketmq_rust|rocketmq_store)\b"
+    )
+    for path in local_owner_paths:
+        if forbidden_local_owner_pattern.search(active_sources[path]):
+            violations.append(f"{path.as_posix()}: Local mapped-file owner leaked facade/backend types")
+
+    store_root = compact_rust(active_sources[STORE_MAPPED_FILE_PATH])
+    if store_root.count("pubuserocketmq_store_local::mapped_file::MappedFile;") != 1:
+        violations.append("Store MappedFile compatibility re-export changed")
+    if store_root.count("pubtraitMappedFileAppend:MappedFile") != 1:
+        violations.append("Store message append adapter owner changed")
+    if re.search(r"\bpub\s+trait\s+MappedFile\b", active_sources[STORE_MAPPED_FILE_PATH]):
+        violations.append("Store recreated the canonical MappedFile trait")
+
+    store_default = compact_rust(active_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH])
+    expected_alias = (
+        "pubtypeDefaultMappedFile=rocketmq_store_local::mapped_file::"
+        "DefaultMappedFile<super::StoreMappedMemory>;"
+    )
+    if store_default.count(expected_alias) != 1:
+        violations.append("Store DefaultMappedFile compatibility specialization changed")
+    if re.search(r"\b(?:struct|enum|trait)\s+DefaultMappedFile\b", active_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH]):
+        violations.append("Store DefaultMappedFile facade regained implementation ownership")
+
+    mapped_file_module_sources = {
+        path: source
+        for path, source in active_sources.items()
+        if path == STORE_MAPPED_FILE_PATH
+        or path.parts[:5] == ("rocketmq-store", "src", "log_file", "mapped_file", path.name)
+    }
+    arc_mut_paths = [
+        path for path, source in mapped_file_module_sources.items() if re.search(r"\bArcMut\b", source)
+    ]
+    if arc_mut_paths:
+        violations.append(f"Store mapped-file retained ArcMut debt: {arc_mut_paths}")
+
     return violations
 
 
@@ -14281,7 +14401,6 @@ use crate::utils::ffi::munlock as unlock_memory;
 use windows::Win32::System::Memory::{
     VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT,
 };
-type Target = [u8];
 struct DefaultMappedFile {
     storage: MappedFileStorage,
     lazy_mmap_operations: AtomicU64,
@@ -14641,7 +14760,17 @@ struct DefaultMappedFile {
         canonical_dir = LOCAL_CRATE / "src" / "mapped_file"
         facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
         self.assertEqual(
-            LEAF_FILES | {"file.rs", "kernel.rs", "mapping.rs", "raw.rs"},
+            LEAF_FILES
+            | {
+                "contract.rs",
+                "default_mapped_file.rs",
+                "file.rs",
+                "kernel.rs",
+                "mapping.rs",
+                "memory.rs",
+                "raw.rs",
+                "select_result.rs",
+            },
             {path.name for path in canonical_dir.glob("*.rs")},
         )
         self.assertTrue(all(not (facade_dir / name).exists() for name in LEAF_FILES))
@@ -14672,49 +14801,22 @@ struct DefaultMappedFile {
                 item,
             )
 
-        facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
-        reference_facade = (facade_dir / "reference_resource.rs").read_text(encoding="utf-8")
-        counter_facade = (facade_dir / "reference_resource_counter.rs").read_text(encoding="utf-8")
-        self.assertEqual(
-            ["pub(crate) use ReferenceResource"],
-            active_kernel_use_statements(reference_facade),
-        )
-        self.assertEqual(
-            [
-                "pub(crate) use ReferenceResourceBase",
-                "pub(crate) use ReferenceResourceCounter",
-            ],
-            active_kernel_use_statements(counter_facade),
-        )
         store_sources = {
             path: path.read_text(encoding="utf-8")
             for path in STORE_CRATE.glob("src/**/*.rs")
         }
+        facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
         self.assertEqual(
             [
                 (
                     facade_dir / "default_mapped_file_impl.rs",
-                    "pub use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE",
-                ),
-                (
-                    facade_dir / "reference_resource.rs",
-                    "pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResource",
-                ),
-                (
-                    facade_dir / "reference_resource_counter.rs",
-                    "pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResourceBase",
-                ),
-                (
-                    facade_dir / "reference_resource_counter.rs",
-                    "pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResourceCounter",
+                    "pub use rocketmq_store_local::mapped_file::OS_PAGE_SIZE",
                 ),
             ],
             kernel_facade_boundary_uses(store_sources),
         )
 
-        default_mapped_file = (
-            facade_dir / "default_mapped_file_impl.rs"
-        ).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
         self.assertEqual(
             [],
             default_mapped_file_progress_violations(default_mapped_file),
@@ -14840,8 +14942,8 @@ struct DefaultMappedFile {
                 1,
             ),
             default_mapped_file.replace(
-                "use rocketmq_store_local::mapped_file::MappedFileRawCore;",
-                "use rocketmq_store_local::mapped_file::MappedFileRawCore as RawCore;",
+                "use super::MappedFileRawCore;",
+                "use super::MappedFileRawCore as RawCore;",
                 1,
             ),
             default_mapped_file.replace(
@@ -14855,8 +14957,8 @@ struct DefaultMappedFile {
                 1,
             ),
             default_mapped_file.replace(
-                "|| self.get_mapped_file_mut()",
-                "self.get_mapped_file_mut()",
+                "self.mapped_file_mut_parts()",
+                "(std::ptr::null_mut(), 0)",
                 1,
             ),
             default_mapped_file.replace(
@@ -14888,6 +14990,73 @@ struct DefaultMappedFile {
                     [],
                     mapped_file_raw_core_store_adapter_violations(mutation),
                 )
+
+    def test_mapped_file_owner_is_local_and_store_is_a_narrow_adapter(self) -> None:
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        self.assertEqual([], mapped_file_owner_violations(production_sources))
+        self.assertFalse(
+            (
+                STORE_CRATE
+                / "src"
+                / "log_file"
+                / "mapped_file"
+                / "reference_resource.rs"
+            ).exists()
+        )
+        self.assertFalse(
+            (
+                STORE_CRATE
+                / "src"
+                / "log_file"
+                / "mapped_file"
+                / "reference_resource_counter.rs"
+            ).exists()
+        )
+
+    def test_mapped_file_owner_contract_rejects_facade_and_backend_leaks(self) -> None:
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        mutations = []
+
+        copied_trait = dict(production_sources)
+        copied_trait[STORE_MAPPED_FILE_PATH] += "\npub trait MappedFile {}\n"
+        mutations.append(copied_trait)
+
+        backend_leak = dict(production_sources)
+        backend_leak[DEFAULT_MAPPED_FILE_PATH] = backend_leak[
+            DEFAULT_MAPPED_FILE_PATH
+        ].replace("use memmap2::MmapMut;", "", 1).replace(
+            "use std::fs::File;",
+            "use std::fs::File;\nuse memmap2::MmapMut;",
+            1,
+        )
+        mutations.append(backend_leak)
+
+        wrong_alias = dict(production_sources)
+        wrong_alias[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH] = wrong_alias[
+            STORE_DEFAULT_MAPPED_FILE_FACADE_PATH
+        ].replace(
+            "DefaultMappedFile<super::StoreMappedMemory>",
+            "DefaultMappedFile<super::MmapRegionSlice>",
+            1,
+        )
+        mutations.append(wrong_alias)
+
+        copied_arc_mut = dict(production_sources)
+        copied_arc_mut[STORE_MAPPED_FILE_MEMORY_PATH] += "\nuse rocketmq_rust::ArcMut;\n"
+        mutations.append(copied_arc_mut)
+
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation=mutation_index):
+                self.assertNotEqual([], mapped_file_owner_violations(mutation))
 
     def test_mapped_file_warmup_schedule_has_one_local_owner_and_store_adapter_only(self) -> None:
         canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
@@ -16636,27 +16805,29 @@ mod cache_residency_plan_tests {
 
         adapter_mutations = [
             default_mapped_file.replace(
-                "rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency(",
                 "crate::mapped_file::kernel::plan_mapped_file_cache_residency(",
+                "plan_mapped_file_cache_residency(",
                 1,
             ),
             default_mapped_file.replace(
-                "use rocketmq_store_local::mapped_file::file::MappedFileStorage;",
-                "use rocketmq_store_local::mapped_file::file::MappedFileStorage;\n"
-                "use rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency;",
+                "use crate::mapped_file::file::MappedFileStorage;",
+                "use crate::mapped_file::file::MappedFileStorage;\n"
+                "use crate::mapped_file::kernel::plan_mapped_file_cache_residency;",
                 1,
             ),
             default_mapped_file.replace(
-                "base_addr, position, size, page_size,",
-                "base_addr, 0, size, page_size,",
+                "base_addr, position, size, page_size)",
+                "base_addr, 0, size, page_size)",
                 1,
             ),
             default_mapped_file.replace(
-                "        let Some(plan) = rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency(\n",
-                "        let _ignored = rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency(\n"
+                "        let Some(plan) =\n"
+                "            crate::mapped_file::kernel::plan_mapped_file_cache_residency(base_addr, position, size, page_size)\n",
+                "        let _ignored = crate::mapped_file::kernel::plan_mapped_file_cache_residency(\n"
                 "            base_addr, position, size, page_size,\n"
                 "        );\n"
-                "        let Some(plan) = rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency(\n",
+                "        let Some(plan) =\n"
+                "            crate::mapped_file::kernel::plan_mapped_file_cache_residency(base_addr, position, size, page_size)\n",
                 1,
             ),
             default_mapped_file.replace("let page_size = get_page_size();", "let page_size = get_page_size().max(1);", 1),
@@ -17044,7 +17215,7 @@ mod tests {
                         mapped_file_progress_policy_violations(mutation),
                     )
 
-        for function_name in MAPPED_FILE_POLICY_METHODS:
+        for function_name in DEFAULT_MAPPED_FILE_POLICY_METHODS:
             for visibility in (
                 "pub ",
                 "pub(crate) ",
@@ -17071,7 +17242,7 @@ mod tests {
                         ),
                     )
 
-        store_raw_bodies = {
+        default_raw_bodies = {
             "is_able_to_flush": """        if self.is_full() {
             return true;
         }
@@ -17082,35 +17253,26 @@ mod tests {
             return (read - flush) / page_size >= flush_least_pages;
         }
         read > flush""",
-            "is_able_to_commit": """        if self.is_full() {
-            return true;
         }
-        let committed = self.progress.committed_position();
-        let write = self.progress.wrote_position();
-        if commit_least_pages > 0 {
-            return (write - committed) / 4096 >= commit_least_pages;
-        }
-        write > committed""",
-        }
-        for function_name, raw_body in store_raw_bodies.items():
-            store_mutations = (
+        for function_name, raw_body in default_raw_bodies.items():
+            default_mutations = (
                 cfg_decoy_method_mutation(default_mapped_file, function_name, raw_body),
                 duplicate_method_mutation(default_mapped_file, function_name, raw_body),
                 cfg_attr_method_mutation(default_mapped_file, function_name),
                 default_mapped_file.replace(
-                    "#[allow(unused_variables)]\nimpl DefaultMappedFile {",
+                    "#[allow(unused_variables)]\nimpl<M: MappedMemory> DefaultMappedFile<M> {",
                     "#[allow(unused_variables)]\n"
                     "#[cfg_attr(any(), cfg(any()))]\n"
-                    "impl DefaultMappedFile {",
+                    "impl<M: MappedMemory> DefaultMappedFile<M> {",
                     1,
                 ),
             )
             for mutation_kind, mutation in zip(
                 ("cfg_decoy", "duplicate", "cfg_attr", "impl_cfg_attr"),
-                store_mutations,
+                default_mutations,
                 strict=True,
             ):
-                with self.subTest(store_wrapper=function_name, mutation=mutation_kind):
+                with self.subTest(default_wrapper=function_name, mutation=mutation_kind):
                     self.assertNotEqual(default_mapped_file, mutation)
                     mutated_sources = dict(production_sources)
                     mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
@@ -17123,15 +17285,12 @@ mod tests {
                         ),
                     )
 
-        store_post_test_signatures = {
+        default_post_test_signatures = {
             "is_able_to_flush": (
                 "fn is_able_to_flush(&self, flush_least_pages: i32) -> bool"
             ),
-            "is_able_to_commit": (
-                "fn is_able_to_commit(&self, commit_least_pages: i32) -> bool"
-            ),
         }
-        for function_name, signature in store_post_test_signatures.items():
+        for function_name, signature in default_post_test_signatures.items():
             test_only_decoy = post_test_method_impl_mutation(
                 default_mapped_file,
                 "DefaultMappedFile",
@@ -17140,7 +17299,7 @@ mod tests {
             )
             test_only_sources = dict(production_sources)
             test_only_sources[DEFAULT_MAPPED_FILE_PATH] = test_only_decoy
-            with self.subTest(store_post_test=function_name, mutation="test_only_impl"):
+            with self.subTest(default_post_test=function_name, mutation="test_only_impl"):
                 self.assertEqual(
                     [],
                     mapped_file_progress_adapter_violations(
@@ -17159,7 +17318,7 @@ mod tests {
                 mutated_sources = dict(production_sources)
                 mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
                 with self.subTest(
-                    store_post_test=function_name,
+                    default_post_test=function_name,
                     mutation=mutation_kind,
                 ):
                     self.assertNotEqual(
@@ -17458,7 +17617,7 @@ mod tests""",
 
         adapter_mutations = [
             default_mapped_file.replace(
-                "pub use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE;",
+                "pub use crate::mapped_file::kernel::OS_PAGE_SIZE;",
                 "pub const OS_PAGE_SIZE: u64 = 1024 * 4;",
                 1,
             ),
@@ -17468,18 +17627,13 @@ mod tests""",
                 1,
             ),
             default_mapped_file.replace(
-                "self.raw_core.is_able_to_commit(commit_least_pages)",
-                "(self.get_wrote_position() - self.get_committed_position()) / 4096 >= commit_least_pages",
-                1,
-            ),
-            default_mapped_file.replace(
                 "self.raw_core\n            .is_able_to_flush",
                 "self\n            .is_able_to_flush",
                 1,
             ),
             default_mapped_file.replace(
-                "pub use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE;",
-                "pub use rocketmq_store_local::mapped_file::kernel::{OS_PAGE_SIZE};",
+                "pub use crate::mapped_file::kernel::OS_PAGE_SIZE;",
+                "pub use crate::mapped_file::kernel::{OS_PAGE_SIZE};",
                 1,
             ),
         ]
@@ -17493,6 +17647,33 @@ mod tests""",
                     mapped_file_progress_adapter_violations(
                         canonical,
                         mutation,
+                        mutated_sources,
+                    ),
+                )
+
+        store_facade = production_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH]
+        store_facade_mutations = [
+            store_facade.replace(
+                "pub use rocketmq_store_local::mapped_file::OS_PAGE_SIZE;",
+                "pub const OS_PAGE_SIZE: u64 = 1024 * 4;",
+                1,
+            ),
+            store_facade.replace(
+                "pub use rocketmq_store_local::mapped_file::OS_PAGE_SIZE;",
+                "pub use rocketmq_store_local::mapped_file::{OS_PAGE_SIZE};",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(store_facade_mutations):
+            with self.subTest(store_facade_mutation=mutation_index):
+                self.assertNotEqual(store_facade, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_progress_adapter_violations(
+                        canonical,
+                        default_mapped_file,
                         mutated_sources,
                     ),
                 )
@@ -17549,20 +17730,27 @@ mod tests""",
             set(active_file_use_statements(platform)),
         )
 
-        default_mapped_file = (
-            STORE_CRATE / "src" / "log_file" / "mapped_file" / "default_mapped_file_impl.rs"
-        ).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
         self.assertEqual([], default_mapped_file_storage_violations(default_mapped_file))
         active_default = active_rust_source(default_mapped_file)
         self.assertRegex(
             active_default,
             r"pub\s+fn\s+parse_file_from_offset\s*\(file_name:\s*&Path\)\s*->\s*u64\s*\{\s*"
-            r"rocketmq_store_local::mapped_file::file::parse_file_from_offset\(file_name\)\s*\}",
+            r"crate::mapped_file::file::parse_file_from_offset\(file_name\)\s*\}",
         )
         self.assertRegex(
             active_default,
             r"pub\s+fn\s+try_parse_file_from_offset\s*\(file_name:\s*&Path\)\s*->\s*io::Result<u64>\s*\{\s*"
-            r"rocketmq_store_local::mapped_file::file::try_parse_file_from_offset\(file_name\)\s*\}",
+            r"crate::mapped_file::file::try_parse_file_from_offset\(file_name\)\s*\}",
+        )
+
+        facade = (
+            STORE_CRATE / "src" / "log_file" / "mapped_file" / "default_mapped_file_impl.rs"
+        ).read_text(encoding="utf-8")
+        self.assertRegex(
+            active_rust_source(facade),
+            r"pub\s+type\s+DefaultMappedFile\s*=\s*"
+            r"rocketmq_store_local::mapped_file::DefaultMappedFile<super::StoreMappedMemory>\s*;",
         )
 
     def test_mapped_file_mapping_has_one_local_owner_and_exact_store_composition(self) -> None:
@@ -17582,14 +17770,20 @@ mod tests""",
         self.assertEqual([], mapped_file_mapping_owner_violations(canonical_source))
         self.assertNotRegex(active_rust_source(canonical_source), r"\bArcMut\b")
 
-        default_mapped_file = (
-            STORE_CRATE / "src" / "log_file" / "mapped_file" / "default_mapped_file_impl.rs"
-        ).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
         self.assertEqual([], default_mapped_file_mapping_violations(default_mapped_file))
         self.assertEqual([], legacy_mapping_getter_signature_violations(default_mapped_file))
-        self.assertEqual(
-            ["pub use LazyMmapStats", "use MappedFileMapping"],
-            active_mapping_use_statements(default_mapped_file),
+        self.assertNotRegex(
+            active_rust_source(source_without_cfg_test_items(default_mapped_file)),
+            r"\b(?:ArcMut|MmapMut)\b",
+        )
+
+        facade = (
+            STORE_CRATE / "src" / "log_file" / "mapped_file" / "default_mapped_file_impl.rs"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "pub use rocketmq_store_local::mapped_file::LazyMmapStats;",
+            active_rust_source(facade),
         )
 
     def test_commit_log_planning_items_have_one_canonical_definition_and_exact_facade_reexports(self) -> None:
@@ -17850,6 +18044,11 @@ mod tests""",
         ).read_text(encoding="utf-8")
         self.assertEqual([], commit_log_loader_owner_violations(canonical_source))
         canonical_mutations = [
+            canonical_source.replace(
+                "pub type RecoveryMapping<T> = for<'a> fn(&'a T) -> Option<(&'a [u8], &'a str)>;",
+                "pub type RecoveryMapping<T> = for<'a> fn(&'a T) -> Option<(&'a mut [u8], &'a str)>;",
+                1,
+            ),
             canonical_source.replace(
                 "pub mark_fully_loaded: fn(&T, position: i32)",
                 "pub mark_fully_loaded: fn(&mut T, position: i32)",
@@ -18123,8 +18322,13 @@ fn copied_loader_flow() {
         for item in COMMIT_LOG_HINT_ITEMS:
             self.assertNotIn(item, facade)
 
-        ffi_source = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
+        ffi_source = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
         self.assertEqual([], store_prefetch_ffi_compatibility_violations(ffi_source))
+        store_ffi = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
+        self.assertIn(
+            "pub use rocketmq_store_local::utils::ffi::prefetch_virtual_memory;",
+            active_rust_source(store_ffi),
+        )
 
         self.assertNotIn("rocketmq_error", canonical_source)
         manifest = tomllib.loads((LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
@@ -18173,8 +18377,8 @@ fn copied_loader_flow() {
                 1,
             ),
             source.replace(
-                "Storage read failed for 'PrefetchVirtualMemory': {error}",
-                "PrefetchVirtualMemory failed: {error}",
+                "crate::utils::ffi::prefetch_virtual_memory(mmap.as_ptr(), mmap.len())",
+                "Ok(true)",
                 1,
             ),
             source.replace("use tracing::info;", "use tracing::info;\nuse tracing::warn;", 1).replace(
@@ -18223,7 +18427,7 @@ fn copied_loader_flow() {
                 self.assertNotEqual([], store_commit_log_hint_adapter_violations(mutation))
 
     def test_store_prefetch_virtual_memory_contract_rejects_compatibility_mutations(self) -> None:
-        source = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
+        source = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
         self.assertEqual([], store_prefetch_ffi_compatibility_violations(source))
         mutations = [
             source.replace(
@@ -18474,7 +18678,7 @@ fn copied_loader_flow() {
             1,
         )
 
-        mapped_file_path = Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs")
+        mapped_file_path = Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs")
         mapped_file_source = sources[mapped_file_path]
         wrong_manager_receiver = mapped_file_source.replace(
             "memory_lock_manager.lock_region_with(category, addr, len, locker)",
@@ -18691,14 +18895,19 @@ fn forbidden_destroy_seam_alias_reference() {
         canonical = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
         facade = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
         self.assertEqual([], memory_lock_ffi_owner_violations(canonical))
-        for item in ("mlock", "munlock"):
+        for item in (
+            "get_page_size",
+            "madvise",
+            "mincore",
+            "mlock",
+            "munlock",
+            "prefetch_virtual_memory",
+        ):
             self.assertEqual(
                 [],
                 direct_exact_reexport_violations(facade, "rocketmq_store_local::utils::ffi", item),
                 item,
             )
-        for retained in ("get_page_size", "madvise", "prefetch_virtual_memory", "mincore"):
-            self.assertRegex(active_rust_source(facade), rf"pub\s+fn\s+{retained}\b")
 
     def test_memory_lock_syscall_contract_rejects_platform_mutations(self) -> None:
         source = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
@@ -18707,7 +18916,7 @@ fn forbidden_destroy_seam_alias_reference() {
             source.replace("libc::mlock", "libc::munlock", 1),
             source.replace("unsafe { VirtualUnlock", "unsafe { VirtualLock", 1),
             source.replace("memory lock (mlock)", "mlock failed", 1),
-            source.replace("// SAFETY:", "// platform call:", 1),
+            source.replace("// SAFETY: mlock", "// platform call: mlock", 1),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):

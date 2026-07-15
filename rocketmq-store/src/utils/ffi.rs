@@ -12,91 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(windows)]
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-
+pub use rocketmq_store_local::utils::ffi::get_page_size;
+pub use rocketmq_store_local::utils::ffi::madvise;
+pub use rocketmq_store_local::utils::ffi::mincore;
 pub use rocketmq_store_local::utils::ffi::mlock;
 pub use rocketmq_store_local::utils::ffi::munlock;
-
-pub const MADV_NORMAL: i32 = 0;
-pub const MADV_RANDOM: i32 = 1;
-pub const MADV_WILLNEED: i32 = 3;
-pub const MADV_DONTNEED: i32 = 4;
-
-#[inline]
-pub fn get_page_size() -> usize {
-    page_size::get()
-}
-
-pub fn madvise(addr: *const u8, len: usize, advice: i32) -> i32 {
-    #[cfg(unix)]
-    {
-        use std::ffi::c_void;
-        unsafe { libc::madvise(addr as *mut c_void, len, advice) }
-    }
-    #[cfg(windows)]
-    {
-        // Windows does not have madvise, so we just return 0
-        0
-    }
-}
-
-pub fn prefetch_virtual_memory(addr: *const u8, len: usize) -> RocketMQResult<bool> {
-    if len == 0 {
-        return Ok(false);
-    }
-
-    #[cfg(windows)]
-    {
-        use std::ffi::c_void;
-
-        use windows::Win32::System::Memory::PrefetchVirtualMemory;
-        use windows::Win32::System::Memory::WIN32_MEMORY_RANGE_ENTRY;
-        use windows::Win32::System::Threading::GetCurrentProcess;
-
-        let range = WIN32_MEMORY_RANGE_ENTRY {
-            VirtualAddress: addr as *mut c_void,
-            NumberOfBytes: len,
-        };
-        unsafe { PrefetchVirtualMemory(GetCurrentProcess(), &[range], 0) }.map_err(|error| {
-            RocketMQError::StorageReadFailed {
-                path: "PrefetchVirtualMemory".to_string(),
-                reason: error.to_string(),
-            }
-        })?;
-        Ok(true)
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = addr;
-        let _ = len;
-        Ok(false)
-    }
-}
-
-pub fn mincore(addr: *const u8, len: usize, vec: *const u8) -> i32 {
-    #[cfg(target_os = "linux")]
-    {
-        use std::ffi::c_void;
-
-        use libc::c_uchar;
-
-        unsafe { libc::mincore(addr as *mut c_void, len, vec as *mut c_uchar) }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use std::ffi::c_void;
-
-        use libc::c_char;
-
-        unsafe { libc::mincore(addr as *mut c_void, len, vec as *mut c_char) }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // Windows does not have mincore, so we just return 0
-        0
-    }
-}
+pub use rocketmq_store_local::utils::ffi::prefetch_virtual_memory;
+pub use rocketmq_store_local::utils::ffi::MADV_DONTNEED;
+pub use rocketmq_store_local::utils::ffi::MADV_NORMAL;
+pub use rocketmq_store_local::utils::ffi::MADV_RANDOM;
+pub use rocketmq_store_local::utils::ffi::MADV_SEQUENTIAL;
+pub use rocketmq_store_local::utils::ffi::MADV_WILLNEED;

@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod contract;
+mod default_mapped_file;
 mod direct_io;
 pub mod file;
 mod flush_strategy;
 mod mapped_buffer;
 mod mapped_file_error;
+mod memory;
 mod metrics;
+mod select_result;
 
 pub mod io_uring_impl;
 #[doc(hidden)]
@@ -25,6 +29,10 @@ pub mod kernel;
 pub mod mapping;
 pub mod raw;
 
+pub use contract::MappedFile;
+pub use default_mapped_file::DefaultMappedFile;
+pub use default_mapped_file::LazyMmapStats;
+pub use default_mapped_file::OS_PAGE_SIZE;
 pub use direct_io::DirectIoBuffer;
 pub use direct_io::DirectIoRequest;
 pub use direct_io::DirectIoValidationError;
@@ -34,5 +42,9 @@ pub use io_uring_impl::IoUringBackendStatus;
 pub use mapped_buffer::MappedBuffer;
 pub use mapped_file_error::MappedFileError;
 pub use mapped_file_error::MappedFileResult;
+pub use memory::MappedMemory;
 pub use metrics::MappedFileMetrics;
 pub use raw::MappedFileRawCore;
+pub use select_result::SelectMappedBufferCacheState;
+pub use select_result::SelectMappedBufferResult;
+pub use select_result::SelectMappedBufferSourceKind;

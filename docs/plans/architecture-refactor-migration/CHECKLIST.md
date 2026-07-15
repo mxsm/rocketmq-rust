@@ -23,6 +23,22 @@
 | Phase 3 | M10–M11 | 未开始 | 待分配 | 8–12 周 | — | — |
 | Phase 4 | M12 | 未开始 | 待分配 | 8–12 周 | — | — |
 
+### 2.1 剩余重构盘点（2026-07-15）
+
+> 统计口径：只统计 82 个顶层 `PR-Mxx-yy` 工作包；M06-03a～ah 等内部迁移证据不重复计数。
+
+| 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
+|---|---:|---:|---:|---:|
+| PR 级工作包 | 30 | 1（PR-M06-03） | 51 未开始；合计 52 尚未完成 | 82 |
+| 里程碑 | 5（M01–M05） | 1（M06） | 6（M07–M12） | 12 |
+| 新增边界 crate | 6 | 0 | 4（store-rocksdb、proxy-core/cluster/local） | 10 |
+| 根 workspace package | 28 | — | 还差 4 | 32 |
+| Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
+
+剩余 51 个未开始工作包分布：M06-04～12 为 9 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
+M10 为 5 个、M11 为 12 个、M12 为 6 个。当前 M06-03 仍需完成 CommitLog 根 append/load/recovery owner
+与 facade 收口，因此尚未勾选父项。
+
 ## 3. Phase 1：安全性与基础治理
 
 ### M01 治理、依赖策略与可重复基线
@@ -142,6 +158,7 @@
   - [x] M06-03af：迁移 CommitLog bounded append-attempt 编排到 Local，Store 保留 mapped-file、active-lock、计时/result 与后处理 adapter
   - [x] M06-03ag：迁移 CommitLog standard recovery declared-frame read owner 到 Local，Store normal/abnormal 各保留一条 MappedFile exact-read adapter
   - [x] M06-03ah：迁移 CommitLog normal recovery 单 segment record-loop 编排到 Local，Store standard/optimized 仅保留 MappedFile、解析、dispatch、日志与统计 adapter
+  - [x] M06-03（MappedFile owner）：迁移 `MappedFile` trait、`DefaultMappedFile`、mapping backend、select result 与平台 FFI 到 Local；Store 仅保留 append/mmap compatibility adapter
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

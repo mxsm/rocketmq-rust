@@ -1481,3 +1481,31 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03ah 只迁移 normal recovery 单 segment record-loop 编排；不迁移实际 MappedFile I/O、record
   parser、abnormal recovery 编排、CommitLog 根 owner、完整 append/load、flush/group commit、CQ/Index、HA、Timer/POP、
   runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03 MappedFile canonical owner extraction evidence
+
+- [x] `[DEV/API]` `rocketmq-store-local::mapped_file` 现为 `MappedFile` trait、泛型
+  `DefaultMappedFile<M>`、unsafe `MappedMemory` backend contract、`SelectMappedBufferResult<M>`、reference
+  lifecycle、mapping/raw/file kernel 与平台 FFI 的 canonical owner。Store 原公开路径以精确 re-export、
+  `DefaultMappedFile<StoreMappedMemory>` type alias 和 `MappedFileAppend` 业务 append extension 保持兼容；
+  `CommitLogLoadAdapter` 的 recovery mapping 已收窄为中立 `&[u8]`，Local 不再依赖 Store mapping 类型。
+- [x] `[COMPAT/SAFETY]` Store compatibility backend 由 `Arc<MmapMut>` 保持 mapping/zero-copy region 生命周期，
+  mapped-file owner 不再持有 `ArcMut`。删除安全的 whole-map `get_mapped_file_mut(&self) -> &mut [u8]` escape，
+  内部写路径改用带完整 `# Safety` 契约的 `mapped_file_mut_parts`；select result 的 mutable slice 同时要求
+  `unsafe` 调用和 `&mut self`。旧 Store module path、append result/status、compaction 显式拒绝、lazy mmap、
+  flush/progress、warmup、memory lock、cache residency 与 zero-copy 行为保持原 adapter 语义。
+- [x] `[TEST/CONTRACT]` `cargo test -p rocketmq-store-local --all-features` 全部通过（crate 单测 99/99，
+  所有 integration suite 通过），其中新的 DefaultMappedFile owner focused 30/30；Store recovery compatibility
+  2/2 与 compaction adapter 1/1 通过。新增 mapped-file owner/facade/backend leak 契约，并同步更新 raw、mapping、
+  cache、warmup、memory-lock、loader 与 FFI mutation matrix；最终完整 M06 contract 126/126 通过
+  （632.603s）。Windows prefetch 错误保留 typed `io::Error` source，不再 stringification。
+- [x] `[ARC/ARCH]` ArcMut ledger 从 1,232 identities/3,372 occurrences 降至
+  1,171 identities/3,233 occurrences；`current_milestone` 保持 M05，未新增 relocation approval 或 baseline
+  债务。ArcMut final guard、architecture dependency baseline、AGENTS routing、workspace fmt、两 crate package
+  check/Clippy、root 28-package all-target/all-feature Clippy、Local strict Rustdoc、Python compile 与 diff check
+  均通过。error architecture guard 的本切片 source-stringification 回归已清零，仅复现未触及的 Broker 1 项、
+  MCP anyhow 8 项与缺失治理文档 2 项，未将其误记为通过。
+- [x] `[INVENTORY/SCOPE]` 总 checklist 已按 82 个顶层 PR 工作包复核：30 已完成、M06-03 进行中、
+  51 未开始，合计 52 个尚未完成；root workspace 为 28/32，尚缺 store-rocksdb 与 proxy-core/cluster/local
+  四个目标 crate。本切片不关闭 PR-M06-03：CommitLog 根 append/load/recovery owner 与 facade 仍需收口；
+  M06-04..12 的 flush/group commit、CQ/Index、HA、Timer/POP、RocksDB 与 Store facade，以及 M07..M12 均未勾选。

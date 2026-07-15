@@ -196,7 +196,12 @@ impl IndexFile {
             // Calculate the absolute position of the slot
             let abs_slot_pos = INDEX_HEADER_SIZE + slot_pos * HASH_SLOT_SIZE;
 
-            let mapped_file = self.mapped_file.get_mapped_file_mut();
+            // SAFETY: IndexFile requires external write serialization, and the derived borrow is
+            // confined to the current slot update.
+            let (ptr, len) = unsafe { self.mapped_file.mapped_file_mut_parts() };
+            // SAFETY: the mapped-file owner returned a live range and external serialization keeps
+            // this mutable slice exclusive.
+            let mapped_file = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
 
             let mut slot_value = mapped_file.get(abs_slot_pos..abs_slot_pos + 4).unwrap().get_i32();
 

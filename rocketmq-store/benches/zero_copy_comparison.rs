@@ -21,8 +21,8 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
-use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::MmapRegionSlice;
 use rocketmq_store::log_file::mapped_file::MappedFile;
+use rocketmq_store_local::mapped_file::MappedMemory;
 use tempfile::TempDir;
 
 fn create_test_file(size: usize) -> (TempDir, DefaultMappedFile) {
@@ -34,7 +34,11 @@ fn create_test_file(size: usize) -> (TempDir, DefaultMappedFile) {
 
     // Write some test data and update write position
     let test_data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
-    mapped_file.get_mapped_file_mut()[0..size].copy_from_slice(&test_data);
+    // SAFETY: benchmark setup has exclusive ownership of the mapped file and derived slice.
+    let (ptr, len) = unsafe { mapped_file.mapped_file_mut_parts() };
+    // SAFETY: the returned parts describe the live mapping for the duration of setup.
+    let mapped_bytes = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
+    mapped_bytes[0..size].copy_from_slice(&test_data);
     MappedFile::set_wrote_position(&mapped_file, size as i32);
 
     (temp_dir, mapped_file)
@@ -59,7 +63,7 @@ fn get_bytes_with_copy(mapped_file: &DefaultMappedFile, pos: usize, size: usize)
 
 // Proposed implementation: true zero-copy
 fn get_bytes_zero_copy(mapped_file: &DefaultMappedFile, pos: usize, size: usize) -> Bytes {
-    Bytes::from_owner(MmapRegionSlice::new(mapped_file.get_mapped_file_arcmut(), pos, size))
+    Bytes::from_owner(mapped_file.get_mapped_memory().region(pos, size))
 }
 
 fn benchmark_zero_copy_comparison(c: &mut Criterion) {

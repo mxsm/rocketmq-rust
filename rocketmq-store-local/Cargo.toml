@@ -36,7 +36,9 @@ observability = [
 
 [dependencies]
 bytes.workspace = true
+cheetah-string.workspace = true
 memmap2 = "0.9.10"
+page_size = "0.6.0"
 parking_lot.workspace = true
 rayon = "1.12"
 rocketmq-error.workspace = true

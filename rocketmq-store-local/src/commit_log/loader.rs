@@ -18,7 +18,6 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
-use memmap2::MmapMut;
 use rayon::prelude::*;
 
 use super::load::apply_recovery_file_prefetch;
@@ -45,6 +44,8 @@ use super::load::RecoveryMmapAdvice;
 /// representation. A target opened in [`CommitLogMappingMode::LazyReadOnly`]
 /// may return `None` from `recovery_mapping` until its mapping is initialized;
 /// the loader treats that state as an intentionally skipped hint attempt.
+pub type RecoveryMapping<T> = for<'a> fn(&'a T) -> Option<(&'a [u8], &'a str)>;
+
 pub struct CommitLogLoadAdapter<T> {
     /// Opens one validated CommitLog segment in the selected mapping mode.
     ///
@@ -56,7 +57,7 @@ pub struct CommitLogLoadAdapter<T> {
     /// Returns the initialized mapping and stable filename used by recovery hints.
     ///
     /// Lazy mappings that have not been initialized must return `None`.
-    pub recovery_mapping: for<'a> fn(&'a T) -> Option<(&'a MmapMut, &'a str)>,
+    pub recovery_mapping: RecoveryMapping<T>,
 
     /// Marks the existing segment as fully written, flushed, and committed.
     pub mark_fully_loaded: fn(&T, position: i32),

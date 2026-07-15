@@ -19,7 +19,6 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use memmap2::MmapMut;
 use rocketmq_store_local::commit_log::load::CommitLogMappingMode;
 use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
 use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
@@ -44,7 +43,7 @@ fn open_fake_target(path: &Path, _file_size: u64, mode: CommitLogMappingMode) ->
     })
 }
 
-fn fake_recovery_mapping(_target: &FakeTarget) -> Option<(&MmapMut, &str)> {
+fn fake_recovery_mapping(_target: &FakeTarget) -> Option<(&[u8], &str)> {
     None
 }
 
@@ -68,7 +67,7 @@ fn open_counting_target(path: &Path, file_size: u64, mode: CommitLogMappingMode)
     open_fake_target(path, file_size, mode).map(CountingTarget)
 }
 
-fn counting_recovery_mapping(_target: &CountingTarget) -> Option<(&MmapMut, &str)> {
+fn counting_recovery_mapping(_target: &CountingTarget) -> Option<(&[u8], &str)> {
     None
 }
 

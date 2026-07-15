@@ -43,8 +43,8 @@ use super::LegacyReadCallBoundary;
 use super::LegacyReadRequest;
 use super::LegacyReadResult;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
-use crate::log_file::mapped_file::reference_resource::ReferenceResource;
 use crate::log_file::mapped_file::MappedFile;
+use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
 
 fn selected(payload: Bytes, start_offset: u64, cache_state: SelectMappedBufferCacheState) -> SelectMappedBufferResult {
     SelectMappedBufferResult {

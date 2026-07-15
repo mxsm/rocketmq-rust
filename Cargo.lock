@@ -4877,7 +4877,6 @@ dependencies = [
  "hashbrown 0.17.1",
  "libc",
  "memmap2",
- "page_size",
  "parking_lot",
  "rand 0.10.2",
  "rayon",
@@ -4931,8 +4930,10 @@ name = "rocketmq-store-local"
 version = "1.0.0"
 dependencies = [
  "bytes",
+ "cheetah-string",
  "libc",
  "memmap2",
+ "page_size",
  "parking_lot",
  "rayon",
  "rocketmq-error",
