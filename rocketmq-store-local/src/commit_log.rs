@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod append;
+pub mod append_attempt;
 pub mod append_frame;
 pub mod header;
 pub mod load;

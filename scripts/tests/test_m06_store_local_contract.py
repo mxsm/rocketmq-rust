@@ -69,6 +69,9 @@ COMMIT_LOG_LOADER_PATH = Path("rocketmq-store-local/src/commit_log/loader.rs")
 COMMIT_LOG_APPEND_FRAME_PATH = Path(
     "rocketmq-store-local/src/commit_log/append_frame.rs"
 )
+COMMIT_LOG_APPEND_ATTEMPT_PATH = Path(
+    "rocketmq-store-local/src/commit_log/append_attempt.rs"
+)
 COMMIT_LOG_HEADER_PATH = Path(
     "rocketmq-store-local/src/commit_log/header.rs"
 )
@@ -7376,12 +7379,14 @@ def store_commit_log_memory_lock_adapter_violations(
         violations.append("Store must contain one planner import and one config-adapter call")
     if normalized_sources.keys() != {STORE_COMMIT_LOG_PATH}:
         violations.append("Store CommitLog memory-lock planner consumers moved or multiplied")
-    if len(re.findall(r"\bCommitLogMemoryLockTarget\b", active)) != 5:
+    if len(re.findall(r"\bCommitLogMemoryLockTarget\b", active)) != 7:
         violations.append("Store CommitLog memory-lock target lifecycle flow changed")
     for signature in (
         "fnis_current(&self,file_from_offset:u64,target:CommitLogMemoryLockTarget)->bool",
         "fnset_current(&mutself,file_from_offset:u64,target:CommitLogMemoryLockTarget,handle:MemoryLockHandle)",
         "fnactive_memory_lock_target(&self,mapped_file:&DefaultMappedFile)->Option<CommitLogMemoryLockTarget>",
+        "fnensure_active_mapped_file_locked_parts<L,G>(active_memory_lock:&ParkingMutex<CommitLogActiveMemoryLock>,active_memory_lock_present:&AtomicBool,target:Option<CommitLogMemoryLockTarget>,file_from_offset:u64,mutlock_region:L,mutunlocker:G,)->RocketMQResult<()>",
+        "L:FnMut(&MemoryLockManager,CommitLogMemoryLockTarget)->RocketMQResult<Option<MemoryLockHandle>>",
     ):
         if signature not in compact:
             violations.append(f"Store CommitLog target lifecycle signature changed: {signature}")
@@ -8887,7 +8892,8 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
         (
             Path("rocketmq-store/src/log_file/commit_log.rs"),
             "ensure_active_mapped_file_locked_with",
-            "mapped_file.lock_region_with(&active_memory_lock.manager,target.category,target.offset,target.len,&mutlocker,)?",
+            "lock_active_mapped_file_parts!(&self.active_memory_lock,&self.active_memory_lock_present,"
+            "mapped_file,target,&mutlocker,&mutunlocker,)",
         ),
         (
             Path("rocketmq-store/src/log_file/commit_log.rs"),
@@ -8929,6 +8935,28 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
             active_rust_source(body or ""),
         ):
             violations.append(f"{path}: {function_name} bypasses the canonical memory-lock manager")
+
+    commit_log_source = sources.get(Path("rocketmq-store/src/log_file/commit_log.rs"), "")
+    commit_log_production = active_rust_source(source_without_cfg_test_items(commit_log_source))
+    macro_matches = list(re.finditer(r"\bmacro_rules!\s+lock_active_mapped_file_parts\b", commit_log_production))
+    expected_macro_body = (
+        "($active_memory_lock:expr,$active_memory_lock_present:expr,$mapped_file:expr,"
+        "$target:expr,$locker:expr,$unlocker:expr$(,)?)=>{{"
+        "letmapped_file=$mapped_file;"
+        "letfile_from_offset=mapped_file.get_file_from_offset();"
+        "CommitLog::ensure_active_mapped_file_locked_parts($active_memory_lock,"
+        "$active_memory_lock_present,$target,file_from_offset,|manager,target|{"
+        "mapped_file.lock_region_with(manager,target.category,target.offset,target.len,$locker)},"
+        "$unlocker,)}};"
+    )
+    macro_body = ""
+    if len(macro_matches) == 1:
+        opening = commit_log_production.find("{", macro_matches[0].end())
+        extracted = braced_body(commit_log_production, opening)
+        if extracted is not None:
+            macro_body = compact_rust(extracted[0])
+    if macro_body != expected_macro_body:
+        violations.append("CommitLog active mapped-file lock macro owner changed")
     return violations
 
 
@@ -10109,9 +10137,491 @@ def mapped_file_raw_core_store_adapter_violations(source: str) -> list[str]:
     return violations
 
 
+def commit_log_append_attempt_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+    store_test_source: str,
+) -> list[str]:
+    local = active_rust_source(source_without_cfg_test_items(local_source))
+    module = active_rust_source(source_without_cfg_test_items(module_source))
+    store = active_rust_source(source_without_cfg_test_items(store_source))
+    violations: list[str] = []
+
+    if len(re.findall(r"\bpub\s+mod\s+append_attempt\s*;", module)) != 1:
+        violations.append("commit_log root must expose one append_attempt module")
+    for item in ("CommitLogAppendAttempt", "CommitLogAppendOutcome", "CommitLogAppendCompleted", "CommitLogAppendAborted"):
+        if len(re.findall(rf"\bpub\s+(?:struct|enum)\s+{item}\b", local)) != 1:
+            violations.append(f"Local append-attempt owner changed: {item}")
+    expected_shapes = {
+        "CommitLogAppendCompleted": (
+            "PutOk{result:AppendMessageResult,rolled_segment:Option<S>,},"
+            "RetryRejected{result:AppendMessageResult,rolled_segment:S,},"
+        ),
+        "CommitLogAppendAborted": (
+            "InitialSegmentUnavailable,InitialActiveLockFailed{error:E},"
+            "InitialMessageIllegal{result:AppendMessageResult},"
+            "InitialUnknown{result:AppendMessageResult},"
+            "RolledSegmentUnavailable{first_eof:AppendMessageResult,old:S},"
+            "RolledActiveLockFailed{first_eof:AppendMessageResult,old:S,error:E,},"
+        ),
+        "CommitLogAppendOutcome": (
+            "Completed(CommitLogAppendCompleted<S>),"
+            "Aborted(CommitLogAppendAborted<S,E>),"
+        ),
+    }
+    for item, expected in expected_shapes.items():
+        if compact_rust(active_item_body(local, "enum", item) or "") != expected:
+            violations.append(f"Local append-attempt outcome shape changed: {item}")
+    if re.search(r"\bpub\s+struct\s+CommitLogAppendAttempt\s*;", local) is None:
+        violations.append("CommitLogAppendAttempt must remain a public unit struct")
+
+    local_imports = [
+        (visibility, body)
+        for kind, visibility, body, _ in active_import_records(local)
+        if kind == "use"
+    ]
+    if local_imports != [
+        ("", "crate::commit_log::append::AppendMessageResult"),
+        ("", "crate::commit_log::append::AppendMessageStatus"),
+    ]:
+        violations.append("Local append-attempt imports changed")
+    if re.search(
+        r"\b(?:MessageExt\w*|MappedFile\w*|PutMessageStatus|tokio|Instant|ArcMut|async|await)\b",
+        local,
+    ) or any(token in local for token in FORBIDDEN_SOURCE_TOKENS) or ".clone(" in local:
+        violations.append("Local append-attempt owner absorbed Store or runtime dependencies")
+    aborted_position = local_source.find("pub enum CommitLogAppendAborted")
+    aborted_docs = local_source[local_source.rfind("///", 0, aborted_position):aborted_position]
+    if "did not complete successfully, including terminal append rejections" not in aborted_docs:
+        violations.append("CommitLogAppendAborted completion documentation changed")
+    run_position = local_source.find("pub fn run")
+    run_docs = local_source[local_source.rfind("///", 0, run_position):run_position]
+    if "retries at most once on EOF" not in run_docs or "retries exactly once" in run_docs:
+        violations.append("CommitLogAppendAttempt::run retry documentation changed")
+
+    run_records = inherent_method_records(local, "CommitLogAppendAttempt", ("run",))["run"]
+    expected_run_signature = (
+        "pubfnrun<S,E,IsFull,Acquire,LockActive,Append>(initial_segment:Option<S>,"
+        "mutis_full:IsFull,mutacquire:Acquire,mutlock_active:LockActive,mutappend:Append,)"
+        "->CommitLogAppendOutcome<S,E>whereIsFull:FnMut(&S)->bool,"
+        "Acquire:FnMut()->Option<S>,LockActive:FnMut(&S)->Result<(),E>,"
+        "Append:FnMut(&S)->AppendMessageResult,"
+    )
+    if len(run_records) != 1 or run_records[0].signature != expected_run_signature or run_records[0].cfg_gated:
+        violations.append("CommitLogAppendAttempt::run signature or visibility changed")
+    run_body = run_records[0].body if len(run_records) == 1 else ""
+    for fragment, count in {
+        "is_full(&segment)": 1,
+        "letSome(rolled)=acquire()else": 1,
+        "lock_active(&segment)": 1,
+        "lock_active(&rolled)": 1,
+        "letfirst=append(&segment);": 1,
+        "letretry=append(&rolled);": 1,
+        "rolled_segment:Some(old)": 1,
+        "RetryRejected{result:retry,rolled_segment:old,}": 1,
+        (
+            "AppendMessageStatus::EndOfFile|AppendMessageStatus::MessageSizeExceeded|"
+            "AppendMessageStatus::PropertiesSizeExceeded|AppendMessageStatus::UnknownError=>{"
+            "CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::RetryRejected"
+        ): 1,
+        "InitialSegmentUnavailable": 2,
+        "drop(segment);": 2,
+    }.items():
+        if run_body.count(fragment) != count:
+            violations.append(f"Local append-attempt control flow changed: {fragment}")
+    if (
+        run_body.count("acquire()") != 3
+        or run_body.count("append(") != 2
+        or run_body.count("lock_active(") != 2
+    ):
+        violations.append("Local append-attempt bounded acquire/append count changed")
+    full_acquire = run_body.find("matchacquire(){Some(acquired)=>{drop(segment);")
+    first_drop = run_body.find("drop(segment);")
+    first_append = run_body.find("letfirst=append(&segment);")
+    first_status = run_body.find("matchfirst.status{")
+    old_binding = run_body.find("letold=segment;")
+    rolled_acquire = run_body.find("letSome(rolled)=acquire()else")
+    rolled_lock = run_body.find("lock_active(&rolled)")
+    retry_append = run_body.find("letretry=append(&rolled);")
+    retry_status = run_body.find("matchretry.status{")
+    if not (
+        -1 < full_acquire <= first_drop < first_append < first_status < old_binding
+        < rolled_acquire < rolled_lock < retry_append < retry_status
+    ):
+        violations.append("Local append-attempt event/drop ordering changed")
+
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(store)
+        if kind == "use" and "commit_log::append_attempt" in body
+    ]
+    expected_imports = {
+        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAborted",
+        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt",
+        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendCompleted",
+        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome",
+    }
+    if set(imports) != expected_imports or len(imports) != len(expected_imports):
+        violations.append("Store append-attempt imports changed")
+    exact_lock_adapter = (
+        "|mapped_file|{lettarget=Self::active_memory_lock_target_for_config("
+        "message_store_config,mapped_file.get_wrote_position().max(0)asu64,"
+        "mapped_file.get_file_size(),);lock_active_mapped_file_parts!(active_memory_lock,"
+        "active_memory_lock_present,mapped_file,target,crate::utils::ffi::mlock,"
+        "crate::utils::ffi::munlock,)}"
+    )
+    expected_adapters = {
+        "put_messages": (
+            "CommitLogAppendAttempt::run(mapped_file,|mapped_file|mapped_file.is_full(),"
+            "||mapped_file_queue.get_last_mapped_file_mut_start_offset(0,true),"
+            + exact_lock_adapter
+            + ","
+            "|mapped_file|{mapped_file.append_messages(&mutmsg_batch,append_message_callback,"
+            "&mutput_message_context,enabled_append_prop_crc,)},)"
+        ),
+        "put_message": (
+            "CommitLogAppendAttempt::run(mapped_file,|mapped_file|mapped_file.is_full(),"
+            "||mapped_file_queue.get_last_mapped_file_mut_start_offset(0,true),"
+            + exact_lock_adapter
+            + ","
+            "|mapped_file|mapped_file.append_message(&mutmsg,append_message_callback,"
+            "&put_message_context),)"
+        ),
+    }
+
+    def append_attempt_call(body: str) -> str:
+        start = body.find("CommitLogAppendAttempt::run(")
+        if start == -1:
+            return ""
+        opening = body.find("(", start)
+        depth = 0
+        for index in range(opening, len(body)):
+            if body[index] == "(":
+                depth += 1
+            elif body[index] == ")":
+                depth -= 1
+                if depth == 0:
+                    return body[start:index + 1]
+        return ""
+
+    for function_name in ("put_messages", "put_message"):
+        body = compact_rust(named_function_body(store, function_name) or "")
+        if body.count("CommitLogAppendAttempt::run(") != 1:
+            violations.append(f"Store {function_name} must use one Local append-attempt adapter")
+        if body.count("|mapped_file|mapped_file.is_full()") != 1:
+            violations.append(f"Store {function_name} is_full closure changed")
+        if body.count("get_last_mapped_file_mut_start_offset(0,true)") != 1:
+            violations.append(f"Store {function_name} acquire closure changed")
+        expected_append = "append_messages(" if function_name == "put_messages" else "append_message("
+        if body.count(expected_append) != 1:
+            violations.append(f"Store {function_name} append closure changed")
+        if append_attempt_call(body) != expected_adapters[function_name]:
+            violations.append(f"Store {function_name} exact closure adapter changed")
+        for outcome in (
+            "CommitLogAppendCompleted::PutOk",
+            "CommitLogAppendCompleted::RetryRejected",
+            "CommitLogAppendAborted::InitialSegmentUnavailable",
+            "CommitLogAppendAborted::InitialActiveLockFailed",
+            "CommitLogAppendAborted::InitialMessageIllegal",
+            "CommitLogAppendAborted::InitialUnknown",
+            "CommitLogAppendAborted::RolledSegmentUnavailable",
+            "CommitLogAppendAborted::RolledActiveLockFailed",
+        ):
+            if body.count(outcome) != 1:
+                violations.append(f"Store {function_name} outcome mapping changed: {outcome}")
+        outcome_statuses = {
+            "CommitLogAppendCompleted::PutOk": "PutOk",
+            "CommitLogAppendCompleted::RetryRejected": "UnknownError",
+            "CommitLogAppendAborted::InitialSegmentUnavailable": "CreateMappedFileFailed",
+            "CommitLogAppendAborted::InitialActiveLockFailed": "CreateMappedFileFailed",
+            "CommitLogAppendAborted::InitialMessageIllegal": "MessageIllegal",
+            "CommitLogAppendAborted::InitialUnknown": "UnknownError",
+            "CommitLogAppendAborted::RolledSegmentUnavailable": "CreateMappedFileFailed",
+            "CommitLogAppendAborted::RolledActiveLockFailed": "CreateMappedFileFailed",
+        }
+        ordered_outcomes = tuple(outcome_statuses)
+        for outcome_index, (outcome, expected_status) in enumerate(outcome_statuses.items()):
+            arm_start = body.find(outcome)
+            later_starts = [
+                body.find(later, arm_start + 1)
+                for later in ordered_outcomes[outcome_index + 1:]
+                if body.find(later, arm_start + 1) != -1
+            ]
+            arm_end = min(later_starts) if later_starts else body.find("};letelapsed_time_in_lock", arm_start)
+            arm = body[arm_start:arm_end]
+            statuses = re.findall(r"PutMessageStatus::([A-Za-z0-9_]+)", arm)
+            if statuses != [expected_status]:
+                violations.append(
+                    f"Store {function_name} outcome status mapping changed: "
+                    f"{outcome} -> {statuses}"
+                )
+        if (
+            body.count("drop(old);") != 2
+            or "old:_," in body
+            or "matchresult.status" in body
+            or "letmutmapped_file=" in body
+        ):
+            violations.append(f"Store {function_name} rolled-segment lifecycle changed")
+        if body.count("PutMessageStatus::UnknownError,Some(result)") != 2:
+            violations.append(f"Store {function_name} unknown-result mapping changed")
+        rolled_outcomes = (
+            "CommitLogAppendAborted::RolledSegmentUnavailable",
+            "CommitLogAppendAborted::RolledActiveLockFailed",
+        )
+        for outcome_index, outcome in enumerate(rolled_outcomes):
+            arm_start = body.find(outcome)
+            arm_end = body.find(
+                rolled_outcomes[outcome_index + 1],
+                arm_start + 1,
+            ) if outcome_index + 1 < len(rolled_outcomes) else body.find("};letelapsed_time_in_lock", arm_start)
+            arm = body[arm_start:arm_end]
+            release = arm.find("self.release_put_message_lock(")
+            topic_drop = arm.find("drop(_topic_queue_guard);")
+            log = arm.find("error!(")
+            old_drop = arm.find("drop(old);")
+            result_return = arm.find("returnPutMessageResult::")
+            if not (-1 < release < topic_drop < log < old_drop < result_return):
+                violations.append(f"Store {function_name} rolled abort order changed: {outcome}")
+
+    default_wrapper_records = inherent_method_records(
+        store,
+        "CommitLog",
+        ("ensure_active_mapped_file_locked",),
+    )["ensure_active_mapped_file_locked"]
+    if (
+        len(default_wrapper_records) != 1
+        or default_wrapper_records[0].body != (
+            "self.ensure_active_mapped_file_locked_with(mapped_file,"
+            "crate::utils::ffi::mlock,crate::utils::ffi::munlock)"
+        )
+    ):
+        violations.append("Store default active-lock wrapper must remain one exact delegation")
+    ensure_wrapper = compact_rust(named_function_body(store, "ensure_active_mapped_file_locked_with") or "")
+    if ensure_wrapper != (
+        "lettarget=self.active_memory_lock_target(mapped_file);"
+        "lock_active_mapped_file_parts!(&self.active_memory_lock,"
+        "&self.active_memory_lock_present,mapped_file,target,&mutlocker,&mutunlocker,)"
+    ):
+        violations.append("Store active-lock test wrapper must remain one parts delegation")
+    release_wrapper = compact_rust(named_function_body(store, "release_active_memory_lock_if_present") or "")
+    if release_wrapper != (
+        "Self::release_active_memory_lock_if_present_parts(&self.active_memory_lock,"
+        "&self.active_memory_lock_present,unlocker,)"
+    ):
+        violations.append("Store active-lock release wrapper must remain one parts delegation")
+    if compact_rust(store).count("lock_active_mapped_file_parts!(") != 3:
+        violations.append("Store active-lock macro adapter call count changed")
+    for helper in (
+        "ensure_active_mapped_file_locked_parts",
+        "release_active_memory_lock_if_present_parts",
+        "release_active_memory_lock_parts",
+    ):
+        helper_body = compact_rust(named_function_body(store, helper) or "")
+        if not helper_body or ".clone(" in helper_body or "Arc::clone" in helper_body:
+            violations.append(f"Store {helper} split helper changed or cloned ownership")
+    required_local_tests = (
+        "initial_present_put_ok_observes_strict_order_without_acquiring",
+        "missing_or_full_initial_segment_acquires_exactly_once",
+        "full_initial_acquire_failure_drops_old_only_after_acquire",
+        "initial_lock_failure_drops_segment_after_the_failed_lock",
+        "initial_abort_outcomes_are_explicit_and_do_not_retry",
+        "first_eof_rolls_once_and_retry_put_ok_returns_old_segment",
+        "rolled_abort_outcomes_retain_first_eof_and_old_segment",
+        "every_non_put_ok_retry_is_rejected_without_a_third_attempt",
+    )
+    for test_name in required_local_tests:
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local append-attempt event/drop test changed: {test_name}")
+    if re.search(r"#\[derive\([^]]*\bClone\b[^]]*\)\]\s*struct\s+Segment\b", local_test_source):
+        violations.append("Local append-attempt Segment must prove that run has no Clone bound")
+    for test_name in (
+        "single_put_retries_encoded_buffer_after_commitlog_eof_roll",
+        "batch_put_retries_full_encoded_buffer_after_partial_frame_eof_roll",
+    ):
+        body = compact_rust(named_function_body(store_test_source, test_name) or "")
+        if not body or "mapped_file_size_commit_log:512" not in body or "wrote_offset,512" not in body:
+            violations.append(f"Store af0 EOF-roll regression changed: {test_name}")
+    return violations
+
+
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
+
+    def test_commit_log_append_attempt_has_one_local_owner_and_two_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_APPEND_ATTEMPT_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_append_attempt.rs").read_text(encoding="utf-8")
+        store_tests = (STORE_CRATE / "src" / "message_store" / "local_file_message_store.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            [],
+            commit_log_append_attempt_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+                store_tests,
+            ),
+        )
+
+    def test_commit_log_append_attempt_contract_rejects_control_flow_adapter_and_drop_mutations(self) -> None:
+        local = (ROOT / COMMIT_LOG_APPEND_ATTEMPT_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_append_attempt.rs").read_text(encoding="utf-8")
+        store_tests = (STORE_CRATE / "src" / "message_store" / "local_file_message_store.rs").read_text(
+            encoding="utf-8"
+        )
+
+        def violations(
+            candidate_local: str = local,
+            candidate_module: str = module,
+            candidate_store: str = store,
+            candidate_local_tests: str = local_tests,
+            candidate_store_tests: str = store_tests,
+        ) -> list[str]:
+            return commit_log_append_attempt_contract_violations(
+                candidate_local,
+                candidate_module,
+                candidate_store,
+                candidate_local_tests,
+                candidate_store_tests,
+            )
+
+        local_mutations = [
+            local.replace("if is_full(&segment)", "if false", 1),
+            local.replace(
+                "match acquire() {\n                        Some(acquired)",
+                "drop(segment);\n                    match acquire() {\n                        Some(acquired)",
+                1,
+            ),
+            local.replace("lock_active(&segment)", "Ok::<(), E>(())", 1),
+            local.replace("let Some(rolled) = acquire()", "let Some(rolled) = None", 1),
+            local.replace("lock_active(&rolled)", "lock_active(&old)", 1),
+            local.replace("append(&rolled)", "append(&old)", 1),
+            local.replace(
+                "AppendMessageStatus::EndOfFile\n                    | AppendMessageStatus::MessageSizeExceeded",
+                "AppendMessageStatus::MessageSizeExceeded",
+                1,
+            ),
+            local.replace("let retry = append(&rolled);", "let _third = append(&rolled);\n                let retry = append(&rolled);", 1),
+            local.replace("rolled_segment: Some(old)", "rolled_segment: Some(old.clone())", 1),
+            local.replace("pub fn run", "#[cfg(any())]\n    pub fn run", 1),
+            local.replace("RetryRejected", "RetryAccepted", 1),
+            local.replace(
+                "did not complete successfully, including terminal append rejections",
+                "aborted before it could produce a final append result",
+                1,
+            ),
+            local.replace("retries at most once on EOF", "retries exactly once on EOF", 1),
+            local + "\npub struct CommitLogAppendAttempt;\n",
+        ]
+        for mutation_index, mutation in enumerate(local_mutations):
+            with self.subTest(local_mutation=mutation_index):
+                self.assertNotEqual(local, mutation)
+                self.assertNotEqual([], violations(candidate_local=mutation))
+
+        module_mutation = module.replace("pub mod append_attempt;", "mod append_attempt;", 1)
+        self.assertNotEqual(module, module_mutation)
+        self.assertNotEqual([], violations(candidate_module=module_mutation))
+
+        rolled_marker = "CommitLogAppendAborted::RolledSegmentUnavailable"
+        rolled_start = store.find(rolled_marker)
+        rolled_log = store.find("error!(", rolled_start)
+        rolled_drop = store.find("drop(old);", rolled_log)
+        moved_drop_store = store[:rolled_log] + "drop(old);\n                " + store[rolled_log:rolled_drop] + store[rolled_drop + len("drop(old);\n"):]
+        batch_start = store.find("pub async fn put_messages")
+        illegal_marker = store.find("CommitLogAppendAborted::InitialMessageIllegal", batch_start)
+        illegal_status = store.find("PutMessageStatus::MessageIllegal", illegal_marker)
+        unknown_marker = store.find("CommitLogAppendAborted::InitialUnknown", illegal_status)
+        unknown_status = store.find("PutMessageStatus::UnknownError", unknown_marker)
+        swapped_batch_statuses = (
+            store[:unknown_status]
+            + "PutMessageStatus::MessageIllegal"
+            + store[unknown_status + len("PutMessageStatus::UnknownError"):]
+        )
+        swapped_batch_statuses = (
+            swapped_batch_statuses[:illegal_status]
+            + "PutMessageStatus::UnknownError"
+            + swapped_batch_statuses[illegal_status + len("PutMessageStatus::MessageIllegal"):]
+        )
+        store_mutations = [
+            store.replace(
+                "use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt;",
+                "use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt as AppendAttempt;",
+                1,
+            ),
+            store.replace("CommitLogAppendAttempt::run(", "CommitLogAppendAttempt::run_disabled(", 1),
+            store.replace("|mapped_file| mapped_file.is_full()", "|_| false", 1),
+            store.replace(
+                "get_last_mapped_file_mut_start_offset(0, true)",
+                "get_last_mapped_file_mut_start_offset(1, true)",
+                1,
+            ),
+            store.replace(
+                "target,\n                        crate::utils::ffi::mlock,",
+                "target,\n                        crate::utils::ffi::munlock,",
+                1,
+            ),
+            store.replace("mapped_file.append_messages(", "mapped_file.append_message(", 1),
+            store.replace("PutMessageStatus::UnknownError, Some(result)", "PutMessageStatus::PutOk, Some(result)", 1),
+            swapped_batch_statuses,
+            store.replace("drop(old);", "", 1),
+            moved_drop_store,
+            store.replace(
+                "&self.active_memory_lock_present,\n            mapped_file,",
+                "&self.active_memory_lock_present.clone(),\n            mapped_file,",
+                1,
+            ),
+            store.replace(
+                "let target = self.active_memory_lock_target(mapped_file);",
+                "let _ = self.active_memory_lock_present.load(Ordering::Acquire);\n        let target = self.active_memory_lock_target(mapped_file);",
+                1,
+            ),
+            store.replace(
+                "fn ensure_active_mapped_file_locked_with<F, G>(",
+                "fn ensure_active_mapped_file_locked(&self, _: &DefaultMappedFile) -> RocketMQResult<()> { Ok(()) }\n\n    fn ensure_active_mapped_file_locked_with<F, G>(",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(store_mutations):
+            with self.subTest(store_mutation=mutation_index):
+                self.assertNotEqual(store, mutation)
+                self.assertNotEqual([], violations(candidate_store=mutation))
+
+        test_mutations = [
+            (
+                "local",
+                local_tests.replace(
+                    "fn full_initial_acquire_failure_drops_old_only_after_acquire",
+                    "fn full_initial_acquire_failure_drops_old_before_acquire",
+                    1,
+                ),
+            ),
+            (
+                "local",
+                local_tests.replace("struct Segment {", "#[derive(Clone)]\nstruct Segment {", 1),
+            ),
+            (
+                "store",
+                store_tests.replace(
+                    "fn batch_put_retries_full_encoded_buffer_after_partial_frame_eof_roll",
+                    "fn batch_put_does_not_retry_after_partial_frame_eof_roll",
+                    1,
+                ),
+            ),
+        ]
+        for test_kind, mutation in test_mutations:
+            with self.subTest(test_mutation=test_kind):
+                if test_kind == "local":
+                    self.assertNotEqual([], violations(candidate_local_tests=mutation))
+                else:
+                    self.assertNotEqual([], violations(candidate_store_tests=mutation))
 
     def test_commit_log_memory_lock_target_has_one_local_owner_and_rejects_policy_mutations(self) -> None:
         canonical_path = ROOT / COMMIT_LOG_MEMORY_LOCK_PATH
@@ -10302,6 +10812,16 @@ mod tests""",
             commit_log.replace(
                 "target: CommitLogMemoryLockTarget",
                 "target: crate::base::memory_lock_manager::MemoryLockHandle",
+                1,
+            ),
+            commit_log.replace(
+                "target: Option<CommitLogMemoryLockTarget>",
+                "target: Option<crate::base::memory_lock_manager::MemoryLockHandle>",
+                1,
+            ),
+            commit_log.replace(
+                "L: FnMut(&MemoryLockManager, CommitLogMemoryLockTarget)",
+                "L: FnMut(&MemoryLockManager, crate::base::memory_lock_manager::MemoryLockHandle)",
                 1,
             ),
             commit_log.replace(
@@ -16287,6 +16807,7 @@ mod tests""",
         self.assertEqual(
             {
                 "append.rs",
+                "append_attempt.rs",
                 "append_frame.rs",
                 "header.rs",
                 "load.rs",

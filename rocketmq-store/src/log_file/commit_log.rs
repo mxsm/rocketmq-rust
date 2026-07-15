@@ -63,7 +63,6 @@ use crate::base::memory_lock_manager::MemoryLockManager;
 use crate::base::message_encoder_pool;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
-use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::message_store::MessageStore;
 use crate::base::message_store::StoreHealthRecorder;
@@ -104,6 +103,10 @@ use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::ffi::MADV_RANDOM;
 
 use rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAborted;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendCompleted;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome;
 use rocketmq_store_local::commit_log::memory_lock::plan_commit_log_memory_lock_target;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockMode;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;
@@ -270,6 +273,30 @@ pub fn get_message_num(
     }
     // message_num
     message_num
+}
+
+macro_rules! lock_active_mapped_file_parts {
+    (
+        $active_memory_lock:expr,
+        $active_memory_lock_present:expr,
+        $mapped_file:expr,
+        $target:expr,
+        $locker:expr,
+        $unlocker:expr $(,)?
+    ) => {{
+        let mapped_file = $mapped_file;
+        let file_from_offset = mapped_file.get_file_from_offset();
+        CommitLog::ensure_active_mapped_file_locked_parts(
+            $active_memory_lock,
+            $active_memory_lock_present,
+            $target,
+            file_from_offset,
+            |manager, target| {
+                mapped_file.lock_region_with(manager, target.category, target.offset, target.len, $locker)
+            },
+            $unlocker,
+        )
+    }};
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -447,29 +474,49 @@ impl CommitLog {
         F: FnMut(*const u8, usize) -> RocketMQResult<()>,
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
-        let Some(target) = self.active_memory_lock_target(mapped_file) else {
-            return self.release_active_memory_lock_if_present(&mut unlocker);
+        let target = self.active_memory_lock_target(mapped_file);
+        lock_active_mapped_file_parts!(
+            &self.active_memory_lock,
+            &self.active_memory_lock_present,
+            mapped_file,
+            target,
+            &mut locker,
+            &mut unlocker,
+        )
+    }
+
+    fn ensure_active_mapped_file_locked_parts<L, G>(
+        active_memory_lock: &ParkingMutex<CommitLogActiveMemoryLock>,
+        active_memory_lock_present: &AtomicBool,
+        target: Option<CommitLogMemoryLockTarget>,
+        file_from_offset: u64,
+        mut lock_region: L,
+        mut unlocker: G,
+    ) -> RocketMQResult<()>
+    where
+        L: FnMut(&MemoryLockManager, CommitLogMemoryLockTarget) -> RocketMQResult<Option<MemoryLockHandle>>,
+        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        let Some(target) = target else {
+            return Self::release_active_memory_lock_if_present_parts(
+                active_memory_lock,
+                active_memory_lock_present,
+                &mut unlocker,
+            );
         };
-        let file_from_offset = mapped_file.get_file_from_offset();
-        let mut active_memory_lock = self.active_memory_lock.lock();
-        if active_memory_lock.is_current(file_from_offset, target) {
-            self.active_memory_lock_present.store(true, Ordering::Release);
+        let mut active_memory_lock_guard = active_memory_lock.lock();
+        if active_memory_lock_guard.is_current(file_from_offset, target) {
+            active_memory_lock_present.store(true, Ordering::Release);
             return Ok(());
         }
 
-        Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlocker)?;
-        self.active_memory_lock_present.store(false, Ordering::Release);
-        if let Some(handle) = mapped_file.lock_region_with(
-            &active_memory_lock.manager,
-            target.category,
-            target.offset,
-            target.len,
-            &mut locker,
-        )? {
-            active_memory_lock.set_current(file_from_offset, target, handle);
-            self.active_memory_lock_present.store(true, Ordering::Release);
+        Self::release_active_memory_lock_locked(&mut active_memory_lock_guard, &mut unlocker)?;
+        active_memory_lock_present.store(false, Ordering::Release);
+        if let Some(handle) = lock_region(&active_memory_lock_guard.manager, target)? {
+            active_memory_lock_guard.set_current(file_from_offset, target, handle);
+            active_memory_lock_present.store(true, Ordering::Release);
         } else {
-            self.active_memory_lock_present.store(false, Ordering::Release);
+            active_memory_lock_present.store(false, Ordering::Release);
         }
         Ok(())
     }
@@ -478,20 +525,39 @@ impl CommitLog {
     where
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
-        if !self.active_memory_lock_present.load(Ordering::Acquire) {
-            return Ok(());
-        }
-
-        self.release_active_memory_lock_with(unlocker)
+        Self::release_active_memory_lock_if_present_parts(
+            &self.active_memory_lock,
+            &self.active_memory_lock_present,
+            unlocker,
+        )
     }
 
-    fn release_active_memory_lock_with<G>(&self, mut unlocker: G) -> RocketMQResult<()>
+    fn release_active_memory_lock_if_present_parts<G>(
+        active_memory_lock: &ParkingMutex<CommitLogActiveMemoryLock>,
+        active_memory_lock_present: &AtomicBool,
+        unlocker: G,
+    ) -> RocketMQResult<()>
     where
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
-        let mut active_memory_lock = self.active_memory_lock.lock();
+        if !active_memory_lock_present.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
+        Self::release_active_memory_lock_parts(active_memory_lock, active_memory_lock_present, unlocker)
+    }
+
+    fn release_active_memory_lock_parts<G>(
+        active_memory_lock: &ParkingMutex<CommitLogActiveMemoryLock>,
+        active_memory_lock_present: &AtomicBool,
+        mut unlocker: G,
+    ) -> RocketMQResult<()>
+    where
+        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        let mut active_memory_lock = active_memory_lock.lock();
         Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlocker)?;
-        self.active_memory_lock_present.store(false, Ordering::Release);
+        active_memory_lock_present.store(false, Ordering::Release);
         Ok(())
     }
 
@@ -843,8 +909,7 @@ impl CommitLog {
             msg_batch.message_ext_broker_inner.with_store_host_v6_flag();
         }
 
-        let mut unlock_mapped_file = None;
-        let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
+        let mapped_file = self.mapped_file_queue.get_last_mapped_file();
         let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
             mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
         } else {
@@ -879,90 +944,108 @@ impl CommitLog {
         // Here settings are stored timestamp, in order to ensure an orderly global
         msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = time_utils::current_millis() as i64;
 
-        if mapped_file.is_none() || mapped_file.as_ref().unwrap().is_full() {
-            mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
-        }
-
-        if mapped_file.is_none() {
-            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-            drop(_topic_queue_guard); // Explicitly release topic_queue_lock on error
-            error!(
-                "create mapped file error, topic: {}  clientAddr: {}",
-                msg_batch.message_ext_broker_inner.topic(),
-                msg_batch.message_ext_broker_inner.born_host()
-            );
-            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-        }
-
-        if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-            drop(_topic_queue_guard);
-            error!(
-                "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                msg_batch.message_ext_broker_inner.topic(),
-                msg_batch.message_ext_broker_inner.born_host(),
-                error
-            );
-            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-        }
-
-        let result = mapped_file.as_ref().unwrap().append_messages(
-            &mut msg_batch,
-            self.append_message_callback.as_ref(),
-            &mut put_message_context,
-            self.enabled_append_prop_crc,
-        );
-        let put_message_result = match result.status {
-            AppendMessageStatus::PutOk => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
-            }
-            AppendMessageStatus::EndOfFile => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                unlock_mapped_file = mapped_file;
-                mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
-                if mapped_file.is_none() {
-                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                    drop(_topic_queue_guard);
-                    error!(
-                        "create mapped file error, topic: {}  clientAddr: {}",
-                        msg_batch.message_ext_broker_inner.topic(),
-                        msg_batch.message_ext_broker_inner.born_host()
+        let append_attempt = {
+            let mapped_file_queue = &mut self.mapped_file_queue;
+            let message_store_config = self.message_store_config.as_ref();
+            let active_memory_lock = &self.active_memory_lock;
+            let active_memory_lock_present = &self.active_memory_lock_present;
+            let append_message_callback = self.append_message_callback.as_ref();
+            let enabled_append_prop_crc = self.enabled_append_prop_crc;
+            CommitLogAppendAttempt::run(
+                mapped_file,
+                |mapped_file| mapped_file.is_full(),
+                || mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true),
+                |mapped_file| {
+                    let target = Self::active_memory_lock_target_for_config(
+                        message_store_config,
+                        mapped_file.get_wrote_position().max(0) as u64,
+                        mapped_file.get_file_size(),
                     );
-                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
-                }
-                if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                    drop(_topic_queue_guard);
-                    error!(
-                        "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                        msg_batch.message_ext_broker_inner.topic(),
-                        msg_batch.message_ext_broker_inner.born_host(),
-                        error
-                    );
-                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
-                }
-                let result = mapped_file.as_ref().unwrap().append_messages(
-                    &mut msg_batch,
-                    self.append_message_callback.as_ref(),
-                    &mut put_message_context,
-                    self.enabled_append_prop_crc,
+                    lock_active_mapped_file_parts!(
+                        active_memory_lock,
+                        active_memory_lock_present,
+                        mapped_file,
+                        target,
+                        crate::utils::ffi::mlock,
+                        crate::utils::ffi::munlock,
+                    )
+                },
+                |mapped_file| {
+                    mapped_file.append_messages(
+                        &mut msg_batch,
+                        append_message_callback,
+                        &mut put_message_context,
+                        enabled_append_prop_crc,
+                    )
+                },
+            )
+        };
+        let (put_message_result, unlock_mapped_file) = match append_attempt {
+            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::PutOk { result, rolled_segment }) => (
+                PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result)),
+                rolled_segment,
+            ),
+            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::RetryRejected { result, rolled_segment }) => (
+                PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result)),
+                Some(rolled_segment),
+            ),
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable) => {
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
+                drop(_topic_queue_guard);
+                error!(
+                    "create mapped file error, topic: {}  clientAddr: {}",
+                    msg_batch.message_ext_broker_inner.topic(),
+                    msg_batch.message_ext_broker_inner.born_host()
                 );
-                if AppendMessageStatus::PutOk == result.status {
-                    PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
-                } else {
-                    PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
-                }
+                return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
             }
-            AppendMessageStatus::MessageSizeExceeded | AppendMessageStatus::PropertiesSizeExceeded => {
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error }) => {
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
+                drop(_topic_queue_guard);
+                error!(
+                    "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                    msg_batch.message_ext_broker_inner.topic(),
+                    msg_batch.message_ext_broker_inner.born_host(),
+                    error
+                );
+                return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
+            }
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialMessageIllegal { result }) => {
                 self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
                 return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
             }
-            AppendMessageStatus::UnknownError => {
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialUnknown { result }) => {
                 self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
                 return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
+            }
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable { first_eof, old }) => {
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
+                drop(_topic_queue_guard);
+                error!(
+                    "create mapped file error, topic: {}  clientAddr: {}",
+                    msg_batch.message_ext_broker_inner.topic(),
+                    msg_batch.message_ext_broker_inner.born_host()
+                );
+                drop(old);
+                return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(first_eof));
+            }
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledActiveLockFailed {
+                first_eof,
+                old,
+                error,
+            }) => {
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
+                drop(_topic_queue_guard);
+                error!(
+                    "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                    msg_batch.message_ext_broker_inner.topic(),
+                    msg_batch.message_ext_broker_inner.born_host(),
+                    error
+                );
+                drop(old);
+                return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(first_eof));
             }
         };
         let elapsed_time_in_lock = self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
@@ -1055,10 +1138,8 @@ impl CommitLog {
 
         let topic_queue_key = generate_key(&msg);
 
-        let mut unlock_mapped_file = None;
-
         //get last mapped file from mapped file queue
-        let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
+        let mapped_file = self.mapped_file_queue.get_last_mapped_file();
         // current offset is physical offset
         let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
             mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
@@ -1102,88 +1183,100 @@ impl CommitLog {
             msg.message_ext_inner.store_timestamp = begin_lock_timestamp as i64;
         }
 
-        if mapped_file.is_none() || mapped_file.as_ref().unwrap().is_full() {
-            mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
-        }
-
-        if mapped_file.is_none() {
-            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-            drop(_topic_queue_guard); // Explicitly release topic_queue_lock on error
-            error!(
-                "create mapped file error, topic: {}  clientAddr: {}",
-                msg.topic(),
-                msg.born_host()
-            );
-            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-        }
-
-        if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-            drop(_topic_queue_guard);
-            error!(
-                "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                msg.topic(),
-                msg.born_host(),
-                error
-            );
-            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-        }
-
-        let result = mapped_file.as_ref().unwrap().append_message(
-            &mut msg,
-            self.append_message_callback.as_ref(),
-            &put_message_context,
-        );
-        let put_message_result = match result.status {
-            AppendMessageStatus::PutOk => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
-            }
-            AppendMessageStatus::EndOfFile => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                unlock_mapped_file = mapped_file;
-                mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
-                if mapped_file.is_none() {
-                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                    drop(_topic_queue_guard); // CRITICAL FIX: Release topic_queue_lock on error
-                    error!(
-                        "create mapped file error, topic: {}  clientAddr: {}",
-                        msg.topic(),
-                        msg.born_host()
+        let append_attempt = {
+            let mapped_file_queue = &mut self.mapped_file_queue;
+            let message_store_config = self.message_store_config.as_ref();
+            let active_memory_lock = &self.active_memory_lock;
+            let active_memory_lock_present = &self.active_memory_lock_present;
+            let append_message_callback = self.append_message_callback.as_ref();
+            CommitLogAppendAttempt::run(
+                mapped_file,
+                |mapped_file| mapped_file.is_full(),
+                || mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true),
+                |mapped_file| {
+                    let target = Self::active_memory_lock_target_for_config(
+                        message_store_config,
+                        mapped_file.get_wrote_position().max(0) as u64,
+                        mapped_file.get_file_size(),
                     );
-                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
-                }
-                if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                    drop(_topic_queue_guard);
-                    error!(
-                        "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                        msg.topic(),
-                        msg.born_host(),
-                        error
-                    );
-                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
-                }
-                let result = mapped_file.as_ref().unwrap().append_message(
-                    &mut msg,
-                    self.append_message_callback.as_ref(),
-                    &put_message_context,
+                    lock_active_mapped_file_parts!(
+                        active_memory_lock,
+                        active_memory_lock_present,
+                        mapped_file,
+                        target,
+                        crate::utils::ffi::mlock,
+                        crate::utils::ffi::munlock,
+                    )
+                },
+                |mapped_file| mapped_file.append_message(&mut msg, append_message_callback, &put_message_context),
+            )
+        };
+        let (put_message_result, unlock_mapped_file) = match append_attempt {
+            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::PutOk { result, rolled_segment }) => (
+                PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result)),
+                rolled_segment,
+            ),
+            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::RetryRejected { result, rolled_segment }) => (
+                PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result)),
+                Some(rolled_segment),
+            ),
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable) => {
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
+                drop(_topic_queue_guard);
+                error!(
+                    "create mapped file error, topic: {}  clientAddr: {}",
+                    msg.topic(),
+                    msg.born_host()
                 );
-                if AppendMessageStatus::PutOk == result.status {
-                    PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
-                } else {
-                    PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
-                }
+                return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
             }
-            AppendMessageStatus::MessageSizeExceeded | AppendMessageStatus::PropertiesSizeExceeded => {
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error }) => {
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
+                drop(_topic_queue_guard);
+                error!(
+                    "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                    msg.topic(),
+                    msg.born_host(),
+                    error
+                );
+                return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
+            }
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialMessageIllegal { result }) => {
                 self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
                 return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
             }
-            AppendMessageStatus::UnknownError => {
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialUnknown { result }) => {
                 self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
                 return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
+            }
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable { first_eof, old }) => {
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
+                drop(_topic_queue_guard);
+                error!(
+                    "create mapped file error, topic: {}  clientAddr: {}",
+                    msg.topic(),
+                    msg.born_host()
+                );
+                drop(old);
+                return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(first_eof));
+            }
+            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledActiveLockFailed {
+                first_eof,
+                old,
+                error,
+            }) => {
+                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
+                drop(_topic_queue_guard);
+                error!(
+                    "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                    msg.topic(),
+                    msg.born_host(),
+                    error
+                );
+                drop(old);
+                return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(first_eof));
             }
         };
         let elapsed_time_in_lock = self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);

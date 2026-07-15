@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1372,3 +1372,48 @@ python scripts/arc_mut_guard.py
   re-encode 或改变其他 EOF 状态，不迁移 append/recovery owner，不修改 flush/group commit、CQ/Index、HA、Timer/POP、
   MappedFile lifecycle、runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和
   M06-04..12 保持未完成。
+
+## M06-03af CommitLog bounded append-attempt orchestration evidence
+
+- [x] `[DEV/API]` 新增纯同步
+  `rocketmq-store-local::commit_log::append_attempt::CommitLogAppendAttempt::run`，以 initial segment 加四个 closure 接收
+  `is_full/acquire/lock_active/append` 操作，只依赖 Local `AppendMessageResult/AppendMessageStatus`。显式 outcome
+  区分 `Completed::{PutOk, RetryRejected}` 与
+  `Aborted::{InitialSegmentUnavailable, InitialActiveLockFailed, InitialMessageIllegal, InitialUnknown,
+  RolledSegmentUnavailable, RolledActiveLockFailed}`；roll 完成结果携带旧 segment，rolled abort 同时保留首次 EOF
+  result 与旧 segment，Store 无需从状态码反推控制流。
+- [x] `[COMPAT/ORDER]` 编排严格冻结旧顺序：initial `Some` 只检查一次 `is_full`，`None/full` 只 acquire 一次，
+  active lock 后 append；只有首次 `EndOfFile` 可再执行一次 acquire、active lock 与 append，retry 的任何非 `PutOk`
+  状态均成为 `RetryRejected`，不存在第三次尝试。DropProbe 另行冻结 full initial 的 acquire RHS 先于旧 segment
+  drop；Store 两条 rolled abort 先 release put lock、drop topic guard、记录原日志，再显式 drop old 并 return，且不走
+  warm unlock。其余 put-lock 计时、observability、慢写 warning、warm unlock、offset/stats、flush/HA 与失败 warning 顺序不变。
+- [x] `[DEV/ADAPTER]` Store single/batch 各保留一条 exact closure adapter。为满足 borrow checker，active-memory-lock
+  实现机械拆为无 `DefaultMappedFile` 类型参数的 parts helper；single、batch 与既有 test wrapper 共同调用私有
+  `lock_active_mapped_file_parts!`，其内部只求值一次 mapped-file expression，并保留全 production 唯一的 mapped-file
+  `lock_region_with` adapter。既有 default wrapper 继续一对一委托，未 clone lock、`Arc` 或 `ArcMut`。Local owner
+  不包含 `MessageExt*`、`MappedFile*`、Store status enum、Tokio、`Instant` 或 `ArcMut`，也不拥有 mmap/I/O、日志、
+  计时及后处理策略。
+- [x] `[TEST/RED/GREEN]` RED 首先以缺少 `append_attempt` module 得到 4 个 `E0432` unresolved-import，并以
+  Store 尚未接入 seam 得到 9 项 focused contract 违规。GREEN 后 Local event/drop exhaustive fixture 8/8 通过；
+  fixture 的 `Segment` 刻意不实现 `Clone`，同时证明 `run` 不要求 `Clone` bound；
+  既有 512B af0 single/batch 回归各 1/1，通过结果仍分别为 `PutOk/offset=512/wrote=170/msg_num=1` 与
+  `PutOk/offset=512/wrote=340/msg_num=2`。Local default 与 all-feature 全量测试均通过。
+- [x] `[CONTRACT]` dedicated contract 固定 Local module/owner/import、outcome shape、generic closure signature、
+  acquire/lock/append 上界、事件与 drop 顺序、retry status 全覆盖；同时固定 Store 两条完整 closure call、八类 outcome
+  到唯一 `PutMessageStatus` 的逐 arm 映射、rolled abort 生命周期、唯一 macro lock-region owner、active-lock
+  parts/wrapper 委托以及 af0 回归。mutation matrix 拒绝 is-full 绕过、
+  acquire/drop 逆序、缺锁、错误 segment、第三次 append、retry 状态遗漏、clone/cfg/duplicate、import alias、两条
+  adapter 参数/append 变异、batch illegal/unknown status 对调、错误 result 映射、old 提前/遗漏 drop、wrapper 加逻辑/
+  clone、错误 API 文档及测试删除；memory-lock focused 3/3、append-attempt focused 2/2 通过。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature、依赖、公开 wire/storage 格式或 runtime ownership。Local/Store
+  all-target/all-feature package Clippy、workspace fmt/diff、architecture 35/35+fixtures+baseline、ArcMut
+  63/63+24 fixtures+final guard 与 AGENTS routing 均通过。active-lock 首版 parts 签名曾产生 1 NEW/2 STALE
+  `DefaultMappedFile` 指纹；最终改为 generic lock-region closure 并复用既有三个 wrapper/type-reference 指纹，未修改
+  ArcMut baseline 或 relocation approval。主线程首次完整 M06 contract 120 项暴露 2 项契约登记缺口：canonical directory
+  尚未登记 `append_attempt.rs`，既有 memory-lock config adapter 尚未冻结新增 parts helper 的 target 类型；补充精确文件集合、
+  target 引用计数、parts helper 完整签名与 closure bound，并加入两条类型替换 mutation 后 focused 2/2 通过，最终完整
+  M06 contract 120/120 通过（602.201s）。实现与契约修正两轮独立复审均为 Critical/Important/Minor = 0/0/0。
+- [x] `[SCOPE]` M06-03af 只迁移 bounded append-attempt 控制流；Store 继续拥有 message encode、MappedFile queue/I/O、
+  active memory-lock syscall、topic/put lock、计时/日志/result mapping、warm/offset/stats/flush/HA。未迁移或修改
+  append-frame/CRC、recovery、flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。
+  PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
