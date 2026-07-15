@@ -103,7 +103,6 @@ use crate::utils::ffi::madvise;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::ffi::MADV_RANDOM;
 
-use rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObservation;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentOutcome;
@@ -136,9 +135,12 @@ use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
+use rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock;
+use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLockStats;
 
 pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
+pub use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLockRuntimeInfo;
 
 //CRC32 Format: [PROPERTY_CRC32 + NAME_VALUE_SEPARATOR + 10-digit fixed-length string +
 // PROPERTY_SEPARATOR]
@@ -180,57 +182,6 @@ fn log_abnormal_recovery_window(
         window.end_offset,
         window.fallback_reason
     );
-}
-
-#[derive(Debug)]
-struct CommitLogActiveMemoryLock {
-    manager: MemoryLockManager,
-    handle: Option<MemoryLockHandle>,
-    file_from_offset: Option<u64>,
-    region_offset: u64,
-    region_len: usize,
-}
-
-impl CommitLogActiveMemoryLock {
-    fn new(warn_only: bool, budget_bytes: u64) -> Self {
-        Self {
-            manager: MemoryLockManager::new(warn_only, budget_bytes),
-            handle: None,
-            file_from_offset: None,
-            region_offset: 0,
-            region_len: 0,
-        }
-    }
-
-    fn is_current(&self, file_from_offset: u64, target: CommitLogMemoryLockTarget) -> bool {
-        let Some(handle) = self.handle else {
-            return false;
-        };
-        if self.file_from_offset != Some(file_from_offset) || handle.category() != target.category {
-            return false;
-        }
-
-        if target.category == MemoryLockCategory::CommitLogActiveWindow {
-            let region_end = self.region_offset.saturating_add(self.region_len as u64);
-            target.offset >= self.region_offset && target.offset < region_end
-        } else {
-            self.region_offset == target.offset && self.region_len == target.len
-        }
-    }
-
-    fn set_current(&mut self, file_from_offset: u64, target: CommitLogMemoryLockTarget, handle: MemoryLockHandle) {
-        self.handle = Some(handle);
-        self.file_from_offset = Some(file_from_offset);
-        self.region_offset = target.offset;
-        self.region_len = target.len;
-    }
-
-    fn clear(&mut self) {
-        self.handle = None;
-        self.file_from_offset = None;
-        self.region_offset = 0;
-        self.region_len = 0;
-    }
 }
 
 // This reduces heap allocations by ~50% by reusing encoder instances
@@ -322,54 +273,6 @@ macro_rules! lock_active_mapped_file_parts {
             $unlocker,
         )
     }};
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct CommitLogPutMessageLockRuntimeInfo {
-    pub acquire_total: u64,
-    pub wait_total_millis: u64,
-    pub wait_max_millis: u64,
-    pub hold_total_millis: u64,
-    pub hold_max_millis: u64,
-}
-
-#[derive(Debug, Default)]
-struct CommitLogPutMessageLockStats {
-    acquire_total: AtomicU64,
-    wait_total_millis: AtomicU64,
-    wait_max_millis: AtomicU64,
-    hold_total_millis: AtomicU64,
-    hold_max_millis: AtomicU64,
-}
-
-impl CommitLogPutMessageLockStats {
-    fn record(&self, wait_millis: u64, hold_millis: u64) {
-        self.acquire_total.fetch_add(1, Ordering::Relaxed);
-        self.wait_total_millis.fetch_add(wait_millis, Ordering::Relaxed);
-        self.hold_total_millis.fetch_add(hold_millis, Ordering::Relaxed);
-        Self::update_max(&self.wait_max_millis, wait_millis);
-        Self::update_max(&self.hold_max_millis, hold_millis);
-    }
-
-    fn snapshot(&self) -> CommitLogPutMessageLockRuntimeInfo {
-        CommitLogPutMessageLockRuntimeInfo {
-            acquire_total: self.acquire_total.load(Ordering::Relaxed),
-            wait_total_millis: self.wait_total_millis.load(Ordering::Relaxed),
-            wait_max_millis: self.wait_max_millis.load(Ordering::Relaxed),
-            hold_total_millis: self.hold_total_millis.load(Ordering::Relaxed),
-            hold_max_millis: self.hold_max_millis.load(Ordering::Relaxed),
-        }
-    }
-
-    fn update_max(target: &AtomicU64, value: u64) {
-        let mut current = target.load(Ordering::Relaxed);
-        while value > current {
-            match target.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
-                Ok(_) => break,
-                Err(actual) => current = actual,
-            }
-        }
-    }
 }
 
 pub struct CommitLog {
@@ -537,7 +440,7 @@ impl CommitLog {
 
         Self::release_active_memory_lock_locked(&mut active_memory_lock_guard, &mut unlocker)?;
         active_memory_lock_present.store(false, Ordering::Release);
-        if let Some(handle) = lock_region(&active_memory_lock_guard.manager, target)? {
+        if let Some(handle) = lock_region(active_memory_lock_guard.manager(), target)? {
             active_memory_lock_guard.set_current(file_from_offset, target, handle);
             active_memory_lock_present.store(true, Ordering::Release);
         } else {
@@ -593,12 +496,12 @@ impl CommitLog {
     where
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
-        let Some(handle) = active_memory_lock.handle.take() else {
+        let Some(handle) = active_memory_lock.take_handle() else {
             active_memory_lock.clear();
             return Ok(());
         };
 
-        active_memory_lock.manager.unlock_region_with(handle, &mut unlocker)?;
+        active_memory_lock.manager().unlock_region_with(handle, &mut unlocker)?;
         active_memory_lock.clear();
         Ok(())
     }

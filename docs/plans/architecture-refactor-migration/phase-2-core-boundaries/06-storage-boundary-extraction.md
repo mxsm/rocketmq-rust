@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1612,3 +1612,31 @@ python scripts/arc_mut_guard.py
 - [x] `[INVENTORY/SCOPE]` M06-03ak 关闭 optimized/standard recovery route 内部工作，但顶层 PR-M06-03 仍未关闭：
   CommitLog 根结构、append/recovery 方法 owner 与 Store facade 仍需最终收口。顶层统计保持 82 个工作包中
   30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
+
+## M06-03al CommitLog runtime state owner extraction evidence
+
+- [x] `[DEV/API]` Local 新增 `commit_log::runtime_state`，由
+  `CommitLogPutMessageLockRuntimeInfo`、hidden `CommitLogPutMessageLockStats` 与 hidden
+  `CommitLogActiveMemoryLock` 唯一拥有 put-message lock 计数/快照和 active memory-lock 当前 handle、文件、范围及
+  manager 状态。模块只依赖原子类型、Local memory-lock manager/handle/target，不含 Store、MappedFile、config、
+  runtime、`dyn`、`ArcMut`、tracing 或 `unsafe`。
+- [x] `[COMPAT/STATE]` put lock 继续用 Relaxed 原子累计 acquire/wait/hold total，并以
+  `compare_exchange_weak` 保持 wait/hold max；Store 旧 `CommitLogPutMessageLockRuntimeInfo` 路径是 canonical Local
+  类型的精确 re-export。active-window 继续复用同文件内 `[offset, offset + len)`，active-file 继续要求类别、文件、
+  offset、len 全部精确匹配；handle 仍先 take、经 canonical manager unlock、再 clear。
+- [x] `[DEV/ADAPTER]` Store 删除两组状态 struct/impl，只持有 Local stats 与 active-lock state。Store 保留
+  MessageStoreConfig→target、MappedFile address/range、平台 lock/unlock、fast-path presence AtomicBool 与错误传播；
+  manager/handle 通过 Local accessor/take seam 使用，不复制状态算法。
+- [x] `[TEST/CONTRACT]` Local 新增 3 项 totals/maxima、active-window 半开范围、active-file exact identity 与
+  take/unlock/clear 回归测试；Local all-feature 全量和 Store CommitLog filtered lib 35/35 通过。M06 contract 新增
+  canonical fields/atomics/order/import/re-export/Store adapter/test mutation，并同步 hidden memory-lock seam caller ledger；
+  首次全量仅暴露 2 项 ledger 缺口，修正后定向 4/4，最终完整 contract 134/134 通过（595.846s）。
+- [x] `[ARC/QUALITY]` Local/Store all-target/all-feature package Clippy、workspace fmt、dependency baseline 与
+  AGENTS routing 均通过。删除 Store stats owner 改变同一 `CommitLog.mapped_file_queue` ArcMut 字段的前置 fingerprint；
+  按 ADR-013 完成 `ad39677711ebd03cb15aa7bc`→`982715d2703b3ca7eb658106` 一对一 relocation、promotion、
+  baseline compare 与 final guard，ledger 保持 1,171 identities/3,233 occurrences，无新增 ArcMut 债务。
+  error architecture guard 仍只复现未触及的 Broker source-stringification 1 项、MCP anyhow 8 项与治理文档缺失 2 项。
+- [x] `[INVENTORY/SCOPE]` M06-03al 关闭两组 CommitLog runtime-neutral 状态 owner，但顶层 PR-M06-03 仍未关闭：
+  CommitLog 根 composition、MappedFileQueue、append/recovery 方法 owner 与 Store facade 仍需按后续依赖收口。
+  顶层统计保持 82 个工作包中 30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12
+  状态不变。

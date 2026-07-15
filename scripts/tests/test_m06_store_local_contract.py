@@ -102,6 +102,9 @@ COMMIT_LOG_LOAD_ORCHESTRATION_PATH = Path(
 COMMIT_LOG_RECOVERY_ORCHESTRATION_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery_orchestration.rs"
 )
+COMMIT_LOG_RUNTIME_STATE_PATH = Path(
+    "rocketmq-store-local/src/commit_log/runtime_state.rs"
+)
 STORE_APPEND_CALLBACK_PATH = Path(
     "rocketmq-store/src/base/append_message_callback.rs"
 )
@@ -210,6 +213,10 @@ MEMORY_LOCK_TEST_SEAM_COUNTS = {
         "lock_region_with": 4,
         "unlock_region_with": 1,
     },
+    Path("rocketmq-store-local/tests/commit_log_runtime_state.rs"): {
+        "lock_region_with": 1,
+        "unlock_region_with": 1,
+    },
     Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"): {
         "lock_region_with": 3,
         "unlock_region_with": 1,
@@ -283,6 +290,9 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "CommitLogRecoveryStep": ("enum", "recovery_orchestration.rs"),
     "optimized_recovery_requested": ("fn", "recovery_orchestration.rs"),
     "drive_commit_log_recovery": ("fn", "recovery_orchestration.rs"),
+    "CommitLogPutMessageLockRuntimeInfo": ("struct", "runtime_state.rs"),
+    "CommitLogPutMessageLockStats": ("struct", "runtime_state.rs"),
+    "CommitLogActiveMemoryLock": ("struct", "runtime_state.rs"),
 }
 COMMIT_LOG_LOAD_OWNER_ITEMS = {
     "CommitLogFileDiscovery": "enum",
@@ -7170,6 +7180,164 @@ def commit_log_memory_lock_owner_violations(
     return violations
 
 
+def commit_log_runtime_state_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+
+    expected_structs = {
+        "CommitLogPutMessageLockRuntimeInfo": (
+            "pubacquire_total:u64,pubwait_total_millis:u64,pubwait_max_millis:u64,"
+            "pubhold_total_millis:u64,pubhold_max_millis:u64,"
+        ),
+        "CommitLogPutMessageLockStats": (
+            "acquire_total:AtomicU64,wait_total_millis:AtomicU64,wait_max_millis:AtomicU64,"
+            "hold_total_millis:AtomicU64,hold_max_millis:AtomicU64,"
+        ),
+        "CommitLogActiveMemoryLock": (
+            "manager:MemoryLockManager,handle:Option<MemoryLockHandle>,file_from_offset:Option<u64>,"
+            "region_offset:u64,region_len:usize,"
+        ),
+    }
+    for item, expected_body in expected_structs.items():
+        if len(re.findall(rf"\bpub\s+struct\s+{item}\b", active)) != 1 or compact_rust(
+            active_item_body(production, "struct", item) or ""
+        ) != expected_body:
+            violations.append(f"Local CommitLog runtime-state owner changed: {item}")
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+struct\s+{item}\b",
+            production,
+        ):
+            violations.append(f"Local CommitLog runtime-state owner is cfg-gated: {item}")
+
+    expected_bodies = {
+        "record": (
+            "self.acquire_total.fetch_add(1,Ordering::Relaxed);self.wait_total_millis.fetch_add("
+            "wait_millis,Ordering::Relaxed);self.hold_total_millis.fetch_add(hold_millis,"
+            "Ordering::Relaxed);Self::update_max(&self.wait_max_millis,wait_millis);"
+            "Self::update_max(&self.hold_max_millis,hold_millis);"
+        ),
+        "snapshot": (
+            "CommitLogPutMessageLockRuntimeInfo{acquire_total:self.acquire_total.load("
+            "Ordering::Relaxed),wait_total_millis:self.wait_total_millis.load(Ordering::Relaxed),"
+            "wait_max_millis:self.wait_max_millis.load(Ordering::Relaxed),hold_total_millis:"
+            "self.hold_total_millis.load(Ordering::Relaxed),hold_max_millis:self.hold_max_millis."
+            "load(Ordering::Relaxed),}"
+        ),
+        "update_max": (
+            "letmutcurrent=target.load(Ordering::Relaxed);whilevalue>current{matchtarget."
+            "compare_exchange_weak(current,value,Ordering::Relaxed,Ordering::Relaxed){"
+            "Ok(_)=>break,Err(actual)=>current=actual,}}"
+        ),
+        "new": (
+            "Self{manager:MemoryLockManager::new(warn_only,budget_bytes),handle:None,"
+            "file_from_offset:None,region_offset:0,region_len:0,}"
+        ),
+        "is_current": (
+            "letSome(handle)=self.handleelse{returnfalse;};ifself.file_from_offset!=Some("
+            "file_from_offset)||handle.category()!=target.category{returnfalse;}iftarget.category"
+            "==MemoryLockCategory::CommitLogActiveWindow{letregion_end=self.region_offset."
+            "saturating_add(self.region_lenasu64);target.offset>=self.region_offset&&target.offset"
+            "<region_end}else{self.region_offset==target.offset&&self.region_len==target.len}"
+        ),
+        "manager": "&self.manager",
+        "set_current": (
+            "self.handle=Some(handle);self.file_from_offset=Some(file_from_offset);"
+            "self.region_offset=target.offset;self.region_len=target.len;"
+        ),
+        "take_handle": "self.handle.take()",
+        "clear": "self.handle=None;self.file_from_offset=None;self.region_offset=0;self.region_len=0;",
+    }
+    for function_name, expected_body in expected_bodies.items():
+        if compact_rust(named_function_body(production, function_name) or "") != expected_body:
+            violations.append(f"Local CommitLog runtime-state behavior changed: {function_name}")
+
+    expected_imports = {
+        "std::sync::atomic::AtomicU64",
+        "std::sync::atomic::Ordering",
+        "crate::base::memory_lock_manager::MemoryLockCategory",
+        "crate::base::memory_lock_manager::MemoryLockHandle",
+        "crate::base::memory_lock_manager::MemoryLockManager",
+        "crate::commit_log::memory_lock::CommitLogMemoryLockTarget",
+    }
+    actual_imports = {
+        body for kind, _, body, _ in active_import_records(production) if kind == "use"
+    }
+    if actual_imports != expected_imports:
+        violations.append("Local CommitLog runtime-state dependencies changed")
+    forbidden = (
+        "MappedFile",
+        "MessageStoreConfig",
+        "LocalFileMessageStore",
+        "ArcMut",
+        "tokio",
+        "tracing",
+        "rocketmq_store",
+        "dyn",
+        "async",
+        "unsafe",
+    )
+    if any(re.search(rf"\b{re.escape(token)}\b", active) for token in forbidden):
+        violations.append("Local CommitLog runtime state absorbed Store/runtime edges")
+    if any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local CommitLog runtime state forbids alias/brace/glob imports")
+    if active_rust_source(module).count("pub mod runtime_state;") != 1:
+        violations.append("Local commit_log module must expose runtime_state exactly once")
+
+    store_active = active_rust_source(source_without_cfg_test_items(store))
+    expected_store_imports = {
+        "use rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock",
+        "use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLockStats",
+    }
+    actual_store_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store)
+        if kind == "use" and not visibility and "commit_log::runtime_state" in body
+    }
+    if actual_store_imports != expected_store_imports:
+        violations.append("Store CommitLog runtime-state imports must be direct and exact")
+    if direct_exact_reexport_violations(
+        store,
+        "rocketmq_store_local::commit_log::runtime_state",
+        "CommitLogPutMessageLockRuntimeInfo",
+    ):
+        violations.append("Store CommitLog lock runtime-info facade changed")
+    for item in expected_structs:
+        if re.search(rf"\bstruct\s+{item}\b", store_active):
+            violations.append(f"Store retained CommitLog runtime-state owner: {item}")
+    expected_store_flows = (
+        "put_message_lock_stats:Arc<CommitLogPutMessageLockStats>",
+        "active_memory_lock:ParkingMutex<CommitLogActiveMemoryLock>",
+        "pubfnput_message_lock_runtime_info(&self)->CommitLogPutMessageLockRuntimeInfo{"
+        "self.put_message_lock_stats.snapshot()}",
+        "active_memory_lock_guard.manager()",
+        "active_memory_lock.take_handle()",
+        "active_memory_lock.manager().unlock_region_with(handle,&mutunlocker)",
+    )
+    store_compact = compact_rust(store_active)
+    for flow in expected_store_flows:
+        if flow not in store_compact:
+            violations.append(f"Store CommitLog runtime-state adapter changed: {flow}")
+
+    required_tests = (
+        "put_message_lock_stats_accumulate_totals_and_maxima",
+        "active_window_reuses_only_offsets_inside_the_current_region",
+        "active_file_requires_exact_region_and_take_clear_removes_identity",
+    )
+    for test_name in required_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local CommitLog runtime-state regression changed: {test_name}")
+    return violations
+
+
 def store_commit_log_memory_lock_adapter_violations(
     commit_log: str,
     store_production_sources: dict[Path, str],
@@ -7179,10 +7347,10 @@ def store_commit_log_memory_lock_adapter_violations(
     compact = compact_rust(production)
     violations: list[str] = []
     expected_imports = {
-        "rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory",
         "rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockMode",
         "rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget",
         "rocketmq_store_local::commit_log::memory_lock::plan_commit_log_memory_lock_target",
+        "rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock",
     }
     actual_imports = {
         body
@@ -7191,6 +7359,7 @@ def store_commit_log_memory_lock_adapter_violations(
             item in body
             for item in (
                 "MemoryLockCategory",
+                "CommitLogActiveMemoryLock",
                 "CommitLogMemoryLockMode",
                 "CommitLogMemoryLockTarget",
                 "plan_commit_log_memory_lock_target",
@@ -7258,17 +7427,26 @@ def store_commit_log_memory_lock_adapter_violations(
         violations.append("Store must contain one planner import and one config-adapter call")
     if normalized_sources.keys() != {STORE_COMMIT_LOG_PATH}:
         violations.append("Store CommitLog memory-lock planner consumers moved or multiplied")
-    if len(re.findall(r"\bCommitLogMemoryLockTarget\b", active)) != 7:
+    if len(re.findall(r"\bCommitLogMemoryLockTarget\b", active)) != 5:
         violations.append("Store CommitLog memory-lock target lifecycle flow changed")
     for signature in (
-        "fnis_current(&self,file_from_offset:u64,target:CommitLogMemoryLockTarget)->bool",
-        "fnset_current(&mutself,file_from_offset:u64,target:CommitLogMemoryLockTarget,handle:MemoryLockHandle)",
         "fnactive_memory_lock_target(&self,mapped_file:&DefaultMappedFile)->Option<CommitLogMemoryLockTarget>",
         "fnensure_active_mapped_file_locked_parts<L,G>(active_memory_lock:&ParkingMutex<CommitLogActiveMemoryLock>,active_memory_lock_present:&AtomicBool,target:Option<CommitLogMemoryLockTarget>,file_from_offset:u64,mutlock_region:L,mutunlocker:G,)->RocketMQResult<()>",
         "L:FnMut(&MemoryLockManager,CommitLogMemoryLockTarget)->RocketMQResult<Option<MemoryLockHandle>>",
     ):
         if signature not in compact:
             violations.append(f"Store CommitLog target lifecycle signature changed: {signature}")
+    for flow in (
+        "active_memory_lock_guard.is_current(file_from_offset,target)",
+        "lock_region(active_memory_lock_guard.manager(),target)",
+        "active_memory_lock_guard.set_current(file_from_offset,target,handle)",
+        "active_memory_lock.take_handle()",
+        "active_memory_lock.manager().unlock_region_with(handle,&mutunlocker)",
+    ):
+        if flow not in compact:
+            violations.append(f"Store CommitLog Local runtime-state adapter changed: {flow}")
+    if re.search(r"\bstruct\s+CommitLogActiveMemoryLock\b", active):
+        violations.append("Store retained CommitLog active-memory-lock state owner")
     if not violations:
         violations.extend(
             f"Store CommitLog memory-lock policy copied: {finding}"
@@ -8781,7 +8959,7 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
         (
             Path("rocketmq-store/src/log_file/commit_log.rs"),
             "release_active_memory_lock_locked",
-            "active_memory_lock.manager.unlock_region_with(handle,&mutunlocker)?",
+            "active_memory_lock.manager().unlock_region_with(handle,&mutunlocker)?",
         ),
         (
             Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"),
@@ -11426,6 +11604,122 @@ class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
 
+    def test_commit_log_runtime_state_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_RUNTIME_STATE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_runtime_state.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            [],
+            commit_log_runtime_state_contract_violations(local, module, store, local_tests),
+        )
+
+    def test_commit_log_runtime_state_rejects_owner_order_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / COMMIT_LOG_RUNTIME_STATE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_runtime_state.rs").read_text(
+            encoding="utf-8"
+        )
+
+        mutations = (
+            (
+                "stats ordering changed",
+                local.replace("fetch_add(1, Ordering::Relaxed)", "fetch_add(1, Ordering::Acquire)", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "max update operation changed",
+                local.replace("compare_exchange_weak", "compare_exchange", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "window upper boundary widened",
+                local.replace("target.offset < region_end", "target.offset <= region_end", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "current region length discarded",
+                local.replace("self.region_len = target.len;", "self.region_len = 0;", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod runtime_state;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store facade aliased",
+                local,
+                module,
+                store.replace(
+                    "pub use rocketmq_store_local::commit_log::runtime_state::"
+                    "CommitLogPutMessageLockRuntimeInfo;",
+                    "pub use rocketmq_store_local::commit_log::runtime_state::"
+                    "CommitLogPutMessageLockRuntimeInfo as LegacyLockInfo;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store copied runtime-info owner",
+                local,
+                module,
+                store.replace(
+                    "#[cfg(test)]\nmod tests",
+                    "pub struct CommitLogPutMessageLockRuntimeInfo;\n\n#[cfg(test)]\nmod tests",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store bypassed manager accessor",
+                local,
+                module,
+                store.replace("active_memory_lock_guard.manager()", "active_memory_lock_guard.manager", 1),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn active_window_reuses_only_offsets_inside_the_current_region()",
+                    "fn active_window_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    commit_log_runtime_state_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
     def test_commit_log_load_orchestration_has_one_local_owner_and_two_store_adapters(self) -> None:
         local = (ROOT / COMMIT_LOG_LOAD_ORCHESTRATION_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
@@ -12516,11 +12810,6 @@ mod tests""",
             commit_log.replace(
                 "use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;",
                 "#[cfg(any())]\nuse rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;",
-                1,
-            ),
-            commit_log.replace(
-                "target: CommitLogMemoryLockTarget",
-                "target: crate::base::memory_lock_manager::MemoryLockHandle",
                 1,
             ),
             commit_log.replace(
@@ -18568,6 +18857,7 @@ mod tests""",
                 "recovery_orchestration.rs",
                 "record.rs",
                 "record_parser.rs",
+                "runtime_state.rs",
             },
             {path.name for path in canonical_dir.glob("*.rs")},
         )

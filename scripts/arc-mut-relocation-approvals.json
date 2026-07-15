@@ -235,6 +235,12 @@
       "from": "81eca711f4cbe249a0b296a7",
       "to": "b8e648fe5c776531402846a3",
       "reason": "Replacing the direct MappedFileProgress field with the Local MappedFileRawCore owner changed adjacent tokens around the existing DefaultMappedFile type reference in the same impl item without adding or moving an occurrence"
+    },
+    {
+      "identity": "b2ef1bf0618590f61e43b12d",
+      "from": "ad39677711ebd03cb15aa7bc",
+      "to": "982715d2703b3ca7eb658106",
+      "reason": "Moving CommitLog put-lock statistics and active memory-lock state to the Local runtime-state owner changed preceding tokens around the existing mapped_file_queue ArcMut field without adding or moving an occurrence"
     }
   ]
 }

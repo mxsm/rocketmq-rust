@@ -163,6 +163,7 @@ M10 为 5 个、M11 为 12 个、M12 为 6 个。当前 M06-03 仍需完成 Comm
   - [x] M06-03ai：迁移 abnormal recovery 单 segment record-loop 编排到 Local，Store standard/optimized 仅保留 MappedFile、解析、dispatch、日志与统计 adapter
   - [x] M06-03aj：迁移 CommitLog safe/optimized/sequential load 外层决策与 fallback 顺序到 Local，Store 仅保留两个 load adapter 与 legacy 日志
   - [x] M06-03ak：迁移 CommitLog optimized/standard recovery route 与环境值语义到 Local，Store normal/abnormal 各保留两个 async adapter
+  - [x] M06-03al：迁移 CommitLog put-message lock 统计/快照与 active memory-lock 当前区域状态到 Local，Store 保留平台 lock/unlock adapter
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer
