@@ -15,16 +15,14 @@
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use parking_lot::Mutex;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::offset_to_file_name;
+use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -47,14 +45,7 @@ pub struct MappedFileQueue {
 
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
-    pub(crate) flushed_where: Arc<AtomicU64>,
-
-    pub(crate) committed_where: Arc<AtomicU64>,
-
-    pub(crate) store_timestamp: Arc<AtomicU64>,
-
-    /// Commit lock for thread safety (matches Java's synchronized)
-    commit_lock: Arc<Mutex<()>>,
+    runtime_state: MappedFileQueueRuntimeState,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -80,10 +71,7 @@ impl Default for MappedFileQueue {
             mapped_file_size: 0,
             mapped_files: ArcSwap::from_pointee(Vec::new()),
             allocate_mapped_file_service: None,
-            flushed_where: Arc::new(AtomicU64::new(0)),
-            committed_where: Arc::new(AtomicU64::new(0)),
-            store_timestamp: Arc::new(AtomicU64::new(0)),
-            commit_lock: Arc::new(Mutex::new(())),
+            runtime_state: MappedFileQueueRuntimeState::default(),
         }
     }
 }
@@ -100,10 +88,7 @@ impl MappedFileQueue {
             mapped_file_size,
             mapped_files: ArcSwap::from_pointee(Vec::new()),
             allocate_mapped_file_service,
-            flushed_where: Arc::new(AtomicU64::new(0)),
-            committed_where: Arc::new(AtomicU64::new(0)),
-            store_timestamp: Arc::new(AtomicU64::new(0)),
-            commit_lock: Arc::new(Mutex::new(())),
+            runtime_state: MappedFileQueueRuntimeState::default(),
         }
     }
 }
@@ -130,7 +115,7 @@ impl MappedFileQueue {
     /// Returns true if commit succeeded
     #[inline]
     pub fn commit(&self, commit_least_pages: i32) -> bool {
-        let _lock = self.commit_lock.lock();
+        let _lock = self.runtime_state.commit_lock().lock();
 
         let mut result = true;
         let committed_where = self.get_committed_where();
@@ -145,7 +130,7 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn get_committed_where(&self) -> i64 {
-        self.committed_where.load(Ordering::Acquire) as i64
+        self.runtime_state.committed_where()
     }
 
     pub fn check_self(&self) {
@@ -402,12 +387,12 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn set_flushed_where(&self, flushed_where: i64) {
-        self.flushed_where.store(flushed_where as u64, Ordering::SeqCst);
+        self.runtime_state.set_flushed_where(flushed_where);
     }
 
     #[inline]
     pub fn set_committed_where(&self, committed_where: i64) {
-        self.committed_where.store(committed_where as u64, Ordering::SeqCst);
+        self.runtime_state.set_committed_where(committed_where);
     }
 
     /// Truncate dirty files beyond the specified offset
@@ -1145,17 +1130,17 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn get_flushed_where(&self) -> i64 {
-        self.flushed_where.load(Ordering::Acquire) as i64
+        self.runtime_state.flushed_where()
     }
 
     #[inline]
     pub fn set_store_timestamp(&self, store_timestamp: u64) {
-        self.store_timestamp.store(store_timestamp, Ordering::Release);
+        self.runtime_state.set_store_timestamp(store_timestamp);
     }
 
     #[inline]
     pub fn get_store_timestamp(&self) -> u64 {
-        self.store_timestamp.load(Ordering::Acquire)
+        self.runtime_state.store_timestamp()
     }
 
     #[inline]

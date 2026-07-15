@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1668,3 +1668,28 @@ python scripts/arc_mut_guard.py
 - [x] `[INVENTORY/SCOPE]` M06-03am 关闭 CommitLog 组合运行态 owner 内部工作，但不关闭顶层 PR-M06-03：
   CommitLog 根结构、MappedFileQueue、append/recovery 方法 owner 与 Store facade 仍需收口；顶层统计保持 82 个
   工作包中 30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
+
+## M06-03an MappedFileQueue runtime progress state owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local `mapped_file::queue_state::MappedFileQueueRuntimeState` 成为 mapped-file queue 的
+  flushed/committed physical offsets、full-flush store timestamp 与 commit serialization lock 唯一 owner；继续使用
+  `Arc<AtomicU64>`/`Arc<Mutex<()>>`，保留 Acquire、Release、SeqCst ordering 和 signed offset 按位往返语义。
+- [x] `[DEV/ADAPTER]` Store `MappedFileQueue` 删除四个分散状态字段，只持一个 `runtime_state`；default/new、
+  commit、get/set committed/flushed/store-timestamp 均精确委托 Local。Store 继续拥有 store path、mapped-file size/
+  collection、AllocateMappedFileService 与 load/create/delete/find/flush/CQ timestamp I/O 编排。
+- [x] `[TEST]` Local 新增 initial/signed-offset 与 commit-lock serialization 2/2；
+  `cargo test -p rocketmq-store-local --all-features` 全量通过，`cargo test -p rocketmq-store --lib` 535/535 通过，
+  覆盖 mapped-file queue、CommitLog、flush、CQ、HA、Timer 等共享消费者。
+- [x] `[CONTRACT]` 新增 baseline+8 类 mutation 两项契约，冻结 Local 四字段顺序/默认值/ordering/lock、唯一 module/
+  definition、Store direct import、单 owner、两次构造和七条精确 adapter，并拒绝旧 Store 字段、alias、bypass 与测试
+  删除。首次完整运行只暴露 canonical 文件集合漏列 `queue_state.rs`，补齐后定向 3/3、最终 M06 contract 136/136
+  通过（610.280s）。
+- [x] `[REV/ARCMUT]` `python scripts/arc_mut_guard.py` 直接通过，无 identity/occurrence/fingerprint 变化，ledger
+  保持 1,171 identities / 3,233 occurrences，无需 ADR-013 relocation approval 或 baseline 更新。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt check、architecture dependency guard 与 AGENTS
+  routing check 通过。error architecture guard 仍只复现既有 Broker source-stringification 1 项、MCP anyhow 8 项
+  与两份缺失 governance 文档，本切片未新增命中。
+- [x] `[INVENTORY/SCOPE]` M06-03an 关闭 MappedFileQueue runtime-neutral progress/commit-lock owner，但不迁移
+  `try_flush`/`FlushProgress` 决策，不跨越 M06-04 flush/group-commit 边界。顶层 PR-M06-03 仍需收口 CommitLog 根结构、
+  MappedFileQueue I/O/collection、append/recovery 方法 owner 与 Store facade；82 个顶层工作包仍为 30 已完成、
+  1 进行中、51 未开始，即 52 个尚未完成。

@@ -27,6 +27,8 @@ pub mod io_uring_impl;
 #[doc(hidden)]
 pub mod kernel;
 pub mod mapping;
+#[doc(hidden)]
+pub mod queue_state;
 pub mod raw;
 
 pub use contract::MappedFile;

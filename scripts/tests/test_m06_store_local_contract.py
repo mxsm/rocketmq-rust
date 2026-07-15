@@ -51,6 +51,9 @@ MAPPED_FILE_KERNEL_PATH = Path("rocketmq-store-local/src/mapped_file/kernel.rs")
 MAPPED_FILE_RAW_PATH = Path("rocketmq-store-local/src/mapped_file/raw.rs")
 MAPPED_FILE_CONTRACT_PATH = Path("rocketmq-store-local/src/mapped_file/contract.rs")
 MAPPED_FILE_MEMORY_PATH = Path("rocketmq-store-local/src/mapped_file/memory.rs")
+MAPPED_FILE_QUEUE_STATE_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_state.rs"
+)
 MAPPED_FILE_SELECT_RESULT_PATH = Path(
     "rocketmq-store-local/src/mapped_file/select_result.rs"
 )
@@ -65,6 +68,9 @@ STORE_DEFAULT_MAPPED_FILE_FACADE_PATH = Path(
     "rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"
 )
 STORE_CHECKPOINT_PATH = Path("rocketmq-store/src/base/store_checkpoint.rs")
+STORE_MAPPED_FILE_QUEUE_PATH = Path(
+    "rocketmq-store/src/consume_queue/mapped_file_queue.rs"
+)
 NORMAL_RECOVERY_WINDOW_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/normal_window.rs"
 )
@@ -258,6 +264,7 @@ CANONICAL_ITEMS = {
     "MappedFileError": ("enum", "mapped_file_error.rs"),
     "MappedFileMetrics": ("struct", "metrics.rs"),
     "MappedFileResult": ("type", "mapped_file_error.rs"),
+    "MappedFileQueueRuntimeState": ("struct", "queue_state.rs"),
     "io_uring_backend_status": ("fn", "io_uring_impl.rs"),
 }
 COMMIT_LOG_CANONICAL_ITEMS = {
@@ -7181,6 +7188,130 @@ def commit_log_memory_lock_owner_violations(
     return violations
 
 
+def mapped_file_queue_runtime_state_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+
+    expected_fields = [
+        ("flushed_where", "Arc<AtomicU64>"),
+        ("committed_where", "Arc<AtomicU64>"),
+        ("store_timestamp", "Arc<AtomicU64>"),
+        ("commit_lock", "Arc<Mutex<()>>"),
+    ]
+    if active_struct_fields(production, "MappedFileQueueRuntimeState") != expected_fields:
+        violations.append("Local mapped-file queue runtime-state fields changed")
+
+    expected_default = (
+        "fndefault()->Self{Self{flushed_where:Arc::new(AtomicU64::new(0)),committed_where:Arc::new("
+        "AtomicU64::new(0)),store_timestamp:Arc::new(AtomicU64::new(0)),commit_lock:"
+        "Arc::new(Mutex::new(())),}}"
+    )
+    default_body = active_trait_impl_body(
+        production,
+        r"\bimpl\s+Default\s+for\s+MappedFileQueueRuntimeState\b",
+    )
+    if compact_rust(default_body or "") != expected_default:
+        violations.append("Local mapped-file queue runtime-state defaults changed")
+
+    expected_impl = (
+        "#[doc(hidden)]pubfncommitted_where(&self)->i64{self.committed_where.load("
+        "Ordering::Acquire)asi64}#[doc(hidden)]pubfnset_committed_where(&self,"
+        "committed_where:i64){self.committed_where.store(committed_whereasu64,Ordering::SeqCst);}"
+        "#[doc(hidden)]pubfnflushed_where(&self)->i64{self.flushed_where.load(Ordering::Acquire)"
+        "asi64}#[doc(hidden)]pubfnset_flushed_where(&self,flushed_where:i64){self.flushed_where."
+        "store(flushed_whereasu64,Ordering::SeqCst);}#[doc(hidden)]pubfnstore_timestamp(&self)"
+        "->u64{self.store_timestamp.load(Ordering::Acquire)}#[doc(hidden)]pubfn"
+        "set_store_timestamp(&self,store_timestamp:u64){self.store_timestamp.store(store_timestamp,"
+        "Ordering::Release);}#[doc(hidden)]pubfncommit_lock(&self)->&Mutex<()>{self.commit_lock."
+        "as_ref()}"
+    )
+    if compact_rust(active_impl_body(production, "MappedFileQueueRuntimeState") or "") != expected_impl:
+        violations.append("Local mapped-file queue runtime-state behavior changed")
+
+    expected_imports = {
+        "std::sync::atomic::AtomicU64",
+        "std::sync::atomic::Ordering",
+        "std::sync::Arc",
+        "parking_lot::Mutex",
+    }
+    actual_imports = {
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use"
+    }
+    if actual_imports != expected_imports:
+        violations.append("Local mapped-file queue runtime-state imports changed")
+    if any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local mapped-file queue runtime state forbids alias/brace/glob imports")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(r"\b(?:rocketmq_|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b", active)
+    ):
+        violations.append("Local mapped-file queue runtime state absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod queue_state;") != 1:
+        violations.append("Local mapped_file module must expose queue_state exactly once")
+
+    store_active = active_rust_source(source_without_cfg_test_items(store_source))
+    expected_store_import = (
+        "use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState"
+    )
+    actual_store_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_state" in body
+    }
+    if actual_store_imports != {expected_store_import}:
+        violations.append("Store mapped-file queue runtime-state import must be direct and exact")
+    if re.search(r"\bstruct\s+MappedFileQueueRuntimeState\b", store_active):
+        violations.append("Store copied mapped-file queue runtime-state owner")
+
+    store_fields = dict(active_struct_fields(store_source, "MappedFileQueue"))
+    if store_fields.get("runtime_state") != "MappedFileQueueRuntimeState":
+        violations.append("Store MappedFileQueue must hold one canonical Local runtime-state owner")
+    for legacy_field in (
+        "flushed_where",
+        "committed_where",
+        "store_timestamp",
+        "commit_lock",
+    ):
+        if legacy_field in store_fields:
+            violations.append(f"Store retained legacy MappedFileQueue state field: {legacy_field}")
+
+    if compact_rust(store_active).count("runtime_state:MappedFileQueueRuntimeState::default()") != 2:
+        violations.append("Store MappedFileQueue constructors must initialize the Local state exactly twice")
+    expected_adapters = {
+        "get_committed_where": "self.runtime_state.committed_where()",
+        "set_committed_where": "self.runtime_state.set_committed_where(committed_where);",
+        "get_flushed_where": "self.runtime_state.flushed_where()",
+        "set_flushed_where": "self.runtime_state.set_flushed_where(flushed_where);",
+        "get_store_timestamp": "self.runtime_state.store_timestamp()",
+        "set_store_timestamp": "self.runtime_state.set_store_timestamp(store_timestamp);",
+    }
+    for function_name, expected_body in expected_adapters.items():
+        if compact_rust(named_function_body(store_source, function_name) or "") != expected_body:
+            violations.append(f"Store mapped-file queue state adapter changed: {function_name}")
+    commit_body = compact_rust(named_function_body(store_source, "commit") or "")
+    if commit_body.count("let_lock=self.runtime_state.commit_lock().lock();") != 1:
+        violations.append("Store mapped-file queue commit lock adapter changed")
+
+    for test_name in (
+        "queue_runtime_state_preserves_initial_values_and_signed_offset_round_trips",
+        "queue_runtime_state_commit_lock_serializes_access",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue runtime-state regression changed: {test_name}")
+    return violations
+
+
 def commit_log_runtime_state_contract_violations(
     local: str,
     module: str,
@@ -11661,6 +11792,126 @@ class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
 
+    def test_mapped_file_queue_runtime_state_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_STATE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_runtime_state.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_runtime_state_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_runtime_state_rejects_owner_order_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_STATE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_runtime_state.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "Local field ordering changed",
+                local.replace(
+                    "    flushed_where: Arc<AtomicU64>,\n    committed_where: Arc<AtomicU64>,",
+                    "    committed_where: Arc<AtomicU64>,\n    flushed_where: Arc<AtomicU64>,",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "Local read ordering changed",
+                local.replace("load(Ordering::Acquire)", "load(Ordering::Relaxed)", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "Local write ordering changed",
+                local.replace("Ordering::SeqCst", "Ordering::Release", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_state;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store retained legacy flushed field",
+                local,
+                module,
+                store.replace(
+                    "    runtime_state: MappedFileQueueRuntimeState,",
+                    "    flushed_where: Arc<AtomicU64>,\n    runtime_state: MappedFileQueueRuntimeState,",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store bypassed committed adapter",
+                local,
+                module,
+                store.replace(
+                    "self.runtime_state.committed_where()",
+                    "self.runtime_state.flushed_where()",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;",
+                    "use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState as QueueState;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn queue_runtime_state_commit_lock_serializes_access()",
+                    "fn queue_runtime_state_commit_lock_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_runtime_state_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
     def test_commit_log_runtime_state_has_one_local_owner_and_exact_store_adapters(self) -> None:
         local = (ROOT / COMMIT_LOG_RUNTIME_STATE_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
@@ -15893,6 +16144,7 @@ struct DefaultMappedFile {
                 "kernel.rs",
                 "mapping.rs",
                 "memory.rs",
+                "queue_state.rs",
                 "raw.rs",
                 "select_result.rs",
             },
