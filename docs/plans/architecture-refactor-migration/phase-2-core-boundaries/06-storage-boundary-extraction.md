@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1745,3 +1745,29 @@ python scripts/arc_mut_guard.py
   `try_flush`/`FlushProgress`、CQ timestamp、CommitLog 或持久格式。顶层 PR-M06-03 仍需收口 CommitLog 根结构、
   MappedFileQueue I/O/allocate adapter 及剩余算法、append/recovery 方法 owner 与 Store facade；82 个顶层工作包仍为
   30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03aq MappedFileQueue allocation decision owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增无依赖 `mapped_file::queue_allocation`，用 `MappedFileQueueLastFile` 与
+  `MappedFileQueueRollFile` 分别承载预分配前和预分配后快照；`plan_mapped_file_queue_preallocation` 唯一拥有 80%
+  threshold/非满段 next-offset 决策，`plan_mapped_file_queue_creation` 唯一拥有空队列 start alignment、满段 roll 与
+  `need_create` 门控。
+- [x] `[DEV/ADAPTER]` Store `get_last_mapped_file_mut_start_offset` 只投影 DefaultMappedFile 状态并执行副作用：
+  先读取 wrote/full 调 Local preallocation decision、调用 AllocateMappedFileService adapter，再重新读取 full/offset
+  调 Local creation decision，最后按结果调用 `try_create_mapped_file`。
+- [x] `[COMPAT]` 保留 usage ratio `wrote as f64 / segment_size as f64 >= 0.8`、full 时不预分配、空队列
+  `start - start % segment_size`、满段 `file_from + segment_size`、零 segment 空队列 panic 与 `need_create=false`
+  仍执行预分配的旧语义。两阶段拆分保留预分配副作用前后两次独立 `is_full()` 观察；storage accessor 当前冻结为
+  collection/size/path = 37/24/6。
+- [x] `[TEST]` Local 新增空队列对齐、80% boundary、满段 roll、禁创建仍预分配、零 segment 失败 5/5；Local
+  all-features 全量与 Store lib 535/535 通过。
+- [x] `[CONTRACT]` 新增 baseline+7 类 mutation 两项契约，冻结两个 snapshot 字段/API、两条纯决策、无依赖 owner、
+  direct exact imports、Store 两阶段 adapter 顺序与五组回归测试；定向 4/4，完整 M06 contract 142/142 通过
+  （619.663s）。旧 storage contract 同步收紧为 37/24/6 accessor。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing
+  与 ArcMut guard 通过；error architecture 与既有基线一致，仍为 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03aq 未迁移 AllocateMappedFileService worker/request table、路径格式、实际 mmap/create、
+  load/delete/truncate/warmup/swap、flush/CQ timestamp、CommitLog 或持久格式。顶层 PR-M06-03 仍需收口 CommitLog
+  根结构、MappedFileQueue I/O/allocate adapter 及剩余算法、append/recovery 方法 owner 与 Store facade；82 个顶层工作包
+  仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。

@@ -22,6 +22,10 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::offset_to_file_name;
+use rocketmq_store_local::mapped_file::queue_allocation::plan_mapped_file_queue_creation;
+use rocketmq_store_local::mapped_file::queue_allocation::plan_mapped_file_queue_preallocation;
+use rocketmq_store_local::mapped_file::queue_allocation::MappedFileQueueLastFile;
+use rocketmq_store_local::mapped_file::queue_allocation::MappedFileQueueRollFile;
 use rocketmq_store_local::mapped_file::queue_index::file_index_by_offset;
 use rocketmq_store_local::mapped_file::queue_index::file_index_by_timestamp;
 use rocketmq_store_local::mapped_file::queue_index::for_each_discontinuous_pair;
@@ -219,31 +223,22 @@ impl MappedFileQueue {
         start_offset: u64,
         need_create: bool,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let mut create_offset = -1i64;
-        let file_size = self.storage.mapped_file_size() as i64;
         let mapped_file_last = self.get_last_mapped_file();
-
-        if let Some(ref current_file) = mapped_file_last {
-            let usage_ratio = current_file.get_wrote_position() as f64 / self.storage.mapped_file_size() as f64;
-            if usage_ratio >= 0.8 && !current_file.is_full() {
-                // Pre-allocate next file in background
-                let next_offset = current_file.get_file_from_offset() + self.storage.mapped_file_size();
+        if let Some(file) = mapped_file_last.as_ref() {
+            let last_file =
+                MappedFileQueueLastFile::new(file.get_file_from_offset(), file.get_wrote_position(), file.is_full());
+            if let Some(next_offset) = plan_mapped_file_queue_preallocation(self.storage.mapped_file_size(), last_file)
+            {
                 self.trigger_pre_allocation(next_offset);
             }
         }
-
-        match mapped_file_last {
-            None => {
-                create_offset = start_offset as i64 - (start_offset as i64 % file_size);
-            }
-            Some(ref value) => {
-                if value.is_full() {
-                    create_offset = value.get_file_from_offset() as i64 + file_size
-                }
-            }
-        }
-        if create_offset != -1 && need_create {
-            return self.try_create_mapped_file(create_offset as u64);
+        let roll_file = mapped_file_last
+            .as_ref()
+            .map(|file| MappedFileQueueRollFile::new(file.get_file_from_offset(), file.is_full()));
+        if let Some(create_offset) =
+            plan_mapped_file_queue_creation(start_offset, self.storage.mapped_file_size(), roll_file, need_create)
+        {
+            return self.try_create_mapped_file(create_offset);
         }
         mapped_file_last
     }
