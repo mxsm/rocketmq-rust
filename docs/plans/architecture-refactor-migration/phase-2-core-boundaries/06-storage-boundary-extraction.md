@@ -1098,7 +1098,7 @@ python scripts/arc_mut_guard.py
   初始 focused 2/2（32.781s）与审查前候选完整 113/113（429.103s）均通过。首次独立审查仍发现 helper 参数/tuple
   返回角色顺序漏检及 plan result 字段错接误报 2 个 Important；修复 TDD RED 由 swapped parameters、swapped return、
   两者同时的 3 个漏报与 scrambled fields 的 1 个误报证明。GREEN 后修复候选 z focused 2/2（36.206s）、y+z
-  focused 4/4（61.891s）与完整 113/113（433.456s）均通过；复审尚未记录 Approved。
+  focused 4/4（61.891s）与完整 113/113（433.456s）均通过；独立技术复审再跑完整 113/113（435.787s）通过。
 - [x] `[CONTRACT]` contract 锁定 plan struct 的 `Copy/Eq`、公开字段顺序/类型、planner 签名/body/statement order/
   visibility/cfg、唯一 Local owner，以及 Linux Store guard→page-size→base-address→单次 planner→allocation→`mincore`
   →result 的精确 dataflow。mutation 覆盖 cast/max、两处 saturating add、alignment/subtraction、`div_ceil`、zero guard、
@@ -1114,7 +1114,8 @@ python scripts/arc_mut_guard.py
 - [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、AGENTS routing、workspace
   fmt、Python compile 与 diff 检查均通过。初次 ArcMut final 因新增 import 的相邻上下文产生同 item 1 NEW/1 STALE；
   Store 改用 fully-qualified planner 调用后复核通过，baseline 与 relocation approval 保持零改动。error hygiene 只复现
-  未触及的 Broker source stringification、MCP anyhow 与两份缺失治理文档基线。
+  未触及的 Broker source stringification、MCP anyhow 与两份缺失治理文档基线。首次独立审查的 2 个 Important 已在
+  `6ab8c390c` 修复；同一审查者对修复快照签署 Critical/Important/Minor = 0/0/0、`Approved`。
 - [x] `[SCOPE]` M06-03z 只迁移 Linux cache-residency 纯整数 page planning；不迁移范围校验、实际 `mincore`、
   allocation、pointer/unsafe、metrics、错误/可观测性、mapped-file I/O、Windows/macOS adapter、async/runtime、flush/
   group commit、CQ/Index、HA、Timer/POP 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和
