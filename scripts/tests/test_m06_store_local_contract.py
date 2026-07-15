@@ -63,6 +63,9 @@ MAPPED_FILE_QUEUE_ALLOCATION_PATH = Path(
 MAPPED_FILE_QUEUE_INDEX_PATH = Path(
     "rocketmq-store-local/src/mapped_file/queue_index.rs"
 )
+MAPPED_FILE_QUEUE_IO_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_io.rs"
+)
 MAPPED_FILE_QUEUE_MAINTENANCE_PATH = Path(
     "rocketmq-store-local/src/mapped_file/queue_maintenance.rs"
 )
@@ -295,7 +298,11 @@ CANONICAL_ITEMS = {
     "file_index_by_offset": ("fn", "queue_index.rs"),
     "file_index_by_timestamp": ("fn", "queue_index.rs"),
     "for_each_discontinuous_pair": ("fn", "queue_index.rs"),
+    "load_mapped_file_queue_path": ("fn", "queue_io.rs"),
+    "load_mapped_file_queue_files": ("fn", "queue_io.rs"),
+    "create_mapped_file_for_queue": ("fn", "queue_io.rs"),
     "MappedFileQueueIndex": ("enum", "queue_index.rs"),
+    "MappedFileQueueLoadOutcome": ("struct", "queue_io.rs"),
     "MappedFileQueueLastFile": ("struct", "queue_allocation.rs"),
     "MappedFileQueueRollFile": ("struct", "queue_allocation.rs"),
     "MappedFileQueueTruncateAction": ("enum", "queue_maintenance.rs"),
@@ -7300,7 +7307,7 @@ def mapped_file_queue_storage_contract_violations(
             violations.append(f"Store mapped-file queue storage constructor changed: {constructor}")
     expected_accessor_counts = {
         "self.storage.mapped_files()": 37,
-        "self.storage.mapped_file_size()": 21,
+        "self.storage.mapped_file_size()": 16,
         "self.storage.store_path()": 6,
     }
     for accessor, expected_count in expected_accessor_counts.items():
@@ -7831,6 +7838,178 @@ def mapped_file_queue_allocation_contract_violations(
     ):
         if named_function_body(local_test_source, test_name) is None:
             violations.append(f"Local mapped-file queue allocation regression changed: {test_name}")
+    return violations
+
+
+def mapped_file_queue_io_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+
+    if active_struct_fields(production, "MappedFileQueueLoadOutcome") != [
+        ("success", "bool"),
+        ("mapped_files", "Vec<Arc<DefaultMappedFile>>"),
+    ]:
+        violations.append("Local mapped-file queue load outcome fields changed")
+    for function_name in (
+        "load_mapped_file_queue_path",
+        "load_mapped_file_queue_files",
+        "create_mapped_file_for_queue",
+        "create_mapped_file_synchronously",
+    ):
+        if named_function_body(production, function_name) is None:
+            violations.append(f"Local mapped-file queue I/O owner changed: {function_name}")
+    for method_name, expected_body in (
+        ("is_success", "self.success"),
+        ("into_mapped_files", "self.mapped_files"),
+    ):
+        if compact_rust(named_function_body(production, method_name) or "") != expected_body:
+            violations.append(f"Local mapped-file queue load outcome API changed: {method_name}")
+
+    path_body = compact_rust(named_function_body(production, "load_mapped_file_queue_path") or "")
+    for fragment in (
+        "letOk(entries)=fs::read_dir(Path::new(store_path))else{returnMappedFileQueueLoadOutcome::new(true,Vec::new());}",
+        "entries.filter_map(Result::ok).map(|entry|entry.path()).collect()",
+        "load_mapped_file_queue_files(files,mapped_file_size)",
+    ):
+        if fragment not in path_body:
+            violations.append(f"Local mapped-file queue directory loading changed: {fragment}")
+
+    files_body = compact_rust(named_function_body(production, "load_mapped_file_queue_files") or "")
+    for fragment in (
+        "files.sort_by(|left,right|left.file_name().cmp(&right.file_name()))",
+        "for(index,file)infiles.iter().enumerate()",
+        "ifmetadata.is_dir(){continue;}",
+        "ifmetadata.len()==0&&index==files.len()-1",
+        "fs::remove_file(file)",
+        "ifmetadata.len()!=mapped_file_size",
+        "DefaultMappedFile::try_new(CheetahString::from_string(file.to_string_lossy().into_owned()),mapped_file_size,)",
+        "mapped_file.set_wrote_position(mapped_file_sizeasi32)",
+        "mapped_file.set_flushed_position(mapped_file_sizeasi32)",
+        "mapped_file.set_committed_position(mapped_file_sizeasi32)",
+        "mapped_files.push(Arc::new(mapped_file))",
+        "MappedFileQueueLoadOutcome::new(true,mapped_files)",
+    ):
+        if fragment not in files_body:
+            violations.append(f"Local mapped-file queue file loading changed: {fragment}")
+    if files_body.count("MappedFileQueueLoadOutcome::new(false,mapped_files)") != 3:
+        violations.append("Local mapped-file queue load must preserve partial files on all three failure paths")
+
+    create_body = compact_rust(named_function_body(production, "create_mapped_file_for_queue") or "")
+    for fragment in (
+        "allocate_service.filter(|service|service.is_started())",
+        "service.allocate_mapped_file_blocking(file_path_text.clone(),mapped_file_size)",
+        "service.submit_request_in_background(next_file_path.to_string_lossy().into_owned(),mapped_file_size)",
+        "create_mapped_file_synchronously(file_path_text,mapped_file_size)?",
+        "iffirst_in_queue",
+        "Arc::get_mut(&mutmapped_file)",
+        "mapped_file.set_first_create_in_queue(true)",
+        "Some(mapped_file)",
+    ):
+        if fragment not in create_body:
+            violations.append(f"Local mapped-file queue creation changed: {fragment}")
+
+    for forbidden in (
+        "rocketmq_store::",
+        "rocketmq_common",
+        "rocketmq_remoting",
+        "rocketmq_broker",
+        "rocketmq_tiered_store",
+        "ArcSwap",
+        "CommitLog",
+        "BoundaryType",
+        "crate::runtime",
+        "spawn_blocking",
+        "block_on",
+        "tokio::spawn",
+    ):
+        if forbidden in active:
+            violations.append(f"Local mapped-file queue I/O absorbed forbidden edge: {forbidden}")
+    if active_rust_source(module_source).count("pub mod queue_io;") != 1:
+        violations.append("Local mapped_file module must expose queue_io exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::mapped_file::queue_io::create_mapped_file_for_queue",
+        "use rocketmq_store_local::mapped_file::queue_io::load_mapped_file_queue_files",
+        "use rocketmq_store_local::mapped_file::queue_io::load_mapped_file_queue_path",
+        "use rocketmq_store_local::mapped_file::queue_io::MappedFileQueueLoadOutcome",
+    }
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_io" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store mapped-file queue I/O imports must be direct and exact")
+
+    store_production = source_without_cfg_test_items(store_source)
+    store_active = active_rust_source(store_production)
+    store_bodies = {
+        function_name: compact_rust(named_function_body(store_production, function_name) or "")
+        for function_name in ("load", "do_load", "apply_load_outcome", "do_create_mapped_file")
+    }
+    for function_name, fragments in {
+        "load": (
+            "load_mapped_file_queue_path(self.storage.store_path(),self.storage.mapped_file_size())",
+            "self.apply_load_outcome(outcome)",
+        ),
+        "do_load": (
+            "load_mapped_file_queue_files(files,self.storage.mapped_file_size())",
+            "self.apply_load_outcome(outcome)",
+        ),
+        "apply_load_outcome": (
+            "letsuccess=outcome.is_success()",
+            "letloaded_files=outcome.into_mapped_files()",
+            "files.extend(loaded_files)",
+            "self.storage.mapped_files().store(Arc::new(files))",
+            "success",
+        ),
+        "do_create_mapped_file": (
+            "letis_first=self.storage.mapped_files().load().is_empty()",
+            "create_mapped_file_for_queue(",
+            "self.allocate_mapped_file_service.as_ref()",
+            "files.push(arc_file.clone())",
+            "self.storage.mapped_files().store(Arc::new(files))",
+            "Some(arc_file)",
+        ),
+    }.items():
+        for fragment in fragments:
+            if fragment not in store_bodies[function_name]:
+                violations.append(f"Store mapped-file queue I/O adapter changed: {function_name}: {fragment}")
+    for forbidden in (
+        "fs::read_dir",
+        ".metadata()",
+        "metadata.len()",
+        "DefaultMappedFile::try_new",
+        "CheetahString::from_string",
+        "create_mapped_file_internal",
+    ):
+        if forbidden in store_active:
+            violations.append(f"Store retained mapped-file queue I/O owner: {forbidden}")
+
+    for test_name in (
+        "missing_queue_directory_preserves_legacy_success",
+        "queue_load_sorts_files_initializes_positions_and_removes_empty_tail",
+        "queue_load_returns_files_loaded_before_a_size_failure",
+        "queue_creation_uses_local_sync_fallback_and_marks_the_first_file",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue I/O regression changed: {test_name}")
+    for test_name in (
+        "test_load_empty_dir",
+        "test_load_with_empty_file",
+        "test_load_with_invalid_file_size",
+        "do_load_applies_files_loaded_before_failure",
+        "test_load_with_correct_file",
+        "trigger_pre_allocation_submits_background_request",
+    ):
+        if named_function_body(store_source, test_name) is None:
+            violations.append(f"Store mapped-file queue I/O adapter regression changed: {test_name}")
     return violations
 
 
@@ -13157,6 +13336,137 @@ class StoreLocalContractTests(unittest.TestCase):
                     ),
                 )
 
+    def test_mapped_file_queue_io_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_IO_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_io.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_io_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_io_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_IO_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_io.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "outcome field changed",
+                local.replace("    success: bool,", "    success: u8,", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "load sorting reversed",
+                local.replace(
+                    "left.file_name().cmp(&right.file_name())",
+                    "right.file_name().cmp(&left.file_name())",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "empty tail gate changed",
+                local.replace("index == files.len() - 1", "index == 0", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "partial failure changed to success",
+                local.replace(
+                    "MappedFileQueueLoadOutcome::new(false, mapped_files)",
+                    "MappedFileQueueLoadOutcome::new(true, mapped_files)",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "allocation service route disabled",
+                local.replace(
+                    "allocate_service.filter(|service| service.is_started())",
+                    "allocate_service.filter(|_| false)",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_io;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::queue_io::create_mapped_file_for_queue;",
+                    "use rocketmq_store_local::mapped_file::queue_io::create_mapped_file_for_queue as create_file;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store load adapter bypassed",
+                local,
+                module,
+                store.replace(
+                    "load_mapped_file_queue_path(self.storage.store_path()",
+                    "store_owned_queue_load(self.storage.store_path()",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn queue_load_returns_files_loaded_before_a_size_failure()",
+                    "fn queue_partial_load_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_io_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
     def test_mapped_file_queue_maintenance_has_one_local_owner_and_exact_store_adapters(self) -> None:
         local = (ROOT / MAPPED_FILE_QUEUE_MAINTENANCE_PATH).read_text(encoding="utf-8")
         module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
@@ -17836,6 +18146,7 @@ struct DefaultMappedFile {
                 "memory.rs",
                 "queue_allocation.rs",
                 "queue_index.rs",
+                "queue_io.rs",
                 "queue_maintenance.rs",
                 "queue_state.rs",
                 "queue_storage.rs",

@@ -36,6 +36,8 @@ pub mod queue_allocation;
 #[doc(hidden)]
 pub mod queue_index;
 #[doc(hidden)]
+pub mod queue_io;
+#[doc(hidden)]
 pub mod queue_maintenance;
 #[doc(hidden)]
 pub mod queue_state;

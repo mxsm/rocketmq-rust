@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au/M06-03av 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1877,3 +1877,30 @@ python scripts/arc_mut_guard.py
   load/create/delete/swap/shutdown/destroy 与剩余 I/O/算法；flush/commit/CQ timestamp 属于后续 M06-04 边界。顶层
   PR-M06-03 仍需收口 CommitLog 根结构、append/recovery composition owner 与 Store facade；82 个顶层工作包仍为
   30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03av mapped-file queue load/create I/O owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增 `mapped_file::queue_io`，唯一拥有 MappedFileQueue 目录 `read_dir`、候选文件名升序排序、
+  metadata/目录/segment-size 校验、尾部零长度文件删除、`DefaultMappedFile` 加载及 wrote/flushed/committed position 初始化；
+  service blocking allocation、N+2 background preallocation、同步创建 fallback 与首文件标记也由 Local 执行。
+- [x] `[DEV/ADAPTER]` Store `load`/`do_load` 仅提供 path、segment-size 或显式候选列表，并把 Local outcome 中已加载文件
+  一次性 extend 到 ArcSwap collection；`do_create_mapped_file` 仅捕获 first-file 快照、传入两个路径并追加 Local 返回对象。
+  Store production 已移除 `read_dir`、metadata、size validation、`CheetahString`、`DefaultMappedFile::try_new` 与旧
+  `create_mapped_file_internal` I/O owner。
+- [x] `[COMPAT]` 不存在/不可读目录仍返回成功空集合；目录项读取错误仍被过滤，目录仍跳过，最后一个零长度文件删除失败仍
+  non-fatal。加载按文件名排序，三类失败均返回 failure 且保留此前成功加载的文件，Store 继续应用 partial result；allocation
+  service 仅在 started 时使用，失败后仍同步 fallback，成功后仍提交 N+2，首文件仍仅在 Arc 唯一时设置标记。
+- [x] `[TEST]` Local queue I/O integration 4/4、Store MappedFileQueue focused 11/11 通过；Local all-feature crate 单测
+  104/104 及全部 integration/doctest 通过，Store lib 537/537 通过。新增回归覆盖 missing-dir、排序/position/空尾删除、
+  partial-load failure 与 sync-create/first-file，并在 Store 验证 partial outcome 实际写入 collection。
+- [x] `[CONTRACT]` 新增 queue I/O baseline 与 9 类 mutation 契约，冻结 outcome fields/API、三条 failure partial-result、
+  discovery/load/create 顺序、Local 依赖边界、Store exact imports/apply adapter 和回归测试；canonical file/item 集合加入
+  `queue_io.rs`、一个 value owner 与三个 public function。完整 M06 contract 152/152 通过（739.115s），storage accessor
+  更新为 collection/size/path = 37/16/6。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、diff check、architecture dependency guard、AGENTS routing、
+  ArcMut guard 与 enforcing runtime audit 通过；error architecture 仍仅复现历史 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03av 已关闭 MappedFileQueue load/create I/O owner，但 time/offset delete、retry-delete、
+  swap/clean、shutdown/destroy 与剩余 lifecycle/统计算法仍需迁移；flush/commit/CQ timestamp 保留给 M06-04。顶层 PR-M06-03
+  仍需收口 CommitLog 根结构、append/recovery composition owner 与 Store facade；82 个顶层工作包仍为 30 已完成、
+  1 进行中、51 未开始，即 52 个尚未完成。
