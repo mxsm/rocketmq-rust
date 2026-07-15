@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1120,3 +1120,36 @@ python scripts/arc_mut_guard.py
   allocation、pointer/unsafe、metrics、错误/可观测性、mapped-file I/O、Windows/macOS adapter、async/runtime、flush/
   group commit、CQ/Index、HA、Timer/POP 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和
   M06-04..12 保持未完成。
+
+## M06-03aa CommitLog loader orchestration extraction evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::loader::CommitLogLoader` 现为 CommitLog 目录发现、全量 metadata
+  校验、mapping plan、ordered parallel/sequential mapping、recovery hints、fully-loaded position 与 statistics
+  归约的唯一 canonical owner。Local loader 状态保持非泛型，通过公开 `CommitLogLoadAdapter<T>` 函数表接收
+  `open`、HRTB `recovery_mapping` 与 `mark_fully_loaded` 三个窄 target 操作，不依赖 Store representation。
+- [x] `[COMPAT/SEMANTICS]` Store 保留同名 `CommitLogLoader` 薄 wrapper 和原有 `new`、
+  `new_with_recovery_mmap_advice`、`new_with_recovery_hints`、`with_lazy_mmap`、`load_optimized` 调用面；wrapper
+  只持有非泛型 Local loader。`load_optimized` 在旧 item 内以类型推断闭包适配 recovery/position，旧
+  `create_mapped_file` item 负责 eager/lazy `DefaultMappedFile` open。缺失目录零 elapsed、空目录 elapsed、先校验后
+  mmap、并行稳定顺序、最后文件 eager、hint 失败非致命与 position/statistics 语义保持不变。
+- [x] `[TEST]` TDD RED 由 Local fixture 的 unresolved loader/adapter import 证明 owner/API 缺失；GREEN 后 Local
+  fake-target fixture 3/3 与 Store loader compatibility/behavior 16/16 通过。M06 source/mutation contract 新增 Local
+  owner 与 Store narrow-wrapper 两项，从 113 增至 115；按本切片范围运行 loader、mapping、hint、validation、
+  discovery 的关联 contract/mutation 13/13 通过。主线程候选快照 gate 前两轮暴露 canonical 文件清单、Local loader
+  别名边界和两处旧 Store mutation fixture 未同步；逐项修复并 targeted 复核后，完整 contract 最终 115/115 通过
+  （444.612s）。
+- [x] `[CONTRACT]` contract 锁定非泛型 Local loader 字段与 constructor defaults、函数表字段/HRTB、完整
+  discovery→validation→plan→mapping→hint→position→statistics 顺序、并行 ordered collection/reduction、唯一 Local
+  adapter/loader owner，以及 Store 五个公开委托、单次函数表构造与 `create_mapped_file` 映射。跨文件 copy guard
+  拒绝 direct/use-alias/cfg/cfg_attr/post-test 的完整编排副本，`#[cfg(test)]` decoy 与缺少 summary 的 near miss 保持零误报。
+- [x] `[FEATURE/PLATFORM]` 未修改 manifest、feature 或依赖。Local 与 Store 的 all-target/all-feature package
+  Clippy 均以 `-D warnings` 通过；Local/Store focused behavior 在 Windows 通过，函数表只传递平台既有 mmap 与
+  prefetch adapter，不新增 runtime、unsafe 或平台 I/O owner。
+- [x] `[REV]` ArcMut 63 项、24 fixtures、ADR-013 monotonic promotion/compare 与更新 ledger 后的裸 final guard
+  全部通过；ledger 保持 1,232 identities，occurrences 从 3,375 降至 3,372。tracked approvals 保留历史并追加 5 条
+  同 item 一对一 fingerprint relocation；parallel、sequential 与 hint 三个旧 Store occurrence 已删除。Store 使用
+  fully-qualified Local loader 路径，未放宽 mapped-file kernel alias guard。workspace fmt、Python compile 与 diff 检查
+  通过，repo ArcMut guard/baseline schema 未放宽。
+- [x] `[SCOPE]` M06-03aa 只迁移 CommitLog loader 完整编排；不迁移 `DefaultMappedFile` representation、实际 mmap/
+  prefetch 平台执行、CommitLog append/recovery state、flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership
+  或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。

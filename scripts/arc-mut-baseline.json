@@ -30970,7 +30970,7 @@
           "id": "f33a68d64527a7522e952920",
           "fingerprint": "d0079f1ac8ed5babdb310b2b",
           "item": "mod tests",
-          "line": 274
+          "line": 134
         }
       ],
       "owner": "store",
@@ -30986,10 +30986,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "710eb3f2dd4a57100c5e0fe1",
-          "fingerprint": "eab8239b91def79be46fc5f3",
+          "id": "5aebad0e8733bce97f8e0557",
+          "fingerprint": "525f2515c9cfebf852f9d244",
           "item": "<module>",
-          "line": 51
+          "line": 35
         }
       ],
       "owner": "store",
@@ -31005,46 +31005,28 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "b8753d5ac10a49784fd677d4",
-          "fingerprint": "058e6eddb43efafc30b0c817",
+          "id": "5351e4d7bf9d68463bd06d9c",
+          "fingerprint": "7c2dec5267521aea50be884a",
           "item": "fn load_optimized",
+          "line": 103
+        },
+        {
+          "id": "89b5c3a41aeda92d9fa2628e",
+          "fingerprint": "78bb8ee158ae04e22e53b9b4",
+          "item": "fn create_mapped_file",
           "line": 121
         },
         {
-          "id": "bb43af94bef98a26d1dac64a",
-          "fingerprint": "06380650144290789834aed5",
-          "item": "fn create_mapped_files_parallel",
-          "line": 182
-        },
-        {
-          "id": "e820ef0e7b9824b99ccb6182",
-          "fingerprint": "a0986860379fd4de2bbd4680",
-          "item": "fn create_mapped_files_sequential",
-          "line": 217
-        },
-        {
-          "id": "1a54bcd9461bfdc5db574061",
-          "fingerprint": "98184e603ace0976f05b75fc",
+          "id": "4c5b69f9b3c5b44567126dc7",
+          "fingerprint": "0067b29fd8427d375482daee",
           "item": "fn create_mapped_file",
-          "line": 237
+          "line": 124
         },
         {
-          "id": "06482c333cf283e2b50d7f9d",
-          "fingerprint": "33bbb67a5ccfed87c0949a21",
+          "id": "c59270c54abe9e31284a2f62",
+          "fingerprint": "849569dfbdc355bff556e60c",
           "item": "fn create_mapped_file",
-          "line": 242
-        },
-        {
-          "id": "fb223d4d74b6fe1c75435d2f",
-          "fingerprint": "3e6554f601f4eccbe650b26e",
-          "item": "fn create_mapped_file",
-          "line": 244
-        },
-        {
-          "id": "837094604bbc640a7c339b3a",
-          "fingerprint": "f427913dad69f3cb076bcf71",
-          "item": "fn apply_memory_hints",
-          "line": 257
+          "line": 125
         }
       ],
       "owner": "store",
@@ -31374,7 +31356,7 @@
           "id": "112fcd5c3ba1434e84e08676",
           "fingerprint": "fc4c548f213b821f0571e801",
           "item": "mod tests",
-          "line": 1697
+          "line": 1691
         }
       ],
       "owner": "store",
@@ -31455,19 +31437,19 @@
           "id": "434f1fa6757d43e5f5558579",
           "fingerprint": "4f266852e4b88ff907bf3d99",
           "item": "fn get_mapped_file_arcmut",
-          "line": 1181
+          "line": 1175
         },
         {
           "id": "ceb9dd9a2f8d055f96f20573",
           "fingerprint": "abf7f9b583afb35f02af6564",
           "item": "struct MmapRegionSlice",
-          "line": 1437
+          "line": 1431
         },
         {
           "id": "55b45b1ee552e490e0a98c1f",
           "fingerprint": "3fb56850cdf116b4d1cf77f3",
           "item": "fn new",
-          "line": 1456
+          "line": 1450
         }
       ],
       "owner": "store",
@@ -31486,7 +31468,7 @@
           "id": "e9003ce535e6ed2a8dbd31c0",
           "fingerprint": "1c34dccdfd19ec0d04293f06",
           "item": "fn create_test_file",
-          "line": 1707
+          "line": 1701
         }
       ],
       "owner": "store",
@@ -31597,25 +31579,25 @@
           "id": "05d006c2c961b12b8db8261c",
           "fingerprint": "035401ea19f3c4b8f924cd1b",
           "item": "impl MappedFile",
-          "line": 396
+          "line": 390
         },
         {
           "id": "81eca711f4cbe249a0b296a7",
           "fingerprint": "ffb6b43621060ba10e967f4d",
           "item": "impl DefaultMappedFile",
-          "line": 1164
+          "line": 1158
         },
         {
           "id": "2464e7c06b100b50595acbcf",
           "fingerprint": "6963ebb375eb3b2091af9675",
           "item": "impl ReferenceResource",
-          "line": 1426
+          "line": 1420
         },
         {
           "id": "dc9c9728be91cbfb16fee98c",
           "fingerprint": "8087200b5691c98369fcc2ec",
           "item": "impl DefaultMappedFile",
-          "line": 1466
+          "line": 1460
         }
       ],
       "owner": "store",
@@ -31634,31 +31616,31 @@
           "id": "9875d18cccdfad9f49090242",
           "fingerprint": "accbd18fe49fb9ab57bda5a4",
           "item": "fn create_test_file",
-          "line": 1701
+          "line": 1695
         },
         {
           "id": "9a8a8fe4a83869022c10c1ca",
           "fingerprint": "3b050ce65f4d6d327c8100ec",
           "item": "fn create_lazy_test_file",
-          "line": 1711
+          "line": 1705
         },
         {
           "id": "33c53ac19c01e046c285c413",
           "fingerprint": "90d7192fe68033f3419e2e87",
           "item": "fn create_lazy_test_file",
-          "line": 1716
+          "line": 1710
         },
         {
           "id": "eb54976384e163992716cfc4",
           "fingerprint": "0e910cea1f506842c793837d",
           "item": "fn create_transient_test_file",
-          "line": 1720
+          "line": 1714
         },
         {
           "id": "f41376727720f8b683ae4a0e",
           "fingerprint": "b935db998d28407791a5d468",
           "item": "fn create_transient_test_file",
-          "line": 1726
+          "line": 1720
         }
       ],
       "owner": "store",
@@ -31677,13 +31659,13 @@
           "id": "a5a8b28cc4c83ad8e66c6b9b",
           "fingerprint": "7562f3394cf3f621fa944084",
           "item": "impl DefaultMappedFile",
-          "line": 1166
+          "line": 1160
         },
         {
           "id": "c731102d6a3e31a495bb97d6",
           "fingerprint": "137024b7c2d42e85f3ae79b4",
           "item": "fn get_mapped_file_mut",
-          "line": 1170
+          "line": 1164
         }
       ],
       "owner": "store",

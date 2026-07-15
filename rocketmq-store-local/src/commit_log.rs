@@ -14,6 +14,7 @@
 
 pub mod append;
 pub mod load;
+pub mod loader;
 pub mod memory_lock;
 pub mod record;
 pub mod record_parser;

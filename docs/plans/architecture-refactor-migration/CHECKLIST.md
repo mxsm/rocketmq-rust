@@ -133,6 +133,7 @@
   - [x] M06-03x：迁移 CommitLog active memory-lock target 纯 planner 到 Local，保留 Store config 与锁生命周期适配
   - [x] M06-03y：迁移 MappedFile cache-residency 纯范围校验到 Local，保留 Store 三平台探测与指标适配
   - [x] M06-03z：迁移 Linux MappedFile cache-residency 纯整数页规划到 Local，保留 Store 平台探测与指针适配
+  - [x] M06-03aa：迁移 CommitLogLoader 完整编排到 Local，Store 保留薄 wrapper 与函数表 target adapter
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

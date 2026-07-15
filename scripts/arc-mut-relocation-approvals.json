@@ -199,6 +199,36 @@
       "from": "1d5c7caace7e723e0aa27bec",
       "to": "447ff463742ecb6680a5e405",
       "reason": "Delegating active memory-lock target planning to Local shortened the preceding config adapter and changed adjacent tokens around the existing DefaultMappedFile parameter in the same ensure_active_mapped_file_locked item without adding or moving an occurrence"
+    },
+    {
+      "identity": "b4ef5272b75fe61fd822816e",
+      "from": "710eb3f2dd4a57100c5e0fe1",
+      "to": "5aebad0e8733bce97f8e0557",
+      "reason": "Importing the Local function-table adapter and using the Local loader through its fully qualified path changed adjacent tokens around the existing DefaultMappedFile module import without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "b8753d5ac10a49784fd677d4",
+      "to": "5351e4d7bf9d68463bd06d9c",
+      "reason": "Delegating loader orchestration through the Local function table changed adjacent tokens around the existing DefaultMappedFile return type in the same load_optimized item without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "1a54bcd9461bfdc5db574061",
+      "to": "89b5c3a41aeda92d9fa2628e",
+      "reason": "Changing create_mapped_file to the Local adapter open signature changed adjacent tokens around the existing DefaultMappedFile return type in the same create_mapped_file item without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "06482c333cf283e2b50d7f9d",
+      "to": "4c5b69f9b3c5b44567126dc7",
+      "reason": "Changing create_mapped_file to the Local adapter open signature changed adjacent tokens around the existing lazy DefaultMappedFile constructor in the same create_mapped_file item without adding or moving an occurrence"
+    },
+    {
+      "identity": "909cf176383a06022042b628",
+      "from": "fb223d4d74b6fe1c75435d2f",
+      "to": "c59270c54abe9e31284a2f62",
+      "reason": "Changing create_mapped_file to the Local adapter open signature changed adjacent tokens around the existing eager DefaultMappedFile constructor in the same create_mapped_file item without adding or moving an occurrence"
     }
   ]
 }
