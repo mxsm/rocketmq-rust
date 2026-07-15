@@ -5184,6 +5184,25 @@ def mapped_file_cache_residency_plan_violations(source: str) -> list[str]:
     return violations
 
 
+class CacheResidencyTupleCall(NamedTuple):
+    bindings: tuple[str, str]
+    callee: str
+    arguments: tuple[str, ...]
+
+
+class CacheResidencyAlignmentHelperRoles(NamedTuple):
+    start_parameter_index: int
+    page_parameter_index: int
+    aligned_return_index: int
+    offset_return_index: int
+
+
+class CacheResidencyStructShape(NamedTuple):
+    path: Path
+    name: str
+    fields: tuple[str, str, str]
+
+
 def cache_residency_assignment_records(
     body: str,
 ) -> tuple[
@@ -5193,7 +5212,7 @@ def cache_residency_assignment_records(
     list[tuple[str, str, str]],
     list[tuple[str, str, str]],
     list[tuple[str, str, str]],
-    list[tuple[str, str, str]],
+    list[CacheResidencyTupleCall],
 ]:
     identifier = WARMUP_IDENTIFIER
     casts = [
@@ -5244,14 +5263,24 @@ def cache_residency_assignment_records(
             body,
         )
     ]
-    tuple_calls = [
-        (match.group("aligned"), match.group("offset"), match.group("callee"))
-        for match in re.finditer(
-            rf"let\((?P<aligned>{identifier}),(?P<offset>{identifier})\)="
-            rf"(?P<callee>{identifier})\([^;]+\);",
-            body,
+    tuple_calls: list[CacheResidencyTupleCall] = []
+    for match in re.finditer(
+        rf"let\((?P<first>{identifier}),(?P<second>{identifier})\)="
+        rf"(?P<callee>{identifier})\((?P<arguments>[^()]*)\);",
+        body,
+    ):
+        argument_parts = split_top_level_expression(match.group("arguments"), ",")
+        arguments = tuple(argument_parts) if all(
+            warmup_identifier_expression(argument) is not None
+            for argument in argument_parts
+        ) else ()
+        tuple_calls.append(
+            CacheResidencyTupleCall(
+                bindings=(match.group("first"), match.group("second")),
+                callee=match.group("callee"),
+                arguments=arguments,
+            )
         )
-    ]
     return casts, normalizations, additions, alignments, subtractions, ceilings, tuple_calls
 
 
@@ -5271,24 +5300,114 @@ def cache_residency_zero_none_guard(body: str, page_count: str, aliases: Identif
     return False
 
 
+def cache_residency_struct_shapes(
+    production_sources: dict[Path, str],
+) -> tuple[CacheResidencyStructShape, ...]:
+    shapes: list[CacheResidencyStructShape] = []
+    for path, source in production_sources.items():
+        production = source_without_cfg_test_items(source)
+        active = active_rust_source(production)
+        for declaration in re.finditer(
+            rf"\bstruct\s+(?P<name>{WARMUP_IDENTIFIER})\b[^;{{]*\{{",
+            active,
+        ):
+            name = declaration.group("name")
+            fields = active_struct_fields(production, name)
+            if len(fields) != 3 or any(field_type != "usize" for _, field_type in fields):
+                continue
+            shapes.append(
+                CacheResidencyStructShape(
+                    path=path,
+                    name=name,
+                    fields=(fields[0][0], fields[1][0], fields[2][0]),
+                )
+            )
+    return tuple(shapes)
+
+
+def cache_residency_result_struct_fields(
+    record: WarmupFunctionRecord,
+    type_name: str,
+    struct_shapes: tuple[CacheResidencyStructShape, ...],
+) -> tuple[str, str, str] | None:
+    local_matches = [
+        shape.fields
+        for shape in struct_shapes
+        if shape.path == record.path and shape.name == type_name
+    ]
+    if len(local_matches) == 1:
+        return local_matches[0]
+    global_matches = [shape.fields for shape in struct_shapes if shape.name == type_name]
+    return global_matches[0] if len(global_matches) == 1 else None
+
+
+def cache_residency_constructor_fields(fields: str) -> dict[str, str] | None:
+    assignments: dict[str, str] = {}
+    for field in split_top_level_expression(fields, ","):
+        if not field:
+            continue
+        parts = split_top_level_expression(field, ":")
+        if len(parts) == 1:
+            field_name = warmup_identifier_expression(parts[0])
+            value = field_name
+        elif len(parts) == 2:
+            field_name = warmup_identifier_expression(parts[0])
+            value = warmup_identifier_expression(parts[1])
+        else:
+            return None
+        if field_name is None or value is None or field_name in assignments:
+            return None
+        assignments[field_name] = value
+    return assignments
+
+
 def cache_residency_has_plan_result(
-    body: str,
+    record: WarmupFunctionRecord,
     aligned: str,
     checked_len: str,
     page_count: str,
     aliases: IdentifierAliases,
+    struct_shapes: tuple[CacheResidencyStructShape, ...],
 ) -> bool:
-    for match in re.finditer(r"Some\([^;]+\{(?P<fields>[^{}]+)\}\)", body):
-        field_identifiers = re.findall(WARMUP_IDENTIFIER, match.group("fields"))
+    body = record.body
+    constructor = re.compile(
+        rf"Some\((?P<type>(?:{WARMUP_IDENTIFIER}::)*{WARMUP_IDENTIFIER})\{{"
+    )
+    for match in constructor.finditer(body):
+        opening_brace = body.find("{", match.start(), match.end())
+        extracted = braced_body(body, opening_brace) if opening_brace != -1 else None
+        if extracted is None:
+            continue
+        fields_body, constructor_end = extracted
+        if body[constructor_end:constructor_end + 1] != ")":
+            continue
+        type_name = match.group("type").split("::")[-1]
+        semantic_fields = cache_residency_result_struct_fields(
+            record,
+            type_name,
+            struct_shapes,
+        )
+        assignments = cache_residency_constructor_fields(fields_body)
+        if semantic_fields is None or assignments is None:
+            continue
+        if set(assignments) != set(semantic_fields):
+            continue
         if all(
-            any(aliases.equivalent(candidate, role) for candidate in field_identifiers)
-            for role in (aligned, checked_len, page_count)
+            aliases.equivalent(assignments[field_name], role)
+            for field_name, role in zip(
+                semantic_fields,
+                (aligned, checked_len, page_count),
+                strict=True,
+            )
         ):
             return True
     return False
 
 
-def cache_residency_direct_copy(record: WarmupFunctionRecord) -> bool:
+def cache_residency_direct_copy(
+    record: WarmupFunctionRecord,
+    struct_shapes: tuple[CacheResidencyStructShape, ...],
+) -> bool:
     body = record.body
     aliases = IdentifierAliases(body)
     casts, normalizations, additions, alignments, subtractions, ceilings, _ = (
@@ -5325,11 +5444,12 @@ def cache_residency_direct_copy(record: WarmupFunctionRecord) -> bool:
                                     continue
                                 if cache_residency_zero_none_guard(body, page_count, aliases) and (
                                     cache_residency_has_plan_result(
-                                        body,
+                                        record,
                                         aligned,
                                         checked_len,
                                         page_count,
                                         aliases,
+                                        struct_shapes,
                                     )
                                 ):
                                     return True
@@ -5338,7 +5458,7 @@ def cache_residency_direct_copy(record: WarmupFunctionRecord) -> bool:
 
 def cache_residency_alignment_helper_roles(
     record: WarmupFunctionRecord,
-) -> tuple[int, int] | None:
+) -> CacheResidencyAlignmentHelperRoles | None:
     aliases = IdentifierAliases(record.body)
     _, _, _, alignments, subtractions, _, _ = cache_residency_assignment_records(record.body)
     for aligned, start, page in alignments:
@@ -5347,20 +5467,61 @@ def cache_residency_alignment_helper_roles(
                 offset_aligned, aligned
             ):
                 continue
-            if not re.search(
-                rf"\((?:{aligned}|{offset}),(?:{aligned}|{offset})\)$",
+            returned = re.search(
+                rf"\((?P<first>{WARMUP_IDENTIFIER}),(?P<second>{WARMUP_IDENTIFIER})\)$",
                 record.body,
+            )
+            if returned is None:
+                continue
+            start_parameters = [
+                index
+                for index, parameter in enumerate(record.parameters)
+                if aliases.equivalent(parameter, start)
+            ]
+            page_parameters = [
+                index
+                for index, parameter in enumerate(record.parameters)
+                if aliases.equivalent(parameter, page)
+            ]
+            returned_values = (returned.group("first"), returned.group("second"))
+            aligned_returns = [
+                index
+                for index, value in enumerate(returned_values)
+                if aliases.equivalent(value, aligned)
+            ]
+            offset_returns = [
+                index
+                for index, value in enumerate(returned_values)
+                if aliases.equivalent(value, offset)
+            ]
+            if not all(
+                len(indices) == 1
+                for indices in (
+                    start_parameters,
+                    page_parameters,
+                    aligned_returns,
+                    offset_returns,
+                )
             ):
                 continue
-            try:
-                return record.parameters.index(start), record.parameters.index(page)
-            except ValueError:
+            roles = CacheResidencyAlignmentHelperRoles(
+                start_parameter_index=start_parameters[0],
+                page_parameter_index=page_parameters[0],
+                aligned_return_index=aligned_returns[0],
+                offset_return_index=offset_returns[0],
+            )
+            if (
+                roles.start_parameter_index == roles.page_parameter_index
+                or roles.aligned_return_index == roles.offset_return_index
+            ):
                 continue
+            return roles
     return None
 
 
 def cache_residency_split_copy_violations(
     records: list[WarmupFunctionRecord],
+    struct_shapes: tuple[CacheResidencyStructShape, ...],
 ) -> list[str]:
     helpers = {
         record.name: (record, roles)
@@ -5375,21 +5536,22 @@ def cache_residency_split_copy_violations(
             cache_residency_assignment_records(body)
         )
         import_aliases = dict(caller.imports)
-        for aligned, offset, callee_alias in tuple_calls:
+        for tuple_call in tuple_calls:
+            callee_alias = tuple_call.callee
             helper_name = import_aliases.get(callee_alias, callee_alias).split("::")[-1]
             helper_entry = helpers.get(helper_name)
             if helper_entry is None:
                 continue
-            helper, _ = helper_entry
-            call_match = re.search(
-                rf"let\({aligned},{offset}\)={callee_alias}\("
-                rf"(?P<start>{WARMUP_IDENTIFIER}),(?P<page>{WARMUP_IDENTIFIER})\);",
-                body,
-            )
-            if call_match is None:
+            helper, helper_roles = helper_entry
+            if len(tuple_call.arguments) != len(helper.parameters) or max(
+                helper_roles.start_parameter_index,
+                helper_roles.page_parameter_index,
+            ) >= len(tuple_call.arguments):
                 continue
-            call_start = call_match.group("start")
-            call_page = call_match.group("page")
+            call_start = tuple_call.arguments[helper_roles.start_parameter_index]
+            call_page = tuple_call.arguments[helper_roles.page_parameter_index]
+            aligned = tuple_call.bindings[helper_roles.aligned_return_index]
+            offset = tuple_call.bindings[helper_roles.offset_return_index]
             parameters = set(caller.parameters)
             is_parameter = lambda role: any(
                 aliases.equivalent(role, parameter) for parameter in parameters
@@ -5417,11 +5579,12 @@ def cache_residency_split_copy_violations(
                                     continue
                                 if cache_residency_zero_none_guard(body, page_count, aliases) and (
                                     cache_residency_has_plan_result(
-                                        body,
+                                        caller,
                                         aligned,
                                         checked_len,
                                         page_count,
                                         aliases,
+                                        struct_shapes,
                                     )
                                 ):
                                     violations.append(
@@ -5434,6 +5597,7 @@ def cache_residency_split_copy_violations(
 def mapped_file_cache_residency_duplicate_policy_violations(
     production_sources: dict[Path, str],
 ) -> list[str]:
+    struct_shapes = cache_residency_struct_shapes(production_sources)
     records = [
         record
         for path, source in production_sources.items()
@@ -5442,13 +5606,13 @@ def mapped_file_cache_residency_duplicate_policy_violations(
     violations = [
         f"{record.path.as_posix()}: {record.name} duplicates mapped-file cache-residency planning"
         for record in records
-        if cache_residency_direct_copy(record)
+        if cache_residency_direct_copy(record, struct_shapes)
         and not (
             record.path == MAPPED_FILE_KERNEL_PATH
             and record.name == MAPPED_FILE_CACHE_RESIDENCY_PLANNER
         )
     ]
-    violations.extend(cache_residency_split_copy_violations(records))
+    violations.extend(cache_residency_split_copy_violations(records, struct_shapes))
     return violations
 
 
@@ -13241,15 +13405,14 @@ fn copied_cache_plan(
 
         helper_path = Path("rocketmq-store/src/base/swappable.rs")
         caller_path = Path("rocketmq-store/src/base/allocate_mapped_file_service.rs")
-        split_sources = dict(production_sources)
-        split_sources[helper_path] += """
+        split_helper = """
 pub(crate) fn align_cache_query(query_start: usize, host_page: usize) -> (usize, usize) {
     let aligned = query_start / host_page * host_page;
     let in_page = query_start - aligned;
     (aligned, in_page)
 }
 """
-        split_sources[caller_path] += """
+        split_caller = """
 use crate::base::swappable::align_cache_query as cache_alignment;
 
 struct SplitCachePlan { aligned: usize, len: usize, pages: usize }
@@ -13270,6 +13433,9 @@ fn copied_cache_plan_through_use_alias(
     Some(SplitCachePlan { aligned, len, pages })
 }
 """
+        split_sources = dict(production_sources)
+        split_sources[helper_path] += split_helper
+        split_sources[caller_path] += split_caller
         split_violations = mapped_file_cache_residency_adapter_violations(
             canonical,
             default_mapped_file,
@@ -13281,6 +13447,98 @@ fn copied_cache_plan_through_use_alias(
                 for violation in split_violations
             ),
             split_violations,
+        )
+
+        split_variants = [
+            (
+                "swapped_helper_parameters",
+                split_helper.replace(
+                    "align_cache_query(query_start: usize, host_page: usize)",
+                    "align_cache_query(host_page: usize, query_start: usize)",
+                    1,
+                ),
+                split_caller.replace(
+                    "cache_alignment(query_start, host_page)",
+                    "cache_alignment(host_page, query_start)",
+                    1,
+                ),
+            ),
+            (
+                "swapped_helper_returns",
+                split_helper.replace("(aligned, in_page)", "(in_page, aligned)", 1),
+                split_caller.replace(
+                    "let (aligned, in_page) = cache_alignment",
+                    "let (in_page, aligned) = cache_alignment",
+                    1,
+                ),
+            ),
+            (
+                "swapped_parameters_and_returns",
+                split_helper.replace(
+                    "align_cache_query(query_start: usize, host_page: usize)",
+                    "align_cache_query(host_page: usize, query_start: usize)",
+                    1,
+                ).replace("(aligned, in_page)", "(in_page, aligned)", 1),
+                split_caller.replace(
+                    "cache_alignment(query_start, host_page)",
+                    "cache_alignment(host_page, query_start)",
+                    1,
+                ).replace(
+                    "let (aligned, in_page) = cache_alignment",
+                    "let (in_page, aligned) = cache_alignment",
+                    1,
+                ),
+            ),
+        ]
+        for kind, helper_variant, caller_variant in split_variants:
+            with self.subTest(split_role_variant=kind):
+                variant_sources = dict(production_sources)
+                variant_sources[helper_path] += helper_variant
+                variant_sources[caller_path] += caller_variant
+                variant_violations = mapped_file_cache_residency_adapter_violations(
+                    canonical,
+                    default_mapped_file,
+                    variant_sources,
+                )
+                self.assertTrue(
+                    any(
+                        helper_path.as_posix() in violation
+                        and caller_path.as_posix() in violation
+                        for violation in variant_violations
+                    ),
+                    variant_violations,
+                )
+
+        explicit_fields_copy = copied_plan.replace(
+            "Some(CopiedCachePlan { aligned, len, pages })",
+            "Some(CopiedCachePlan { aligned: aligned, len: len, pages: pages })",
+            1,
+        )
+        explicit_sources = dict(production_sources)
+        explicit_sources[copied_path] += explicit_fields_copy
+        self.assertNotEqual(
+            [],
+            mapped_file_cache_residency_adapter_violations(
+                canonical,
+                default_mapped_file,
+                explicit_sources,
+            ),
+        )
+
+        scrambled_fields_copy = copied_plan.replace(
+            "Some(CopiedCachePlan { aligned, len, pages })",
+            "Some(CopiedCachePlan { aligned: pages, len: aligned, pages: len })",
+            1,
+        )
+        scrambled_sources = dict(production_sources)
+        scrambled_sources[copied_path] += scrambled_fields_copy
+        self.assertEqual(
+            [],
+            mapped_file_cache_residency_adapter_violations(
+                canonical,
+                default_mapped_file,
+                scrambled_sources,
+            ),
         )
 
         test_only_sources = dict(production_sources)

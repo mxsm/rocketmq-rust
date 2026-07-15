@@ -1095,12 +1095,18 @@ python scripts/arc_mut_guard.py
 - [x] `[TEST]` Rust TDD RED 由 Local fixture 的 2 个 E0432 证明 owner/type 缺失；GREEN 后 planner focused 1/1、
   mapped-file kernel 15/15、Local lib 69/69、Local default/all-feature 全量、Store invalid-range 1/1 与
   `DefaultMappedFile` 30/30 均通过。M06 source/mutation contract 新增 owner/adapter 两项，从 111 增至 113 项，
-  focused 2/2（32.781s）与冻结候选完整 113/113（429.103s）均通过。
+  初始 focused 2/2（32.781s）与审查前候选完整 113/113（429.103s）均通过。首次独立审查仍发现 helper 参数/tuple
+  返回角色顺序漏检及 plan result 字段错接误报 2 个 Important；修复 TDD RED 由 swapped parameters、swapped return、
+  两者同时的 3 个漏报与 scrambled fields 的 1 个误报证明。GREEN 后修复候选 z focused 2/2（36.206s）、y+z
+  focused 4/4（61.891s）与完整 113/113（433.456s）均通过；复审尚未记录 Approved。
 - [x] `[CONTRACT]` contract 锁定 plan struct 的 `Copy/Eq`、公开字段顺序/类型、planner 签名/body/statement order/
   visibility/cfg、唯一 Local owner，以及 Linux Store guard→page-size→base-address→单次 planner→allocation→`mincore`
   →result 的精确 dataflow。mutation 覆盖 cast/max、两处 saturating add、alignment/subtraction、`div_ceil`、zero guard、
   plan 字段映射与 Store 参数/字段消费，并覆盖 cfg/cfg_attr/duplicate/post-test、变量改名/alias、direct/cfg copy 和跨文件
-  split-helper use-alias 完整副本；单独 saturating-add/alignment/div-ceil 与缺少后续角色的 near miss 均保持零误报。
+  split-helper use-alias 完整副本。审查修复后 helper contract 结构化保留 start/page 参数索引与 aligned/offset tuple 返回
+  索引，不依赖固定参数或返回顺序；result contract 从对应 3×`usize` struct 解析字段顺序和 shorthand/显式 initializer，
+  逐字段绑定 aligned/checked-len/page-count 角色。swapped helper parameters/returns 及组合仍识别完整副本，正确显式字段
+  仍命中，而 scrambled fields、单独 saturating-add/alignment/div-ceil 与缺少后续角色均保持零误报。
 - [x] `[FEATURE/PLATFORM]` 未修改 manifest、feature 或依赖。Local 与 Store 各七组有效 feature closure、两 crate
   all-target/all-feature package Clippy、root exact workspace Clippy、Local strict Rustdoc 均通过；Store 普通 Rustdoc
   只复现 4 个未触及的 invalid-HTML warning。WSL/Linux 固定隔离 target 通过 Local planner 1/1、Store invalid-range
