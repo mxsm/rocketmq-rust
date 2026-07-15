@@ -241,6 +241,24 @@
       "from": "ad39677711ebd03cb15aa7bc",
       "to": "982715d2703b3ca7eb658106",
       "reason": "Moving CommitLog put-lock statistics and active memory-lock state to the Local runtime-state owner changed preceding tokens around the existing mapped_file_queue ArcMut field without adding or moving an occurrence"
+    },
+    {
+      "identity": "250761360f210e16dd1bc14b",
+      "from": "9ed2e1e104c45cd80f56de96",
+      "to": "ff32c4ce45d7a75051d09d81",
+      "reason": "Replacing six adjacent CommitLog implementation-state fields with one Local CommitLogRuntimeState field changed surrounding tokens around the existing LocalFileMessageStore field without adding or moving an occurrence"
+    },
+    {
+      "identity": "b2ef1bf0618590f61e43b12d",
+      "from": "f562f845a1643d76c37d2cae",
+      "to": "7e991426dfa471f3448fdf1f",
+      "reason": "Replacing six adjacent CommitLog implementation-state fields with one Local CommitLogRuntimeState field changed surrounding tokens around the existing dispatcher ArcMut field without adding or moving an occurrence"
+    },
+    {
+      "identity": "b2ef1bf0618590f61e43b12d",
+      "from": "abb1aa80c74cf115fedf9d18",
+      "to": "c374ebb529470db81585545f",
+      "reason": "Replacing six adjacent CommitLog implementation-state fields with one Local CommitLogRuntimeState field changed surrounding tokens around the existing flush_manager ArcMut field without adding or moving an occurrence"
     }
   ]
 }

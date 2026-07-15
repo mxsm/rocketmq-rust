@@ -136,7 +136,7 @@ use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock;
-use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLockStats;
+use rocketmq_store_local::commit_log::runtime_state::CommitLogRuntimeState;
 
 pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
@@ -282,20 +282,15 @@ pub struct CommitLog {
     enabled_append_prop_crc: bool,
     local_file_message_store: Option<ArcMut<LocalFileMessageStore>>,
     dispatcher: ArcMut<CommitLogDispatcherDefault>,
-    confirm_offset: i64,
+    runtime_state: CommitLogRuntimeState,
     store_checkpoint: Arc<StoreCheckpoint>,
     append_message_callback: Arc<DefaultAppendMessageCallback>,
     put_message_lock: Arc<tokio::sync::Mutex<()>>,
-    put_message_lock_stats: Arc<CommitLogPutMessageLockStats>,
     topic_queue_lock: Arc<TopicQueueLock>,
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     consume_queue_store: ConsumeQueueStore,
     flush_manager: ArcMut<DefaultFlushManager>,
-    begin_time_in_lock: Arc<AtomicU64>,
     cold_data_check_service: Arc<ColdDataCheckService>,
-    active_memory_lock: ParkingMutex<CommitLogActiveMemoryLock>,
-    active_memory_lock_present: AtomicBool,
-    last_load_statistics: ParkingMutex<LoadStatistics>,
 }
 
 impl CommitLog {
@@ -326,14 +321,16 @@ impl CommitLog {
             enabled_append_prop_crc,
             local_file_message_store: None,
             dispatcher,
-            confirm_offset: -1,
+            runtime_state: CommitLogRuntimeState::new(
+                message_store_config.linux_memory_lock_warn_only,
+                memory_lock_budget_bytes,
+            ),
             store_checkpoint: store_checkpoint.clone(),
             append_message_callback: Arc::new(DefaultAppendMessageCallback::new(
                 message_store_config.clone(),
                 topic_config_table.clone(),
             )),
             put_message_lock: Arc::new(Default::default()),
-            put_message_lock_stats: Arc::new(Default::default()),
             topic_queue_lock: Arc::new(TopicQueueLock::with_size(message_store_config.topic_queue_lock_num)),
             topic_config_table,
             consume_queue_store,
@@ -342,14 +339,7 @@ impl CommitLog {
                 mapped_file_queue,
                 store_checkpoint,
             )),
-            begin_time_in_lock: Arc::new(AtomicU64::new(0)),
             cold_data_check_service: Arc::new(Default::default()),
-            active_memory_lock: ParkingMutex::new(CommitLogActiveMemoryLock::new(
-                message_store_config.linux_memory_lock_warn_only,
-                memory_lock_budget_bytes,
-            )),
-            active_memory_lock_present: AtomicBool::new(false),
-            last_load_statistics: ParkingMutex::new(LoadStatistics::default()),
         }
     }
 
@@ -403,9 +393,10 @@ impl CommitLog {
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
         let target = self.active_memory_lock_target(mapped_file);
+        let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
         lock_active_mapped_file_parts!(
-            &self.active_memory_lock,
-            &self.active_memory_lock_present,
+            active_memory_lock,
+            active_memory_lock_present,
             mapped_file,
             target,
             &mut locker,
@@ -453,11 +444,8 @@ impl CommitLog {
     where
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
-        Self::release_active_memory_lock_if_present_parts(
-            &self.active_memory_lock,
-            &self.active_memory_lock_present,
-            unlocker,
-        )
+        let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
+        Self::release_active_memory_lock_if_present_parts(active_memory_lock, active_memory_lock_present, unlocker)
     }
 
     fn release_active_memory_lock_if_present_parts<G>(
@@ -592,7 +580,7 @@ impl CommitLog {
 
         match loader.load_optimized() {
             Ok((mapped_files, stats)) => {
-                *self.last_load_statistics.lock() = stats.clone();
+                self.runtime_state.set_load_statistics(stats.clone());
                 // Replace the mapped_files vec in mapped_file_queue
                 // This is safe because we're in &mut self
                 {
@@ -652,7 +640,7 @@ impl CommitLog {
     }
 
     pub fn put_message_lock_runtime_info(&self) -> CommitLogPutMessageLockRuntimeInfo {
-        self.put_message_lock_stats.snapshot()
+        self.runtime_state.put_message_lock_runtime_info()
     }
 
     fn release_put_message_lock(
@@ -662,10 +650,10 @@ impl CommitLog {
         lock_hold_start: Instant,
     ) -> u64 {
         let elapsed_time_in_lock = lock_hold_start.elapsed().as_millis() as u64;
-        self.put_message_lock_stats
-            .record(lock_wait_millis, elapsed_time_in_lock);
+        self.runtime_state
+            .record_put_message_lock(lock_wait_millis, elapsed_time_in_lock);
         drop(put_message_lock);
-        self.begin_time_in_lock.store(0, Ordering::Release);
+        self.runtime_state.clear_begin_time_in_lock();
         elapsed_time_in_lock
     }
 
@@ -699,22 +687,22 @@ impl CommitLog {
     }
 
     pub fn set_confirm_offset(&mut self, phy_offset: i64) {
-        self.confirm_offset = phy_offset;
+        self.runtime_state.set_confirm_offset(phy_offset);
         self.store_checkpoint.set_confirm_phy_offset(phy_offset as u64);
     }
 
     fn compute_controller_confirm_offset(&self) -> i64 {
         let Some(message_store) = self.local_file_message_store.as_ref() else {
-            return self.confirm_offset;
+            return self.runtime_state.confirm_offset();
         };
 
         if self.message_store_config.broker_role == BrokerRole::Slave || message_store.get_running_flags().is_fenced() {
-            return self.confirm_offset;
+            return self.runtime_state.confirm_offset();
         }
 
         let max_phy_offset = message_store.get_max_phy_offset();
         let Some(ha_service) = message_store.get_ha_service() else {
-            return self.confirm_offset;
+            return self.runtime_state.confirm_offset();
         };
 
         if ha_service.local_sync_state_set_size(max_phy_offset) <= 1
@@ -723,11 +711,11 @@ impl CommitLog {
             return max_phy_offset;
         }
 
-        if self.confirm_offset >= 0 {
-            return self.confirm_offset;
+        if self.runtime_state.confirm_offset() >= 0 {
+            return self.runtime_state.confirm_offset();
         }
 
-        ha_service.compute_confirm_offset(self.confirm_offset, max_phy_offset)
+        ha_service.compute_confirm_offset(self.runtime_state.confirm_offset(), max_phy_offset)
     }
 
     fn clamp_controller_recover_confirm_offset(&mut self, min_phy_offset: i64, upper_bound: i64) {
@@ -867,8 +855,7 @@ impl CommitLog {
         let lock_wait_start = Instant::now();
         let _put_message_lock = self.put_message_lock.lock().await;
         let lock_wait_millis = lock_wait_start.elapsed().as_millis() as u64;
-        self.begin_time_in_lock
-            .store(time_utils::current_millis(), std::sync::atomic::Ordering::Release);
+        self.runtime_state.set_begin_time_in_lock(time_utils::current_millis());
         let start_time = Instant::now();
         // Here settings are stored timestamp, in order to ensure an orderly global
         msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = time_utils::current_millis() as i64;
@@ -876,8 +863,7 @@ impl CommitLog {
         let append_attempt = {
             let mapped_file_queue = &mut self.mapped_file_queue;
             let message_store_config = self.message_store_config.as_ref();
-            let active_memory_lock = &self.active_memory_lock;
-            let active_memory_lock_present = &self.active_memory_lock_present;
+            let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
             let append_message_callback = self.append_message_callback.as_ref();
             let enabled_append_prop_crc = self.enabled_append_prop_crc;
             CommitLogAppendAttempt::run(
@@ -1104,8 +1090,7 @@ impl CommitLog {
         let _put_message_lock = self.put_message_lock.lock().await;
         let lock_wait_millis = lock_wait_start.elapsed().as_millis() as u64;
         let begin_lock_timestamp = time_utils::current_millis();
-        self.begin_time_in_lock
-            .store(begin_lock_timestamp, std::sync::atomic::Ordering::Release);
+        self.runtime_state.set_begin_time_in_lock(begin_lock_timestamp);
         let start_time = Instant::now();
         // Here settings are stored timestamp, in order to ensure an orderly global
         if !self.message_store_config.duplication_enable {
@@ -1115,8 +1100,7 @@ impl CommitLog {
         let append_attempt = {
             let mapped_file_queue = &mut self.mapped_file_queue;
             let message_store_config = self.message_store_config.as_ref();
-            let active_memory_lock = &self.active_memory_lock;
-            let active_memory_lock_present = &self.active_memory_lock_present;
+            let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
             let append_message_callback = self.append_message_callback.as_ref();
             CommitLogAppendAttempt::run(
                 mapped_file,
@@ -1872,7 +1856,7 @@ impl CommitLog {
         if self.broker_config.enable_controller_mode {
             return self.compute_controller_confirm_offset();
         } else if self.broker_config.duplication_enable {
-            return self.confirm_offset;
+            return self.runtime_state.confirm_offset();
         }
         let ms = self.local_file_message_store.as_ref().unwrap();
         if ms.is_sync_disk_flush() {
@@ -1885,7 +1869,7 @@ impl CommitLog {
     pub fn get_confirm_offset_directly(&self) -> i64 {
         if self.broker_config.enable_controller_mode {
             let Some(message_store) = self.local_file_message_store.as_ref() else {
-                return self.confirm_offset;
+                return self.runtime_state.confirm_offset();
             };
 
             if self.message_store_config.broker_role != BrokerRole::Slave
@@ -1899,9 +1883,9 @@ impl CommitLog {
                 }
             }
 
-            self.confirm_offset
+            self.runtime_state.confirm_offset()
         } else if self.broker_config.duplication_enable {
-            self.confirm_offset
+            self.runtime_state.confirm_offset()
         } else {
             self.get_max_offset()
         }
@@ -2429,7 +2413,7 @@ impl CommitLog {
 
     #[inline]
     pub fn load_statistics(&self) -> LoadStatistics {
-        self.last_load_statistics.lock().clone()
+        self.runtime_state.load_statistics()
     }
 
     fn recovery_mmap_advice(&self) -> RecoveryMmapAdvice {
@@ -2653,7 +2637,10 @@ impl CommitLog {
     }
 
     pub fn lock_time_mills(&self) -> i64 {
-        let begin = self.begin_time_in_lock.load(std::sync::atomic::Ordering::Acquire);
+        let begin = self
+            .runtime_state
+            .begin_time_in_lock()
+            .load(std::sync::atomic::Ordering::Acquire);
         if begin > 0 {
             (SystemClock::now() - (begin as u128)) as i64
         } else {
@@ -2662,7 +2649,7 @@ impl CommitLog {
     }
 
     pub fn begin_time_in_lock(&self) -> &Arc<AtomicU64> {
-        &self.begin_time_in_lock
+        self.runtime_state.begin_time_in_lock()
     }
 
     pub fn remain_how_many_data_to_commit(&self) -> i64 {
@@ -3077,12 +3064,12 @@ mod tests {
 
     #[test]
     fn put_message_lock_stats_records_totals_and_maxes() {
-        let stats = CommitLogPutMessageLockStats::default();
+        let state = CommitLogRuntimeState::new(true, 0);
 
-        stats.record(3, 7);
-        stats.record(5, 2);
+        state.record_put_message_lock(3, 7);
+        state.record_put_message_lock(5, 2);
 
-        let snapshot = stats.snapshot();
+        let snapshot = state.put_message_lock_runtime_info();
         assert_eq!(snapshot.acquire_total, 2);
         assert_eq!(snapshot.wait_total_millis, 8);
         assert_eq!(snapshot.wait_max_millis, 5);
@@ -3227,7 +3214,7 @@ mod tests {
             .append_data(0, &[1, 2, 3, 4], 0, 4)
             .await
             .expect("append data");
-        store.get_commit_log_mut().confirm_offset = -1;
+        store.get_commit_log_mut().runtime_state.set_confirm_offset(-1);
 
         assert_eq!(store.get_confirm_offset(), -1);
 
@@ -3252,7 +3239,7 @@ mod tests {
 
         store.get_commit_log_mut().clamp_controller_recover_confirm_offset(0, 6);
 
-        assert_eq!(store.get_commit_log().confirm_offset, 6);
+        assert_eq!(store.get_commit_log().runtime_state.confirm_offset(), 6);
         assert_eq!(store.get_confirm_offset(), 6);
 
         let _ = std::fs::remove_dir_all(temp_root);
@@ -3415,7 +3402,9 @@ mod tests {
             .expect("active file lock should succeed");
         assert!(store
             .get_commit_log()
-            .active_memory_lock_present
+            .runtime_state
+            .active_memory_lock_parts()
+            .1
             .load(Ordering::Acquire));
 
         store
@@ -3427,7 +3416,9 @@ mod tests {
             .expect("active file lock release should succeed");
         assert!(!store
             .get_commit_log()
-            .active_memory_lock_present
+            .runtime_state
+            .active_memory_lock_parts()
+            .1
             .load(Ordering::Acquire));
 
         store

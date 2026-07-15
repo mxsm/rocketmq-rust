@@ -14,12 +14,17 @@
 
 //! Runtime-neutral state owned by the Local CommitLog boundary.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use crate::base::memory_lock_manager::MemoryLockCategory;
 use crate::base::memory_lock_manager::MemoryLockHandle;
 use crate::base::memory_lock_manager::MemoryLockManager;
+use crate::commit_log::load::LoadStatistics;
 use crate::commit_log::memory_lock::CommitLogMemoryLockTarget;
 
 /// Snapshot of CommitLog put-message lock timing counters.
@@ -152,5 +157,95 @@ impl CommitLogActiveMemoryLock {
         self.file_from_offset = None;
         self.region_offset = 0;
         self.region_len = 0;
+    }
+}
+
+/// Canonical runtime-neutral state held by the Local CommitLog core.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct CommitLogRuntimeState {
+    confirm_offset: i64,
+    put_message_lock_stats: CommitLogPutMessageLockStats,
+    begin_time_in_lock: Arc<AtomicU64>,
+    active_memory_lock: Mutex<CommitLogActiveMemoryLock>,
+    active_memory_lock_present: AtomicBool,
+    last_load_statistics: Mutex<LoadStatistics>,
+}
+
+impl CommitLogRuntimeState {
+    /// Creates the legacy initial CommitLog runtime state.
+    #[doc(hidden)]
+    pub fn new(memory_lock_warn_only: bool, memory_lock_budget_bytes: u64) -> Self {
+        Self {
+            confirm_offset: -1,
+            put_message_lock_stats: CommitLogPutMessageLockStats::default(),
+            begin_time_in_lock: Arc::new(AtomicU64::new(0)),
+            active_memory_lock: Mutex::new(CommitLogActiveMemoryLock::new(
+                memory_lock_warn_only,
+                memory_lock_budget_bytes,
+            )),
+            active_memory_lock_present: AtomicBool::new(false),
+            last_load_statistics: Mutex::new(LoadStatistics::default()),
+        }
+    }
+
+    /// Returns the stored confirm offset without applying HA/config policy.
+    #[doc(hidden)]
+    pub fn confirm_offset(&self) -> i64 {
+        self.confirm_offset
+    }
+
+    /// Replaces the stored confirm offset.
+    #[doc(hidden)]
+    pub fn set_confirm_offset(&mut self, confirm_offset: i64) {
+        self.confirm_offset = confirm_offset;
+    }
+
+    /// Returns the current put-message lock timing snapshot.
+    #[doc(hidden)]
+    pub fn put_message_lock_runtime_info(&self) -> CommitLogPutMessageLockRuntimeInfo {
+        self.put_message_lock_stats.snapshot()
+    }
+
+    /// Records one completed put-message lock acquisition.
+    #[doc(hidden)]
+    pub fn record_put_message_lock(&self, wait_millis: u64, hold_millis: u64) {
+        self.put_message_lock_stats.record(wait_millis, hold_millis);
+    }
+
+    /// Stores the timestamp at which the current put-message lock hold began.
+    #[doc(hidden)]
+    pub fn set_begin_time_in_lock(&self, begin_time: u64) {
+        self.begin_time_in_lock.store(begin_time, Ordering::Release);
+    }
+
+    /// Clears the current put-message lock start timestamp.
+    #[doc(hidden)]
+    pub fn clear_begin_time_in_lock(&self) {
+        self.begin_time_in_lock.store(0, Ordering::Release);
+    }
+
+    /// Returns the shared legacy lock-start timestamp handle.
+    #[doc(hidden)]
+    pub fn begin_time_in_lock(&self) -> &Arc<AtomicU64> {
+        &self.begin_time_in_lock
+    }
+
+    /// Returns the active-lock state and its lock-free presence hint.
+    #[doc(hidden)]
+    pub fn active_memory_lock_parts(&self) -> (&Mutex<CommitLogActiveMemoryLock>, &AtomicBool) {
+        (&self.active_memory_lock, &self.active_memory_lock_present)
+    }
+
+    /// Replaces the most recent CommitLog load statistics.
+    #[doc(hidden)]
+    pub fn set_load_statistics(&self, statistics: LoadStatistics) {
+        *self.last_load_statistics.lock() = statistics;
+    }
+
+    /// Returns a snapshot of the most recent CommitLog load statistics.
+    #[doc(hidden)]
+    pub fn load_statistics(&self) -> LoadStatistics {
+        self.last_load_statistics.lock().clone()
     }
 }

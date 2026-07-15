@@ -293,6 +293,7 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "CommitLogPutMessageLockRuntimeInfo": ("struct", "runtime_state.rs"),
     "CommitLogPutMessageLockStats": ("struct", "runtime_state.rs"),
     "CommitLogActiveMemoryLock": ("struct", "runtime_state.rs"),
+    "CommitLogRuntimeState": ("struct", "runtime_state.rs"),
 }
 COMMIT_LOG_LOAD_OWNER_ITEMS = {
     "CommitLogFileDiscovery": "enum",
@@ -7203,6 +7204,11 @@ def commit_log_runtime_state_contract_violations(
             "manager:MemoryLockManager,handle:Option<MemoryLockHandle>,file_from_offset:Option<u64>,"
             "region_offset:u64,region_len:usize,"
         ),
+        "CommitLogRuntimeState": (
+            "confirm_offset:i64,put_message_lock_stats:CommitLogPutMessageLockStats,"
+            "begin_time_in_lock:Arc<AtomicU64>,active_memory_lock:Mutex<CommitLogActiveMemoryLock>,"
+            "active_memory_lock_present:AtomicBool,last_load_statistics:Mutex<LoadStatistics>,"
+        ),
     }
     for item, expected_body in expected_structs.items():
         if len(re.findall(rf"\bpub\s+struct\s+{item}\b", active)) != 1 or compact_rust(
@@ -7257,12 +7263,40 @@ def commit_log_runtime_state_contract_violations(
         if compact_rust(named_function_body(production, function_name) or "") != expected_body:
             violations.append(f"Local CommitLog runtime-state behavior changed: {function_name}")
 
+    expected_runtime_state_impl = (
+        "#[doc(hidden)]pubfnnew(memory_lock_warn_only:bool,memory_lock_budget_bytes:u64)->Self{"
+        "Self{confirm_offset:-1,put_message_lock_stats:CommitLogPutMessageLockStats::default(),"
+        "begin_time_in_lock:Arc::new(AtomicU64::new(0)),active_memory_lock:Mutex::new("
+        "CommitLogActiveMemoryLock::new(memory_lock_warn_only,memory_lock_budget_bytes,)),"
+        "active_memory_lock_present:AtomicBool::new(false),last_load_statistics:Mutex::new("
+        "LoadStatistics::default()),}}#[doc(hidden)]pubfnconfirm_offset(&self)->i64{"
+        "self.confirm_offset}#[doc(hidden)]pubfnset_confirm_offset(&mutself,confirm_offset:i64){"
+        "self.confirm_offset=confirm_offset;}#[doc(hidden)]pubfnput_message_lock_runtime_info(&self)"
+        "->CommitLogPutMessageLockRuntimeInfo{self.put_message_lock_stats.snapshot()}#[doc(hidden)]"
+        "pubfnrecord_put_message_lock(&self,wait_millis:u64,hold_millis:u64){self."
+        "put_message_lock_stats.record(wait_millis,hold_millis);}#[doc(hidden)]pubfn"
+        "set_begin_time_in_lock(&self,begin_time:u64){self.begin_time_in_lock.store(begin_time,"
+        "Ordering::Release);}#[doc(hidden)]pubfnclear_begin_time_in_lock(&self){self."
+        "begin_time_in_lock.store(0,Ordering::Release);}#[doc(hidden)]pubfnbegin_time_in_lock(&self)"
+        "->&Arc<AtomicU64>{&self.begin_time_in_lock}#[doc(hidden)]pubfnactive_memory_lock_parts("
+        "&self)->(&Mutex<CommitLogActiveMemoryLock>,&AtomicBool){(&self.active_memory_lock,&self."
+        "active_memory_lock_present)}#[doc(hidden)]pubfnset_load_statistics(&self,statistics:"
+        "LoadStatistics){*self.last_load_statistics.lock()=statistics;}#[doc(hidden)]pubfn"
+        "load_statistics(&self)->LoadStatistics{self.last_load_statistics.lock().clone()}"
+    )
+    if compact_rust(active_impl_body(production, "CommitLogRuntimeState") or "") != expected_runtime_state_impl:
+        violations.append("Local CommitLog composite runtime-state behavior changed")
+
     expected_imports = {
+        "std::sync::atomic::AtomicBool",
         "std::sync::atomic::AtomicU64",
         "std::sync::atomic::Ordering",
+        "std::sync::Arc",
+        "parking_lot::Mutex",
         "crate::base::memory_lock_manager::MemoryLockCategory",
         "crate::base::memory_lock_manager::MemoryLockHandle",
         "crate::base::memory_lock_manager::MemoryLockManager",
+        "crate::commit_log::load::LoadStatistics",
         "crate::commit_log::memory_lock::CommitLogMemoryLockTarget",
     }
     actual_imports = {
@@ -7295,7 +7329,7 @@ def commit_log_runtime_state_contract_violations(
     store_active = active_rust_source(source_without_cfg_test_items(store))
     expected_store_imports = {
         "use rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock",
-        "use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLockStats",
+        "use rocketmq_store_local::commit_log::runtime_state::CommitLogRuntimeState",
     }
     actual_store_imports = {
         statement
@@ -7310,14 +7344,33 @@ def commit_log_runtime_state_contract_violations(
         "CommitLogPutMessageLockRuntimeInfo",
     ):
         violations.append("Store CommitLog lock runtime-info facade changed")
+    store_commit_log_fields = dict(active_struct_fields(store, "CommitLog"))
+    if store_commit_log_fields.get("runtime_state") != "CommitLogRuntimeState":
+        violations.append("Store CommitLog must hold one canonical Local runtime-state owner")
+    for legacy_field in (
+        "confirm_offset",
+        "put_message_lock_stats",
+        "begin_time_in_lock",
+        "active_memory_lock",
+        "active_memory_lock_present",
+        "last_load_statistics",
+    ):
+        if legacy_field in store_commit_log_fields:
+            violations.append(f"Store retained legacy CommitLog state field: {legacy_field}")
     for item in expected_structs:
         if re.search(rf"\bstruct\s+{item}\b", store_active):
             violations.append(f"Store retained CommitLog runtime-state owner: {item}")
     expected_store_flows = (
-        "put_message_lock_stats:Arc<CommitLogPutMessageLockStats>",
-        "active_memory_lock:ParkingMutex<CommitLogActiveMemoryLock>",
+        "runtime_state:CommitLogRuntimeState",
+        "runtime_state:CommitLogRuntimeState::new(",
         "pubfnput_message_lock_runtime_info(&self)->CommitLogPutMessageLockRuntimeInfo{"
-        "self.put_message_lock_stats.snapshot()}",
+        "self.runtime_state.put_message_lock_runtime_info()}",
+        "self.runtime_state.record_put_message_lock(lock_wait_millis,elapsed_time_in_lock)",
+        "self.runtime_state.clear_begin_time_in_lock()",
+        "self.runtime_state.set_confirm_offset(phy_offset)",
+        "self.runtime_state.set_load_statistics(stats.clone())",
+        "self.runtime_state.load_statistics()",
+        "self.runtime_state.active_memory_lock_parts()",
         "active_memory_lock_guard.manager()",
         "active_memory_lock.take_handle()",
         "active_memory_lock.manager().unlock_region_with(handle,&mutunlocker)",
@@ -7331,6 +7384,7 @@ def commit_log_runtime_state_contract_violations(
         "put_message_lock_stats_accumulate_totals_and_maxima",
         "active_window_reuses_only_offsets_inside_the_current_region",
         "active_file_requires_exact_region_and_take_clear_removes_identity",
+        "composite_runtime_state_preserves_initial_values_and_updates",
     )
     for test_name in required_tests:
         if named_function_body(local_tests, test_name) is None:
@@ -8953,8 +9007,9 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
         (
             Path("rocketmq-store/src/log_file/commit_log.rs"),
             "ensure_active_mapped_file_locked_with",
-            "lock_active_mapped_file_parts!(&self.active_memory_lock,&self.active_memory_lock_present,"
-            "mapped_file,target,&mutlocker,&mutunlocker,)",
+            "let(active_memory_lock,active_memory_lock_present)=self.runtime_state."
+            "active_memory_lock_parts();lock_active_mapped_file_parts!(active_memory_lock,"
+            "active_memory_lock_present,mapped_file,target,&mutlocker,&mutunlocker,)",
         ),
         (
             Path("rocketmq-store/src/log_file/commit_log.rs"),
@@ -10551,14 +10606,16 @@ def commit_log_append_attempt_contract_violations(
     ensure_wrapper = compact_rust(named_function_body(store, "ensure_active_mapped_file_locked_with") or "")
     if ensure_wrapper != (
         "lettarget=self.active_memory_lock_target(mapped_file);"
-        "lock_active_mapped_file_parts!(&self.active_memory_lock,"
-        "&self.active_memory_lock_present,mapped_file,target,&mutlocker,&mutunlocker,)"
+        "let(active_memory_lock,active_memory_lock_present)=self.runtime_state."
+        "active_memory_lock_parts();lock_active_mapped_file_parts!(active_memory_lock,"
+        "active_memory_lock_present,mapped_file,target,&mutlocker,&mutunlocker,)"
     ):
         violations.append("Store active-lock test wrapper must remain one parts delegation")
     release_wrapper = compact_rust(named_function_body(store, "release_active_memory_lock_if_present") or "")
     if release_wrapper != (
-        "Self::release_active_memory_lock_if_present_parts(&self.active_memory_lock,"
-        "&self.active_memory_lock_present,unlocker,)"
+        "let(active_memory_lock,active_memory_lock_present)=self.runtime_state."
+        "active_memory_lock_parts();Self::release_active_memory_lock_if_present_parts("
+        "active_memory_lock,active_memory_lock_present,unlocker)"
     ):
         violations.append("Store active-lock release wrapper must remain one parts delegation")
     if compact_rust(store).count("lock_active_mapped_file_parts!(") != 3:
@@ -11686,6 +11743,17 @@ class StoreLocalContractTests(unittest.TestCase):
                 local_tests,
             ),
             (
+                "Store retained legacy confirm field",
+                local,
+                module,
+                store.replace(
+                    "    runtime_state: CommitLogRuntimeState,",
+                    "    confirm_offset: i64,\n    runtime_state: CommitLogRuntimeState,",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
                 "Store bypassed manager accessor",
                 local,
                 module,
@@ -12577,8 +12645,8 @@ class StoreLocalContractTests(unittest.TestCase):
             store.replace("drop(old);", "", 1),
             moved_drop_store,
             store.replace(
-                "&self.active_memory_lock_present,\n            mapped_file,",
-                "&self.active_memory_lock_present.clone(),\n            mapped_file,",
+                "self.runtime_state.active_memory_lock_parts();",
+                "self.runtime_state.active_memory_lock_parts_disabled();",
                 1,
             ),
             store.replace(

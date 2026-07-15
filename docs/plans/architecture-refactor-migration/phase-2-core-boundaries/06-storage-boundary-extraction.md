@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1640,3 +1640,31 @@ python scripts/arc_mut_guard.py
   CommitLog 根 composition、MappedFileQueue、append/recovery 方法 owner 与 Store facade 仍需按后续依赖收口。
   顶层统计保持 82 个工作包中 30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12
   状态不变。
+
+## M06-03am CommitLog composite runtime state owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local `commit_log::runtime_state::CommitLogRuntimeState` 成为 CommitLog 实现运行态的唯一组合
+  owner，持有 confirm offset、put-message lock statistics、begin-time-in-lock、active memory-lock/presence 与
+  last-load statistics；初始化值、原子 ordering、锁预算和 warn-only 配置均保持既有语义。
+- [x] `[DEV/ADAPTER]` Store `CommitLog` 删除六个分散状态字段，只保留一个 `runtime_state` 字段；load、append、
+  recovery、controller confirm 与 memory-lock 生命周期通过 Local accessor 委托，Store 继续持有 MappedFile、
+  平台 lock/unlock、日志、dispatch、flush/HA/CQ/Index adapter。
+- [x] `[TEST]` `cargo test -p rocketmq-store-local --all-features` 全量通过；新增 composite runtime-state 更新测试后
+  focused 文件为 4/4。`cargo test -p rocketmq-store --lib log_file::commit_log` 35/35、
+  `cargo test -p rocketmq-store --test commitlog_recovery_tests` 19/19 通过。
+- [x] `[CONTRACT]` runtime-state/append/memory-lock 定向 baseline+mutation 契约通过；完整 M06 contract 134/134
+  通过（614.167s），冻结四个 Local 状态 owner、组合字段/方法、Store direct import/re-export、单 owner、精确
+  adapter dataflow 与四个 Local focused test，旧 Store 状态 owner、别名/brace/glob import、clone/cfg/重复定义均
+  fail closed。
+- [x] `[REV/ARCMUT]` 组合字段替换仅使同一 `struct CommitLog` 内三个既有 occurrence 发生一对一 fingerprint
+  变化：identity `250761360f210e16dd1bc14b` 的 `9ed2e1e104c45cd80f56de96`→
+  `ff32c4ce45d7a75051d09d81`，identity `b2ef1bf0618590f61e43b12d` 的
+  `f562f845a1643d76c37d2cae`→`7e991426dfa471f3448fdf1f` 与
+  `abb1aa80c74cf115fedf9d18`→`c374ebb529470db81585545f`。ADR-013 精确 approval、promotion、compare 与更新
+  ledger 后裸守卫均通过，债务保持 1,171 identities / 3,233 occurrences。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt check、architecture dependency guard、AGENTS
+  routing check 均通过。error architecture guard 仍只报告既有 Broker source-stringification 1 项、MCP anyhow 8 项
+  与两份缺失 governance 文档，本切片未新增命中。
+- [x] `[INVENTORY/SCOPE]` M06-03am 关闭 CommitLog 组合运行态 owner 内部工作，但不关闭顶层 PR-M06-03：
+  CommitLog 根结构、MappedFileQueue、append/recovery 方法 owner 与 Store facade 仍需收口；顶层统计保持 82 个
+  工作包中 30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。

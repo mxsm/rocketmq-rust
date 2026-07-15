@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use std::ptr::NonNull;
+use std::sync::atomic::Ordering;
 
 use rocketmq_error::RocketMQResult;
 use rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory;
+use rocketmq_store_local::commit_log::load::LoadStatistics;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLockStats;
+use rocketmq_store_local::commit_log::runtime_state::CommitLogRuntimeState;
 
 fn test_handle(
     state: &CommitLogActiveMemoryLock,
@@ -89,4 +92,34 @@ fn active_file_requires_exact_region_and_take_clear_removes_identity() -> Rocket
     assert!(!state.is_current(200, target));
     assert!(state.take_handle().is_none());
     Ok(())
+}
+
+#[test]
+fn composite_runtime_state_preserves_initial_values_and_updates() {
+    let mut state = CommitLogRuntimeState::new(true, 1024);
+    assert_eq!(state.confirm_offset(), -1);
+    assert_eq!(state.put_message_lock_runtime_info().acquire_total, 0);
+    assert_eq!(state.begin_time_in_lock().load(Ordering::Acquire), 0);
+    assert!(!state.active_memory_lock_parts().1.load(Ordering::Acquire));
+    assert_eq!(state.load_statistics().total_files, 0);
+
+    state.set_confirm_offset(41);
+    state.record_put_message_lock(3, 5);
+    state.set_begin_time_in_lock(43);
+    let statistics = LoadStatistics {
+        total_files: 7,
+        total_size_bytes: 11,
+        ..LoadStatistics::default()
+    };
+    state.set_load_statistics(statistics);
+
+    assert_eq!(state.confirm_offset(), 41);
+    assert_eq!(state.put_message_lock_runtime_info().wait_total_millis, 3);
+    assert_eq!(state.put_message_lock_runtime_info().hold_total_millis, 5);
+    assert_eq!(state.begin_time_in_lock().load(Ordering::Acquire), 43);
+    assert_eq!(state.load_statistics().total_files, 7);
+    assert_eq!(state.load_statistics().total_size_bytes, 11);
+
+    state.clear_begin_time_in_lock();
+    assert_eq!(state.begin_time_in_lock().load(Ordering::Acquire), 0);
 }
