@@ -16,12 +16,10 @@
 
 use bytes::Bytes;
 
+use super::header::HostWidth;
+use super::header::MESSAGE_MAGIC_CODE;
+use super::header::MESSAGE_MAGIC_CODE_V2;
 use super::record::BLANK_MAGIC_CODE;
-use super::record::MESSAGE_MAGIC_CODE;
-use super::record::MESSAGE_MAGIC_CODE_V2;
-
-const BORN_HOST_V6_FLAG: i32 = 1 << 4;
-const STORE_HOST_V6_FLAG: i32 = 1 << 5;
 
 /// CommitLog record encoding version selected by its magic code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -354,10 +352,10 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
     let physical_offset = reader.read_i64(CommitLogRecordField::PhysicalOffset)?;
     let sys_flag = reader.read_i32(CommitLogRecordField::SysFlag)?;
     let born_timestamp = reader.read_i64(CommitLogRecordField::BornTimestamp)?;
-    let born_host_len = if sys_flag & BORN_HOST_V6_FLAG == 0 { 8 } else { 20 };
+    let born_host_len = HostWidth::born(sys_flag).encoded_len();
     let born_host = reader.take(born_host_len, CommitLogRecordField::BornHost)?;
     let store_timestamp = reader.read_i64(CommitLogRecordField::StoreTimestamp)?;
-    let store_host_len = if sys_flag & STORE_HOST_V6_FLAG == 0 { 8 } else { 20 };
+    let store_host_len = HostWidth::store(sys_flag).encoded_len();
     let store_host = reader.take(store_host_len, CommitLogRecordField::StoreHost)?;
     let reconsume_times = reader.read_i32(CommitLogRecordField::ReconsumeTimes)?;
     let prepared_transaction_offset = reader.read_i64(CommitLogRecordField::PreparedTransactionOffset)?;
@@ -452,15 +450,15 @@ mod tests {
     use bytes::Bytes;
     use bytes::BytesMut;
 
+    use super::super::header::BORN_HOST_V6_FLAG;
+    use super::super::header::STORE_HOST_V6_FLAG;
     use super::decode_commit_log_record;
     use super::CommitLogRecordBodyMode;
     use super::CommitLogRecordChecksum;
     use super::CommitLogRecordOutcome;
     use super::CommitLogRecordVersion;
-    use super::BORN_HOST_V6_FLAG;
     use super::MESSAGE_MAGIC_CODE;
     use super::MESSAGE_MAGIC_CODE_V2;
-    use super::STORE_HOST_V6_FLAG;
 
     struct SpyChecksum {
         calls: Cell<usize>,

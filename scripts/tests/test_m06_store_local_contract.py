@@ -69,10 +69,16 @@ COMMIT_LOG_LOADER_PATH = Path("rocketmq-store-local/src/commit_log/loader.rs")
 COMMIT_LOG_APPEND_FRAME_PATH = Path(
     "rocketmq-store-local/src/commit_log/append_frame.rs"
 )
+COMMIT_LOG_HEADER_PATH = Path(
+    "rocketmq-store-local/src/commit_log/header.rs"
+)
 STORE_APPEND_CALLBACK_PATH = Path(
     "rocketmq-store/src/base/append_message_callback.rs"
 )
 STORE_COMMIT_LOG_PATH = Path("rocketmq-store/src/log_file/commit_log.rs")
+STORE_COMMIT_LOG_RECOVERY_PATH = Path(
+    "rocketmq-store/src/log_file/commit_log_recovery.rs"
+)
 MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush", "is_able_to_commit")
 MAPPED_FILE_POLICY_REFERENCE = re.compile(
     r"(?:\.|::)\s*(is_able_to_flush|is_able_to_commit)\b"
@@ -219,8 +225,8 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "AbnormalRecoveryFileRange": ("struct", "recovery.rs"),
     "AbnormalRecoveryWindow": ("struct", "recovery.rs"),
     "plan_abnormal_recovery_window_from_ranges": ("fn", "recovery.rs"),
-    "MESSAGE_MAGIC_CODE": ("const", "record.rs"),
-    "MESSAGE_MAGIC_CODE_V2": ("const", "record.rs"),
+    "MESSAGE_MAGIC_CODE": ("const", "header.rs"),
+    "MESSAGE_MAGIC_CODE_V2": ("const", "header.rs"),
     "BLANK_MAGIC_CODE": ("const", "record.rs"),
     "is_blank_message": ("fn", "record.rs"),
     "CommitLogFrameSource": ("trait", "record.rs"),
@@ -8947,7 +8953,6 @@ def append_frame_kernel_owner_violations(
 
     expected_owners = {
         "BLANK_MARKER_LENGTH": "const",
-        "HostWidth": "enum",
         "AppendFrameCrcPlan": "enum",
         "BlankMarker": "struct",
         "SegmentAppendDecision": "enum",
@@ -8971,15 +8976,17 @@ def append_frame_kernel_owner_violations(
     if len(re.findall(r"\bpub\s+mod\s+append_frame\s*;", active_rust_source(module_source))) != 1:
         violations.append("commit_log root must expose exactly one append_frame module")
     imports = [
-        body
-        for kind, _, body, _ in active_import_records(production)
+        (visibility, body)
+        for kind, visibility, body, _ in active_import_records(production)
         if kind == "use"
     ]
-    if imports != ["super::record::BLANK_MAGIC_CODE"]:
+    if imports != [
+        ("pub", "super::header::HostWidth"),
+        ("", "super::record::BLANK_MAGIC_CODE"),
+    ]:
         violations.append(f"append-frame imports changed: {imports}")
 
     expected_items = {
-        ("enum", "HostWidth"): "Ipv4,Ipv6,",
         ("enum", "AppendFrameCrcPlan"): (
             "Disabled,Trailer{covered_end:usize,trailer_start:usize,trailer_end:usize,},"
         ),
@@ -9215,14 +9222,6 @@ def append_frame_kernel_owner_violations(
         if fragment not in docs:
             violations.append(f"AppendBatchFrameCursor documentation changed: {fragment}")
 
-    timestamp_body = compact_rust(
-        named_function_body(production, "store_timestamp_position") or ""
-    )
-    if timestamp_body != (
-        "matchself{Self::Ipv4=>IPV4_STORE_TIMESTAMP_POSITION,"
-        "Self::Ipv6=>IPV6_STORE_TIMESTAMP_POSITION,}"
-    ):
-        violations.append("HostWidth timestamp mapping changed")
     if compact_rust(named_function_body(production, "bytes") or "") != "&self.bytes":
         violations.append("BlankMarker bytes accessor changed")
     if compact_rust(named_function_body(production, "declared_wrote_bytes") or "") != (
@@ -9234,8 +9233,6 @@ def append_frame_kernel_owner_violations(
         "END_FILE_MIN_BLANK_LENGTH": "8",
         "QUEUE_OFFSET_POSITION": "20",
         "PHYSICAL_OFFSET_POSITION": "28",
-        "IPV4_STORE_TIMESTAMP_POSITION": "56",
-        "IPV6_STORE_TIMESTAMP_POSITION": "68",
     }
     for constant, value in required_constants.items():
         if re.search(rf"\bconst\s+{constant}\s*:\s*(?:i32|usize)\s*=\s*{value}\s*;", active) is None:
@@ -9274,6 +9271,277 @@ def append_frame_kernel_owner_violations(
             violations.append(f"{path}: Store copied append-frame blank marker")
         if re.search(r"(?:encoded_len|msg_len)\+8>max_blank", candidate_active):
             violations.append(f"{path}: Store copied append-frame segment-roll policy")
+    return violations
+
+
+HEADER_LAYOUT_CONSTANTS = {
+    "MAGIC_CODE_POSITION": ("usize", "4", ""),
+    "SYS_FLAG_POSITION": ("usize", "36", ""),
+    "BORN_HOST_V6_FLAG": ("i32", "0x10", "pub(crate)"),
+    "STORE_HOST_V6_FLAG": ("i32", "0x20", "pub(crate)"),
+    "IPV4_HOST_LENGTH": ("usize", "8", ""),
+    "IPV6_HOST_LENGTH": ("usize", "20", ""),
+    "IPV4_STORE_TIMESTAMP_POSITION": ("usize", "56", ""),
+    "IPV6_STORE_TIMESTAMP_POSITION": ("usize", "68", ""),
+    "MESSAGE_MAGIC_CODE": ("i32", "-626843481", "pub"),
+    "MESSAGE_MAGIC_CODE_V2": ("i32", "-626843477", "pub"),
+}
+
+
+def commit_log_header_contract_violations(
+    header_source: str,
+    module_source: str,
+    record_source: str,
+    append_source: str,
+    parser_source: str,
+    recovery_source: str,
+    commit_log_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    header_production = source_without_cfg_test_items(header_source)
+    header_active = active_rust_source(header_production)
+    header_compact = compact_rust(header_production)
+    violations: list[str] = []
+
+    if len(re.findall(r"\bpub\s+mod\s+header\s*;", active_rust_source(module_source))) != 1:
+        violations.append("commit_log root must expose exactly one header module")
+
+    for item, item_kind in {
+        "HostWidth": "enum",
+        "MESSAGE_MAGIC_CODE": "const",
+        "MESSAGE_MAGIC_CODE_V2": "const",
+    }.items():
+        occurrences = file_item_owner_occurrences(production_sources, item)
+        if occurrences != [(COMMIT_LOG_HEADER_PATH, item_kind)]:
+            violations.append(f"{item} header owner occurrences changed: {occurrences}")
+
+    for constant, (constant_type, value, visibility) in HEADER_LAYOUT_CONSTANTS.items():
+        visibility_pattern = re.escape(visibility) + r"\s+" if visibility else ""
+        if re.search(
+            rf"\b{visibility_pattern}const\s+{constant}\s*:\s*{constant_type}\s*=\s*"
+            rf"{re.escape(value)}\s*;",
+            header_active,
+        ) is None:
+            violations.append(f"CommitLog header constant changed: {constant}")
+        occurrences = file_item_owner_occurrences(production_sources, constant)
+        if occurrences != [(COMMIT_LOG_HEADER_PATH, "const")]:
+            violations.append(f"{constant} owner occurrences changed: {occurrences}")
+
+    host_width_match = re.search(r"\bpub\s+enum\s+HostWidth\b", header_active)
+    if host_width_match is None or attributes_have_cfg_gate(
+        contiguous_outer_attributes_before(header_active, host_width_match.start())
+    ):
+        violations.append("HostWidth must remain a public non-cfg owner")
+    if compact_rust(active_item_body(header_production, "enum", "HostWidth") or "") != (
+        "Ipv4,Ipv6,"
+    ):
+        violations.append("HostWidth variants changed")
+
+    host_width_methods = ("born", "store", "encoded_len", "store_timestamp_position")
+    method_records = inherent_method_records(header_production, "HostWidth", host_width_methods)
+    expected_method_signatures = {
+        "born": "pub(crate)fnborn(sys_flag:i32)->Self",
+        "store": "pub(crate)fnstore(sys_flag:i32)->Self",
+        "encoded_len": "pub(crate)fnencoded_len(self)->usize",
+        "store_timestamp_position": (
+            "pub(crate)fnstore_timestamp_position(self)->usize"
+        ),
+    }
+    expected_method_bodies = {
+        "born": (
+            "ifsys_flag&BORN_HOST_V6_FLAG==0{Self::Ipv4}else{Self::Ipv6}"
+        ),
+        "store": (
+            "ifsys_flag&STORE_HOST_V6_FLAG==0{Self::Ipv4}else{Self::Ipv6}"
+        ),
+        "encoded_len": (
+            "matchself{Self::Ipv4=>IPV4_HOST_LENGTH,Self::Ipv6=>IPV6_HOST_LENGTH,}"
+        ),
+        "store_timestamp_position": (
+            "matchself{Self::Ipv4=>IPV4_STORE_TIMESTAMP_POSITION,"
+            "Self::Ipv6=>IPV6_STORE_TIMESTAMP_POSITION,}"
+        ),
+    }
+    for method_name in host_width_methods:
+        records = method_records[method_name]
+        if len(records) != 1:
+            violations.append(f"HostWidth::{method_name} definition count changed")
+            continue
+        record = records[0]
+        if record.signature != expected_method_signatures[method_name]:
+            violations.append(f"HostWidth::{method_name} signature changed")
+        if record.visibility != "pub(crate)" or record.cfg_gated:
+            violations.append(f"HostWidth::{method_name} visibility changed")
+        if record.body != expected_method_bodies[method_name]:
+            violations.append(f"HostWidth::{method_name} behavior changed")
+
+    expected_function_signatures = (
+        (
+            "probe_store_timestamp",
+            "pubfnprobe_store_timestamp<F>(mutread:F)->Option<i64>where"
+            "F:FnMut(usize,usize)->Option<Bytes>,",
+        ),
+        (
+            "store_timestamp_from_frame",
+            "pubfnstore_timestamp_from_frame(frame:&[u8])->i64",
+        ),
+        (
+            "read_i32_or_zero",
+            "fnread_i32_or_zero<F>(read:&mutF,offset:usize)->i32where"
+            "F:FnMut(usize,usize)->Option<Bytes>,",
+        ),
+        (
+            "read_i64_or_zero",
+            "fnread_i64_or_zero<F>(read:&mutF,offset:usize)->i64where"
+            "F:FnMut(usize,usize)->Option<Bytes>,",
+        ),
+    )
+    for function_name, signature in expected_function_signatures:
+        if header_compact.count(signature) != 1:
+            violations.append(f"{function_name} signature changed")
+
+    expected_function_bodies = {
+        "probe_store_timestamp": (
+            "letmagic_code=read_i32_or_zero(&mutread,MAGIC_CODE_POSITION);"
+            "ifmagic_code!=MESSAGE_MAGIC_CODE&&magic_code!=MESSAGE_MAGIC_CODE_V2{returnNone;}"
+            "letsys_flag=read_i32_or_zero(&mutread,SYS_FLAG_POSITION);"
+            "lettimestamp_position=HostWidth::born(sys_flag).store_timestamp_position();"
+            "letstore_timestamp=read_i64_or_zero(&mutread,timestamp_position);"
+            "(store_timestamp!=0).then_some(store_timestamp)"
+        ),
+        "store_timestamp_from_frame": (
+            "letsys_flag=i32::from_be_bytes(frame[SYS_FLAG_POSITION..SYS_FLAG_POSITION+4]"
+            ".try_into().unwrap());"
+            "lettimestamp_position=HostWidth::born(sys_flag).store_timestamp_position();"
+            "i64::from_be_bytes(frame[timestamp_position..timestamp_position+8]"
+            ".try_into().unwrap())"
+        ),
+        "read_i32_or_zero": (
+            "read(offset,4).map(|bytes|i32::from_be_bytes(bytes[0..4]"
+            ".try_into().unwrap())).unwrap_or(0)"
+        ),
+        "read_i64_or_zero": (
+            "read(offset,8).map(|bytes|i64::from_be_bytes(bytes[0..8]"
+            ".try_into().unwrap())).unwrap_or(0)"
+        ),
+    }
+    for function_name, expected_body in expected_function_bodies.items():
+        body = compact_rust(named_function_body(header_production, function_name) or "")
+        if body != expected_body:
+            violations.append(f"{function_name} behavior changed")
+
+    for function_name in ("probe_store_timestamp", "store_timestamp_from_frame"):
+        function_position = header_source.find(f"pub fn {function_name}")
+        panic_position = header_source.rfind("/// # Panics", 0, function_position)
+        previous_public_function = header_source.rfind("pub fn ", 0, function_position)
+        if not previous_public_function < panic_position < function_position:
+            violations.append(f"{function_name} must document its panic seam")
+
+    imports = [
+        (visibility, body)
+        for kind, visibility, body, _ in active_import_records(header_production)
+        if kind == "use"
+    ]
+    if imports != [("", "bytes::Bytes")]:
+        violations.append(f"CommitLog header imports changed: {imports}")
+    if re.search(
+        r"\b(?:ArcMut|MappedFile|MessageStoreConfig|StoreCheckpoint|MessageExt|tracing|tokio)\b",
+        header_active,
+    ) or any(token in header_active for token in FORBIDDEN_SOURCE_TOKENS):
+        violations.append("CommitLog header absorbed Store or runtime ownership")
+
+    record_magic_reexports = [
+        (visibility, body)
+        for kind, visibility, body, _ in active_import_records(record_source)
+        if kind == "use" and body.startswith("super::header::MESSAGE_MAGIC_CODE")
+    ]
+    if record_magic_reexports != [
+        ("pub", "super::header::MESSAGE_MAGIC_CODE"),
+        ("pub", "super::header::MESSAGE_MAGIC_CODE_V2"),
+    ]:
+        violations.append("record magic-code compatibility re-exports changed")
+    violations.extend(direct_exact_reexport_violations(append_source, "super::header", "HostWidth"))
+
+    parser_production = source_without_cfg_test_items(parser_source)
+    parser_compact = compact_rust(parser_production)
+    if parser_compact.count("HostWidth::born(sys_flag).encoded_len()") != 1:
+        violations.append("record parser born-host width delegation changed")
+    if parser_compact.count("HostWidth::store(sys_flag).encoded_len()") != 1:
+        violations.append("record parser store-host width delegation changed")
+    for legacy in (
+        "BORN_HOST_V6_FLAG",
+        "STORE_HOST_V6_FLAG",
+        "ifsys_flag&0x10",
+        "ifsys_flag&0x20",
+    ):
+        if legacy in parser_compact:
+            violations.append(f"record parser retained fixed-header layout: {legacy}")
+
+    append_production = source_without_cfg_test_items(append_source)
+    append_compact = compact_rust(append_production)
+    if append_compact.count("born_host_width.store_timestamp_position()") != 1:
+        violations.append("append-frame timestamp-position delegation changed")
+    for legacy in (
+        "IPV4_STORE_TIMESTAMP_POSITION",
+        "IPV6_STORE_TIMESTAMP_POSITION",
+        "[56..64]",
+        "[68..76]",
+    ):
+        if legacy in append_compact:
+            violations.append(f"append-frame retained fixed-header layout: {legacy}")
+
+    recovery_body = compact_rust(
+        named_function_body(
+            source_without_cfg_test_items(recovery_source),
+            "is_mapped_file_matched_recover",
+        )
+        or ""
+    )
+    exact_probe_adapter = (
+        "letSome(store_timestamp)=rocketmq_store_local::commit_log::header::"
+        "probe_store_timestamp(|offset,len|{mapped_file.get_bytes(offset,len)})"
+        "else{returnfalse;};"
+    )
+    if recovery_body.count(exact_probe_adapter) != 1:
+        violations.append("Store recovery timestamp probe adapter changed")
+    if recovery_body.count(
+        "store_timestamp<=store_checkpoint.get_min_timestamp_index()asi64"
+    ) != 1 or recovery_body.count(
+        "store_timestamp<=store_checkpoint.get_min_timestamp()asi64"
+    ) != 1:
+        violations.append("Store recovery checkpoint comparison changed")
+    if recovery_body.count("time_millis_to_human_string(store_timestamp)") != 2:
+        violations.append("Store recovery timestamp logging changed")
+    for legacy in (
+        "MESSAGE_MAGIC_CODE_POSITION",
+        "SYSFLAG_POSITION",
+        "MessageSysFlag::BORNHOST_V6_FLAG",
+        ".get_i32()",
+        ".get_i64()",
+        "born_host_length",
+        "msg_store_time_pos",
+    ):
+        if legacy in recovery_body:
+            violations.append(f"Store recovery retained fixed-header probe: {legacy}")
+
+    pickup_body = compact_rust(
+        named_function_body(
+            source_without_cfg_test_items(commit_log_source),
+            "pickup_store_timestamp",
+        )
+        or ""
+    )
+    expected_pickup_body = (
+        "ifoffset>=self.get_min_offset()&&(offset+sizeasi64)<=self.get_max_offset(){"
+        "letresult=self.get_message(offset,size);ifletSome(result)=result{"
+        "letbuffer=result.get_buffer();rocketmq_store_local::commit_log::header::"
+        "store_timestamp_from_frame(buffer)}else{-1}}else{-1}"
+    )
+    if pickup_body != expected_pickup_body:
+        violations.append("pickup_store_timestamp adapter behavior changed")
+    if "ArcMut" in pickup_body:
+        violations.append("pickup_store_timestamp added an ArcMut fingerprint")
+
     return violations
 
 
@@ -11385,8 +11653,8 @@ pub use {module}::{item};
                 1,
             ),
             append_frame_source.replace(
-                "const IPV4_STORE_TIMESTAMP_POSITION: usize = 56;",
-                "const IPV4_STORE_TIMESTAMP_POSITION: usize = 57;",
+                "pub use super::header::HostWidth;",
+                "use super::header::HostWidth;",
                 1,
             ),
             append_frame_source.replace(
@@ -11599,6 +11867,235 @@ fn copied_roll(encoded_len: i32, max_blank: i32) -> bool {
             with self.subTest(append_frame_adapter_mutation=mutation_index):
                 self.assertNotEqual(callback_source, mutation)
                 self.assertNotEqual([], append_frame_store_adapter_violations(mutation))
+
+    def test_commit_log_header_contract_rejects_layout_probe_and_adapter_mutations(self) -> None:
+        sources = {
+            "header_source": (ROOT / COMMIT_LOG_HEADER_PATH).read_text(encoding="utf-8"),
+            "module_source": (LOCAL_CRATE / "src" / "commit_log.rs").read_text(
+                encoding="utf-8"
+            ),
+            "record_source": (
+                LOCAL_CRATE / "src" / "commit_log" / "record.rs"
+            ).read_text(encoding="utf-8"),
+            "append_source": (ROOT / COMMIT_LOG_APPEND_FRAME_PATH).read_text(
+                encoding="utf-8"
+            ),
+            "parser_source": (
+                LOCAL_CRATE / "src" / "commit_log" / "record_parser.rs"
+            ).read_text(encoding="utf-8"),
+            "recovery_source": (ROOT / STORE_COMMIT_LOG_RECOVERY_PATH).read_text(
+                encoding="utf-8"
+            ),
+            "commit_log_source": (ROOT / STORE_COMMIT_LOG_PATH).read_text(
+                encoding="utf-8"
+            ),
+        }
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            commit_log_header_contract_violations(
+                **sources,
+                production_sources=production_sources,
+            ),
+        )
+
+        source_paths = {
+            "header_source": COMMIT_LOG_HEADER_PATH,
+            "module_source": Path("rocketmq-store-local/src/commit_log.rs"),
+            "record_source": Path("rocketmq-store-local/src/commit_log/record.rs"),
+            "append_source": COMMIT_LOG_APPEND_FRAME_PATH,
+            "parser_source": Path(
+                "rocketmq-store-local/src/commit_log/record_parser.rs"
+            ),
+            "recovery_source": STORE_COMMIT_LOG_RECOVERY_PATH,
+            "commit_log_source": STORE_COMMIT_LOG_PATH,
+        }
+
+        def assert_rejected(label: str, **mutations: str) -> None:
+            mutated_sources = dict(sources)
+            mutated_production_sources = dict(production_sources)
+            for source_name, mutation in mutations.items():
+                self.assertNotEqual(sources[source_name], mutation, label)
+                mutated_sources[source_name] = mutation
+                mutated_production_sources[source_paths[source_name]] = mutation
+            self.assertNotEqual(
+                [],
+                commit_log_header_contract_violations(
+                    **mutated_sources,
+                    production_sources=mutated_production_sources,
+                ),
+                label,
+            )
+
+        header = sources["header_source"]
+        constant_mutations = {
+            "magic offset": ("MAGIC_CODE_POSITION: usize = 4", "MAGIC_CODE_POSITION: usize = 5"),
+            "sysflag offset": ("SYS_FLAG_POSITION: usize = 36", "SYS_FLAG_POSITION: usize = 37"),
+            "born flag": ("BORN_HOST_V6_FLAG: i32 = 0x10", "BORN_HOST_V6_FLAG: i32 = 0x11"),
+            "store flag": ("STORE_HOST_V6_FLAG: i32 = 0x20", "STORE_HOST_V6_FLAG: i32 = 0x21"),
+            "IPv4 host length": ("IPV4_HOST_LENGTH: usize = 8", "IPV4_HOST_LENGTH: usize = 9"),
+            "IPv6 host length": ("IPV6_HOST_LENGTH: usize = 20", "IPV6_HOST_LENGTH: usize = 21"),
+            "IPv4 timestamp offset": (
+                "IPV4_STORE_TIMESTAMP_POSITION: usize = 56",
+                "IPV4_STORE_TIMESTAMP_POSITION: usize = 57",
+            ),
+            "IPv6 timestamp offset": (
+                "IPV6_STORE_TIMESTAMP_POSITION: usize = 68",
+                "IPV6_STORE_TIMESTAMP_POSITION: usize = 69",
+            ),
+            "V1 magic": ("-626843481", "-626843480"),
+            "V2 magic": ("-626843477", "-626843476"),
+        }
+        for label, (old, new) in constant_mutations.items():
+            with self.subTest(mutation=label):
+                assert_rejected(label, header_source=header.replace(old, new, 1))
+
+        header_mutations = {
+            "little endian i32": header.replace("i32::from_be_bytes", "i32::from_le_bytes", 1),
+            "little endian i64": header.replace("i64::from_be_bytes", "i64::from_le_bytes", 1),
+            "drop V2 acceptance": header.replace(
+                " && magic_code != MESSAGE_MAGIC_CODE_V2",
+                "",
+                1,
+            ),
+            "missing i32 is one": header.replace(".unwrap_or(0)", ".unwrap_or(1)", 1),
+            "missing i64 is one": header.rsplit(".unwrap_or(0)", 1)[0]
+            + ".unwrap_or(1)"
+            + header.rsplit(".unwrap_or(0)", 1)[1],
+            "zero timestamp accepted": header.replace(
+                "(store_timestamp != 0).then_some(store_timestamp)",
+                "Some(store_timestamp)",
+                1,
+            ),
+            "magic read width": header.replace("read(offset, 4)", "read(offset, 5)", 1),
+            "timestamp read width": header.replace("read(offset, 8)", "read(offset, 7)", 1),
+            "present short becomes fallback": header.replace(
+                ".map(|bytes| i32::from_be_bytes(bytes[0..4].try_into().unwrap()))",
+                ".and_then(|bytes| bytes.get(0..4).map(|value| i32::from_be_bytes(value.try_into().unwrap())))",
+                1,
+            ),
+            "strict becomes fallible": header.replace(
+                "pub fn store_timestamp_from_frame(frame: &[u8]) -> i64",
+                "pub fn store_timestamp_from_frame(frame: &[u8]) -> Option<i64>",
+                1,
+            ),
+            "strict uses checked slice": header.replace(
+                "frame[SYS_FLAG_POSITION..SYS_FLAG_POSITION + 4]",
+                "frame.get(SYS_FLAG_POSITION..SYS_FLAG_POSITION + 4).unwrap()",
+                1,
+            ),
+            "flag visibility widened": header.replace(
+                "pub(crate) const BORN_HOST_V6_FLAG",
+                "pub const BORN_HOST_V6_FLAG",
+                1,
+            ),
+            "method visibility widened": header.replace(
+                "pub(crate) fn born",
+                "pub fn born",
+                1,
+            ),
+        }
+        short_circuit_old = (
+            "let magic_code = read_i32_or_zero(&mut read, MAGIC_CODE_POSITION);\n"
+            "    if magic_code != MESSAGE_MAGIC_CODE && magic_code != MESSAGE_MAGIC_CODE_V2 {\n"
+            "        return None;\n"
+            "    }\n\n"
+            "    let sys_flag = read_i32_or_zero(&mut read, SYS_FLAG_POSITION);"
+        )
+        short_circuit_new = (
+            "let magic_code = read_i32_or_zero(&mut read, MAGIC_CODE_POSITION);\n"
+            "    let sys_flag = read_i32_or_zero(&mut read, SYS_FLAG_POSITION);\n"
+            "    if magic_code != MESSAGE_MAGIC_CODE && magic_code != MESSAGE_MAGIC_CODE_V2 {\n"
+            "        return None;\n"
+            "    }"
+        )
+        header_mutations["invalid magic reads sysflag"] = header.replace(
+            short_circuit_old,
+            short_circuit_new,
+            1,
+        )
+        for label, mutation in header_mutations.items():
+            with self.subTest(mutation=label):
+                assert_rejected(label, header_source=mutation)
+
+        recovery = sources["recovery_source"]
+        recovery_mutations = {
+            "probe closure changes offset": recovery.replace(
+                "mapped_file.get_bytes(offset, len)",
+                "mapped_file.get_bytes(offset + 1, len)",
+                1,
+            ),
+            "safe checkpoint less-than": recovery.replace(
+                "store_timestamp <= store_checkpoint.get_min_timestamp_index() as i64",
+                "store_timestamp < store_checkpoint.get_min_timestamp_index() as i64",
+                1,
+            ),
+            "normal checkpoint less-than": recovery.replace(
+                "store_timestamp <= store_checkpoint.get_min_timestamp() as i64",
+                "store_timestamp < store_checkpoint.get_min_timestamp() as i64",
+                1,
+            ),
+            "timestamp logging removed": recovery.replace(
+                "time_millis_to_human_string(store_timestamp)",
+                '"hidden"',
+                1,
+            ),
+        }
+        for label, mutation in recovery_mutations.items():
+            with self.subTest(mutation=label):
+                assert_rejected(label, recovery_source=mutation)
+
+        commit_log = sources["commit_log_source"]
+        pickup_mutations = {
+            "pickup range less-than": commit_log.replace(
+                "(offset + size as i64) <= self.get_max_offset()",
+                "(offset + size as i64) < self.get_max_offset()",
+                1,
+            ),
+            "pickup loses strict reader": commit_log.replace(
+                "rocketmq_store_local::commit_log::header::store_timestamp_from_frame(buffer)",
+                "rocketmq_store_local::commit_log::header::probe_store_timestamp(|_, _| None).unwrap_or(-1)",
+                1,
+            ),
+            "pickup changes missing sentinel": commit_log.replace(
+                "            } else {\n                -1\n            }",
+                "            } else {\n                0\n            }",
+                1,
+            ),
+        }
+        for label, mutation in pickup_mutations.items():
+            with self.subTest(mutation=label):
+                assert_rejected(label, commit_log_source=mutation)
+
+        parser = sources["parser_source"]
+        assert_rejected(
+            "parser duplicates born-host formula",
+            parser_source=parser.replace(
+                "HostWidth::born(sys_flag).encoded_len()",
+                "if sys_flag & 0x10 == 0 { 8 } else { 20 }",
+                1,
+            ),
+        )
+        append = sources["append_source"]
+        assert_rejected(
+            "append duplicates timestamp offset",
+            append_source=append.replace(
+                "born_host_width.store_timestamp_position()",
+                "match born_host_width { HostWidth::Ipv4 => 56, HostWidth::Ipv6 => 68 }",
+                1,
+            ),
+        )
+        duplicate_constant = "\nconst MAGIC_CODE_POSITION: usize = 4;\n"
+        for source_name in ("parser_source", "append_source", "recovery_source"):
+            with self.subTest(mutation=f"duplicate layout in {source_name}"):
+                assert_rejected(
+                    f"duplicate layout in {source_name}",
+                    **{source_name: sources[source_name] + duplicate_constant},
+                )
 
     def test_commit_log_record_contract_rejects_dynamic_port_and_masks_inactive_text(self) -> None:
         valid = "pub struct CommitLogFrameCursor<S: CommitLogFrameSource> { source: S }"
@@ -15631,6 +16128,7 @@ mod tests""",
             {
                 "append.rs",
                 "append_frame.rs",
+                "header.rs",
                 "load.rs",
                 "loader.rs",
                 "memory_lock.rs",
@@ -15655,7 +16153,11 @@ mod tests""",
             if LOCAL_CRATE in path.parents or STORE_CRATE in path.parents
         }
         for item, (item_kind, expected_file) in COMMIT_LOG_CANONICAL_ITEMS.items():
-            sources = storage_boundary_sources if expected_file == "record.rs" else rust_sources
+            sources = (
+                storage_boundary_sources
+                if expected_file in {"header.rs", "record.rs"}
+                else rust_sources
+            )
             definitions = canonical_definition_paths(sources, item, item_kind)
             self.assertEqual([canonical_dir / expected_file], definitions, item)
 
@@ -15782,7 +16284,6 @@ mod tests""",
             for path in crate.glob("src/**/*.rs")
         }
         for item in [
-            "MESSAGE_MAGIC_CODE",
             "BLANK_MAGIC_CODE",
             "is_blank_message",
             "CommitLogFrameSource",
@@ -15790,6 +16291,14 @@ mod tests""",
         ]:
             self.assertEqual(
                 [(canonical_file, COMMIT_LOG_CANONICAL_ITEMS[item][0])],
+                commit_log_record_owner_occurrences(rust_sources, item),
+                item,
+            )
+
+        header_file = LOCAL_CRATE / "src" / "commit_log" / "header.rs"
+        for item in ["MESSAGE_MAGIC_CODE", "MESSAGE_MAGIC_CODE_V2"]:
+            self.assertEqual(
+                [(header_file, COMMIT_LOG_CANONICAL_ITEMS[item][0])],
                 commit_log_record_owner_occurrences(rust_sources, item),
                 item,
             )

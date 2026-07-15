@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use super::header::HostWidth;
 use super::record::BLANK_MAGIC_CODE;
 
 const END_FILE_MIN_BLANK_LENGTH: i32 = 8;
@@ -19,26 +20,6 @@ const END_FILE_MIN_BLANK_LENGTH: i32 = 8;
 pub const BLANK_MARKER_LENGTH: usize = END_FILE_MIN_BLANK_LENGTH as usize;
 const QUEUE_OFFSET_POSITION: usize = 20;
 const PHYSICAL_OFFSET_POSITION: usize = 28;
-const IPV4_STORE_TIMESTAMP_POSITION: usize = 56;
-const IPV6_STORE_TIMESTAMP_POSITION: usize = 68;
-
-/// Width of a host address encoded in a commit-log frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HostWidth {
-    /// Four-byte IP address followed by a four-byte port.
-    Ipv4,
-    /// Sixteen-byte IP address followed by a four-byte port.
-    Ipv6,
-}
-
-impl HostWidth {
-    fn store_timestamp_position(self) -> usize {
-        match self {
-            Self::Ipv4 => IPV4_STORE_TIMESTAMP_POSITION,
-            Self::Ipv6 => IPV6_STORE_TIMESTAMP_POSITION,
-        }
-    }
-}
 
 /// CRC work that the Store adapter must perform after frame finalization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

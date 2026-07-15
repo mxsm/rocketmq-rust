@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1297,4 +1297,44 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03ad 只迁移 append TOTALSIZE 解码与 batch frame traversal owner；Store 继续持有
   message/config/topic/transaction、CRC 执行/no-op、context、message-id、timer/result 与 MappedFile I/O。
   recovery/header/encoder、MappedFile raw/flush、CQ/Index、HA、Timer/POP、runtime ownership 与持久格式均未修改。
+  PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ae CommitLog fixed-header and timestamp probe extraction evidence
+
+- [x] `[DEV/API]` 新增 `rocketmq-store-local::commit_log::header` 作为 CommitLog fixed-header 唯一 owner，冻结
+  magic/sysflag 位置 `4/36`、born/store IPv6 flags `0x10/0x20`、host 长度 `8/20`、Store timestamp
+  位置 `56/68` 与 V1/V2 magic。`HostWidth` 类型及 variants 保持公开，以原路径
+  `commit_log::append_frame::HostWidth` 精确 re-export；flags 与四个选择/长度方法保持 `pub(crate)`，不为测试扩大
+  API。V1/V2 magic 仍由 `commit_log::record` 精确 re-export，兼容既有调用路径。
+- [x] `[COMPAT/ORDER]` recovery probe 依次读取 magic `(4,4)`、sysflag `(36,4)` 与按 born-host flag
+  选择的 timestamp `(56|68,8)`；只有 provider 返回 `None` 才按零值回退，provider 返回 `Some` 短字段继续
+  保留 direct-slice panic。无效 magic 在 sysflag read 前立即返回，零 timestamp 返回 `None`。严格 frame reader
+  保留 big-endian 直接索引与短 frame panic；Store recovery 只传
+  `|offset, len| mapped_file.get_bytes(offset, len)`，checkpoint safe-index/normal 分支、两处 `<=`、最小时间戳与
+  logging 保持 Store 所有。`pickup_store_timestamp` 保留范围、`get_message` 和 `-1` sentinel，并以 fully-qualified
+  Local strict reader 读取 buffer。
+- [x] `[TEST]` RED replay 临时移除 `pub mod header` 后精确得到 6 个 E0432，证明 append/record/parser 的新 owner
+  seam 缺失；恢复模块后 Local header focused 10/10 通过。golden 覆盖 V1 IPv4、V2 IPv6、`0x10/0x20` 独立
+  born/store flag、精确 read sequence、missing magic/sysflag/timestamp 零回退、invalid magic short-circuit、zero
+  timestamp、provider `Some-short` panic、strict IPv4/IPv6 big-endian 及两个 strict short-frame panic。Local
+  default/all-feature 全量测试均通过。未新增 Store runtime wrapper fixture：构造真实 `DefaultMappedFile` 会引入
+  transitive ArcMut 测试指纹，而 Local golden 与精确 Store adapter contract 已覆盖本切片的两条 Store 调用路径。
+- [x] `[CONTRACT]` dedicated header owner/adapter contract 锁定常量、唯一 owner、窄 visibility、`HostWidth` 四方法、
+  probe/strict/helper exact body 与 panic 文档、record/append compatibility re-export、parser host-width delegation、
+  recovery closure/checkpoint/logging 及 pickup strict adapter。mutation matrix 拒绝四个 offset、两个 flag、两个 host
+  length、V1/V2 magic、BE→LE、read width、missing→非零、zero timestamp 接受、invalid magic 后继续读 sysflag、
+  `Some-short` 变 checked fallback、strict checked slice/`Option`、Store 两处 checkpoint 与 pickup 的 `<=`→`<`、
+  parser/append 手写布局及 Store/parser/append 重复常量；dedicated 1/1 与受影响既有 planning/append/record 4/4
+  均通过，主线程最终完整 M06 contract 118/118 通过（553.420s）。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature、依赖、runtime ownership、unsafe 或 error mapping。Store
+  default/all-feature check、两 crate all-target/all-feature package Clippy、root exact workspace Clippy、workspace fmt、
+  Local strict Rustdoc 与 AGENTS routing 通过；Store 普通 Rustdoc 只复现四条未触及的 invalid-HTML warning。
+  architecture 35/35+fixtures+baseline、ArcMut 63/63+24 fixtures+final guard 通过。初次 ArcMut final 因删除 recovery
+  旧 magic import 的相邻 token context 产生同 identity 的 1 NEW/1 STALE；现以带原因的最窄 `unused_imports`
+  compatibility import 保持既有 `DefaultMappedFile` fingerprint，最终新增 ArcMut 为 0，未新增 relocation approval
+  或 baseline 债务。初次 Store package Clippy 的 `useless_asref` 已通过直接传 buffer 修复并复跑通过。独立审查
+  Critical/Important/Minor = 0/0/0，另行复跑 header 10/10、record parser 3/3 与 dedicated contract 1/1 通过。
+- [x] `[SCOPE]` M06-03ae 只迁移 fixed-header layout、host-width 选择与 timestamp probe/strict read；不迁移或修改
+  M06-03ad cursor/TOTALSIZE、append CRC/body encoder、record parser bounded reader/error order、recovery scan loop、
+  flush/group commit、CQ/Index、HA、Timer/POP、MappedFile lifecycle/I/O、checkpoint policy、runtime ownership 或持久格式。
   PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。

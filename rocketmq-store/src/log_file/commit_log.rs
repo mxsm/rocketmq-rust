@@ -43,7 +43,6 @@ use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::time_utils;
 use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::CRC32Utils::crc32_bytes;
-use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::cheetah_from_utf8_lossy;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::TimeUtils::current_millis;
@@ -2724,14 +2723,7 @@ impl CommitLog {
             let result = self.get_message(offset, size);
             if let Some(result) = result {
                 let buffer = result.get_buffer();
-                let sys_flag = (&buffer[MessageDecoder::SYSFLAG_POSITION..]).get_i32();
-                let born_host_length = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
-                    8
-                } else {
-                    20
-                };
-                let msg_store_time_pos = born_host_length + 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
-                (&buffer[msg_store_time_pos..]).get_i64()
+                rocketmq_store_local::commit_log::header::store_timestamp_from_frame(buffer)
             } else {
                 -1
             }

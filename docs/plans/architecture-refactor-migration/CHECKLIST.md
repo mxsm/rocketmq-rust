@@ -137,6 +137,7 @@
   - [x] M06-03ab：迁移 DefaultMappedFile raw byte/progress owner 到 Local，Store 保留 mmap/lifecycle/platform adapter
   - [x] M06-03ac：迁移 CommitLog append frame finalization/segment-roll/blank marker kernel 到 Local，Store 保留业务、CRC 与 I/O adapter
   - [x] M06-03ad：迁移 CommitLog append TOTALSIZE 解码与 batch frame traversal owner 到 Local，Store 保留业务、CRC、context、计时/result 与 MappedFile I/O adapter
+  - [x] M06-03ae：迁移 CommitLog fixed-header layout 与 Store timestamp probe owner 到 Local，Store recovery/pickup 仅保留 MappedFile、checkpoint 与范围 adapter
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

@@ -14,6 +14,7 @@
 
 pub mod append;
 pub mod append_frame;
+pub mod header;
 pub mod load;
 pub mod loader;
 pub mod memory_lock;
