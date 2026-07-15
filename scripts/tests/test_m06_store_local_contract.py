@@ -66,6 +66,12 @@ COMMIT_LOG_MEMORY_LOCK_PATH = Path(
     "rocketmq-store-local/src/commit_log/memory_lock.rs"
 )
 COMMIT_LOG_LOADER_PATH = Path("rocketmq-store-local/src/commit_log/loader.rs")
+COMMIT_LOG_APPEND_FRAME_PATH = Path(
+    "rocketmq-store-local/src/commit_log/append_frame.rs"
+)
+STORE_APPEND_CALLBACK_PATH = Path(
+    "rocketmq-store/src/base/append_message_callback.rs"
+)
 STORE_COMMIT_LOG_PATH = Path("rocketmq-store/src/log_file/commit_log.rs")
 MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush", "is_able_to_commit")
 MAPPED_FILE_POLICY_REFERENCE = re.compile(
@@ -8920,6 +8926,419 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
     return violations
 
 
+APPEND_FRAME_KERNEL_METHODS = (
+    "segment_append_decision",
+    "blank_marker",
+    "finalize_frame",
+    "finalize_batch_frame",
+    "patch_runtime_fields",
+)
+
+
+def append_frame_kernel_owner_violations(
+    source: str,
+    module_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    violations: list[str] = []
+
+    expected_owners = {
+        "BLANK_MARKER_LENGTH": "const",
+        "HostWidth": "enum",
+        "AppendFrameCrcPlan": "enum",
+        "BlankMarker": "struct",
+        "SegmentAppendDecision": "enum",
+        "AppendFrameKernel": "struct",
+    }
+    for item, item_kind in expected_owners.items():
+        occurrences = file_item_owner_occurrences(production_sources, item)
+        if occurrences != [(COMMIT_LOG_APPEND_FRAME_PATH, item_kind)]:
+            violations.append(f"{item} owner occurrences changed: {occurrences}")
+        item_match = re.search(
+            rf"\bpub\s+{item_kind}\s+{re.escape(item)}\b",
+            active,
+        )
+        if item_match is None or attributes_have_cfg_gate(
+            contiguous_outer_attributes_before(active, item_match.start())
+        ):
+            violations.append(f"{item} must remain a public non-cfg owner")
+
+    if len(re.findall(r"\bpub\s+mod\s+append_frame\s*;", active_rust_source(module_source))) != 1:
+        violations.append("commit_log root must expose exactly one append_frame module")
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use"
+    ]
+    if imports != ["super::record::BLANK_MAGIC_CODE"]:
+        violations.append(f"append-frame imports changed: {imports}")
+
+    expected_items = {
+        ("enum", "HostWidth"): "Ipv4,Ipv6,",
+        ("enum", "AppendFrameCrcPlan"): (
+            "Disabled,Trailer{covered_end:usize,trailer_start:usize,trailer_end:usize,},"
+        ),
+        ("struct", "BlankMarker"): (
+            "bytes:[u8;BLANK_MARKER_LENGTH],declared_wrote_bytes:i32,"
+        ),
+        ("enum", "SegmentAppendDecision"): "Append,Roll,",
+    }
+    for (item_kind, item), expected_body in expected_items.items():
+        body = compact_rust(active_item_body(production, item_kind, item) or "")
+        if body != expected_body:
+            violations.append(f"{item} shape changed")
+    if re.search(r"\bpub\s+struct\s+AppendFrameKernel\s*;", active) is None:
+        violations.append("AppendFrameKernel must remain a public unit struct")
+
+    records = inherent_method_records(
+        production,
+        "AppendFrameKernel",
+        APPEND_FRAME_KERNEL_METHODS,
+    )
+    expected_signatures = {
+        "segment_append_decision": (
+            "pubfnsegment_append_decision(encoded_len:i32,max_blank:i32)"
+            "->SegmentAppendDecision"
+        ),
+        "blank_marker": "pubfnblank_marker(max_blank:i32)->BlankMarker",
+        "finalize_frame": (
+            "pubfnfinalize_frame(frame:&mut[u8],queue_offset:i64,physical_offset:i64,"
+            "store_timestamp:i64,born_host_width:HostWidth,crc_reserved_length:i32,)"
+            "->AppendFrameCrcPlan"
+        ),
+        "finalize_batch_frame": (
+            "pubfnfinalize_batch_frame(frame:&mut[u8],queue_offset:i64,physical_offset:i64,"
+            "store_timestamp:i64,born_host_width:HostWidth,)->AppendFrameCrcPlan"
+        ),
+        "patch_runtime_fields": (
+            "fnpatch_runtime_fields(frame:&mut[u8],queue_offset:i64,physical_offset:i64,"
+            "store_timestamp:i64,born_host_width:HostWidth,)"
+        ),
+    }
+    expected_bodies = {
+        "segment_append_decision": (
+            "ifencoded_len+END_FILE_MIN_BLANK_LENGTH>max_blank{"
+            "SegmentAppendDecision::Roll}else{"
+            "SegmentAppendDecision::Append}"
+        ),
+        "blank_marker": (
+            "letmutbytes=[0;BLANK_MARKER_LENGTH];"
+            "bytes[0..4].copy_from_slice(&max_blank.to_be_bytes());"
+            "bytes[4..8].copy_from_slice(&BLANK_MAGIC_CODE.to_be_bytes());"
+            "BlankMarker{bytes,declared_wrote_bytes:max_blank,}"
+        ),
+        "finalize_frame": (
+            "Self::patch_runtime_fields(frame,queue_offset,physical_offset,store_timestamp,"
+            "born_host_width);ifcrc_reserved_length==0{AppendFrameCrcPlan::Disabled}else{"
+            "letcovered_end=(frame.len()asi32-crc_reserved_length)asusize;"
+            "AppendFrameCrcPlan::Trailer{covered_end,trailer_start:covered_end,"
+            "trailer_end:frame.len(),}}"
+        ),
+        "finalize_batch_frame": (
+            "Self::patch_runtime_fields(frame,queue_offset,physical_offset,store_timestamp,"
+            "born_host_width);AppendFrameCrcPlan::Disabled"
+        ),
+        "patch_runtime_fields": (
+            "frame[QUEUE_OFFSET_POSITION..QUEUE_OFFSET_POSITION+8]"
+            ".copy_from_slice(&queue_offset.to_be_bytes());"
+            "frame[PHYSICAL_OFFSET_POSITION..PHYSICAL_OFFSET_POSITION+8]"
+            ".copy_from_slice(&physical_offset.to_be_bytes());"
+            "lettimestamp_position=born_host_width.store_timestamp_position();"
+            "frame[timestamp_position..timestamp_position+8]"
+            ".copy_from_slice(&store_timestamp.to_be_bytes());"
+        ),
+    }
+    for method_name in APPEND_FRAME_KERNEL_METHODS:
+        method_records = records[method_name]
+        if len(method_records) != 1:
+            violations.append(f"AppendFrameKernel::{method_name} definition count changed")
+            continue
+        record = method_records[0]
+        if record.signature != expected_signatures[method_name]:
+            violations.append(f"AppendFrameKernel::{method_name} signature changed")
+        expected_visibility = "" if method_name == "patch_runtime_fields" else "pub"
+        if record.visibility != expected_visibility or record.cfg_gated:
+            violations.append(f"AppendFrameKernel::{method_name} visibility changed")
+        if record.body != expected_bodies[method_name]:
+            violations.append(f"AppendFrameKernel::{method_name} behavior changed")
+
+    timestamp_body = compact_rust(
+        named_function_body(production, "store_timestamp_position") or ""
+    )
+    if timestamp_body != (
+        "matchself{Self::Ipv4=>IPV4_STORE_TIMESTAMP_POSITION,"
+        "Self::Ipv6=>IPV6_STORE_TIMESTAMP_POSITION,}"
+    ):
+        violations.append("HostWidth timestamp mapping changed")
+    if compact_rust(named_function_body(production, "bytes") or "") != "&self.bytes":
+        violations.append("BlankMarker bytes accessor changed")
+    if compact_rust(named_function_body(production, "declared_wrote_bytes") or "") != (
+        "self.declared_wrote_bytes"
+    ):
+        violations.append("BlankMarker declared byte count changed")
+
+    required_constants = {
+        "END_FILE_MIN_BLANK_LENGTH": "8",
+        "QUEUE_OFFSET_POSITION": "20",
+        "PHYSICAL_OFFSET_POSITION": "28",
+        "IPV4_STORE_TIMESTAMP_POSITION": "56",
+        "IPV6_STORE_TIMESTAMP_POSITION": "68",
+    }
+    for constant, value in required_constants.items():
+        if re.search(rf"\bconst\s+{constant}\s*:\s*(?:i32|usize)\s*=\s*{value}\s*;", active) is None:
+            violations.append(f"append-frame constant changed: {constant}")
+    if re.search(
+        r"\bpub\s+const\s+BLANK_MARKER_LENGTH\s*:\s*usize\s*=\s*"
+        r"END_FILE_MIN_BLANK_LENGTH\s+as\s+usize\s*;",
+        active,
+    ) is None:
+        violations.append("public blank-marker length changed")
+
+    if re.search(r"\([^)]*:\s*bool\b", active, re.DOTALL):
+        violations.append("append-frame API must use named enums instead of positional bool")
+    if re.search(
+        r"\b(?:MessageExt|MessageStoreConfig|DashMap|ArcMut|MappedFile|Mmap|crc32|create_crc32)\b",
+        active,
+    ):
+        violations.append("append-frame kernel absorbed Store, mapping, or CRC execution ownership")
+    if any(token in active for token in FORBIDDEN_SOURCE_TOKENS):
+        violations.append("append-frame kernel has a forbidden crate edge")
+
+    for path, candidate in production_sources.items():
+        if STORE_CRATE.name not in path.parts:
+            continue
+        candidate_active = compact_rust(source_without_cfg_test_items(candidate))
+        if (
+            "[20..28]" in candidate_active
+            and "[28..36]" in candidate_active
+            and ("[56..64]" in candidate_active or "[68..76]" in candidate_active)
+        ):
+            violations.append(f"{path}: Store copied append-frame fixed offsets")
+        if (
+            "max_blank.to_be_bytes()" in candidate_active
+            and "BLANK_MAGIC_CODE.to_be_bytes()" in candidate_active
+        ):
+            violations.append(f"{path}: Store copied append-frame blank marker")
+        if re.search(r"(?:encoded_len|msg_len)\+8>max_blank", candidate_active):
+            violations.append(f"{path}: Store copied append-frame segment-roll policy")
+    return violations
+
+
+def append_frame_store_adapter_violations(source: str) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    violations: list[str] = []
+
+    required_imports = {
+        "rocketmq_store_local::commit_log::append_frame::AppendFrameCrcPlan",
+        "rocketmq_store_local::commit_log::append_frame::AppendFrameKernel",
+        "rocketmq_store_local::commit_log::append_frame::BLANK_MARKER_LENGTH",
+        "rocketmq_store_local::commit_log::append_frame::HostWidth",
+        "rocketmq_store_local::commit_log::append_frame::SegmentAppendDecision",
+    }
+    imports = {
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use" and "commit_log::append_frame" in body
+    }
+    if imports != required_imports:
+        violations.append(f"Store append-frame imports changed: {sorted(imports)}")
+
+    required_counts = {
+        "AppendFrameKernel::segment_append_decision(": 3,
+        "AppendFrameKernel::finalize_frame(": 2,
+        "AppendFrameKernel::finalize_batch_frame(": 1,
+        "AppendFrameKernel::blank_marker(max_blank)": 3,
+        "self.msg_store_item_memory.lock()": 3,
+        "bytes.put_slice(marker.bytes())": 3,
+        "crc32(&pre_encode_buffer[..covered_end])": 1,
+        "create_crc32(&mutpre_encode_buffer[trailer_start..trailer_end],crc32)": 1,
+        "crc32(&buffer[..covered_end])": 1,
+        "create_crc32(&mutbuffer[trailer_start..trailer_end],crc32)": 1,
+    }
+    for fragment, count in required_counts.items():
+        if compact.count(fragment) != count:
+            violations.append(f"Store append-frame adapter count changed: {fragment}")
+    exact_decision_calls = {
+        "AppendFrameKernel::segment_append_decision(msg_len,max_blank)": 2,
+        "AppendFrameKernel::segment_append_decision(total_msg_len,max_blank)": 1,
+    }
+    for fragment, count in exact_decision_calls.items():
+        if compact.count(fragment) != count:
+            violations.append(f"Store segment-roll input changed: {fragment}")
+
+    forbidden_store_fragments = (
+        "[20..28]",
+        "[28..36]",
+        "[56..64]",
+        "[68..76]",
+        "BLANK_MAGIC_CODE",
+        "END_FILE_MIN_BLANK_LENGTH",
+        ".put_i32(max_blank)",
+        "msg_len+8>max_blank",
+        "total_msg_len+8>max_blank",
+    )
+    for fragment in forbidden_store_fragments:
+        if fragment in compact:
+            violations.append(f"Store retained append-frame kernel: {fragment}")
+
+    if compact.count(
+        "MessageSysFlag::TRANSACTION_PREPARED_TYPE|MessageSysFlag::TRANSACTION_ROLLBACK_TYPE"
+    ) != 2 or compact.count("queue_offset=0;") != 2:
+        violations.append("Store transaction consume-queue gate changed")
+    if compact.count(
+        "msg_store_item_memory:Mutex<bytes::BytesMut>"
+    ) != 1 or compact.count(
+        "msg_store_item_memory:Mutex::new(bytes::BytesMut::with_capacity("
+        "BLANK_MARKER_LENGTH))"
+    ) != 1:
+        violations.append("Store append scratch-buffer ownership changed")
+    if compact.count(
+        "ifenabled_append_prop_crc{let_check_size=msg_len-self.crc32_reserved_length;}"
+    ) != 1:
+        violations.append("Store batch CRC no-op arithmetic changed")
+
+    function_bodies: dict[str, list[str]] = {}
+    for function_name, body in rust_function_bodies(production):
+        function_bodies.setdefault(function_name, []).append(compact_rust(body))
+    standard_bodies = function_bodies.get("do_append", [])
+    batch_bodies = function_bodies.get("do_append_batch", [])
+    zero_copy_bodies = [
+        body
+        for body in function_bodies.get("do_append_zerocopy", [])
+        if "AppendFrameKernel::finalize_frame(" in body
+    ]
+    if len(standard_bodies) != 1 or len(batch_bodies) != 1 or len(zero_copy_bodies) != 1:
+        violations.append("Store append callback body ownership changed")
+        return violations
+
+    def require_order(label: str, body: str, fragments: tuple[str, ...]) -> None:
+        cursor = -1
+        for fragment in fragments:
+            next_position = body.find(fragment, cursor + 1)
+            if next_position == -1:
+                violations.append(f"{label} lost ordered adapter fragment: {fragment}")
+                return
+            cursor = next_position
+
+    standard = standard_bodies[0]
+    exact_standard_finalizer = (
+        "letcrc_plan=AppendFrameKernel::finalize_frame("
+        "&mutpre_encode_buffer[..msg_lenasusize],queue_offset,wrote_offset,"
+        "msg_inner.store_timestamp(),born_host_width,self.crc32_reserved_length,);"
+    )
+    if standard.count(exact_standard_finalizer) != 1:
+        violations.append("standard append finalizer arguments changed")
+    if standard.count("mapped_file.write_bytes_segment(") != 1:
+        violations.append("standard append EOF scratch write changed")
+    require_order(
+        "standard append",
+        standard,
+        (
+            "MessageSysFlag::get_transaction_value",
+            "AppendFrameKernel::segment_append_decision(",
+            "self.msg_store_item_memory.lock()",
+            "bytes.clear();",
+            "AppendFrameKernel::blank_marker(max_blank)",
+            "bytes.put_slice(marker.bytes());",
+            "mapped_file.write_bytes_segment(",
+            "AppendFrameKernel::finalize_frame(",
+            "crc32(&pre_encode_buffer[..covered_end])",
+            "letinstant=Instant::now();mapped_file.append_message_bytes_no_position_update_ref(",
+        ),
+    )
+    batch = batch_bodies[0]
+    exact_batch_finalizer = (
+        "let_crc_plan=AppendFrameKernel::finalize_batch_frame("
+        "&mutmessages_byte_buffer[msg_pos..frame_end],queue_offset,phy_pos,"
+        "msg_batch.message_ext_broker_inner.store_timestamp(),born_host_width,);"
+    )
+    if batch.count(exact_batch_finalizer) != 1:
+        violations.append("batch append finalizer arguments changed")
+    if batch.count("mapped_file.write_bytes_segment(") != 1:
+        violations.append("batch append EOF scratch write changed")
+    require_order(
+        "batch append",
+        batch,
+        (
+            "letbegin_time_mills=Instant::now();",
+            "AppendFrameKernel::segment_append_decision(",
+            "self.msg_store_item_memory.lock()",
+            "bytes.clear();",
+            "AppendFrameKernel::blank_marker(max_blank)",
+            "bytes.put_slice(marker.bytes());",
+            "mapped_file.write_bytes_segment(",
+            "AppendFrameKernel::finalize_batch_frame(",
+            "put_message_context.get_phy_pos_mut()[index]=phy_pos;",
+            "mapped_file.append_message_bytes_no_position_update(&bytes);",
+        ),
+    )
+    if "crc32(" in batch or "create_crc32(" in batch:
+        violations.append("batch append CRC must remain a no-op")
+    zero_copy = zero_copy_bodies[0]
+    exact_zero_copy_finalizer = (
+        "letcrc_plan=AppendFrameKernel::finalize_frame("
+        "&mutbuffer[..msg_lenasusize],queue_offset,wrote_offset,"
+        "msg_inner.store_timestamp(),born_host_width,self.crc32_reserved_length,);"
+    )
+    if zero_copy.count(exact_zero_copy_finalizer) != 1:
+        violations.append("zero-copy append finalizer arguments changed")
+    if zero_copy.count("mapped_file.write_bytes_segment(") != 1:
+        violations.append("zero-copy append EOF scratch write changed")
+    zero_copy_timers = [
+        match.start()
+        for match in re.finditer(
+            re.escape("letinstant=Instant::now();"),
+            zero_copy,
+        )
+    ]
+    zero_copy_write = zero_copy.find("mapped_file.write_bytes_segment(")
+    zero_copy_eof_return = zero_copy.find(
+        "returnAppendMessageResult",
+        zero_copy_write,
+    )
+    direct_buffer = zero_copy.find("mapped_file.get_direct_write_buffer(")
+    if (
+        len(zero_copy_timers) != 2
+        or zero_copy_write == -1
+        or zero_copy_eof_return == -1
+        or direct_buffer == -1
+        or not (
+            zero_copy_timers[0]
+            < zero_copy_write
+            < zero_copy_eof_return
+            < zero_copy_timers[1]
+            < direct_buffer
+        )
+    ):
+        violations.append("zero-copy EOF/normal timer positions changed")
+    require_order(
+        "zero-copy append",
+        zero_copy,
+        (
+            "MessageSysFlag::get_transaction_value",
+            "AppendFrameKernel::segment_append_decision(",
+            "self.msg_store_item_memory.lock()",
+            "bytes.clear();",
+            "AppendFrameKernel::blank_marker(max_blank)",
+            "bytes.put_slice(marker.bytes());",
+            "letinstant=Instant::now();",
+            "mapped_file.write_bytes_segment(",
+            "returnAppendMessageResult",
+            "letinstant=Instant::now();",
+            "mapped_file.get_direct_write_buffer(",
+            "copy_from_slice(&pre_encode_buffer",
+            "AppendFrameKernel::finalize_frame(",
+            "crc32(&buffer[..covered_end])",
+            "mapped_file.commit_direct_write(",
+        ),
+    )
+    return violations
+
+
 MAPPED_FILE_RAW_CORE_METHODS = (
     "new",
     "file_size",
@@ -10706,6 +11125,212 @@ pub use {module}::{item};
                     any(expected_violation in violation for violation in violations),
                     violations,
                 )
+
+        append_frame_source = (
+            LOCAL_CRATE / "src" / "commit_log" / "append_frame.rs"
+        ).read_text(encoding="utf-8")
+        commit_log_module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(
+            encoding="utf-8"
+        )
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            append_frame_kernel_owner_violations(
+                append_frame_source,
+                commit_log_module,
+                production_sources,
+            ),
+        )
+        owner_mutations = [
+            append_frame_source.replace(
+                "encoded_len + END_FILE_MIN_BLANK_LENGTH > max_blank",
+                "encoded_len + END_FILE_MIN_BLANK_LENGTH >= max_blank",
+                1,
+            ),
+            append_frame_source.replace(
+                "const QUEUE_OFFSET_POSITION: usize = 20;",
+                "const QUEUE_OFFSET_POSITION: usize = 21;",
+                1,
+            ),
+            append_frame_source.replace(
+                "const IPV4_STORE_TIMESTAMP_POSITION: usize = 56;",
+                "const IPV4_STORE_TIMESTAMP_POSITION: usize = 57;",
+                1,
+            ),
+            append_frame_source.replace(
+                "bytes[0..4].copy_from_slice(&max_blank.to_be_bytes());",
+                "bytes[0..4].copy_from_slice(&BLANK_MAGIC_CODE.to_be_bytes());",
+                1,
+            ),
+            append_frame_source.replace(
+                "if crc_reserved_length == 0",
+                "if crc_reserved_length <= 0",
+                1,
+            ),
+            append_frame_source.replace(
+                "born_host_width: HostWidth,",
+                "born_host_is_ipv6: bool,",
+                1,
+            ),
+            append_frame_source.replace(
+                "pub struct AppendFrameKernel;",
+                "#[cfg(any())]\npub struct AppendFrameKernel;",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(owner_mutations):
+            with self.subTest(append_frame_owner_mutation=mutation_index):
+                self.assertNotEqual(append_frame_source, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[COMMIT_LOG_APPEND_FRAME_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    append_frame_kernel_owner_violations(
+                        mutation,
+                        commit_log_module,
+                        mutated_sources,
+                    ),
+                )
+
+        copied_kernel_sources = dict(production_sources)
+        copied_kernel_sources[
+            Path("rocketmq-store/src/copied_append_frame_kernel.rs")
+        ] = """
+fn copied_finalize(frame: &mut [u8], queue: i64, physical: i64, timestamp: i64) {
+    frame[20..28].copy_from_slice(&queue.to_be_bytes());
+    frame[28..36].copy_from_slice(&physical.to_be_bytes());
+    frame[56..64].copy_from_slice(&timestamp.to_be_bytes());
+}
+fn copied_blank(max_blank: i32) {
+    let _ = max_blank.to_be_bytes();
+    let _ = BLANK_MAGIC_CODE.to_be_bytes();
+}
+fn copied_roll(encoded_len: i32, max_blank: i32) -> bool {
+    encoded_len + 8 > max_blank
+}
+"""
+        self.assertNotEqual(
+            [],
+            append_frame_kernel_owner_violations(
+                append_frame_source,
+                commit_log_module,
+                copied_kernel_sources,
+            ),
+        )
+
+        callback_source = (ROOT / STORE_APPEND_CALLBACK_PATH).read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual([], append_frame_store_adapter_violations(callback_source))
+
+        def replace_nth_occurrence(
+            source: str,
+            old: str,
+            new: str,
+            occurrence: int,
+        ) -> str:
+            position = -1
+            for _ in range(occurrence):
+                position = source.find(old, position + 1)
+            self.assertNotEqual(-1, position)
+            return source[:position] + new + source[position + len(old):]
+
+        def move_zero_copy_normal_timer_into_eof(source: str) -> str:
+            without_normal_timer = source.replace(
+                "        let instant = Instant::now();\n"
+                "        if let Some((buffer, _pos)) = "
+                "mapped_file.get_direct_write_buffer(msg_len as usize) {",
+                "        if let Some((buffer, _pos)) = "
+                "mapped_file.get_direct_write_buffer(msg_len as usize) {",
+                1,
+            )
+            self.assertNotEqual(source, without_normal_timer)
+            return replace_nth_occurrence(
+                without_normal_timer,
+                "            );\n            return AppendMessageResult {",
+                "            );\n"
+                "            let instant = Instant::now();\n"
+                "            return AppendMessageResult {",
+                2,
+            )
+
+        adapter_mutations = [
+            callback_source.replace(
+                "AppendFrameKernel::segment_append_decision(msg_len, max_blank)",
+                "AppendFrameKernel::segment_append_decision(msg_len - 1, max_blank)",
+                1,
+            ),
+            callback_source.replace(
+                "AppendFrameKernel::finalize_frame(",
+                "AppendFrameKernel::finalize_frame_changed(",
+                1,
+            ),
+            callback_source.replace("queue_offset = 0;", "queue_offset = 1;", 1),
+            callback_source.replace(
+                "let _check_size = msg_len - self.crc32_reserved_length;",
+                "let _check_size = msg_len.checked_sub(self.crc32_reserved_length);",
+                1,
+            ),
+            callback_source.replace(
+                "#[cfg(test)]\nmod tests",
+                "fn copied_runtime_patch(frame: &mut [u8], value: i64) {\n"
+                "    frame[20..28].copy_from_slice(&value.to_be_bytes());\n"
+                "}\n\n#[cfg(test)]\nmod tests",
+                1,
+            ),
+            callback_source.replace(
+                "use rocketmq_store_local::commit_log::append_frame::SegmentAppendDecision;",
+                "use rocketmq_store_local::commit_log::append_frame::SegmentAppendDecision;\n"
+                "use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;",
+                1,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "mapped_file.write_bytes_segment(",
+                "mapped_file.write_bytes_segment_removed(",
+                3,
+            ),
+            callback_source.replace(
+                "        let instant = Instant::now();\n"
+                "        if let Some((buffer, _pos)) = "
+                "mapped_file.get_direct_write_buffer(msg_len as usize) {",
+                "        if let Some((buffer, _pos)) = "
+                "mapped_file.get_direct_write_buffer(msg_len as usize) {\n"
+                "            let instant = Instant::now();",
+                1,
+            ),
+            callback_source.replace(
+                "            queue_offset,\n"
+                "            wrote_offset,\n"
+                "            msg_inner.store_timestamp(),\n"
+                "            born_host_width,\n"
+                "            self.crc32_reserved_length,",
+                "            wrote_offset,\n"
+                "            queue_offset,\n"
+                "            msg_inner.store_timestamp(),\n"
+                "            born_host_width,\n"
+                "            self.crc32_reserved_length,",
+                1,
+            ),
+            callback_source.replace(
+                "            born_host_width,\n"
+                "            self.crc32_reserved_length,\n"
+                "        );",
+                "            born_host_width,\n"
+                "            0,\n"
+                "        );",
+                1,
+            ),
+            move_zero_copy_normal_timer_into_eof(callback_source),
+        ]
+        for mutation_index, mutation in enumerate(adapter_mutations):
+            with self.subTest(append_frame_adapter_mutation=mutation_index):
+                self.assertNotEqual(callback_source, mutation)
+                self.assertNotEqual([], append_frame_store_adapter_violations(mutation))
 
     def test_commit_log_record_contract_rejects_dynamic_port_and_masks_inactive_text(self) -> None:
         valid = "pub struct CommitLogFrameCursor<S: CommitLogFrameSource> { source: S }"
@@ -14735,7 +15360,16 @@ mod tests""",
         self.assert_local_crate_exists()
         canonical_dir = LOCAL_CRATE / "src" / "commit_log"
         self.assertEqual(
-            {"append.rs", "load.rs", "loader.rs", "memory_lock.rs", "recovery.rs", "record.rs", "record_parser.rs"},
+            {
+                "append.rs",
+                "append_frame.rs",
+                "load.rs",
+                "loader.rs",
+                "memory_lock.rs",
+                "recovery.rs",
+                "record.rs",
+                "record_parser.rs",
+            },
             {path.name for path in canonical_dir.glob("*.rs")},
         )
 
@@ -14815,6 +15449,26 @@ mod tests""",
                 canonical_config.read_text(encoding="utf-8"),
             ),
         )
+
+        append_frame_file = LOCAL_CRATE / "src" / "commit_log" / "append_frame.rs"
+        commit_log_module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(
+            encoding="utf-8"
+        )
+        relative_sources = {
+            path.relative_to(ROOT): source for path, source in rust_sources.items()
+        }
+        self.assertEqual(
+            [],
+            append_frame_kernel_owner_violations(
+                append_frame_file.read_text(encoding="utf-8"),
+                commit_log_module,
+                relative_sources,
+            ),
+        )
+        callback_source = (ROOT / STORE_APPEND_CALLBACK_PATH).read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual([], append_frame_store_adapter_violations(callback_source))
 
         commit_log_root = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
         local_root = (LOCAL_CRATE / "src" / "lib.rs").read_text(encoding="utf-8")

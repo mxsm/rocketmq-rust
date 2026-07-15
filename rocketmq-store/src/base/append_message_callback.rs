@@ -20,6 +20,12 @@ use bytes::BufMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use rocketmq_store_local::commit_log::append_frame::AppendFrameCrcPlan;
+use rocketmq_store_local::commit_log::append_frame::AppendFrameKernel;
+use rocketmq_store_local::commit_log::append_frame::HostWidth;
+use rocketmq_store_local::commit_log::append_frame::SegmentAppendDecision;
+use rocketmq_store_local::commit_log::append_frame::BLANK_MARKER_LENGTH;
+
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -36,7 +42,6 @@ use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::put_message_context::PutMessageContext;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::log_file::commit_log::get_message_num;
-use crate::log_file::commit_log::BLANK_MAGIC_CODE;
 use crate::log_file::commit_log::CRC32_RESERVED_LEN;
 use crate::log_file::mapped_file::MappedFile;
 
@@ -109,9 +114,6 @@ pub trait AppendMessageCallback {
     }
 }
 
-// File at the end of the minimum fixed length empty
-const END_FILE_MIN_BLANK_LENGTH: i32 = 4 + 4;
-
 pub struct DefaultAppendMessageCallback {
     msg_store_item_memory: Mutex<bytes::BytesMut>,
     crc32_reserved_length: i32,
@@ -130,7 +132,7 @@ impl DefaultAppendMessageCallback {
             0
         };
         Self {
-            msg_store_item_memory: Mutex::new(bytes::BytesMut::with_capacity(END_FILE_MIN_BLANK_LENGTH as usize)),
+            msg_store_item_memory: Mutex::new(bytes::BytesMut::with_capacity(BLANK_MARKER_LENGTH)),
             crc32_reserved_length,
             message_store_config,
             topic_config_table,
@@ -165,11 +167,11 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
 
         // Determines whether there is sufficient free space
-        if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
+        if let SegmentAppendDecision::Roll = AppendFrameKernel::segment_append_decision(msg_len, max_blank) {
             let mut bytes = self.msg_store_item_memory.lock();
             bytes.clear();
-            bytes.put_i32(max_blank);
-            bytes.put_i32(BLANK_MAGIC_CODE);
+            let marker = AppendFrameKernel::blank_marker(max_blank);
+            bytes.put_slice(marker.bytes());
             let instant = Instant::now();
             mapped_file.write_bytes_segment(
                 bytes.as_ref(),
@@ -181,7 +183,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 status: AppendMessageStatus::EndOfFile,
                 wrote_offset,
                 /* only wrote 8 bytes, but declare wrote maxBlank for compute write position */
-                wrote_bytes: max_blank,
+                wrote_bytes: marker.declared_wrote_bytes(),
                 store_timestamp: msg_inner.store_timestamp(),
                 logics_offset: queue_offset,
                 msg_num: message_num as i32,
@@ -191,31 +193,27 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             };
         }
 
-        /*        let mut pos = 4 // 1 TOTALSIZE
-        + 4// 2 MAGICCODE
-        + 4// 3 BODYCRC
-        + 4 // 4 QUEUEID
-        + 4; // 5 FLAG*/
-        let mut pos = 20; // TOTALSIZE +  MAGICCODE + BODYCRC + QUEUEID + FLAG
-        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_be_bytes()); // 6 QUEUEOFFSET
-        pos += 8;
-        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&wrote_offset.to_be_bytes()); // 7 PHYSICALOFFSET
-        let ip_len = if msg_inner.sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
-            4 + 4
+        let born_host_width = if msg_inner.sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
+            HostWidth::Ipv4
         } else {
-            16 + 4
+            HostWidth::Ipv6
         };
-        // 8 SYSFLAG, 9 BORNTIMESTAMP, 10 BORNHOST
-        pos += 8 + 4 + 8 + ip_len;
-
-        // 11 STORETIMESTAMP refresh store time stamp in lock
-        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&msg_inner.store_timestamp().to_be_bytes());
-
-        if self.message_store_config.enabled_append_prop_crc {
-            // 18 CRC32
-            let check_size = msg_len - self.crc32_reserved_length;
-            let crc32 = crc32(&pre_encode_buffer[..check_size as usize]);
-            create_crc32(&mut pre_encode_buffer[check_size as usize..msg_len as usize], crc32);
+        let crc_plan = AppendFrameKernel::finalize_frame(
+            &mut pre_encode_buffer[..msg_len as usize],
+            queue_offset,
+            wrote_offset,
+            msg_inner.store_timestamp(),
+            born_host_width,
+            self.crc32_reserved_length,
+        );
+        if let AppendFrameCrcPlan::Trailer {
+            covered_end,
+            trailer_start,
+            trailer_end,
+        } = crc_plan
+        {
+            let crc32 = crc32(&pre_encode_buffer[..covered_end]);
+            create_crc32(&mut pre_encode_buffer[trailer_start..trailer_end], crc32);
         }
 
         //let bytes = pre_encode_buffer.freeze();
@@ -257,10 +255,10 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         let mut messages_byte_buffer = msg_batch.encoded_buff.take().unwrap();
         let sys_flag = msg_batch.message_ext_broker_inner.sys_flag();
         //born host length
-        let born_host_length = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
-            4 + 4
+        let born_host_width = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
+            HostWidth::Ipv4
         } else {
-            16 + 4
+            HostWidth::Ipv6
         };
         //store host length
         let store_host_length = if sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG == 0 {
@@ -284,11 +282,11 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                     .unwrap(),
             );
             total_msg_len += msg_len;
-            if total_msg_len + END_FILE_MIN_BLANK_LENGTH > max_blank {
+            if let SegmentAppendDecision::Roll = AppendFrameKernel::segment_append_decision(total_msg_len, max_blank) {
                 let mut bytes = self.msg_store_item_memory.lock();
                 bytes.clear();
-                bytes.put_i32(max_blank);
-                bytes.put_i32(BLANK_MAGIC_CODE);
+                let marker = AppendFrameKernel::blank_marker(max_blank);
+                bytes.put_slice(marker.bytes());
                 mapped_file.write_bytes_segment(
                     bytes.as_ref(),
                     mapped_file.get_wrote_position() as usize,
@@ -298,7 +296,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 return AppendMessageResult {
                     status: AppendMessageStatus::EndOfFile,
                     wrote_offset,
-                    wrote_bytes: max_blank,
+                    wrote_bytes: marker.declared_wrote_bytes(),
                     msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
                     store_timestamp: msg_batch.message_ext_broker_inner.store_timestamp(),
                     logics_offset: begin_queue_offset,
@@ -306,14 +304,15 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                     ..Default::default()
                 };
             }
-            let mut pos = msg_pos + 20;
-            messages_byte_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_be_bytes());
-            pos += 8;
             let phy_pos = wrote_offset + total_msg_len as i64 - msg_len as i64;
-            messages_byte_buffer[pos..(pos + 8)].copy_from_slice(&phy_pos.to_be_bytes());
-            pos += 8 + 4 + 8 + born_host_length;
-            messages_byte_buffer[pos..(pos + 8)]
-                .copy_from_slice(&msg_batch.message_ext_broker_inner.store_timestamp().to_be_bytes());
+            let frame_end = msg_pos + msg_len as usize;
+            let _crc_plan = AppendFrameKernel::finalize_batch_frame(
+                &mut messages_byte_buffer[msg_pos..frame_end],
+                queue_offset,
+                phy_pos,
+                msg_batch.message_ext_broker_inner.store_timestamp(),
+                born_host_width,
+            );
             if enabled_append_prop_crc {
                 let _check_size = msg_len - self.crc32_reserved_length;
             }
@@ -377,12 +376,11 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
 
         // Check if we have enough space
-        if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
-            // Write end-of-file marker
+        if let SegmentAppendDecision::Roll = AppendFrameKernel::segment_append_decision(msg_len, max_blank) {
             let mut bytes = self.msg_store_item_memory.lock();
             bytes.clear();
-            bytes.put_i32(max_blank);
-            bytes.put_i32(BLANK_MAGIC_CODE);
+            let marker = AppendFrameKernel::blank_marker(max_blank);
+            bytes.put_slice(marker.bytes());
             let instant = Instant::now();
             mapped_file.write_bytes_segment(
                 bytes.as_ref(),
@@ -393,7 +391,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             return AppendMessageResult {
                 status: AppendMessageStatus::EndOfFile,
                 wrote_offset,
-                wrote_bytes: max_blank,
+                wrote_bytes: marker.declared_wrote_bytes(),
                 store_timestamp: msg_inner.store_timestamp(),
                 logics_offset: queue_offset,
                 msg_num: message_num as i32,
@@ -409,32 +407,27 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             // Copy pre-encoded buffer directly to mmap (single copy, no intermediate buffer)
             buffer[..msg_len as usize].copy_from_slice(&pre_encode_buffer[..msg_len as usize]);
 
-            // Update runtime fields that weren't known at pre-encode time
-            let mut pos = 20; // Skip TOTALSIZE, MAGICCODE, BODYCRC, QUEUEID, FLAG
-
-            // 6 QUEUEOFFSET - update with actual queue offset
-            buffer[pos..pos + 8].copy_from_slice(&queue_offset.to_be_bytes());
-            pos += 8;
-
-            // 7 PHYSICALOFFSET - update with actual physical offset
-            buffer[pos..pos + 8].copy_from_slice(&wrote_offset.to_be_bytes());
-
-            // Calculate IP length to skip to store timestamp
-            let ip_len = if msg_inner.sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
-                4 + 4
+            let born_host_width = if msg_inner.sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
+                HostWidth::Ipv4
             } else {
-                16 + 4
+                HostWidth::Ipv6
             };
-            pos += 8 + 4 + 8 + ip_len; // Skip SYSFLAG, BORNTIMESTAMP, BORNHOST
-
-            // 11 STORETIMESTAMP - update with current timestamp
-            buffer[pos..pos + 8].copy_from_slice(&msg_inner.store_timestamp().to_be_bytes());
-
-            // Update CRC32 if enabled
-            if self.message_store_config.enabled_append_prop_crc {
-                let check_size = msg_len - self.crc32_reserved_length;
-                let crc32 = crc32(&buffer[..check_size as usize]);
-                create_crc32(&mut buffer[check_size as usize..msg_len as usize], crc32);
+            let crc_plan = AppendFrameKernel::finalize_frame(
+                &mut buffer[..msg_len as usize],
+                queue_offset,
+                wrote_offset,
+                msg_inner.store_timestamp(),
+                born_host_width,
+                self.crc32_reserved_length,
+            );
+            if let AppendFrameCrcPlan::Trailer {
+                covered_end,
+                trailer_start,
+                trailer_end,
+            } = crc_plan
+            {
+                let crc32 = crc32(&buffer[..covered_end]);
+                create_crc32(&mut buffer[trailer_start..trailer_end], crc32);
             }
 
             // Commit the write atomically
@@ -526,9 +519,12 @@ mod tests {
         assert_eq!(result.wrote_bytes, max_blank);
 
         let mut marker = mapped_file
-            .get_bytes(wrote_position as usize, END_FILE_MIN_BLANK_LENGTH as usize)
+            .get_bytes(wrote_position as usize, BLANK_MARKER_LENGTH)
             .expect("blank marker");
         assert_eq!(marker.get_i32(), max_blank);
-        assert_eq!(marker.get_i32(), BLANK_MAGIC_CODE);
+        assert_eq!(
+            marker.get_i32(),
+            rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE
+        );
     }
 }

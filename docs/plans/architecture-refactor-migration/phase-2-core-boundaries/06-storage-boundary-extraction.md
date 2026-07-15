@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1198,3 +1198,56 @@ python scripts/arc_mut_guard.py
   storage/reference lifecycle、实际 mmap flush、平台 lock/warm/cache 探测、metrics、transient pool、公开 `MappedFile`
   trait、flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、
   M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ac CommitLog append frame kernel extraction evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::append_frame::AppendFrameKernel` 现为 append frame runtime
+  字段 finalization、segment-roll 判定与 blank marker 编码的唯一 canonical owner。Local 以命名
+  `HostWidth::{Ipv4,Ipv6}` 区分 host 布局，并返回命名 `AppendFrameCrcPlan`；不依赖 Store/common/
+  `rocketmq-rust`，不持有 `MessageExt`、config、`DashMap`、`ArcMut`、mapped file 或 CRC32 执行器。
+  Store 的标准、batch 与 zero-copy callback 只提供业务计算后的标量和借入字节切片。
+- [x] `[COMPAT/SEMANTICS]` 固定布局保持 queue offset `20..28`、physical offset `28..36`、IPv4
+  store timestamp `56..64`、IPv6 store timestamp `68..76`；仅 `encoded_len + 8 > max_blank`
+  才 roll。blank marker 仍是 `[max_blank big-endian][BLANK_MAGIC_CODE big-endian]` 八字节，EOF
+  实际只写八字节但结果 `wrote_bytes = max_blank`。标准与 zero-copy 由 Local 计算完全相同的 CRC
+  covered/trailer range，Store 仍在原位置执行 `crc32`/`create_crc32`；batch 保留原
+  `if enabled_append_prop_crc { let _check_size = msg_len - crc32_reserved_length; }` no-op 算术。
+  prepared/rollback transaction 的 queue offset 归零 gate、message-id、result/context、metrics 与业务配置
+  均留在 Store。三个 EOF 分支保持“roll 判定→scratch mutex lock→clear→Local marker 编码→`put_slice`
+  →原时点计时/实际 I/O”的次序，marker 不在加锁前构造；普通 `i32` `+`/`-`/cast/panic 行为未改成
+  checked、saturating 或 fail-closed 策略。Local safe finalization API 已明确记录短 frame 与旧算术的
+  `# Panics` 不变量。
+- [x] `[TEST]` TDD RED 由 `cargo test -p rocketmq-store-local --test commit_log_append_frame_kernel`
+  的四个 E0432 证明 `commit_log::append_frame` owner 尚不存在；GREEN 后 Local kernel fixture 7/7、
+  Store callback focused 2/2、Local default/all-feature 全量和 Store default/all-feature check 均通过。
+  M06 contract 在既有 append source/value 两项测试内扩充唯一 owner、adapter、exact-body、dataflow/order
+  与 mutation guard，关联 focused 2/2（3.516s）通过并保持完整 suite 为 117 项。主线程首次完整运行
+  116/117（496.243s），准确暴露旧 planning canonical 文件集合未登记新增 `append_frame.rs`；最小补齐清单后
+  失败项 focused 1/1（2.637s）通过，最终候选快照完整 117/117（508.371s）通过。独立初审以
+  Critical/Important/Minor = 0/1/0 指出 Store adapter contract 未精确冻结三条 finalizer 参数、第三条
+  zero-copy EOF scratch write 与 EOF/normal 两个分路径 timer；审查者证明“改名第三个 write、normal timer
+  后移、standard queue/physical 对调、reserved length 改 0、把两个 timer 都放入 EOF 分支”五个 mutation
+  最初均漏杀。收紧 contract 后五项全部被杀死，新增 source/mutation focused 1/1（44.699s）通过；该
+  contract-only 修复后的最终候选由主线程完整重跑 117/117（519.061s）通过；原 reviewer 复放五项
+  mutation 并额外验证 batch/zero-copy 参数错接后，以 Critical/Important/Minor = 0/0/0 Approved。
+- [x] `[CONTRACT]` contract 锁定五个 Local owner 的唯一 production 定义、root module、精确 enum/
+  struct/常量/方法签名与 body、`HostWidth` timestamp 映射、strict roll、blank big-endian 次序、CRC
+  range 和 batch disabled plan；拒绝 positional bool、Store/common/`ArcMut`/mapped-file/CRC execution
+  owner。Store contract 锁定三次 roll、三次“lock→clear→marker→scratch”、两次标准/zero-copy
+  finalization与一次 batch finalization的完整 frame slice/queue/physical/timestamp/host/CRC-reserved 参数
+  顺序和值、三条 EOF `write_bytes_segment`、zero-copy `first timer < EOF write < EOF return < second timer
+  < direct buffer` 的分路径边界、两条 transaction gate、两条 CRC 执行与原 callback/I/O/计时 dataflow，
+  并拒绝固定偏移、blank magic、roll 算法或 batch CRC 算术回流。mutation 覆盖 `>`→`>=`、
+  offset/timestamp 漂移、blank 字段错接、CRC 条件、Host bool、cfg owner、错误 adapter 参数、缺失委托、
+  transaction offset、checked batch subtraction、Store 固定切片与 blank import。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature 或依赖。Local/Store 共 12 组有效 feature closure、两
+  crate all-target/all-feature package Clippy、root exact workspace Clippy、workspace fmt、Local strict
+  Rustdoc 均通过；Store 普通 Rustdoc 只复现四条未触及的 invalid-HTML warning。architecture 35/35、
+  fixtures 与 baseline，ArcMut 63/63、24 fixtures 与裸 final guard，以及 AGENTS routing 均通过；ArcMut
+  ledger 保持 1,232 identities/3,372 occurrences，未新增 relocation approval 或 baseline 债务。
+  error hygiene 只复现未触及的 Broker source stringification 1、MCP anyhow 8 与缺失治理文档 2；裸
+  Store `--no-default-features` 只复现既有 124 个 E0004 与一个 unused `ArcMut`，两者均未标记为通过。
+- [x] `[SCOPE]` M06-03ac 只迁移 append frame finalization/roll/blank 纯字节 kernel；不迁移或修改实际
+  mapped-file I/O、CRC32 算法执行、message/config/topic/transaction/result/context/timing/metrics、flush/
+  group commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/
+  TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
