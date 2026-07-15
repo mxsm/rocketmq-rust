@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1534,4 +1534,32 @@ python scripts/arc_mut_guard.py
   Broker source-stringification 1 项、MCP anyhow 8 项和治理文档缺失 2 项，未将非零基线误记为通过。
 - [x] `[INVENTORY/SCOPE]` 本切片关闭 native mmap/load owner 内部工作，但不关闭顶层 PR-M06-03；
   CommitLog 根 append/load/recovery owner、Store facade 最终收口仍待完成。82 个顶层工作包统计保持
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
+
+## M06-03ai abnormal recovery segment orchestration extraction evidence
+
+- [x] `[DEV/API]` Local 新增 runtime-neutral `commit_log::abnormal_recovery`，由
+  `AbnormalRecoveryRecord<R>`、`AbnormalRecoveryObservation`、`AbnormalRecoverySegmentOutcome<E>` 与
+  `AbnormalRecoveryState::drive_abnormal_segment` 唯一拥有 abnormal recovery 单 segment record-loop。
+  driver 通过泛型 next/started/observe closure 接收 adapter，不引入 Store、MappedFile、消息类型、runtime、
+  `dyn`、`ArcMut` 或 `unsafe` 边界。
+- [x] `[ORDER/FAIL-CLOSED]` segment-start 与 message/blank 状态转换先于 observation；invalid warning observation
+  先于状态转换；source-end 不触发 observation。dispatch/skip、file-end hook、standard stop 与 optimized next
+  保持策略差异；adapter error 保留原错误身份，state error 和 unexpected action 以 typed outcome 返回，生产路径
+  不使用 panic/unreachable。payload 在 observation 返回或 state rejection 后由 driver 释放，不要求 `Clone`。
+- [x] `[DEV/ADAPTER]` Store `recover_abnormally` 与 `recover_abnormally_optimized` 各且仅各调用一次
+  `drive_abnormal_segment`，不再直接 `apply` `SegmentStarted/MessageAccepted/Blank/InvalidRecord/SourceEnded`。
+  Store 仅保留 declared-frame/batch 读取、record parser、confirm gate 输入、dispatch/file-end hook、warning、
+  optimized file statistics 与最终 checkpoint/CQ truncate/MappedFile 水位写回；两条路径仍使用原 raw input size
+  计算 confirm candidate，且 dispatch 与 skip 都计入 optimized 已处理文件。
+- [x] `[TEST/CONTRACT]` Local abnormal orchestration 6/6、Store recovery integration 19/19、Store CommitLog
+  filtered lib tests 35/35 与 Local all-feature 全量均通过。新增 owner/order/payload/error/adapter mutation contract，
+  并将原 Store direct-event contract 收敛为 exact Local driver seam；最终完整 M06 contract 128/128 通过
+  （591.305s）。
+- [x] `[FEATURE/ARCH]` Local/Store all-target/all-feature package Clippy、workspace fmt/diff check、ArcMut final
+  guard、architecture dependency baseline 与 AGENTS routing 均通过；未修改 manifest、feature、持久格式、
+  runtime ownership、ArcMut baseline 或 relocation approval。error architecture guard 仅复现未触及的 Broker
+  source-stringification 1 项、MCP anyhow 8 项和治理文档缺失 2 项，未将非零基线误记为通过。
+- [x] `[INVENTORY/SCOPE]` M06-03ai 关闭 abnormal 单 segment 编排内部工作，但顶层 PR-M06-03 仍未关闭：
+  CommitLog 根结构、外层 append/recovery composition 与 Store facade 仍需最终收口。顶层统计保持 82 个工作包中
   30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。

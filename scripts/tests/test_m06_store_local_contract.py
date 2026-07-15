@@ -93,6 +93,9 @@ COMMIT_LOG_RECORD_PATH = Path(
 COMMIT_LOG_NORMAL_RECOVERY_PATH = Path(
     "rocketmq-store-local/src/commit_log/normal_recovery.rs"
 )
+COMMIT_LOG_ABNORMAL_RECOVERY_PATH = Path(
+    "rocketmq-store-local/src/commit_log/abnormal_recovery.rs"
+)
 STORE_APPEND_CALLBACK_PATH = Path(
     "rocketmq-store/src/base/append_message_callback.rs"
 )
@@ -260,6 +263,10 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "NormalRecoveryObservation": ("enum", "normal_recovery.rs"),
     "NormalRecoverySegmentOutcome": ("enum", "normal_recovery.rs"),
     "drive_segment": ("fn", "normal_recovery.rs"),
+    "AbnormalRecoveryRecord": ("enum", "abnormal_recovery.rs"),
+    "AbnormalRecoveryObservation": ("enum", "abnormal_recovery.rs"),
+    "AbnormalRecoverySegmentOutcome": ("enum", "abnormal_recovery.rs"),
+    "drive_abnormal_segment": ("fn", "abnormal_recovery.rs"),
 }
 COMMIT_LOG_LOAD_OWNER_ITEMS = {
     "CommitLogFileDiscovery": "enum",
@@ -1991,26 +1998,26 @@ def store_abnormal_confirm_candidate_adapter_violations(
         if body is None or normalized.count(expected_call) != 1:
             violations.append(f"{function_name} must call Local candidate once with raw input size")
             continue
-        expected_warning_statement = compact_rust(
-            'warn!("' + expected_warning + '");'
+        expected_adapter = (
+            f"letconfirm_candidate_end={expected_call}.map_err("
+            "AbnormalRecoveryAdapterError::ConfirmCandidate)?;"
         )
-        expected_error_match = (
-            f"letconfirm_candidate_end=match{expected_call}{{"
-            "Ok(candidate)=>candidate,Err(error)=>{"
-            f"{expected_warning_statement}"
-            "break'segments;}};"
+        if normalized.count(expected_adapter) != 1:
+            violations.append(f"{function_name} candidate adapter mapping changed")
+        expected_failure_arm = (
+            "AbnormalRecoverySegmentOutcome::AdapterFailed("
+            "AbnormalRecoveryAdapterError::ConfirmCandidate(error,))=>{"
+            + compact_rust('warn!("' + expected_warning + '");')
+            + "break'segments;}"
         )
-        if normalized.count(expected_error_match) != 1:
-            violations.append(
-                f"{function_name} candidate error warning or fail-closed action changed"
-            )
-            continue
+        if normalized.count(expected_failure_arm) != 1:
+            violations.append(f"{function_name} candidate failure arm changed")
         ordered_flow = [
-            expected_error_match,
-            "letvalidated_size=matchu64::try_from(dispatch_request.msg_size){",
-            "letrelative_start=matchu64::try_from(",
+            expected_adapter,
+            "letvalidated_size=u64::try_from(dispatch_request.msg_size).map_err(",
+            "letrelative_start=u64::try_from(",
             "letdispatch_gate=",
-            "matchabnormal_recovery.apply(AbnormalRecoveryEvent::MessageAccepted{",
+            "AbnormalRecoveryRecord::Message{",
         ]
         positions = [normalized.find(fragment) for fragment in ordered_flow]
         if any(position == -1 for position in positions) or positions != sorted(positions):
@@ -2025,7 +2032,7 @@ def store_abnormal_confirm_candidate_adapter_violations(
         violations.append("Store retained abnormal confirm candidate helper")
     if re.search(r"\bAbnormalRecoveryAdapterOffsetError\b", active):
         violations.append("Store retained legacy abnormal candidate error")
-    if compact.count("matchabnormal_confirm_candidate_end(") != 2:
+    if compact.count("abnormal_confirm_candidate_end(") != 2:
         violations.append("Store abnormal candidate failure control flow changed")
     if not violations:
         for finding in confirm_candidate_semantic_copies(store_sources):
@@ -2035,185 +2042,184 @@ def store_abnormal_confirm_candidate_adapter_violations(
 
 def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
     violations: list[str] = []
+    production = source_without_cfg_test_items(commit_log)
+    import_records = active_import_records(production)
+    orchestration_prefix = "rocketmq_store_local::commit_log::abnormal_recovery::"
     recovery_prefix = "rocketmq_store_local::commit_log::recovery::"
-    expected_imports = {
-        "AbnormalRecoveryAction",
+    expected_orchestration = {
+        "AbnormalRecoveryObservation",
+        "AbnormalRecoveryRecord",
+        "AbnormalRecoverySegmentOutcome",
+    }
+    actual_orchestration = {
+        body.removeprefix(orchestration_prefix)
+        for kind, _, body, _ in import_records
+        if kind == "use" and body.startswith(orchestration_prefix)
+    }
+    if actual_orchestration != expected_orchestration:
+        violations.append("Store abnormal orchestration imports must be direct and exact")
+    expected_recovery = {
+        "AbnormalRecoveryConfirmCandidateError",
         "AbnormalRecoveryDispatchGate",
-        "AbnormalRecoveryEvent",
         "AbnormalRecoveryPolicy",
         "AbnormalRecoveryState",
     }
-    imports = {
+    actual_recovery = {
         body.removeprefix(recovery_prefix)
-        for kind, _, body, _ in active_import_records(commit_log)
-        if kind == "use" and body.startswith(recovery_prefix) and body.removeprefix(recovery_prefix).startswith("Abnormal")
-    }
-    if imports != expected_imports:
-        violations.append("Store abnormal recovery imports must be exact Local imports")
-    if any(
-        kind == "use"
+        for kind, _, body, _ in import_records
+        if kind == "use"
         and body.startswith(recovery_prefix)
         and body.removeprefix(recovery_prefix).startswith("Abnormal")
+    }
+    if actual_recovery != expected_recovery:
+        violations.append("Store abnormal state imports must exclude event/action policy")
+    if any(
+        kind == "use"
+        and body.startswith((orchestration_prefix, recovery_prefix))
         and (" as " in body or "{" in body or "*" in body)
-        for kind, _, body, _ in active_import_records(commit_log)
+        for kind, _, body, _ in import_records
     ):
         violations.append("Store abnormal recovery imports forbid alias/brace/glob")
 
-    candidate_imports = [
-        body
-        for kind, _, body, _ in active_import_records(commit_log)
-        if kind == "use" and "abnormal_confirm_candidate_end" in body
-    ]
-    if candidate_imports != [recovery_prefix + "abnormal_confirm_candidate_end"]:
-        violations.append("Store abnormal confirm candidate import must be direct and exact")
-    if named_function_body(commit_log, "abnormal_confirm_candidate_end") is not None:
+    for item in ("abnormal_confirm_candidate_end", "should_truncate_recovery_consume_queue"):
+        imports = [
+            body
+            for kind, _, body, _ in import_records
+            if kind == "use" and item in body
+        ]
+        if imports != [recovery_prefix + item]:
+            violations.append(f"Store abnormal recovery import changed: {item}")
+    if named_function_body(production, "abnormal_confirm_candidate_end") is not None:
         violations.append("Store retained abnormal confirm candidate helper")
-    truncate_policy = "should_truncate_recovery_consume_queue"
-    truncate_imports = [
-        body
-        for kind, _, body, _ in active_import_records(commit_log)
-        if kind == "use" and truncate_policy in body
-    ]
-    if truncate_imports != [recovery_prefix + truncate_policy]:
-        violations.append("Store abnormal recovery ConsumeQueue policy import changed")
 
-    for name, policy in [
+    for name, policy in (
         ("recover_abnormally", "Standard"),
         ("recover_abnormally_optimized", "Optimized"),
-    ]:
-        body = named_function_body(commit_log, name)
+    ):
+        body = named_function_body(production, name)
         if body is None:
             violations.append(f"{name} body missing")
             continue
-        if body.count(f"AbnormalRecoveryPolicy::{policy}") != 1:
-            violations.append(f"{name} Local abnormal policy construction changed")
-        if body.count("AbnormalRecoveryState::try_new") != 1:
-            violations.append(f"{name} must construct one Local abnormal state")
-        normalized = re.sub(r"\s+", "", body)
-        if policy == "Optimized":
-            seed = "letinitial_offset=ifindex==0{first_recovery_file.get_file_from_offset()}else{0};"
-            input_size = "msg_size"
-        else:
-            seed = "letinitial_offset=first_recovery_file.get_file_from_offset();"
-            input_size = "input_size"
+        active_body = active_rust_source(body)
+        normalized = compact_rust(body)
+        if body.count(f"AbnormalRecoveryPolicy::{policy}") != 1 or body.count(
+            "AbnormalRecoveryState::try_new"
+        ) != 1:
+            violations.append(f"{name} Local abnormal state construction changed")
+        seed = (
+            "letinitial_offset=ifindex==0{first_recovery_file.get_file_from_offset()}else{0};"
+            if policy == "Optimized"
+            else "letinitial_offset=first_recovery_file.get_file_from_offset();"
+        )
+        input_size = "msg_size" if policy == "Optimized" else "input_size"
         if seed not in normalized:
             violations.append(f"{name} abnormal recovery seed changed")
-        if normalized.count(
-            f"abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,{input_size})"
-        ) != 1:
-            violations.append(f"{name} confirm candidate must use raw input size")
-        if body.count("self.get_confirm_offset().max(0)") != 1:
-            violations.append(f"{name} must read a fresh confirm limit per message")
-        if body.count("AbnormalRecoveryDispatchGate::ConfirmBounded") != 1:
-            violations.append(f"{name} must build one Local confirm-bounded gate")
-        for event in ["SegmentStarted", "MessageAccepted", "Blank", "InvalidRecord", "SourceEnded"]:
-            if body.count(f"AbnormalRecoveryEvent::{event}") != 1:
-                violations.append(f"{name} must route {event} through Local abnormal reducer")
-        if body.count("abnormal_recovery.summary()") != 1:
-            violations.append(f"{name} must bind exactly one Local abnormal summary")
-        if "AbnormalRecoverySummary{" in normalized:
-            violations.append(f"{name} must not construct an abnormal summary")
-        if "letdo_dispatch=true;" not in normalized or "do_dispatch=false" in normalized:
-            violations.append(f"{name} abnormal recovery dispatch mode changed")
-        dispatch_arm = (
-            "Ok(AbnormalRecoveryAction::DispatchMessage)=>{"
-            "self.on_commit_log_dispatch(&mutdispatch_request,do_dispatch,true,false);}"
-        )
-        message_match = abnormal_recovery_event_match(body, "MessageAccepted")
-        if message_match is None:
-            violations.append(f"{name} MessageAccepted action match is missing")
-            message_action_body = ""
-            message_match_end = -1
-        else:
-            _, message_action_body, message_match_end = message_match
-        normalized_message_actions = re.sub(r"\s+", "", message_action_body)
+        if len(re.findall(r"\babnormal_recovery\.drive_abnormal_segment\s*\(", active_body)) != 1:
+            violations.append(f"{name} must delegate one segment driver")
         if (
-            dispatch_arm not in normalized_message_actions
-            or "Ok(AbnormalRecoveryAction::SkipMessageDispatch)=>{}" not in normalized_message_actions
+            "abnormal_recovery.apply" in active_body
+            or "AbnormalRecoveryEvent" in active_body
+            or "AbnormalRecoveryAction" in active_body
         ):
-            violations.append(f"{name} must obey Local message dispatch actions")
-        if any(
-            fragment not in normalized_message_actions
-            for fragment in [
-                "Ok(action)=>{warn!();break'segments;}",
-                "Err(error)=>{warn!();break'segments;}",
-            ]
-        ):
-            violations.append(f"{name} must stop after non-message actions or reducer errors")
-        blank_hook = (
-            "Ok(AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment)=>{"
-            "self.on_commit_log_dispatch(&mutdispatch_request,do_dispatch,true,true);"
+            violations.append(f"{name} retained direct abnormal state policy")
+
+        candidate = f"abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,{input_size})"
+        candidate_adapter = candidate + ".map_err(AbnormalRecoveryAdapterError::ConfirmCandidate)?;"
+        if normalized.count(candidate_adapter) != 1:
+            violations.append(f"{name} confirm candidate adapter changed")
+        if normalized.count("letconfirm_offset=self.get_confirm_offset();") != 1:
+            violations.append(f"{name} confirm snapshot changed")
+        if normalized.count(
+            "u64::try_from(confirm_offset.max(0)).map_err("
+            "AbnormalRecoveryAdapterError::ConfirmLimitConversion)?;"
+        ) != 1:
+            violations.append(f"{name} confirm gate conversion changed")
+        required_records = (
+            "AbnormalRecoveryRecord::Message{relative_start,validated_size,"
+            "confirm_candidate_end,dispatch_gate,record:dispatch_request,}",
+            "AbnormalRecoveryRecord::Blank{record:dispatch_request,}",
+            "AbnormalRecoveryRecord::Invalid{relative_start:u64::try_from(",
+            "AbnormalRecoveryRecord::SourceEnded",
         )
-        if blank_hook not in normalized or "self.dispatcher.dispatch" in normalized:
-            violations.append(f"{name} blank must use only the compatibility file-end hook")
+        if any(fragment not in normalized for fragment in required_records):
+            violations.append(f"{name} abnormal record adapter changed")
+        required_observations = (
+            "AbnormalRecoveryObservation::DispatchMessage=>{self.on_commit_log_dispatch("
+            "dispatch_request,do_dispatch,true,false);}",
+            "AbnormalRecoveryObservation::SkipMessageDispatch=>{}",
+            "AbnormalRecoveryObservation::Blank=>{self.on_commit_log_dispatch("
+            "dispatch_request,do_dispatch,true,true);}",
+            "AbnormalRecoveryObservation::Invalid{relative_start}=>{",
+        )
+        if any(fragment not in normalized for fragment in required_observations):
+            violations.append(f"{name} abnormal observation adapter changed")
+        if "self.dispatcher.dispatch" in normalized or "letdo_dispatch=true;" not in normalized:
+            violations.append(f"{name} bypassed compatibility dispatch hook")
         if policy == "Standard":
-            checked_cursor = "current_pos.checked_add(input_size)"
-            if normalized.count(checked_cursor) != 1 or "current_pos+input_size" in normalized:
+            if normalized.count("current_pos.checked_add(input_size)") != 1 or "current_pos+input_size" in normalized:
                 violations.append(f"{name} raw input cursor advancement changed")
+            if "files_processed+=1" in normalized:
+                violations.append(f"{name} absorbed optimized file statistics")
         else:
-            process_message = (
-                "letmutdispatch_request="
-                "recovery_ctx.process_message(&mutmsg_bytes,absolute_offset);"
-            )
-            ordered_message_flow = [
-                process_message,
-                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,msg_size)",
+            ordered = (
+                "recovery_ctx.process_message(&mutmsg_bytes,absolute_offset)",
+                candidate,
                 "letdispatch_gate=",
-                "matchabnormal_recovery.apply(AbnormalRecoveryEvent::MessageAccepted{",
-            ]
-            positions = [normalized.find(fragment) for fragment in ordered_message_flow]
-            if (
-                normalized.count(process_message) != 1
-                or any(position == -1 for position in positions)
-                or positions != sorted(positions)
-            ):
-                violations.append(
-                    f"{name} must parse each message before candidate, gate, and reducer application"
-                )
-
-            active_body = active_rust_source(body)
-            if "file_processed" in message_action_body:
-                violations.append(f"{name} file-processed marker must be outside dispatch action arms")
-            match_tail = "" if message_match_end == -1 else active_body[message_match_end:]
-            if re.match(r"\s*file_processed\s*=\s*true\s*;", match_tail) is None:
-                violations.append(
-                    f"{name} must mark the file immediately after a successful message action match"
-                )
+                "AbnormalRecoveryRecord::Message{",
+            )
+            positions = [normalized.find(fragment) for fragment in ordered]
+            if any(position == -1 for position in positions) or positions != sorted(positions):
+                violations.append(f"{name} parse/candidate/gate/record order changed")
             if len(re.findall(r"\bfile_processed\s*=\s*true\s*;", active_body)) != 1:
-                violations.append(f"{name} must mark each file from one accepted-message site")
+                violations.append(f"{name} accepted-message marker changed")
+            accepted = (
+                "letmessage_accepted=matches!(observation,"
+                "AbnormalRecoveryObservation::DispatchMessage|"
+                "AbnormalRecoveryObservation::SkipMessageDispatch);"
+            )
+            if accepted not in normalized or "ifmessage_accepted{file_processed=true;}" not in normalized:
+                violations.append(f"{name} dispatch and skip must both mark the file")
+            if normalized.count("iffile_processed{recovery_ctx.stats.files_processed+=1;}") != 1:
+                violations.append(f"{name} file statistics guard changed")
 
-            stats_increment = "recovery_ctx.stats.files_processed+=1;"
-            if normalized.count(stats_increment) != 1:
-                violations.append(f"{name} must increment file statistics exactly once")
-            stats_guard = re.search(r"\bif\s+file_processed\s*\{", active_body)
-            if stats_guard is None:
-                violations.append(f"{name} file statistics must be guarded by file_processed")
-            else:
-                stats_open = active_body.find("{", stats_guard.start())
-                stats_body = braced_body(active_body, stats_open)
-                if stats_body is None or re.sub(r"\s+", "", stats_body[0]) != stats_increment:
-                    violations.append(f"{name} file statistics guard changed")
-            if len(re.findall(r"\bfile_processed\b", active_body)) != 3:
-                violations.append(f"{name} file-processed marker escaped its structural contract")
-        required_final = [
+        for error_variant in (
+            "ConfirmCandidate",
+            "ConfirmLimitConversion",
+            "FramePositionOverflow",
+            "RelativeOffsetConversion",
+            "ValidatedSizeConversion",
+        ):
+            if normalized.count(
+                "AbnormalRecoverySegmentOutcome::AdapterFailed("
+                f"AbnormalRecoveryAdapterError::{error_variant}"
+            ) != 1:
+                violations.append(f"{name} adapter error arm changed: {error_variant}")
+        if normalized.count("AbnormalRecoverySegmentOutcome::StateFailed(error)") != 1 or normalized.count(
+            "AbnormalRecoverySegmentOutcome::UnexpectedAction(action)"
+        ) != 1:
+            violations.append(f"{name} driver failure handling changed")
+        required_final = (
             "letsummary=abnormal_recovery.summary();",
             "i64::try_from(summary.last_valid_offset)",
             "i64::try_from(summary.confirm_valid_offset)",
             "i64::try_from(summary.truncate_offset)",
-            "self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(),confirm_valid_offset)",
+            "self.clamp_controller_recover_confirm_offset("
+            "message_store.get_min_phy_offset(),confirm_valid_offset)",
             "self.set_confirm_offset(last_valid_offset)",
-            "should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
+            "should_truncate_recovery_consume_queue("
+            "max_phy_offset_of_consume_queue,summary.truncate_offset)",
             "message_store.truncate_dirty_logic_files(process_offset)",
             "self.mapped_file_queue.set_flushed_where(process_offset)",
             "self.mapped_file_queue.set_committed_where(process_offset)",
             "self.mapped_file_queue.truncate_dirty_files(process_offset)",
-        ]
+        )
         if any(fragment not in normalized for fragment in required_final):
             violations.append(f"{name} final abnormal watermarks changed")
-        if re.search(r"\b(?:last_valid_msg_phy_offset|last_confirm_valid_msg_phy_offset|mapped_file_offset)\b", body):
+        if "AbnormalRecoverySummary{" in normalized or re.search(
+            r"\b(?:last_valid_msg_phy_offset|last_confirm_valid_msg_phy_offset|mapped_file_offset)\b",
+            body,
+        ):
             violations.append(f"{name} copied Local abnormal watermark state")
-        if re.search(r"\bmatch\s+AbnormalRecoveryPolicy\b", body):
-            violations.append(f"{name} copied Local abnormal policy match")
         if re.search(r"\b(?:as|unwrap|expect|panic)\b", body):
             violations.append(f"{name} uses unchecked conversion or panic")
     return violations
@@ -10396,6 +10402,133 @@ def commit_log_append_attempt_contract_violations(
     return violations
 
 
+def abnormal_recovery_segment_orchestration_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    expected_items = {
+        "AbnormalRecoveryRecord": (
+            "enum",
+            "Message{relative_start:u64,validated_size:u64,confirm_candidate_end:i64,"
+            "dispatch_gate:AbnormalRecoveryDispatchGate,record:R,},Blank{record:R,},"
+            "Invalid{relative_start:Option<u64>,record:R,},SourceEnded,",
+        ),
+        "AbnormalRecoveryObservation": (
+            "enum",
+            "DispatchMessage,SkipMessageDispatch,Blank,"
+            "Invalid{relative_start:Option<u64>,},",
+        ),
+        "AbnormalRecoverySegmentOutcome": (
+            "enum",
+            "ContinueNextSegment,StopRecovery,AdapterFailed(E),"
+            "StateFailed(AbnormalRecoveryOffsetError),"
+            "UnexpectedAction(AbnormalRecoveryAction),",
+        ),
+    }
+    for item, (kind, expected_body) in expected_items.items():
+        if len(re.findall(rf"\bpub\s+{kind}\s+{item}\b", active)) != 1 or compact_rust(
+            active_item_body(production, kind, item) or ""
+        ) != expected_body:
+            violations.append(f"Local abnormal orchestration item changed: {item}")
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+{kind}\s+{item}\b",
+            production,
+        ):
+            violations.append(f"Local abnormal orchestration item is cfg-gated: {item}")
+
+    methods = inherent_method_records(
+        production,
+        "AbnormalRecoveryState",
+        ("drive_abnormal_segment",),
+    )["drive_abnormal_segment"]
+    if len(methods) != 1 or methods[0].visibility != "pub" or methods[0].cfg_gated:
+        violations.append("Local abnormal segment driver ownership changed")
+    signature = "" if not methods else methods[0].signature
+    signature_parts = (
+        "pubfndrive_abnormal_segment<R,E,Next,Started,Observe>",
+        "&mutself,segment_base:u64,mutnext_record:Next,"
+        "on_segment_started:Started,mutobserve:Observe,",
+        "->AbnormalRecoverySegmentOutcome<E>",
+        "Next:FnMut()->Result<AbnormalRecoveryRecord<R>,E>",
+        "Started:FnOnce()",
+        "Observe:FnMut(AbnormalRecoveryObservation,&mutR)",
+    )
+    if any(part not in signature for part in signature_parts):
+        violations.append("Local abnormal segment driver signature changed")
+    required_flow = (
+        "self.apply(AbnormalRecoveryEvent::SegmentStarted{base_offset:segment_base,})",
+        "on_segment_started();",
+        "letrecord=matchnext_record()",
+        "self.apply(AbnormalRecoveryEvent::MessageAccepted{segment_base,relative_start,"
+        "validated_size,confirm_candidate_end,dispatch_gate,})",
+        "observe(AbnormalRecoveryObservation::DispatchMessage,&mutrecord)",
+        "observe(AbnormalRecoveryObservation::SkipMessageDispatch,&mutrecord)",
+        "self.apply(AbnormalRecoveryEvent::Blank)",
+        "observe(AbnormalRecoveryObservation::Blank,&mutrecord)",
+        "observe(AbnormalRecoveryObservation::Invalid{relative_start},&mutrecord)",
+        "self.apply(AbnormalRecoveryEvent::InvalidRecord)",
+        "AbnormalRecoveryRecord::SourceEnded=>matchself.apply(AbnormalRecoveryEvent::SourceEnded)",
+    )
+    if any(fragment not in compact for fragment in required_flow):
+        violations.append("Local abnormal segment driver flow changed")
+    ordered_pairs = (
+        (
+            "self.apply(AbnormalRecoveryEvent::SegmentStarted",
+            "on_segment_started();",
+        ),
+        (
+            "self.apply(AbnormalRecoveryEvent::MessageAccepted",
+            "observe(AbnormalRecoveryObservation::DispatchMessage",
+        ),
+        (
+            "self.apply(AbnormalRecoveryEvent::Blank)",
+            "observe(AbnormalRecoveryObservation::Blank",
+        ),
+        (
+            "observe(AbnormalRecoveryObservation::Invalid",
+            "self.apply(AbnormalRecoveryEvent::InvalidRecord)",
+        ),
+    )
+    if any(
+        compact.find(first) == -1
+        or compact.find(second) == -1
+        or compact.find(first) > compact.find(second)
+        for first, second in ordered_pairs
+    ):
+        violations.append("Local abnormal observation/state order changed")
+    if re.search(r"\b(?:panic|unreachable)\s*!", active):
+        violations.append("Local abnormal segment driver must return typed outcomes instead of panic")
+    forbidden = ("MappedFile", "MessageExt", "DispatchRequest", "ArcMut", "tokio", "rocketmq_store", "unsafe")
+    if any(re.search(rf"\b{re.escape(token)}\b", active) for token in forbidden):
+        violations.append("Local abnormal segment driver absorbed Store/runtime edges")
+    if re.search(r"\bdyn\b", active) or any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local abnormal segment driver uses dynamic or indirect imports")
+    if active_rust_source(module).count("pub mod abnormal_recovery;") != 1:
+        violations.append("Local commit_log module must expose abnormal_recovery exactly once")
+    required_tests = (
+        "segment_state_error_skips_started_and_preserves_adapter_error_identity",
+        "dispatch_and_skip_observe_after_state_and_before_payload_drop",
+        "blank_observes_once_and_stops_reading",
+        "invalid_is_observed_before_policy_action",
+        "message_state_failure_drops_unobserved_payload_and_stops_reading",
+        "source_ended_never_observes_and_returns_policy_action",
+    )
+    for test_name in required_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local abnormal orchestration regression changed: {test_name}")
+    violations.extend(store_abnormal_recovery_adapter_violations(store))
+    return violations
+
+
 def normal_recovery_segment_orchestration_contract_violations(
     local: str,
     module: str,
@@ -10947,6 +11080,107 @@ def commit_log_declared_frame_contract_violations(
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
+
+    def test_abnormal_recovery_segment_orchestration_has_one_local_owner_and_two_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_ABNORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "abnormal_recovery_orchestration.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            [],
+            abnormal_recovery_segment_orchestration_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_abnormal_recovery_segment_orchestration_rejects_owner_order_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / COMMIT_LOG_ABNORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "abnormal_recovery_orchestration.rs").read_text(
+            encoding="utf-8"
+        )
+
+        mutations = (
+            ("driver renamed", local.replace("drive_abnormal_segment", "drive_records", 1), module, store, local_tests),
+            (
+                "started callback moved before state",
+                local.replace(
+                    "        match self.apply(AbnormalRecoveryEvent::SegmentStarted {",
+                    "        on_segment_started();\n        match self.apply(AbnormalRecoveryEvent::SegmentStarted {",
+                    1,
+                ).replace("        on_segment_started();\n\n        loop", "\n        loop", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "blank routed through source-end state",
+                local.replace(
+                    "AbnormalRecoveryRecord::Blank { mut record } => match self.apply(AbnormalRecoveryEvent::Blank) {",
+                    "AbnormalRecoveryRecord::Blank { mut record } => match self.apply(AbnormalRecoveryEvent::SourceEnded) {",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "production panic",
+                local.replace("        loop {", '        panic!("forbidden");\n        loop {', 1),
+                module,
+                store,
+                local_tests,
+            ),
+            ("module removed", local, module.replace("pub mod abnormal_recovery;", "", 1), store, local_tests),
+            (
+                "regression removed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn blank_observes_once_and_stops_reading()",
+                    "fn blank_observation_removed()",
+                    1,
+                ),
+            ),
+            (
+                "Store driver removed",
+                local,
+                module,
+                store.replace("abnormal_recovery.drive_abnormal_segment", "abnormal_recovery.drive_records", 1),
+                local_tests,
+            ),
+            (
+                "Store copied state policy",
+                local,
+                module,
+                store.replace(
+                    "let outcome = abnormal_recovery.drive_abnormal_segment(",
+                    "let _ = abnormal_recovery.apply(event);\n            "
+                    "let outcome = abnormal_recovery.drive_abnormal_segment(",
+                    1,
+                ),
+                local_tests,
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual((local, module, store, local_tests), (local_source, module_source, store_source, test_source))
+                self.assertNotEqual(
+                    [],
+                    abnormal_recovery_segment_orchestration_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
 
     def test_normal_recovery_segment_orchestration_has_one_local_owner_and_two_store_adapters(self) -> None:
         local = (ROOT / COMMIT_LOG_NORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
@@ -11961,14 +12195,14 @@ pub(crate) fn same_named_inner(_: i64, _: usize) -> Option<i64> { None }
                 1,
             ),
             commit_log.replace(
-                "match abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, msg_size)",
-                "match Ok(dispatch_request.commit_log_offset)",
+                ".map_err(AbnormalRecoveryAdapterError::ConfirmCandidate)?;",
+                ".unwrap();",
                 1,
             ),
             commit_log.replace(
-                "match abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, input_size)",
-                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, input_size).unwrap();\n                            match Ok(dispatch_request.commit_log_offset)",
-                1,
+                ".map_err(AbnormalRecoveryAdapterError::ConfirmCandidate)?;",
+                ".map_err(AbnormalRecoveryAdapterError::ValidatedSizeConversion)?;",
+                2,
             ),
             commit_log.replace(
                 "use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;",
@@ -12008,33 +12242,6 @@ pub(crate) fn same_named_inner(_: i64, _: usize) -> Option<i64> { None }
             commit_log.replace(
                 'warn!("standard abnormal recovery confirm candidate failed: {error}");',
                 'warn!("standard abnormal recovery confirm candidate failed");',
-                1,
-            ),
-            commit_log.replace(
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
-                "                                break 'segments;",
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
-                "                                continue;",
-                1,
-            ),
-            commit_log.replace(
-                'warn!("standard abnormal recovery confirm candidate failed: {error}");\n'
-                "                                    break 'segments;",
-                'warn!("standard abnormal recovery confirm candidate failed: {error}");\n'
-                "                                    return;",
-                1,
-            ),
-            commit_log.replace(
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
-                "                                break 'segments;",
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
-                "                                break 'files;",
-                1,
-            ),
-            commit_log.replace(
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
-                "                                break 'segments;",
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");',
                 1,
             ),
         ]
@@ -13966,15 +14173,11 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
         optimized_start = source.index("pub async fn recover_abnormally_optimized")
         prefix = source[:optimized_start]
         optimized = source[optimized_start:]
-        process_message = (
-            "                let mut dispatch_request = "
-            "recovery_ctx.process_message(&mut msg_bytes, absolute_offset);\n\n"
-        )
+        process_message = "let dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);"
         self.assertIn(process_message, optimized)
         mutation = optimized.replace(process_message, "", 1).replace(
-            "                    let validated_size = match u64::try_from(dispatch_request.msg_size) {",
-            process_message
-            + "                    let validated_size = match u64::try_from(dispatch_request.msg_size) {",
+            "let validated_size = u64::try_from(dispatch_request.msg_size)",
+            process_message + "\n                        let validated_size = u64::try_from(dispatch_request.msg_size)",
             1,
         )
         self.assertNotEqual(source, prefix + mutation)
@@ -13985,22 +14188,12 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
         optimized_start = source.index("pub async fn recover_abnormally_optimized")
         prefix = source[:optimized_start]
         optimized = source[optimized_start:]
-        dispatch = (
-            "                        Ok(AbnormalRecoveryAction::DispatchMessage) => {\n"
-            "                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);\n"
-            "                        }"
-        )
-        dispatch_only = dispatch.replace(
-            "                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);",
-            "                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);\n"
-            "                            file_processed = true;",
-            1,
-        )
         mutation = optimized.replace(
-            "                    file_processed = true;\n",
-            "",
+            "AbnormalRecoveryObservation::DispatchMessage\n"
+            "                            | AbnormalRecoveryObservation::SkipMessageDispatch",
+            "AbnormalRecoveryObservation::DispatchMessage",
             1,
-        ).replace(dispatch, dispatch_only, 1)
+        )
         self.assertNotEqual(source, prefix + mutation)
         self.assertNotEqual([], store_abnormal_recovery_adapter_violations(prefix + mutation))
 
@@ -14013,15 +14206,17 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
             return source[:abnormal_start] + source[abnormal_start:].replace(old, new, 1)
 
         mutations = [
-            mutate_abnormal("self.get_confirm_offset().max(0)", "initial_offset"),
+            mutate_abnormal("let confirm_offset = self.get_confirm_offset();", "let confirm_offset = initial_offset as i64;"),
             source.replace(
                 "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, msg_size)",
-                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, validated_size)",
+                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, validated_size as usize)",
                 1,
             ),
             source.replace(
-                "Ok(AbnormalRecoveryAction::SkipMessageDispatch) => {}",
-                "Ok(AbnormalRecoveryAction::SkipMessageDispatch) => {\n                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);\n                        }",
+                "AbnormalRecoveryObservation::SkipMessageDispatch => {}",
+                "AbnormalRecoveryObservation::SkipMessageDispatch => {\n"
+                "                            self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, false);\n"
+                "                        }",
                 1,
             ),
             source.replace("let initial_offset = if index == 0", "let initial_offset = if false", 1),
@@ -14038,13 +14233,22 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
             mutate_abnormal("self.set_confirm_offset(last_valid_offset)", "self.set_confirm_offset(process_offset)"),
             mutate_abnormal("summary.truncate_offset", "summary.last_valid_offset"),
             mutate_abnormal(
-                "self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);",
-                "self.dispatcher.dispatch(&dispatch_request);",
+                "self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, true);",
+                "self.dispatcher.dispatch(dispatch_request);",
             ),
             mutate_abnormal("file_processed = true;", "file_processed = false;"),
             source.replace("current_pos.checked_add(input_size)", "current_pos + input_size", 1),
             source.replace("abnormal_confirm_candidate_end", "abnormal_confirm_candidate_end_bypass", 1),
             source.replace("AbnormalRecoveryPolicy::Standard", "AbnormalRecoveryPolicy::Optimized", 1),
+            mutate_abnormal(
+                "abnormal_recovery.drive_abnormal_segment(",
+                "abnormal_recovery.drive_records(",
+            ),
+            mutate_abnormal(
+                "let outcome = abnormal_recovery.drive_abnormal_segment(",
+                "let _ = abnormal_recovery.apply(event);\n            "
+                "let outcome = abnormal_recovery.drive_abnormal_segment(",
+            ),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
@@ -17740,6 +17944,7 @@ mod tests""",
         self.assertEqual(
             {
                 "append.rs",
+                "abnormal_recovery.rs",
                 "append_attempt.rs",
                 "append_frame.rs",
                 "header.rs",

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod abnormal_recovery;
 pub mod append;
 pub mod append_attempt;
 pub mod append_frame;
