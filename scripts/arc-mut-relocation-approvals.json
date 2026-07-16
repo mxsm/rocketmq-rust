@@ -757,6 +757,24 @@
       "from": "8cf224e67e403e9c041bddb3",
       "to": "e1e3b99509ce5cd0c6593b07",
       "reason": "Migrating ServiceManager imports to the runtime owner shifted adjacent context around the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "b6cd20b767d2754c052ccc58",
+      "from": "ea1ac9da956f2a73c1309b4f",
+      "to": "59830353e1ae781bff5b8497",
+      "reason": "Constructing the ServiceContext-owned cluster-test route lookup changed adjacent tokens around the existing NameServer remoting-client ArcMut constructor without adding an occurrence"
+    },
+    {
+      "identity": "fd7722e9ba670cb1a5e1c616",
+      "from": "c7190f441ea90177c2d9071d",
+      "to": "c797782132914fa6a0a43c0b",
+      "reason": "Replacing the adjacent cluster-test lookup enum with an injected trait object changed the fingerprint of the existing controller-manager ArcMut field without adding an occurrence"
+    },
+    {
+      "identity": "836e64acea33b983d15dbb7b",
+      "from": "52414788a50b9eab17ad75e8",
+      "to": "7a50859a05211e98ae51b6ff",
+      "reason": "Extracting the client-backed route lookup into the transport adapter shifted the existing request-processor ArcMut field within the same struct without adding an occurrence"
     }
   ]
 }

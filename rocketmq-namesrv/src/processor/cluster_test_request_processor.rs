@@ -12,21 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::time::Duration;
-
 use cheetah_string::CheetahString;
-use rocketmq_client::admin::default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
-use rocketmq_client::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client::base::client_config::ClientConfig;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
@@ -37,119 +29,10 @@ use tracing::info;
 use crate::bootstrap::NameServerRuntimeInner;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 
-const CLUSTER_TEST_INSTANCE_PREFIX: &str = "CLUSTER_TEST_NS_INS_";
-type ClusterTestLookupFuture<'a, T> = Pin<Box<dyn Future<Output = rocketmq_error::RocketMQResult<T>> + Send + 'a>>;
-type ClusterTestShutdownFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+mod route_lookup;
 
-pub(crate) enum ClusterTestRouteLookup {
-    Default(DefaultClusterTestRouteLookup),
-    #[cfg(test)]
-    Test(TestClusterTestRouteLookup),
-}
-
-impl ClusterTestRouteLookup {
-    pub(crate) fn new(product_env_name: &str) -> Self {
-        Self::Default(DefaultClusterTestRouteLookup::new(product_env_name))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn for_test(route: Option<TopicRouteData>) -> Self {
-        Self::Test(TestClusterTestRouteLookup::new(route))
-    }
-
-    pub(crate) fn start(&self) -> ClusterTestLookupFuture<'_, ()> {
-        match self {
-            ClusterTestRouteLookup::Default(lookup) => lookup.start(),
-            #[cfg(test)]
-            ClusterTestRouteLookup::Test(lookup) => lookup.start(),
-        }
-    }
-
-    pub(crate) fn lookup_topic_route(
-        &self,
-        topic: &CheetahString,
-    ) -> ClusterTestLookupFuture<'_, Option<TopicRouteData>> {
-        match self {
-            ClusterTestRouteLookup::Default(lookup) => lookup.lookup_topic_route(topic),
-            #[cfg(test)]
-            ClusterTestRouteLookup::Test(lookup) => lookup.lookup_topic_route(topic),
-        }
-    }
-
-    pub(crate) fn shutdown(&self) -> ClusterTestShutdownFuture<'_> {
-        match self {
-            ClusterTestRouteLookup::Default(lookup) => lookup.shutdown(),
-            #[cfg(test)]
-            ClusterTestRouteLookup::Test(lookup) => lookup.shutdown(),
-        }
-    }
-}
-
-pub(crate) struct DefaultClusterTestRouteLookup {
-    admin_ext: ArcMut<DefaultMQAdminExtImpl>,
-}
-
-impl DefaultClusterTestRouteLookup {
-    pub(crate) fn new(product_env_name: &str) -> Self {
-        let mut client_config = ClientConfig::default();
-        client_config.set_unit_name(CheetahString::from(product_env_name));
-        client_config.set_instance_name(CheetahString::from_string(format!(
-            "{}{}",
-            CLUSTER_TEST_INSTANCE_PREFIX, product_env_name
-        )));
-        let admin_ext_group =
-            CheetahString::from_string(format!("{}{}_GROUP", CLUSTER_TEST_INSTANCE_PREFIX, product_env_name));
-        let admin_ext = ArcMut::new(DefaultMQAdminExtImpl::new(
-            None,
-            Duration::from_secs(3),
-            ArcMut::new(client_config),
-            admin_ext_group,
-        ));
-        admin_ext.mut_from_ref().set_inner(admin_ext.clone());
-
-        Self { admin_ext }
-    }
-
-    fn start(&self) -> ClusterTestLookupFuture<'_, ()> {
-        Box::pin(async move { self.admin_ext.mut_from_ref().start().await })
-    }
-
-    fn lookup_topic_route(&self, topic: &CheetahString) -> ClusterTestLookupFuture<'_, Option<TopicRouteData>> {
-        let topic = topic.clone();
-        Box::pin(async move { self.admin_ext.examine_topic_route_info(topic).await })
-    }
-
-    fn shutdown(&self) -> ClusterTestShutdownFuture<'_> {
-        Box::pin(async move {
-            self.admin_ext.mut_from_ref().shutdown().await;
-        })
-    }
-}
-
-#[cfg(test)]
-pub(crate) struct TestClusterTestRouteLookup {
-    route: Option<TopicRouteData>,
-}
-
-#[cfg(test)]
-impl TestClusterTestRouteLookup {
-    fn new(route: Option<TopicRouteData>) -> Self {
-        Self { route }
-    }
-
-    fn start(&self) -> ClusterTestLookupFuture<'_, ()> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn lookup_topic_route(&self, _topic: &CheetahString) -> ClusterTestLookupFuture<'_, Option<TopicRouteData>> {
-        let route = self.route.clone();
-        Box::pin(async move { Ok(route) })
-    }
-
-    fn shutdown(&self) -> ClusterTestShutdownFuture<'_> {
-        Box::pin(async {})
-    }
-}
+pub(crate) use route_lookup::ClusterTestRouteLookup;
+pub(crate) use route_lookup::TransportClusterTestRouteLookup;
 
 pub struct ClusterTestRequestProcessor {
     name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
@@ -243,7 +126,29 @@ mod tests {
     use rocketmq_remoting::local::LocalRequestHarness;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+    use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_remoting::runtime::processor::RequestProcessor;
+
+    use super::route_lookup::ClusterTestLookupFuture;
+
+    struct TestClusterTestRouteLookup {
+        route: Option<TopicRouteData>,
+    }
+
+    impl ClusterTestRouteLookup for TestClusterTestRouteLookup {
+        fn start(&self) -> ClusterTestLookupFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn lookup_topic_route(&self, _topic: &CheetahString) -> ClusterTestLookupFuture<'_, Option<TopicRouteData>> {
+            let route = self.route.clone();
+            Box::pin(async move { Ok(route) })
+        }
+
+        fn shutdown(&self) -> ClusterTestLookupFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
 
     fn sample_topic_route_data() -> TopicRouteData {
         let mut broker_addrs = HashMap::new();
@@ -270,7 +175,9 @@ mod tests {
             use_route_info_manager_v2: true,
             ..NamesrvConfig::default()
         };
-        let mock_lookup = Arc::new(ClusterTestRouteLookup::for_test(Some(sample_topic_route_data())));
+        let mock_lookup = Arc::new(TestClusterTestRouteLookup {
+            route: Some(sample_topic_route_data()),
+        });
 
         let bootstrap = Builder::new()
             .set_name_server_config(namesrv_config)

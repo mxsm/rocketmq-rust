@@ -28,6 +28,7 @@ use rocketmq_rust::ArcMut;
 pub use self::client_request_processor::ClientRequestProcessor;
 pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;
 pub(crate) use self::cluster_test_request_processor::ClusterTestRouteLookup;
+pub(crate) use self::cluster_test_request_processor::TransportClusterTestRouteLookup;
 use crate::bootstrap::InFlightRequestTracker;
 use crate::processor::default_request_processor::DefaultRequestProcessor;
 

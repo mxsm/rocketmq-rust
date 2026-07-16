@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；PR-M07-01、PR-M07-02 已完成 |
+| 状态 | 进行中；PR-M07-01、PR-M07-02、PR-M07-03 已完成 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP15 `rocketmq-rust-drain`、WP18 `client-edge-burn-down`；完成 WP17 的 consumer 迁移 |
 | 前置条件 | model/protocol/transport/store-api canonical 边界稳定；Client allowlist/source guard 可用 |
@@ -66,11 +66,11 @@
 
 ### PR-M07-03：NameServer RouteLookup 反转
 
-- [ ] `[ARCH]` 固定 `ClusterTestRouteLookup` 输入/输出、3 秒 deadline、缓存/回退和生命周期 owner。
-- [ ] `[DEV]` 默认 adapter 只依赖 protocol+transport，由 ServiceContext 拥有；移除 MQClientManager/admin registry。
-- [ ] `[TEST]` 对成功、timeout、NameServer 不可达、route 回退、shutdown 做差分。
-- [ ] `[REV]` 检查 NameServer manifest/source/normal closure 无 Client，deadline 不在每层重置。
-- [ ] 回滚点：旧 processor facade 保留；adapter 可切回旧实现，但 Client 边重新出现会阻塞 M07 Gate。
+- [x] `[ARCH]` 固定 `ClusterTestRouteLookup` 输入/输出、3 秒 deadline、缓存/回退和生命周期 owner。
+- [x] `[DEV]` 默认 adapter 只依赖 protocol+transport，由 ServiceContext 拥有；移除 MQClientManager/admin registry。
+- [x] `[TEST]` 对成功、timeout、NameServer 不可达、route 回退、shutdown 做差分。
+- [x] `[REV]` 检查 NameServer manifest/source/normal closure 无 Client，deadline 不在每层重置。
+- [x] 回滚点：旧 processor facade 保留；adapter 可切回旧实现，但 Client 边重新出现会阻塞 M07 Gate。
 
 ### PR-M07-04：Broker Client 边清零
 
@@ -262,3 +262,28 @@ python scripts/arc_mut_guard.py
   remoting 直接边；若 admin-core capability 不足，必须先扩展 admin-owned port。
 - [x] `[INVENTORY]` PR-M07-02 父项关闭；82 个顶层工作包更新为 42 已完成、0 阻塞、40 未开始。M07 保持进行中，
   唯一下一工作包为 PR-M07-03 NameServer RouteLookup 反转。
+
+## PR-M07-03 NameServer RouteLookup 反转 evidence
+
+- [x] `[BOUNDARY/OWNER]` `ClusterTestRouteLookup` 已改为注入式异步 port；默认
+  `TransportClusterTestRouteLookup` 由 `ServiceContext` 的 `namesrv.cluster-test-route-lookup` 子上下文拥有，内部仅用 canonical
+  protocol header/command 与 `TransportClient`。启动不访问外部环境，shutdown 会取消活动解析并等待 task tree；未创建第二套
+  `RuntimeOwner`、MQClientManager、DefaultMQAdminExt 或 admin registry。
+- [x] `[COMPAT/DEADLINE]` `productEnvName` 继续使用既有 top-addressing URL 规则，解析后的 SocketAddr 列表按 lookup 缓存；连接失败后
+  清缓存以便下次重新解析。本地 route 仍优先并附加 order config，缺失时才调用注入 lookup。每次 lookup 只创建一个 3 秒绝对
+  `ShutdownDeadline`，同一值贯穿 HTTP addressing、DNS 和全部 transport 尝试，不在分层或重试时重置。
+- [x] `[DEPENDENCY/POLICY]` NameServer manifest 与 lockfile 删除 `rocketmq-client-rust`，新增 protocol+transport owner 边；`src/`
+  无 `rocketmq_client(_rust)::`。architecture baseline 删除 NameServer 的 manifest/source Client 例外，Client root manifest consumer
+  基线从 4 收敛到 3；5 项 M07-03 contract 冻结 manifest/lockfile/source、deadline、ServiceContext owner 与 baseline。
+- [x] `[TEST/NAMESRV]` transport adapter 的成功解码/端点缓存、绝对 timeout、不可达端点和活动解析 shutdown 4 项测试通过；processor
+  route fallback、cluster-test boot 与 remoting 集成通过。`cargo test -p rocketmq-namesrv` 完成 179 unit、1 binary、7
+  CheetahString、6 remoting integration、2 size、4 index 与 8 doc tests（1 个既有 ignored），无失败。
+- [x] `[GOVERNANCE]` architecture baseline guard、35 项单测、1 clean/6 violation fixtures、新旧 M07 contract 共 9 项通过；runtime
+  enforcing audit、AGENTS routing 通过。ArcMut 默认 admin lookup 的 3 identities/6 occurrences 被删除，3 个保留 occurrence 按
+  ADR-013 一对一 relocation，台账由 1,170/3,232 收敛到 1,167 identities/3,226 occurrences；63 项 guard 单测与 24 fixtures 通过。
+- [x] `[ERROR]` error hygiene 仅复现 `main` 既有 11 项：Broker source stringification 1、MCP anyhow 8、缺失治理文档 2；
+  NameServer 本次新增的 typed network/RPC/config errors 没有产生 finding，故该命令仍记录为 pre-existing failure，不计为通过。
+- [x] `[FINAL/ROLLBACK]` NameServer all-target/all-feature strict Clippy、package fmt 与全部测试通过；回滚可替换注入 adapter，但
+  processor facade、protocol contract、单 deadline 和 ServiceContext owner 必须保留，不得恢复 Client/admin registry 直接边。
+- [x] `[INVENTORY]` PR-M07-03 父项关闭；82 个顶层工作包更新为 43 已完成、0 阻塞、39 未开始。剩余分布为 M07 4、M08 6、
+  M09 6、M10 5、M11 12、M12 6；M07 保持进行中，唯一下一工作包为 PR-M07-04 Broker Client 边清零。
