@@ -12,12 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
-
-pub trait RocksDbCodec {
-    type Item;
-
-    fn encode(value: &Self::Item, dst: &mut Vec<u8>) -> Result<(), RocketMQError>;
-
-    fn decode(src: &[u8]) -> Result<Self::Item, RocketMQError>;
-}
+pub use rocketmq_store_rocksdb::codec::RocksDbCodec;

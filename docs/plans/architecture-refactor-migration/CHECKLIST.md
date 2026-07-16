@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 36 | 0 | 46 未开始；合计 46 尚未完成 | 82 |
+| PR 级工作包 | 37 | 0 | 45 未开始；合计 45 尚未完成 | 82 |
 | 里程碑 | 5（M01–M05） | 1（M06） | 6（M07–M12） | 12 |
-| 新增边界 crate | 6 | 0 | 4（store-rocksdb、proxy-core/cluster/local） | 10 |
-| 根 workspace package | 28 | — | 还差 4 | 32 |
+| 新增边界 crate | 7 | 0 | 3（proxy-core/cluster/local） | 10 |
+| 根 workspace package | 29 | — | 还差 3 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 46 个未开始工作包分布：M06-09～12 为 4 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
-M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-08 已完成 LocalFileMessageStore composition 与 normalized config 边界；当前下一工作包为 PR-M06-09。
+剩余 45 个未开始工作包分布：M06-10～12 为 3 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
+M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-09 已完成 RocksDB foundation 物理 owner 与 native feature 隔离；当前下一工作包为 PR-M06-10。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -211,7 +211,13 @@ M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-08 已完成 LocalFileMe
   - [x] Store 公共 `LocalFileMessageStore` 路径不变，仅连接 Broker/CommitLog/CQ/runtime effect adapter
   - [x] public-path doctest、config、lifecycle/query/reput/cleanup、Store/Local 回归与架构门禁通过
   - [x] 兼容 ledger、回滚点与 36/46 顶层工作包盘点已冻结
-- [ ] PR-M06-09：创建 RocksDB foundation
+- [x] PR-M06-09：创建 RocksDB foundation
+  - [x] 新增 `rocketmq-store-rocksdb`，`default = []`，独占 native `rocksdb` 依赖
+  - [x] config/CF/key-value/codec/store/snapshot、CQ/Index kernel、maintenance/runtime 迁入新 owner
+  - [x] Store 旧深路径保持精确 re-export，仅保留 config source、DispatchRequest 与 CommitLog dispatcher adapter
+  - [x] Store default/no-default 与 Local dependency tree 均无 native RocksDB；Rocks owner tree 独立包含 native 库
+  - [x] foundation/snapshot/reopen/CF、legacy 82 项 corpus、runtime/error/architecture/ArcMut 门禁证据与回滚点已冻结
+  - [x] 独立兼容 ledger、根 package 29/32 与 37/45 顶层工作包盘点已冻结
 - [ ] PR-M06-10：实现 RocksDB MessageStore adapter 与 parity
 - [ ] PR-M06-11：完成 Store facade、Tiered 反转与 feature 所有权
 - [ ] PR-M06-12：完成依赖图与消费方收口
