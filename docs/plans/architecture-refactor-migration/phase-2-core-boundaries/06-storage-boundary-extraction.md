@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03（含 M06-03a～M06-03bb）已完成，继续 M06-04 |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03 已完成，PR-M06-04a 已完成，继续 M06-04b |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -78,7 +78,7 @@
 
 ### PR-M06-04：机械迁移 Flush 与 Group Commit
 
-- [ ] 入口：`[TEST]` M02 的 `try_flush`、legacy adapter 和 SyncFlush/ack 契约测试全部通过；任何行为缺陷先回 M02 修复。
+- [x] 入口：`[TEST]` M02 的 `try_flush`、legacy adapter 和 SyncFlush/ack 契约测试全部通过；任何行为缺陷先回 M02 修复。
 - [ ] `[DEV]` 只迁移 flush manager、group-commit request/worker 和 checkpoint 接线；canonical `try_flush` 与 R0 `flush() -> i64` adapter 语义保持不变。
 - [ ] `[DEV]` 所有 SyncFlush/ack 继续只调用 `try_flush`；legacy adapter 留 facade，不作为内部确认入口。
 - [ ] `[TEST]` focused test：I/O failure、同批 waiter、group-commit batching、watermark 单调性和 crash/restart。
@@ -2044,3 +2044,24 @@ python scripts/arc_mut_guard.py
   因此可整体 revert 父 PR。回滚不得恢复已由 contract 禁止的 Local/Store 双 owner。
 - [x] `[INVENTORY]` PR-M06-03 父项关闭，M06 整体仍进行中且 Exit Checklist 保持未完成。82 个顶层工作包更新为
   31 已完成、0 进行中、51 未开始，即 51 个尚未完成；下一工作包为 PR-M06-04。
+
+## M06-04a GroupCommit request and runtime stats owner extraction evidence
+
+- [x] `[ENTRY]` `failed_canonical_flush_marks_store_unwriteable_and_legacy_flush_keeps_watermark` 1/1、
+  `default_flush_manager::tests` 9/9 与 `store_api_legacy_adapter` 9/9 在迁移前通过；canonical `try_flush`、R0
+  `flush() -> i64` adapter、SyncFlush/ack 和 typed failure 基线均未发现待回 M02 的缺陷。
+- [x] `[DEV/OWNER]` 新增 `rocketmq-store-local::flush::group_commit`，唯一拥有泛型 `GroupCommitRequest<E>`、
+  neutral `GroupCommitStatus`、batch success/error completion、deadline/enqueue timestamp 与 `SyncFlushStats`；Store 内部
+  `group_commit_request` 收敛为 `GroupCommitRequest<StoreError>` type alias，公开 `SyncFlushRuntimeInfo` 旧路径改为精确 re-export。
+- [x] `[ADAPTER/COMPAT]` Store `DefaultFlushManager` 继续把 `Flushed/TimedOut` 穷尽映射为
+  `PutOk/FlushDiskTimeout`，保留同批单次 flush、typed error `Arc` 身份、health recorder 先记录一次、queue-depth/wait-time
+  统计和 timeout 行为；未修改 channel 容量 1024、最多 1000 次重试、1ms 间隔、fsync 策略、checkpoint 或默认配置。
+- [x] `[TEST/CONTRACT]` Local 新增 final-watermark 双 waiter、共享 typed error 和 zero-timeout 3/3；Store 原 GroupCommit
+  回归 9/9。新增 `test_m06_flush_local_contract.py` 1/1，锁定六个 canonical owner、Store type alias/re-export/import 和
+  禁止 duplicate struct/batch/stats implementation。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency、AGENTS routing、
+  enforcing runtime audit 与 diff check 全部通过。ArcMut 仅因新增 Local import 产生既有 `ArcMut`/`WeakArcMut` 各一处 token
+  relocation，按 ADR-013 一对一 approval 更新后仍为 1,171 identities/3,233 occurrences，零新增债务。
+- [x] `[INVENTORY/SCOPE]` M06-04a 只关闭 request/batch/runtime-stats owner；`FlushProgress`、queue flush/commit I/O、
+  GroupCommit worker/checkpoint、AsyncFlush/CommitRealTime worker 和最终 facade 分别留给 M06-04b～e。82 个顶层工作包为
+  31 已完成、1 进行中、50 未开始，即仍有 51 个尚未完成。

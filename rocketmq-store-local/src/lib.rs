@@ -15,5 +15,6 @@
 pub mod base;
 pub mod commit_log;
 pub mod config;
+pub mod flush;
 pub mod mapped_file;
 pub mod utils;

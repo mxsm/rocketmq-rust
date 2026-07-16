@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::store_error::StoreError;
+//! Canonical Local flush and group-commit primitives.
 
-pub(crate) type GroupCommitRequest = rocketmq_store_local::flush::group_commit::GroupCommitRequest<StoreError>;
+pub mod group_commit;
+
+pub use group_commit::SyncFlushRuntimeInfo;

@@ -295,6 +295,18 @@
       "from": "ff32c4ce45d7a75051d09d81",
       "to": "0810b733f105ac040a2584ba",
       "reason": "Moving the existing LocalFileMessageStore field into the Store adapter owned by the Local CommitLog root changed its token context within the same struct CommitLog item without adding an occurrence"
+    },
+    {
+      "identity": "3739e726bed526a639c25377",
+      "from": "d16230a40f2e4fe0c5107d8c",
+      "to": "4a3ceae0adde98d4e37bfbbe",
+      "reason": "Importing the canonical Local group-commit owner changed the module import order around the existing ArcMut import without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "3c663e49572a9aa0b69c5ffb",
+      "from": "ca420a570de170114791491c",
+      "to": "c701bcf628553b4ebbb79f02",
+      "reason": "Importing the canonical Local group-commit owner changed the module import order around the existing WeakArcMut import without adding or moving a shared-mutation occurrence"
     }
   ]
 }

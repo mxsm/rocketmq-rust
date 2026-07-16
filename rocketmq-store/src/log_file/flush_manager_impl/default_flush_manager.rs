@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::VecDeque;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use parking_lot::Mutex;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
+use rocketmq_store_local::flush::group_commit::complete_group_commit_batch;
+use rocketmq_store_local::flush::group_commit::complete_group_commit_batch_error;
+use rocketmq_store_local::flush::group_commit::GroupCommitStatus;
+use rocketmq_store_local::flush::group_commit::SyncFlushStats;
 use tokio::sync::Notify;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -42,78 +42,6 @@ use crate::consume_queue::mapped_file_queue::FlushProgress;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
 use crate::store_error::StoreError;
-
-#[derive(Clone, Default)]
-struct SyncFlushStats {
-    inner: Arc<SyncFlushStatsInner>,
-}
-
-#[derive(Default)]
-struct SyncFlushStatsInner {
-    queue_depth: AtomicU64,
-    enqueue_total: AtomicU64,
-    completed_total: AtomicU64,
-    timeout_total: AtomicU64,
-    max_wait_millis: AtomicU64,
-    wait_total_millis: AtomicU64,
-    pending_enqueue_times: Mutex<VecDeque<u64>>,
-}
-
-impl SyncFlushStats {
-    fn record_enqueue(&self, enqueue_time_millis: u64) {
-        self.inner.pending_enqueue_times.lock().push_back(enqueue_time_millis);
-        self.inner.queue_depth.fetch_add(1, Ordering::Relaxed);
-        self.inner.enqueue_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn record_completion(&self, request: &GroupCommitRequest, status: PutMessageStatus) {
-        let _ = self
-            .inner
-            .queue_depth
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
-                Some(depth.saturating_sub(1))
-            });
-        self.inner.pending_enqueue_times.lock().pop_front();
-
-        let wait_millis = current_millis().saturating_sub(request.enqueue_time_millis);
-        self.inner.completed_total.fetch_add(1, Ordering::Relaxed);
-        self.inner.wait_total_millis.fetch_add(wait_millis, Ordering::Relaxed);
-        if status == PutMessageStatus::FlushDiskTimeout {
-            self.inner.timeout_total.fetch_add(1, Ordering::Relaxed);
-        }
-        update_atomic_max(&self.inner.max_wait_millis, wait_millis);
-    }
-
-    fn snapshot(&self) -> SyncFlushRuntimeInfo {
-        let oldest_wait_millis = self
-            .inner
-            .pending_enqueue_times
-            .lock()
-            .front()
-            .map(|enqueue_time| current_millis().saturating_sub(*enqueue_time))
-            .unwrap_or_default();
-
-        SyncFlushRuntimeInfo {
-            queue_depth: self.inner.queue_depth.load(Ordering::Relaxed),
-            enqueue_total: self.inner.enqueue_total.load(Ordering::Relaxed),
-            completed_total: self.inner.completed_total.load(Ordering::Relaxed),
-            timeout_total: self.inner.timeout_total.load(Ordering::Relaxed),
-            oldest_wait_millis,
-            max_wait_millis: self.inner.max_wait_millis.load(Ordering::Relaxed),
-            wait_total_millis: self.inner.wait_total_millis.load(Ordering::Relaxed),
-        }
-    }
-}
-
-fn update_atomic_max(target: &AtomicU64, value: u64) {
-    let mut current = target.load(Ordering::Relaxed);
-    while value > current {
-        match target.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
-            Err(observed) => current = observed,
-        }
-    }
-}
 
 pub struct DefaultFlushManager {
     group_commit_service: Option<GroupCommitService>,
@@ -315,7 +243,8 @@ impl FlushManager for DefaultFlushManager {
                                 return PutMessageStatus::FlushDiskTimeout;
                             }
                             match flush_ok_receiver.await {
-                                Ok(Ok(status)) => status,
+                                Ok(Ok(GroupCommitStatus::Flushed)) => PutMessageStatus::PutOk,
+                                Ok(Ok(GroupCommitStatus::TimedOut)) => PutMessageStatus::FlushDiskTimeout,
                                 Ok(Err(error)) => {
                                     warn!(error = %error, "sync flush failed");
                                     PutMessageStatus::FlushDiskTimeout
@@ -379,7 +308,7 @@ impl GroupCommitService {
         let Some(tx_in) = self.tx_in.as_ref() else {
             return false;
         };
-        let enqueue_time_millis = request.enqueue_time_millis;
+        let enqueue_time_millis = request.enqueue_time_millis();
         tokio::select! {
             result = tx_in.send(request) => {
                 let sent = result.is_ok();
@@ -427,11 +356,11 @@ impl GroupCommitService {
                                     complete_group_commit_batch(remaining, result.flushed_where, &sync_flush_stats);
                                 }
                                 Err(error) => {
+                                    store_health_recorder.record_flush_failure(error.as_ref());
                                     complete_group_commit_batch_error(
                                         remaining,
                                         error,
                                         &sync_flush_stats,
-                                        &store_health_recorder,
                                     );
                                 }
                             }
@@ -458,7 +387,7 @@ impl GroupCommitService {
                             requests.push(request);
                         }
 
-                        let target_offset = requests.iter().map(|request| request.next_offset).max().unwrap_or(0);
+                        let target_offset = requests.iter().map(GroupCommitRequest::next_offset).max().unwrap_or(0);
                         let mut flush_ok = mapped_file_queue.get_flushed_where() >= target_offset;
                         let mut flush_error = None;
                         if let Some(error) = forced_flush_error.clone() {
@@ -484,11 +413,11 @@ impl GroupCommitService {
                         }
 
                         if let Some(error) = flush_error {
+                            store_health_recorder.record_flush_failure(error.as_ref());
                             complete_group_commit_batch_error(
                                 requests,
                                 error,
                                 &sync_flush_stats,
-                                &store_health_recorder,
                             );
                             continue;
                         }
@@ -525,35 +454,6 @@ impl GroupCommitService {
         self.shutdown_token.cancel();
         self.tx_in.take();
         shutdown_worker_gracefully("GroupCommitService", &mut self.worker_group).await;
-    }
-}
-
-fn complete_group_commit_batch(
-    requests: Vec<GroupCommitRequest>,
-    flushed_where: i64,
-    sync_flush_stats: &SyncFlushStats,
-) {
-    for request in requests {
-        let status = if flushed_where >= request.next_offset {
-            PutMessageStatus::PutOk
-        } else {
-            PutMessageStatus::FlushDiskTimeout
-        };
-        sync_flush_stats.record_completion(&request, status);
-        request.complete(status);
-    }
-}
-
-fn complete_group_commit_batch_error(
-    requests: Vec<GroupCommitRequest>,
-    error: Arc<StoreError>,
-    sync_flush_stats: &SyncFlushStats,
-    store_health_recorder: &StoreHealthRecorder,
-) {
-    store_health_recorder.record_flush_failure(error.as_ref());
-    for request in requests {
-        sync_flush_stats.record_completion(&request, PutMessageStatus::FlushDiskTimeout);
-        request.complete_error(error.clone());
     }
 }
 
@@ -863,17 +763,14 @@ mod tests {
         let sync_flush_stats = SyncFlushStats::default();
         let (request_64, mut response_64) = GroupCommitRequest::new(64, 5_000);
         let (request_96, mut response_96) = GroupCommitRequest::new(96, 5_000);
-        sync_flush_stats.record_enqueue(request_64.enqueue_time_millis);
-        sync_flush_stats.record_enqueue(request_96.enqueue_time_millis);
+        sync_flush_stats.record_enqueue(request_64.enqueue_time_millis());
+        sync_flush_stats.record_enqueue(request_96.enqueue_time_millis());
         let requests = vec![request_64, request_96];
 
         complete_group_commit_batch(requests, 80, &sync_flush_stats);
 
-        assert!(matches!(response_64.try_recv(), Ok(Ok(PutMessageStatus::PutOk))));
-        assert!(matches!(
-            response_96.try_recv(),
-            Ok(Ok(PutMessageStatus::FlushDiskTimeout))
-        ));
+        assert!(matches!(response_64.try_recv(), Ok(Ok(GroupCommitStatus::Flushed))));
+        assert!(matches!(response_96.try_recv(), Ok(Ok(GroupCommitStatus::TimedOut))));
 
         let runtime_info = sync_flush_stats.snapshot();
         assert_eq!(runtime_info.queue_depth, 0);
@@ -890,12 +787,8 @@ mod tests {
         let (second, mut second_response) = GroupCommitRequest::new(96, 5_000);
         let error = Arc::new(StoreError::InvalidState("injected flush failure".to_string()));
 
-        complete_group_commit_batch_error(
-            vec![first, second],
-            error.clone(),
-            &sync_flush_stats,
-            &store_health_recorder,
-        );
+        store_health_recorder.record_flush_failure(error.as_ref());
+        complete_group_commit_batch_error(vec![first, second], error.clone(), &sync_flush_stats);
 
         let first_error = first_response.try_recv().unwrap().unwrap_err();
         let second_error = second_response.try_recv().unwrap().unwrap_err();
@@ -916,14 +809,14 @@ mod tests {
         let sync_flush_stats = SyncFlushStats::default();
         let (request, _response) = GroupCommitRequest::new(64, 5_000);
 
-        sync_flush_stats.record_enqueue(request.enqueue_time_millis);
+        sync_flush_stats.record_enqueue(request.enqueue_time_millis());
 
         let runtime_info = sync_flush_stats.snapshot();
         assert_eq!(runtime_info.queue_depth, 1);
         assert_eq!(runtime_info.enqueue_total, 1);
         assert_eq!(runtime_info.completed_total, 0);
         assert_eq!(runtime_info.timeout_total, 0);
-        assert!(runtime_info.oldest_wait_millis <= current_millis().saturating_sub(request.enqueue_time_millis));
+        assert!(runtime_info.oldest_wait_millis <= current_millis().saturating_sub(request.enqueue_time_millis()));
     }
 
     #[tokio::test]
