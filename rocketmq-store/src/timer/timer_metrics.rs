@@ -18,31 +18,22 @@ use std::path::Path;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use parking_lot::RwLock;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_store_local::timer::metrics::default_timer_dist;
+use rocketmq_store_local::timer::metrics::TimerMetric;
+use rocketmq_store_local::timer::metrics::TimerMetricsState;
 use serde::Deserialize;
 use serde::Serialize;
-
-fn default_timer_dist() -> Vec<i32> {
-    vec![5, 60, 300, 900, 3600, 14_400, 28_800, 86_400]
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Metric {
-    count: i64,
-    time_stamp: i64,
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimerMetricsSerializeWrapper {
-    timing_count: HashMap<String, Metric>,
+    timing_count: HashMap<String, TimerMetric>,
     #[serde(default)]
-    timing_distribution: HashMap<i32, Metric>,
+    timing_distribution: HashMap<i32, TimerMetric>,
     #[serde(default = "default_timer_dist")]
     timer_dist: Vec<i32>,
     data_version: DataVersion,
@@ -50,9 +41,7 @@ pub struct TimerMetricsSerializeWrapper {
 
 pub struct TimerMetrics {
     config_path: Mutex<Option<String>>,
-    timing_count: RwLock<HashMap<String, Metric>>,
-    timing_distribution: RwLock<HashMap<i32, Metric>>,
-    timer_dist: RwLock<Vec<i32>>,
+    state: TimerMetricsState,
     data_version: Mutex<DataVersion>,
 }
 
@@ -97,10 +86,11 @@ impl ConfigManager for TimerMetrics {
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
+        let (timing_count, timing_distribution, timer_dist) = self.state.export();
         let wrapper = TimerMetricsSerializeWrapper {
-            timing_count: self.timing_count.read().clone(),
-            timing_distribution: self.timing_distribution.read().clone(),
-            timer_dist: self.timer_dist.read().clone(),
+            timing_count,
+            timing_distribution,
+            timer_dist,
             data_version: self.data_version.lock().clone(),
         };
 
@@ -113,9 +103,8 @@ impl ConfigManager for TimerMetrics {
 
     fn decode(&self, json_string: &str) {
         if let Ok(wrapper) = serde_json::from_str::<TimerMetricsSerializeWrapper>(json_string) {
-            *self.timing_count.write() = wrapper.timing_count;
-            *self.timing_distribution.write() = wrapper.timing_distribution;
-            *self.timer_dist.write() = wrapper.timer_dist;
+            self.state
+                .apply(wrapper.timing_count, wrapper.timing_distribution, wrapper.timer_dist);
             *self.data_version.lock() = wrapper.data_version;
         }
     }
@@ -125,9 +114,7 @@ impl TimerMetrics {
     pub fn new(config_path: Option<String>) -> Self {
         Self {
             config_path: Mutex::new(config_path),
-            timing_count: RwLock::new(HashMap::new()),
-            timing_distribution: RwLock::new(HashMap::new()),
-            timer_dist: RwLock::new(default_timer_dist()),
+            state: TimerMetricsState::default(),
             data_version: Mutex::new(rocketmq_remoting::protocol::data_version_facade::new_data_version()),
         }
     }
@@ -141,95 +128,57 @@ impl TimerMetrics {
     }
 
     pub fn to_wrapper(&self) -> TimerMetricsSerializeWrapper {
+        let (timing_count, timing_distribution, timer_dist) = self.state.export();
         TimerMetricsSerializeWrapper {
-            timing_count: self.timing_count.read().clone(),
-            timing_distribution: self.timing_distribution.read().clone(),
-            timer_dist: self.timer_dist.read().clone(),
+            timing_count,
+            timing_distribution,
+            timer_dist,
             data_version: self.data_version(),
         }
     }
 
     pub fn apply_wrapper(&self, wrapper: TimerMetricsSerializeWrapper) {
-        *self.timing_count.write() = wrapper.timing_count;
-        *self.timing_distribution.write() = wrapper.timing_distribution;
-        *self.timer_dist.write() = wrapper.timer_dist;
+        self.state
+            .apply(wrapper.timing_count, wrapper.timing_distribution, wrapper.timer_dist);
         *self.data_version.lock() = wrapper.data_version;
     }
 
     pub fn get_timing_count(&self, key: &CheetahString) -> i64 {
-        self.timing_count
-            .read()
-            .get(key.as_str())
-            .map(|metric| metric.count)
-            .unwrap_or_default()
+        self.state.get_timing_count(key.as_str())
     }
 
     pub fn get_timing_count_snapshot(&self) -> HashMap<String, i64> {
-        self.timing_count
-            .read()
-            .iter()
-            .filter_map(|(topic, metric)| (metric.count > 0).then_some((topic.clone(), metric.count)))
-            .collect()
+        self.state.timing_count_snapshot()
     }
 
     pub fn replace_timing_count_snapshot(&self, timing_count_snapshot: HashMap<String, i64>) {
-        let mut timing_count = self.timing_count.write();
-        timing_count.clear();
-        for (topic, count) in timing_count_snapshot {
-            if count <= 0 {
-                continue;
-            }
-            timing_count.insert(
-                topic,
-                Metric {
-                    count,
-                    time_stamp: current_millis() as i64,
-                },
-            );
-        }
+        self.state
+            .replace_timing_count_snapshot(timing_count_snapshot, current_millis() as i64);
         self.data_version.lock().next_version();
     }
 
     pub fn add_timing_count(&self, key: &CheetahString, delta: i64) {
-        let mut timing_count = self.timing_count.write();
-        let entry = timing_count.entry(key.to_string()).or_insert(Metric {
-            count: 0,
-            time_stamp: 0,
-        });
-        entry.count = (entry.count + delta).max(0);
-        entry.time_stamp = current_millis() as i64;
+        self.state
+            .add_timing_count(key.as_str(), delta, current_millis() as i64);
         self.data_version.lock().next_version();
     }
 
     pub fn get_timing_distribution_snapshot(&self) -> HashMap<i32, i64> {
-        self.timing_distribution
-            .read()
-            .iter()
-            .filter_map(|(period, metric)| (metric.count > 0).then_some((*period, metric.count)))
-            .collect()
+        self.state.timing_distribution_snapshot()
     }
 
     pub fn replace_timing_distribution_snapshot(&self, timing_distribution_snapshot: HashMap<i32, i64>) {
-        let mut timing_distribution = self.timing_distribution.write();
-        timing_distribution.clear();
-        for (period, count) in timing_distribution_snapshot {
-            timing_distribution.insert(
-                period,
-                Metric {
-                    count: count.max(0),
-                    time_stamp: current_millis() as i64,
-                },
-            );
-        }
+        self.state
+            .replace_timing_distribution_snapshot(timing_distribution_snapshot, current_millis() as i64);
         self.data_version.lock().next_version();
     }
 
     pub fn timer_dist_list(&self) -> Vec<i32> {
-        self.timer_dist.read().clone()
+        self.state.timer_dist()
     }
 
     pub fn set_timer_dist_list(&self, timer_dist: Vec<i32>) {
-        *self.timer_dist.write() = timer_dist;
+        self.state.set_timer_dist(timer_dist);
         self.data_version.lock().next_version();
     }
 }

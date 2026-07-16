@@ -19,15 +19,14 @@ use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
 
 use parking_lot::Mutex;
-use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::DataVersion;
-
-const TIMER_CHECKPOINT_SIZE: usize = 56;
+use rocketmq_store_local::timer::checkpoint::TimerCheckpointRecord;
+use rocketmq_store_local::timer::checkpoint::TimerCheckpointState;
+use rocketmq_store_local::timer::checkpoint::TimerCheckpointVersion;
+use rocketmq_store_local::timer::checkpoint::TIMER_CHECKPOINT_SIZE;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimerCheckpointSnapshot {
@@ -40,10 +39,7 @@ pub struct TimerCheckpointSnapshot {
 
 pub struct TimerCheckpoint {
     path: PathBuf,
-    last_read_time_ms: AtomicI64,
-    last_timer_log_flush_pos: AtomicI64,
-    last_timer_queue_offset: AtomicI64,
-    master_timer_queue_offset: AtomicI64,
+    state: TimerCheckpointState,
     data_version: Mutex<DataVersion>,
 }
 
@@ -51,7 +47,7 @@ impl TimerCheckpoint {
     pub fn new<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
-            ensure_dir_ok(parent.to_string_lossy().as_ref());
+            std::fs::create_dir_all(parent)?;
         }
         let file = OpenOptions::new()
             .create(true)
@@ -65,10 +61,7 @@ impl TimerCheckpoint {
 
         let mut checkpoint = Self {
             path,
-            last_read_time_ms: AtomicI64::new(0),
-            last_timer_log_flush_pos: AtomicI64::new(0),
-            last_timer_queue_offset: AtomicI64::new(0),
-            master_timer_queue_offset: AtomicI64::new(0),
+            state: TimerCheckpointState::default(),
             data_version: Mutex::new(rocketmq_remoting::protocol::data_version_facade::new_data_version()),
         };
         checkpoint.load_from_disk()?;
@@ -77,7 +70,7 @@ impl TimerCheckpoint {
 
     pub fn flush(&self) -> std::io::Result<()> {
         if let Some(parent) = self.path.parent() {
-            ensure_dir_ok(parent.to_string_lossy().as_ref());
+            std::fs::create_dir_all(parent)?;
         }
 
         let mut file = OpenOptions::new()
@@ -97,38 +90,35 @@ impl TimerCheckpoint {
     }
 
     pub fn last_read_time_ms(&self) -> i64 {
-        self.last_read_time_ms.load(Ordering::Relaxed)
+        self.state.last_read_time_ms()
     }
 
     pub fn set_last_read_time_ms(&self, last_read_time_ms: i64) {
-        self.last_read_time_ms.store(last_read_time_ms, Ordering::Relaxed);
+        self.state.set_last_read_time_ms(last_read_time_ms);
     }
 
     pub fn last_timer_log_flush_pos(&self) -> i64 {
-        self.last_timer_log_flush_pos.load(Ordering::Relaxed)
+        self.state.last_timer_log_flush_pos()
     }
 
     pub fn set_last_timer_log_flush_pos(&self, last_timer_log_flush_pos: i64) {
-        self.last_timer_log_flush_pos
-            .store(last_timer_log_flush_pos, Ordering::Relaxed);
+        self.state.set_last_timer_log_flush_pos(last_timer_log_flush_pos);
     }
 
     pub fn last_timer_queue_offset(&self) -> i64 {
-        self.last_timer_queue_offset.load(Ordering::Relaxed)
+        self.state.last_timer_queue_offset()
     }
 
     pub fn set_last_timer_queue_offset(&self, last_timer_queue_offset: i64) {
-        self.last_timer_queue_offset
-            .store(last_timer_queue_offset, Ordering::Relaxed);
+        self.state.set_last_timer_queue_offset(last_timer_queue_offset);
     }
 
     pub fn master_timer_queue_offset(&self) -> i64 {
-        self.master_timer_queue_offset.load(Ordering::Relaxed)
+        self.state.master_timer_queue_offset()
     }
 
     pub fn set_master_timer_queue_offset(&self, master_timer_queue_offset: i64) {
-        self.master_timer_queue_offset
-            .store(master_timer_queue_offset, Ordering::Relaxed);
+        self.state.set_master_timer_queue_offset(master_timer_queue_offset);
     }
 
     pub fn data_version(&self) -> DataVersion {
@@ -166,36 +156,16 @@ impl TimerCheckpoint {
             return Ok(());
         }
 
-        self.last_read_time_ms = AtomicI64::new(read_i64(&buffer[0..8]));
-        self.last_timer_log_flush_pos = AtomicI64::new(read_i64(&buffer[8..16]));
-        self.last_timer_queue_offset = AtomicI64::new(read_i64(&buffer[16..24]));
-        self.master_timer_queue_offset = AtomicI64::new(read_i64(&buffer[24..32]));
-
-        let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
-        data_version.set_state_version(read_i64(&buffer[32..40]));
-        data_version.set_timestamp(read_i64(&buffer[40..48]));
-        data_version.set_counter(read_i64(&buffer[48..56]));
-        *self.data_version.get_mut() = data_version;
+        let record = TimerCheckpointRecord::decode(&buffer)?;
+        self.state = TimerCheckpointState::from_record(record);
+        *self.data_version.get_mut() = data_version_from_record(record.version);
         Ok(())
     }
 
     fn encode(&self) -> [u8; TIMER_CHECKPOINT_SIZE] {
-        let mut buffer = [0u8; TIMER_CHECKPOINT_SIZE];
-        buffer[0..8].copy_from_slice(&self.last_read_time_ms().to_be_bytes());
-        buffer[8..16].copy_from_slice(&self.last_timer_log_flush_pos().to_be_bytes());
-        buffer[16..24].copy_from_slice(&self.last_timer_queue_offset().to_be_bytes());
-        buffer[24..32].copy_from_slice(&self.master_timer_queue_offset().to_be_bytes());
-
         let data_version = self.data_version();
-        buffer[32..40].copy_from_slice(&data_version.state_version().to_be_bytes());
-        buffer[40..48].copy_from_slice(&data_version.timestamp().to_be_bytes());
-        buffer[48..56].copy_from_slice(&data_version.counter().to_be_bytes());
-        buffer
+        self.state.record(version_record(&data_version)).encode()
     }
-}
-
-fn read_i64(buffer: &[u8]) -> i64 {
-    i64::from_be_bytes(buffer.try_into().expect("timer checkpoint field size must be 8 bytes"))
 }
 
 impl TimerCheckpointSnapshot {
@@ -236,42 +206,43 @@ impl TimerCheckpointSnapshot {
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        let mut buffer = [0u8; TIMER_CHECKPOINT_SIZE];
-        buffer[0..8].copy_from_slice(&self.last_read_time_ms.to_be_bytes());
-        buffer[8..16].copy_from_slice(&self.last_timer_log_flush_pos.to_be_bytes());
-        buffer[16..24].copy_from_slice(&self.last_timer_queue_offset.to_be_bytes());
-        buffer[24..32].copy_from_slice(&self.master_timer_queue_offset.to_be_bytes());
-        buffer[32..40].copy_from_slice(&self.data_version.state_version().to_be_bytes());
-        buffer[40..48].copy_from_slice(&self.data_version.timestamp().to_be_bytes());
-        buffer[48..56].copy_from_slice(&self.data_version.counter().to_be_bytes());
-        buffer.to_vec()
+        TimerCheckpointRecord {
+            last_read_time_ms: self.last_read_time_ms,
+            last_timer_log_flush_pos: self.last_timer_log_flush_pos,
+            last_timer_queue_offset: self.last_timer_queue_offset,
+            master_timer_queue_offset: self.master_timer_queue_offset,
+            version: version_record(&self.data_version),
+        }
+        .encode()
+        .to_vec()
     }
 
     pub fn decode(buffer: &[u8]) -> std::io::Result<Self> {
-        if buffer.len() < TIMER_CHECKPOINT_SIZE {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                format!(
-                    "timer checkpoint snapshot requires {} bytes, got {}",
-                    TIMER_CHECKPOINT_SIZE,
-                    buffer.len()
-                ),
-            ));
-        }
-
-        let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
-        data_version.set_state_version(read_i64(&buffer[32..40]));
-        data_version.set_timestamp(read_i64(&buffer[40..48]));
-        data_version.set_counter(read_i64(&buffer[48..56]));
-
+        let record = TimerCheckpointRecord::decode(buffer)?;
         Ok(Self {
-            last_read_time_ms: read_i64(&buffer[0..8]),
-            last_timer_log_flush_pos: read_i64(&buffer[8..16]),
-            last_timer_queue_offset: read_i64(&buffer[16..24]),
-            master_timer_queue_offset: read_i64(&buffer[24..32]),
-            data_version,
+            last_read_time_ms: record.last_read_time_ms,
+            last_timer_log_flush_pos: record.last_timer_log_flush_pos,
+            last_timer_queue_offset: record.last_timer_queue_offset,
+            master_timer_queue_offset: record.master_timer_queue_offset,
+            data_version: data_version_from_record(record.version),
         })
     }
+}
+
+fn version_record(data_version: &DataVersion) -> TimerCheckpointVersion {
+    TimerCheckpointVersion {
+        state_version: data_version.state_version(),
+        timestamp: data_version.timestamp(),
+        counter: data_version.counter(),
+    }
+}
+
+fn data_version_from_record(version: TimerCheckpointVersion) -> DataVersion {
+    let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
+    data_version.set_state_version(version.state_version);
+    data_version.set_timestamp(version.timestamp);
+    data_version.set_counter(version.counter);
+    data_version
 }
 
 #[cfg(test)]

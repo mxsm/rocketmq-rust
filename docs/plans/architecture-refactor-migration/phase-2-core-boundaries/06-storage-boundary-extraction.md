@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06 已完成，继续 PR-M06-07 |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06/PR-M06-07 已完成，继续 PR-M06-08 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -113,11 +113,11 @@
 
 ### PR-M06-07：迁移 Timer、POP 与 Local Services
 
-- [ ] 入口：`[TEST]` Timer/POP/revive/cold-data/stats 当前行为和 feature fixture可重复。
-- [ ] `[DEV]` 分批机械迁移 timer、pop、services、stats、hook/filter adapter；每批使用独立提交。
-- [ ] `[TEST]` focused test：timer recovery/expiry、POP checkpoint/revive、cold-data check、service start/stop和feature gates。
-- [ ] `[REV]` 检查 owner/task/budget 不变，未把 Broker 私有状态或 façade 依赖带入 Local。
-- [ ] 回滚点：按 Timer、POP、services 三个 delegation 独立切回；已迁其他模块不受影响。
+- [x] 入口：`[TEST]` Timer/POP/revive/cold-data/stats 当前行为和 feature fixture可重复。
+- [x] `[DEV]` 分批机械迁移 timer、pop、services、stats、hook/filter adapter；每批使用独立提交。
+- [x] `[TEST]` focused test：timer recovery/expiry、POP checkpoint/revive、cold-data check、service start/stop和feature gates。
+- [x] `[REV]` 检查 owner/task/budget 不变，未把 Broker 私有状态或 façade 依赖带入 Local。
+- [x] 回滚点：按 Timer、POP、services 三个 delegation 独立切回；已迁其他模块不受影响。
 
 ### PR-M06-08：LocalFileMessageStore Facade、Composition 与 Config
 
@@ -2338,3 +2338,33 @@ python scripts/arc_mut_guard.py
   HA/transfer adapter，但不得恢复 Local/Store 双 owner，也不回滚 CommitLog/flush/CQ/Index owner；无磁盘数据迁移。
 - [x] `[INVENTORY]` PR-M06-06 父项关闭；82 个顶层工作包更新为 34 已完成、0 进行中、48 未开始，即
   48 个尚未完成。M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-07。
+
+## M06-07 Timer, POP, and Local Services boundary extraction evidence
+
+- [x] `[ARCH/SCOPE]` 盘点 Timer、POP、cold-data、stats、hook/filter 的 owner、依赖和调用点；冻结 40B timer-log、
+  56B checkpoint、wheel slot、POP ACK/BatchACK/Checkpoint Serde、TPS/延迟分桶、hook 注册顺序与冷数据默认行为。
+  本包不改变 CommitLog/CQ/Index 持久格式、Timer 默认参数、POP revive 语义或 LocalFileMessageStore composition。
+- [x] `[DEV/OWNER]` Local canonical 拥有 `timer::{slot,timer_log,timer_wheel,checkpoint,metrics,service}`、
+  `pop::{ack_msg,batch_ack_msg,pop_check_point}`、`services::cold_data_check`、`stats::{stats_type,StoreStatsState}`、
+  `filter` 与泛型 `HookRegistry`。Timer schedule/recovery/backlog/TPS 和 Store TPS/延迟/运行时统计不再由 facade 复制。
+- [x] `[DEV/ADAPTER]` Store Timer 仅保留 `MessageExt` 投影、CommitLog/CQ 副作用、`MessageStoreConfig`、磁盘文件、
+  `DataVersion`/`ConfigManager` 与 TaskGroup scheduler；`StoreStatsService` 仅保留 `BrokerIdentity`、TaskGroup 和 start/stop
+  lifecycle，并通过 `Deref` 暴露 Local state。旧 POP/filter/stats/timer/cold-data 深路径精确 re-export；真实 put-message
+  hook 列表改由 Local registry 持有，legacy trait/getter 不变。
+- [x] `[TEST]` 新增 M06-07 source contract 4/4；Local all-feature 176 个 unit tests及全部 integration/doctest通过；
+  Store Timer 30/30、stats lifecycle 3/3、timer restart integration 3/3、Store all-feature lib 483/483 通过。
+  cold-data 当前 page-cache/cold-area 默认值、POP Serde/checkpoint/revive fields、timer recovery/expiry/roll 和 hook 顺序均有回归覆盖；
+  Local `--no-default-features` check 通过。Store no-default 仍复现已记录的空 `GenericMessageStore` baseline，不属于 R0 承诺且未计为通过。
+- [x] `[RUNTIME/DEPENDENCY]` enforcing runtime audit、architecture dependency guard 35/35、AGENTS routing 与 Local
+  manifest/forbidden-edge impacted contract 2/2 通过。Local 不含 Store/Common/Remoting/Broker/DataVersion、
+  `LocalFileMessageStore` 或 detached `tokio::spawn`；既有 TaskGroup owner 和 shutdown 时序保持在 Store adapter。
+- [x] `[REV]` workspace fmt、diff check、Local/Store 与 workspace all-target/all-feature strict Clippy 通过。完整既有 StoreLocal mutation
+  suite 超过 240 秒工具窗口，未形成结果且未计为通过；与本包直接相关的 workspace feature ownership 和 Local
+  forbidden-edge 两项已拆分重跑全绿，新增 M06-07 contract 4/4 全绿。hook 字段替换和 Timer import 抽取引起 3 条
+  既有 ArcMut fingerprint 一对一 relocation，按 ADR-013 精确批准并完成 monotonic promotion/compare；账本仍为
+  1,171 identities/3,233 occurrences，零新增共享可变状态债务，guard 与 24 项 fixture 全绿。
+- [x] `[LEDGER/ROLLBACK]` compatibility ledger 冻结 Timer/POP/services/stats/filter/hook owner、Store-only protocol/
+  runtime/effect ports与旧路径删除条件。可整体 revert PR-M06-07，或按 Timer、POP、services delegation 回切；不得恢复
+  Local/Store 双 owner，既有 timer/POP 持久数据无需迁移。
+- [x] `[INVENTORY]` PR-M06-07 父项关闭；82 个顶层工作包更新为 35 已完成、0 进行中、47 未开始，即
+  47 个尚未完成。M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-08。

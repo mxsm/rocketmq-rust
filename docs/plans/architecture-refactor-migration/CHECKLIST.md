@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 34 | 0 | 48 未开始；合计 48 尚未完成 | 82 |
+| PR 级工作包 | 35 | 0 | 47 未开始；合计 47 尚未完成 | 82 |
 | 里程碑 | 5（M01–M05） | 1（M06） | 6（M07–M12） | 12 |
 | 新增边界 crate | 6 | 0 | 4（store-rocksdb、proxy-core/cluster/local） | 10 |
 | 根 workspace package | 28 | — | 还差 4 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 48 个未开始工作包分布：M06-07～12 为 6 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
-M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-06 已完成 HA/Replication/Transfer owner 迁移；当前下一工作包为 PR-M06-07。
+剩余 47 个未开始工作包分布：M06-08～12 为 5 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
+M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-07 已完成 Timer/POP/Local Services owner 迁移；当前下一工作包为 PR-M06-08。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -199,7 +199,12 @@ M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-06 已完成 HA/Replicat
   - [x] Store 仅保留 socket、Remoting/controller DTO、CommitLog/LocalFileMessageStore 与 lifecycle adapter
   - [x] focused HA/transfer、Store all-feature lib、runtime audit、architecture/ArcMut guard 全部通过
   - [x] 冻结兼容 ledger、回滚点与 34/48 顶层工作包盘点
-- [ ] PR-M06-07：迁移 Timer、POP 与 Local Services
+- [x] PR-M06-07：迁移 Timer、POP 与 Local Services
+  - [x] Timer log/wheel/slot、checkpoint state/codec、metrics 与 schedule/recovery/backlog/TPS kernel 迁入 Local
+  - [x] POP ACK/BatchACK/Checkpoint、filter、cold-data service 与 stats state 迁入 Local，Store 旧路径保持兼容
+  - [x] Store Timer 保留 MessageExt/CommitLog/CQ/config/DataVersion/file I/O adapter，stats 保留 Broker/TaskGroup lifecycle adapter
+  - [x] Local hook registry 接入真实 put-message hook 路径，注册顺序和 legacy getter 保持不变
+  - [x] Timer/POP/重启恢复/服务生命周期、Store 全量、runtime/architecture/Clippy 门禁通过并冻结 35/47 盘点
 - [ ] PR-M06-08：收敛 LocalFileMessageStore facade、composition 与 config
 - [ ] PR-M06-09：创建 RocksDB foundation
 - [ ] PR-M06-10：实现 RocksDB MessageStore adapter 与 parity

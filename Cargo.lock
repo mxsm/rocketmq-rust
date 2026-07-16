@@ -4931,6 +4931,7 @@ version = "1.0.0"
 dependencies = [
  "bytes",
  "cheetah-string",
+ "dashmap",
  "libc",
  "memmap2",
  "page_size",

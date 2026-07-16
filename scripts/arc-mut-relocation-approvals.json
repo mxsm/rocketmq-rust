@@ -469,6 +469,24 @@
       "from": "e7c8f168db0bc1e6907dda5a",
       "to": "e566573a107c0f26a85cbfe6",
       "reason": "Replacing the Store-owned max acknowledged offset atomic with Local ReplicationProgress changed adjacent field context around the existing LocalFileMessageStore type without adding an occurrence"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "d61004e177406b1a80eba545",
+      "to": "358fd0880bb937a7bd625566",
+      "reason": "Replacing the put-message hook Vec with the Local HookRegistry changed adjacent field context around the existing ArcMut type reference in the same LocalFileMessageStore struct without adding an occurrence"
+    },
+    {
+      "identity": "829ee7c4a57a6808f54c907c",
+      "from": "98125b6f56713ad4fbcd8575",
+      "to": "63acc2aef21e44da330786c1",
+      "reason": "Replacing the put-message hook Vec with the Local HookRegistry changed the fingerprint of the existing LocalFileMessageStore shared UnsafeCell wrapper without adding an occurrence"
+    },
+    {
+      "identity": "85875520c1f74ec05bf38d10",
+      "from": "1634fad6825ef8a080c922ea",
+      "to": "59690fe43b7e20d5c5b0b4ce",
+      "reason": "Importing Local Timer schedule recovery metrics and record owners changed module context around the existing ArcMut import without adding or moving an occurrence"
     }
   ]
 }
