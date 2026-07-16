@@ -509,6 +509,66 @@ impl<L> Default for GetResult<L> {
     }
 }
 
+/// Owned logical-read outcome after backend leases have been decoded by an adapter.
+///
+/// This projection keeps storage navigation semantics in the storage boundary while allowing the
+/// caller to own decoded records. `None` records remain distinct from a successful read containing
+/// an empty record collection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadOutcome<T> {
+    status: GetStatus,
+    next_begin_offset: i64,
+    min_offset: i64,
+    max_offset: i64,
+    records: Option<Vec<T>>,
+}
+
+impl<T> ReadOutcome<T> {
+    /// Creates an owned read outcome from canonical store navigation fields.
+    pub fn new<R>(status: GetStatus, next_begin_offset: i64, min_offset: i64, max_offset: i64, records: R) -> Self
+    where
+        R: Into<Option<Vec<T>>>,
+    {
+        Self {
+            status,
+            next_begin_offset,
+            min_offset,
+            max_offset,
+            records: records.into(),
+        }
+    }
+
+    /// Returns the exact backend-neutral logical-read status.
+    pub const fn status(&self) -> GetStatus {
+        self.status
+    }
+
+    /// Returns the next logical offset suggested by the store.
+    pub const fn next_begin_offset(&self) -> i64 {
+        self.next_begin_offset
+    }
+
+    /// Returns the minimum readable logical offset.
+    pub const fn min_offset(&self) -> i64 {
+        self.min_offset
+    }
+
+    /// Returns the maximum logical offset observed by the store.
+    pub const fn max_offset(&self) -> i64 {
+        self.max_offset
+    }
+
+    /// Returns decoded records without transferring ownership.
+    pub fn records(&self) -> Option<&[T]> {
+        self.records.as_deref()
+    }
+
+    /// Consumes the outcome and returns its decoded records.
+    pub fn into_records(self) -> Option<Vec<T>> {
+        self.records
+    }
+}
+
 /// Canonical neutral projection of a legacy key query result.
 #[derive(Debug)]
 pub struct QueryResult<L> {

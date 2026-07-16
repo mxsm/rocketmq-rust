@@ -17,10 +17,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::consumer::pull_result::PullResult;
-use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -37,15 +34,15 @@ use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
-use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store_api::ReadOutcome;
 use tokio::sync::Mutex;
 use tracing::error;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::store_read::decode_read_outcome;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
 pub struct TransactionalMessageBridge<MS: MessageStore> {
@@ -112,7 +109,7 @@ where
         );
     }
 
-    pub async fn get_half_message(&self, queue_id: i32, offset: i64, nums: i32) -> Option<PullResult> {
+    pub async fn get_half_message(&self, queue_id: i32, offset: i64, nums: i32) -> Option<ReadOutcome<MessageExt>> {
         self.get_message(
             &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
             &CheetahString::from_static_str(TransactionalMessageUtil::build_half_topic()),
@@ -124,7 +121,7 @@ where
         .await
     }
 
-    pub async fn get_op_message(&self, queue_id: i32, offset: i64, nums: i32) -> Option<PullResult> {
+    pub async fn get_op_message(&self, queue_id: i32, offset: i64, nums: i32) -> Option<ReadOutcome<MessageExt>> {
         self.get_message(
             &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
             &CheetahString::from_static_str(TransactionalMessageUtil::build_op_topic()),
@@ -145,7 +142,7 @@ where
         nums: i32,
         _sub: Option<SubscriptionData>, /* in Java version, this is not used, so we keep it as
                                          * Option */
-    ) -> Option<PullResult> {
+    ) -> Option<ReadOutcome<MessageExt>> {
         let get_message_result = self
             .broker_runtime_inner
             .message_store()
@@ -157,30 +154,7 @@ where
             .await;
 
         if let Some(get_message_result) = get_message_result {
-            let (pull_status, msg_found_list) = match get_message_result.status().unwrap() {
-                GetMessageStatus::Found => {
-                    let msg_list = Self::decode_msg_list(&get_message_result);
-                    (PullStatus::Found, Some(msg_list))
-                }
-                GetMessageStatus::NoMatchedMessage => (PullStatus::NoMatchedMsg, None),
-                GetMessageStatus::OffsetOverflowOne | GetMessageStatus::NoMessageInQueue => {
-                    (PullStatus::NoNewMsg, None)
-                }
-                GetMessageStatus::MessageWasRemoving
-                | GetMessageStatus::OffsetFoundNull
-                | GetMessageStatus::OffsetOverflowBadly
-                | GetMessageStatus::OffsetTooSmall
-                | GetMessageStatus::NoMatchedLogicQueue => (PullStatus::OffsetIllegal, None),
-
-                GetMessageStatus::OffsetReset => (PullStatus::NoNewMsg, None),
-            };
-            Some(PullResult::new(
-                pull_status,
-                get_message_result.next_begin_offset() as u64,
-                get_message_result.min_offset() as u64,
-                get_message_result.max_offset() as u64,
-                msg_found_list.map(|msg_found_list| msg_found_list.into_iter().map(ArcMut::new).collect()),
-            ))
+            decode_read_outcome(get_message_result, false)
         } else {
             error!(
                 "Get message from store return null. topic={}, groupId={}, requestOffset={}",
@@ -188,18 +162,6 @@ where
             );
             None
         }
-    }
-
-    fn decode_msg_list(get_message_result: &GetMessageResult) -> Vec<MessageExt> {
-        let mut found_list = Vec::new();
-        for bb in get_message_result.message_mapped_list() {
-            let mut bytes = Bytes::copy_from_slice(bb.get_buffer());
-            let msg_ext = message_decoder::decode(&mut bytes, true, false, false, false, false);
-            if let Some(msg_ext) = msg_ext {
-                found_list.push(msg_ext);
-            }
-        }
-        found_list
     }
 
     pub async fn select_topic_config(&mut self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {

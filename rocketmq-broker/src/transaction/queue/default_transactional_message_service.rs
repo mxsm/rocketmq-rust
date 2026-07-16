@@ -18,8 +18,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::consumer::pull_result::PullResult;
-use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -32,11 +30,12 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
-use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store_api::GetStatus;
+use rocketmq_store_api::ReadOutcome;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tracing::debug;
@@ -60,6 +59,27 @@ const MAX_RETRY_TIMES_FOR_ESCAPE: i32 = 10;
 const MAX_RETRY_COUNT_WHEN_HALF_NULL: i32 = 1;
 const OP_MSG_PULL_NUMS: i32 = 32;
 const SLEEP_WHILE_NO_OP: i32 = 1000;
+
+type TransactionReadOutcome = ReadOutcome<MessageExt>;
+
+fn is_no_new_message(status: GetStatus) -> bool {
+    matches!(
+        status,
+        GetStatus::OffsetOverflowOne | GetStatus::NoMessageInQueue | GetStatus::OffsetReset
+    )
+}
+
+fn is_illegal_or_unmatched_offset(status: GetStatus) -> bool {
+    matches!(
+        status,
+        GetStatus::NoMatchedMessage
+            | GetStatus::MessageWasRemoving
+            | GetStatus::OffsetFoundNull
+            | GetStatus::OffsetOverflowBadly
+            | GetStatus::OffsetTooSmall
+            | GetStatus::NoMatchedLogicQueue
+    )
+}
 
 pub struct DefaultTransactionalMessageService<MS: MessageStore> {
     transactional_message_bridge: TransactionalMessageBridge<MS>,
@@ -313,7 +333,7 @@ where
         remove_map: &mut HashMap<i64, i64>,
         op_msg_map: &mut HashMap<i64, HashSet<i64>>,
         done_op_offset: &mut Vec<i64>,
-        mut pull_result: Option<PullResult>,
+        mut pull_result: Option<TransactionReadOutcome>,
         mut listener: Listener,
     ) -> RocketMQResult<()> {
         let mut get_message_null_count = 1;
@@ -355,18 +375,18 @@ where
                         get_message_null_count += 1;
 
                         if let Some(pr) = get_result.pull_result {
-                            if *pr.pull_status() == PullStatus::NoNewMsg {
+                            if is_no_new_message(pr.status()) {
                                 debug!(
-                                    "No new msg, the miss offset={} in={:?}, continue check={}, pull result={}",
+                                    "No new msg, the miss offset={} in={:?}, continue check={}, pull result={:?}",
                                     consume_half_offset, message_queue, get_message_null_count, pr
                                 );
                                 break;
                             } else {
                                 info!(
-                                    "Illegal offset, the miss offset={} in={:?}, continue check={}, pull result={}",
+                                    "Illegal offset, the miss offset={} in={:?}, continue check={}, pull result={:?}",
                                     consume_half_offset, message_queue, get_message_null_count, pr
                                 );
-                                consume_half_offset = pr.next_begin_offset() as i64;
+                                consume_half_offset = pr.next_begin_offset();
                                 new_offset = consume_half_offset;
                                 continue;
                             }
@@ -457,7 +477,7 @@ where
 
                 // Determine if check is needed
                 let op_msg = if let Some(ref inner) = pull_result {
-                    inner.msg_found_list()
+                    inner.records()
                 } else {
                     None
                 };
@@ -503,19 +523,16 @@ where
                         .fill_op_remove_map(
                             remove_map,
                             op_queue,
-                            next_op_offset as i64,
+                            next_op_offset,
                             half_offset,
                             op_msg_map,
                             done_op_offset,
                         )
                         .await?;
 
-                    if pull_result.is_none()
-                        || matches!(
-                            pull_result.as_ref().unwrap().pull_status(),
-                            PullStatus::NoNewMsg | PullStatus::OffsetIllegal | PullStatus::NoMatchedMsg
-                        )
-                    {
+                    if pull_result.as_ref().is_none_or(|result| {
+                        is_no_new_message(result.status()) || is_illegal_or_unmatched_offset(result.status())
+                    }) {
                         tokio::time::sleep(Duration::from_millis(SLEEP_WHILE_NO_OP as u64)).await;
                     } else {
                         info!(
@@ -550,12 +567,12 @@ where
         let max_msg_offset = if let Some(ref pr) = get_result.pull_result {
             pr.max_offset()
         } else {
-            new_offset as u64
+            new_offset
         };
         let max_op_offset = if let Some(ref pr) = pull_result {
             pr.max_offset()
         } else {
-            new_op_offset as u64
+            new_op_offset
         };
         let msg_time = get_result
             .get_msg()
@@ -567,9 +584,9 @@ where
              msgTimeDelayInMs={} putInQueueCount={}",
             message_queue,
             new_op_offset,
-            max_op_offset as i64 - new_op_offset,
+            max_op_offset - new_op_offset,
             new_offset,
-            max_msg_offset - new_offset as u64,
+            max_msg_offset - new_offset,
             msg_time,
             current_millis() as i64 - msg_time,
             put_in_queue_count
@@ -634,14 +651,14 @@ where
     /// Determine if message check is needed
     fn is_check_needed(
         &self,
-        op_msg: Option<&Vec<ArcMut<MessageExt>>>,
+        op_msg: Option<&[MessageExt]>,
         value_of_current_minus_born: i64,
         check_immunity_time: i64,
         start_time: i64,
         transaction_timeout: i64,
     ) -> bool {
         transaction_check_needed(
-            op_msg.map(Vec::as_slice),
+            op_msg,
             value_of_current_minus_born,
             check_immunity_time,
             start_time,
@@ -793,9 +810,9 @@ where
         let mut get_result = GetResult::new();
 
         if let Some(result) = self.pull_half_msg(message_queue, offset, PULL_MSG_RETRY_NUMBER).await {
-            if let Some(message_exts) = result.msg_found_list() {
+            if let Some(message_exts) = result.records() {
                 if !message_exts.is_empty() {
-                    get_result.set_msg(Some(message_exts[0].as_ref().clone()));
+                    get_result.set_msg(Some(message_exts[0].clone()));
                 }
             }
             get_result.set_pull_result(Some(result));
@@ -805,7 +822,7 @@ where
     }
 
     /// Pull half message
-    async fn pull_half_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Option<PullResult> {
+    async fn pull_half_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Option<TransactionReadOutcome> {
         self.transactional_message_bridge
             .get_half_message(mq.queue_id(), offset, nums)
             .await
@@ -840,8 +857,8 @@ where
     ///
     /// # Returns
     ///
-    /// A `Result` containing an `Option<PullResult>`:
-    /// - `Some(PullResult)` if the operation messages were successfully pulled.
+    /// A `Result` containing an optional store read outcome:
+    /// - `Some(ReadOutcome)` if the operation messages were successfully read.
     /// - `None` if no operation messages were found or an error occurred.
     ///
     /// # Errors
@@ -856,36 +873,33 @@ where
         mini_offset: i64,
         op_msg_map: &mut HashMap<i64, HashSet<i64>>,
         done_op_offset: &mut Vec<i64>,
-    ) -> RocketMQResult<Option<PullResult>> {
+    ) -> RocketMQResult<Option<TransactionReadOutcome>> {
         let pull_result = self.pull_op_msg(op_queue, pull_offset_of_op, OP_MSG_PULL_NUMS).await;
 
         let Some(pull_result) = pull_result else {
             return Ok(None);
         };
 
-        match pull_result.pull_status() {
-            PullStatus::OffsetIllegal | PullStatus::NoMatchedMsg => {
-                warn!(
-                    "The miss op offset={} in queue={:?} is illegal, pullResult={}",
-                    pull_offset_of_op, op_queue, pull_result
-                );
-                self.transactional_message_bridge
-                    .update_consume_offset(op_queue, pull_result.next_begin_offset() as i64);
-                return Ok(Some(pull_result));
-            }
-            PullStatus::NoNewMsg => {
-                warn!(
-                    "The miss op offset={} in queue={:?} is NO_NEW_MSG, pullResult={}",
-                    pull_offset_of_op, op_queue, pull_result
-                );
-                return Ok(Some(pull_result));
-            }
-            _ => {}
+        if is_illegal_or_unmatched_offset(pull_result.status()) {
+            warn!(
+                "The miss op offset={} in queue={:?} is illegal, pullResult={:?}",
+                pull_offset_of_op, op_queue, pull_result
+            );
+            self.transactional_message_bridge
+                .update_consume_offset(op_queue, pull_result.next_begin_offset());
+            return Ok(Some(pull_result));
+        }
+        if is_no_new_message(pull_result.status()) {
+            warn!(
+                "The miss op offset={} in queue={:?} is NO_NEW_MSG, pullResult={:?}",
+                pull_offset_of_op, op_queue, pull_result
+            );
+            return Ok(Some(pull_result));
         }
 
-        let Some(op_msgs) = pull_result.msg_found_list() else {
+        let Some(op_msgs) = pull_result.records() else {
             warn!(
-                "The miss op offset={} in queue={:?} is empty, pullResult={}",
+                "The miss op offset={} in queue={:?} is empty, pullResult={:?}",
                 pull_offset_of_op, op_queue, pull_result
             );
             return Ok(Some(pull_result));
@@ -951,7 +965,7 @@ where
     }
 
     /// Pull operation message
-    async fn pull_op_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Option<PullResult> {
+    async fn pull_op_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Option<TransactionReadOutcome> {
         self.transactional_message_bridge
             .get_op_message(mq.queue_id(), offset, nums)
             .await
@@ -959,13 +973,13 @@ where
 }
 
 fn transaction_check_needed(
-    op_msg: Option<&[ArcMut<MessageExt>]>,
+    op_msg: Option<&[MessageExt]>,
     value_of_current_minus_born: i64,
     check_immunity_time: i64,
     start_time: i64,
     transaction_timeout: i64,
 ) -> bool {
-    if let Some(last_msg) = op_msg.and_then(<[ArcMut<MessageExt>]>::last) {
+    if let Some(last_msg) = op_msg.and_then(<[MessageExt]>::last) {
         return last_msg.born_timestamp() - start_time > transaction_timeout;
     }
 
@@ -1119,7 +1133,7 @@ mod tests {
             born_timestamp: 11_001,
             ..Default::default()
         };
-        let op_messages = vec![ArcMut::new(op_message)];
+        let op_messages = vec![op_message];
 
         assert!(transaction_check_needed(Some(&op_messages), 0, 1_000, 10_000, 1_000));
 
@@ -1127,7 +1141,7 @@ mod tests {
             born_timestamp: 10_500,
             ..Default::default()
         };
-        let recent_op_messages = vec![ArcMut::new(recent_op_message)];
+        let recent_op_messages = vec![recent_op_message];
 
         assert!(!transaction_check_needed(
             Some(&recent_op_messages),
@@ -1144,7 +1158,7 @@ mod tests {
 
         assert!(source.contains(") -> RocketMQResult<()>"));
         assert!(source.contains(") -> RocketMQResult<GetResult>"));
-        assert!(source.contains(") -> RocketMQResult<Option<PullResult>>"));
+        assert!(source.contains(") -> RocketMQResult<Option<TransactionReadOutcome>>"));
         assert!(!source.contains(concat!("Box<dyn std::error::", "Error")));
     }
 }

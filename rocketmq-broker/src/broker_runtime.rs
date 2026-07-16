@@ -5166,7 +5166,6 @@ mod tests {
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
-    use rocketmq_client_rust::producer::producer_impl::topic_publish_info::TopicPublishInfo;
     use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
     use rocketmq_common::common::attribute::Attribute;
     use rocketmq_common::common::boundary_type::BoundaryType;
@@ -6406,15 +6405,15 @@ accounts:
     }
 
     fn seed_lite_topic_publish_route(runtime: &mut BrokerRuntime, broker_names: &[CheetahString]) {
-        let mut publish_info = TopicPublishInfo::new();
-        publish_info.have_topic_router_info = true;
-        publish_info.message_queue_list = broker_names
-            .iter()
-            .enumerate()
-            .map(|(queue_id, broker_name)| {
-                MessageQueue::from_parts("parent-topic", broker_name.clone(), queue_id as i32)
-            })
-            .collect();
+        let publish_info = crate::topic::route::BrokerPublishRoute::from_queues(
+            broker_names
+                .iter()
+                .enumerate()
+                .map(|(queue_id, broker_name)| {
+                    MessageQueue::from_parts("parent-topic", broker_name.clone(), queue_id as i32)
+                })
+                .collect(),
+        );
         runtime
             .inner_for_test()
             .topic_route_info_manager_mut()

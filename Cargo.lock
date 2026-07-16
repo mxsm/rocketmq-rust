@@ -4423,7 +4423,6 @@ dependencies = [
  "parking_lot",
  "rand 0.10.2",
  "rocketmq-auth",
- "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-controller",
  "rocketmq-error",

@@ -12,7 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod broker_outer_api;
-pub(crate) mod pull;
-pub(crate) mod result;
-pub(crate) mod send;
+use bytes::Bytes;
+use rocketmq_model::result::PullStatus;
+
+/// Broker-local transport response retained only until pull bytes are decoded.
+pub(super) struct BrokerPullResponse {
+    pub(super) status: PullStatus,
+    pub(super) next_begin_offset: u64,
+    pub(super) min_offset: u64,
+    pub(super) max_offset: u64,
+    pub(super) message_binary: Option<Bytes>,
+    pub(super) offset_delta: Option<i64>,
+}

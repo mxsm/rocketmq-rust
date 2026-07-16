@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_client_rust::consumer::pull_result::PullResult;
 use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_store_api::ReadOutcome;
 
 pub(crate) struct GetResult {
     pub(crate) msg: Option<MessageExt>,
-    pub(crate) pull_result: Option<PullResult>,
+    pub(crate) pull_result: Option<ReadOutcome<MessageExt>>,
 }
 
 impl GetResult {
@@ -28,11 +28,11 @@ impl GetResult {
         }
     }
 
-    pub fn get_pull_result(&self) -> Option<&PullResult> {
+    pub fn get_pull_result(&self) -> Option<&ReadOutcome<MessageExt>> {
         self.pull_result.as_ref()
     }
 
-    pub fn set_pull_result(&mut self, pull_result: Option<PullResult>) {
+    pub fn set_pull_result(&mut self, pull_result: Option<ReadOutcome<MessageExt>>) {
         self.pull_result = pull_result;
     }
 

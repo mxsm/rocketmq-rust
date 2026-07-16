@@ -13,4 +13,5 @@
 // limitations under the License.
 
 pub(crate) mod manager;
+pub(crate) mod route;
 pub(crate) mod topic_queue_mapping_clean_service;
