@@ -12,10 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Canonical Local flush and group-commit primitives.
+use rocketmq_store::consume_queue::mapped_file_queue::FlushProgress as LegacyFlushProgress;
+use rocketmq_store_local::flush::FlushProgress as CanonicalFlushProgress;
 
-pub mod group_commit;
-pub mod queue;
+fn accept_canonical(_progress: CanonicalFlushProgress) {}
 
-pub use group_commit::SyncFlushRuntimeInfo;
-pub use queue::FlushProgress;
+#[test]
+fn legacy_flush_progress_is_the_canonical_local_type() {
+    let progress = LegacyFlushProgress {
+        appended: 128,
+        durable_before: 64,
+        durable: 96,
+        store_timestamp: 7,
+    };
+
+    accept_canonical(progress);
+}

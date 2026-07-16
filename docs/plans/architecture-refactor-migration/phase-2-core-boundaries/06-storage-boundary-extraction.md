@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03 已完成，PR-M06-04a 已完成，继续 M06-04b |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03 已完成，PR-M06-04a/b 已完成，继续 M06-04c |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -2065,3 +2065,21 @@ python scripts/arc_mut_guard.py
 - [x] `[INVENTORY/SCOPE]` M06-04a 只关闭 request/batch/runtime-stats owner；`FlushProgress`、queue flush/commit I/O、
   GroupCommit worker/checkpoint、AsyncFlush/CommitRealTime worker 和最终 facade 分别留给 M06-04b～e。82 个顶层工作包为
   31 已完成、1 进行中、50 未开始，即仍有 51 个尚未完成。
+
+## M06-04b mapped-file queue flush/commit driver extraction evidence
+
+- [x] `[DEV/OWNER]` 新增 `rocketmq-store-local::flush::queue`，唯一拥有 `FlushProgress`、segment flush/commit outcome、
+  final durable watermark/timestamp 计算和 legacy commit-result 判定；Store `consume_queue::mapped_file_queue::FlushProgress`
+  改为 canonical Local 类型的精确 re-export。
+- [x] `[ADAPTER/COMPAT]` Store `MappedFileQueue` 继续提供 ArcSwap snapshot、具体 mapped-file 查找、`try_flush`/`commit`
+  I/O 和 Local runtime-state 写回；Local driver 注入 offset/return-first 参数并保持原有 `file_from_offset + position` 算法。
+  `flush_least_pages == 0` 才替换 timestamp，I/O error 在写回 durable watermark 前原样返回，legacy `flush()` 和 `commit()`
+  布尔语义均未改变。
+- [x] `[TEST]` Local 新增 empty/thorough/partial/error flush 与 commit legacy contract 5/5；Store MappedFileQueue 原回归
+  11/11、FlushManager 原回归 9/9，并新增 legacy/canonical `FlushProgress` 编译期类型身份 1/1。
+- [x] `[CONTRACT/REV]` M06 flush owner contract 扩展为 12 个 queue/group-commit owner 与 Store re-export/driver adapter，
+  定向 1/1。Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency、ArcMut zero-growth、
+  AGENTS routing、enforcing runtime audit 和 diff check 全部通过；本切片没有 ArcMut baseline 变化。
+- [x] `[SCOPE]` 未修改 batch/channel/retry/fsync/checkpoint/default config；GroupCommit worker/checkpoint、
+  AsyncFlush/CommitRealTime worker 和最终 facade 继续由 M06-04c～e 承接。顶层统计仍为 31 已完成、1 进行中、
+  50 未开始，即 51 个尚未完成。

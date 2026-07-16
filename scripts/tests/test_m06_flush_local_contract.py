@@ -36,6 +36,10 @@ class M06FlushLocalContractTests(unittest.TestCase):
             "rocketmq-store/src/log_file/flush_manager_impl/default_flush_manager.rs"
         )
         store_trait = source("rocketmq-store/src/base/flush_manager.rs")
+        local_queue = source("rocketmq-store-local/src/flush/queue.rs")
+        store_queue = source(
+            "rocketmq-store/src/consume_queue/mapped_file_queue.rs"
+        )
 
         for owner in (
             "pub struct GroupCommitRequest<E>",
@@ -70,6 +74,22 @@ class M06FlushLocalContractTests(unittest.TestCase):
         )
         self.assertNotIn("fn complete_group_commit_batch(", store_manager)
         self.assertNotIn("struct SyncFlushStats", store_manager)
+
+        for owner in (
+            "pub struct FlushProgress",
+            "pub struct SegmentFlushProgress",
+            "pub struct SegmentCommitProgress",
+            "pub struct QueueCommitProgress",
+            "pub fn try_flush_mapped_file_queue<E>",
+            "pub fn commit_mapped_file_queue(",
+        ):
+            self.assertIn(owner, local_queue)
+        self.assertIn(
+            "pub use rocketmq_store_local::flush::FlushProgress;", store_queue
+        )
+        self.assertNotIn("pub struct FlushProgress", store_queue)
+        self.assertIn("let progress = try_flush_mapped_file_queue(", store_queue)
+        self.assertIn("let progress = commit_mapped_file_queue(", store_queue)
 
 
 if __name__ == "__main__":

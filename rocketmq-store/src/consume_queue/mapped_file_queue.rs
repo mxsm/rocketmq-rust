@@ -19,6 +19,10 @@ use arc_swap::ArcSwap;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::offset_to_file_name;
+use rocketmq_store_local::flush::queue::commit_mapped_file_queue;
+use rocketmq_store_local::flush::queue::try_flush_mapped_file_queue;
+use rocketmq_store_local::flush::queue::SegmentCommitProgress;
+use rocketmq_store_local::flush::queue::SegmentFlushProgress;
 use rocketmq_store_local::mapped_file::queue_allocation::plan_mapped_file_queue_creation;
 use rocketmq_store_local::mapped_file::queue_allocation::plan_mapped_file_queue_preallocation;
 use rocketmq_store_local::mapped_file::queue_allocation::MappedFileQueueLastFile;
@@ -75,13 +79,7 @@ pub struct MappedFileQueue {
     runtime_state: MappedFileQueueRuntimeState,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct FlushProgress {
-    pub appended: i64,
-    pub durable_before: i64,
-    pub durable: i64,
-    pub store_timestamp: u64,
-}
+pub use rocketmq_store_local::flush::FlushProgress;
 
 impl Default for MappedFileQueue {
     fn default() -> Self {
@@ -126,16 +124,18 @@ impl MappedFileQueue {
     #[inline]
     pub fn commit(&self, commit_least_pages: i32) -> bool {
         let _lock = self.runtime_state.commit_lock().lock();
-
-        let mut result = true;
         let committed_where = self.get_committed_where();
-        if let Some(mapped_file) = self.find_mapped_file_by_offset(committed_where, committed_where == 0) {
-            let offset = mapped_file.commit(commit_least_pages);
-            let whered = mapped_file.get_file_from_offset() + offset as u64;
-            result = whered == self.get_committed_where() as u64;
-            self.set_committed_where(whered as i64);
-        }
-        result
+        let progress = commit_mapped_file_queue(committed_where, |offset, return_first_on_not_found| {
+            self.find_mapped_file_by_offset(offset, return_first_on_not_found)
+                .map(|mapped_file| {
+                    SegmentCommitProgress::new(
+                        mapped_file.get_file_from_offset(),
+                        mapped_file.commit(commit_least_pages),
+                    )
+                })
+        });
+        self.set_committed_where(progress.committed());
+        progress.legacy_commit_result()
     }
 
     #[inline]
@@ -831,23 +831,28 @@ impl MappedFileQueue {
     pub fn try_flush(&self, flush_least_pages: i32) -> MappedFileResult<FlushProgress> {
         let durable_before = self.get_flushed_where();
         let appended = self.get_max_offset();
-        let mut durable = durable_before;
-        let mut store_timestamp = self.get_store_timestamp();
-        if let Some(mapped_file) = self.find_mapped_file_by_offset(durable_before, durable_before == 0) {
-            let mapped_file_position = mapped_file.try_flush(flush_least_pages)?;
-            durable = (mapped_file.get_file_from_offset() + mapped_file_position as u64) as i64;
-            self.set_flushed_where(durable);
-            if flush_least_pages == 0 {
-                store_timestamp = mapped_file.get_store_timestamp();
-                self.set_store_timestamp(store_timestamp);
-            }
-        }
-        Ok(FlushProgress {
+        let progress = try_flush_mapped_file_queue(
             appended,
             durable_before,
-            durable,
-            store_timestamp,
-        })
+            self.get_store_timestamp(),
+            flush_least_pages,
+            |offset, return_first_on_not_found| {
+                self.find_mapped_file_by_offset(offset, return_first_on_not_found)
+                    .map(|mapped_file| {
+                        mapped_file.try_flush(flush_least_pages).map(|flushed_position| {
+                            SegmentFlushProgress::new(
+                                mapped_file.get_file_from_offset(),
+                                flushed_position,
+                                mapped_file.get_store_timestamp(),
+                            )
+                        })
+                    })
+                    .transpose()
+            },
+        )?;
+        self.set_flushed_where(progress.durable);
+        self.set_store_timestamp(progress.store_timestamp);
+        Ok(progress)
     }
 
     #[inline]
