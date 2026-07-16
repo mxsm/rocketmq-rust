@@ -10568,17 +10568,17 @@ def storage_local_compatibility_ledger_violations(
 ) -> list[str]:
     violations: list[str] = []
     required_ledger_fragments = (
-        "# M06-03 Local 存储兼容与所有权 Ledger",
+        "# M06-03/M06-04 Local 存储兼容与所有权 Ledger",
         "## Canonical ownership",
         "`rocketmq-store-local::mapped_file`",
         "`rocketmq-store-local::base::allocate_mapped_file_service`",
         "`rocketmq-store-local::commit_log::{load,loader,load_orchestration}`",
         "`rocketmq-store-local::commit_log::{normal_recovery,abnormal_recovery,recovery,recovery_orchestration}`",
         "`rocketmq-store-local::commit_log::{runtime_state,root}`",
+        "`rocketmq-store-local::flush::{root,group_commit,queue,worker}`",
         "## Feature compatibility",
         "`default = []`",
         "## Retained Store-only ports",
-        "- M06-04：",
         "- M06-05：",
         "- M06-06：",
         "- M06-07：",

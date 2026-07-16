@@ -1,8 +1,8 @@
-# M06-03 Local 存储兼容与所有权 Ledger
+# M06-03/M06-04 Local 存储兼容与所有权 Ledger
 
-本文冻结 PR-M06-03 完成后的 Local 存储 canonical owner、`rocketmq-store` 兼容面、后续迁移边界和删除条件。
-它只关闭 CommitLog append/load/recovery、MappedFile、MappedFileQueue 本阶段纯 owner 与 allocation service；不会提前关闭
-M06-04～M06-08 的 flush、CQ/Index、HA、Timer/POP 或 `LocalFileMessageStore` composition。
+本文冻结 PR-M06-04 完成后的 Local 存储 canonical owner、`rocketmq-store` 兼容面、后续迁移边界和删除条件。
+它关闭 CommitLog append/load/recovery、MappedFile、MappedFileQueue、allocation service 与 flush/group-commit owner；不会提前关闭
+M06-05～M06-08 的 CQ/Index、HA、Timer/POP 或 `LocalFileMessageStore` composition。
 
 ## Canonical ownership
 
@@ -15,6 +15,7 @@ M06-04～M06-08 的 flush、CQ/Index、HA、Timer/POP 或 `LocalFileMessageStore
 | CommitLog discovery/load/mmap hint/fast-safe route | `rocketmq-store-local::commit_log::{load,loader,load_orchestration}` | `commit_log_loader` 精确 re-export canonical types；Store 只适配目录/config、MappedFile、日志和统计 | M06-08 收敛 composition；旧 loader path 下一 major 前保留 |
 | CommitLog normal/abnormal recovery state、segment driver、route、completion | `rocketmq-store-local::commit_log::{normal_recovery,abnormal_recovery,recovery,recovery_orchestration}` | `commit_log_recovery` 精确 re-export公共 recovery value；Store 只提供 record I/O/parser/dispatch 和 CQ/runtime side effects | M06-04～06 迁完外部 port 后由 M06-08/11 收敛 |
 | CommitLog runtime state 与 root composition owner | `rocketmq-store-local::commit_log::{runtime_state,root}` | 旧 public `log_file::commit_log::CommitLog` 保持单字段 `CommitLogRoot<CommitLogAdapter>` facade；Store adapter 暂存 config、MappedFileQueue、dispatcher、flush/HA port | M06-08 完成 Local composition，M06-11 冻结最终 Store facade |
+| FlushManager root、GroupCommit request/batch/worker、queue flush/commit 与 real-time workers | `rocketmq-store-local::flush::{root,group_commit,queue,worker}` | 旧 `DefaultFlushManager` 保持单字段 `FlushManagerRoot<DefaultFlushManagerAdapter>` facade；Store adapter 只持有 config、TaskGroup、mapped-file I/O、checkpoint、health 与消息状态映射 | M06-08 收敛 Local composition，M06-11 冻结最终 Store facade；旧 public path 按下一 major 兼容窗口处理 |
 
 ## Feature compatibility
 
@@ -24,7 +25,8 @@ M06-04～M06-08 的 flush、CQ/Index、HA、Timer/POP 或 `LocalFileMessageStore
 
 ## Retained Store-only ports
 
-- M06-04：FlushManager、GroupCommit request/worker、checkpoint 和 SyncFlush/ack adapter。
+- M06-04 完成后仅保留 Store 外部 adapter：`MessageStoreConfig` 投影、`TaskGroup`/timer/blocking executor、具体 mapped-file
+  I/O、`StoreCheckpoint`、health recorder 与 `GroupCommitStatus -> PutMessageStatus` 映射；这些 adapter 不拥有 Local flush 算法。
 - M06-05：ConsumeQueue、Index、dispatch materialization 与 CQ timestamp。
 - M06-06：HA、replication、transfer 和 controller/replica side effects。
 - M06-07：Timer、POP、revive、stats 与 Local services。
@@ -39,11 +41,11 @@ M06-04～M06-08 的 flush、CQ/Index、HA、Timer/POP 或 `LocalFileMessageStore
 - Local 不依赖 Store facade、Broker、Remoting、RocksDB 或 TieredStore；Rocks/Tiered 不得创建第二 CommitLog。
 - Store facade 只能保留精确 re-export、type alias、composition、config 投影和外部副作用 adapter；不得重新实现已列为 Local owner 的算法。
 - facade 删除必须等到 M06-11/M09 冻结 consumer 清单，并至少跨越下一 major 兼容窗口；没有下游 canonical-import 证据不得删除。
-- PR-M06-03 可按提交/合并整体回滚，因为旧 public path、feature 入口和磁盘数据未改变；不得通过回滚恢复已被契约禁止的双 owner。
+- PR-M06-03/04 可分别按提交/合并整体回滚，因为旧 public path、feature 入口和磁盘数据未改变；不得通过回滚恢复已被契约禁止的双 owner。
 
 ## Closeout evidence
 
-- `rocketmq-store-local` all-feature 单元、integration 与 doctest 全绿；Store lib 537/537。
-- 完整 M06 owner/adapter/mutation contract 160/160；Local/Store strict Clippy 与 workspace fmt 全绿。
+- `rocketmq-store-local` all-feature 单元、integration 与 doctest 全绿；Store all-feature lib 545/545。
+- M06 flush owner contract 1/1 与完整 M06 owner/adapter/mutation contract 160/160 全绿；Local/Store strict Clippy 与 workspace fmt 全绿。
 - architecture dependency、ArcMut zero-growth、AGENTS routing、enforcing runtime audit 与 diff check 全绿。
-- `git fetch origin main` 后分支相对 `origin/main` 为 0 behind；PR-M06-03 没有未合入的 main 基线。
+- `git fetch origin main` 后分支相对 `origin/main` 为 0 behind；PR-M06-04 没有未合入的 main 基线。

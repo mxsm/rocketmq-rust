@@ -37,6 +37,7 @@ class M06FlushLocalContractTests(unittest.TestCase):
         )
         store_trait = source("rocketmq-store/src/base/flush_manager.rs")
         local_queue = source("rocketmq-store-local/src/flush/queue.rs")
+        local_manager_root = source("rocketmq-store-local/src/flush/root.rs")
         local_worker = source("rocketmq-store-local/src/flush/worker.rs")
         store_queue = source(
             "rocketmq-store/src/consume_queue/mapped_file_queue.rs"
@@ -112,6 +113,23 @@ class M06FlushLocalContractTests(unittest.TestCase):
         self.assertIn("run_commit_real_time_worker(", store_manager)
         self.assertNotIn("let mut last_flush_timestamp", store_manager)
         self.assertNotIn("let mut last_commit_timestamp", store_manager)
+
+        self.assertIn("pub struct FlushManagerRoot<A>", local_manager_root)
+        self.assertIn("pub fn adapter(&self) -> &A", local_manager_root)
+        self.assertIn("pub fn adapter_mut(&mut self) -> &mut A", local_manager_root)
+        self.assertIn("pub mod root;", local_root)
+        self.assertRegex(
+            store_manager,
+            r"pub struct DefaultFlushManager\s*\{\s*"
+            r"root: FlushManagerRoot<DefaultFlushManagerAdapter>,\s*\}",
+        )
+        self.assertIn(
+            "pub use adapter::DefaultFlushManager as DefaultFlushManagerAdapter;",
+            store_manager,
+        )
+        self.assertIn("impl Deref for DefaultFlushManager", store_manager)
+        self.assertIn("impl DerefMut for DefaultFlushManager", store_manager)
+        self.assertNotIn(".flush(", store_manager)
 
 
 if __name__ == "__main__":

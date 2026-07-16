@@ -29,15 +29,15 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 31 | 1（PR-M06-04） | 50 未开始；合计 51 尚未完成 | 82 |
+| PR 级工作包 | 32 | 0 | 50 未开始；合计 50 尚未完成 | 82 |
 | 里程碑 | 5（M01–M05） | 1（M06） | 6（M07–M12） | 12 |
 | 新增边界 crate | 6 | 0 | 4（store-rocksdb、proxy-core/cluster/local） | 10 |
 | 根 workspace package | 28 | — | 还差 4 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
 剩余 50 个未开始工作包分布：M06-05～12 为 8 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
-M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-04 正在迁移 Flush/GroupCommit owner，完成后尚未完成总数才会从 51
-降为 50；当前下一工作包仍为 PR-M06-04。
+M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-04 已完成 Flush/GroupCommit owner 迁移；当前下一工作包为
+PR-M06-05。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -180,12 +180,12 @@ M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-04 正在迁移 Flush/Gr
   - [x] M06-03az：迁移 CommitLog append outcome resolution owner 到 Local，Store 仅保留 status/log/lock/flush/HA adapter
   - [x] M06-03ba：迁移 CommitLog recovery completion owner 到 Local，Store 四条 recovery 路径统一为 completion side-effect adapter
   - [x] M06-03bb：冻结 Local/Store compatibility ledger、feature/re-export/facade contract 并完成父项收口
-- [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
+- [x] PR-M06-04：机械迁移 Flush 与 Group Commit
   - [x] M06-04a：迁移 GroupCommit request、batch completion 与 SyncFlush runtime stats owner 到 Local，Store 保留 status/error/health adapter
   - [x] M06-04b：迁移 canonical `FlushProgress` 与 MappedFileQueue flush/commit I/O owner，Store 保留 legacy path
   - [x] M06-04c：迁移 GroupCommit worker 驱动与 checkpoint completion owner
   - [x] M06-04d：迁移 AsyncFlush/CommitRealTime worker 驱动与生命周期 owner
-  - [ ] M06-04e：收敛 FlushManager facade、SyncFlush/ack adapter、兼容 ledger 与父项验收
+  - [x] M06-04e：收敛 FlushManager facade、SyncFlush/ack adapter、兼容 ledger 与父项验收
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer
 - [ ] PR-M06-07：迁移 Timer、POP 与 Local Services

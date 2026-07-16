@@ -12,12 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Canonical Local flush and group-commit primitives.
+use rocketmq_store_local::flush::root::FlushManagerRoot;
 
-pub mod group_commit;
-pub mod queue;
-pub mod root;
-pub mod worker;
+#[test]
+fn flush_manager_root_preserves_exclusive_adapter_identity() {
+    let root = FlushManagerRoot::new(String::from("flush-adapter"));
 
-pub use group_commit::SyncFlushRuntimeInfo;
-pub use queue::FlushProgress;
+    assert_eq!(root.adapter(), "flush-adapter");
+    assert_eq!(root.into_adapter(), "flush-adapter");
+}
+
+#[test]
+fn flush_manager_root_exposes_one_mutable_adapter_owner() {
+    let mut root = FlushManagerRoot::new(vec![1_u64, 2]);
+
+    root.adapter_mut().push(3);
+
+    assert_eq!(root.adapter(), &[1, 2, 3]);
+}

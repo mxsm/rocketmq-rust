@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03 已完成，PR-M06-04a～d 已完成，继续 M06-04e |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04 已完成，继续 PR-M06-05 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -79,11 +79,11 @@
 ### PR-M06-04：机械迁移 Flush 与 Group Commit
 
 - [x] 入口：`[TEST]` M02 的 `try_flush`、legacy adapter 和 SyncFlush/ack 契约测试全部通过；任何行为缺陷先回 M02 修复。
-- [ ] `[DEV]` 只迁移 flush manager、group-commit request/worker 和 checkpoint 接线；canonical `try_flush` 与 R0 `flush() -> i64` adapter 语义保持不变。
-- [ ] `[DEV]` 所有 SyncFlush/ack 继续只调用 `try_flush`；legacy adapter 留 facade，不作为内部确认入口。
-- [ ] `[TEST]` focused test：I/O failure、同批 waiter、group-commit batching、watermark 单调性和 crash/restart。
-- [ ] `[REV]` 以机械迁移 diff 审查，没有顺带调整 batch 阈值、fsync 策略、错误分类或默认配置。
-- [ ] 回滚点：flush delegation 指回迁移前模块；不得回滚 M02 正确性契约或恢复 `i64` ack 判定。
+- [x] `[DEV]` 只迁移 flush manager、group-commit request/worker 和 checkpoint 接线；canonical `try_flush` 与 R0 `flush() -> i64` adapter 语义保持不变。
+- [x] `[DEV]` 所有 SyncFlush/ack 继续只调用 `try_flush`；legacy adapter 留 facade，不作为内部确认入口。
+- [x] `[TEST]` focused test：I/O failure、同批 waiter、group-commit batching、watermark 单调性和 crash/restart。
+- [x] `[REV]` 以机械迁移 diff 审查，没有顺带调整 batch 阈值、fsync 策略、错误分类或默认配置。
+- [x] 回滚点：flush delegation 指回迁移前模块；不得回滚 M02 正确性契约或恢复 `i64` ack 判定。
 
 ### PR-M06-05：迁移 CQ 与 Index
 
@@ -2123,3 +2123,26 @@ python scripts/arc_mut_guard.py
   参数）按 ADR-013 一对一 relocation 后仍为 1,171 identities/3,233 occurrences，零新增债务。
 - [x] `[SCOPE]` 本切片不收口最终 FlushManager facade、SyncFlush/ack adapter 或 compatibility ledger；它们继续由
   M06-04e 承接。顶层统计保持 31 已完成、1 进行中、50 未开始，即 51 个尚未完成。
+
+## M06-04e FlushManager facade and parent closeout evidence
+
+- [x] `[DEV/OWNER]` 新增 Local 泛型 `FlushManagerRoot<A>`，唯一拥有完整 composition adapter；Store 旧
+  `DefaultFlushManager` 收敛为仅含 `FlushManagerRoot<DefaultFlushManagerAdapter>` 的单字段 facade，并通过窄
+  `Deref/DerefMut` 委托保持构造、trait 与内部调用兼容。
+- [x] `[ADAPTER/COMPAT]` Store adapter 继续持有 `MessageStoreConfig`、三个 service lifecycle、MappedFileQueue、
+  SyncFlush stats 与 health recorder；`GroupCommitStatus` 仍穷尽映射为 `PutOk/FlushDiskTimeout`。source contract 禁止
+  facade 内部调用 legacy `.flush()`，所有确认路径继续只经 `try_flush`/durable watermark。
+- [x] `[LEDGER]` `06-storage-local-compatibility-ledger.md` 升级为 M06-03/M06-04 快照，冻结
+  `flush::{root,group_commit,queue,worker}` canonical owner、Store-only 外部 adapter、下一 major 删除窗口与分 PR 回滚规则。
+- [x] `[TEST]` Local `FlushManagerRoot` identity/mutable-owner 2/2、Store FlushManager 9/9、Local all-feature unit/integration/
+  doctest 全绿、Store all-feature lib 545/545；I/O failure、同批 waiter、batching、watermark 单调性与 crash-before-flush
+  均由上述 suite 覆盖。
+- [x] `[CONTRACT]` M06 flush owner contract 1/1，完整 M06 owner/adapter/mutation contract 160/160（755.875s）；
+  compatibility ledger 定向 mutation test 1/1。契约锁定单字段 facade、Local root、无 duplicate owner 与 feature 转发。
+- [x] `[REV]` Local/Store strict Clippy、root workspace `--no-deps --all-targets --all-features -D warnings` Clippy、workspace
+  fmt、architecture dependency、ArcMut zero-growth、AGENTS routing、enforcing runtime audit 和 diff check 全部退出码 0。
+  唯一 facade field relocation 按 ADR-013 一对一更新后仍为 1,171 identities/3,233 occurrences，零新增债务。
+- [x] `[MAIN/ROLLBACK]` `git fetch origin main` 后分支相对 `origin/main` 为 0 behind；旧 Store public path、feature、默认配置、
+  batch/channel/retry/fsync/checkpoint 与磁盘格式未改变，可整体 revert PR-M06-04，但不得恢复双 owner 或 `i64` ack 判定。
+- [x] `[INVENTORY]` PR-M06-04 父项关闭，M06 整体仍进行中且 Exit Checklist 保持未完成。82 个顶层工作包更新为
+  32 已完成、0 进行中、50 未开始，即 50 个尚未完成；下一工作包为 PR-M06-05。

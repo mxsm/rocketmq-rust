@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +27,7 @@ use rocketmq_store_local::flush::group_commit::GroupCommitWorkerConfig;
 use rocketmq_store_local::flush::group_commit::GroupCommitWorkerPorts;
 use rocketmq_store_local::flush::group_commit::SyncFlushStats;
 use rocketmq_store_local::flush::group_commit::GROUP_COMMIT_CHANNEL_CAPACITY;
+use rocketmq_store_local::flush::root::FlushManagerRoot;
 use rocketmq_store_local::flush::worker::run_commit_real_time_worker;
 use rocketmq_store_local::flush::worker::run_flush_real_time_worker;
 use rocketmq_store_local::flush::worker::CommitRealTimeWorkerConfig;
@@ -53,13 +56,38 @@ use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitReques
 use crate::store_error::StoreError;
 
 pub struct DefaultFlushManager {
-    group_commit_service: Option<GroupCommitService>,
-    flush_real_time_service: Option<FlushRealTimeService>,
-    commit_real_time_service: Option<CommitRealTimeService>,
-    message_store_config: Arc<MessageStoreConfig>,
-    mapped_file_queue: Option<ArcMut<MappedFileQueue>>,
-    sync_flush_stats: SyncFlushStats,
-    store_health_recorder: StoreHealthRecorder,
+    root: FlushManagerRoot<DefaultFlushManagerAdapter>,
+}
+
+mod adapter {
+    /// Store-owned composition dependencies used by the legacy flush-manager facade.
+    #[doc(hidden)]
+    pub struct DefaultFlushManager {
+        pub(super) group_commit_service: Option<super::GroupCommitService>,
+        pub(super) flush_real_time_service: Option<super::FlushRealTimeService>,
+        pub(super) commit_real_time_service: Option<super::CommitRealTimeService>,
+        pub(super) message_store_config: super::Arc<super::MessageStoreConfig>,
+        pub(super) mapped_file_queue: Option<super::ArcMut<super::MappedFileQueue>>,
+        pub(super) sync_flush_stats: super::SyncFlushStats,
+        pub(super) store_health_recorder: super::StoreHealthRecorder,
+    }
+}
+
+#[doc(hidden)]
+pub use adapter::DefaultFlushManager as DefaultFlushManagerAdapter;
+
+impl Deref for DefaultFlushManager {
+    type Target = DefaultFlushManagerAdapter;
+
+    fn deref(&self) -> &Self::Target {
+        self.root.adapter()
+    }
+}
+
+impl DerefMut for DefaultFlushManager {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.root.adapter_mut()
+    }
 }
 
 impl DefaultFlushManager {
@@ -112,13 +140,15 @@ impl DefaultFlushManager {
         };
 
         DefaultFlushManager {
-            group_commit_service,
-            flush_real_time_service,
-            message_store_config,
-            commit_real_time_service,
-            mapped_file_queue: Some(mapped_file_queue),
-            sync_flush_stats,
-            store_health_recorder,
+            root: FlushManagerRoot::new(DefaultFlushManagerAdapter {
+                group_commit_service,
+                flush_real_time_service,
+                message_store_config,
+                commit_real_time_service,
+                mapped_file_queue: Some(mapped_file_queue),
+                sync_flush_stats,
+                store_health_recorder,
+            }),
         }
     }
 
