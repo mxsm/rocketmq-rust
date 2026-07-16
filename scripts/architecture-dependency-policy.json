@@ -426,7 +426,7 @@
   "client_policy": {
     "package": "rocketmq-client-rust",
     "crate_names": ["rocketmq_client_rust", "rocketmq_client"],
-    "baseline_manifest_consumers": 5,
+    "baseline_manifest_consumers": 4,
     "baseline_standalone_consumers": 3,
     "target_manifest_allowlist": [
       "rocketmq-proxy-cluster",
