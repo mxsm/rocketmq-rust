@@ -18,13 +18,27 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use bytes::Buf;
-use bytes::BufMut;
-use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_store_local::consume_queue::batch::correct_batch_min_offsets;
+use rocketmq_store_local::consume_queue::batch::find_batch_record_in_files;
+use rocketmq_store_local::consume_queue::batch::find_first_batch_record;
+use rocketmq_store_local::consume_queue::batch::find_last_batch_record;
+use rocketmq_store_local::consume_queue::batch::plan_batch_truncate;
+use rocketmq_store_local::consume_queue::batch::scan_batch_recovery;
+use rocketmq_store_local::consume_queue::batch::search_batch_offset_by_time;
+use rocketmq_store_local::consume_queue::batch::BatchConsumeQueueRecord;
+use rocketmq_store_local::consume_queue::batch::BatchRecordPosition;
+use rocketmq_store_local::consume_queue::batch::BatchTruncatePlan;
+pub(crate) use rocketmq_store_local::consume_queue::batch::BATCH_CQ_STORE_UNIT_SIZE as CQ_STORE_UNIT_SIZE;
+use rocketmq_store_local::consume_queue::batch::INVALID_COMPACTED_OFFSET as INVALID_POS;
+use rocketmq_store_local::consume_queue::root::drive_consume_queue_dispatch;
+use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchMetadata;
+use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchMode;
+use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchOutcome;
+use rocketmq_store_local::consume_queue::single::ConsumeQueueTimeBoundary;
 use tracing::info;
 use tracing::warn;
 
@@ -39,31 +53,6 @@ use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::CqUnit;
 use crate::queue::FileQueueLifeCycle;
-
-pub(crate) const CQ_STORE_UNIT_SIZE: i32 = 46;
-const MSG_STORE_TIME_OFFSET_INDEX: i32 = 20;
-const MSG_BASE_OFFSET_INDEX: i32 = 28;
-const MSG_BATCH_SIZE_INDEX: i32 = 36;
-const MSG_COMPACT_OFFSET_LENGTH: i32 = 4;
-const INVALID_POS: i32 = -1;
-
-#[derive(Clone, Debug)]
-struct BatchQueueEntry {
-    pos: i64,
-    size: i32,
-    tags_code: i64,
-    store_time: i64,
-    msg_base_offset: i64,
-    batch_size: i16,
-    compacted_offset: i32,
-    raw: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct BatchRecordPosition {
-    file_index: usize,
-    position: i32,
-}
 
 pub struct BatchConsumeQueue {
     message_store_config: Arc<MessageStoreConfig>,
@@ -125,106 +114,37 @@ impl BatchConsumeQueue {
         }
     }
 
-    fn encode_unit(
-        offset: i64,
-        size: i32,
-        tags_code: i64,
-        store_time: i64,
-        msg_base_offset: i64,
-        batch_size: i16,
-        compacted_offset: i32,
-    ) -> Vec<u8> {
-        let mut bytes = BytesMut::with_capacity(CQ_STORE_UNIT_SIZE as usize);
-        bytes.put_i64(offset);
-        bytes.put_i32(size);
-        bytes.put_i64(tags_code);
-        bytes.put_i64(store_time);
-        bytes.put_i64(msg_base_offset);
-        bytes.put_i16(batch_size);
-        bytes.put_i32(compacted_offset);
-        bytes.put_i32(0);
-        bytes.to_vec()
-    }
-
-    fn read_entry(mapped_file: &Arc<DefaultMappedFile>, position: i32) -> Option<BatchQueueEntry> {
+    fn read_entry(mapped_file: &Arc<DefaultMappedFile>, position: i32) -> Option<BatchConsumeQueueRecord> {
         if position < 0 || position + CQ_STORE_UNIT_SIZE > mapped_file.get_read_position() {
             return None;
         }
 
-        let mut bytes = mapped_file.get_bytes(position as usize, CQ_STORE_UNIT_SIZE as usize)?;
-        let raw = bytes.as_ref().to_vec();
-        let pos = bytes.get_i64();
-        let size = bytes.get_i32();
-        let tags_code = bytes.get_i64();
-        let store_time = bytes.get_i64();
-        let msg_base_offset = bytes.get_i64();
-        let batch_size = bytes.get_i16();
-        let compacted_offset = bytes.get_i32();
-        let _reserved = bytes.get_i32();
+        let bytes = mapped_file.get_bytes(position as usize, CQ_STORE_UNIT_SIZE as usize)?;
+        BatchConsumeQueueRecord::decode(bytes.as_ref()).filter(|record| record.is_valid())
+    }
 
-        if pos < 0 || size <= 0 || msg_base_offset < 0 || batch_size <= 0 {
-            return None;
-        }
-
-        Some(BatchQueueEntry {
-            pos,
-            size,
-            tags_code,
-            store_time,
-            msg_base_offset,
-            batch_size,
-            compacted_offset,
-            raw,
+    fn read_first_valid_entry(mapped_file: &Arc<DefaultMappedFile>) -> Option<(i32, BatchConsumeQueueRecord)> {
+        find_first_batch_record(mapped_file.get_read_position(), |position| {
+            Self::read_entry(mapped_file, position)
         })
     }
 
-    fn read_first_valid_entry(mapped_file: &Arc<DefaultMappedFile>) -> Option<(i32, BatchQueueEntry)> {
-        let mut position = 0;
-        while position + CQ_STORE_UNIT_SIZE <= mapped_file.get_read_position() {
-            if let Some(entry) = Self::read_entry(mapped_file, position) {
-                return Some((position, entry));
-            }
-            position += CQ_STORE_UNIT_SIZE;
-        }
-        None
-    }
-
-    fn read_last_valid_entry(mapped_file: &Arc<DefaultMappedFile>) -> Option<(i32, BatchQueueEntry)> {
-        let mut position = mapped_file.get_read_position() - CQ_STORE_UNIT_SIZE;
-        while position >= 0 {
-            if let Some(entry) = Self::read_entry(mapped_file, position) {
-                return Some((position, entry));
-            }
-            if position < CQ_STORE_UNIT_SIZE {
-                break;
-            }
-            position -= CQ_STORE_UNIT_SIZE;
-        }
-        None
+    fn read_last_valid_entry(mapped_file: &Arc<DefaultMappedFile>) -> Option<(i32, BatchConsumeQueueRecord)> {
+        find_last_batch_record(mapped_file.get_read_position(), |position| {
+            Self::read_entry(mapped_file, position)
+        })
     }
 
     fn find_record_position_in_snapshot(
         files: &[Arc<DefaultMappedFile>],
         queue_offset: i64,
-    ) -> Option<(BatchRecordPosition, BatchQueueEntry)> {
-        let mut candidate: Option<(BatchRecordPosition, BatchQueueEntry)> = None;
-
-        for (file_index, mapped_file) in files.iter().enumerate() {
-            let mut position = 0;
-            while position + CQ_STORE_UNIT_SIZE <= mapped_file.get_read_position() {
-                let Some(entry) = Self::read_entry(mapped_file, position) else {
-                    break;
-                };
-                if entry.msg_base_offset <= queue_offset {
-                    candidate = Some((BatchRecordPosition { file_index, position }, entry));
-                    position += CQ_STORE_UNIT_SIZE;
-                    continue;
-                }
-                return candidate;
-            }
-        }
-
-        candidate
+    ) -> Option<(BatchRecordPosition, BatchConsumeQueueRecord)> {
+        find_batch_record_in_files(
+            files.len(),
+            queue_offset,
+            |file_index| files[file_index].get_read_position(),
+            |file_index, position| Self::read_entry(&files[file_index], position),
+        )
     }
 
     fn find_record_position(&self, queue_offset: i64) -> Option<(Vec<Arc<DefaultMappedFile>>, BatchRecordPosition)> {
@@ -238,14 +158,14 @@ impl BatchConsumeQueue {
         Some((files, position))
     }
 
-    fn entry_to_cq_unit(entry: BatchQueueEntry) -> CqUnit {
+    fn entry_to_cq_unit(entry: BatchConsumeQueueRecord) -> CqUnit {
         CqUnit {
-            queue_offset: entry.msg_base_offset,
-            size: entry.size,
-            pos: entry.pos,
+            queue_offset: entry.message_base_offset,
+            size: entry.message_size,
+            pos: entry.physical_offset,
             batch_num: entry.batch_size,
             tags_code: entry.tags_code,
-            native_buffer: entry.raw,
+            native_buffer: entry.encode().to_vec(),
             compacted_offset: entry.compacted_offset,
             ..CqUnit::default()
         }
@@ -258,7 +178,8 @@ impl BatchConsumeQueue {
                     mapped_file.get_file_from_offset() as i64 + position as i64,
                     Ordering::Release,
                 );
-                self.min_offset_in_queue.store(entry.msg_base_offset, Ordering::Release);
+                self.min_offset_in_queue
+                    .store(entry.message_base_offset, Ordering::Release);
                 return;
             }
         }
@@ -271,9 +192,9 @@ impl BatchConsumeQueue {
         for mapped_file in self.mapped_file_queue.iter_reversed() {
             if let Some((_, entry)) = Self::read_last_valid_entry(&mapped_file) {
                 self.max_offset_in_queue
-                    .store(entry.msg_base_offset + entry.batch_size as i64, Ordering::Release);
+                    .store(entry.queue_end_offset(), Ordering::Release);
                 self.max_msg_phy_offset_in_commit_log
-                    .store(entry.pos + entry.size as i64, Ordering::Release);
+                    .store(entry.physical_end_offset(), Ordering::Release);
                 return;
             }
         }
@@ -307,7 +228,7 @@ impl BatchConsumeQueue {
             return true;
         }
 
-        let record = Self::encode_unit(
+        let record = BatchConsumeQueueRecord::new(
             offset,
             size,
             tags_code,
@@ -325,7 +246,7 @@ impl BatchConsumeQueue {
         };
 
         let is_new_file = mapped_file.get_read_position() < CQ_STORE_UNIT_SIZE;
-        if mapped_file.append_message_bytes(&record) {
+        if mapped_file.append_message_bytes(&record.encode()) {
             self.max_msg_phy_offset_in_commit_log
                 .store(offset + size as i64, Ordering::Release);
             self.max_offset_in_queue
@@ -371,21 +292,18 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
 
         loop {
             let read_position = mapped_file.get_read_position();
-            mapped_file_offset = 0;
-
-            while mapped_file_offset + CQ_STORE_UNIT_SIZE <= read_position {
-                let Some(entry) = Self::read_entry(&mapped_file, mapped_file_offset) else {
-                    info!(
-                        "Recover current batch consume queue file over, file={} mappedFileOffset={}",
-                        mapped_file.get_file_name(),
-                        mapped_file_offset
-                    );
-                    break;
-                };
-
-                mapped_file_offset += CQ_STORE_UNIT_SIZE;
+            let scan = scan_batch_recovery(read_position, |position| Self::read_entry(&mapped_file, position));
+            mapped_file_offset = scan.valid_bytes;
+            if let Some(max_physical_offset) = scan.max_physical_offset {
                 self.max_msg_phy_offset_in_commit_log
-                    .store(entry.pos + entry.size as i64, Ordering::Release);
+                    .store(max_physical_offset, Ordering::Release);
+            }
+            if mapped_file_offset < read_position {
+                info!(
+                    "Recover current batch consume queue file over, file={} mappedFileOffset={}",
+                    mapped_file.get_file_name(),
+                    mapped_file_offset
+                );
             }
 
             if mapped_file_offset == read_position {
@@ -450,46 +368,26 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
             mapped_file.set_committed_position(0);
             mapped_file.set_flushed_position(0);
 
-            let mut remove_file = false;
-            let mut stop = false;
-            let mut position = 0;
-
-            while position + CQ_STORE_UNIT_SIZE <= self.mapped_file_size as i32 {
-                let Some(entry) = Self::read_entry(&mapped_file, position) else {
-                    stop = true;
-                    break;
-                };
-
-                if position == 0 && entry.pos >= max_commit_log_pos {
-                    remove_file = true;
+            match plan_batch_truncate(self.mapped_file_size as i32, max_commit_log_pos, |position| {
+                Self::read_entry(&mapped_file, position)
+            }) {
+                BatchTruncatePlan::RetryFile => continue,
+                BatchTruncatePlan::DeleteFile => {
+                    self.mapped_file_queue.delete_last_mapped_file();
+                }
+                BatchTruncatePlan::Retain {
+                    valid_bytes,
+                    max_physical_offset,
+                } => {
+                    mapped_file.set_wrote_position(valid_bytes);
+                    mapped_file.set_committed_position(valid_bytes);
+                    mapped_file.set_flushed_position(valid_bytes);
+                    if let Some(max_physical_offset) = max_physical_offset {
+                        self.max_msg_phy_offset_in_commit_log
+                            .store(max_physical_offset, Ordering::Release);
+                    }
                     break;
                 }
-
-                if entry.pos >= max_commit_log_pos {
-                    stop = true;
-                    break;
-                }
-
-                position += CQ_STORE_UNIT_SIZE;
-                mapped_file.set_wrote_position(position);
-                mapped_file.set_committed_position(position);
-                mapped_file.set_flushed_position(position);
-                self.max_msg_phy_offset_in_commit_log
-                    .store(entry.pos + entry.size as i64, Ordering::Release);
-
-                if position == self.mapped_file_size as i32 {
-                    stop = true;
-                    break;
-                }
-            }
-
-            if remove_file {
-                self.mapped_file_queue.delete_last_mapped_file();
-                continue;
-            }
-
-            if stop {
-                break;
             }
         }
 
@@ -512,7 +410,7 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
         let next_file_index = position.file_index + 1;
         if let Some(next_file) = files.get(next_file_index) {
             if let Some((_, entry)) = Self::read_first_valid_entry(next_file) {
-                return entry.msg_base_offset;
+                return entry.message_base_offset;
             }
         }
 
@@ -678,61 +576,51 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
             return;
         }
 
-        let mut next_min_offset = self.get_min_offset_in_queue();
-        let mut next_logic_offset = self.get_min_logic_offset();
-        let mut found_valid = false;
-
-        for mapped_file in self.mapped_file_queue.iter() {
-            let mut position = 0;
-            while position + CQ_STORE_UNIT_SIZE <= mapped_file.get_read_position() {
-                let Some(entry) = Self::read_entry(&mapped_file, position) else {
-                    break;
-                };
-
-                if entry.pos < min_commit_log_offset {
-                    next_min_offset = entry.msg_base_offset + entry.batch_size as i64;
-                    next_logic_offset =
-                        mapped_file.get_file_from_offset() as i64 + position as i64 + CQ_STORE_UNIT_SIZE as i64;
-                    position += CQ_STORE_UNIT_SIZE;
-                    continue;
-                }
-
-                next_min_offset = entry.msg_base_offset;
-                next_logic_offset = mapped_file.get_file_from_offset() as i64 + position as i64;
-                found_valid = true;
-                break;
-            }
-
-            if found_valid {
-                break;
-            }
-        }
-
-        self.min_offset_in_queue.store(next_min_offset, Ordering::Release);
-        self.min_logic_offset.store(next_logic_offset, Ordering::Release);
+        let files = self.mapped_file_queue.snapshot();
+        let selected = correct_batch_min_offsets(
+            files.len(),
+            min_commit_log_offset,
+            self.get_min_offset_in_queue(),
+            self.get_min_logic_offset(),
+            |file_index| files[file_index].get_read_position(),
+            |file_index| files[file_index].get_file_from_offset() as i64,
+            |file_index, position| Self::read_entry(&files[file_index], position),
+        );
+        self.min_offset_in_queue.store(selected.queue_offset, Ordering::Release);
+        self.min_logic_offset.store(selected.logic_offset, Ordering::Release);
     }
 
     #[inline]
     fn put_message_position_info_wrapper(&mut self, request: &DispatchRequest) {
-        if request.msg_base_offset < 0 || request.batch_size <= 0 {
-            warn!(
-                "unexpected dispatch request in batch consume queue topic={} queue={} commit_log_offset={}",
-                self.topic, self.queue_id, request.commit_log_offset
-            );
-            return;
-        }
-
-        for _ in 0..30 {
-            if self.put_batch_message_position_info(
-                request.commit_log_offset,
-                request.msg_size,
-                request.tags_code,
-                request.store_timestamp,
-                request.msg_base_offset,
-                request.batch_size,
-            ) {
+        let outcome = drive_consume_queue_dispatch(
+            ConsumeQueueDispatchMode::Batch,
+            ConsumeQueueDispatchMetadata {
+                message_base_offset: request.msg_base_offset,
+                batch_size: request.batch_size,
+            },
+            true,
+            30,
+            |_| {
+                self.put_batch_message_position_info(
+                    request.commit_log_offset,
+                    request.msg_size,
+                    request.tags_code,
+                    request.store_timestamp,
+                    request.msg_base_offset,
+                    request.batch_size,
+                )
+            },
+        );
+        match outcome {
+            ConsumeQueueDispatchOutcome::Appended { .. } => return,
+            ConsumeQueueDispatchOutcome::InvalidBatch => {
+                warn!(
+                    "unexpected dispatch request in batch consume queue topic={} queue={} commit_log_offset={}",
+                    self.topic, self.queue_id, request.commit_log_offset
+                );
                 return;
             }
+            ConsumeQueueDispatchOutcome::NotWriteable | ConsumeQueueDispatchOutcome::Exhausted { .. } => {}
         }
 
         warn!(
@@ -799,7 +687,7 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
         Some(Box::new(BatchConsumeQueueIterator {
             files,
             file_index: position.file_index,
-            position: position.position,
+            position: position.relative_offset,
         }))
     }
 
@@ -812,37 +700,18 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
     }
 
     fn get_offset_in_queue_by_time_with_boundary(&self, timestamp: i64, boundary_type: BoundaryType) -> i64 {
-        let mut candidate = None;
-        let mut last_seen = None;
-
-        for mapped_file in self.mapped_file_queue.iter() {
-            let mut position = 0;
-            while position + CQ_STORE_UNIT_SIZE <= mapped_file.get_read_position() {
-                let Some(entry) = Self::read_entry(&mapped_file, position) else {
-                    break;
-                };
-                last_seen = Some(entry.msg_base_offset);
-                if entry.store_time < timestamp {
-                    position += CQ_STORE_UNIT_SIZE;
-                    continue;
-                }
-
-                match boundary_type {
-                    BoundaryType::Lower => return entry.msg_base_offset,
-                    BoundaryType::Upper => {
-                        candidate = Some(entry.msg_base_offset);
-                        position += CQ_STORE_UNIT_SIZE;
-                        continue;
-                    }
-                }
-            }
-
-            if let Some(offset) = candidate {
-                return offset;
-            }
-        }
-
-        candidate.or(last_seen).unwrap_or(-1)
+        let files = self.mapped_file_queue.snapshot();
+        let boundary = match boundary_type {
+            BoundaryType::Lower => ConsumeQueueTimeBoundary::Lower,
+            BoundaryType::Upper => ConsumeQueueTimeBoundary::Upper,
+        };
+        search_batch_offset_by_time(
+            files.len(),
+            timestamp,
+            boundary,
+            |file_index| files[file_index].get_read_position(),
+            |file_index, position| Self::read_entry(&files[file_index], position),
+        )
     }
 }
 
@@ -877,6 +746,7 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::BufMut;
+    use bytes::BytesMut;
     use cheetah_string::CheetahString;
     use tempfile::tempdir;
 
@@ -1037,5 +907,18 @@ mod tests {
         let latest = consume_queue.get(6).expect("remaining batch");
         assert_eq!(latest.queue_offset, 6);
         assert_eq!(latest.batch_num, 2);
+    }
+
+    #[test]
+    fn batch_consume_queue_rejects_invalid_dispatch_before_creating_a_file() {
+        let root = tempdir().expect("tempdir");
+        let store_path = CheetahString::from_string(root.path().join("batch-cq").to_string_lossy().to_string());
+        let mut consume_queue = create_batch_consume_queue(store_path, (CQ_STORE_UNIT_SIZE * 2) as usize);
+
+        consume_queue.put_message_position_info_wrapper(&dispatch_request(100, 40, 1_000, -1, 1));
+
+        assert_eq!(consume_queue.get_mapped_file_count(), 0);
+        assert_eq!(consume_queue.get_max_offset_in_queue(), 0);
+        assert_eq!(consume_queue.get_max_physic_offset(), -1);
     }
 }

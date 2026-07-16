@@ -13,29 +13,27 @@
 // limitations under the License.
 
 use std::io;
-use std::mem;
 use std::sync::Arc;
 
-use bytes::Buf;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
+use rocketmq_store_local::index::codec::index_file_total_size as local_index_file_total_size;
+use rocketmq_store_local::index::codec::IndexLayoutError;
+use rocketmq_store_local::index::codec::INDEX_ENTRY_SIZE;
+use rocketmq_store_local::index::codec::INDEX_HASH_SLOT_SIZE;
+use rocketmq_store_local::index::file::drive_index_put;
+use rocketmq_store_local::index::file::is_index_time_matched;
+use rocketmq_store_local::index::file::normalize_index_key_hash;
+use rocketmq_store_local::index::file::query_index_offsets;
+use rocketmq_store_local::index::file::IndexFileSnapshot;
+use rocketmq_store_local::index::file::IndexHeaderUpdate;
+use rocketmq_store_local::index::file::IndexPutOutcome;
 use tracing::info;
 use tracing::warn;
 
 use crate::index::index_header::IndexHeader;
-use crate::index::index_header::INDEX_HEADER_SIZE;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
-
-/// Size of each hash slot entry (4 bytes for i32 index pointer)
-const HASH_SLOT_SIZE: usize = 4;
-
-/// Size of each index entry (20 bytes total)
-/// Layout: keyHash(4) + phyOffset(8) + timeDiff(4) + nextIndex(4) = 20 bytes
-const INDEX_SIZE: usize = 20;
-
-/// Invalid index marker (0 means no previous index in chain)
-const INVALID_INDEX: i32 = 0;
 
 /// Default hash slot count (5 million slots)
 /// Same as Java: org.apache.rocketmq.store.config.MessageStoreConfig.maxHashSlotNum
@@ -190,95 +188,40 @@ impl IndexFile {
     }
 
     pub fn put_key(&self, key: &str, phy_offset: i64, store_timestamp: i64) -> bool {
-        if self.index_header.get_index_count() < self.index_num as i32 {
-            let hash_code = self.index_key_hash_method(key);
-            let slot_pos = hash_code as usize % self.hash_slot_num;
-            // Calculate the absolute position of the slot
-            let abs_slot_pos = INDEX_HEADER_SIZE + slot_pos * HASH_SLOT_SIZE;
-
-            // SAFETY: IndexFile requires external write serialization, and the derived borrow is
-            // confined to the current slot update.
-            let (ptr, len) = unsafe { self.mapped_file.mapped_file_mut_parts() };
-            // SAFETY: the mapped-file owner returned a live range and external serialization keeps
-            // this mutable slice exclusive.
-            let mapped_file = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
-
-            let mut slot_value = mapped_file.get(abs_slot_pos..abs_slot_pos + 4).unwrap().get_i32();
-
-            if slot_value <= INVALID_INDEX || slot_value > self.index_header.get_index_count() {
-                slot_value = INVALID_INDEX;
+        let outcome = drive_index_put(
+            self.snapshot(),
+            self.index_key_hash_method(key),
+            phy_offset,
+            store_timestamp,
+            |position| self.read_index_bytes(position),
+            |position, bytes| {
+                self.mapped_file.write_bytes_segment(bytes, position, 0, bytes.len());
+            },
+            |update| self.apply_header_update(update),
+        );
+        match outcome {
+            IndexPutOutcome::Written => true,
+            IndexPutOutcome::Full => {
+                warn!(
+                    "Over index file capacity: index count = {}; index max num = {}",
+                    self.index_header.get_index_count(),
+                    self.index_num
+                );
+                false
             }
-
-            let mut time_diff = store_timestamp - self.index_header.get_begin_timestamp();
-            time_diff /= 1000;
-            if self.index_header.get_begin_timestamp() <= 0 {
-                time_diff = 0;
-            } else if time_diff > i32::MAX as i64 {
-                time_diff = i32::MAX as i64;
-            } else if time_diff < 0 {
-                time_diff = 0;
+            IndexPutOutcome::SlotUnavailable => {
+                warn!("Index hash slot is outside the mapped file");
+                false
             }
-
-            let abs_index_pos = INDEX_HEADER_SIZE
-                + self.hash_slot_num * HASH_SLOT_SIZE
-                + self.index_header.get_index_count() as usize * INDEX_SIZE;
-
-            self.mapped_file
-                .write_bytes_segment(&hash_code.to_be_bytes(), abs_index_pos, 0, mem::size_of::<i32>());
-            self.mapped_file.write_bytes_segment(
-                &phy_offset.to_be_bytes(),
-                abs_index_pos + 4,
-                0,
-                mem::size_of::<i64>(),
-            );
-            self.mapped_file.write_bytes_segment(
-                &(time_diff as i32).to_be_bytes(),
-                abs_index_pos + 4 + 8,
-                0,
-                mem::size_of::<i32>(),
-            );
-            self.mapped_file.write_bytes_segment(
-                &slot_value.to_be_bytes(),
-                abs_index_pos + 4 + 8 + 4,
-                0,
-                mem::size_of::<i32>(),
-            );
-            self.mapped_file.write_bytes_segment(
-                &self.index_header.get_index_count().to_be_bytes(),
-                abs_slot_pos,
-                0,
-                mem::size_of::<i32>(),
-            );
-
-            if self.index_header.get_index_count() <= 1 {
-                self.index_header.set_begin_phy_offset(phy_offset);
-                self.index_header.set_begin_timestamp(store_timestamp);
+            IndexPutOutcome::LayoutOverflow => {
+                warn!("Index file layout position overflow");
+                false
             }
-
-            if slot_value == INVALID_INDEX {
-                self.index_header.inc_hash_slot_count();
-            }
-            self.index_header.inc_index_count();
-            self.index_header.set_end_phy_offset(phy_offset);
-            self.index_header.set_end_timestamp(store_timestamp);
-            true
-        } else {
-            warn!(
-                "Over index file capacity: index count = {}; index max num = {}",
-                self.index_header.get_index_count(),
-                self.index_num
-            );
-            false
         }
     }
 
     pub fn index_key_hash_method(&self, key: &str) -> i32 {
-        let hash_code = JavaStringHasher::hash_str(key);
-        if hash_code == i32::MIN {
-            0
-        } else {
-            hash_code.abs()
-        }
+        normalize_index_key_hash(JavaStringHasher::hash_str(key))
     }
 
     #[inline]
@@ -302,11 +245,12 @@ impl IndexFile {
     }
 
     pub fn is_time_matched(&self, begin: i64, end: i64) -> bool {
-        let begin_timestamp = self.index_header.get_begin_timestamp();
-        let end_timestamp = self.index_header.get_end_timestamp();
-        begin < begin_timestamp && end > end_timestamp
-            || begin >= begin_timestamp && begin <= end_timestamp
-            || end >= begin_timestamp && end <= end_timestamp
+        is_index_time_matched(
+            self.index_header.get_begin_timestamp(),
+            self.index_header.get_end_timestamp(),
+            begin,
+            end,
+        )
     }
 
     pub fn select_phy_offset(&self, phy_offsets: &mut Vec<i64>, key: &str, max_num: usize, begin: i64, end: i64) {
@@ -315,91 +259,55 @@ impl IndexFile {
             return;
         }
 
-        // Use closure to ensure release() is called on all exit paths
-        (|| {
-            let key_hash = self.index_key_hash_method(key);
-            let slot_pos = key_hash as usize % self.hash_slot_num;
-            let abs_slot_pos = INDEX_HEADER_SIZE + slot_pos * HASH_SLOT_SIZE;
-
-            let mut buffer = match self.mapped_file.get_slice(abs_slot_pos, abs_slot_pos + 4) {
-                None => return,
-                Some(value) => value,
-            };
-            let slot_value = buffer.get_i32();
-            if slot_value <= INVALID_INDEX
-                || slot_value > self.index_header.get_index_count()
-                || self.index_header.get_index_count() <= 1
-            {
-                // Nothing to do
-                return;
-            }
-
-            let mut next_index_to_read = slot_value;
-            while phy_offsets.len() < max_num {
-                let abs_index_pos =
-                    INDEX_HEADER_SIZE + self.hash_slot_num * HASH_SLOT_SIZE + next_index_to_read as usize * INDEX_SIZE;
-
-                let buffer = match self.mapped_file.get_slice(abs_index_pos, abs_index_pos + INDEX_SIZE) {
-                    None => break,
-                    Some(buf) => buf,
-                };
-
-                // CRITICAL FIX: buffer is a relative slice [0..INDEX_SIZE], not absolute position
-                // Use relative offsets, not abs_index_pos
-                let key_hash_read = (&buffer[0..4]).get_i32();
-                let phy_offset_read = (&buffer[4..12]).get_i64();
-                let time_diff = (&buffer[12..16]).get_i32();
-                let prev_index_read = (&buffer[16..20]).get_i32();
-
-                if time_diff < 0 {
-                    break;
-                }
-
-                let time_read = self.index_header.get_begin_timestamp() + time_diff as i64 * 1000;
-                if key_hash == key_hash_read && (time_read >= begin && time_read <= end) {
-                    phy_offsets.push(phy_offset_read);
-                }
-
-                if prev_index_read <= INVALID_INDEX
-                    || prev_index_read > self.index_header.get_index_count()
-                    || prev_index_read == next_index_to_read
-                    || time_read < begin
-                {
-                    break;
-                }
-
-                next_index_to_read = prev_index_read;
-            }
-        })();
+        query_index_offsets(
+            self.snapshot(),
+            self.index_key_hash_method(key),
+            max_num,
+            begin,
+            end,
+            phy_offsets,
+            |position| self.read_index_bytes::<INDEX_HASH_SLOT_SIZE>(position),
+            |position| self.read_index_bytes::<INDEX_ENTRY_SIZE>(position),
+        );
         self.mapped_file.release();
+    }
+
+    fn snapshot(&self) -> IndexFileSnapshot {
+        IndexFileSnapshot::new(
+            self.hash_slot_num,
+            self.index_num,
+            self.index_header.get_index_count(),
+            self.index_header.get_begin_timestamp(),
+        )
+    }
+
+    fn read_index_bytes<const N: usize>(&self, position: usize) -> Option<[u8; N]> {
+        self.mapped_file.get_slice(position, N)?.try_into().ok()
+    }
+
+    fn apply_header_update(&self, update: IndexHeaderUpdate) {
+        match update {
+            IndexHeaderUpdate::SetBeginPhyOffset(offset) => self.index_header.set_begin_phy_offset(offset),
+            IndexHeaderUpdate::SetBeginTimestamp(timestamp) => self.index_header.set_begin_timestamp(timestamp),
+            IndexHeaderUpdate::IncrementHashSlotCount => self.index_header.inc_hash_slot_count(),
+            IndexHeaderUpdate::IncrementIndexCount => self.index_header.inc_index_count(),
+            IndexHeaderUpdate::SetEndPhyOffset(offset) => self.index_header.set_end_phy_offset(offset),
+            IndexHeaderUpdate::SetEndTimestamp(timestamp) => self.index_header.set_end_timestamp(timestamp),
+        }
     }
 }
 
 fn index_file_total_size(hash_slot_num: usize, index_num: usize) -> io::Result<usize> {
-    if hash_slot_num == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "index hash slot number must be positive",
-        ));
-    }
-    if index_num == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "index entry number must be positive",
-        ));
-    }
-
-    let hash_slots_size = hash_slot_num
-        .checked_mul(HASH_SLOT_SIZE)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "index hash slot section size overflow"))?;
-    let indexes_size = index_num
-        .checked_mul(INDEX_SIZE)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "index entry section size overflow"))?;
-
-    INDEX_HEADER_SIZE
-        .checked_add(hash_slots_size)
-        .and_then(|size| size.checked_add(indexes_size))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "index file total size overflow"))
+    local_index_file_total_size(hash_slot_num, index_num).map_err(|error| {
+        let message = match error {
+            IndexLayoutError::ZeroHashSlots => "index hash slot number must be positive",
+            IndexLayoutError::ZeroIndexEntries => "index entry number must be positive",
+            IndexLayoutError::HashSlotSectionOverflow => "index hash slot section size overflow",
+            IndexLayoutError::IndexEntrySectionOverflow => "index entry section size overflow",
+            IndexLayoutError::TotalSizeOverflow => "index file total size overflow",
+        };
+        io::Error::new(io::ErrorKind::InvalidInput, message)
+    })
 }
 
 #[cfg(test)]
@@ -580,6 +488,26 @@ mod tests {
         file.select_phy_offset(&mut results, "same_key", 5, base_time - 1000, base_time + 20000);
 
         assert_eq!(results.len(), 5, "Should respect max_num limit");
+    }
+
+    #[test]
+    fn query_reads_entries_from_the_second_half_of_the_index_file() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("20000000000031");
+        let file = IndexFile::new(file_path.to_str().unwrap(), 1, 10, 0, 0);
+        let base_time = 1_000_000_000_000;
+        for index in 0..8 {
+            assert!(file.put_key("same_key", index, base_time + index * 1000));
+        }
+
+        let mut results = Vec::new();
+        file.select_phy_offset(&mut results, "same_key", 10, base_time, base_time + 10_000);
+
+        assert_eq!(results.len(), 8);
+        assert!(results.contains(&0));
+        assert!(results.contains(&7));
     }
 
     #[test]

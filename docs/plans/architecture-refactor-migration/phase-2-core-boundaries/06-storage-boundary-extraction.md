@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04 已完成，继续 PR-M06-05 |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05 已完成，继续 PR-M06-06 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -87,11 +87,21 @@
 
 ### PR-M06-05：迁移 CQ 与 Index
 
-- [ ] 入口：`[ARCH]` 20B CQ、Index header/slot、offset 与 Java compatibility golden 已签名。
-- [ ] `[DEV]` 机械迁移 consume_queue/queue/index 和必要 message encoder adapter，保持 dispatch 顺序和文件路径。
-- [ ] `[TEST]` focused test：20B unit golden、min/max offset、replay、index query、dirty tail和边界 offset。
-- [ ] `[REV]` 检查没有引入新的分配/I/O 优化；性能改动留 M10，行为修复单独 PR。
-- [ ] 回滚点：CQ/Index factory 分别指回旧实现；CommitLog owner和已写格式不变。
+- [x] 入口：`[ARCH]` 20B CQ、Index header/slot、offset 与 Java compatibility golden 已签名。
+- [x] `[DEV]` 机械迁移 consume_queue/queue/index 和必要 message encoder adapter，保持 dispatch 顺序和文件路径。
+- [x] `[TEST]` focused test：20B unit golden、min/max offset、replay、index query、dirty tail和边界 offset。
+- [x] `[REV]` 未引入新的分配/I/O 优化；性能改动留 M10；`get_slice(position,size)` 合同修复有独立回归和证据。
+- [x] 回滚点：CQ/Index factory 分别指回旧实现；CommitLog owner和已写格式不变。
+
+内部迁移切片：
+
+- [x] M06-05a：迁移 canonical 20B CQ record codec 与边界校验到 Local。
+- [x] M06-05b：迁移 SingleConsumeQueue scan/search/recovery kernel 到 Local。
+- [x] M06-05c：迁移 BatchConsumeQueue 与 CQExt storage kernel 到 Local。
+- [x] M06-05d：迁移 ConsumeQueue root/store/dispatch owner，Store 保留 composition adapter。
+- [x] M06-05e：迁移 40B IndexHeader 与 20B index entry/slot codec 到 Local。
+- [x] M06-05f：迁移 IndexFile put/query driver 到 Local。
+- [x] M06-05g：迁移 IndexService lifecycle/query/dispatch root，冻结 ledger 并完成父项验收。
 
 ### PR-M06-06：迁移 HA、Replication 与 Transfer
 
@@ -2146,3 +2156,151 @@ python scripts/arc_mut_guard.py
   batch/channel/retry/fsync/checkpoint 与磁盘格式未改变，可整体 revert PR-M06-04，但不得恢复双 owner 或 `i64` ack 判定。
 - [x] `[INVENTORY]` PR-M06-04 父项关闭，M06 整体仍进行中且 Exit Checklist 保持未完成。82 个顶层工作包更新为
   32 已完成、0 进行中、50 未开始，即 50 个尚未完成；下一工作包为 PR-M06-05。
+
+## M06-05a canonical 20-byte ConsumeQueue record extraction evidence
+
+- [x] `[ENTRY]` Store `single_consume_queue::tests` 4/4、Index module 22/22、normal/abnormal dirty-tail recovery 2/2
+  在迁移前通过；20B CQ、40B IndexHeader/20B index entry、min/max/query 与 replay 基线未发现需先行修复的缺陷。
+- [x] `[DEV/OWNER]` 新增 `rocketmq-store-local::consume_queue::record`，唯一拥有 `CQ_STORE_UNIT_SIZE=20`、
+  `MSG_TAG_OFFSET_INDEX=12`、`ConsumeQueueRecord`、big-endian encode/decode、checked decode-at、pre-blank sentinel 与
+  written/end-offset 语义；Local root 暴露 canonical `consume_queue` module。
+- [x] `[ADAPTER/COMPAT]` Store `single_consume_queue` 精确 re-export 两个旧常量路径，并在 append、pre-blank、truncate、
+  recovery、min-offset correction、timestamp search 与 iterator 全部调用 Local codec；Store 不再保留 `BytesMut` 编码缓冲或
+  `put/get_i64/i32`、`from_be_bytes` 的第二份 20B codec。文件路径、dispatch 顺序与 CQExt 地址判定未改变。
+- [x] `[TEST/CONTRACT]` Local Java-compatible exact bytes、signed round-trip、bounded decode-at、pre-blank 4/4；Store CQ
+  原回归 4/4，normal/abnormal dirty-tail 2/2。新增 M06 CQ owner contract 1/1，锁定 Local owner、Store re-export/adapter
+  与禁止 duplicate codec。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency、ArcMut zero-growth、
+  AGENTS routing 与 diff check 通过。既有 `ArcMut` import/field 两处按 ADR-013 一对一 relocation 后仍为
+  1,171 identities/3,233 occurrences，零新增债务；本切片未触发 runtime ownership gate。
+- [x] `[SCOPE]` 本切片只关闭 canonical 20B CQ record codec；Single/Batch/CQExt driver、ConsumeQueue root/store、
+  IndexHeader/IndexFile/IndexService 与最终 ledger 继续由 M06-05b～g 承接。顶层统计为 32 已完成、1 进行中、
+  49 未开始，即仍有 50 个尚未完成。
+
+## M06-05b SingleConsumeQueue kernel extraction evidence
+
+- [x] `[DEV/OWNER]` 新增 `rocketmq-store-local::consume_queue::single`，唯一拥有 fixed-record recovery scan、
+  min-offset selection、truncate planning 与 timestamp lower/upper boundary search。Local kernel 只接收 record reader、
+  CommitLog timestamp lookup 与 CQExt address predicate，不持有 mapped file、Store、runtime、日志或配置类型。
+- [x] `[ADAPTER/COMPAT]` Store `ConsumeQueue` 保留 mapped-file 选择/位置应用、CommitLog lookup、CQExt truncate、日志与
+  文件删除 adapter；原有 duplicate timestamp、首记录截断特例、不可读 record 重试、dirty-tail recovery、文件路径、
+  20B 格式及 public trait/path 均未改变。Store 已无第二份 binary-search、recovery、min-offset 或 truncate record loop。
+- [x] `[TEST/CONTRACT]` Local SingleConsumeQueue suite 10/10，覆盖 duplicate/missing/out-of-range timestamp、lookup failure、
+  recovery prefix、min-offset、delete/retain/retry truncate；Store adapter 回归 6/6，duplicate timestamp 1/1，normal/abnormal
+  dirty-tail recovery 2/2，M06 CQ source owner/adapter contract 1/1。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency baseline、ArcMut
+  zero-growth、AGENTS routing 与 diff check 全部退出码 0。ArcMut ledger 保持 1,171 identities/3,233 occurrences，
+  无 relocation approval 或 baseline 变化；本切片未触发 runtime、typed-error、feature 或 observability 专项门禁。
+- [x] `[SCOPE]` 本切片只关闭 SingleConsumeQueue scan/search/recovery kernel；BatchConsumeQueue/CQExt、ConsumeQueue
+  root/store/dispatch、IndexHeader/IndexFile/IndexService 与最终 ledger 继续由 M06-05c～g 承接。顶层统计保持
+  32 已完成、1 进行中、49 未开始，即仍有 50 个尚未完成。
+
+## M06-05c BatchConsumeQueue and CQExt kernel extraction evidence
+
+- [x] `[DEV/OWNER]` Local `consume_queue::batch` 唯一拥有 canonical 46B `BatchConsumeQueueRecord` 与 first/last、
+  queue-offset、timestamp、recovery、truncate、min-offset kernel；Local `consume_queue::extension` 唯一拥有公开
+  `CqExtUnit`、可变长 big-endian codec、地址 decorate/undecorate、容量/换页、dirty-tail scan 与文件保留判定。
+- [x] `[ADAPTER/COMPAT]` Store BatchCQ 只注入 mapped-file read/position、原子 offset 与日志 adapter；CQExt 只保留
+  mapped-file create/append/truncate/delete、生命周期与日志。旧 `rocketmq_store::consume_queue::cq_ext_unit::{CqExtUnit,
+  MIN_EXT_UNIT_SIZE,MAX_EXT_UNIT_SIZE}` 路径精确 re-export Local owner，Broker 默认特性编译通过；46B/CQExt 磁盘格式、
+  dispatch 顺序、地址范围、四字节 end blank、三次 append retry 与 public trait 语义未改变。
+- [x] `[TEST/CONTRACT]` Local Batch/CQExt kernel 12/12；Store BatchCQ 3/3、CQExt 4/4、SingleCQ+CqExt 6/6；M06 CQ
+  owner/adapter source contract 1/1。额外覆盖 46B golden/invalid record、offset/time/min/recovery/delete/retain/retry、
+  CQExt round-trip/truncation/partial tail、public mutator/write-to/skip、address/capacity/roll boundary。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、architecture dependency baseline 与 ArcMut final guard
+  通过；Broker default-feature `cargo check` 通过。CQExt module 既有 `ArcMut` import 因 Local imports 改变相邻指纹，
+  按 ADR-013 完成 1 条一对一 relocation approval，ledger 保持 1,171 identities/3,233 occurrences，零新增债务。
+  首次 Broker all-feature check 仅因 124 秒工具超时未形成结果，未标记为通过；随后默认特性检查退出码 0。
+- [x] `[SCOPE]` 本切片不迁移 ConsumeQueue root/store/dispatch、IndexHeader/IndexFile/IndexService 或最终 ledger；
+  它们继续由 M06-05d～g 承接。未修改 manifest、feature、runtime ownership、typed-error、observability、持久路径或
+  默认配置。顶层统计保持 32 已完成、1 进行中、49 未开始，即仍有 50 个尚未完成。
+
+## M06-05d ConsumeQueue root, store, and dispatch extraction evidence
+
+- [x] `[DEV/OWNER]` Local `consume_queue::root` 新增 canonical `ConsumeQueueRoot<A>`/`ConsumeQueueStoreRoot<A>` 与
+  `ConsumeQueueDispatchRoot<A>`，唯一拥有 transaction eligibility gate、global progress projection、Single/Batch
+  validation/writeability/30 次 retry driver、lock-free find→out-of-lock create→atomic publish 顺序与 query clamp。
+- [x] `[ADAPTER/COMPAT]` Store `ConsumeQueueStore` 收敛为 Local root 包装既有 `ArcMut<Inner>` 的 composition facade；
+  `CommitLogDispatcherBuildConsumeQueue` 收敛为 Local dispatch root facade。Store 继续拥有 MessageSysFlag/CQType 投影、
+  `DispatchRequest`、mapped-file/CQ factory、DashMap/ArcMut table、配置、checkpoint、CQExt、multi-dispatch、日志与 error flag；
+  public trait/path、transaction gate、30 次重试、checkpoint/LMQ 顺序和并发 triple-check 行为未改变。
+- [x] `[TEST/CONTRACT]` Local ConsumeQueue root 7/7；Store SingleCQ 6/6、BatchCQ 4/4、ConsumeQueueStore 9/9、
+  transaction dispatcher 1/1；M06 CQ owner/adapter source contract 1/1。覆盖 retry success/exhaustion、invalid Batch、
+  non-writeable、find hit/miss publish、offset clamp、prepared/rollback skip 与 empty progress。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、architecture dependency baseline、ArcMut final guard、
+  AGENTS routing、workspace fmt 与 diff check 通过。Local root 包装和 factory driver 仅使 4 个既有同 item occurrence
+  改变上下文，按 ADR-013 一对一批准后 ledger 保持 1,171 identities/3,233 occurrences，零新增债务。
+- [x] `[SCOPE]` 本切片不迁移 IndexHeader/IndexFile/IndexService 或最终 compatibility ledger；它们继续由
+  M06-05e～g 承接。未修改 manifest、feature、runtime ownership、typed-error、observability、持久格式/路径或默认配置。
+  顶层统计保持 32 已完成、1 进行中、49 未开始，即仍有 50 个尚未完成。
+
+## M06-05e Index header, slot, and entry codec extraction evidence
+
+- [x] `[DEV/OWNER]` 新增 Local `index::codec`，唯一拥有 canonical 40B `IndexHeaderRecord`、4B `IndexSlot`、
+  20B `IndexEntry`、header 字段偏移、空链 sentinel 与 checked file/slot/entry layout；所有持久字段继续采用
+  Java-compatible big-endian，header decode 继续把非正 `index_count` 归一为 1。
+- [x] `[ADAPTER/COMPAT]` Store `IndexHeader` 继续拥有 mapped-file 与原子状态，只通过 Local record 执行整头
+  load/flush，并精确 re-export 旧 `INDEX_HEADER_SIZE` 路径；`IndexFile` 继续拥有 mmap/I/O、hash、time-diff、
+  put/query traversal 与日志，但 slot/entry 读写和绝对位置全部委托 Local。文件尺寸错误种类与消息、public path、
+  默认 5M/20M 容量、写入顺序、链式冲突语义及磁盘字节保持不变。
+- [x] `[TEST/CONTRACT]` Local exact 40B/20B golden、signed round-trip、short-input、legacy index-count 与
+  zero/overflow layout 5/5；Store Index 原回归 22/22；新增 M06 Index owner/adapter source contract 1/1，锁定
+  Local 唯一 codec/layout owner，并禁止 Store 恢复手写 slot/entry decoder 或布局常量。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency baseline、
+  ArcMut final guard、AGENTS routing 与 diff check 通过。切片未触及 `ArcMut` occurrence，ledger 保持
+  1,171 identities/3,233 occurrences，零 relocation approval、零新增债务；未触发 runtime、typed-error、
+  observability 或 RocksDB 专项门禁。
+- [x] `[SCOPE]` 本切片不迁移 IndexFile hash/time-diff/put/query driver、IndexService lifecycle/query/dispatch root
+  或最终 compatibility ledger；它们继续由 M06-05f～g 承接。未修改 manifest、feature、持久路径或默认配置。
+  顶层统计保持 32 已完成、1 进行中、49 未开始，即仍有 50 个尚未完成。
+
+## M06-05f IndexFile put/query driver extraction evidence
+
+- [x] `[DEV/OWNER]` 新增 Local `index::file`，唯一拥有 `IndexFileSnapshot`、put/query outcome、header update event、
+  capacity gate、slot 链头归一化、time-diff clamp、hash 归一化、collision-chain traversal、time/range filter、
+  result limit 与成功写入后的 header 更新顺序。driver 只依赖固定长度 read、byte write 和 header event callback。
+- [x] `[ADAPTER/COMPAT]` Store `IndexFile` 仅投影 snapshot，提供固定 4B/20B mmap read、byte write、原子 header
+  update、shared Java hasher 与日志 adapter；public `put_key`/`select_phy_offset`/`index_key_hash_method`/
+  `is_time_matched` 路径和返回语义未变，entry→slot→begin/hash-count/index-count/end 更新顺序保持不变。
+- [x] `[FIX/COMPAT]` 固定长度 read adapter 现在按 `MappedFile::get_slice(position, size)` 合同传入 4 或 20；旧查询把
+  第二参数误作 end position，导致位于索引文件后半段的合法 entry 被判越界。新增 1-slot/10-entry 回归在第 8 条链记录
+  位于文件后半段时验证 8/8 offsets 均可查询，未改变持久字节、链布局或既有文件兼容性。
+- [x] `[TEST/CONTRACT]` Local put/query driver 6/6；Local codec/layout 5/5；Store Index 回归扩展为 23/23；
+  M06 Index owner/adapter source contract 1/1，锁定 Local driver、Store fixed-size adapter，并禁止 Store 恢复
+  time-diff、hash edge、chain traversal 或手写 entry/slot driver。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency baseline、
+  ArcMut final guard、AGENTS routing 与 diff check 通过。切片未触及 `ArcMut` occurrence，ledger 保持
+  1,171 identities/3,233 occurrences，零新增债务；未触发 runtime、typed-error、observability 或 RocksDB 专项门禁。
+- [x] `[SCOPE]` 本切片不迁移 IndexService lifecycle/load/query/build/dispatch root，也不冻结最终 compatibility ledger；
+  它们由 M06-05g 承接。未修改 manifest、feature、持久路径、容量默认值或 service lifecycle。顶层统计保持
+  32 已完成、1 进行中、49 未开始，即仍有 50 个尚未完成。
+
+## M06-05g IndexService root and PR-M06-05 parent closeout evidence
+
+- [x] `[DEV/OWNER]` Local `index::service` 新增 canonical `IndexServiceRoot<A>`、`IndexServiceFile` port、
+  `QueryOffsetResult`、load/safe-offset/expiration/shutdown/destroy、tail reuse/create/retry/flush、跨文件 query、
+  dispatch preflight、unique→normal→tag key traversal 与 key builder；Local `index::dispatch` 新增 feature gate/progress root。
+- [x] `[FACADE/ADAPTER]` Store `IndexService` 收敛为单字段 `IndexServiceRoot<IndexServiceAdapter>` facade，旧 public
+  方法通过 `Deref/DerefMut` 保持可用；adapter 仅拥有目录 I/O、`RwLock<Vec<Arc<IndexFile>>>`、config/checkpoint/
+  error flag、shared Java hasher、等待与 detached flush、日志和 `DispatchRequest`/MessageConst 投影。
+  `CommitLogDispatcherBuildIndex` 同样收敛为单字段 `IndexDispatchRoot<IndexDispatchAdapter>`；旧
+  `index::query_offset_result::QueryOffsetResult` 精确 re-export Local owner。
+- [x] `[COMPAT]` load 对不安全文件的删除、legacy checkpoint safe-offset 恢复、过期文件始终保留 newest、3 次 create
+  retry/1 秒等待、full-file rollover/async flush fallback、query newest-first/metadata/limit、rollback/empty/old-offset gate、
+  unique/normal/tag 次序和 tag failure 后 safe-offset 语义均未改变。40B/4B/20B/46B/CQExt 磁盘格式、目录、默认容量、
+  public path 与 feature 未改变。
+- [x] `[TEST]` Local Index service/dispatch root 7/7、file driver 6/6、codec/layout 5/5；Store Index service/file 23/23、
+  dispatcher gate/progress 2/2；Local all-feature unit/integration/doctest 全绿，Store all-feature lib 544/544。
+  M06 CQ/Flush/Index owner contract 3/3、Store API contract 8/8、StoreLocal ledger/feature/forbidden-edge impacted contract 3/3。
+- [x] `[VALIDATION NOTE]` monolithic `test_m06_*` discover 与单独 160-test StoreLocal mutation suite 分别在 304 秒和
+  604 秒工具窗口超时，均未形成结果且未计为通过；受本 PR 影响的 Index、ledger、feature/forbidden-edge 契约已拆分重跑通过，
+  M06-04 冻结快照上的既有 160/160 历史证据未被改写。
+- [x] `[REV]` Local/Store strict Clippy、root workspace `--no-deps --all-targets --all-features -D warnings` Clippy、
+  workspace fmt、architecture dependency、ArcMut zero-growth、AGENTS routing、enforcing runtime audit 与 diff check 全部通过。
+  本切片未触及 `ArcMut` occurrence，ledger 保持 1,171 identities/3,233 occurrences，零新增债务。
+- [x] `[LEDGER]` `06-storage-local-compatibility-ledger.md` 冻结 M06-03/04/05 owner 快照，新增 CQ/Index canonical
+  owner、Store-only port、removal milestone、回滚与当前验证证据；对应 mutation contract 通过。
+- [x] `[MAIN/ROLLBACK]` `git fetch origin main` 后候选分支相对 `origin/main` 为 0 behind；发布分支在不改变最终树内容的
+  前提下整理为一个 Issue-linked commit。可整体 revert PR-M06-05，但不得恢复 Local/Store 双 owner；已写 CQ/Index 文件无需数据迁移。
+- [x] `[INVENTORY]` PR-M06-05 父项关闭；82 个顶层工作包更新为 33 已完成、0 进行中、49 未开始，即 49 个尚未完成。
+  M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-06。

@@ -12,4 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use rocketmq_store_local::index::service::QueryOffsetResult;
+//! Canonical Local consume-queue storage primitives.
+
+pub mod batch;
+pub mod extension;
+pub mod record;
+pub mod root;
+pub mod single;
