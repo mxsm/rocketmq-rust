@@ -130,11 +130,11 @@ use rocketmq_store_local::commit_log::record_parser::CommitLogRecordErrorKind;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
 use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;
 use rocketmq_store_local::commit_log::recovery::plan_normal_recovery_file_window;
-use rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryConfirmCandidateError;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
+use rocketmq_store_local::commit_log::recovery::CommitLogRecoveryCompletion;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
 use rocketmq_store_local::commit_log::root::CommitLogRoot;
@@ -185,6 +185,46 @@ fn log_abnormal_recovery_window(
         window.end_offset,
         window.fallback_reason
     );
+}
+
+macro_rules! apply_recovery_completion {
+    ($commit_log:ident, $completion:expr, $max_consume_queue_offset:expr, $message_store:ident $(,)?) => {{
+        match $completion {
+            CommitLogRecoveryCompletion::Empty => {
+                $commit_log.mapped_file_queue.set_flushed_where(0);
+                $commit_log.mapped_file_queue.set_committed_where(0);
+                $message_store.consume_queue_store_mut().destroy();
+                $message_store.consume_queue_store_mut().load_after_destroy();
+            }
+            CommitLogRecoveryCompletion::Recovered {
+                confirm_offset,
+                controller_confirm_offset,
+                process_offset,
+                truncate_consume_queue,
+            } => {
+                if $commit_log.broker_config.enable_controller_mode {
+                    $commit_log.clamp_controller_recover_confirm_offset(
+                        $message_store.get_min_phy_offset(),
+                        controller_confirm_offset,
+                    );
+                } else {
+                    $commit_log.set_confirm_offset(confirm_offset);
+                }
+
+                if truncate_consume_queue {
+                    warn!(
+                        "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
+                        $max_consume_queue_offset, process_offset
+                    );
+                    $message_store.truncate_dirty_logic_files(process_offset);
+                }
+
+                $commit_log.mapped_file_queue.set_flushed_where(process_offset);
+                $commit_log.mapped_file_queue.set_committed_where(process_offset);
+                $commit_log.mapped_file_queue.truncate_dirty_files(process_offset);
+            }
+        }
+    }};
 }
 
 // This reduces heap allocations by ~50% by reusing encoder instances
@@ -1463,17 +1503,17 @@ impl CommitLog {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
         let message_store_config = self.message_store_config.clone();
-        let broker_config = self.broker_config.clone();
-
         let mapped_files = self.mapped_file_queue.get_mapped_files();
         let mapped_files_inner = mapped_files.load();
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
-            self.mapped_file_queue.set_flushed_where(0);
-            self.mapped_file_queue.set_committed_where(0);
-            message_store.consume_queue_store_mut().destroy();
-            message_store.consume_queue_store_mut().load_after_destroy();
+            apply_recovery_completion!(
+                self,
+                CommitLogRecoveryCompletion::Empty,
+                max_phy_offset_of_consume_queue,
+                message_store,
+            );
             return;
         }
 
@@ -1613,40 +1653,8 @@ impl CommitLog {
             }
         }
 
-        let summary = normal_recovery.summary();
-        let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
-            Ok(offset) => offset,
-            Err(error) => {
-                warn!("normal optimized recovery last-valid conversion failed: {error}");
-                return;
-            }
-        };
-        let process_offset = match i64::try_from(summary.truncate_offset) {
-            Ok(offset) => offset,
-            Err(error) => {
-                warn!("normal optimized recovery truncate conversion failed: {error}");
-                return;
-            }
-        };
-
-        if broker_config.enable_controller_mode {
-            self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), last_valid_offset);
-        } else {
-            self.set_confirm_offset(last_valid_offset);
-        }
-
-        // Clear ConsumeQueue redundant data
-        if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
-            warn!(
-                "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
-                max_phy_offset_of_consume_queue, process_offset
-            );
-            message_store.truncate_dirty_logic_files(process_offset);
-        }
-
-        self.mapped_file_queue.set_flushed_where(process_offset);
-        self.mapped_file_queue.set_committed_where(process_offset);
-        self.mapped_file_queue.truncate_dirty_files(process_offset);
+        let completion = normal_recovery.completion(max_phy_offset_of_consume_queue);
+        apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue, message_store);
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Normal");
@@ -1660,7 +1668,6 @@ impl CommitLog {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
         let message_store_config = self.message_store_config.clone();
-        let broker_config = self.broker_config.clone();
         // let mut mapped_file_queue = mapped_files.write().await;
         let mapped_files = self.mapped_file_queue.get_mapped_files();
         let mapped_files_inner = mapped_files.load();
@@ -1813,47 +1820,19 @@ impl CommitLog {
                 }
             }
 
-            let summary = normal_recovery.summary();
-            let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
-                Ok(offset) => offset,
-                Err(error) => {
-                    warn!("normal recovery last-valid conversion failed: {error}");
-                    return;
-                }
-            };
-            let process_offset = match i64::try_from(summary.truncate_offset) {
-                Ok(offset) => offset,
-                Err(error) => {
-                    warn!("normal recovery truncate conversion failed: {error}");
-                    return;
-                }
-            };
-            if broker_config.enable_controller_mode {
-                self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), process_offset);
-            } else {
-                self.set_confirm_offset(last_valid_offset);
-            }
-
-            // Clear ConsumeQueue redundant data
-            if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
-                warn!(
-                    "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
-                    max_phy_offset_of_consume_queue, process_offset
-                );
-                message_store.truncate_dirty_logic_files(process_offset)
-            }
-            self.mapped_file_queue.set_flushed_where(process_offset);
-            self.mapped_file_queue.set_committed_where(process_offset);
-            self.mapped_file_queue.truncate_dirty_files(process_offset);
+            let completion = normal_recovery.completion(max_phy_offset_of_consume_queue);
+            apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue, message_store);
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
                                         files"
             );
-            self.mapped_file_queue.set_flushed_where(0);
-            self.mapped_file_queue.set_committed_where(0);
-            message_store.consume_queue_store_mut().destroy();
-            message_store.consume_queue_store_mut().load_after_destroy();
+            apply_recovery_completion!(
+                self,
+                CommitLogRecoveryCompletion::Empty,
+                max_phy_offset_of_consume_queue,
+                message_store,
+            );
         }
     }
 
@@ -1923,10 +1902,12 @@ impl CommitLog {
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
-            self.mapped_file_queue.set_flushed_where(0);
-            self.mapped_file_queue.set_committed_where(0);
-            message_store.consume_queue_store_mut().destroy();
-            message_store.consume_queue_store_mut().load_after_destroy();
+            apply_recovery_completion!(
+                self,
+                CommitLogRecoveryCompletion::Empty,
+                max_phy_offset_of_consume_queue,
+                message_store,
+            );
             return;
         }
 
@@ -2109,47 +2090,8 @@ impl CommitLog {
             }
         }
 
-        let summary = abnormal_recovery.summary();
-        let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
-            Ok(offset) => offset,
-            Err(error) => {
-                warn!("optimized abnormal recovery last-valid conversion failed: {error}");
-                return;
-            }
-        };
-        let confirm_valid_offset = match i64::try_from(summary.confirm_valid_offset) {
-            Ok(offset) => offset,
-            Err(error) => {
-                warn!("optimized abnormal recovery confirm-valid conversion failed: {error}");
-                return;
-            }
-        };
-        let process_offset = match i64::try_from(summary.truncate_offset) {
-            Ok(offset) => offset,
-            Err(error) => {
-                warn!("optimized abnormal recovery truncate conversion failed: {error}");
-                return;
-            }
-        };
-
-        if broker_config.enable_controller_mode {
-            self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), confirm_valid_offset);
-        } else {
-            self.set_confirm_offset(last_valid_offset);
-        }
-
-        // Clear ConsumeQueue redundant data
-        if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
-            warn!(
-                "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
-                max_phy_offset_of_consume_queue, process_offset
-            );
-            message_store.truncate_dirty_logic_files(process_offset);
-        }
-
-        self.mapped_file_queue.set_flushed_where(process_offset);
-        self.mapped_file_queue.set_committed_where(process_offset);
-        self.mapped_file_queue.truncate_dirty_files(process_offset);
+        let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);
+        apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue, message_store);
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Abnormal");
@@ -2347,53 +2289,19 @@ impl CommitLog {
                 }
             }
 
-            let summary = abnormal_recovery.summary();
-            let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
-                Ok(offset) => offset,
-                Err(error) => {
-                    warn!("standard abnormal recovery last-valid conversion failed: {error}");
-                    return;
-                }
-            };
-            let confirm_valid_offset = match i64::try_from(summary.confirm_valid_offset) {
-                Ok(offset) => offset,
-                Err(error) => {
-                    warn!("standard abnormal recovery confirm-valid conversion failed: {error}");
-                    return;
-                }
-            };
-            let process_offset = match i64::try_from(summary.truncate_offset) {
-                Ok(offset) => offset,
-                Err(error) => {
-                    warn!("standard abnormal recovery truncate conversion failed: {error}");
-                    return;
-                }
-            };
-            if broker_config.enable_controller_mode {
-                self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), confirm_valid_offset);
-            } else {
-                self.set_confirm_offset(last_valid_offset);
-            }
-
-            if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
-                warn!(
-                    "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
-                    max_phy_offset_of_consume_queue, process_offset
-                );
-                message_store.truncate_dirty_logic_files(process_offset)
-            }
-            self.mapped_file_queue.set_flushed_where(process_offset);
-            self.mapped_file_queue.set_committed_where(process_offset);
-            self.mapped_file_queue.truncate_dirty_files(process_offset);
+            let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);
+            apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue, message_store);
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
                                         files"
             );
-            self.mapped_file_queue.set_flushed_where(0);
-            self.mapped_file_queue.set_committed_where(0);
-            message_store.consume_queue_store_mut().destroy();
-            message_store.consume_queue_store_mut().load_after_destroy();
+            apply_recovery_completion!(
+                self,
+                CommitLogRecoveryCompletion::Empty,
+                max_phy_offset_of_consume_queue,
+                message_store,
+            );
         }
     }
 

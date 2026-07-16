@@ -14,10 +14,12 @@
 
 use tracing::info;
 
+mod completion;
 mod confirm_candidate;
 mod consume_queue;
 mod normal_window;
 
+pub use completion::CommitLogRecoveryCompletion;
 pub use confirm_candidate::abnormal_confirm_candidate_end;
 pub use confirm_candidate::AbnormalRecoveryConfirmCandidateError;
 pub use consume_queue::should_truncate_recovery_consume_queue;

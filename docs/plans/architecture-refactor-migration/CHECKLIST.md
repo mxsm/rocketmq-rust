@@ -36,8 +36,8 @@
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
 剩余 51 个未开始工作包分布：M06-04～12 为 9 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
-M10 为 5 个、M11 为 12 个、M12 为 6 个。当前 M06-03 的 MappedFileQueue、CommitLog 根 owner 与 append-attempt
-composition 已完成，仍需完成 recovery completion owner 与 Store facade 收口，因此尚未勾选父项。
+M10 为 5 个、M11 为 12 个、M12 为 6 个。当前 M06-03 的 MappedFileQueue、CommitLog 根 owner、append-attempt
+composition 与 recovery completion owner 已完成，仅剩 Store facade 最终收口，因此尚未勾选父项。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -178,6 +178,7 @@ composition 已完成，仍需完成 recovery completion owner 与 Store facade 
   - [x] M06-03ax：迁移 MappedFileQueue warmup/lazy-mmap 聚合及 max/min/total/available/fall-behind/roll 查询 owner 到 Local，Store 精确 re-export stats 并保留 snapshot adapter
   - [x] M06-03ay：迁移 CommitLog 根 owner 到 Local 泛型 `CommitLogRoot`，Store 旧 `CommitLog` 收敛为单字段 facade 与 composition adapter
   - [x] M06-03az：迁移 CommitLog append outcome resolution owner 到 Local，Store 仅保留 status/log/lock/flush/HA adapter
+  - [x] M06-03ba：迁移 CommitLog recovery completion owner 到 Local，Store 四条 recovery 路径统一为 completion side-effect adapter
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

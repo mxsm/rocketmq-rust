@@ -110,6 +110,9 @@ NORMAL_RECOVERY_WINDOW_PATH = Path(
 RECOVERY_CONSUME_QUEUE_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/consume_queue.rs"
 )
+RECOVERY_COMPLETION_PATH = Path(
+    "rocketmq-store-local/src/commit_log/recovery/completion.rs"
+)
 ABNORMAL_CONFIRM_CANDIDATE_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/confirm_candidate.rs"
 )
@@ -2192,7 +2195,7 @@ def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
     ):
         violations.append("Store abnormal recovery imports forbid alias/brace/glob")
 
-    for item in ("abnormal_confirm_candidate_end", "should_truncate_recovery_consume_queue"):
+    for item in ("abnormal_confirm_candidate_end",):
         imports = [
             body
             for kind, _, body, _ in import_records
@@ -2310,25 +2313,20 @@ def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
         ) != 1:
             violations.append(f"{name} driver failure handling changed")
         required_final = (
-            "letsummary=abnormal_recovery.summary();",
-            "i64::try_from(summary.last_valid_offset)",
-            "i64::try_from(summary.confirm_valid_offset)",
-            "i64::try_from(summary.truncate_offset)",
-            "self.clamp_controller_recover_confirm_offset("
-            "message_store.get_min_phy_offset(),confirm_valid_offset)",
-            "self.set_confirm_offset(last_valid_offset)",
-            "should_truncate_recovery_consume_queue("
-            "max_phy_offset_of_consume_queue,summary.truncate_offset)",
-            "message_store.truncate_dirty_logic_files(process_offset)",
-            "self.mapped_file_queue.set_flushed_where(process_offset)",
-            "self.mapped_file_queue.set_committed_where(process_offset)",
-            "self.mapped_file_queue.truncate_dirty_files(process_offset)",
+            "letcompletion=abnormal_recovery.completion(max_phy_offset_of_consume_queue);",
+            "apply_recovery_completion!(self,completion,max_phy_offset_of_consume_queue,message_store);",
         )
         if any(fragment not in normalized for fragment in required_final):
             violations.append(f"{name} final abnormal watermarks changed")
-        if "AbnormalRecoverySummary{" in normalized or re.search(
+        if (
+            "abnormal_recovery.summary()" in normalized
+            or "should_truncate_recovery_consume_queue" in normalized
+            or "i64::try_from(summary." in normalized
+            or "AbnormalRecoverySummary{" in normalized
+            or re.search(
             r"\b(?:last_valid_msg_phy_offset|last_confirm_valid_msg_phy_offset|mapped_file_offset)\b",
             body,
+            )
         ):
             violations.append(f"{name} copied Local abnormal watermark state")
         if re.search(r"\b(?:as|unwrap|expect|panic)\b", body):
@@ -10455,6 +10453,107 @@ def recovery_consume_queue_owner_violations(
     return violations
 
 
+def recovery_completion_owner_violations(
+    completion: str,
+    recovery_root: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(completion)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    masked_sources = {
+        path: source_without_cfg_test_items(source)
+        for path, source in production_sources.items()
+    }
+    violations: list[str] = []
+
+    if file_item_owner_occurrences(masked_sources, "CommitLogRecoveryCompletion") != [
+        (RECOVERY_COMPLETION_PATH, "enum")
+    ]:
+        violations.append("CommitLog recovery completion must have one Local enum owner")
+    expected_shape = (
+        "Empty,Recovered{confirm_offset:i64,controller_confirm_offset:i64,"
+        "process_offset:i64,truncate_consume_queue:bool,},"
+    )
+    if compact_rust(active_item_body(production, "enum", "CommitLogRecoveryCompletion") or "") != expected_shape:
+        violations.append("CommitLog recovery completion shape changed")
+
+    expected_signature = (
+        "pubfncompletion(&self,max_phy_offset_of_consume_queue:i64)"
+        "->CommitLogRecoveryCompletion"
+    )
+    normal_records = inherent_method_records(
+        production,
+        "NormalRecoveryState",
+        ("completion",),
+    )["completion"]
+    abnormal_records = inherent_method_records(
+        production,
+        "AbnormalRecoveryState",
+        ("completion",),
+    )["completion"]
+    for owner, records in (
+        ("normal", normal_records),
+        ("abnormal", abnormal_records),
+    ):
+        if (
+            len(records) != 1
+            or records[0].visibility != "pub"
+            or records[0].cfg_gated
+            or records[0].signature != expected_signature
+        ):
+            violations.append(f"Local {owner} recovery completion signature changed")
+
+    normal_body = normal_records[0].body if len(normal_records) == 1 else ""
+    normal_contract = (
+        "letsummary=self.summary();",
+        "letconfirm_offset=signed_offset(summary.last_valid_offset);",
+        "letprocess_offset=signed_offset(summary.truncate_offset);",
+        "NormalRecoveryPolicy::Standard=>process_offset",
+        "NormalRecoveryPolicy::Optimized=>confirm_offset",
+        "CommitLogRecoveryCompletion::Recovered{confirm_offset,controller_confirm_offset,"
+        "process_offset,truncate_consume_queue:should_truncate_recovery_consume_queue("
+        "max_phy_offset_of_consume_queue,summary.truncate_offset,),}",
+    )
+    if any(fragment not in normal_body for fragment in normal_contract):
+        violations.append("Local normal recovery completion mapping changed")
+
+    abnormal_body = abnormal_records[0].body if len(abnormal_records) == 1 else ""
+    abnormal_contract = (
+        "letsummary=self.summary();",
+        "confirm_offset:signed_offset(summary.last_valid_offset)",
+        "controller_confirm_offset:signed_offset(summary.confirm_valid_offset)",
+        "process_offset:signed_offset(summary.truncate_offset)",
+        "truncate_consume_queue:should_truncate_recovery_consume_queue("
+        "max_phy_offset_of_consume_queue,summary.truncate_offset,)",
+    )
+    if any(fragment not in abnormal_body for fragment in abnormal_contract):
+        violations.append("Local abnormal recovery completion mapping changed")
+
+    if compact.count("offsetasi64") != 1 or "constfnsigned_offset(offset:u64)->i64" not in compact:
+        violations.append("Local recovery completion signed-offset invariant changed")
+    if any(
+        token in active
+        for token in (
+            "ArcMut",
+            "LocalFileMessageStore",
+            "MappedFileQueue",
+            "BrokerConfig",
+            "tokio",
+            "tracing",
+            "unsafe",
+        )
+    ):
+        violations.append("Local recovery completion absorbed Store/runtime side effects")
+
+    root_active = active_rust_source(source_without_cfg_test_items(recovery_root))
+    if root_active.count("mod completion;") != 1:
+        violations.append("Local recovery root must declare completion exactly once")
+    if root_active.count("pub use completion::CommitLogRecoveryCompletion;") != 1:
+        violations.append("Local recovery root must re-export completion exactly once")
+    return violations
+
+
 def store_recovery_consume_queue_adapter_violations(
     commit_log: str,
     production_sources: dict[Path, str],
@@ -10468,8 +10567,8 @@ def store_recovery_consume_queue_adapter_violations(
         for kind, _, body, _ in active_import_records(production)
         if kind == "use" and owner in body
     ]
-    if imports != [f"rocketmq_store_local::commit_log::recovery::{owner}"]:
-        violations.append("Store recovery ConsumeQueue truncation import must be direct and exact")
+    if imports:
+        violations.append("Store must not import the Local ConsumeQueue truncation policy")
     for legacy in (
         "should_truncate_normal_recovery_consume_queue",
         "should_truncate_abnormal_recovery_consume_queue",
@@ -10482,13 +10581,8 @@ def store_recovery_consume_queue_adapter_violations(
         for path, source in production_sources.items()
         if re.search(rf"\b{owner}\b", source)
     }
-    expected_path = Path("rocketmq-store/src/log_file/commit_log.rs")
-    if references != {expected_path: 5}:
+    if references:
         violations.append(f"Store recovery ConsumeQueue truncation references changed: {references}")
-    expected_call = (
-        "should_truncate_recovery_consume_queue("
-        "max_phy_offset_of_consume_queue,summary.truncate_offset)"
-    )
     for function_name in (
         "recover_normally_optimized",
         "recover_normally",
@@ -10497,10 +10591,10 @@ def store_recovery_consume_queue_adapter_violations(
     ):
         body = named_function_body(production, function_name)
         normalized = compact_rust(body or "")
-        if body is None or normalized.count(expected_call) != 1:
-            violations.append(f"{function_name} must directly call the Local truncation policy once")
-        if normalized.count(f"if{expected_call}{{") != 1:
-            violations.append(f"{function_name} truncation decision control flow changed")
+        if body is None or normalized.count(".completion(max_phy_offset_of_consume_queue)") != 1:
+            violations.append(f"{function_name} must obtain one Local recovery completion")
+        if owner in normalized or "summary.truncate_offset" in normalized:
+            violations.append(f"{function_name} retained ConsumeQueue truncation policy")
     for function_name in (
         "should_truncate_normal_recovery_consume_queue",
         "should_truncate_abnormal_recovery_consume_queue",
@@ -12924,6 +13018,7 @@ def normal_recovery_segment_orchestration_contract_violations(
     if actual_imports != expected_imports:
         violations.append("Store normal recovery imports must be direct and exact")
     expected_state_imports = {
+        "use rocketmq_store_local::commit_log::recovery::CommitLogRecoveryCompletion",
         "use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy",
         "use rocketmq_store_local::commit_log::recovery::NormalRecoveryState",
     }
@@ -12933,6 +13028,7 @@ def normal_recovery_segment_orchestration_contract_violations(
         if kind == "use"
         and body
         in {
+            "rocketmq_store_local::commit_log::recovery::CommitLogRecoveryCompletion",
             "rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy",
             "rocketmq_store_local::commit_log::recovery::NormalRecoveryState",
         }
@@ -12946,10 +13042,8 @@ def normal_recovery_segment_orchestration_contract_violations(
     abnormal_optimized = named_function_body(store_production, "recover_abnormally_optimized") or ""
     abnormal_standard = named_function_body(store_production, "recover_abnormally") or ""
     empty_cleanup = (
-        "warn!();self.mapped_file_queue.set_flushed_where(0);"
-        "self.mapped_file_queue.set_committed_where(0);"
-        "message_store.consume_queue_store_mut().destroy();"
-        "message_store.consume_queue_store_mut().load_after_destroy();"
+        "warn!();apply_recovery_completion!(self,CommitLogRecoveryCompletion::Empty,"
+        "max_phy_offset_of_consume_queue,message_store,);"
     )
     for name, policy, body in (
         ("recover_normally_optimized", "Optimized", optimized),
@@ -13034,76 +13128,64 @@ def normal_recovery_segment_orchestration_contract_violations(
         if state_creation == -1 or empty_branch == -1 or state_creation < empty_branch:
             violations.append(f"Store {name} empty-file path must bypass Local state construction")
 
-        summary_bindings: dict[str, re.Match[str]] = {}
-        for binding, field in (
-            ("last_valid_offset", "last_valid_offset"),
-            ("process_offset", "truncate_offset"),
+        completion_flow = (
+            "letcompletion=normal_recovery.completion(max_phy_offset_of_consume_queue);",
+            "apply_recovery_completion!(self,completion,max_phy_offset_of_consume_queue,message_store);",
+        )
+        if any(fragment not in compact_body for fragment in completion_flow):
+            violations.append(f"Store {name} final recovery writes must flow from Local completion")
+        if compact_body.count("normal_recovery.completion(max_phy_offset_of_consume_queue)") != 1:
+            violations.append(f"Store {name} must obtain exactly one Local recovery completion")
+        if any(
+            fragment in compact_body
+            for fragment in (
+                "normal_recovery.summary()",
+                "NormalRecoverySummary{",
+                "should_truncate_recovery_consume_queue",
+                "i64::try_from(summary.",
+                "self.set_confirm_offset(",
+                "self.clamp_controller_recover_confirm_offset(",
+                "message_store.truncate_dirty_logic_files(",
+                "self.mapped_file_queue.set_flushed_where(",
+                "self.mapped_file_queue.set_committed_where(",
+                "self.mapped_file_queue.truncate_dirty_files(",
+            )
         ):
-            matches = list(
-                re.finditer(
-                    rf"\blet\s+{binding}\s*=\s*match\s+i64::try_from\s*\(\s*"
-                    rf"summary\.{field}\s*\)\s*\{{\s*Ok\s*\(\s*offset\s*\)\s*=>\s*"
-                    r"offset\s*,\s*Err\s*\(\s*error\s*\)\s*=>\s*\{"
-                    r"(?P<failure>.*?)\}\s*\}\s*;",
-                    active_body,
-                    re.DOTALL,
-                )
-            )
-            if len(matches) != 1 or compact_rust(matches[0].group("failure")) != "warn!();return;":
-                violations.append(f"Store {name} {binding} summary conversion must fail closed")
-            else:
-                summary_bindings[binding] = matches[0]
-        expected_binding_counts = {"last_valid_offset": 1, "process_offset": 2}
-        for binding, expected_count in expected_binding_counts.items():
-            count = len(re.findall(rf"\blet\s+(?:mut\s+)?{binding}\b", active_body))
-            if count != expected_count or re.search(rf"\blet\s+mut\s+{binding}\b", active_body):
-                violations.append(f"Store {name} {binding} binding ownership changed")
+            violations.append(f"Store {name} retained final recovery decision policy")
 
-        required_summary_flow = (
-            "letsummary=normal_recovery.summary();",
-            "letlast_valid_offset=matchi64::try_from(summary.last_valid_offset)",
-            "letprocess_offset=matchi64::try_from(summary.truncate_offset)",
-            "should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
-            "self.set_confirm_offset(last_valid_offset)",
-            "message_store.truncate_dirty_logic_files(process_offset)",
-            "self.mapped_file_queue.set_flushed_where(process_offset)",
-            "self.mapped_file_queue.set_committed_where(process_offset)",
-            "self.mapped_file_queue.truncate_dirty_files(process_offset)",
-        )
-        if any(fragment not in compact_body for fragment in required_summary_flow):
-            violations.append(f"Store {name} final recovery writes must flow from Local summary")
-        controller_confirm_offset = "process_offset" if policy == "Standard" else "last_valid_offset"
-        controller_flow = (
-            "self.clamp_controller_recover_confirm_offset("
-            f"message_store.get_min_phy_offset(),{controller_confirm_offset})"
-        )
-        if controller_flow not in compact_body:
-            violations.append(f"Store {name} controller confirm offset flow changed")
-        if compact_body.count("normal_recovery.summary()") != 1 or "NormalRecoverySummary{" in compact_body:
-            violations.append(f"Store {name} must use exactly one Local recovery summary")
-        process_binding = summary_bindings.get("process_offset")
-        if process_binding is not None:
-            final_tail = active_body[process_binding.end():]
-            if re.search(
-                r"\blet\s+(?:mut\s+)?(?:last_valid_offset|process_offset)\b"
-                r"|\b(?:last_valid_offset|process_offset)\s*=(?!=)",
-                final_tail,
-            ):
-                violations.append(f"Store {name} final summary offsets are shadowed or overwritten")
-            compact_tail = compact_rust(final_tail)
-            ordered_final_writes = (
-                controller_flow,
-                "self.set_confirm_offset(last_valid_offset)",
-                "should_truncate_recovery_consume_queue("
-                "max_phy_offset_of_consume_queue,summary.truncate_offset)",
-                "message_store.truncate_dirty_logic_files(process_offset)",
-                "self.mapped_file_queue.set_flushed_where(process_offset)",
-                "self.mapped_file_queue.set_committed_where(process_offset)",
-                "self.mapped_file_queue.truncate_dirty_files(process_offset)",
-            )
-            positions = [compact_tail.find(fragment) for fragment in ordered_final_writes]
-            if any(position == -1 for position in positions) or positions != sorted(positions):
-                violations.append(f"Store {name} final summary write order changed")
+    completion_macro_matches = list(
+        re.finditer(r"\bmacro_rules!\s+apply_recovery_completion\b", store_production)
+    )
+    compact_completion_adapter = ""
+    if len(completion_macro_matches) == 1:
+        opening = store_production.find("{", completion_macro_matches[0].end())
+        extracted = braced_body(store_production, opening)
+        if extracted is not None:
+            compact_completion_adapter = compact_rust(extracted[0])
+    completion_contract = (
+        "($commit_log:ident,$completion:expr,$max_consume_queue_offset:expr,$message_store:ident$(,)?)=>{{",
+        "match$completion{CommitLogRecoveryCompletion::Empty=>{",
+        "$commit_log.mapped_file_queue.set_flushed_where(0);",
+        "$commit_log.mapped_file_queue.set_committed_where(0);",
+        "$message_store.consume_queue_store_mut().destroy();",
+        "$message_store.consume_queue_store_mut().load_after_destroy();",
+        "CommitLogRecoveryCompletion::Recovered{confirm_offset,controller_confirm_offset,"
+        "process_offset,truncate_consume_queue,}=>{",
+        "if$commit_log.broker_config.enable_controller_mode{$commit_log.clamp_controller_recover_confirm_offset("
+        "$message_store.get_min_phy_offset(),controller_confirm_offset,);}else{"
+        "$commit_log.set_confirm_offset(confirm_offset);}",
+        "iftruncate_consume_queue{warn!(",
+        "$message_store.truncate_dirty_logic_files(process_offset);}",
+        "$commit_log.mapped_file_queue.set_flushed_where(process_offset);",
+        "$commit_log.mapped_file_queue.set_committed_where(process_offset);",
+        "$commit_log.mapped_file_queue.truncate_dirty_files(process_offset);",
+    )
+    if len(completion_macro_matches) != 1 or any(
+        fragment not in compact_completion_adapter for fragment in completion_contract
+    ):
+        violations.append("Store recovery completion side-effect adapter changed")
+    if "should_truncate_recovery_consume_queue" in compact_completion_adapter or "summary." in compact_completion_adapter:
+        violations.append("Store recovery completion adapter absorbed Local decision policy")
     for name, body in (
         ("recover_abnormally_optimized", abnormal_optimized),
         ("recover_abnormally", abnormal_standard),
@@ -13191,9 +13273,9 @@ def normal_recovery_segment_orchestration_contract_violations(
             if message not in raw_body:
                 violations.append(f"Store {name} invalid-record warning changed")
         driver_position = body.find("normal_recovery.drive_segment")
-        summary_position = body.find("letsummary=normal_recovery.summary()")
-        if driver_position == -1 or summary_position <= driver_position:
-            violations.append(f"Store {name} final summary moved before segment driver")
+        completion_position = body.find("letcompletion=normal_recovery.completion(")
+        if driver_position == -1 or completion_position <= driver_position:
+            violations.append(f"Store {name} final completion moved before segment driver")
 
     required_tests = (
         "segment_started_state_error_skips_started_and_next",
@@ -15381,8 +15463,8 @@ class StoreLocalContractTests(unittest.TestCase):
                 1,
             ),
             "optimized empty-file return removed": store.replace(
-                "message_store.consume_queue_store_mut().load_after_destroy();\n            return;",
-                "message_store.consume_queue_store_mut().load_after_destroy();",
+                "                message_store,\n            );\n            return;",
+                "                message_store,\n            );",
                 1,
             ),
             "optimized adapter failure continues": store.replace(
@@ -15392,19 +15474,19 @@ class StoreLocalContractTests(unittest.TestCase):
                 "                    continue 'segments;",
                 1,
             ),
-            "optimized final confirm uses truncate offset": store.replace(
-                "self.set_confirm_offset(last_valid_offset);",
-                "self.set_confirm_offset(process_offset);",
+            "optimized completion input changed": store.replace(
+                "normal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "normal_recovery.completion(-1)",
                 1,
             ),
-            "optimized controller confirm uses truncate offset": store.replace(
-                "self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), last_valid_offset);",
-                "self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), process_offset);",
+            "controller completion field bypassed": store.replace(
+                "                        controller_confirm_offset,",
+                "                        confirm_offset,",
                 1,
             ),
-            "optimized truncate offset shadowed": store.replace(
-                "        };\n\n        if broker_config.enable_controller_mode {",
-                "        };\n        let process_offset = 0;\n\n        if broker_config.enable_controller_mode {",
+            "completion process offset bypassed": store.replace(
+                "$commit_log.mapped_file_queue.set_flushed_where(process_offset);",
+                "$commit_log.mapped_file_queue.set_flushed_where(confirm_offset);",
                 1,
             ),
             "optimized summary before driver": summary_before_driver,
@@ -16595,6 +16677,82 @@ mod tests {
             recovery_consume_queue_owner_violations(test_decoy, test_sources),
         )
 
+    def test_recovery_completion_has_one_local_owner_and_rejects_mapping_mutations(self) -> None:
+        completion_path = ROOT / RECOVERY_COMPLETION_PATH
+        completion = completion_path.read_text(encoding="utf-8")
+        recovery_root = (LOCAL_CRATE / "src" / "commit_log" / "recovery.rs").read_text(
+            encoding="utf-8"
+        )
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            recovery_completion_owner_violations(
+                completion,
+                recovery_root,
+                production_sources,
+            ),
+        )
+
+        mutations = [
+            completion.replace("controller_confirm_offset: i64,", "controller_confirm_offset: u64,", 1),
+            completion.replace(
+                "NormalRecoveryPolicy::Standard => process_offset,",
+                "NormalRecoveryPolicy::Standard => confirm_offset,",
+                1,
+            ),
+            completion.replace(
+                "controller_confirm_offset: signed_offset(summary.confirm_valid_offset),",
+                "controller_confirm_offset: signed_offset(summary.last_valid_offset),",
+                1,
+            ),
+            completion.replace(
+                "max_phy_offset_of_consume_queue,\n                summary.truncate_offset,",
+                "max_phy_offset_of_consume_queue,\n                summary.last_valid_offset,",
+                1,
+            ),
+            completion.replace("offset as i64", "offset as i32 as i64", 1),
+            completion + "\nfn forbidden_store_edge(_: LocalFileMessageStore) {}\n",
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(completion_mutation=mutation_index):
+                self.assertNotEqual(completion, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[RECOVERY_COMPLETION_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    recovery_completion_owner_violations(
+                        mutation,
+                        recovery_root,
+                        mutated_sources,
+                    ),
+                )
+
+        root_mutation = recovery_root.replace(
+            "pub use completion::CommitLogRecoveryCompletion;",
+            "pub(crate) use completion::CommitLogRecoveryCompletion;",
+            1,
+        )
+        self.assertNotEqual(recovery_root, root_mutation)
+        self.assertNotEqual(
+            [],
+            recovery_completion_owner_violations(
+                completion,
+                root_mutation,
+                production_sources,
+            ),
+        )
+
+        tests = (LOCAL_CRATE / "tests" / "commit_log_recovery_completion.rs").read_text(encoding="utf-8")
+        for test_name in (
+            "normal_completion_preserves_policy_specific_controller_boundaries",
+            "abnormal_completion_preserves_confirm_and_truncation_watermarks",
+        ):
+            self.assertIn(f"fn {test_name}()", tests)
+
     def test_store_recovery_consume_queue_paths_delegate_once_and_reject_adapter_mutations(self) -> None:
         commit_log_path = Path("rocketmq-store/src/log_file/commit_log.rs")
         commit_log = (ROOT / commit_log_path).read_text(encoding="utf-8")
@@ -16608,25 +16766,34 @@ mod tests {
         )
         mutations = [
             commit_log.replace(
+                "use rocketmq_store_local::commit_log::recovery::CommitLogRecoveryCompletion;",
+                "use rocketmq_store_local::commit_log::recovery::CommitLogRecoveryCompletion;\n"
                 "use rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue;",
-                "use rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue as should_truncate;",
                 1,
             ),
             commit_log.replace(
-                "max_phy_offset_of_consume_queue, summary.truncate_offset",
-                "summary.truncate_offset as i64, max_phy_offset_of_consume_queue as u64",
+                "normal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "normal_recovery.summary()",
                 1,
             ),
             commit_log.replace(
-                "max_phy_offset_of_consume_queue, summary.truncate_offset",
-                "max_phy_offset_of_consume_queue, process_offset as u64",
+                "abnormal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "abnormal_recovery.summary()",
                 1,
             ),
-            commit_log.replace("should_truncate_recovery_consume_queue(", "false && should_truncate_recovery_consume_queue(", 1),
-            commit_log.replace("should_truncate_recovery_consume_queue(", "should_truncate_recovery_consume_queue_old(", 1),
+            commit_log.replace(
+                "normal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "normal_recovery.completion(-1)",
+                1,
+            ),
+            commit_log.replace(
+                "abnormal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "abnormal_recovery.completion(-1)",
+                1,
+            ),
             commit_log
             + "\nfn extra_recovery_adapter(maximum: i64, truncate: u64) -> bool {\n"
-            + "    should_truncate_recovery_consume_queue(maximum, truncate)\n}\n",
+            + "    rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue(maximum, truncate)\n}\n",
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(adapter_mutation=mutation_index):
@@ -18181,7 +18348,7 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
                 "let _ = normal_recovery.apply(event);\n        let outcome = normal_recovery.drive_segment(",
                 1,
             ),
-            source.replace("normal_recovery.summary()", "normal_recovery.summary_copy()", 1),
+            source.replace("normal_recovery.completion(", "normal_recovery.completion_copy(", 1),
             source[:abnormal_open + 1] + "\n        drive_segment();" + source[abnormal_open + 1:],
             source.replace(
                 "pub async fn recover_abnormally_optimized",
@@ -18210,14 +18377,11 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
         self.assertNotEqual(source, mutation)
         self.assertNotEqual([], store_normal_recovery_adapter_violations(mutation))
 
-    def test_store_normal_recovery_contract_rejects_handmade_final_summary(self) -> None:
+    def test_store_normal_recovery_contract_rejects_handmade_final_completion(self) -> None:
         source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
         mutation = source.replace(
-            "let summary = normal_recovery.summary();",
-            """let summary = rocketmq_store_local::commit_log::recovery::NormalRecoverySummary {
-            last_valid_offset: 0,
-            truncate_offset: 0,
-        };""",
+            "let completion = normal_recovery.completion(max_phy_offset_of_consume_queue);",
+            "let completion = CommitLogRecoveryCompletion::Empty;",
             1,
         )
         self.assertNotEqual(source, mutation)
@@ -18279,17 +18443,24 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
             ),
             source.replace("let initial_offset = if index == 0", "let initial_offset = if false", 1),
             source.replace(
-                "let summary = abnormal_recovery.summary();",
-                "let summary = rocketmq_store_local::commit_log::recovery::AbnormalRecoverySummary { last_valid_offset: 0, confirm_valid_offset: 0, truncate_offset: 0 };",
+                "let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);",
+                "let completion = CommitLogRecoveryCompletion::Empty;",
                 1,
             ),
             source.replace(
-                "message_store.get_min_phy_offset(), confirm_valid_offset",
-                "message_store.get_min_phy_offset(), last_valid_offset",
+                "abnormal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "abnormal_recovery.completion(-1)",
                 1,
             ),
-            mutate_abnormal("self.set_confirm_offset(last_valid_offset)", "self.set_confirm_offset(process_offset)"),
-            mutate_abnormal("summary.truncate_offset", "summary.last_valid_offset"),
+            mutate_abnormal(
+                "apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue, message_store);",
+                "apply_recovery_completion!(self, CommitLogRecoveryCompletion::Empty, max_phy_offset_of_consume_queue, message_store);",
+            ),
+            mutate_abnormal(
+                "let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);",
+                "let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);\n"
+                "        let _ = abnormal_recovery.summary();",
+            ),
             mutate_abnormal(
                 "self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, true);",
                 "self.dispatcher.dispatch(dispatch_request);",

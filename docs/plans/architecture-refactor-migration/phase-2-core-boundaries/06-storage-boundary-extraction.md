@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au/M06-03av/M06-03aw/M06-03ax/M06-03ay/M06-03az 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au/M06-03av/M06-03aw/M06-03ax/M06-03ay/M06-03az/M06-03ba 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -2001,4 +2001,26 @@ python scripts/arc_mut_guard.py
   architecture dependency guard、ArcMut guard、AGENTS routing、enforcing runtime audit 与 diff check 均通过。
 - [x] `[INVENTORY/SCOPE]` append attempt/roll/retry/terminal resolution composition 已由 Local 拥有；Store 留存 message admission/encode、
   lock acquisition、legacy result facade 与 M06-04/M06-06 的 flush/HA port。PR-M06-03 继续收口 recovery completion owner 与最终 facade；
+  顶层统计保持 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03ba CommitLog recovery completion owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增 `recovery::CommitLogRecoveryCompletion`，唯一拥有 empty/recovered completion 词汇、normal/abnormal
+  summary 到 signed confirm/controller/process offset 的映射，以及 ConsumeQueue truncation 决策。normal standard/optimized 的 controller
+  上界差异由各自 state policy 保留；abnormal controller 上界继续来自 confirm-valid watermark。
+- [x] `[DEV/ADAPTER]` Store 四条 recovery 路径删除重复的 summary conversion、controller/legacy confirm 选择、CQ truncation 判断与
+  queue progress 写回，统一各调用一次 Local `completion(...)`；单一 `apply_recovery_completion!` adapter 只应用 controller clamp、legacy confirm、
+  CQ truncate、flushed/committed 与 dirty-file truncate 外部副作用，并处理 empty reset/destroy/reload。
+- [x] `[COMPAT]` normal standard 仍以 process offset 作为 controller recovery 上界、normal optimized 仍以 last-valid offset 为上界；
+  abnormal 两条路径仍以 confirm-valid offset 为 controller 上界、last-valid offset 为非 controller confirm。负 CQ max offset、`>=`
+  截断边界、warning 与 truncate 顺序、空 CommitLog 的路径专属日志和 reset/destroy/reload 顺序均保持不变。
+- [x] `[TEST]` Local completion integration 2/2、Local all-feature crate 单元 104/104 及全部 integration/doctest、Store lib 537/537
+  通过；覆盖 normal policy-specific controller boundary、abnormal confirm/truncate watermark、负值与精确 CQ 边界。
+- [x] `[CONTRACT]` 新增 completion owner baseline + 6 类 mutation，冻结 enum shape、signed-offset state invariant、normal/abnormal mapping、
+  module export、两项回归以及 Store 单一 side-effect adapter；同步将旧 direct-summary/CQ 契约改为禁止 Store 回流决策。最终形态关键定向
+  baseline/mutation 5/5 与完整 M06 contract 159/159 通过（745.397s）。Local/Store all-target/all-feature strict Clippy、workspace fmt、
+  architecture dependency guard、ArcMut guard、AGENTS routing、enforcing runtime audit 与 diff check 均通过；本切片未修改 typed-error
+  mapping 或敏感字段。
+- [x] `[INVENTORY/SCOPE]` CommitLog recovery completion composition 已由 Local 拥有；Store 只保留 MappedFile/CQ/runtime state 外部副作用
+  adapter。PR-M06-03 仅剩最终 Store facade/legacy ledger 收口；flush/group-commit、CQ/Index、HA、Timer/POP 仍留给 M06-04..07。
   顶层统计保持 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
