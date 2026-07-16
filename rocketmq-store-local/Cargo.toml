@@ -44,6 +44,7 @@ parking_lot.workspace = true
 rayon = "1.12"
 rocketmq-error.workspace = true
 rocketmq-observability = { workspace = true, optional = true }
+rocketmq-store-api.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

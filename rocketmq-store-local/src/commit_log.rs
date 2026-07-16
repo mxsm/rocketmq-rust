@@ -22,6 +22,7 @@ pub mod load_orchestration;
 pub mod loader;
 pub mod memory_lock;
 pub mod normal_recovery;
+pub mod read;
 pub mod record;
 pub mod record_parser;
 pub mod recovery;

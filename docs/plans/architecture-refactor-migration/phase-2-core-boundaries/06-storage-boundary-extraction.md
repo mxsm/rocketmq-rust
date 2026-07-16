@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06/PR-M06-07/PR-M06-08/PR-M06-09 已完成，继续 PR-M06-10 |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06/PR-M06-07/PR-M06-08/PR-M06-09/PR-M06-10 已完成，继续 PR-M06-11 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -138,11 +138,11 @@
 
 ### PR-M06-10：RocksDB MessageStore Adapter 与 Parity
 
-- [ ] 入口：`[TEST]` Rocks foundation和 Local semantic corpus均通过，唯一 CommitLog接口已冻结。
-- [ ] `[DEV]` 迁 message-store adapter，组合 store-local CommitLog，只替换 Rocks CQ/Index 派生路径。
-- [ ] `[TEST]` focused test：`rocksdb_store_semantics_tests`、Broker rocks/pop、Local/Rocks parity、restart和failure mapping。
-- [ ] `[REV]` 检查不写第二消息日志、不改变 column family/offset/error语义，Client/Broker类型不泄漏。
-- [ ] 回滚点：Rocks factory 指回已通过同一 parity corpus的上一 adapter；Local/default和CommitLog保持在线。
+- [x] 入口：`[TEST]` Rocks foundation和 Local semantic corpus均通过，唯一 CommitLog接口已冻结。
+- [x] `[DEV]` 迁 message-store adapter，组合 store-local CommitLog，只替换 Rocks CQ/Index 派生路径。
+- [x] `[TEST]` focused test：`rocksdb_store_semantics_tests`、Broker rocks/pop、Local/Rocks parity、restart和failure mapping。
+- [x] `[REV]` 检查不写第二消息日志、不改变 column family/offset/error语义，Client/Broker类型不泄漏。
+- [x] 回滚点：Rocks factory 指回已通过同一 parity corpus的上一 adapter；Local/default和CommitLog保持在线。
 
 ### PR-M06-11：Store Facade、Tiered 反转与 Feature 所有权
 
@@ -2431,3 +2431,32 @@ python scripts/arc_mut_guard.py
   和第二 CommitLog。Rocks/Store/Broker strict Clippy、workspace fmt 与 workspace all-target/all-feature Clippy 均通过。
 - [x] `[INVENTORY]` PR-M06-09 父项关闭；82 个顶层工作包更新为 37 已完成、0 进行中、45 未开始，即
   45 个尚未完成。M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-10。
+
+## M06-10 RocksDB MessageStore adapter evidence
+
+- [x] `[ARCH/OWNER]` `rocketmq-store-rocksdb::message_store` canonical 拥有 `RocksDbDerivedStore` 与
+  `RocksDbMessageStoreRoot` 的 `L: LocalWalPort` 注入边界；Timer/Transaction build kernel 同步迁入 Rocks owner。依赖方向固定为
+  `rocksdb → local → store-api`，owner 无 Store/Tiered/Broker/Client/Common/Remoting/rocketmq-rust 类型，也不创建第二 CommitLog。
+- [x] `[DEV/ADAPTER]` Store 旧 `RocksDBMessageStore` 缩为 Local WAL handle、Rocks root、legacy DTO/error/trait/config
+  映射和 CommitLog dispatcher。默认只注册 Rocks CQ/Index；显式 `rocksdb_cq_double_write_enable=true` 才保留 Local 镜像。
+- [x] `[CORRECTNESS]` Rocks CQ 成功写入、load、restart catch-up 与 truncate 后单调同步 Local queue-offset allocator；
+  修复无 uniq-key 普通索引被 Local fallback 掩盖的问题，并把 Timer progress 固定为 physical CommitLog offset。
+- [x] `[COMPAT/ROLLBACK]` 20B CQ、Index key/value/CF、CommitLog bytes、旧 public path、feature alias 与同步 sentinel 保持；
+  独立 [`07-storage-rocksdb-message-store-compatibility-ledger.md`](07-storage-rocksdb-message-store-compatibility-ledger.md)
+  冻结 owner、默认/显式双写语义、删除条件和整体 revert 回滚点。
+- [x] `[TEST]` Rocks owner unit/integration 4/4、Rocks foundation 82/82、Store semantics 9/9、Broker rocks 20/20 与
+  pop_consumer 4/4 已通过，覆盖默认/显式 double-write、Local/Rocks pull parity、Rocks-only index、restart/reput allocator、
+  dirty tail、time boundary、typed failure/health mapping；Local default/all-feature 全量与 Store all-feature lib 484/484 同步通过。
+- [x] `[CONTRACT]` 新增 Rocks adapter source contract 后完整 M06 contract 最终 190/190（604.962s）通过。首次 188/190
+  暴露 canonical `read.rs` 文件集与 mapped-file facade 扫描范围漂移，第二次 189/190 暴露 extern-crate alias 负向夹具；
+  修复后 7 个相关正/负向定向用例与最终全量均通过，没有放宽 mapped-file alias/tree/glob/extern 绕过。
+- [x] `[FEATURE/DEPENDENCY]` store-api、Local、Rocks 的 no-default/default check/test 和 Local/Rocks normal dependency tree
+  通过；architecture baseline/fixtures、Rocks owner 禁止边、AGENTS routing 通过。默认 Local/Rocks-only 与显式
+  `rocksdb_cq_double_write_enable` 路径均有测试固定。
+- [x] `[ARC/RUNTIME]` ArcMut baseline 从 1171 identities/3233 occurrences 收敛到 1170/3232，当前 guard、24 个 fixtures
+  与 63 个 guard 单测通过；runtime enforcing audit 通过且未新增 runtime boundary debt。
+- [x] `[ERROR/GATE]` error hygiene 的本次 Rocks source-preservation 违规已清零；最终仅复现 main
+  `443e1cc0ba5e8d86d9205d1a92e604bd33aea880` 的既有 11 项（auth 1、MCP 8、治理文档 2），同级临时 worktree
+  对照退出码同为 1。Store/Rocks/Broker package Clippy、workspace exact fmt/Clippy 与 `git diff --check` 通过。
+- [x] `[INVENTORY]` PR-M06-10 父项关闭；82 个顶层工作包更新为 38 已完成、0 进行中、44 未开始，即
+  44 个尚未完成。M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-11。

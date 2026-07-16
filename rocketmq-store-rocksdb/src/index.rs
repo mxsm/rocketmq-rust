@@ -175,9 +175,8 @@ impl RocksDbIndexBuildService {
             return Ok(Vec::new());
         }
 
-        let Some(uniq_key) = dispatch_request.uniq_key().filter(|key| !key.is_empty()) else {
-            return Ok(Vec::new());
-        };
+        let uniq_key = dispatch_request.uniq_key().filter(|key| !key.is_empty());
+        let compatibility_uniq_key = uniq_key.unwrap_or_default();
 
         let topic = dispatch_request.topic();
         let mut records = Vec::new();
@@ -189,7 +188,7 @@ impl RocksDbIndexBuildService {
             records.push(IndexRocksDbRecord::normal_key(
                 topic,
                 key,
-                uniq_key,
+                compatibility_uniq_key,
                 dispatch_request.store_timestamp(),
                 dispatch_request.commit_log_offset(),
             ));
@@ -199,18 +198,20 @@ impl RocksDbIndexBuildService {
             records.push(IndexRocksDbRecord::tag_key(
                 topic,
                 tag,
-                uniq_key,
+                compatibility_uniq_key,
                 dispatch_request.store_timestamp(),
                 dispatch_request.commit_log_offset(),
             ));
         }
 
-        records.push(IndexRocksDbRecord::unique_key(
-            topic,
-            uniq_key,
-            dispatch_request.store_timestamp(),
-            dispatch_request.commit_log_offset(),
-        ));
+        if let Some(uniq_key) = uniq_key {
+            records.push(IndexRocksDbRecord::unique_key(
+                topic,
+                uniq_key,
+                dispatch_request.store_timestamp(),
+                dispatch_request.commit_log_offset(),
+            ));
+        }
         Ok(records)
     }
 

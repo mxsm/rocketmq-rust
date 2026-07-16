@@ -571,6 +571,90 @@
       "from": "6ec2bd83a05e2f80412c1abd",
       "to": "8a24b37e7d1a474fd2ca4d4d",
       "reason": "Adding the LocalStoreComposition field changed adjacent context around the existing LocalFileMessageStore type reference without adding an occurrence"
+    },
+    {
+      "identity": "0463c42820325fd7d7f79917",
+      "from": "76d3e08efedb5f9bbf9d7aaa",
+      "to": "81de4656756d99a5ed707f59",
+      "reason": "Composing the extracted RocksDB root changed adjacent context around the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "2195951d60e6e7239b36b1cc",
+      "from": "373e37c655b09fa3fa8782d3",
+      "to": "b080c014ce7957ffecaf38e5",
+      "reason": "Selecting Local derived dispatchers from the existing RocksDB compatibility config changed adjacent constructor context without adding an ArcMut occurrence"
+    },
+    {
+      "identity": "28a87f40c2e05f736c36d573",
+      "from": "caa14c60bb80ffbac859897e",
+      "to": "88d3afe5ff8345c6b7776ca5",
+      "reason": "Replacing inline RocksDB backend construction with the extracted owner root changed the existing LocalFileMessageStore ArcMut constructor fingerprint"
+    },
+    {
+      "identity": "3285b544c13b1e6571022f88",
+      "from": "d669c819d8a2768cd6554afa",
+      "to": "91d68eabb397d4feb1a19a09",
+      "reason": "Adding RocksDB adapter parity cases changed adjacent import context in the existing semantics test without adding an occurrence"
+    },
+    {
+      "identity": "6eeaeadc640036c97325f4c3",
+      "from": "ee1f9e08b3c6ac8fe2c2bd45",
+      "to": "35c5d503f8b36fc49ec70861",
+      "reason": "Replacing RocksDB backend fields with the extracted owner root changed the existing shared-wrapper fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "87f95d97d097fb6a91e66904",
+      "from": "c8099e11fa2e119b2932312a",
+      "to": "543d913b3a6e9eb308b2bbe4",
+      "reason": "Delegating RocksDB lifecycle operations to the extracted owner changed adjacent context around an existing RocksDBMessageStore reference"
+    },
+    {
+      "identity": "87f95d97d097fb6a91e66904",
+      "from": "bb0147f5be1178b4639d9343",
+      "to": "ae5724dfc8f328477d71af16",
+      "reason": "Delegating RocksDB read operations to the extracted owner changed adjacent context around an existing RocksDBMessageStore reference"
+    },
+    {
+      "identity": "87f95d97d097fb6a91e66904",
+      "from": "833ee86eb927e190d1e04d33",
+      "to": "591e5c14393284cd5ad89ece",
+      "reason": "Delegating RocksDB index queries to the extracted owner changed adjacent context around an existing RocksDBMessageStore reference"
+    },
+    {
+      "identity": "87f95d97d097fb6a91e66904",
+      "from": "b3f21af1ba271d14f5d7b9bc",
+      "to": "06d8af4802b3a5f1aa74aaaa",
+      "reason": "Removing the obsolete adapter-local unit module changed adjacent context around an existing RocksDBMessageStore reference"
+    },
+    {
+      "identity": "ddc89dfb256d0e55fc89c305",
+      "from": "7217cfdc72cb68126a2fa1ea",
+      "to": "d7778296ef81fa5710955ef8",
+      "reason": "Injecting the narrow Local WAL port changed adjacent context around the existing LocalFileMessageStore facade field"
+    },
+    {
+      "identity": "ddc89dfb256d0e55fc89c305",
+      "from": "0f2416ce0631c9a775a8afed",
+      "to": "c87d53335c3f33da58ea4ae7",
+      "reason": "Injecting the narrow Local WAL port changed adjacent context around the existing LocalFileMessageStore accessor"
+    },
+    {
+      "identity": "ddc89dfb256d0e55fc89c305",
+      "from": "d2727c917a253722cd0ee0b2",
+      "to": "c46762e268005ebf4890fc46",
+      "reason": "Composing the RocksDB owner changed adjacent context around the existing LocalFileMessageStore compatibility return type"
+    },
+    {
+      "identity": "e805e4bbe6d16335af1f3d50",
+      "from": "5a33ebefe7242b8afcf169b8",
+      "to": "05756ac594343e2aa5842ec6",
+      "reason": "Composing the RocksDB owner root changed adjacent context around the existing LocalFileMessageStore ArcMut field"
+    },
+    {
+      "identity": "f6e062bd61c7d022dbba10bc",
+      "from": "5382f21e9c57edc69e8ce15f",
+      "to": "245ed505123e8e3fdf662db6",
+      "reason": "Adding queue-offset synchronization changed adjacent context around the existing ArcConsumeQueue recovery snapshot reference"
     }
   ]
 }

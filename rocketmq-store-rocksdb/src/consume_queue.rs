@@ -457,6 +457,34 @@ impl RocksDbConsumeQueueStore {
             .map_or(0, |value| value.consume_queue_offset))
     }
 
+    /// Returns the exclusive maximum consume-queue offset for every topic and
+    /// queue currently recorded by RocksDB.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the offset column family cannot be scanned or a
+    /// stored maximum cannot be represented as an exclusive offset.
+    pub fn max_offsets_by_topic_queue(&self) -> Result<HashMap<(String, i32), i64>, RocketMQError> {
+        let mut offsets = HashMap::new();
+        for entry in self.scan_offset_entries()? {
+            if entry.boundary != ConsumeQueueOffsetBoundary::Max {
+                continue;
+            }
+            let next_offset =
+                entry
+                    .value
+                    .consume_queue_offset
+                    .checked_add(1)
+                    .ok_or_else(|| RocketMQError::ConfigInvalidValue {
+                        key: "rocksdb.consume_queue.max_offset",
+                        value: entry.value.consume_queue_offset.to_string(),
+                        reason: "max consume queue offset overflowed i64 when converted to next offset".to_string(),
+                    })?;
+            offsets.insert((entry.topic, entry.queue_id), next_offset);
+        }
+        Ok(offsets)
+    }
+
     pub fn get_max_phy_offset_in_consume_queue(
         &self,
         topic: impl Into<String>,
