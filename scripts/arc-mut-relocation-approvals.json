@@ -487,6 +487,90 @@
       "from": "1634fad6825ef8a080c922ea",
       "to": "59690fe43b7e20d5c5b0b4ce",
       "reason": "Importing Local Timer schedule recovery metrics and record owners changed module context around the existing ArcMut import without adding or moving an occurrence"
+    },
+    {
+      "identity": "1861cca7274c8df71f0b600a",
+      "from": "0918ad20b3e22887b013aba8",
+      "to": "0272eb6f065fcadde2433cc9",
+      "reason": "Adding the normalized cleanup policy parameter changed adjacent tokens around the existing CleanCommitLogService ArcMut constructor argument without adding an occurrence"
+    },
+    {
+      "identity": "1861cca7274c8df71f0b600a",
+      "from": "504c7b7d5ee4f131fbb2993d",
+      "to": "f405d52da628e924dba63dd5",
+      "reason": "Adding the Local reput policy projection changed adjacent tokens around the existing test helper ArcMut type without adding an occurrence"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "6524641f2dac1b9507490766",
+      "to": "66b95ed4a446ae74aa052cc7",
+      "reason": "Adding the Local reput policy parameter changed adjacent tokens around the existing CommitLog ArcMut run_once parameter without adding an occurrence"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "306a5bb513ea5c3e794f22be",
+      "to": "d3d641e8d0b6ae2a13fbe2ad",
+      "reason": "Adding the Local reput policy parameter changed adjacent tokens around the existing dispatcher ArcMut run_once parameter without adding an occurrence"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "785642198eed1a19a1fd100a",
+      "to": "4582701031e93158c6d3eff9",
+      "reason": "Adding the Local reput policy parameter changed adjacent tokens around the existing CommitLog ArcMut start parameter without adding an occurrence"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "df19244a14badcddb74e7509",
+      "to": "3041a4b81382e6207f108fdf",
+      "reason": "Adding the Local reput policy parameter changed adjacent tokens around the existing dispatcher ArcMut start parameter without adding an occurrence"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "1ffa7f224f6f4e1cfdca0ce4",
+      "to": "d8037a2bd068cdcd2c5f00db",
+      "reason": "Replacing the cleanup retry atomic with the Local tracker changed adjacent fields around the existing CleanCommitLogService ArcMut reference without adding an occurrence"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "08de475d27c0cec432f9cdf8",
+      "to": "d583a5819be1a1a66fc207ab",
+      "reason": "Delegating cleanup decisions to the Local policy changed adjacent context around the existing CleanConsumeQueueService ArcMut reference without adding an occurrence"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "f708516e46176e73ea9b2d3f",
+      "to": "b34a21bf98770e31f4a165b4",
+      "reason": "Adding the Local reput policy field changed adjacent context around the existing CommitLog ArcMut field without adding an occurrence"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "e356459ed0ba6a38ceb0e2b5",
+      "to": "e0683262788f978bff01a307",
+      "reason": "Adding the Local reput policy field changed adjacent context around the existing dispatcher ArcMut field without adding an occurrence"
+    },
+    {
+      "identity": "36b5807f24c40eea34ef1b20",
+      "from": "deb1274c9cb2d398cf5106b6",
+      "to": "b51abb9cdd4277835643fb3a",
+      "reason": "Delegating disk pressure classification to the Local cleanup policy changed adjacent context around the existing LocalFileMessageStore path helper reference without adding an occurrence"
+    },
+    {
+      "identity": "36b5807f24c40eea34ef1b20",
+      "from": "9bb7b99d7be1d9ae354a1d74",
+      "to": "740811ee3ad741abaa452675",
+      "reason": "Adding the Local reput policy projection changed adjacent context around the existing LocalFileMessageStore test helper type without adding an occurrence"
+    },
+    {
+      "identity": "829ee7c4a57a6808f54c907c",
+      "from": "63acc2aef21e44da330786c1",
+      "to": "13d3086891612680d1512e25",
+      "reason": "Replacing the lifecycle atomic with the LocalStoreComposition changed the fingerprint of the existing LocalFileMessageStore shared UnsafeCell wrapper without adding an occurrence"
+    },
+    {
+      "identity": "d73ee824202523f10a8371cb",
+      "from": "6ec2bd83a05e2f80412c1abd",
+      "to": "8a24b37e7d1a474fd2ca4d4d",
+      "reason": "Adding the LocalStoreComposition field changed adjacent context around the existing LocalFileMessageStore type reference without adding an occurrence"
     }
   ]
 }

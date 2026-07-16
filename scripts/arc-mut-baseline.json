@@ -29730,7 +29730,7 @@
           "id": "b871300ee7ca8786bbc26b35",
           "fingerprint": "60663fd942af19d6f9199b24",
           "item": "fn run_store_local_file_scheduled_lifecycle_probe",
-          "line": 1162
+          "line": 1173
         }
       ],
       "owner": "store",
@@ -29749,7 +29749,7 @@
           "id": "f8b0ea22c86e0bc6cb92ffea",
           "fingerprint": "1e252acb0c5593b57e0095a1",
           "item": "mod bench_support",
-          "line": 75
+          "line": 86
         }
       ],
       "owner": "store",
@@ -29768,7 +29768,7 @@
           "id": "a42c1622746f302febbeff19",
           "fingerprint": "4409877677a2ab1aa08a3793",
           "item": "fn run_store_local_file_scheduled_lifecycle_probe",
-          "line": 1165
+          "line": 1176
         }
       ],
       "owner": "store",
@@ -29787,7 +29787,7 @@
           "id": "f348cf8c3d1bbc140f438bb6",
           "fingerprint": "e059b52786cec435681ca0e9",
           "item": "fn run_store_local_file_scheduled_lifecycle_probe",
-          "line": 1162
+          "line": 1173
         }
       ],
       "owner": "store",
@@ -29806,7 +29806,7 @@
           "id": "ff5cb8579b356fbd4d66fab8",
           "fingerprint": "1f5ae028a080b73b6ea8f67b",
           "item": "mod bench_support",
-          "line": 93
+          "line": 104
         }
       ],
       "owner": "store",
@@ -30377,7 +30377,7 @@
           "id": "5e2a976814d52acf97caff6c",
           "fingerprint": "38da9387a61c9d87bb9ef91b",
           "item": "<module>",
-          "line": 164
+          "line": 171
         }
       ],
       "owner": "store",
@@ -30396,13 +30396,13 @@
           "id": "41cfbce8951a575089c25d86",
           "fingerprint": "1db69a6201259e16b3e3de6d",
           "item": "fn get_consume_queue",
-          "line": 3583
+          "line": 3559
         },
         {
           "id": "fb117dcbd6c98f3fc8307c10",
           "fingerprint": "eac0977e97367bb08379fd51",
           "item": "fn find_consume_queue",
-          "line": 3590
+          "line": 3566
         }
       ],
       "owner": "store",
@@ -30421,31 +30421,31 @@
           "id": "373e37c655b09fa3fa8782d3",
           "fingerprint": "5374125d11aad32cd42c32a5",
           "item": "fn try_new",
-          "line": 492
+          "line": 461
         },
         {
           "id": "159edd577ca779c3c2632b4e",
           "fingerprint": "8adb6a3fdb4ea46cd96bce0c",
           "item": "fn try_new",
-          "line": 522
+          "line": 491
         },
         {
           "id": "89c232cf45deec0689d095b3",
           "fingerprint": "8f05858b4f69cb3c851df1f8",
           "item": "fn try_new",
-          "line": 617
+          "line": 587
         },
         {
           "id": "57e135a427ffb2ea551225b9",
           "fingerprint": "457380e7781ba11f1a1c1b8b",
           "item": "fn init",
-          "line": 2049
+          "line": 2019
         },
         {
           "id": "5dcf15358cca2af960647d6d",
           "fingerprint": "795137858435605e6055c3bb",
           "item": "fn init",
-          "line": 2055
+          "line": 2025
         }
       ],
       "owner": "store",
@@ -30464,67 +30464,67 @@
           "id": "fe6ed215f742b0b7382f046f",
           "fingerprint": "3228e710dd3b2f82289ce6e0",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5761
+          "line": 5744
         },
         {
           "id": "a784257a9eea3ca2888a65d6",
           "fingerprint": "730edc6c382a5095a5566f80",
           "item": "fn new_unwired_test_store",
-          "line": 5799
+          "line": 5782
         },
         {
           "id": "ea80384d3d04734ae9e31340",
           "fingerprint": "bc019fd36449638f708552dc",
           "item": "fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled",
-          "line": 6071
+          "line": 6062
         },
         {
           "id": "c10b456359e577355ad93172",
           "fingerprint": "a8128514745e5b5b0f573a04",
           "item": "fn compaction_topic_dispatches_and_reads_from_compaction_store",
-          "line": 6465
+          "line": 6456
         },
         {
           "id": "1e66c7b54d88ce1b95508c4c",
           "fingerprint": "a8128514745e5b5b0f573a04",
           "item": "fn rocksdb_store_type_with_rocksdb_cq_topic_uses_compat_local_queue_path",
-          "line": 6511
+          "line": 6502
         },
         {
           "id": "6eca838ea25456a66bfe1e87",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master",
-          "line": 7378
+          "line": 7369
         },
         {
           "id": "7ad9c617a9ab2369224ba894",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk",
-          "line": 7723
+          "line": 7714
         },
         {
           "id": "a90459da038304a8d37b178a",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset",
-          "line": 8274
+          "line": 8265
         },
         {
           "id": "4bf08ba5d315432b007618ef",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index",
-          "line": 8324
+          "line": 8315
         },
         {
           "id": "6d4ec8cb2eb76b205899a719",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset",
-          "line": 8385
+          "line": 8376
         },
         {
           "id": "f55a020f1bb78baf0d9c9841",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor",
-          "line": 8410
+          "line": 8401
         }
       ],
       "owner": "store",
@@ -30562,7 +30562,7 @@
           "id": "73d704c7294a4ad3c853d582",
           "fingerprint": "2140089977a37314c7c94030",
           "item": "mod tests",
-          "line": 5660
+          "line": 5643
         }
       ],
       "owner": "store",
@@ -30581,181 +30581,181 @@
           "id": "358fd0880bb937a7bd625566",
           "fingerprint": "963e26c23ed57eea1ce9255f",
           "item": "struct LocalFileMessageStore",
-          "line": 328
+          "line": 296
         },
         {
           "id": "cd4231d8fda902aac51fb373",
           "fingerprint": "d793119c20bbcc8e79715efb",
           "item": "struct LocalFileMessageStore",
-          "line": 329
+          "line": 297
         },
         {
           "id": "c0e1b409d21fc82c2f9a473a",
           "fingerprint": "7555c33cb6cd42519deeda10",
           "item": "struct LocalFileMessageStore",
-          "line": 337
+          "line": 305
         },
         {
           "id": "5ce5b945e839ffda6f34ee86",
           "fingerprint": "9156fee9804c415403ef7440",
           "item": "struct LocalFileMessageStore",
-          "line": 364
+          "line": 331
         },
         {
           "id": "ba7c6f9ec481b755ca32530d",
           "fingerprint": "cc6923be1ef1d352a01deba7",
           "item": "struct LocalFileMessageStore",
-          "line": 373
+          "line": 340
         },
         {
           "id": "9c9d8ffd1188ccc3592c63a2",
           "fingerprint": "acf1a9f8e0ba233f3c9a87bb",
           "item": "fn new",
-          "line": 445
+          "line": 412
         },
         {
           "id": "7d81f03f8180dee49d0cf8e4",
           "fingerprint": "acf1a9f8e0ba233f3c9a87bb",
           "item": "fn try_new",
-          "line": 462
+          "line": 429
         },
         {
           "id": "9ea4eaf9af63b82283fca422",
           "fingerprint": "afe97e447680f873317b8ab8",
           "item": "fn build_tiered_store",
-          "line": 632
+          "line": 602
         },
         {
           "id": "3306ff378264125e46889d33",
           "fingerprint": "e5109240ce1534636584aa25",
           "item": "fn set_message_store_arc",
-          "line": 890
+          "line": 860
         },
         {
           "id": "10e4f234ee2565c31b36a2f7",
           "fingerprint": "53471ebe8974aca32fdab54d",
           "item": "fn delay_level_table",
-          "line": 901
+          "line": 871
         },
         {
           "id": "55d711651af016482f79bc31",
           "fingerprint": "f989223aeed8f2b3eb1a48fc",
           "item": "fn message_store_arc_or_error",
-          "line": 988
+          "line": 959
         },
         {
           "id": "f5fac3db5be9035b514f23eb",
           "fingerprint": "c33b43872bc8c2b497c48d58",
           "item": "fn get_topic_config",
-          "line": 1086
+          "line": 1057
         },
         {
           "id": "fe18a5aea3534e4ebfc6a76c",
           "fingerprint": "69a8d585bf49df024e8d71a4",
           "item": "fn start",
-          "line": 4250
+          "line": 4225
         },
         {
           "id": "0e882c172d4250fa64b76ab0",
           "fingerprint": "e040ac0df878d7a0f9be8577",
           "item": "struct BackgroundIndexRebuildWorker",
-          "line": 4344
+          "line": 4319
         },
         {
-          "id": "785642198eed1a19a1fd100a",
-          "fingerprint": "d0935cc202d47666cc0df07b",
+          "id": "4582701031e93158c6d3eff9",
+          "fingerprint": "1c93f8e3f0ced7d79afddcc8",
           "item": "fn start",
-          "line": 4581
+          "line": 4555
         },
         {
-          "id": "df19244a14badcddb74e7509",
-          "fingerprint": "48974834b17e02e1a2b36da1",
+          "id": "3041a4b81382e6207f108fdf",
+          "fingerprint": "e3fa09bd49504f076da1a918",
           "item": "fn start",
-          "line": 4583
+          "line": 4558
         },
         {
           "id": "f7fa186b77201d41b312b3ac",
           "fingerprint": "25308b92853a7656193b065e",
           "item": "fn start",
-          "line": 4585
+          "line": 4560
         },
         {
-          "id": "6524641f2dac1b9507490766",
-          "fingerprint": "ba8a419d81760057598fb915",
+          "id": "66b95ed4a446ae74aa052cc7",
+          "fingerprint": "96c1f62b398174e21a5554b8",
           "item": "fn run_once",
-          "line": 4751
+          "line": 4727
         },
         {
-          "id": "306a5bb513ea5c3e794f22be",
-          "fingerprint": "48974834b17e02e1a2b36da1",
+          "id": "d3d641e8d0b6ae2a13fbe2ad",
+          "fingerprint": "e3fa09bd49504f076da1a918",
           "item": "fn run_once",
-          "line": 4753
+          "line": 4730
         },
         {
           "id": "fab45978fcb0c29d61780058",
           "fingerprint": "5c304b2651587cadb336e9a6",
           "item": "fn run_once",
-          "line": 4755
+          "line": 4732
         },
         {
-          "id": "f708516e46176e73ea9b2d3f",
-          "fingerprint": "68a4dea3e302d489ec960781",
+          "id": "b34a21bf98770e31f4a165b4",
+          "fingerprint": "6456002e767075c2a111a438",
           "item": "struct ReputMessageServiceInner",
-          "line": 4830
+          "line": 4808
         },
         {
-          "id": "e356459ed0ba6a38ceb0e2b5",
-          "fingerprint": "48974834b17e02e1a2b36da1",
+          "id": "e0683262788f978bff01a307",
+          "fingerprint": "e3fa09bd49504f076da1a918",
           "item": "struct ReputMessageServiceInner",
-          "line": 4832
+          "line": 4811
         },
         {
           "id": "5fec31e144244d68cfe1e516",
           "fingerprint": "1a5ecb154882b957d5018729",
           "item": "struct ReputMessageServiceInner",
-          "line": 4834
+          "line": 4813
         },
         {
           "id": "d250794d266a1160203f4239",
           "fingerprint": "6d55657ad493eae437eac3b0",
           "item": "fn dispatch_reput_batch",
-          "line": 4838
+          "line": 4817
         },
         {
           "id": "59b6f3a63c8c6592eeac6514",
           "fingerprint": "05a30ded732ed2c1c89ad3f3",
           "item": "fn dispatch_reput_batch",
-          "line": 4839
+          "line": 4818
         },
         {
-          "id": "1ffa7f224f6f4e1cfdca0ce4",
-          "fingerprint": "281e5c4f1462b0816adc2e00",
+          "id": "d8037a2bd068cdcd2c5f00db",
+          "fingerprint": "545c9b46ab33535af90503fe",
           "item": "struct CleanCommitLogService",
-          "line": 5192
+          "line": 5171
         },
         {
-          "id": "08de475d27c0cec432f9cdf8",
-          "fingerprint": "7acad88aee390b850f97a42c",
+          "id": "d583a5819be1a1a66fc207ab",
+          "fingerprint": "eb5c006d884d32a8e0b5e9b8",
           "item": "struct CleanConsumeQueueService",
-          "line": 5393
+          "line": 5378
         },
         {
           "id": "95946ce5d0633d5bb0eb512b",
           "fingerprint": "2d17eb4b45a953b52bfc11a9",
           "item": "fn new",
-          "line": 5399
+          "line": 5384
         },
         {
           "id": "61cc2f3dbf65ad4e6a3025ec",
           "fingerprint": "2ff84019b2e3a42a1d431022",
           "item": "struct CorrectLogicOffsetService",
-          "line": 5433
+          "line": 5418
         },
         {
           "id": "b5b3d3b4a047150fa61686c4",
           "fingerprint": "ac08876c41b7c0d7270e69a9",
           "item": "fn new",
-          "line": 5438
+          "line": 5423
         }
       ],
       "owner": "store",
@@ -30771,118 +30771,118 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "0918ad20b3e22887b013aba8",
-          "fingerprint": "76af7ca489e52ebfab81a4bd",
+          "id": "0272eb6f065fcadde2433cc9",
+          "fingerprint": "07f48c3f324369a987bcd9ed",
           "item": "fn new",
-          "line": 5204
+          "line": 5184
         },
         {
           "id": "818e23254f48bf96c011502d",
           "fingerprint": "06808e60c57a588d963a39d1",
           "item": "fn new_test_store",
-          "line": 5717
+          "line": 5700
         },
         {
           "id": "bd75d2fc21441146137a1fa7",
           "fingerprint": "2c50adbb8bb3601aa9696f99",
           "item": "fn new_configured_test_store",
-          "line": 5751
+          "line": 5734
         },
         {
           "id": "a4565850138c33457cb4503f",
           "fingerprint": "ddaaf51b7e9e8a6d5a7fa862",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5759
+          "line": 5742
         },
         {
           "id": "82ea5c873c16992c9150a787",
           "fingerprint": "a59864eb9429d10129008663",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5764
+          "line": 5747
         },
         {
           "id": "e300821df2b0dcc5a7ec4518",
           "fingerprint": "1240b98bd3ace44c67fb31a5",
           "item": "fn new_unwired_test_store",
-          "line": 5794
+          "line": 5777
         },
         {
           "id": "03de0f2c94675977dc93bc33",
           "fingerprint": "4409877677a2ab1aa08a3793",
           "item": "fn new_unwired_test_store",
-          "line": 5802
+          "line": 5785
         },
         {
-          "id": "504c7b7d5ee4f131fbb2993d",
-          "fingerprint": "705341b003b934b62d41c282",
+          "id": "f405d52da628e924dba63dd5",
+          "fingerprint": "9594ea63f3c6dfc2a4f8dadb",
           "item": "fn reput_inner_for_store",
-          "line": 5860
+          "line": 5843
         },
         {
           "id": "2bc785020cffc531f67851d5",
           "fingerprint": "65fc444d08793f252677b512",
           "item": "fn new_async_flush_test_store",
-          "line": 5950
+          "line": 5941
         },
         {
           "id": "d3c97c8726298454fce74c15",
           "fingerprint": "7666f2a4683b6bb72bf1c3ee",
           "item": "fn append_encoded_test_message",
-          "line": 6001
+          "line": 5992
         },
         {
           "id": "f82cfea3d0ea6119b10efdb0",
           "fingerprint": "09110b2e53b7eb82a0456a37",
           "item": "fn append_encoded_test_message_with_key",
-          "line": 6011
+          "line": 6002
         },
         {
           "id": "12312895c95000e25723ccbe",
           "fingerprint": "4409877677a2ab1aa08a3793",
           "item": "fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled",
-          "line": 6074
+          "line": 6065
         },
         {
           "id": "9b6981b75d6d8201e9a8365d",
           "fingerprint": "30e084e32d538c30720ff9b6",
           "item": "fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master",
-          "line": 7389
+          "line": 7380
         },
         {
           "id": "a8e3d703ddc770393aa8d072",
           "fingerprint": "4409877677a2ab1aa08a3793",
           "item": "fn master_store_in_process_round_trips_concrete_store_reference",
-          "line": 7428
+          "line": 7419
         },
         {
           "id": "832e44c796a4cee0ae67a7dd",
           "fingerprint": "4409877677a2ab1aa08a3793",
           "item": "fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk",
-          "line": 7731
+          "line": 7722
         },
         {
           "id": "189e90157c3a3241f6b72456",
           "fingerprint": "30e084e32d538c30720ff9b6",
           "item": "fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset",
-          "line": 8284
+          "line": 8275
         },
         {
           "id": "7b87fd1be059d112aaa2ecc3",
           "fingerprint": "30e084e32d538c30720ff9b6",
           "item": "fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index",
-          "line": 8334
+          "line": 8325
         },
         {
           "id": "e0986b3022b078d47dfc7fdc",
           "fingerprint": "30e084e32d538c30720ff9b6",
           "item": "fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset",
-          "line": 8395
+          "line": 8386
         },
         {
           "id": "dbd3ad2b6d465c9f58ff2af5",
           "fingerprint": "30e084e32d538c30720ff9b6",
           "item": "fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor",
-          "line": 8420
+          "line": 8411
         }
       ],
       "owner": "store",
@@ -30901,61 +30901,61 @@
           "id": "72afb08dd84823802eddf156",
           "fingerprint": "7322e8445966d188ee7fd92d",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5761
+          "line": 5744
         },
         {
           "id": "a4fff833b2fce8cc031cd4c0",
           "fingerprint": "338645fde00ddca9b9407106",
           "item": "fn new_unwired_test_store",
-          "line": 5799
+          "line": 5782
         },
         {
           "id": "0fb3aca56be2c7b8686d0093",
           "fingerprint": "98775f57bdf0972c76ba7d6d",
           "item": "fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled",
-          "line": 6071
+          "line": 6062
         },
         {
           "id": "7c7647aaebb9f5e60713f098",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master",
-          "line": 7378
+          "line": 7369
         },
         {
           "id": "532385187ca9a0a1d26b5ad9",
           "fingerprint": "3592b529ab80ca668d418994",
           "item": "fn master_store_in_process_round_trips_concrete_store_reference",
-          "line": 7417
+          "line": 7408
         },
         {
           "id": "c6b0b2d54151b046598a4eac",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk",
-          "line": 7723
+          "line": 7714
         },
         {
           "id": "0ef117a8762354e66adc13ba",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset",
-          "line": 8274
+          "line": 8265
         },
         {
           "id": "ef577de87e7470e8528bf219",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index",
-          "line": 8324
+          "line": 8315
         },
         {
           "id": "2e2dbf0ae36fa13c563d8440",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset",
-          "line": 8385
+          "line": 8376
         },
         {
           "id": "fea9d18dd6124ff2f461ca3f",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor",
-          "line": 8410
+          "line": 8401
         }
       ],
       "owner": "store",
@@ -30974,7 +30974,7 @@
           "id": "3dd2d02171a16f9cda183c72",
           "fingerprint": "0d4bb512c707f673d304374f",
           "item": "mod tests",
-          "line": 5683
+          "line": 5666
         }
       ],
       "owner": "store",
@@ -30990,10 +30990,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "63acc2aef21e44da330786c1",
-          "fingerprint": "c2afab6f1d4c2eb1250aa09a",
+          "id": "13d3086891612680d1512e25",
+          "fingerprint": "b7b8f3917ccd075aa8343f50",
           "item": "fn drop",
-          "line": 324
+          "line": 291
         }
       ],
       "owner": "store",
@@ -31009,88 +31009,88 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "6ec2bd83a05e2f80412c1abd",
-          "fingerprint": "5334f34aa6a57f27aa05c153",
+          "id": "8a24b37e7d1a474fd2ca4d4d",
+          "fingerprint": "a3513f09e6c14e819402cc39",
           "item": "struct LocalFileMessageStore",
-          "line": 324
+          "line": 291
         },
         {
           "id": "526e8642bbbc08a831c3b6f4",
           "fingerprint": "b63abb90c9ebbbf93fec3d77",
           "item": "struct LocalFileMessageStore",
-          "line": 364
+          "line": 331
         },
         {
           "id": "916265f6e7ec148c0546b598",
           "fingerprint": "17b851a7b8b68ea945f20437",
           "item": "impl LocalFileMessageStore",
-          "line": 437
+          "line": 404
         },
         {
           "id": "1755447c34eba58228ab63ab",
           "fingerprint": "d6c800e84bf0268d938070ca",
           "item": "fn set_message_store_arc",
-          "line": 890
+          "line": 860
         },
         {
           "id": "430536820fef8d2029e0813f",
           "fingerprint": "a82bed77f348e97f3fc18d4a",
           "item": "fn message_store_arc_or_error",
-          "line": 988
+          "line": 959
         },
         {
           "id": "fe864a8e7bb01fdf4839a1ec",
           "fingerprint": "b1e5ab656549d1ea194d5bd3",
           "item": "impl Drop",
-          "line": 1075
+          "line": 1046
         },
         {
           "id": "9ba3e5e75793e333cc4f7e58",
           "fingerprint": "28b9f90e9d6de0e1c04f40b0",
           "item": "impl LocalFileMessageStore",
-          "line": 1084
+          "line": 1055
         },
         {
           "id": "7de71a3330daeebfe3e4fcdb",
           "fingerprint": "bc54d1e953e8dc9c4d8b1704",
           "item": "impl MessageStore",
-          "line": 1851
+          "line": 1820
         },
         {
           "id": "dd7d2ca979e7321a0531cad8",
           "fingerprint": "0716072c66ac8246e6711921",
           "item": "fn start",
-          "line": 4585
+          "line": 4560
         },
         {
           "id": "cd8634aab722ed70fbbb60d4",
           "fingerprint": "2ae53147e701a16cb0e446b7",
           "item": "fn run_once",
-          "line": 4755
+          "line": 4732
         },
         {
           "id": "db15efbfcb8ca3dd22f134b6",
           "fingerprint": "1daaf6b15d24063307cb7f12",
           "item": "struct ReputMessageServiceInner",
-          "line": 4834
+          "line": 4813
         },
         {
           "id": "0084947673da00b358eda490",
           "fingerprint": "90fec4925e7650a4d7a58a5d",
           "item": "fn dispatch_reput_batch",
-          "line": 4839
+          "line": 4818
         },
         {
           "id": "17a40d2b55a9ccc512c7286c",
           "fingerprint": "468eb0a73148a232b93b9dbd",
           "item": "fn do_reput",
-          "line": 4972
+          "line": 4951
         },
         {
           "id": "c22cad79c43f8dc4b5793c0c",
           "fingerprint": "ec470e270ac9362bd7c04ed3",
           "item": "fn read_and_parse_batch",
-          "line": 5123
+          "line": 5108
         }
       ],
       "owner": "store",
@@ -31106,88 +31106,88 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "deb1274c9cb2d398cf5106b6",
-          "fingerprint": "6e16d074e87b7d64dedd4c02",
+          "id": "b51abb9cdd4277835643fb3a",
+          "fingerprint": "613631996c689785a0c6b2cf",
           "item": "fn is_space_to_delete",
-          "line": 5314
+          "line": 5300
         },
         {
           "id": "6a112e4551e45cd0ec64422b",
           "fingerprint": "e80b3e9ee2dffe26e070244d",
           "item": "fn min_physic_disk_ratio",
-          "line": 5354
+          "line": 5340
         },
         {
           "id": "4170a65b94468400f103d66a",
           "fingerprint": "80a2a65128a715e4690f9234",
           "item": "fn new_test_store",
-          "line": 5717
+          "line": 5700
         },
         {
           "id": "ecef5dc452b331aa59ee2e0c",
           "fingerprint": "65d2f136242a67e39970048c",
           "item": "fn new_configured_test_store",
-          "line": 5751
+          "line": 5734
         },
         {
           "id": "f4167e9cdb317f920eee8481",
           "fingerprint": "09828229447f9c27eca62b69",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5759
+          "line": 5742
         },
         {
           "id": "e0aa33305e95db168c92764e",
           "fingerprint": "a83fce1e061e676764384245",
           "item": "fn new_unwired_test_store",
-          "line": 5794
+          "line": 5777
         },
         {
           "id": "a5b4a4beeff33840a0fc01c7",
           "fingerprint": "cbc997c17eb8e6ca0bfde016",
           "item": "fn install_recording_arriving_listener",
-          "line": 5850
+          "line": 5833
         },
         {
-          "id": "9bb7b99d7be1d9ae354a1d74",
-          "fingerprint": "887a3ed4430863f6282c7b11",
+          "id": "740811ee3ad741abaa452675",
+          "fingerprint": "1173b84cce36bf29492ae20f",
           "item": "fn reput_inner_for_store",
-          "line": 5860
+          "line": 5843
         },
         {
           "id": "952561de7f9c1082ab5972bd",
           "fingerprint": "f05584a3e8f30f1765f4faa7",
           "item": "fn new_async_flush_test_store",
-          "line": 5950
+          "line": 5941
         },
         {
           "id": "b6d69ce623a4436bf9946d9b",
           "fingerprint": "1096c9bed13b8b6a0e6add8c",
           "item": "fn encode_tiered_test_message",
-          "line": 5978
+          "line": 5969
         },
         {
           "id": "ebc61622bb5d0eed7de2b3c5",
           "fingerprint": "2be67fb1f1aa0fd31c8d50cb",
           "item": "fn append_encoded_test_message",
-          "line": 6001
+          "line": 5992
         },
         {
           "id": "9a402b7ec18071dc55b33a0b",
           "fingerprint": "b1b766dcf50e538cdd500bc1",
           "item": "fn append_encoded_test_message_with_key",
-          "line": 6011
+          "line": 6002
         },
         {
           "id": "0dab0a2327068f084dad3638",
           "fingerprint": "f705056c61af1cd82f726a9c",
           "item": "fn master_store_in_process_round_trips_concrete_store_reference",
-          "line": 7436
+          "line": 7427
         },
         {
           "id": "57088fa6a3447b30555d062b",
           "fingerprint": "5602f91428927b4c07a845d2",
           "item": "fn clean_commit_log_service_run_deletes_when_disk_usage_is_unavailable",
-          "line": 8886
+          "line": 8874
         }
       ],
       "owner": "store",
@@ -31206,25 +31206,25 @@
           "id": "47767c8e5ca840205a963aeb",
           "fingerprint": "0db97432516266903a225050",
           "item": "fn reset_write_offset",
-          "line": 3520
+          "line": 3496
         },
         {
           "id": "2732429f59b892a7989c9385",
           "fingerprint": "1536b864d3d6678585c2bd31",
           "item": "fn get_commit_log_mut_from_ref",
-          "line": 3652
+          "line": 3628
         },
         {
           "id": "eea893960dd7e04dd261bdd0",
           "fingerprint": "f5378b1857786f892cf9849d",
           "item": "fn truncate_files",
-          "line": 3868
+          "line": 3844
         },
         {
           "id": "3459e3572b6f2b66ed8b8e65",
           "fingerprint": "470c1a7982c2bfa430ed8b87",
           "item": "fn get_last_mapped_file",
-          "line": 3919
+          "line": 3895
         }
       ],
       "owner": "store",
@@ -31243,13 +31243,13 @@
           "id": "8104e48e05dd038205b87fe9",
           "fingerprint": "9ff5fa713aebcdfa30578fd3",
           "item": "fn run",
-          "line": 5227
+          "line": 5209
         },
         {
           "id": "3868a2990574ade766ffcdc8",
           "fingerprint": "98b4d8e57654052e46da2da2",
           "item": "fn run",
-          "line": 5249
+          "line": 5231
         }
       ],
       "owner": "store",

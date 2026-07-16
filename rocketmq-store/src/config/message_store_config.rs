@@ -18,6 +18,12 @@ use std::sync::LazyLock;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
+use rocketmq_common::common::mix_all;
+use rocketmq_store_local::config::backend::LocalBackendConfig;
+use rocketmq_store_local::config::backend::LocalCleanupConfig;
+use rocketmq_store_local::config::backend::LocalQueryConfig;
+use rocketmq_store_local::config::backend::LocalRecoveryConfig;
+use rocketmq_store_local::config::backend::LocalReputConfig;
 use serde::Deserialize;
 
 use crate::base::store_enum::StoreType;
@@ -1450,6 +1456,39 @@ impl Default for MessageStoreConfig {
 }
 
 impl MessageStoreConfig {
+    /// Projects the legacy Serde-compatible envelope into local backend settings.
+    pub fn normalized_local_backend_config(&self) -> LocalBackendConfig {
+        let commit_log_paths = self
+            .get_store_path_commit_log()
+            .split(mix_all::MULTI_PATH_SPLITTER.as_str())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .collect();
+
+        LocalBackendConfig {
+            store_path_root_dir: PathBuf::from(self.store_path_root_dir.as_str()),
+            commit_log_paths,
+            store_io_hint_enabled: self.store_io_hint_enable,
+            recovery: LocalRecoveryConfig {
+                consume_queue_parallelism: self.effective_local_file_consume_queue_recovery_parallelism(),
+                background_index_rebuild_enabled: self.effective_background_index_rebuild_enable(),
+            },
+            query: LocalQueryConfig {
+                message_index_enabled: self.message_index_enable,
+            },
+            reput: LocalReputConfig {
+                read_uncommitted: self.read_uncommitted,
+            },
+            cleanup: LocalCleanupConfig {
+                disk_warning_ratio: (self.disk_space_warning_level_ratio as f64 / 100.0).clamp(0.35, 0.90),
+                disk_clean_forcibly_ratio: (self.disk_space_clean_forcibly_ratio as f64 / 100.0).clamp(0.30, 0.85),
+                disk_max_used_ratio: self.disk_max_used_space_ratio.clamp(10, 95) as f64 / 100.0,
+                clean_file_forcibly_enabled: self.clean_file_forcibly_enable,
+            },
+        }
+    }
+
     pub fn effective_background_index_rebuild_enable(&self) -> bool {
         self.enable_background_index_rebuild
             && self.message_index_enable
@@ -2259,6 +2298,68 @@ mod tests {
         assert_eq!(config.disk_space_clean_forcibly_ratio, 85);
         assert_eq!(config.file_reserved_time, 72);
         assert!(config.clean_file_forcibly_enable);
+    }
+
+    #[test]
+    fn normalized_local_backend_config_preserves_legacy_defaults() {
+        let config = MessageStoreConfig::default();
+        let normalized = config.normalized_local_backend_config();
+
+        assert_eq!(
+            normalized.store_path_root_dir,
+            std::path::PathBuf::from(config.store_path_root_dir.as_str())
+        );
+        assert_eq!(
+            normalized.commit_log_paths,
+            vec![std::path::PathBuf::from(config.get_store_path_commit_log())]
+        );
+        assert_eq!(
+            normalized.recovery.consume_queue_parallelism,
+            config.effective_local_file_consume_queue_recovery_parallelism()
+        );
+        assert!(!normalized.recovery.background_index_rebuild_enabled);
+        assert!(normalized.query.message_index_enabled);
+        assert!(!normalized.reput.read_uncommitted);
+        assert_eq!(normalized.cleanup.disk_warning_ratio, 0.90);
+        assert_eq!(normalized.cleanup.disk_clean_forcibly_ratio, 0.85);
+        assert_eq!(normalized.cleanup.disk_max_used_ratio, 0.75);
+        assert!(normalized.cleanup.clean_file_forcibly_enabled);
+    }
+
+    #[test]
+    fn normalized_local_backend_config_uses_deserialized_alias_values() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str(
+            r#"{
+                "store_io_hint_enable": false,
+                "storePathCommitLog": "one,two",
+                "diskSpaceWarningLevelRatio": 1,
+                "diskSpaceCleanForciblyRatio": 100,
+                "diskMaxUsedSpaceRatio": 1,
+                "readUncommitted": true
+            }"#,
+        )?;
+
+        let normalized = config.normalized_local_backend_config();
+
+        assert_eq!(normalized.commit_log_paths.len(), 2);
+        assert!(!normalized.store_io_hint_enabled);
+        assert_eq!(normalized.cleanup.disk_warning_ratio, 0.35);
+        assert_eq!(normalized.cleanup.disk_clean_forcibly_ratio, 0.85);
+        assert_eq!(normalized.cleanup.disk_max_used_ratio, 0.10);
+        assert!(normalized.reput.read_uncommitted);
+        Ok(())
+    }
+
+    #[test]
+    fn normalized_local_backend_config_keeps_camel_case_and_alias_inputs_equivalent() -> Result<(), serde_json::Error> {
+        let camel_case: MessageStoreConfig = serde_json::from_str(r#"{"storeIoHintEnable":false}"#)?;
+        let alias: MessageStoreConfig = serde_json::from_str(r#"{"store_io_hint_enable":false}"#)?;
+
+        assert_eq!(
+            camel_case.normalized_local_backend_config(),
+            alias.normalized_local_backend_config()
+        );
+        Ok(())
     }
 
     #[test]
