@@ -52,7 +52,6 @@
       "remove_by": "M06"
     },
     {"caller": "rocketmq-broker", "target": "rocketmq-client-rust", "kind": "normal", "path": "rocketmq-broker/Cargo.toml", "alias": "rocketmq_client_rust", "count": 1, "owner": "broker", "remove_by": "M07"},
-    {"caller": "rocketmq-namesrv", "target": "rocketmq-client-rust", "kind": "normal", "path": "rocketmq-namesrv/Cargo.toml", "alias": "rocketmq_client", "count": 1, "owner": "namesrv", "remove_by": "M07"},
     {"caller": "rocketmq-proxy", "target": "rocketmq-client-rust", "kind": "normal", "path": "rocketmq-proxy/Cargo.toml", "alias": "rocketmq_client_rust", "count": 1, "owner": "proxy", "remove_by": "M08"},
     {"caller": "rocketmq-admin-core", "target": "rocketmq-client-rust", "kind": "normal", "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml", "alias": "rocketmq_client_rust", "count": 1, "owner": "admin", "remove_by": "M07"},
     {"caller": "rocketmq-example", "target": "rocketmq-client-rust", "kind": "dev", "path": "rocketmq-example/Cargo.toml", "alias": "rocketmq_client_rust", "count": 1, "owner": "examples", "remove_by": "M09"},
@@ -117,7 +116,6 @@
     {"path": "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs", "alias": "rocketmq_client_rust", "count": 2, "owner": "broker", "remove_by": "M07"},
     {"path": "rocketmq-broker/src/transaction/queue/get_result.rs", "alias": "rocketmq_client_rust", "count": 1, "owner": "broker", "remove_by": "M07"},
     {"path": "rocketmq-broker/src/transaction/queue/transactional_message_bridge.rs", "alias": "rocketmq_client_rust", "count": 2, "owner": "broker", "remove_by": "M07"},
-    {"path": "rocketmq-namesrv/src/processor/cluster_test_request_processor.rs", "alias": "rocketmq_client", "count": 3, "owner": "namesrv", "remove_by": "M07"},
     {"path": "rocketmq-proxy/src/cluster.rs", "alias": "rocketmq_client_rust", "count": 14, "owner": "proxy", "remove_by": "M08"},
     {"path": "rocketmq-proxy/src/grpc/adapter.rs", "alias": "rocketmq_client_rust", "count": 2, "owner": "proxy", "remove_by": "M08"},
     {"path": "rocketmq-proxy/src/grpc/service.rs", "alias": "rocketmq_client_rust", "count": 2, "owner": "proxy", "remove_by": "M08"},

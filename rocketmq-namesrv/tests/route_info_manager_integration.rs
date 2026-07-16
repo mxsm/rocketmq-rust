@@ -67,6 +67,7 @@ struct NamesrvHarness {
     client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     server_task: JoinHandle<RocketMQResult<()>>,
+    runtime_context: rocketmq_runtime::RuntimeContext,
 }
 
 impl NamesrvHarness {
@@ -84,9 +85,11 @@ impl NamesrvHarness {
                 bind_address: "127.0.0.1".to_string(),
                 ..ServerConfig::default()
             };
+            let runtime_context = rocketmq_runtime::RuntimeContext::from_current(format!("namesrv-integration-{port}"));
             let bootstrap = Builder::new()
                 .set_name_server_config(namesrv_config.clone())
                 .set_server_config(server_config)
+                .set_service_context(runtime_context.service_context("namesrv"))
                 .build();
 
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -111,6 +114,7 @@ impl NamesrvHarness {
                     return Self {
                         addr,
                         client,
+                        runtime_context,
                         shutdown_tx: Some(shutdown_tx),
                         server_task,
                     };
@@ -122,6 +126,7 @@ impl NamesrvHarness {
                     if !server_task.is_finished() {
                         let _ = tokio::time::timeout(Duration::from_secs(1), &mut server_task).await;
                     }
+                    let _ = runtime_context.shutdown_tasks(Duration::from_secs(1)).await;
                 }
             }
         }
@@ -150,6 +155,11 @@ impl NamesrvHarness {
             .expect("namesrv task should stop before timeout")
             .expect("namesrv task should not panic");
         join_result.expect("namesrv task should exit cleanly");
+        self.runtime_context
+            .shutdown_tasks(Duration::from_secs(1))
+            .await
+            .assert_no_task_leak()
+            .expect("namesrv integration runtime should not leak tasks");
     }
 }
 

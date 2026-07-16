@@ -69,6 +69,7 @@ use crate::processor::ClusterTestRequestProcessor;
 use crate::processor::ClusterTestRouteLookup;
 use crate::processor::NameServerRequestProcessor;
 use crate::processor::NameServerRequestProcessorWrapper;
+use crate::processor::TransportClusterTestRouteLookup;
 use crate::route::route_info_manager::RouteInfoManager;
 use crate::route::route_info_manager_v2::RouteInfoManagerV2;
 use crate::route::route_info_manager_wrapper::RouteInfoManagerWrapper;
@@ -274,7 +275,7 @@ pub struct Builder {
     name_server_config: Option<NamesrvConfig>,
     server_config: Option<ServerConfig>,
     controller_config: Option<ControllerConfig>,
-    cluster_test_route_lookup: Option<Arc<ClusterTestRouteLookup>>,
+    cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
     service_context: Option<ServiceContext>,
 }
 
@@ -510,6 +511,14 @@ impl NameServerRuntime {
                     ),
                 });
             }
+        }
+
+        if namesrv_config.cluster_test && self.inner.cluster_test_route_lookup().is_none() {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "clusterTest",
+                value: namesrv_config.cluster_test.to_string(),
+                reason: "cluster-test route lookup requires an injected ServiceContext owner".to_string(),
+            });
         }
 
         Ok(())
@@ -787,7 +796,9 @@ impl NameServerRuntime {
         shutdown_report.route_unregistration = self.inner.route_info_manager_mut().shutdown_unregister_service().await;
 
         if let Some(cluster_test_route_lookup) = self.inner.cluster_test_route_lookup() {
-            cluster_test_route_lookup.shutdown().await;
+            if let Err(error) = cluster_test_route_lookup.shutdown().await {
+                warn!("Cluster test route lookup shutdown failed: {error}");
+            }
         }
 
         info!(
@@ -979,7 +990,7 @@ impl Builder {
     #[inline]
     pub(crate) fn set_cluster_test_route_lookup(
         mut self,
-        cluster_test_route_lookup: Arc<ClusterTestRouteLookup>,
+        cluster_test_route_lookup: Arc<dyn ClusterTestRouteLookup>,
     ) -> Self {
         self.cluster_test_route_lookup = Some(cluster_test_route_lookup);
         self
@@ -1005,15 +1016,6 @@ impl Builder {
         } else {
             self.controller_config
         };
-        let cluster_test_route_lookup = if name_server_config.cluster_test {
-            Some(
-                self.cluster_test_route_lookup
-                    .unwrap_or_else(|| Arc::new(ClusterTestRouteLookup::new(&name_server_config.product_env_name))),
-            )
-        } else {
-            self.cluster_test_route_lookup
-        };
-
         info!("Building NameServer with configuration:");
         info!("  - Listen port: {}", server_config.listen_port);
         info!(
@@ -1029,6 +1031,18 @@ impl Builder {
             .service_context
             .as_ref()
             .map(|context| context.child("rocketmq-namesrv"));
+        let cluster_test_route_lookup = if name_server_config.cluster_test {
+            self.cluster_test_route_lookup.or_else(|| {
+                service_context.as_ref().map(|context| {
+                    Arc::new(TransportClusterTestRouteLookup::new(
+                        &name_server_config.product_env_name,
+                        context.child("namesrv.cluster-test-route-lookup"),
+                    )) as Arc<dyn ClusterTestRouteLookup>
+                })
+            })
+        } else {
+            self.cluster_test_route_lookup
+        };
 
         // Create remoting client
         let remoting_client = ArcMut::new(match service_context.as_ref() {
@@ -1111,7 +1125,7 @@ pub(crate) struct NameServerRuntimeInner {
     remoting_client: ArcMut<RocketmqDefaultClient>,
     broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
     controller_manager: Option<ArcMut<ControllerManager>>,
-    cluster_test_route_lookup: Option<Arc<ClusterTestRouteLookup>>,
+    cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
     service_context: Option<ServiceContext>,
     task_group: OnceLock<TaskGroup>,
     in_flight_requests: Arc<InFlightRequestTracker>,
@@ -1577,7 +1591,7 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
-    pub fn cluster_test_route_lookup(&self) -> Option<&Arc<ClusterTestRouteLookup>> {
+    pub fn cluster_test_route_lookup(&self) -> Option<&Arc<dyn ClusterTestRouteLookup>> {
         self.cluster_test_route_lookup.as_ref()
     }
 }
@@ -3334,6 +3348,7 @@ mod tests {
 
     #[tokio::test]
     async fn boot_supports_cluster_test_mode() {
+        let runtime = RuntimeContext::from_current("namesrv-cluster-test-mode");
         let namesrv_config = NamesrvConfig {
             cluster_test: true,
             ..NamesrvConfig::default()
@@ -3341,12 +3356,18 @@ mod tests {
         let bootstrap = Builder::new()
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
+            .set_service_context(runtime.service_context("namesrv"))
             .build();
 
         bootstrap
             .boot_with_shutdown(async {})
             .await
             .expect("cluster test mode should boot and shut down cleanly once implemented");
+        runtime
+            .shutdown_tasks(Duration::from_secs(1))
+            .await
+            .assert_no_task_leak()
+            .unwrap();
     }
 
     #[tokio::test]
