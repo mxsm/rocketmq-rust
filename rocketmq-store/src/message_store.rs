@@ -67,7 +67,6 @@ use crate::store_error::StoreError;
 use crate::timer::timer_message_store::TimerMessageStore;
 
 pub enum GenericMessageStore {
-    #[cfg(feature = "local_file_store")]
     LocalFileStore(ArcMut<local_file_message_store::LocalFileMessageStore>),
 
     #[cfg(feature = "rocksdb_store")]
@@ -75,7 +74,6 @@ pub enum GenericMessageStore {
 }
 
 impl GenericMessageStore {
-    #[cfg(feature = "local_file_store")]
     pub fn local_file(store: ArcMut<local_file_message_store::LocalFileMessageStore>) -> Self {
         Self::LocalFileStore(store)
     }
@@ -90,7 +88,6 @@ impl GenericMessageStore {
         message_arriving_listener: Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
     ) {
         match self {
-            #[cfg(feature = "local_file_store")]
             Self::LocalFileStore(store) => store.set_message_arriving_listener(message_arriving_listener),
             #[cfg(feature = "rocksdb_store")]
             Self::RocksDBStore(store) => store
@@ -101,7 +98,6 @@ impl GenericMessageStore {
 
     pub async fn reput_once(&mut self) {
         match self {
-            #[cfg(feature = "local_file_store")]
             Self::LocalFileStore(store) => store.reput_once().await,
             #[cfg(feature = "rocksdb_store")]
             Self::RocksDBStore(store) => store.local_file_store_mut().reput_once().await,
@@ -110,7 +106,6 @@ impl GenericMessageStore {
 
     pub fn consume_queue_store_mut(&mut self) -> &mut ConsumeQueueStore {
         match self {
-            #[cfg(feature = "local_file_store")]
             Self::LocalFileStore(store) => store.consume_queue_store_mut(),
             #[cfg(feature = "rocksdb_store")]
             Self::RocksDBStore(store) => store.local_file_store_mut().consume_queue_store_mut(),
@@ -120,7 +115,6 @@ impl GenericMessageStore {
     #[cfg(feature = "rocksdb_store")]
     pub fn rocksdb_ticker_metrics(&self) -> Option<rocketmq_observability::metrics::rocksdb::RocksDbTickerMetrics> {
         match self {
-            #[cfg(feature = "local_file_store")]
             Self::LocalFileStore(_) => None,
             Self::RocksDBStore(store) => Some(store.rocksdb_store().ticker_metrics()),
         }
@@ -131,7 +125,6 @@ impl GenericMessageStore {
         &self,
     ) -> Option<Arc<rocketmq_observability::metrics::tiered_store::TieredStoreMetrics>> {
         match self {
-            #[cfg(feature = "local_file_store")]
             Self::LocalFileStore(store) => store.tiered_store_metrics(),
             #[cfg(feature = "rocksdb_store")]
             Self::RocksDBStore(store) => store.local_file_store().tiered_store_metrics(),
@@ -142,7 +135,6 @@ impl GenericMessageStore {
 macro_rules! delegate_store {
     ($self:expr, $method:ident($($arg:expr),* $(,)?)) => {
         match $self {
-            #[cfg(feature = "local_file_store")]
             GenericMessageStore::LocalFileStore(store) => store.$method($($arg),*),
             #[cfg(feature = "rocksdb_store")]
             GenericMessageStore::RocksDBStore(store) => store.$method($($arg),*),
@@ -153,7 +145,6 @@ macro_rules! delegate_store {
 macro_rules! delegate_store_async {
     ($self:expr, $method:ident($($arg:expr),* $(,)?)) => {
         match $self {
-            #[cfg(feature = "local_file_store")]
             GenericMessageStore::LocalFileStore(store) => store.$method($($arg),*).await,
             #[cfg(feature = "rocksdb_store")]
             GenericMessageStore::RocksDBStore(store) => store.$method($($arg),*).await,
@@ -547,7 +538,6 @@ impl MessageStore for GenericMessageStore {
 
     fn get_message_store_config(&self) -> &MessageStoreConfig {
         match self {
-            #[cfg(feature = "local_file_store")]
             GenericMessageStore::LocalFileStore(store) => store.message_store_config_ref(),
             #[cfg(feature = "rocksdb_store")]
             GenericMessageStore::RocksDBStore(store) => MessageStore::get_message_store_config(store.as_ref()),
@@ -632,7 +622,6 @@ impl MessageStore for GenericMessageStore {
 
     fn get_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
         match self {
-            #[cfg(feature = "local_file_store")]
             GenericMessageStore::LocalFileStore(store) => store.get_master_store_in_process::<M>(),
             #[cfg(feature = "rocksdb_store")]
             GenericMessageStore::RocksDBStore(store) => store.get_master_store_in_process::<M>(),
@@ -641,7 +630,6 @@ impl MessageStore for GenericMessageStore {
 
     fn set_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
         match self {
-            #[cfg(feature = "local_file_store")]
             GenericMessageStore::LocalFileStore(store) => store.set_master_store_in_process(master_store_in_process),
             #[cfg(feature = "rocksdb_store")]
             GenericMessageStore::RocksDBStore(store) => store.set_master_store_in_process(master_store_in_process),

@@ -113,6 +113,7 @@ use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendFailure;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendResolution;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus;
 use rocketmq_store_local::commit_log::load_orchestration::drive_commit_log_load;
+use rocketmq_store_local::commit_log::load_orchestration::parallel_commit_log_load_enabled;
 use rocketmq_store_local::commit_log::load_orchestration::safe_load_requested;
 use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadObservation;
 use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadStep;
@@ -634,9 +635,7 @@ impl CommitLog {
         let store_path = self.message_store_config.get_store_path_commit_log();
         let mapped_file_size = self.message_store_config.mapped_file_size_commit_log as u64;
 
-        // Determine if parallel loading should be enabled
-        // Use parallel mode if we expect more than 4 files (empirically optimal threshold)
-        let enable_parallel = cfg!(feature = "fast-load") || !cfg!(feature = "safe-load");
+        let enable_parallel = parallel_commit_log_load_enabled();
 
         let recovery_mmap_advice = self.recovery_mmap_advice();
         let recovery_file_prefetch = self.recovery_file_prefetch();

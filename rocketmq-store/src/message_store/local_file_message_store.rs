@@ -83,18 +83,6 @@ use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_rust::ArcMut;
-#[cfg(feature = "tieredstore")]
-use rocketmq_tieredstore::fetcher::TieredGetMessageResult;
-#[cfg(feature = "tieredstore")]
-use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
-#[cfg(feature = "tieredstore")]
-use rocketmq_tieredstore::fetcher::TieredQueryResult;
-#[cfg(feature = "tieredstore")]
-use rocketmq_tieredstore::TieredLifecycle;
-#[cfg(feature = "tieredstore")]
-use rocketmq_tieredstore::TieredMessageFetcher;
-#[cfg(feature = "tieredstore")]
-use rocketmq_tieredstore::TieredStore;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -128,11 +116,7 @@ use crate::base::message_store::MessageStoreShutdownReport;
 use crate::base::message_store::StoreHealthRecorder;
 use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
-#[cfg(feature = "tieredstore")]
-use crate::base::select_result::SelectMappedBufferCacheState;
 use crate::base::select_result::SelectMappedBufferResult;
-#[cfg(feature = "tieredstore")]
-use crate::base::select_result::SelectMappedBufferSourceKind;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
@@ -177,7 +161,9 @@ use crate::store_path_config_helper::get_lock_file;
 use crate::store_path_config_helper::get_store_checkpoint;
 use crate::store_path_config_helper::get_store_path_consume_queue;
 #[cfg(feature = "tieredstore")]
-use crate::tieredstore::TieredCommitLogDispatcher;
+use crate::tieredstore::resolve_tiered_dispatch_body;
+#[cfg(feature = "tieredstore")]
+use crate::tieredstore::TieredStoreDecorator;
 use crate::timer::timer_message_store::TimerMessageStore;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
@@ -304,7 +290,7 @@ pub struct LocalFileMessageStore {
     consume_queue_store: ConsumeQueueStore,
     dispatcher: ArcMut<CommitLogDispatcherDefault>,
     #[cfg(feature = "tieredstore")]
-    tiered_store: Option<Arc<TieredStore>>,
+    tiered_store: Option<Arc<TieredStoreDecorator>>,
     broker_init_max_offset: Arc<AtomicI64>,
     state_machine_version: Arc<AtomicI64>,
     controller_epoch_start_offset: Arc<AtomicI64>,
@@ -606,7 +592,7 @@ impl LocalFileMessageStore {
         message_store_config: Arc<MessageStoreConfig>,
         commit_log: ArcMut<CommitLog>,
         dispatcher: &mut CommitLogDispatcherDefault,
-    ) -> Result<Option<Arc<TieredStore>>, StoreError> {
+    ) -> Result<Option<Arc<TieredStoreDecorator>>, StoreError> {
         let Some(tiered_store_config) = message_store_config.tiered_store_config.clone() else {
             return Ok(None);
         };
@@ -614,75 +600,14 @@ impl LocalFileMessageStore {
             return Ok(None);
         }
 
-        let tiered_store = Arc::new(TieredStore::new(tiered_store_config).map_err(|error| {
-            StoreError::TieredStore(format!(
-                "failed to create tieredstore for local file message store: {error}"
-            ))
-        })?);
+        let tiered_store = Arc::new(TieredStoreDecorator::new(tiered_store_config)?);
         let commit_log_for_dispatch = commit_log;
         let body_resolver = Arc::new(move |request: &DispatchRequest| -> Option<Bytes> {
-            Self::resolve_tiered_dispatch_body(&commit_log_for_dispatch, request)
+            resolve_tiered_dispatch_body(&commit_log_for_dispatch, request)
         });
-        dispatcher.add_dispatcher(Arc::new(TieredCommitLogDispatcher::new(
-            tiered_store.dispatcher(),
-            body_resolver,
-        )));
+        dispatcher.add_dispatcher(tiered_store.commit_log_dispatcher(body_resolver));
 
         Ok(Some(tiered_store))
-    }
-
-    #[cfg(feature = "tieredstore")]
-    fn resolve_tiered_dispatch_body(commit_log: &CommitLog, request: &DispatchRequest) -> Option<Bytes> {
-        if request.commit_log_offset < 0 || request.msg_size <= 0 {
-            return None;
-        }
-
-        let size = usize::try_from(request.msg_size).ok()?;
-        let result = commit_log.get_message(request.commit_log_offset, request.msg_size)?;
-        let bytes = result.get_bytes()?;
-        if bytes.len() < size {
-            return None;
-        }
-        Some(bytes.slice(..size))
-    }
-
-    #[cfg(feature = "tieredstore")]
-    fn select_result_from_tiered_message(message: Bytes) -> SelectMappedBufferResult {
-        SelectMappedBufferResult {
-            start_offset: 0,
-            size: message.len() as i32,
-            bytes: Some(message),
-            mapped_file: None,
-            is_in_cache: false,
-            source_kind: SelectMappedBufferSourceKind::Bytes,
-            file_offset: 0,
-            cache_state: SelectMappedBufferCacheState::Unknown,
-        }
-    }
-
-    #[cfg(feature = "tieredstore")]
-    fn map_tiered_get_status(status: TieredGetMessageStatus) -> GetMessageStatus {
-        match status {
-            TieredGetMessageStatus::Found => GetMessageStatus::Found,
-            TieredGetMessageStatus::NoMatchedMessage => GetMessageStatus::NoMatchedMessage,
-            TieredGetMessageStatus::OffsetFoundNull => GetMessageStatus::OffsetFoundNull,
-            TieredGetMessageStatus::OffsetOverflowBadly => GetMessageStatus::OffsetOverflowBadly,
-            TieredGetMessageStatus::OffsetOverflowOne => GetMessageStatus::OffsetOverflowOne,
-            TieredGetMessageStatus::OffsetTooSmall => GetMessageStatus::OffsetTooSmall,
-            TieredGetMessageStatus::NoMatchedLogicQueue => GetMessageStatus::NoMatchedLogicQueue,
-        }
-    }
-
-    #[cfg(feature = "tieredstore")]
-    fn should_try_tiered_get_message(status: GetMessageStatus) -> bool {
-        matches!(
-            status,
-            GetMessageStatus::NoMatchedLogicQueue
-                | GetMessageStatus::NoMessageInQueue
-                | GetMessageStatus::OffsetTooSmall
-                | GetMessageStatus::OffsetFoundNull
-                | GetMessageStatus::MessageWasRemoving
-        )
     }
 
     #[cfg(feature = "tieredstore")]
@@ -697,140 +622,6 @@ impl LocalFileMessageStore {
             .get_earliest_unit_and_store_time()
             .map(|(_, earliest_store_time)| timestamp < earliest_store_time)
             .unwrap_or(true)
-    }
-
-    #[cfg(feature = "tieredstore")]
-    fn to_store_get_message_result(
-        fetched: TieredGetMessageResult,
-        requested_offset: i64,
-        max_total_msg_size: i32,
-        message_filter: Option<ArcMessageFilter>,
-    ) -> GetMessageResult {
-        let mut result = GetMessageResult::new_result_size(fetched.messages.len());
-        result.set_min_offset(fetched.min_offset);
-        result.set_max_offset(fetched.max_offset);
-        result.set_next_begin_offset(fetched.next_begin_offset);
-
-        let status = Self::map_tiered_get_status(fetched.status);
-        if status != GetMessageStatus::Found {
-            result.set_status(Some(status));
-            return result;
-        }
-
-        let max_total_msg_size = max_total_msg_size.max(0);
-        let mut next_queue_offset = requested_offset;
-        for message in fetched.messages {
-            if let Some(filter) = message_filter.as_ref() {
-                if !filter.is_matched_by_commit_log(Some(message.as_ref()), None) {
-                    next_queue_offset = next_queue_offset.saturating_add(1);
-                    continue;
-                }
-            }
-            if result.buffer_total_size() > 0
-                && result.buffer_total_size().saturating_add(message.len() as i32) > max_total_msg_size
-            {
-                break;
-            }
-            let queue_offset = next_queue_offset.max(0) as u64;
-            result.add_message(Self::select_result_from_tiered_message(message), queue_offset, 1);
-            next_queue_offset = next_queue_offset.saturating_add(1);
-        }
-
-        result.set_status(Some(if result.message_count() > 0 {
-            GetMessageStatus::Found
-        } else {
-            GetMessageStatus::NoMatchedMessage
-        }));
-        result
-    }
-
-    #[cfg(feature = "tieredstore")]
-    async fn get_message_from_tiered_store(
-        &self,
-        group: &CheetahString,
-        topic: &CheetahString,
-        queue_id: i32,
-        offset: i64,
-        max_msg_nums: i32,
-        max_total_msg_size: i32,
-        message_filter: Option<ArcMessageFilter>,
-    ) -> Option<GetMessageResult> {
-        let tiered_store = self.tiered_store.as_ref()?;
-        let metrics = tiered_store.metrics();
-        metrics.record_get_message_fallback(topic.as_str(), group.as_str());
-        match tiered_store
-            .fetcher()
-            .get_message(topic.to_string(), queue_id, offset, max_msg_nums)
-            .await
-        {
-            Ok(fetched) => {
-                let result = Self::to_store_get_message_result(fetched, offset, max_total_msg_size, message_filter);
-                if result.status() == Some(GetMessageStatus::Found) {
-                    metrics.record_messages_out(topic.as_str(), group.as_str(), result.message_count().max(0) as u64);
-                }
-                Some(result)
-            }
-            Err(error) => {
-                warn!(
-                    group = %group,
-                    topic = %topic,
-                    queue_id,
-                    offset,
-                    error = %error,
-                    "tieredstore get_message fallback failed"
-                );
-                None
-            }
-        }
-    }
-
-    #[cfg(feature = "tieredstore")]
-    fn to_store_query_message_result(fetched: TieredQueryResult<Bytes>, fallback_timestamp: i64) -> QueryMessageResult {
-        let mut result = QueryMessageResult {
-            index_last_update_timestamp: fallback_timestamp,
-            ..QueryMessageResult::default()
-        };
-        for message in fetched.values {
-            result.add_message(Self::select_result_from_tiered_message(message));
-        }
-        result
-    }
-
-    #[cfg(feature = "tieredstore")]
-    async fn query_message_from_tiered_store(
-        &self,
-        topic: &CheetahString,
-        key: &CheetahString,
-        max_num: i32,
-        begin_timestamp: i64,
-        end_timestamp: i64,
-    ) -> Option<QueryMessageResult> {
-        let tiered_store = self.tiered_store.as_ref()?;
-        match tiered_store
-            .fetcher()
-            .query_message(
-                topic.to_string(),
-                key.to_string(),
-                max_num,
-                begin_timestamp,
-                end_timestamp,
-            )
-            .await
-        {
-            Ok(fetched) if !fetched.values.is_empty() => {
-                Some(Self::to_store_query_message_result(fetched, end_timestamp))
-            }
-            Ok(_) => None,
-            Err(error) => {
-                warn!(
-                    topic = %topic,
-                    key = %key,
-                    error = %error,
-                    "tieredstore query_message fallback failed"
-                );
-                None
-            }
-        }
     }
 
     pub fn get_store_path_physic(message_store_config: &Arc<MessageStoreConfig>) -> String {
@@ -1929,10 +1720,7 @@ impl MessageStore for LocalFileMessageStore {
 
             #[cfg(feature = "tieredstore")]
             if let Some(tiered_store) = self.tiered_store.as_ref() {
-                tiered_store
-                    .start()
-                    .await
-                    .map_err(|error| StoreError::TieredStore(format!("failed to start tieredstore: {error}")))?;
+                tiered_store.start().await?;
             }
 
             self.reput_message_service
@@ -2496,19 +2284,23 @@ impl MessageStore for LocalFileMessageStore {
         result.set_min_offset(min_offset);
 
         #[cfg(feature = "tieredstore")]
-        if Self::should_try_tiered_get_message(status) {
-            if let Some(tiered_result) = self
-                .get_message_from_tiered_store(
-                    group,
-                    topic,
-                    queue_id,
-                    offset,
-                    max_msg_nums,
-                    max_total_msg_size,
-                    message_filter.clone(),
-                )
-                .await
-            {
+        if TieredStoreDecorator::should_try_get_message(status) {
+            if let Some(tiered_result) = match self.tiered_store.as_ref() {
+                Some(tiered_store) => {
+                    tiered_store
+                        .get_message(
+                            group,
+                            topic,
+                            queue_id,
+                            offset,
+                            max_msg_nums,
+                            max_total_msg_size,
+                            message_filter.clone(),
+                        )
+                        .await
+                }
+                None => None,
+            } {
                 if tiered_result.status() != Some(GetMessageStatus::NoMatchedLogicQueue) {
                     result = tiered_result;
                     status = result.status().unwrap_or(status);
@@ -2616,18 +2408,11 @@ impl MessageStore for LocalFileMessageStore {
         #[cfg(feature = "tieredstore")]
         if self.should_try_tiered_offset_by_time(topic, queue_id, timestamp) {
             if let Some(tiered_store) = self.tiered_store.as_ref() {
-                match tiered_store
-                    .fetcher()
-                    .get_offset_by_time_with_boundary(topic.to_string(), queue_id, timestamp, boundary_type)
-                    .await
+                if let Some(offset) = tiered_store
+                    .offset_by_time(topic, queue_id, timestamp, boundary_type)
+                    .await?
                 {
-                    Ok(offset) if offset >= 0 => return Ok(offset),
-                    Ok(_) => {}
-                    Err(error) => {
-                        return Err(StoreError::TieredStore(format!(
-                            "tieredstore offset by time lookup failed: {error}"
-                        )));
-                    }
+                    return Ok(offset);
                 }
             }
         }
@@ -3218,10 +3003,8 @@ impl MessageStore for LocalFileMessageStore {
         #[cfg(feature = "tieredstore")]
         if let Some(tiered_store) = self.tiered_store.as_ref() {
             return tiered_store
-                .fetcher()
-                .get_message_timestamp(topic.to_string(), queue_id, consume_queue_offset)
-                .await
-                .map_err(|error| StoreError::TieredStore(format!("tieredstore timestamp lookup failed: {error}")));
+                .message_timestamp(topic, queue_id, consume_queue_offset)
+                .await;
         }
         Ok(-1)
     }
@@ -3335,11 +3118,13 @@ impl MessageStore for LocalFileMessageStore {
 
         #[cfg(feature = "tieredstore")]
         if query_message_result.buffer_total_size == 0 {
-            if let Some(tiered_result) = self
-                .query_message_from_tiered_store(topic, key, max_num, begin_timestamp, end_timestamp)
-                .await
-            {
-                return Some(tiered_result);
+            if let Some(tiered_store) = self.tiered_store.as_ref() {
+                if let Some(tiered_result) = tiered_store
+                    .query_message(topic, key, max_num, begin_timestamp, end_timestamp)
+                    .await
+                {
+                    return Some(tiered_result);
+                }
             }
         }
 
@@ -6257,6 +6042,7 @@ mod tests {
         tiered_store.shutdown().await.expect("shutdown tieredstore dispatcher");
 
         let fetched = tiered_store
+            .inner()
             .fetcher()
             .get_message(topic.to_string(), 0, queue_offset, 1)
             .await
@@ -6316,6 +6102,7 @@ mod tests {
             .expect("tieredstore should be initialized")
             .clone();
         tiered_store
+            .inner()
             .dispatcher()
             .dispatch(TieredDispatchRequest {
                 topic: topic.to_string(),

@@ -139,3 +139,47 @@ where
         self.metadata_store.destroy().await
     }
 }
+
+impl<P> rocketmq_store_api::StoreLifecycle for TieredStore<P>
+where
+    P: TieredStoreProvider,
+{
+    type Error = RocketMQError;
+
+    async fn load(&mut self) -> Result<bool, Self::Error> {
+        TieredLifecycle::load(self).await?;
+        Ok(true)
+    }
+
+    async fn start(&mut self) -> Result<(), Self::Error> {
+        TieredLifecycle::start(self).await
+    }
+
+    async fn shutdown(&mut self) -> Result<(), Self::Error> {
+        TieredLifecycle::shutdown(self).await
+    }
+}
+
+#[cfg(test)]
+mod store_api_tests {
+    use rocketmq_store_api::StoreLifecycle;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn tiered_store_implements_backend_neutral_lifecycle() {
+        let temp_dir = tempfile::tempdir().expect("create tiered lifecycle temp dir");
+        let mut store = TieredStore::new(TieredStoreConfig {
+            backend_provider: "memory".to_owned(),
+            store_path_root_dir: temp_dir.path().join("tiered-lifecycle"),
+            ..TieredStoreConfig::default()
+        })
+        .expect("create tiered store");
+
+        assert!(StoreLifecycle::load(&mut store).await.expect("load tiered store"));
+        StoreLifecycle::start(&mut store).await.expect("start tiered store");
+        StoreLifecycle::shutdown(&mut store)
+            .await
+            .expect("shutdown tiered store");
+    }
+}

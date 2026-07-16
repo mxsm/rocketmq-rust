@@ -376,6 +376,7 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "CommitLogLoadStep": ("enum", "load_orchestration.rs"),
     "CommitLogLoadObservation": ("enum", "load_orchestration.rs"),
     "safe_load_requested": ("fn", "load_orchestration.rs"),
+    "parallel_commit_log_load_enabled": ("fn", "load_orchestration.rs"),
     "drive_commit_log_load": ("fn", "load_orchestration.rs"),
     "CommitLogRecoveryStep": ("enum", "recovery_orchestration.rs"),
     "optimized_recovery_requested": ("fn", "recovery_orchestration.rs"),
@@ -2758,7 +2759,8 @@ def has_unix_only_normal_libc(manifest: dict[str, Any]) -> bool:
 
 
 def canonical_definition_paths(sources: dict[Path, str], item: str, item_kind: str) -> list[Path]:
-    pattern = re.compile(rf"\bpub\s+{re.escape(item_kind)}\s+{re.escape(item)}\b")
+    kind_pattern = r"(?:const\s+)?fn" if item_kind == "fn" else re.escape(item_kind)
+    pattern = re.compile(rf"\bpub\s+{kind_pattern}\s+{re.escape(item)}\b")
     return [
         path
         for path, source in sources.items()
@@ -12579,11 +12581,15 @@ def commit_log_load_orchestration_contract_violations(
         ):
             violations.append(f"Local CommitLog load item is cfg-gated: {item}")
 
-    for function_name in ("safe_load_requested", "drive_commit_log_load"):
-        if len(re.findall(rf"\bpub\s+fn\s+{function_name}\b", active)) != 1:
+    for function_name in (
+        "safe_load_requested",
+        "parallel_commit_log_load_enabled",
+        "drive_commit_log_load",
+    ):
+        if len(re.findall(rf"\bpub\s+(?:const\s+)?fn\s+{function_name}\b", active)) != 1:
             violations.append(f"Local CommitLog load function ownership changed: {function_name}")
         if re.search(
-            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+fn\s+{function_name}\b",
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+(?:const\s+)?fn\s+{function_name}\b",
             production,
         ):
             violations.append(f"Local CommitLog load function is cfg-gated: {function_name}")
@@ -12597,6 +12603,17 @@ def commit_log_load_orchestration_contract_violations(
         'value.is_some_and(|value|value=="1"||value.to_lowercase()=="true")'
     ):
         violations.append("Local safe-load legacy truth table changed")
+
+    parallel_load_body = compact_rust(
+        named_function_body(local, "parallel_commit_log_load_enabled") or ""
+    )
+    parallel_load_for_body = compact_rust(
+        named_function_body(local, "parallel_commit_log_load_enabled_for") or ""
+    )
+    if parallel_load_body != (
+        "parallel_commit_log_load_enabled_for(cfg!(feature=),cfg!(feature=))"
+    ) or parallel_load_for_body != "fast_load||!safe_load":
+        violations.append("Local fast/safe feature priority changed")
 
     expected_driver_signature = (
         "pubfndrive_commit_log_load<E,Execute,Observe>(force_sequential:bool,"
@@ -12658,6 +12675,7 @@ def commit_log_load_orchestration_contract_violations(
 
     expected_imports = {
         "use rocketmq_store_local::commit_log::load_orchestration::drive_commit_log_load",
+        "use rocketmq_store_local::commit_log::load_orchestration::parallel_commit_log_load_enabled",
         "use rocketmq_store_local::commit_log::load_orchestration::safe_load_requested",
         "use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadObservation",
         "use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadStep",
@@ -12696,6 +12714,11 @@ def commit_log_load_orchestration_contract_violations(
         violations.append("Store CommitLog load observation logging changed")
 
     optimized_body = compact_rust(named_function_body(store, "load_optimized") or "")
+    if (
+        optimized_body.count("parallel_commit_log_load_enabled()") != 1
+        or "cfg!(feature=" in optimized_body
+    ):
+        violations.append("Store optimized load must consume the Local feature policy")
     check_self = "self.mapped_file_queue.check_self();"
     stats_log = "info!(,stats.total_files"
     optimized_success = "Ok(true)"
@@ -15140,6 +15163,14 @@ class StoreLocalContractTests(unittest.TestCase):
                 1,
             ),
             "safe-load truth table widened": local.replace('value == "1"', 'value == "yes"', 1),
+            "fast-load no longer wins": local.replace(
+                "fast_load || !safe_load", "fast_load && !safe_load", 1
+            ),
+            "feature policy made private": local.replace(
+                "pub const fn parallel_commit_log_load_enabled",
+                "const fn parallel_commit_log_load_enabled",
+                1,
+            ),
         }
         for label, local_source in local_mutations.items():
             with self.subTest(mutation=label):
@@ -15177,6 +15208,17 @@ class StoreLocalContractTests(unittest.TestCase):
                     "        drive_commit_log_load(\n",
                     "        if force_sequential { let _ = self.load_sequential(); }\n"
                     "        drive_commit_log_load(\n",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store copied feature priority",
+                local,
+                module,
+                store.replace(
+                    "parallel_commit_log_load_enabled()",
+                    'cfg!(feature = "fast-load") || !cfg!(feature = "safe-load")',
                     1,
                 ),
                 local_tests,

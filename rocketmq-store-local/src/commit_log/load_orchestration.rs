@@ -43,6 +43,18 @@ pub fn safe_load_requested(value: Option<&str>) -> bool {
     value.is_some_and(|value| value == "1" || value.to_lowercase() == "true")
 }
 
+/// Returns whether the Local owner selects parallel CommitLog loading.
+///
+/// The legacy priority is preserved: `fast-load` wins when both feature aliases are enabled,
+/// while `safe-load` alone selects the sequential path.
+pub const fn parallel_commit_log_load_enabled() -> bool {
+    parallel_commit_log_load_enabled_for(cfg!(feature = "fast-load"), cfg!(feature = "safe-load"))
+}
+
+const fn parallel_commit_log_load_enabled_for(fast_load: bool, safe_load: bool) -> bool {
+    fast_load || !safe_load
+}
+
 /// Drives the optimized/sequential CommitLog load decision and fallback order.
 ///
 /// The optimized path is never attempted when `force_sequential` is true. An optimized `Ok(false)`
@@ -87,5 +99,18 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parallel_commit_log_load_enabled_for;
+
+    #[test]
+    fn fast_load_keeps_priority_over_safe_load() {
+        assert!(parallel_commit_log_load_enabled_for(false, false));
+        assert!(parallel_commit_log_load_enabled_for(true, false));
+        assert!(!parallel_commit_log_load_enabled_for(false, true));
+        assert!(parallel_commit_log_load_enabled_for(true, true));
     }
 }

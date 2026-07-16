@@ -15,17 +15,289 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use cheetah_string::CheetahString;
+use rocketmq_common::common::boundary_type::BoundaryType;
+use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 use rocketmq_tieredstore::dispatcher::DefaultTieredDispatcher;
 use rocketmq_tieredstore::dispatcher::TieredDispatchRequest;
+use rocketmq_tieredstore::fetcher::TieredGetMessageResult;
+use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
+use rocketmq_tieredstore::fetcher::TieredQueryResult;
 use rocketmq_tieredstore::provider::ProviderKind;
 use rocketmq_tieredstore::provider::TieredStoreProvider;
+use rocketmq_tieredstore::TieredLifecycle;
+use rocketmq_tieredstore::TieredMessageFetcher;
+use rocketmq_tieredstore::TieredStore;
+use rocketmq_tieredstore::TieredStoreConfig;
 use tracing::debug;
 use tracing::warn;
 
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
+use crate::base::get_message_result::GetMessageResult;
+use crate::base::message_status_enum::GetMessageStatus;
+use crate::base::query_message_result::QueryMessageResult;
+use crate::base::select_result::SelectMappedBufferCacheState;
+use crate::base::select_result::SelectMappedBufferResult;
+use crate::base::select_result::SelectMappedBufferSourceKind;
+use crate::filter::ArcMessageFilter;
+use crate::log_file::commit_log::CommitLog;
+use crate::store_error::StoreError;
 
 pub type DispatchBodyResolver = dyn Fn(&DispatchRequest) -> Option<Bytes> + Send + Sync;
+
+/// Store-facade decorator that composes Local fallback semantics with the Tiered owner.
+pub struct TieredStoreDecorator {
+    store: Arc<TieredStore>,
+}
+
+impl TieredStoreDecorator {
+    pub fn new(config: TieredStoreConfig) -> Result<Self, StoreError> {
+        let store = TieredStore::new(config).map_err(|error| {
+            StoreError::TieredStore(format!(
+                "failed to create tieredstore for local file message store: {error}"
+            ))
+        })?;
+        Ok(Self { store: Arc::new(store) })
+    }
+
+    pub fn commit_log_dispatcher(&self, body_resolver: Arc<DispatchBodyResolver>) -> Arc<dyn CommitLogDispatcher> {
+        Arc::new(TieredCommitLogDispatcher::new(self.store.dispatcher(), body_resolver))
+    }
+
+    pub async fn load(&self) -> Result<(), StoreError> {
+        self.store
+            .load()
+            .await
+            .map_err(|error| StoreError::TieredStore(format!("failed to load tieredstore: {error}")))
+    }
+
+    pub async fn start(&self) -> Result<(), StoreError> {
+        self.store
+            .start()
+            .await
+            .map_err(|error| StoreError::TieredStore(format!("failed to start tieredstore: {error}")))
+    }
+
+    pub async fn shutdown(&self) -> Result<(), StoreError> {
+        self.store
+            .shutdown()
+            .await
+            .map_err(|error| StoreError::TieredStore(format!("failed to shutdown tieredstore: {error}")))
+    }
+
+    pub fn metrics(&self) -> Arc<TieredStoreMetrics> {
+        self.store.metrics()
+    }
+
+    pub const fn should_try_get_message(status: GetMessageStatus) -> bool {
+        matches!(
+            status,
+            GetMessageStatus::NoMatchedLogicQueue
+                | GetMessageStatus::NoMessageInQueue
+                | GetMessageStatus::OffsetTooSmall
+                | GetMessageStatus::OffsetFoundNull
+                | GetMessageStatus::MessageWasRemoving
+        )
+    }
+
+    pub async fn get_message(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_msg_nums: i32,
+        max_total_msg_size: i32,
+        message_filter: Option<ArcMessageFilter>,
+    ) -> Option<GetMessageResult> {
+        let metrics = self.store.metrics();
+        metrics.record_get_message_fallback(topic.as_str(), group.as_str());
+        match self
+            .store
+            .fetcher()
+            .get_message(topic.to_string(), queue_id, offset, max_msg_nums)
+            .await
+        {
+            Ok(fetched) => {
+                let result = Self::to_store_get_message_result(fetched, offset, max_total_msg_size, message_filter);
+                if result.status() == Some(GetMessageStatus::Found) {
+                    metrics.record_messages_out(topic.as_str(), group.as_str(), result.message_count().max(0) as u64);
+                }
+                Some(result)
+            }
+            Err(error) => {
+                warn!(
+                    group = %group,
+                    topic = %topic,
+                    queue_id,
+                    offset,
+                    error = %error,
+                    "tieredstore get_message fallback failed"
+                );
+                None
+            }
+        }
+    }
+
+    pub async fn query_message(
+        &self,
+        topic: &CheetahString,
+        key: &CheetahString,
+        max_num: i32,
+        begin_timestamp: i64,
+        end_timestamp: i64,
+    ) -> Option<QueryMessageResult> {
+        match self
+            .store
+            .fetcher()
+            .query_message(
+                topic.to_string(),
+                key.to_string(),
+                max_num,
+                begin_timestamp,
+                end_timestamp,
+            )
+            .await
+        {
+            Ok(fetched) if !fetched.values.is_empty() => {
+                Some(Self::to_store_query_message_result(fetched, end_timestamp))
+            }
+            Ok(_) => None,
+            Err(error) => {
+                warn!(topic = %topic, key = %key, error = %error, "tieredstore query_message fallback failed");
+                None
+            }
+        }
+    }
+
+    pub async fn offset_by_time(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        timestamp: i64,
+        boundary_type: BoundaryType,
+    ) -> Result<Option<i64>, StoreError> {
+        self.store
+            .fetcher()
+            .get_offset_by_time_with_boundary(topic.to_string(), queue_id, timestamp, boundary_type)
+            .await
+            .map(|offset| (offset >= 0).then_some(offset))
+            .map_err(|error| StoreError::TieredStore(format!("tieredstore offset by time lookup failed: {error}")))
+    }
+
+    pub async fn message_timestamp(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        consume_queue_offset: i64,
+    ) -> Result<i64, StoreError> {
+        self.store
+            .fetcher()
+            .get_message_timestamp(topic.to_string(), queue_id, consume_queue_offset)
+            .await
+            .map_err(|error| StoreError::TieredStore(format!("tieredstore timestamp lookup failed: {error}")))
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn inner(&self) -> &Arc<TieredStore> {
+        &self.store
+    }
+
+    fn to_store_get_message_result(
+        fetched: TieredGetMessageResult,
+        requested_offset: i64,
+        max_total_msg_size: i32,
+        message_filter: Option<ArcMessageFilter>,
+    ) -> GetMessageResult {
+        let mut result = GetMessageResult::new_result_size(fetched.messages.len());
+        result.set_min_offset(fetched.min_offset);
+        result.set_max_offset(fetched.max_offset);
+        result.set_next_begin_offset(fetched.next_begin_offset);
+
+        let status = map_tiered_get_status(fetched.status);
+        if status != GetMessageStatus::Found {
+            result.set_status(Some(status));
+            return result;
+        }
+
+        let max_total_msg_size = max_total_msg_size.max(0);
+        let mut next_queue_offset = requested_offset;
+        for message in fetched.messages {
+            if let Some(filter) = message_filter.as_ref() {
+                if !filter.is_matched_by_commit_log(Some(message.as_ref()), None) {
+                    next_queue_offset = next_queue_offset.saturating_add(1);
+                    continue;
+                }
+            }
+            if result.buffer_total_size() > 0
+                && result.buffer_total_size().saturating_add(message.len() as i32) > max_total_msg_size
+            {
+                break;
+            }
+            let queue_offset = next_queue_offset.max(0) as u64;
+            result.add_message(select_result_from_tiered_message(message), queue_offset, 1);
+            next_queue_offset = next_queue_offset.saturating_add(1);
+        }
+
+        result.set_status(Some(if result.message_count() > 0 {
+            GetMessageStatus::Found
+        } else {
+            GetMessageStatus::NoMatchedMessage
+        }));
+        result
+    }
+
+    fn to_store_query_message_result(fetched: TieredQueryResult<Bytes>, fallback_timestamp: i64) -> QueryMessageResult {
+        let mut result = QueryMessageResult {
+            index_last_update_timestamp: fallback_timestamp,
+            ..QueryMessageResult::default()
+        };
+        for message in fetched.values {
+            result.add_message(select_result_from_tiered_message(message));
+        }
+        result
+    }
+}
+
+pub fn resolve_tiered_dispatch_body(commit_log: &CommitLog, request: &DispatchRequest) -> Option<Bytes> {
+    if request.commit_log_offset < 0 || request.msg_size <= 0 {
+        return None;
+    }
+
+    let size = usize::try_from(request.msg_size).ok()?;
+    let result = commit_log.get_message(request.commit_log_offset, request.msg_size)?;
+    let bytes = result.get_bytes()?;
+    if bytes.len() < size {
+        return None;
+    }
+    Some(bytes.slice(..size))
+}
+
+fn select_result_from_tiered_message(message: Bytes) -> SelectMappedBufferResult {
+    SelectMappedBufferResult {
+        start_offset: 0,
+        size: message.len() as i32,
+        bytes: Some(message),
+        mapped_file: None,
+        is_in_cache: false,
+        source_kind: SelectMappedBufferSourceKind::Bytes,
+        file_offset: 0,
+        cache_state: SelectMappedBufferCacheState::Unknown,
+    }
+}
+
+fn map_tiered_get_status(status: TieredGetMessageStatus) -> GetMessageStatus {
+    match status {
+        TieredGetMessageStatus::Found => GetMessageStatus::Found,
+        TieredGetMessageStatus::NoMatchedMessage => GetMessageStatus::NoMatchedMessage,
+        TieredGetMessageStatus::OffsetFoundNull => GetMessageStatus::OffsetFoundNull,
+        TieredGetMessageStatus::OffsetOverflowBadly => GetMessageStatus::OffsetOverflowBadly,
+        TieredGetMessageStatus::OffsetOverflowOne => GetMessageStatus::OffsetOverflowOne,
+        TieredGetMessageStatus::OffsetTooSmall => GetMessageStatus::OffsetTooSmall,
+        TieredGetMessageStatus::NoMatchedLogicQueue => GetMessageStatus::NoMatchedLogicQueue,
+    }
+}
 
 pub struct TieredCommitLogDispatcher<P = ProviderKind>
 where
