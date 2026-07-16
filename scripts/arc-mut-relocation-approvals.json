@@ -325,6 +325,24 @@
       "from": "c701bcf628553b4ebbb79f02",
       "to": "40abdeec7b706b7a903595f0",
       "reason": "Importing the Local group-commit worker ports changed the module import order around the existing WeakArcMut import without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "527ebe3ad5a4c0369200bcb4",
+      "from": "23348ceae91879a47f8cd4a6",
+      "to": "142e50c0a2fe6071fa98ca69",
+      "reason": "Moving the async flush and commit worker loops to Local changed adjacent test imports around the existing use super glob without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "3739e726bed526a639c25377",
+      "from": "4a3ceae0adde98d4e37bfbbe",
+      "to": "ed90aef20d1d02193c746b52",
+      "reason": "Importing the canonical Local flush worker ports changed the module import order around the existing ArcMut import without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "05fa6e11b73b578d790f0703",
+      "from": "de65814644028765e153d7b3",
+      "to": "139cbea77af3f218c78c32eb",
+      "reason": "Returning the canonical Local commit worker progress changed adjacent tokens around the existing commit helper ArcMut parameter without adding or moving a shared-mutation occurrence"
     }
   ]
 }

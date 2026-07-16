@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03 已完成，PR-M06-04a～c 已完成，继续 M06-04d |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03 已完成，PR-M06-04a～d 已完成，继续 M06-04e |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -2103,3 +2103,23 @@ python scripts/arc_mut_guard.py
   `WeakArcMut` import）按 ADR-013 一对一 relocation 后仍为 1,171 identities/3,233 occurrences，零新增债务。
 - [x] `[SCOPE]` 本切片不迁移 AsyncFlush/CommitRealTime worker 或最终 FlushManager facade；它们继续由 M06-04d/e
   承接。顶层统计保持 31 已完成、1 进行中、50 未开始，即 51 个尚未完成。
+
+## M06-04d AsyncFlush and CommitRealTime worker owner extraction evidence
+
+- [x] `[DEV/OWNER]` 新增 Local `flush::worker`，由 `run_flush_real_time_worker` 唯一拥有 periodic/thorough interval、
+  final flush、checkpoint 判定与 failure phase 分类；`run_commit_real_time_worker` 唯一拥有 commit loop、thorough interval、
+  final commit、flush wakeup 和 checkpoint 判定。两类 legacy config 均由 Store 配置投影一次后传入 Local。
+- [x] `[ADAPTER/RUNTIME]` Store 继续拥有 `TaskGroup`、`CancellationToken`、`Notify`、blocking executor、具体 mapped-file
+  flush/commit I/O、`StoreCheckpoint`、health/log callback 与 `WeakArcMut<dyn FlushManager>` wakeup adapter。Local 不创建
+  runtime/task 且不直接调用 timer；delay 由 Store 注入，enforcing runtime audit 保持零 action-required 增量。
+- [x] `[COMPAT]` AsyncFlush 仍按原 `flush_interval`、`flush_thorough_interval` 与 timed/notify 策略运行，取消后执行原次数
+  final flush；CommitRealTime 仍保持 commit 后唤醒 flush、positive timestamp checkpoint 与 final commit 顺序。旧
+  `DefaultFlushManager` public facade、GroupCommit channel/retry/fsync 及错误到 health 的映射均未改变。
+- [x] `[TEST/CONTRACT]` Local 新增 cancelled final flush/checkpoint、periodic failure phase + final flush、commit progress
+  wakeup + final commit checkpoint 3/3；Store `default_flush_manager::tests` 原回归 9/9。M06 flush source contract 1/1
+  扩展锁定两个 Local runner/config/ports owner，并禁止 Store 留存旧 timestamp 驱动循环。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency、AGENTS routing、
+  enforcing runtime audit 与 diff check 通过。3 个既有 ArcMut occurrence（测试 glob、module `ArcMut` import、commit helper
+  参数）按 ADR-013 一对一 relocation 后仍为 1,171 identities/3,233 occurrences，零新增债务。
+- [x] `[SCOPE]` 本切片不收口最终 FlushManager facade、SyncFlush/ack adapter 或 compatibility ledger；它们继续由
+  M06-04e 承接。顶层统计保持 31 已完成、1 进行中、50 未开始，即 51 个尚未完成。

@@ -16,6 +16,7 @@
 
 pub mod group_commit;
 pub mod queue;
+pub mod worker;
 
 pub use group_commit::SyncFlushRuntimeInfo;
 pub use queue::FlushProgress;

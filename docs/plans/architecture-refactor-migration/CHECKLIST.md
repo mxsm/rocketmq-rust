@@ -184,7 +184,7 @@ M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-04 正在迁移 Flush/Gr
   - [x] M06-04a：迁移 GroupCommit request、batch completion 与 SyncFlush runtime stats owner 到 Local，Store 保留 status/error/health adapter
   - [x] M06-04b：迁移 canonical `FlushProgress` 与 MappedFileQueue flush/commit I/O owner，Store 保留 legacy path
   - [x] M06-04c：迁移 GroupCommit worker 驱动与 checkpoint completion owner
-  - [ ] M06-04d：迁移 AsyncFlush/CommitRealTime worker 驱动与生命周期 owner
+  - [x] M06-04d：迁移 AsyncFlush/CommitRealTime worker 驱动与生命周期 owner
   - [ ] M06-04e：收敛 FlushManager facade、SyncFlush/ack adapter、兼容 ledger 与父项验收
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
@@ -26,6 +25,14 @@ use rocketmq_store_local::flush::group_commit::GroupCommitWorkerConfig;
 use rocketmq_store_local::flush::group_commit::GroupCommitWorkerPorts;
 use rocketmq_store_local::flush::group_commit::SyncFlushStats;
 use rocketmq_store_local::flush::group_commit::GROUP_COMMIT_CHANNEL_CAPACITY;
+use rocketmq_store_local::flush::worker::run_commit_real_time_worker;
+use rocketmq_store_local::flush::worker::run_flush_real_time_worker;
+use rocketmq_store_local::flush::worker::CommitRealTimeWorkerConfig;
+use rocketmq_store_local::flush::worker::CommitRealTimeWorkerPorts;
+use rocketmq_store_local::flush::worker::CommitWorkerProgress;
+use rocketmq_store_local::flush::worker::FlushRealTimeWorkerConfig;
+use rocketmq_store_local::flush::worker::FlushRealTimeWorkerPorts;
+use rocketmq_store_local::flush::worker::FlushWorkerFailurePhase;
 use tokio::sync::Notify;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -414,68 +421,34 @@ impl FlushRealTimeService {
             }
         };
         self.shutdown_token = CancellationToken::new();
-        let message_store_config = self.message_store_config.clone();
+        let worker_config = FlushRealTimeWorkerConfig::legacy(
+            self.message_store_config.flush_commit_log_timed,
+            self.message_store_config.flush_interval_commit_log as u64,
+            self.message_store_config.flush_commit_log_least_pages,
+            self.message_store_config.flush_commit_log_thorough_interval as u64,
+        );
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = self.notified.clone();
         let shutdown_token = self.shutdown_token.clone();
         let store_health_recorder = self.store_health_recorder.clone();
         if let Err(error) = worker_group.spawn_service("commit-log-flush-real-time", async move {
-            let mut last_flush_timestamp = 0;
-            loop {
-                if shutdown_token.is_cancelled() {
-                    break;
-                }
-
-                let flush_commit_log_timed = message_store_config.flush_commit_log_timed;
-                let interval = message_store_config.flush_interval_commit_log;
-                let mut flush_physic_queue_least_pages = message_store_config.flush_commit_log_least_pages;
-                let flush_physic_queue_thorough_interval = message_store_config.flush_commit_log_thorough_interval;
-                //let mut print_flush_progress = false;
-
-                let current_time_millis = current_millis();
-                if current_time_millis >= last_flush_timestamp + flush_physic_queue_thorough_interval as u64 {
-                    last_flush_timestamp = current_time_millis;
-                    flush_physic_queue_least_pages = 0;
-                }
-                if flush_commit_log_timed {
-                    tokio::select! {
-                        _ = shutdown_token.cancelled() => break,
-                        _ = time::sleep(time::Duration::from_millis(interval as u64)) => {}
-                    }
-                } else {
-                    tokio::select! {
-                        _ = shutdown_token.cancelled() => break,
-                        _ = notified.notified() => {}
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(interval as u64)) => {}
-                    }
-                }
-
-                let flush_result =
-                    match flush_mapped_file_queue(mapped_file_queue.clone(), flush_physic_queue_least_pages).await {
-                        Ok(result) => result,
-                        Err(error) => {
-                            store_health_recorder.record_flush_failure(error.as_ref());
-                            warn!(error = %error, "asynchronous commitlog flush failed");
-                            break;
-                        }
-                    };
-                let store_timestamp = flush_result.store_timestamp;
-                if store_timestamp > 0 {
-                    store_checkpoint.set_physic_msg_timestamp(store_timestamp);
-                }
-            }
-            match flush_mapped_file_queue(mapped_file_queue, 0).await {
-                Ok(flush_result) => {
-                    let store_timestamp = flush_result.store_timestamp;
-                    if store_timestamp > 0 {
-                        store_checkpoint.set_physic_msg_timestamp(store_timestamp);
-                    }
-                }
-                Err(error) => {
+            let ports = FlushRealTimeWorkerPorts::new(
+                move |least_pages| flush_mapped_file_queue(mapped_file_queue.clone(), least_pages),
+                move |phase, error: Arc<StoreError>| {
                     store_health_recorder.record_flush_failure(error.as_ref());
-                    warn!(error = %error, "final asynchronous commitlog flush failed");
-                }
-            }
+                    match phase {
+                        FlushWorkerFailurePhase::Periodic => {
+                            warn!(error = %error, "asynchronous commitlog flush failed");
+                        }
+                        FlushWorkerFailurePhase::Final => {
+                            warn!(error = %error, "final asynchronous commitlog flush failed");
+                        }
+                    }
+                },
+                move |timestamp| store_checkpoint.set_physic_msg_timestamp(timestamp),
+                time::sleep,
+            );
+            run_flush_real_time_worker(notified, shutdown_token, worker_config, ports).await;
         }) {
             warn!("FlushRealTimeService cannot start because task spawn failed: {error}");
             return;
@@ -529,36 +502,19 @@ impl CommitRealTimeService {
             }
         };
         self.shutdown_token = CancellationToken::new();
-        let message_store_config = self.message_store_config.clone();
+        let worker_config = CommitRealTimeWorkerConfig::legacy(
+            self.message_store_config.commit_interval_commit_log,
+            self.message_store_config.commit_commit_log_least_pages,
+            self.message_store_config.commit_commit_log_thorough_interval,
+        );
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = self.notified.clone();
         let flush_manager = self.flush_manager.clone();
         let shutdown_token = self.shutdown_token.clone();
         if let Err(error) = worker_group.spawn_service("commit-log-commit-real-time", async move {
-            let mut last_commit_timestamp = 0;
-            loop {
-                if shutdown_token.is_cancelled() {
-                    break;
-                }
-
-                let interval = message_store_config.commit_interval_commit_log;
-                let mut commit_data_least_pages = message_store_config.commit_commit_log_least_pages;
-                let commit_data_thorough_interval = message_store_config.commit_commit_log_thorough_interval;
-                //let mut print_flush_progress = false;
-
-                let begin = current_millis();
-                if begin >= last_commit_timestamp + commit_data_thorough_interval {
-                    last_commit_timestamp = begin;
-                    commit_data_least_pages = 0;
-                }
-
-                let Some(commit_result) =
-                    commit_mapped_file_queue(mapped_file_queue.clone(), commit_data_least_pages).await
-                else {
-                    break;
-                };
-                if !commit_result.commit_ok {
-                    last_commit_timestamp = current_millis();
+            let ports = CommitRealTimeWorkerPorts::new(
+                move |least_pages| commit_mapped_file_queue(mapped_file_queue.clone(), least_pages),
+                move || {
                     if let Some(flush_manager) =
                         flush_manager.as_ref().and_then(|flush_manager| flush_manager.upgrade())
                     {
@@ -566,22 +522,11 @@ impl CommitRealTimeService {
                     } else {
                         warn!("CommitRealTimeService cannot wake flush because flush manager is not initialized");
                     }
-                }
-
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = notified.notified() => {}
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(interval)) => {}
-                }
-            }
-            if let Some(commit_result) = commit_mapped_file_queue(mapped_file_queue, 0).await {
-                if !commit_result.commit_ok {
-                    let store_timestamp = commit_result.store_timestamp;
-                    if store_timestamp > 0 {
-                        store_checkpoint.set_physic_msg_timestamp(store_timestamp);
-                    }
-                }
-            }
+                },
+                move |timestamp| store_checkpoint.set_physic_msg_timestamp(timestamp),
+                time::sleep,
+            );
+            run_commit_real_time_worker(notified, shutdown_token, worker_config, ports).await;
         }) {
             warn!("CommitRealTimeService cannot start because task spawn failed: {error}");
             return;
@@ -639,22 +584,15 @@ pub(crate) async fn flush_mapped_file_queue(
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CommitMappedFileQueueResult {
-    commit_ok: bool,
-    store_timestamp: u64,
-}
-
 async fn commit_mapped_file_queue(
     mapped_file_queue: ArcMut<MappedFileQueue>,
     commit_least_pages: i32,
-) -> Option<CommitMappedFileQueueResult> {
+) -> Option<CommitWorkerProgress> {
     match crate::runtime::spawn_io("commitlog-commit", move || {
-        let commit_ok = mapped_file_queue.commit(commit_least_pages);
-        CommitMappedFileQueueResult {
-            commit_ok,
-            store_timestamp: mapped_file_queue.get_store_timestamp(),
-        }
+        CommitWorkerProgress::new(
+            mapped_file_queue.commit(commit_least_pages),
+            mapped_file_queue.get_store_timestamp(),
+        )
     })
     .await
     {
@@ -670,6 +608,7 @@ async fn commit_mapped_file_queue(
 mod tests {
     use super::*;
 
+    use rocketmq_common::TimeUtils::current_millis;
     use rocketmq_store_local::flush::group_commit::complete_group_commit_batch;
     use rocketmq_store_local::flush::group_commit::complete_group_commit_batch_error;
     use tempfile::tempdir;
@@ -757,10 +696,7 @@ mod tests {
         ));
         assert_eq!(
             commit_mapped_file_queue(mapped_file_queue, 0).await,
-            Some(CommitMappedFileQueueResult {
-                commit_ok: true,
-                store_timestamp: 0,
-            })
+            Some(CommitWorkerProgress::new(true, 0))
         );
     }
 

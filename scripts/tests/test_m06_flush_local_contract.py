@@ -37,6 +37,7 @@ class M06FlushLocalContractTests(unittest.TestCase):
         )
         store_trait = source("rocketmq-store/src/base/flush_manager.rs")
         local_queue = source("rocketmq-store-local/src/flush/queue.rs")
+        local_worker = source("rocketmq-store-local/src/flush/worker.rs")
         store_queue = source(
             "rocketmq-store/src/consume_queue/mapped_file_queue.rs"
         )
@@ -96,6 +97,21 @@ class M06FlushLocalContractTests(unittest.TestCase):
         self.assertNotIn("pub struct FlushProgress", store_queue)
         self.assertIn("let progress = try_flush_mapped_file_queue(", store_queue)
         self.assertIn("let progress = commit_mapped_file_queue(", store_queue)
+
+        for owner in (
+            "pub struct FlushRealTimeWorkerConfig",
+            "pub struct FlushRealTimeWorkerPorts<",
+            "pub async fn run_flush_real_time_worker<",
+            "pub struct CommitRealTimeWorkerConfig",
+            "pub struct CommitRealTimeWorkerPorts<",
+            "pub struct CommitWorkerProgress",
+            "pub async fn run_commit_real_time_worker<",
+        ):
+            self.assertIn(owner, local_worker)
+        self.assertIn("run_flush_real_time_worker(", store_manager)
+        self.assertIn("run_commit_real_time_worker(", store_manager)
+        self.assertNotIn("let mut last_flush_timestamp", store_manager)
+        self.assertNotIn("let mut last_commit_timestamp", store_manager)
 
 
 if __name__ == "__main__":
