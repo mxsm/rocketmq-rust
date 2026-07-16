@@ -88,6 +88,7 @@ rocketmq-security-api = { version = "1.0.0", path = "./rocketmq-security-api" }
 rocketmq-store-api     = { version = "1.0.0", path = "./rocketmq-store-api", default-features = false }
 rocketmq-store-local   = { version = "1.0.0", path = "./rocketmq-store-local", default-features = false }
 rocketmq-store-rocksdb = { version = "1.0.0", path = "./rocketmq-store-rocksdb", default-features = false }
+rocketmq-tieredstore   = { version = "1.0.0", path = "./rocketmq-tieredstore" }
 rocketmq-transport    = { version = "1.0.0", path = "./rocketmq-transport", default-features = false }
 
 tokio        = { version = "1.52", features = ["full"] }

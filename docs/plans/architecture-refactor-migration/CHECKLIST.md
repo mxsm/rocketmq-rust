@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 39 | 0 | 43 未开始；合计 43 尚未完成 | 82 |
-| 里程碑 | 5（M01–M05） | 1（M06） | 6（M07–M12） | 12 |
+| PR 级工作包 | 40 | 0 | 42 未开始；合计 42 尚未完成 | 82 |
+| 里程碑 | 6（M01–M06） | 0 | 6（M07–M12） | 12 |
 | 新增边界 crate | 7 | 0 | 3（proxy-core/cluster/local） | 10 |
 | 根 workspace package | 29 | — | 还差 3 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 43 个未开始工作包分布：M06-12 为 1 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
-M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-11 已完成 Store facade、Tiered 反转与 feature 所有权；当前下一工作包为 PR-M06-12。
+剩余 42 个未开始工作包分布：M07 为 7 个、M08 为 6 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、
+M12 为 6 个。PR-M06-12 已完成依赖图与消费方收口，M06 Gate 已关闭；当前下一工作包为 PR-M07-01。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -232,8 +232,15 @@ M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-11 已完成 Store facad
   - [x] no-default/default/local/fast/safe/fast+safe/io_uring/rocks/tiered/observability 精确矩阵全部通过
   - [x] Tiered lifecycle、写入 dispatch、读取 fallback、fast+safe 优先级与 195 项 M06 contract 通过
   - [x] 独立兼容 ledger、7 条 ArcMut 一对一 relocation 与 39/43 顶层工作包盘点已冻结
-- [ ] PR-M06-12：完成依赖图与消费方收口
-- [ ] 对应任务文档的 Exit Checklist 全部通过
+- [x] PR-M06-12：完成依赖图与消费方收口
+  - [x] root workspace 统一登记 API/Local/Rocks/Tiered dependency，当前 29/32，剩余仅三个 Proxy package
+  - [x] architecture policy 新增 Store facade 禁止反向依赖 Client/Broker/NameServer/Controller/Proxy 的规则
+  - [x] storage 子图精确冻结为 `api ← local ← rocks`、`api ← tiered` 与 `store → 四个 owner`
+  - [x] Broker send processor 直连 `MessageAppender + StoreHealth`；Store facade consumer 固定为 Broker/Proxy/store-inspect
+  - [x] 四个 standalone Cargo 项目无 storage 直接边，canonical/legacy compile 与十项 feature matrix 通过
+  - [x] 完整 M06 contract 200/200、architecture/runtime/ArcMut/routing 与 consumer all-feature checks 通过
+  - [x] closeout ledger、回滚点、M07/M09/M10 交接物与 40/42 顶层工作包盘点已冻结
+- [x] 对应任务文档的 Exit Checklist 全部通过
 
 ### M07 Legacy Runtime 排空与 Client 依赖边收敛
 

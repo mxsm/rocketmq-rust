@@ -134,6 +134,17 @@
       ]
     },
     {
+      "id": "store-facade-no-high-level-services",
+      "callers": ["rocketmq-store"],
+      "forbidden_targets": [
+        "rocketmq-client-rust",
+        "rocketmq-broker",
+        "rocketmq-namesrv",
+        "rocketmq-controller",
+        "rocketmq-proxy"
+      ]
+    },
+    {
       "id": "proxy-local-no-client",
       "callers": ["rocketmq-proxy-local"],
       "forbidden_targets": ["rocketmq-client-rust"]

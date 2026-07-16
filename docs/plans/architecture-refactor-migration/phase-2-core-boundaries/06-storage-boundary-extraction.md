@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06/PR-M06-07/PR-M06-08/PR-M06-09/PR-M06-10/PR-M06-11 已完成，继续 PR-M06-12 |
+| 状态 | 已完成；M06-01～M06-12、兼容台账、依赖图、消费方验证与 Exit Checklist 已关闭 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -29,7 +29,7 @@
 ## 入口条件
 
 - [x] `[ARCH]` 冻结 capability、AppendReceipt/DerivedProgress/StoreError 语义和 legacy adapter 边界。
-- [ ] `[TEST]` 准备 dirty-tail、flush、HA、recovery、20B CQ/Index、Local/Rocks parity corpus。
+- [x] `[TEST]` 准备 dirty-tail、flush、HA、recovery、20B CQ/Index、Local/Rocks parity corpus。
 - [x] `[DEV]` 检查 store/broker/tieredstore 目标文件和现有用户修改无重叠。
 - [x] `[HUMAN]` 批准 CommitLog 唯一 WAL 与 `rocks → local → api` 单向关系。
 
@@ -157,12 +157,12 @@
 
 ### PR-M06-12：依赖图与消费方收口
 
-- [ ] 入口：`[TEST]` PR-M06-03至11的focused evidence齐全且对应同一候选快照。
-- [ ] `[DEV]` 更新root workspace和dependency policy；累计package数增加3；新processor直连store-api。
-- [ ] `[TEST]` 运行canonical/legacy compile、完整精确feature矩阵、Broker和受影响standalone path consumers。
-- [ ] `[REV]` 证明local/rocks/tiered/facade四个closure符合目标DAG，机械迁移与行为修复提交可追溯分离。
-- [ ] 回滚点：closeout失败返回具体PR修复并重新冻结，不通过扩大policy baseline收口。
-- [ ] `[HUMAN]` 签署storage compatibility、唯一WAL和M06 Gate。
+- [x] 入口：`[TEST]` PR-M06-03至11的focused evidence齐全且对应同一候选快照。
+- [x] `[DEV]` 更新root workspace和dependency policy；累计package数增加3；新processor直连store-api。
+- [x] `[TEST]` 运行canonical/legacy compile、完整精确feature矩阵、Broker和受影响standalone path consumers。
+- [x] `[REV]` 证明local/rocks/tiered/facade四个closure符合目标DAG，机械迁移与行为修复提交可追溯分离。
+- [x] 回滚点：closeout失败返回具体PR修复并重新冻结，不通过扩大policy baseline收口。
+- [x] `[HUMAN]` 签署storage compatibility、唯一WAL和M06 Gate。
 
 ## 公共兼容面
 
@@ -220,14 +220,14 @@ python scripts/arc_mut_guard.py
 
 ## Exit Checklist
 
-- [ ] `[REV]` store-api 无实现泄漏，capability 足够窄。
-- [ ] `[TEST]` Local dirty-tail/flush/HA/CQ/Index/recovery golden 全绿。
-- [ ] `[TEST]` Rocks foundation/semantics/Broker parity 全绿，默认 tree 无 native RocksDB。
-- [ ] `[REV]` CommitLog 只在 Local，Rocks/Tiered 只持派生状态。
-- [ ] `[DEV]` store facade 无算法回流，旧路径/feature alias 可编译。
-- [ ] `[TEST]` 精确 feature matrix 和受影响 consumer 验证完成。
-- [ ] `[DEV]` dependency policy/package 数与实际一致。
-- [ ] `[HUMAN]` 唯一 WAL、持久兼容与 M06 Gate 已签署。
+- [x] `[REV]` store-api 无实现泄漏，capability 足够窄。
+- [x] `[TEST]` Local dirty-tail/flush/HA/CQ/Index/recovery golden 全绿。
+- [x] `[TEST]` Rocks foundation/semantics/Broker parity 全绿，默认 tree 无 native RocksDB。
+- [x] `[REV]` CommitLog 只在 Local，Rocks/Tiered 只持派生状态。
+- [x] `[DEV]` store facade 无算法回流，旧路径/feature alias 可编译。
+- [x] `[TEST]` 精确 feature matrix 和受影响 consumer 验证完成。
+- [x] `[DEV]` dependency policy/package 数与实际一致。
+- [x] `[HUMAN]` 唯一 WAL、持久兼容与 M06 Gate 已签署。
 
 ## 交接物
 
@@ -2495,3 +2495,28 @@ python scripts/arc_mut_guard.py
   分别回滚；legacy re-export/no-default Local path 始终保留，不得恢复第二 CommitLog 或 Tiered→Store 反向依赖。
 - [x] `[INVENTORY]` PR-M06-11 父项关闭；82 个顶层工作包更新为 39 已完成、0 进行中、43 未开始，即 43 个尚未完成。
   M06 整体仍进行中且 Exit Checklist 保持未完成；唯一下一工作包为 PR-M06-12。
+
+## M06-12 Storage 依赖图与消费方收口 evidence
+
+- [x] `[ARCH/DAG]` root workspace 统一登记 Tiered owner，Store 的 Tiered 边改用 workspace dependency；最终 storage
+  子图精确固定为 Local→API、Rocks→Local/API、Tiered→API、Store→API/Local/Rocks/Tiered。Architecture policy 新增
+  `store-facade-no-high-level-services`，禁止 Store facade 直接依赖 Client、Broker、NameServer、Controller 或 Proxy，且未扩大 baseline。
+- [x] `[CONSUMER]` root workspace 直接 consumer inventory 已逐 manifest 冻结：API 由 Broker/Store/Local/Rocks/Tiered
+  消费，Store 由 Broker/Proxy/store-inspect 消费，Local 由 Store/Rocks 消费，Rocks 与 Tiered 均只由 Store 消费；Broker
+  `send_message_processor.rs` 是唯一直接消费 Store API 的 Broker source，并通过 `MessageAppender + StoreHealth` 使用 capability。
+  四个 standalone Cargo 项目均无 storage package 直接边，因此没有遗漏的 standalone consumer 迁移。
+- [x] `[TEST/CANONICAL]` Store API no-default check 与 18 项 contract、Local no-default check 与 185 项 all-feature lib、
+  Rocks no-default check 与 4 项 owner test、Tiered all-feature lib 55/55、Store legacy adapter 9/9 全部通过。
+- [x] `[TEST/MATRIX]` Store no-default、default、local、fast、safe、fast+safe、io_uring、rocksdb_store、tieredstore、
+  observability 十项精确 feature matrix 逐项通过；Broker、Proxy、store-inspect 三个实际 facade consumer 的 all-feature check 通过。
+- [x] `[CONTRACT/GOVERNANCE]` 新增 5 项 closeout contract 后完整 M06 contract 200/200（606.671s）通过；architecture
+  dependency 35 项单测与 6 个 violation fixtures、ArcMut guard、runtime enforcing audit、AGENTS routing 均通过。
+- [x] `[ERROR]` error architecture guard 仅复现 main 既有 11 项：Broker source stringification 1、MCP anyhow 8、缺失
+  治理文档 2；本工作包没有新增 finding，仍诚实记录为 pre-existing failure，不计为通过。
+- [x] `[FINAL]` workspace exact fmt 与 workspace all-target/all-feature strict Clippy 通过；最终 closeout contract 5/5、
+  architecture dependency baseline、ArcMut guard、Python compile、82 项 checklist 计数（40/42）与 `git diff --check` 同步通过。
+- [x] `[COMPAT/ROLLBACK]` 独立
+  [`09-storage-dependency-consumer-closeout.md`](09-storage-dependency-consumer-closeout.md) 冻结最终 DAG、consumer inventory、
+  feature/consumer 验证、失败路由和分层回滚点；回滚不得恢复第二 CommitLog、backend→Store 反向边或关闭 R0 legacy path。
+- [x] `[INVENTORY/GATE]` PR-M06-12 与 M06 Exit Checklist 全部关闭；82 个顶层工作包更新为 40 已完成、0 进行中、
+  42 未开始。M06 Gate 完成，下一目标为 PR-M07-01 Legacy Runtime 排空。
