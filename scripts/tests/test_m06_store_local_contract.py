@@ -10568,7 +10568,7 @@ def storage_local_compatibility_ledger_violations(
 ) -> list[str]:
     violations: list[str] = []
     required_ledger_fragments = (
-        "# M06-03/M06-04/M06-05/M06-06 Local 存储兼容与所有权 Ledger",
+        "# M06-03/M06-04/M06-05/M06-06/M06-07 Local 存储兼容与所有权 Ledger",
         "## Canonical ownership",
         "`rocketmq-store-local::mapped_file`",
         "`rocketmq-store-local::base::allocate_mapped_file_service`",
@@ -10579,11 +10579,15 @@ def storage_local_compatibility_ledger_violations(
         "`rocketmq-store-local::consume_queue::{record,single,batch,extension,root}`",
         "`rocketmq-store-local::index::{codec,file,service,dispatch}`",
         "`rocketmq-store-local::{ha,transfer}`",
+        "`rocketmq-store-local::timer`",
+        "`rocketmq-store-local::pop`",
+        "`rocketmq-store-local::stats`",
+        "`rocketmq-store-local::{filter,services,hook}`",
         "## Feature compatibility",
         "`default = []`",
         "## Retained Store-only ports",
         "HA/replication/transfer 仅保留具体 socket/network",
-        "- M06-07：",
+        "Timer 仅保留 `MessageExt`/CommitLog/CQ effect",
         "- M06-08：",
         "## Compatibility and removal rules",
         "下一 major",
@@ -16884,7 +16888,13 @@ mod tests {
         self.assertEqual([], violations())
         mutations = (
             {"candidate_ledger": ledger.replace("`default = []`", "`default = [fast-load]`", 1)},
-            {"candidate_ledger": ledger.replace("- M06-07：", "- M06-09：", 1)},
+            {
+                "candidate_ledger": ledger.replace(
+                    "Timer 仅保留 `MessageExt`/CommitLog/CQ effect",
+                    "Timer facade 重新拥有 schedule/recovery 算法",
+                    1,
+                )
+            },
             {
                 "candidate_local_manifest": local_manifest.replace(
                     "default = []",

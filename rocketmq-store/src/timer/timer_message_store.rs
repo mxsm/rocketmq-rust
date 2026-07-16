@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -39,6 +38,13 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_rust::ArcMut;
+use rocketmq_store_local::timer::service::clamp_queue_offset;
+use rocketmq_store_local::timer::service::recover_timer_log_len as plan_recovered_timer_log_len;
+use rocketmq_store_local::timer::service::timer_slot_is_valid;
+use rocketmq_store_local::timer::service::TimerBacklogMetrics;
+use rocketmq_store_local::timer::service::TimerLogRecord;
+use rocketmq_store_local::timer::service::TimerSchedulePolicy;
+use rocketmq_store_local::timer::service::TimerTpsCounter;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::error;
 use tracing::warn;
@@ -82,50 +88,6 @@ pub const MAGIC_DELETE: i32 = 1 << 2;
 const EMPTY_TIMER_LOG_POS: i64 = -1;
 const MIN_SCHEDULER_INTERVAL_MS: u64 = 100;
 const MAX_FUTURE_CURSOR_SKEW_SLOTS: i64 = 2;
-const TPS_WINDOW_MS: i64 = 3_000;
-
-#[derive(Clone, Copy, Debug)]
-struct TimerLogRecord {
-    deliver_time_ms: i64,
-    commit_log_offset: i64,
-    size: i32,
-    queue_offset: i64,
-    prev_pos: i64,
-    magic: i32,
-}
-
-impl TimerLogRecord {
-    const SIZE: usize = 40;
-
-    fn encode(self) -> [u8; Self::SIZE] {
-        let mut buffer = [0u8; Self::SIZE];
-        buffer[0..8].copy_from_slice(&self.deliver_time_ms.to_be_bytes());
-        buffer[8..16].copy_from_slice(&self.commit_log_offset.to_be_bytes());
-        buffer[16..20].copy_from_slice(&self.size.to_be_bytes());
-        buffer[20..28].copy_from_slice(&self.queue_offset.to_be_bytes());
-        buffer[28..36].copy_from_slice(&self.prev_pos.to_be_bytes());
-        buffer[36..40].copy_from_slice(&self.magic.to_be_bytes());
-        buffer
-    }
-
-    fn decode(buffer: &[u8]) -> std::io::Result<Self> {
-        if buffer.len() != Self::SIZE {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("invalid timer log record length {}", buffer.len()),
-            ));
-        }
-
-        Ok(Self {
-            deliver_time_ms: read_i64(&buffer[0..8])?,
-            commit_log_offset: read_i64(&buffer[8..16])?,
-            size: read_i32(&buffer[16..20])?,
-            queue_offset: read_i64(&buffer[20..28])?,
-            prev_pos: read_i64(&buffer[28..36])?,
-            magic: read_i32(&buffer[36..40])?,
-        })
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
 struct TimerLogEntry {
@@ -137,105 +99,6 @@ struct TimerLogEntry {
 struct RecoveredTimerState {
     read_time_ms: i64,
     queue_offset: i64,
-}
-
-struct BacklogMetricsSnapshot {
-    topic_backlog: HashMap<String, i64>,
-    timer_backlog_distribution: HashMap<i32, i64>,
-    timer_dist: Vec<i32>,
-}
-
-impl BacklogMetricsSnapshot {
-    fn new(timer_dist: Vec<i32>) -> Self {
-        Self {
-            topic_backlog: HashMap::new(),
-            timer_backlog_distribution: HashMap::new(),
-            timer_dist,
-        }
-    }
-
-    fn observe_message(&mut self, message: &MessageExt, now_ms: i64) {
-        let Some(deliver_time_ms) = parse_deliver_time_ms(message) else {
-            return;
-        };
-        self.observe_distribution(deliver_time_ms, now_ms);
-        let delta = if is_delete_timer_message(message) { -1 } else { 1 };
-        let topic = message
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
-            .map(|topic| topic.to_string())
-            .unwrap_or_else(|| message.topic().to_string());
-        *self.topic_backlog.entry(topic).or_default() += delta;
-    }
-
-    fn normalized_topic_backlog(&self) -> HashMap<String, i64> {
-        self.topic_backlog
-            .iter()
-            .filter_map(|(topic, count)| (*count > 0).then_some((topic.clone(), *count)))
-            .collect()
-    }
-
-    fn timer_backlog_distribution(&self) -> HashMap<i32, i64> {
-        self.timer_backlog_distribution
-            .iter()
-            .filter_map(|(period, count)| (*count > 0).then_some((*period, *count)))
-            .collect()
-    }
-
-    fn observe_distribution(&mut self, deliver_time_ms: i64, now_ms: i64) {
-        let remaining_ms = deliver_time_ms.saturating_sub(now_ms).max(0);
-        let remaining_secs = ((remaining_ms + 999) / 1000) as i32;
-        if let Some(period) = self.timer_dist.iter().copied().find(|period| remaining_secs <= *period) {
-            *self.timer_backlog_distribution.entry(period).or_default() += 1;
-        }
-    }
-}
-
-#[derive(Default)]
-struct TpsCounter {
-    state: Mutex<TpsCounterState>,
-}
-
-#[derive(Default)]
-struct TpsCounterState {
-    buckets: VecDeque<(i64, usize)>,
-    total: usize,
-}
-
-impl TpsCounter {
-    fn record(&self, delta: usize) {
-        if delta == 0 {
-            return;
-        }
-        let now_ms = current_millis() as i64;
-        let mut state = self.state.lock();
-        Self::evict_expired(&mut state, now_ms);
-        if state.buckets.back().is_some_and(|(bucket_ms, _)| *bucket_ms == now_ms) {
-            if let Some((_, count)) = state.buckets.back_mut() {
-                *count += delta;
-            }
-            state.total += delta;
-            return;
-        }
-        state.buckets.push_back((now_ms, delta));
-        state.total += delta;
-    }
-
-    fn get_tps(&self) -> f32 {
-        let now_ms = current_millis() as i64;
-        let mut state = self.state.lock();
-        Self::evict_expired(&mut state, now_ms);
-        state.total as f32 * 1000.0 / TPS_WINDOW_MS as f32
-    }
-
-    fn evict_expired(state: &mut TpsCounterState, now_ms: i64) {
-        while let Some((bucket_ms, count)) = state.buckets.front().copied() {
-            if now_ms - bucket_ms < TPS_WINDOW_MS {
-                break;
-            }
-            state.total = state.total.saturating_sub(count);
-            state.buckets.pop_front();
-        }
-    }
 }
 
 pub struct TimerMessageStore {
@@ -254,8 +117,8 @@ pub struct TimerMessageStore {
     process_lock: AsyncMutex<()>,
     scheduler_group: Mutex<Option<rocketmq_runtime::TaskGroup>>,
     scheduler_tasks: Mutex<Option<ScheduledTaskGroup>>,
-    enqueue_tps_counter: TpsCounter,
-    dequeue_tps_counter: TpsCounter,
+    enqueue_tps_counter: TimerTpsCounter,
+    dequeue_tps_counter: TimerTpsCounter,
 }
 
 impl TimerMessageStore {
@@ -399,19 +262,19 @@ impl TimerMessageStore {
     pub fn runtime_backlog_metrics(&self) -> (HashMap<String, i64>, HashMap<i32, i64>) {
         let backlog_metrics = self.collect_backlog_metrics();
         self.timer_metrics
-            .replace_timing_distribution_snapshot(backlog_metrics.timer_backlog_distribution());
+            .replace_timing_distribution_snapshot(backlog_metrics.distribution_snapshot());
         (
-            backlog_metrics.normalized_topic_backlog(),
-            backlog_metrics.timer_backlog_distribution(),
+            backlog_metrics.topic_snapshot(),
+            backlog_metrics.distribution_snapshot(),
         )
     }
 
     pub fn get_enqueue_tps(&self) -> f32 {
-        self.enqueue_tps_counter.get_tps()
+        self.enqueue_tps_counter.get_tps(current_millis() as i64)
     }
 
     pub fn get_dequeue_tps(&self) -> f32 {
-        self.dequeue_tps_counter.get_tps()
+        self.dequeue_tps_counter.get_tps(current_millis() as i64)
     }
 
     pub fn is_should_running_dequeue(&self) -> bool {
@@ -483,8 +346,8 @@ impl TimerMessageStore {
             process_lock: AsyncMutex::new(()),
             scheduler_group: Mutex::new(None),
             scheduler_tasks: Mutex::new(None),
-            enqueue_tps_counter: TpsCounter::default(),
-            dequeue_tps_counter: TpsCounter::default(),
+            enqueue_tps_counter: TimerTpsCounter::default(),
+            dequeue_tps_counter: TimerTpsCounter::default(),
         }
     }
 
@@ -696,7 +559,7 @@ impl TimerMessageStore {
     fn refresh_timer_backlog_distribution(&self) {
         let backlog_metrics = self.collect_backlog_metrics();
         self.timer_metrics
-            .replace_timing_distribution_snapshot(backlog_metrics.timer_backlog_distribution());
+            .replace_timing_distribution_snapshot(backlog_metrics.distribution_snapshot());
     }
 
     fn check_and_revise_metrics(&self) {
@@ -706,7 +569,7 @@ impl TimerMessageStore {
         }
 
         let backlog_metrics = self.collect_backlog_metrics();
-        let actual_topic_backlog = backlog_metrics.normalized_topic_backlog();
+        let actual_topic_backlog = backlog_metrics.topic_snapshot();
         let current_topic_backlog = self.timer_metrics.get_timing_count_snapshot();
         let mut revised_topic_backlog = current_topic_backlog.clone();
         let mut candidate_topics = HashSet::new();
@@ -737,18 +600,18 @@ impl TimerMessageStore {
             self.timer_metrics.replace_timing_count_snapshot(revised_topic_backlog);
         }
         self.timer_metrics
-            .replace_timing_distribution_snapshot(backlog_metrics.timer_backlog_distribution());
+            .replace_timing_distribution_snapshot(backlog_metrics.distribution_snapshot());
     }
 
-    fn collect_backlog_metrics(&self) -> BacklogMetricsSnapshot {
+    fn collect_backlog_metrics(&self) -> TimerBacklogMetrics {
         let now_ms = self.floor_time_ms(current_millis() as i64);
-        let mut backlog_metrics = BacklogMetricsSnapshot::new(self.timer_metrics.timer_dist_list());
+        let mut backlog_metrics = TimerBacklogMetrics::new(self.timer_metrics.timer_dist_list());
         self.collect_unindexed_timer_queue_backlog(now_ms, &mut backlog_metrics);
         self.collect_indexed_timer_wheel_backlog(now_ms, &mut backlog_metrics);
         backlog_metrics
     }
 
-    fn collect_unindexed_timer_queue_backlog(&self, now_ms: i64, backlog_metrics: &mut BacklogMetricsSnapshot) {
+    fn collect_unindexed_timer_queue_backlog(&self, now_ms: i64, backlog_metrics: &mut TimerBacklogMetrics) {
         let Some(message_store) = self.default_message_store.as_ref() else {
             return;
         };
@@ -771,12 +634,12 @@ impl TimerMessageStore {
                 queue_offset = cq_unit.queue_offset + 1;
                 continue;
             };
-            backlog_metrics.observe_message(&message, now_ms);
+            observe_backlog_message(backlog_metrics, &message, now_ms);
             queue_offset = cq_unit.queue_offset + 1;
         }
     }
 
-    fn collect_indexed_timer_wheel_backlog(&self, now_ms: i64, backlog_metrics: &mut BacklogMetricsSnapshot) {
+    fn collect_indexed_timer_wheel_backlog(&self, now_ms: i64, backlog_metrics: &mut TimerBacklogMetrics) {
         let Some(message_store) = self.default_message_store.as_ref() else {
             return;
         };
@@ -813,7 +676,7 @@ impl TimerMessageStore {
                     );
                     continue;
                 };
-                backlog_metrics.observe_message(&message, now_ms);
+                observe_backlog_message(backlog_metrics, &message, now_ms);
             }
         }
     }
@@ -844,10 +707,8 @@ impl TimerMessageStore {
 
     fn recover_timer_log_len(&self, timer_checkpoint: &TimerCheckpoint, timer_log: &TimerLog) -> std::io::Result<i64> {
         let current_len = timer_log.len()? as i64;
-        let checkpoint_len = timer_checkpoint.last_timer_log_flush_pos().clamp(0, current_len);
-        let recovered_len = checkpoint_len - checkpoint_len.rem_euclid(TimerLogRecord::SIZE as i64);
-        let aligned_current_len = current_len - current_len.rem_euclid(TimerLogRecord::SIZE as i64);
-        let target_len = recovered_len.min(aligned_current_len);
+        let checkpoint_len = timer_checkpoint.last_timer_log_flush_pos();
+        let target_len = plan_recovered_timer_log_len(current_len, checkpoint_len);
         if target_len != current_len {
             warn!(
                 "revise timer log from {} to {} based on checkpoint flush position {}",
@@ -859,41 +720,33 @@ impl TimerMessageStore {
     }
 
     fn recover_read_time_ms(&self, checkpoint_read_time_ms: i64) -> i64 {
-        let now_floor = self.floor_time_ms(current_millis() as i64);
-        let ttl_floor = now_floor.saturating_sub(self.timer_wheel_window_ms());
-        let base = if checkpoint_read_time_ms <= 0 {
-            now_floor
-        } else {
-            self.floor_time_ms(checkpoint_read_time_ms)
-        };
-        base.max(ttl_floor)
+        self.timer_policy()
+            .recover_read_time_ms(checkpoint_read_time_ms, current_millis() as i64)
     }
 
     fn recover_queue_offset(&self, checkpoint_queue_offset: i64) -> i64 {
         let Some(message_store) = self.default_message_store.as_ref() else {
-            return checkpoint_queue_offset.max(0);
+            return clamp_queue_offset(checkpoint_queue_offset, None, None);
         };
         let consume_queue = message_store.find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0);
         let Some(consume_queue) = consume_queue else {
-            return checkpoint_queue_offset.max(0);
+            return clamp_queue_offset(checkpoint_queue_offset, None, None);
         };
         let min_offset = consume_queue.get_min_offset_in_queue();
         let max_offset = consume_queue.get_max_offset_in_queue();
-        if checkpoint_queue_offset < min_offset {
+        let recovered_offset = clamp_queue_offset(checkpoint_queue_offset, Some(min_offset), Some(max_offset));
+        if recovered_offset == min_offset && checkpoint_queue_offset < min_offset {
             warn!(
                 "revise timer queue offset from {} to consume queue min {}",
                 checkpoint_queue_offset, min_offset
             );
-            min_offset
-        } else if checkpoint_queue_offset > max_offset {
+        } else if recovered_offset == max_offset && checkpoint_queue_offset > max_offset {
             warn!(
                 "revise timer queue offset from {} to consume queue max {}",
                 checkpoint_queue_offset, max_offset
             );
-            max_offset
-        } else {
-            checkpoint_queue_offset
         }
+        recovered_offset
     }
 
     fn repair_timer_wheel(&self, timer_wheel: &TimerWheel, recovered_log_len: i64) -> std::io::Result<()> {
@@ -901,14 +754,7 @@ impl TimerMessageStore {
             if slot.num <= 0 {
                 return Slot::new_with_num_magic(0, 0, 0, 0, 0);
             }
-            let invalid = slot.first_pos < 0
-                || slot.last_pos < 0
-                || slot.first_pos >= recovered_log_len
-                || slot.last_pos >= recovered_log_len
-                || slot.first_pos > slot.last_pos
-                || slot.first_pos.rem_euclid(TimerLogRecord::SIZE as i64) != 0
-                || slot.last_pos.rem_euclid(TimerLogRecord::SIZE as i64) != 0;
-            if invalid {
+            if !timer_slot_is_valid(slot, recovered_log_len) {
                 warn!(
                     "clear invalid timer wheel slot time={} first={} last={} num={} against log len {}",
                     slot.time_ms, slot.first_pos, slot.last_pos, slot.num, recovered_log_len
@@ -1016,7 +862,7 @@ impl TimerMessageStore {
                             self.timer_metrics.add_timing_count(&real_topic, 1);
                         }
                     }
-                    self.enqueue_tps_counter.record(1);
+                    self.enqueue_tps_counter.record(1, current_millis() as i64);
                     queue_offset = cq_unit.queue_offset + 1;
                     self.curr_queue_offset.store(queue_offset, Ordering::Relaxed);
                     indexed += 1;
@@ -1145,7 +991,7 @@ impl TimerMessageStore {
                         #[cfg(feature = "observability")]
                         rocketmq_observability::metrics::timer::record_dequeue_total(real_topic.as_str());
                     }
-                    self.dequeue_tps_counter.record(1);
+                    self.dequeue_tps_counter.record(1, current_millis() as i64);
                     processed += 1;
                     continue;
                 }
@@ -1184,7 +1030,7 @@ impl TimerMessageStore {
             self.timer_metrics.add_timing_count(&delivered_topic, -1);
             #[cfg(feature = "observability")]
             rocketmq_observability::metrics::timer::record_dequeue_total(delivered_topic.as_str());
-            self.dequeue_tps_counter.record(1);
+            self.dequeue_tps_counter.record(1, current_millis() as i64);
             processed += 1;
         }
 
@@ -1339,10 +1185,6 @@ impl TimerMessageStore {
         }
     }
 
-    fn align_delivery_time_ms(&self, deliver_time_ms: i64, dequeue_cursor: i64) -> i64 {
-        self.ceil_time_ms(deliver_time_ms).max(dequeue_cursor)
-    }
-
     fn plan_timer_slot(
         &self,
         deliver_time_ms: i64,
@@ -1350,68 +1192,38 @@ impl TimerMessageStore {
         lower_bound_ms: i64,
         is_delete: bool,
     ) -> (i64, i32) {
-        let mut target_time_ms = deliver_time_ms;
-        let mut magic = if is_delete { MAGIC_DELETE } else { MAGIC_DEFAULT };
-        let roll_window_ms = self.timer_roll_window_ms();
-
-        if deliver_time_ms.saturating_sub(reference_time_ms) >= roll_window_ms {
-            magic |= MAGIC_ROLL;
-            let overflow_ms = deliver_time_ms
-                .saturating_sub(reference_time_ms)
-                .saturating_sub(roll_window_ms);
-            let near_boundary_ms = self.timer_roll_window_half_ms();
-            if overflow_ms < self.timer_roll_window_third_ms() {
-                target_time_ms = reference_time_ms.saturating_add(near_boundary_ms);
-            } else {
-                target_time_ms = reference_time_ms.saturating_add(roll_window_ms);
-            }
-        }
-
-        (self.align_delivery_time_ms(target_time_ms, lower_bound_ms), magic)
+        self.timer_policy().plan_slot(
+            deliver_time_ms,
+            reference_time_ms,
+            lower_bound_ms,
+            if is_delete { MAGIC_DELETE } else { MAGIC_DEFAULT },
+            MAGIC_ROLL,
+        )
     }
 
     fn floor_time_ms(&self, time_ms: i64) -> i64 {
-        let precision_ms = self.precision_ms();
-        time_ms.div_euclid(precision_ms) * precision_ms
+        self.timer_policy().floor_time_ms(time_ms)
     }
 
     fn ceil_time_ms(&self, time_ms: i64) -> i64 {
-        let precision_ms = self.precision_ms();
-        if time_ms.rem_euclid(precision_ms) == 0 {
-            time_ms
-        } else {
-            (time_ms.div_euclid(precision_ms) + 1) * precision_ms
-        }
+        self.timer_policy().ceil_time_ms(time_ms)
     }
 
     fn precision_ms(&self) -> i64 {
-        self.message_store_config.timer_precision_ms.max(1) as i64
-    }
-
-    fn timer_wheel_window_ms(&self) -> i64 {
-        self.precision_ms() * (TIMER_WHEEL_TTL_DAY as i64 * DAY_SECS as i64)
-    }
-
-    fn timer_roll_window_slots(&self) -> i64 {
-        let max_slots = (TIMER_WHEEL_TTL_DAY as usize * DAY_SECS as usize).saturating_sub(TIMER_BLANK_SLOTS as usize);
-        let configured = self.message_store_config.timer_roll_window_slot;
-        if configured < 2 || configured > max_slots {
-            max_slots as i64
-        } else {
-            configured as i64
-        }
+        self.timer_policy().precision_ms()
     }
 
     fn timer_roll_window_ms(&self) -> i64 {
-        self.timer_roll_window_slots().saturating_mul(self.precision_ms())
+        self.timer_policy().roll_window_ms()
     }
 
-    fn timer_roll_window_half_ms(&self) -> i64 {
-        (self.timer_roll_window_slots() / 2).saturating_mul(self.precision_ms())
-    }
-
-    fn timer_roll_window_third_ms(&self) -> i64 {
-        (self.timer_roll_window_slots() / 3).saturating_mul(self.precision_ms())
+    fn timer_policy(&self) -> TimerSchedulePolicy {
+        TimerSchedulePolicy::new(
+            self.message_store_config.timer_precision_ms,
+            TIMER_WHEEL_TTL_DAY as usize * DAY_SECS as usize,
+            TIMER_BLANK_SLOTS as usize,
+            self.message_store_config.timer_roll_window_slot,
+        )
     }
 
     fn should_running_enqueue(&self) -> bool {
@@ -1447,6 +1259,17 @@ pub fn build_delete_key(real_topic: &str, unique_key: &str) -> CheetahString {
     CheetahString::from_string(format!("{}_{}", real_topic, unique_key))
 }
 
+fn observe_backlog_message(backlog: &mut TimerBacklogMetrics, message: &MessageExt, now_ms: i64) {
+    let Some(deliver_time_ms) = parse_deliver_time_ms(message) else {
+        return;
+    };
+    let topic = message
+        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+        .map(|topic| topic.to_string())
+        .unwrap_or_else(|| message.topic().to_string());
+    backlog.observe(topic, deliver_time_ms, now_ms, is_delete_timer_message(message));
+}
+
 fn parse_deliver_time_ms(message: &MessageExt) -> Option<i64> {
     message
         .property(&CheetahString::from_static_str(TIMER_OUT_MS))
@@ -1473,20 +1296,6 @@ fn build_delete_key_for_message(message: &MessageExt) -> Option<CheetahString> {
 
 fn need_roll(magic: i32) -> bool {
     (magic & MAGIC_ROLL) != 0
-}
-
-fn read_i64(buffer: &[u8]) -> std::io::Result<i64> {
-    let bytes: [u8; 8] = buffer
-        .try_into()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "timer log i64 field size must be 8"))?;
-    Ok(i64::from_be_bytes(bytes))
-}
-
-fn read_i32(buffer: &[u8]) -> std::io::Result<i32> {
-    let bytes: [u8; 4] = buffer
-        .try_into()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "timer log i32 field size must be 4"))?;
-    Ok(i32::from_be_bytes(bytes))
 }
 
 #[cfg(test)]

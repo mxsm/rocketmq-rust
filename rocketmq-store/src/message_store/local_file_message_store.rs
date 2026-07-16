@@ -105,6 +105,7 @@ use tracing::warn;
 use rocketmq_store_local::commit_log::recovery_orchestration::drive_commit_log_recovery;
 use rocketmq_store_local::commit_log::recovery_orchestration::optimized_recovery_requested;
 use rocketmq_store_local::commit_log::recovery_orchestration::CommitLogRecoveryStep;
+use rocketmq_store_local::hook::HookRegistry;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -323,7 +324,7 @@ impl Drop for StoreLockGuard {
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
-    put_message_hook_list: Vec<Arc<dyn PutMessageHook + Send + Sync>>,
+    put_message_hook_list: HookRegistry<dyn PutMessageHook + Send + Sync>,
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     commit_log: ArcMut<CommitLog>,
 
@@ -545,7 +546,7 @@ impl LocalFileMessageStore {
         Ok(Self {
             message_store_config: message_store_config.clone(),
             broker_config,
-            put_message_hook_list: vec![],
+            put_message_hook_list: HookRegistry::new(),
             topic_config_table,
             // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
             commit_log: commit_log.clone(),
@@ -3883,8 +3884,8 @@ impl MessageStore for LocalFileMessageStore {
 
     fn get_put_message_hook_list(&self) -> Vec<Arc<dyn PutMessageHook>> {
         self.put_message_hook_list
-            .iter()
-            .cloned()
+            .snapshot()
+            .into_iter()
             .map(|hook| hook as Arc<dyn PutMessageHook>)
             .collect()
     }
