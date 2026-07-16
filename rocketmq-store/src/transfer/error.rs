@@ -12,16 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub type TransferResult<T> = Result<T, TransferError>;
-
-#[derive(Debug, thiserror::Error)]
-pub enum TransferError {
-    #[error("invalid transfer input: {0}")]
-    InvalidInput(String),
-    #[error("commitlog segment selection failed: {0}")]
-    SegmentSelection(String),
-    #[error("unsupported transfer segment source: {0}")]
-    UnsupportedSegmentSource(&'static str),
-    #[error("transfer I/O error: {0}")]
-    Io(#[from] std::io::Error),
-}
+pub use rocketmq_store_local::transfer::error::TransferError;
+pub use rocketmq_store_local::transfer::error::TransferResult;

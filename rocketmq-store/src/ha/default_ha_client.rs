@@ -19,7 +19,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::BufMut;
 use bytes::BytesMut;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
@@ -40,8 +39,6 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::message_store::MessageStore;
-use crate::ha::default_ha_connection::decode_transfer_header;
-use crate::ha::default_ha_connection::transfer_header_size;
 use crate::ha::flow_monitor::FlowMonitor;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
@@ -644,48 +641,36 @@ impl ReaderTask {
 
     async fn dispatch_read(&mut self) -> HAClientTaskResult<bool> {
         loop {
-            let header_size = transfer_header_size(self.enable_controller_mode);
-            let diff = self.buf.len().saturating_sub(self.dispatch_pos);
-            if diff < header_size {
-                self.compact();
-                return Ok(true);
-            }
-
-            let header = decode_transfer_header(
-                &self.buf[self.dispatch_pos..self.dispatch_pos + header_size],
-                self.enable_controller_mode,
-            )?;
-            let master_phy_offset = header.master_phy_offset;
-            let body_size = header.body_size;
-
             let slave_phy_offset = self.store.get_max_phy_offset();
-            if slave_phy_offset != 0 && slave_phy_offset != master_phy_offset {
-                return Err(HAClientError::Service(format!(
-                    "master pushed offset != slave max, slave: {}, master: {}",
-                    slave_phy_offset, master_phy_offset
-                )));
-            }
-
-            if diff < header_size + body_size {
+            let frame = rocketmq_store_local::ha::wire::plan_replica_frame(
+                &self.buf,
+                self.dispatch_pos,
+                self.enable_controller_mode,
+                slave_phy_offset,
+            )?;
+            let Some(frame) = frame else {
                 self.compact();
                 return Ok(true);
-            }
+            };
+            let body = &self.buf[frame.body_range.clone()];
 
-            let data_start = self.dispatch_pos + header_size;
-            let data_end = data_start + body_size;
-            let body = &self.buf[data_start..data_end];
-
-            if body_size > 0 {
+            if !body.is_empty() {
                 self.store
-                    .append_to_commit_log(master_phy_offset, body, 0, body_size as i32)
+                    .append_to_commit_log(
+                        frame.master_phy_offset,
+                        body,
+                        0,
+                        i32::try_from(body.len())
+                            .map_err(|_| HAClientError::Service("HA frame body exceeds i32".to_string()))?,
+                    )
                     .await?;
             }
 
-            Self::apply_master_confirm_offset(&self.store, header.confirm_offset);
+            Self::apply_master_confirm_offset(&self.store, frame.confirm_offset);
 
-            self.dispatch_pos = data_end;
+            self.dispatch_pos = frame.next_dispatch_position;
 
-            if body_size > 0 {
+            if !body.is_empty() {
                 let cur = self.store.get_max_phy_offset();
                 let _ = self.offset_tx.send(cur);
             }
@@ -699,10 +684,9 @@ impl ReaderTask {
 
         let min_phy_offset = store.get_min_phy_offset();
         let max_phy_offset = store.get_max_phy_offset().max(min_phy_offset);
-        store
-            .clone()
-            .mut_from_ref()
-            .set_confirm_offset(confirm_offset.clamp(min_phy_offset, max_phy_offset));
+        let confirm_offset =
+            rocketmq_store_local::ha::wire::clamp_confirm_offset(confirm_offset, min_phy_offset, max_phy_offset);
+        store.clone().mut_from_ref().set_confirm_offset(confirm_offset);
     }
 
     // Move the unconsumed data to the start of the buffer to save space.
@@ -783,12 +767,12 @@ impl WriterTask {
         enable_controller_mode: bool,
         reported_broker_id: i64,
     ) -> bytes::Bytes {
-        report_offset.clear();
-        report_offset.put_i64(max_off);
-        if enable_controller_mode {
-            report_offset.put_i64(reported_broker_id);
-        }
-        report_offset.split().freeze()
+        rocketmq_store_local::ha::wire::encode_offset_report(
+            report_offset,
+            max_off,
+            enable_controller_mode,
+            reported_broker_id,
+        )
     }
 }
 
@@ -801,6 +785,8 @@ pub enum HAClientError {
     Store(#[from] StoreError),
     #[error(transparent)]
     HAConnection(#[from] HAConnectionError),
+    #[error(transparent)]
+    Wire(#[from] rocketmq_store_local::ha::wire::HaWireError),
     #[error("Connection error: {0}")]
     Connection(String),
     #[error("Service error: {0}")]
@@ -823,8 +809,8 @@ mod tests {
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::ha::default_ha_connection::decode_transfer_header;
     use crate::ha::default_ha_connection::encode_transfer_header;
-    use crate::ha::default_ha_connection::CONTROLLER_TRANSFER_HEADER_SIZE;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
+    use rocketmq_store_local::ha::wire::CONTROLLER_TRANSFER_HEADER_SIZE;
 
     fn new_test_message_store(root: &Path) -> ArcMut<LocalFileMessageStore> {
         std::fs::create_dir_all(root).expect("create temp root dir");

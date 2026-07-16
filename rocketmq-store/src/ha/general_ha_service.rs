@@ -28,12 +28,7 @@ use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotifi
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::store_error::HAResult;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct HAAckedReplicaSnapshot {
-    pub slave_broker_id: Option<i64>,
-    pub slave_ack_offset: i64,
-}
+pub(crate) use rocketmq_store_local::ha::replication::HAAckedReplicaSnapshot;
 
 #[derive(Clone)]
 pub enum GeneralHAService {

@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05 已完成，继续 PR-M06-06 |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06 已完成，继续 PR-M06-07 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -105,11 +105,11 @@
 
 ### PR-M06-06：迁移 HA、Replication 与 Transfer
 
-- [ ] 入口：`[ARCH]` replication capability、ack 条件、leader/follower recovery 和 transfer wire 语义已冻结。
-- [ ] `[DEV]` 机械迁移 HA、replication、transfer 和相关 checkpoint adapter；background work 继续由 ServiceContext/TaskGroup 拥有。
-- [ ] `[TEST]` focused test：HA handshake/offset、replica catch-up、leader restart、transfer partial write和shutdown deadline。
-- [ ] `[REV]` 检查没有第二 WAL、没有 detached thread/task，HA 状态不泄漏到 store-api。
-- [ ] 回滚点：composition 选择旧 HA/transfer adapter；不回滚 CommitLog/flush owner或持久数据。
+- [x] 入口：`[ARCH]` replication capability、ack 条件、leader/follower recovery 和 transfer wire 语义已冻结。
+- [x] `[DEV]` 机械迁移 HA、replication、transfer 和相关 checkpoint adapter；background work 继续由 ServiceContext/TaskGroup 拥有。
+- [x] `[TEST]` focused test：HA handshake/offset、replica catch-up、leader restart、transfer partial write和shutdown deadline。
+- [x] `[REV]` 检查没有第二 WAL、没有 detached thread/task，HA 状态不泄漏到 store-api。
+- [x] 回滚点：composition 选择旧 HA/transfer adapter；不回滚 CommitLog/flush owner或持久数据。
 
 ### PR-M06-07：迁移 Timer、POP 与 Local Services
 
@@ -2304,3 +2304,37 @@ python scripts/arc_mut_guard.py
   前提下整理为一个 Issue-linked commit。可整体 revert PR-M06-05，但不得恢复 Local/Store 双 owner；已写 CQ/Index 文件无需数据迁移。
 - [x] `[INVENTORY]` PR-M06-05 父项关闭；82 个顶层工作包更新为 33 已完成、0 进行中、49 未开始，即 49 个尚未完成。
   M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-06。
+
+## M06-06 HA, replication, and transfer boundary extraction evidence
+
+- [x] `[ARCH/SCOPE]` 冻结 transfer header/offset report、replica frame 连续性、confirm-offset clamp、ACK 条件、
+  sync-state set、epoch transition、flow-control budget 与 partial-write 顺序；本包只迁移 backend-neutral owner，
+  不改变 CommitLog/CQ/Index 持久格式、HA wire 字节、默认 batch/flow 参数或 Rocks/Tiered 组合。
+- [x] `[DEV/OWNER]` Local 新增 canonical `transfer::{batch,error,planner,segment}` 与
+  `ha::{wire,flow,replication,transfer_engine,transfer_metrics}`；`ReplicationStateRoot`/`ReplicationProgress`
+  统一拥有 role/master、epoch、sync-state set、replica ACK snapshot、confirm-offset 与单调进度，transfer engine
+  统一拥有 bytes/vectored/sendfile partial-write driver 和 metrics。
+- [x] `[DEV/ADAPTER]` Store 旧 transfer/HA path 收敛为精确 re-export 或窄 adapter；socket/network、controller
+  Remoting DTO、`LocalFileMessageStore`/CommitLog append、配置投影、日志以及 `ServiceManager`/`ServiceContext`/
+  `TaskGroup` 生命周期仍留在 Store。`DefaultHAClient`、`DefaultHAConnection`、`AutoSwitchHAService`、
+  `DefaultHAService` 与 `GroupTransferService` 均委托 Local wire/state/progress/ACK 算法，不复制第二 owner。
+- [x] `[TEST]` `rocketmq-store-local --all-features` 的 126 个 unit tests、全部 integration/doctest，Local HA
+  planner/partial-write boundary 2/2，Store focused HA/transfer 22/22，以及 Store all-feature lib 531/531 全部通过；
+  M06 HA source contract 2/2 锁定唯一 Local owner、Store facade、依赖禁边与 runtime adapter 边界。
+- [x] `[RUNTIME/COMPAT]` enforcing runtime audit 通过；Local HA 不含 `tokio::spawn`、Remoting/controller DTO、
+  `LocalFileMessageStore` 或第二 WAL，生产 background work 继续由既有 `ServiceContext`/`TaskGroup` 拥有。
+  旧 public module/type identity、wire/storage bytes、feature/default 与 shutdown ownership 保持兼容。
+- [x] `[ARC/REV]` Local/Store strict all-target/all-feature Clippy、architecture dependency guard、workspace fmt/
+  Clippy、AGENTS routing 与 diff check 通过。13 个既有 occurrence 因 owner 搬迁发生同 item 一对一 fingerprint
+  relocation，按 ADR-013 精确批准；`current_milestone` 保持 M05，ledger 仍为 1,171 identities/3,233 occurrences，
+  零新增共享可变状态债务。
+- [x] `[VALIDATION NOTE]` typed-error hygiene 初次发现本包新增的 wire error 字符串化映射；已改为
+  `HAClientError::Wire` typed source 并复扫消除。本门禁仍非零退出，只复现未改动路径的 Broker source-stringification
+  1 项、MCP anyhow 8 项和缺失治理文档 2 项；`git diff --name-only main` 与这些路径交集为空，因此不计为本包通过，
+  也没有用 allowlist 掩盖。
+- [x] `[LEDGER]` `06-storage-local-compatibility-ledger.md` 冻结 M06-06 canonical owner、Store-only network/
+  runtime/effect ports、removal milestone、兼容规则和验证快照；M06-07/08 的 Timer/POP 与 store composition 未提前关闭。
+- [x] `[MAIN/ROLLBACK]` 候选分支从最新 main 创建；可整体 revert PR-M06-06，使 Store composition 指回旧
+  HA/transfer adapter，但不得恢复 Local/Store 双 owner，也不回滚 CommitLog/flush/CQ/Index owner；无磁盘数据迁移。
+- [x] `[INVENTORY]` PR-M06-06 父项关闭；82 个顶层工作包更新为 34 已完成、0 进行中、48 未开始，即
+  48 个尚未完成。M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-07。
