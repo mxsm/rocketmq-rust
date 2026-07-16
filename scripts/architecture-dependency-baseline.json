@@ -51,7 +51,6 @@
       "owner": "tieredstore",
       "remove_by": "M06"
     },
-    {"caller": "rocketmq-broker", "target": "rocketmq-client-rust", "kind": "normal", "path": "rocketmq-broker/Cargo.toml", "alias": "rocketmq_client_rust", "count": 1, "owner": "broker", "remove_by": "M07"},
     {"caller": "rocketmq-proxy", "target": "rocketmq-client-rust", "kind": "normal", "path": "rocketmq-proxy/Cargo.toml", "alias": "rocketmq_client_rust", "count": 1, "owner": "proxy", "remove_by": "M08"},
     {"caller": "rocketmq-admin-core", "target": "rocketmq-client-rust", "kind": "normal", "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml", "alias": "rocketmq_client_rust", "count": 1, "owner": "admin", "remove_by": "M07"},
     {"caller": "rocketmq-example", "target": "rocketmq-client-rust", "kind": "dev", "path": "rocketmq-example/Cargo.toml", "alias": "rocketmq_client_rust", "count": 1, "owner": "examples", "remove_by": "M09"},
@@ -107,15 +106,6 @@
     {"rule": "compatibility-manifest-burn-down", "caller": "rocketmq-common", "target": "rocketmq-protocol", "kind": "normal", "path": "rocketmq-common/Cargo.toml", "alias": "rocketmq_protocol", "count": 1, "owner": "common", "reason": "R0 protocol re-export edge activated by M04", "remove_by": "M09", "adr": "docs/architecture-refactor-design.md#54-目标依赖-dag"}
   ],
   "source_exceptions": [
-    {"path": "rocketmq-broker/src/broker_runtime.rs", "alias": "rocketmq_client_rust", "count": 1, "owner": "broker", "remove_by": "M07"},
-    {"path": "rocketmq-broker/src/failover/escape_bridge.rs", "alias": "rocketmq_client_rust", "count": 5, "owner": "broker", "remove_by": "M07"},
-    {"path": "rocketmq-broker/src/out_api/broker_outer_api.rs", "alias": "rocketmq_client_rust", "count": 5, "owner": "broker", "remove_by": "M07"},
-    {"path": "rocketmq-broker/src/processor/processor_service/pop_revive_service.rs", "alias": "rocketmq_client_rust", "count": 2, "owner": "broker", "remove_by": "M07"},
-    {"path": "rocketmq-broker/src/processor/query_assignment_processor.rs", "alias": "rocketmq_client_rust", "count": 3, "owner": "broker", "remove_by": "M07"},
-    {"path": "rocketmq-broker/src/topic/manager/topic_route_info_manager.rs", "alias": "rocketmq_client_rust", "count": 3, "owner": "broker", "remove_by": "M07"},
-    {"path": "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs", "alias": "rocketmq_client_rust", "count": 2, "owner": "broker", "remove_by": "M07"},
-    {"path": "rocketmq-broker/src/transaction/queue/get_result.rs", "alias": "rocketmq_client_rust", "count": 1, "owner": "broker", "remove_by": "M07"},
-    {"path": "rocketmq-broker/src/transaction/queue/transactional_message_bridge.rs", "alias": "rocketmq_client_rust", "count": 2, "owner": "broker", "remove_by": "M07"},
     {"path": "rocketmq-proxy/src/cluster.rs", "alias": "rocketmq_client_rust", "count": 14, "owner": "proxy", "remove_by": "M08"},
     {"path": "rocketmq-proxy/src/grpc/adapter.rs", "alias": "rocketmq_client_rust", "count": 2, "owner": "proxy", "remove_by": "M08"},
     {"path": "rocketmq-proxy/src/grpc/service.rs", "alias": "rocketmq_client_rust", "count": 2, "owner": "proxy", "remove_by": "M08"},

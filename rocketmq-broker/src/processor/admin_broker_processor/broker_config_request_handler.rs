@@ -738,6 +738,7 @@ mod tests {
     use rocketmq_remoting::connection::Connection;
     use rocketmq_remoting::net::channel::Channel;
     use rocketmq_remoting::net::channel::ChannelInner;
+    #[cfg(feature = "rocksdb_store")]
     use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
     use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;

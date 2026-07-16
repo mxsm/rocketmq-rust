@@ -36,16 +36,16 @@ impl LiteSharding {
             .topic_publish_info_table
             .get(parent_topic)
             .cloned();
-        let Some(publish_info) = publish_info.filter(|info| !info.message_queue_list.is_empty()) else {
+        let Some(publish_info) = publish_info.filter(|info| !info.message_queues().is_empty()) else {
             return current_broker;
         };
 
         let bucket = consistent_hash(
             java_string_hash_code(lite_topic.as_str()),
-            publish_info.message_queue_list.len(),
+            publish_info.message_queues().len(),
         );
         publish_info
-            .message_queue_list
+            .message_queues()
             .get(bucket)
             .map(|queue| queue.broker_name().clone())
             .unwrap_or(current_broker)

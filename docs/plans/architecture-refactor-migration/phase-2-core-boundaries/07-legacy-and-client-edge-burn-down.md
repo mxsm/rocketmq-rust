@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；PR-M07-01、PR-M07-02、PR-M07-03 已完成 |
+| 状态 | 进行中；PR-M07-01、PR-M07-02、PR-M07-03、PR-M07-04 已完成 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP15 `rocketmq-rust-drain`、WP18 `client-edge-burn-down`；完成 WP17 的 consumer 迁移 |
 | 前置条件 | model/protocol/transport/store-api canonical 边界稳定；Client allowlist/source guard 可用 |
@@ -74,12 +74,12 @@
 
 ### PR-M07-04：Broker Client 边清零
 
-- [ ] `[DEV]` 远程结果改用 model；本地 transaction/POP 改用 store-api read outcome。
-- [ ] `[DEV]` 建 Broker-owned `BrokerPublishRoute` 和 out-api send/pull/result adapter；TopicPublishInfo 留 Client。
-- [ ] `[DEV]` 迁 query assignment 分配算法、route projection、escape bridge 和 test-only fixture。
-- [ ] `[TEST]` 覆盖 send/pull/pop/transaction/route/query-assignment 差分和 all-targets 编译。
-- [ ] `[REV]` 检查 Broker manifest/source/normal closure无 Client/client-api，processor 不依赖 store facade。
-- [ ] 回滚点：按 result/route/assignment/read 投影切片回滚；不得新增 client-api 或 admin-core 绕行。
+- [x] `[DEV]` 远程结果改用 model；本地 transaction/POP 改用 store-api read outcome。
+- [x] `[DEV]` 建 Broker-owned `BrokerPublishRoute` 和 out-api send/pull/result adapter；TopicPublishInfo 留 Client。
+- [x] `[DEV]` 迁 query assignment 分配算法、route projection、escape bridge 和 test-only fixture。
+- [x] `[TEST]` 覆盖 send/pull/pop/transaction/route/query-assignment 差分和 all-targets 编译。
+- [x] `[REV]` 检查 Broker manifest/source/normal closure无 Client/client-api，processor 不依赖 store facade。
+- [x] 回滚点：按 result/route/assignment/read 投影切片回滚；不得新增 client-api 或 admin-core 绕行。
 
 ### PR-M07-05：Admin contract 与 Client adapter 收口
 
@@ -287,3 +287,32 @@ python scripts/arc_mut_guard.py
   processor facade、protocol contract、单 deadline 和 ServiceContext owner 必须保留，不得恢复 Client/admin registry 直接边。
 - [x] `[INVENTORY]` PR-M07-03 父项关闭；82 个顶层工作包更新为 43 已完成、0 阻塞、39 未开始。剩余分布为 M07 4、M08 6、
   M09 6、M10 5、M11 12、M12 6；M07 保持进行中，唯一下一工作包为 PR-M07-04 Broker Client 边清零。
+
+## PR-M07-04 Broker Client 边清零 evidence
+
+- [x] `[RESULT/READ OWNER]` Broker 远程 send/pull 统一返回 `rocketmq-model` 的 `SendResult`/`PullOutcome`；新增
+  `rocketmq-store-api::ReadOutcome<T>` 作为拥有型本地读取结果。transaction 与 POP 仅在 Broker-local store adapter 内接触
+  legacy `GetMessageResult`，解码后传递 `MessageExt` 所有权，不再借用 Client `PullResult` 或为记录补造 `ArcMut`。
+- [x] `[ROUTE/ADAPTER OWNER]` Broker-owned `BrokerPublishRoute` 独立承担 ordered/static/normal route projection、轮询与 broker
+  避让；out-api 的 request、raw response、send/pull 映射拆入 Broker 私有 adapter。Client 的 `TopicPublishInfo` 未搬入共享层，
+  escape bridge、lite sharding、runtime fixture 和 route cache 全部改用 Broker/model owner。
+- [x] `[ASSIGNMENT/DEPENDENCY]` query assignment 直接使用 model allocation contract/算法。Broker manifest、lockfile、源码外部
+  Client API 和 `cargo tree -p rocketmq-broker -e normal` 中的 `rocketmq-client-rust` 匹配均为 0；architecture baseline 删除 Broker
+  manifest 与 9 个 source 例外，workspace Client manifest consumer 基线由 3 收敛到 2。
+- [x] `[TEST/BEHAVIOR]` store-api 19 项、out-api 8 项、query assignment 10 项、transaction 6 项、POP revive 13 项、route 2 项和
+  RocksDB POP consumer 4 项聚焦测试通过；Broker default/all-feature all-targets 编译、Broker all-feature strict Clippy 与 RocksDB
+  feature strict Clippy 通过。`cargo test -p rocketmq-broker` 串行复核为 504 passed、25 failed、1 ignored；25 项是可在本包外独立
+  复现的既有 Broker 测试失败（以 Lite 配置键不匹配及既有 controller/lifecycle 用例为主），因此未把全包测试记录为通过。
+- [x] `[GOVERNANCE]` M07 Client-edge 合同 15 项、architecture baseline guard、1 clean/6 violation fixtures、architecture/ArcMut
+  guard 单测合计 98 项与 ArcMut 24 fixtures 通过；ArcMut 台账净减少 4 identities/10 occurrences，由 1,167/3,226 收敛到
+  1,163/3,216，9 个保留出现点按 ADR-013 一对一 relocation 批准，零新增共享可变债务。
+- [x] `[FINAL]` root workspace exact fmt 与 all-target/all-feature strict Clippy、AGENTS routing、`git diff --check` 通过；Clippy
+  仅输出不受 `-D warnings` 控制的 linker/future-incompat 提示。error architecture guard 仍只复现 main 既有 11 项（Broker 1、
+  MCP 8、缺失治理文档 2），该既有失败未计为通过。
+- [x] `[TARGET GAP]` target guard 仍为 incomplete：缺少 `rocketmq-proxy-core`、`rocketmq-proxy-cluster`、
+  `rocketmq-proxy-local` 3 个计划 crate，并有 153 项目标态差距（Client source 96、Client manifest 3、目标 DAG 直接边 52、
+  传递闭包边 2）。Client source 差距分布为 Proxy 36、Admin Core 35、Tauri backend 25、Web backend 3，分别交给
+  PR-M07-05、PR-M07-06、M08 与 M09 收口；Broker 不在剩余 Client 差距中。
+- [x] `[ROLLBACK/INVENTORY]` 回滚必须按 read outcome、out-api adapter、route、assignment 四个投影切片执行，保留 model/store-api
+  owner，且不得恢复 Broker Client 边或新增 client-api/admin-core 绕行。父项关闭后 82 个顶层工作包为 44 已完成、0 阻塞、
+  38 未开始；剩余分布为 M07 3、M08 6、M09 6、M10 5、M11 12、M12 6，唯一下一工作包为 PR-M07-05。

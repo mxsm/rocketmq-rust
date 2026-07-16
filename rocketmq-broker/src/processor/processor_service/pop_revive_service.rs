@@ -21,13 +21,10 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
 use cheetah_string::CheetahString;
 use futures::future::join_all;
 use futures::FutureExt;
 use parking_lot::Mutex;
-use rocketmq_client_rust::consumer::pull_result::PullResult;
-use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::message::message_decoder;
@@ -44,14 +41,14 @@ use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
-use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::AppendMessageStatus;
-use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::pop::ack_msg::AckMsg;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
+use rocketmq_store_api::GetStatus;
+use rocketmq_store_api::ReadOutcome;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -59,6 +56,7 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::metrics::pop_metrics_manager;
 use crate::processor::pop_message_processor::PopMessageProcessor;
+use crate::store_read::decode_read_outcome;
 
 /// Maximum number of concurrent in-flight revive requests
 const MAX_INFLIGHT_REVIVE_REQUESTS: usize = 3;
@@ -230,7 +228,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
     }
 
-    pub(crate) async fn get_revive_message(&self, offset: i64, queue_id: i32) -> Option<Vec<ArcMut<MessageExt>>> {
+    pub(crate) async fn get_revive_message(&self, offset: i64, queue_id: i32) -> Option<Vec<MessageExt>> {
         let pull_result = self
             .get_message(
                 &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
@@ -243,9 +241,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             .await?;
         if reach_tail(&pull_result, offset) {
             //nothing to do
-        } else if *pull_result.pull_status() == PullStatus::OffsetIllegal
-            || *pull_result.pull_status() == PullStatus::NoMatchedMsg
-        {
+        } else if is_offset_illegal_or_unmatched(pull_result.status()) {
             if !self.should_run_pop_revive.load(Ordering::Acquire) {
                 return None;
             }
@@ -254,10 +250,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
                 &self.revive_topic,
                 queue_id,
-                pull_result.next_begin_offset() as i64 - 1,
+                pull_result.next_begin_offset() - 1,
             );
         }
-        pull_result.msg_found_list().cloned()
+        pull_result.into_records()
     }
 
     pub async fn get_message(
@@ -268,7 +264,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         offset: i64,
         nums: i32,
         de_compress_body: bool,
-    ) -> Option<PullResult> {
+    ) -> Option<ReadOutcome<MessageExt>> {
         let message_store = self.broker_runtime_inner.message_store()?;
         let get_message_result = message_store
             .get_message(
@@ -276,33 +272,8 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 None,
             )
             .await;
-        if let Some(get_message_result_) = get_message_result {
-            let next_begin_offset = get_message_result_.next_begin_offset();
-            let min_offset = get_message_result_.min_offset();
-            let max_offset = get_message_result_.max_offset();
-            let pull_status = match get_message_result_.status().unwrap() {
-                GetMessageStatus::Found => {
-                    let found_list = decode_msg_list(get_message_result_, de_compress_body);
-                    (PullStatus::Found, Some(found_list))
-                }
-                GetMessageStatus::NoMatchedMessage => (PullStatus::NoMatchedMsg, None),
-
-                GetMessageStatus::NoMessageInQueue | GetMessageStatus::OffsetReset => (PullStatus::NoNewMsg, None),
-
-                GetMessageStatus::MessageWasRemoving
-                | GetMessageStatus::NoMatchedLogicQueue
-                | GetMessageStatus::OffsetFoundNull
-                | GetMessageStatus::OffsetOverflowBadly
-                | GetMessageStatus::OffsetTooSmall
-                | GetMessageStatus::OffsetOverflowOne => (PullStatus::OffsetIllegal, None),
-            };
-            Some(PullResult::new(
-                pull_status.0,
-                next_begin_offset as u64,
-                min_offset as u64,
-                max_offset as u64,
-                pull_status.1,
-            ))
+        if let Some(get_message_result) = get_message_result {
+            decode_read_outcome(get_message_result, de_compress_body)
         } else {
             if let Some(store) = self.broker_runtime_inner.message_store() {
                 let max_queue_offset = store.get_max_offset_in_queue(topic, queue_id);
@@ -1078,29 +1049,26 @@ impl<MS: MessageStore> PopReviveService<MS> {
     }
 }
 
-fn reach_tail(pull_result: &PullResult, offset: i64) -> bool {
-    *pull_result.pull_status() == PullStatus::NoNewMsg
-        || *pull_result.pull_status() == PullStatus::OffsetIllegal && offset == pull_result.max_offset() as i64
+fn reach_tail(read_outcome: &ReadOutcome<MessageExt>, offset: i64) -> bool {
+    is_no_new_message(read_outcome.status())
+        || is_offset_illegal_or_unmatched(read_outcome.status()) && offset == read_outcome.max_offset()
 }
 
-fn decode_msg_list(get_message_result: GetMessageResult, de_compress_body: bool) -> Vec<ArcMut<MessageExt>> {
-    let mut found_list = Vec::new();
-    for (index, bb) in get_message_result.message_mapped_list().iter().enumerate() {
-        let mut bytes = Bytes::copy_from_slice(bb.get_buffer());
-        let msg_ext = message_decoder::decode(&mut bytes, true, de_compress_body, false, false, false);
-        match msg_ext {
-            Some(msg_ext) => {
-                found_list.push(ArcMut::new(msg_ext));
-            }
-            None => {
-                error!(
-                    "decode_msg_list: decode msgExt is null, index={}, start_offset={}, size={}",
-                    index, bb.start_offset, bb.size
-                );
-            }
-        }
-    }
-    found_list
+fn is_no_new_message(status: GetStatus) -> bool {
+    matches!(status, GetStatus::NoMessageInQueue | GetStatus::OffsetReset)
+}
+
+fn is_offset_illegal_or_unmatched(status: GetStatus) -> bool {
+    matches!(
+        status,
+        GetStatus::NoMatchedMessage
+            | GetStatus::MessageWasRemoving
+            | GetStatus::NoMatchedLogicQueue
+            | GetStatus::OffsetFoundNull
+            | GetStatus::OffsetOverflowBadly
+            | GetStatus::OffsetTooSmall
+            | GetStatus::OffsetOverflowOne
+    )
 }
 
 struct ConsumeReviveObj {

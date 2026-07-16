@@ -775,6 +775,60 @@
       "from": "52414788a50b9eab17ad75e8",
       "to": "7a50859a05211e98ae51b6ff",
       "reason": "Extracting the client-backed route lookup into the transport adapter shifted the existing request-processor ArcMut field within the same struct without adding an occurrence"
+    },
+    {
+      "identity": "2278d410debc604733d1a654",
+      "from": "e7aebd764725945d0f11e190",
+      "to": "68303e8d7b3e8edfde882ba1",
+      "reason": "Migrating escape-bridge result imports changed adjacent tokens around the existing test glob import without adding an occurrence"
+    },
+    {
+      "identity": "71a366a01416590f034e75a4",
+      "from": "7105fb1d724c870bb4e292b6",
+      "to": "5cf05b5ce90918bb02a390eb",
+      "reason": "Migrating escape-bridge result imports shifted the existing ArcMut import within the same module without adding an occurrence"
+    },
+    {
+      "identity": "2dd50ce9ed358d3302c71100",
+      "from": "d7a2f1d04d667b26885353ab",
+      "to": "c57a804764738385eb080155",
+      "reason": "Extracting Broker out-api result adapters shifted the existing response mut_from_ref call within the same method without adding an occurrence"
+    },
+    {
+      "identity": "142e952df20aaa01c7178300",
+      "from": "fa14eb65080bd6a9db4b0248",
+      "to": "63eb864d6039ccc98f780921",
+      "reason": "Replacing POP Client pull results with owned store-api outcomes shifted the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "6df635fad6180ee1e7a4ad87",
+      "from": "8ff686726ee0a9c04a448c1b",
+      "to": "200327696bbc467ba7dd3300",
+      "reason": "Replacing the Client publish-route type shifted the first existing ArcMut route-cache field within the same struct without adding an occurrence"
+    },
+    {
+      "identity": "6df635fad6180ee1e7a4ad87",
+      "from": "4f029f1d2007a8dec1222963",
+      "to": "db304471f7949401de1f8eaf",
+      "reason": "Replacing the Client publish-route type shifted the second existing ArcMut route-cache field within the same struct without adding an occurrence"
+    },
+    {
+      "identity": "06108b436e195283a71b19b0",
+      "from": "87cf5c7b34260711dc2cc8b0",
+      "to": "e04aab519acf51460ab8dae0",
+      "reason": "Replacing the Client publish-route projection shifted the existing route mut_from_ref call within the same method without adding an occurrence"
+    },
+    {
+      "identity": "369b750bf8d2e1aaa9f561f1",
+      "from": "8424c9f8d2a2be048958e1ee",
+      "to": "60222c0ff3742dd639f974de",
+      "reason": "Replacing transaction Client pull results with store-api outcomes shifted the existing WeakArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "5d897fedb0e592f3c6306230",
+      "from": "215312fe8a29b6726059aea2",
+      "to": "90f7d694889c075a7c018060",
+      "reason": "Replacing transaction Client pull results with store-api outcomes shifted the existing ArcMut import without adding an occurrence"
     }
   ]
 }

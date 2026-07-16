@@ -12,15 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
-
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use rocketmq_client_rust::consumer::pull_status::PullStatus;
-use rocketmq_client_rust::producer::send_result::SendResult;
-use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -29,6 +24,9 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
+use rocketmq_model::result::PullStatus;
+use rocketmq_model::result::SendResult;
+use rocketmq_model::result::SendStatus;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
@@ -182,7 +180,7 @@ where
             .topic_route_info_manager()
             .try_to_find_topic_publish_info(message_to_put.get_topic())
             .await;
-        if !topic_publish_info.as_ref().is_some_and(|value| value.ok()) {
+        if !topic_publish_info.as_ref().is_some_and(|value| value.is_usable()) {
             warn!(
                 "putMessageToRemoteBroker: no route info of topic {} when escaping message, msgId={}",
                 message_to_put.get_topic(),
@@ -193,7 +191,7 @@ where
         let topic_publish_info = topic_publish_info.unwrap();
         let _mq_selected = if broker_name_to_send.as_ref().is_none_or(|value| !value.is_empty()) {
             let mq = topic_publish_info
-                .select_one_message_queue_by_broker(broker_name_to_send.as_ref())
+                .select_one_queue_avoiding(broker_name_to_send.as_ref())
                 .unwrap();
             message_to_put.message_ext_inner.queue_id = mq.queue_id();
             broker_name_to_send = Some(mq.broker_name().clone());
@@ -282,7 +280,7 @@ where
                 return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
             }
             let topic_publish_info = topic_publish_info.unwrap();
-            let mq_selected = topic_publish_info.select_one_message_queue();
+            let mq_selected = topic_publish_info.select_one_queue();
             if mq_selected.is_none() {
                 return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
             }
@@ -333,7 +331,7 @@ where
             }
             let topic_publish_info = topic_publish_info.unwrap();
 
-            if topic_publish_info.message_queue_list.is_empty() {
+            if topic_publish_info.message_queues().is_empty() {
                 return PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true);
             }
             //let message_queue = mq_selected.unwrap();
@@ -343,8 +341,8 @@ where
                 message_ext.message_ext_inner.store_host
             );
             let code = JavaStringHasher::hash_str(id.as_str());
-            let index = code as usize % topic_publish_info.message_queue_list.len();
-            let message_queue = topic_publish_info.message_queue_list[index].clone();
+            let index = code as usize % topic_publish_info.message_queues().len();
+            let message_queue = topic_publish_info.message_queues()[index].clone();
             message_ext.message_ext_inner.queue_id = message_queue.queue_id();
             let broker_name_to_send = message_queue.broker_name();
             let broker_addr_to_send = self
@@ -473,14 +471,10 @@ where
             {
                 Ok(pull_result) => {
                     if let Some(result) = pull_result.0 {
-                        if *result.pull_status() == PullStatus::Found
-                            && result.msg_found_list().is_some_and(|value| !value.is_empty())
+                        if result.pull_status() == PullStatus::Found
+                            && result.messages().is_some_and(|value| !value.is_empty())
                         {
-                            return (
-                                Some(result.msg_found_list().unwrap()[0].clone().deref().clone()),
-                                "".to_string(),
-                                false,
-                            );
+                            return (Some(result.messages().unwrap()[0].clone()), "".to_string(), false);
                         }
                     }
                 }
@@ -520,8 +514,8 @@ fn transform_send_result2put_result(send_result: Option<SendResult>) -> PutMessa
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_client_rust::producer::send_result::SendResult;
-    use rocketmq_client_rust::producer::send_status::SendStatus;
+    use rocketmq_model::result::SendResult;
+    use rocketmq_model::result::SendStatus;
 
     use super::*;
 

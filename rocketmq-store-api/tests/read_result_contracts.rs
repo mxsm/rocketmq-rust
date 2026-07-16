@@ -18,6 +18,7 @@ use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::LeasedBytes;
 use rocketmq_store_api::QueryResult;
 use rocketmq_store_api::ReadCacheState;
+use rocketmq_store_api::ReadOutcome;
 use rocketmq_store_api::SelectResult;
 
 #[test]
@@ -55,6 +56,19 @@ fn get_result_preserves_legacy_navigation_and_accounting_fields() {
     assert_eq!(vec![7, 8], result.queue_offsets);
     assert_eq!(9, result.next_begin_offset);
     assert!(result.suggest_pulling_from_replica);
+}
+
+#[test]
+fn read_outcome_owns_decoded_records_and_preserves_absence() {
+    let found = ReadOutcome::new(GetStatus::Found, 9, 2, 20, vec!["first", "second"]);
+    let absent = ReadOutcome::<String>::new(GetStatus::NoMessageInQueue, 20, 2, 20, None);
+
+    assert_eq!(GetStatus::Found, found.status());
+    assert_eq!(9, found.next_begin_offset());
+    assert_eq!(2, found.min_offset());
+    assert_eq!(20, found.max_offset());
+    assert_eq!(Some(&["first", "second"][..]), found.records());
+    assert_eq!(None, absent.records());
 }
 
 #[test]

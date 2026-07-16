@@ -705,6 +705,7 @@ pub(crate) mod pop;
 pub(crate) mod processor;
 pub(crate) mod schedule;
 pub(crate) mod slave;
+pub(crate) mod store_read;
 pub(crate) mod subscription;
 pub(crate) mod topic;
 mod transaction;

@@ -812,7 +812,7 @@
           "id": "ab7b36e73225c82ba5237e56",
           "fingerprint": "3f50ae58593a221c0712bf87",
           "item": "mod tests",
-          "line": 5281
+          "line": 5280
         }
       ],
       "owner": "broker",
@@ -1048,259 +1048,259 @@
           "id": "5689243529837bbe350032c7",
           "fingerprint": "c7fde3d9b289d1ecd7941a05",
           "item": "fn new_controller_mode_message_store",
-          "line": 5971
+          "line": 5970
         },
         {
           "id": "ebcabf7205b353d3880366f0",
           "fingerprint": "ad961926a6b3fa8e3506899e",
           "item": "fn create_test_channel",
-          "line": 6115
+          "line": 6114
         },
         {
           "id": "7aed31bc24c67a5d0bce3686",
           "fingerprint": "7d426f36baa73733431a25b9",
           "item": "fn create_test_channel",
-          "line": 6116
+          "line": 6115
         },
         {
           "id": "d44b46087e818d6af95c96f9",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn process_broker_request",
-          "line": 6125
+          "line": 6124
         },
         {
           "id": "f762524e4f274d53ec4505de",
           "fingerprint": "2a7f0d06c89bc24d8df69c4c",
           "item": "fn seed_lite_query_state",
-          "line": 6312
+          "line": 6311
         },
         {
           "id": "012e3f2183cea0ad640eb11a",
           "fingerprint": "87b232607b0d2a48219b514d",
           "item": "fn sync_namesrv_member_group",
-          "line": 6526
+          "line": 6525
         },
         {
           "id": "53895922ba560a60e96a66cd",
           "fingerprint": "619aa37796e9fdd172f9701b",
           "item": "fn new_test_controller_manager",
-          "line": 6628
+          "line": 6627
         },
         {
           "id": "3e9cf8ecdb4471e2f5c043f5",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase3_send_message_processor_writes_to_local_store",
-          "line": 7209
+          "line": 7208
         },
         {
           "id": "cd355c13f4ab1f843807f393",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase3_consumer_send_msg_back_writes_retry_delay_message",
-          "line": 7282
+          "line": 7281
         },
         {
           "id": "e9bcd3faaa3763567bb762df",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase3_topic_config_admin_processor_returns_decodable_bodies",
-          "line": 7382
+          "line": 7381
         },
         {
           "id": "ec2343bcb7cf8f29bdc8f896",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase4_consumer_offset_processors_round_trip_committed_offset",
-          "line": 7482
+          "line": 7481
         },
         {
           "id": "fbf728a698328d5502da4e9a",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_compatible",
-          "line": 7760
+          "line": 7759
         },
         {
           "id": "05647a770e7a227637cf743e",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase6_store_offset_and_consume_queue_queries_return_decodable_models",
-          "line": 7910
+          "line": 7909
         },
         {
           "id": "760e1c8c0ea40f728f46ba38",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn init_processor_routes_lite_subscription_ctl_requests_to_lite_processor",
-          "line": 8234
+          "line": 8233
         },
         {
           "id": "52b4cba5922e5886ceb4e952",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_broker_lite_info_returns_registry_aggregates",
-          "line": 8257
+          "line": 8256
         },
         {
           "id": "65667511bc840fc2ecbec66a",
           "fingerprint": "7ba3b523d9bc95f174067d42",
           "item": "fn get_broker_lite_info_reports_pop_lite_order_info_count",
-          "line": 8313
+          "line": 8312
         },
         {
           "id": "b81d2d6e32a99a4ef7b0323f",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_broker_lite_info_reports_pop_lite_order_info_count",
-          "line": 8335
+          "line": 8334
         },
         {
           "id": "9a7d81f4c25a65a3376ed5d3",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_parent_topic_info_returns_group_and_lite_counts",
-          "line": 8364
+          "line": 8363
         },
         {
           "id": "bad49e2a50036a4fa4bcefb8",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_parent_topic_info_rejects_non_lite_parent_topic",
-          "line": 8408
+          "line": 8407
         },
         {
           "id": "90a18f9bd2b0bea36ba898d3",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_lite_topic_info_returns_subscribers_for_matching_lite_topic",
-          "line": 8434
+          "line": 8433
         },
         {
           "id": "60bc8cfe66766dbb0b61f285",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_lite_topic_info_marks_current_broker_when_sharding_route_points_local_broker",
-          "line": 8480
+          "line": 8479
         },
         {
           "id": "eb429cb04d75dc76877c3f88",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_lite_topic_info_rejects_non_lite_parent_topic",
-          "line": 8514
+          "line": 8513
         },
         {
           "id": "8df1ecd8fa63284abe6d52ca",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_lite_client_info_returns_topics_for_bound_client",
-          "line": 8539
+          "line": 8538
         },
         {
           "id": "48273a19cccc479906e5072f",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_lite_client_info_rejects_non_lite_parent_topic",
-          "line": 8590
+          "line": 8589
         },
         {
           "id": "dd6fe2f4293fa25fc877c369",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_lite_group_info_returns_offset_wrapper_for_specific_lite_topic",
-          "line": 8619
+          "line": 8618
         },
         {
           "id": "5e3f4a81e10771eb80cac26c",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_lite_group_info_returns_topk_aggregates_for_group",
-          "line": 8667
+          "line": 8666
         },
         {
           "id": "769fbf7c5fc1294eb1759793",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn get_lite_group_info_uses_offset_table_entries_not_present_in_registry",
-          "line": 8717
+          "line": 8716
         },
         {
           "id": "3aba120e05c534547e6806cc",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn trigger_lite_dispatch_enqueues_events_for_target_client",
-          "line": 8767
+          "line": 8766
         },
         {
           "id": "f85096260167711d46ea4c83",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn trigger_lite_dispatch_enqueues_events_for_target_client",
-          "line": 8783
+          "line": 8782
         },
         {
           "id": "5a5ddf43a0d2586d0612d97e",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn trigger_lite_dispatch_without_client_id_enqueues_events_for_group_subscribers",
-          "line": 8810
+          "line": 8809
         },
         {
           "id": "b8c159e0004784b8f429e57f",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn trigger_lite_dispatch_respects_broker_max_client_event_count_fallback",
-          "line": 8855
+          "line": 8854
         },
         {
           "id": "826e5a7c0a37e23023f7550e",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn pop_lite_message_without_events_returns_polling_timeout",
-          "line": 8893
+          "line": 8892
         },
         {
           "id": "11f2d3af5f3debc90b59e782",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn pop_lite_message_without_events_suspends_when_polling_enabled",
-          "line": 8932
+          "line": 8931
         },
         {
           "id": "07110be8f7fc315d75387194",
           "fingerprint": "7ba3b523d9bc95f174067d42",
           "item": "fn trigger_lite_dispatch_wakes_suspended_pop_lite_request_and_advances_offset",
-          "line": 8993
+          "line": 8992
         },
         {
           "id": "b6e4a417ee8c4f47604ef10f",
           "fingerprint": "32eb972a2d86ec30eb1b3d83",
           "item": "fn trigger_lite_dispatch_wakes_suspended_pop_lite_request_and_advances_offset",
-          "line": 9017
+          "line": 9016
         },
         {
           "id": "8811d8c24d2202493e1142df",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn pop_lite_message_returns_dispatched_lmq_payload_and_advances_offset",
-          "line": 9137
+          "line": 9136
         },
         {
           "id": "689fbda134a7648e23053a7c",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn pop_lite_message_blocks_fifo_for_different_attempt_id",
-          "line": 9207
+          "line": 9206
         },
         {
           "id": "2460ceefa6c27cdba78be109",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn pop_lite_message_blocks_fifo_for_different_attempt_id",
-          "line": 9237
+          "line": 9236
         },
         {
           "id": "b6af9f9aae897b013bdb0cb9",
           "fingerprint": "51aa5aaaede0dc1805a6bd25",
           "item": "fn pop_lite_message_allows_same_attempt_id_to_continue_fifo_consumption",
-          "line": 9292
+          "line": 9291
         },
         {
           "id": "f5d7427637ad5b7236000c6f",
           "fingerprint": "834586d23941dffac7e14ca2",
           "item": "fn pop_lite_message_allows_same_attempt_id_to_continue_fifo_consumption",
-          "line": 9313
+          "line": 9312
         },
         {
           "id": "21c69b7487ceefd61305dd26",
           "fingerprint": "8467b8e74a44e2436129e395",
           "item": "fn run_metadata_migration_to_rocksdb_case",
-          "line": 9481
+          "line": 9480
         },
         {
           "id": "a3c29627e8d7d7e68fa8faae",
           "fingerprint": "e21707b42c3ee99cb2a5e67d",
           "item": "fn apply_message_store_role_change_promotes_store_to_master",
-          "line": 9615
+          "line": 9614
         },
         {
           "id": "4ff61cc699c2c34d1b75fdec",
           "fingerprint": "e21707b42c3ee99cb2a5e67d",
           "item": "fn apply_message_store_role_change_demotes_store_to_slave",
-          "line": 9648
+          "line": 9647
         }
       ],
       "owner": "broker",
@@ -1645,43 +1645,43 @@
           "id": "2b6ee8edd4a6435a6b3007b2",
           "fingerprint": "6503d57af85359294b26eef5",
           "item": "fn new_controller_mode_message_store",
-          "line": 5968
+          "line": 5967
         },
         {
           "id": "7bdb505a7ad57da940a75d7f",
           "fingerprint": "45d4fce8e4631b7aa89855d4",
           "item": "fn new_controller_mode_message_store",
-          "line": 5970
+          "line": 5969
         },
         {
           "id": "afc9d0ffc2784c3033759398",
           "fingerprint": "f110ae95bad9bdcfcf90572a",
           "item": "fn sync_namesrv_member_group",
-          "line": 6530
+          "line": 6529
         },
         {
           "id": "ddfaca7a6f1bf5a25f1f67cd",
           "fingerprint": "40a015e01b834947b96f055b",
           "item": "fn new_test_controller_manager",
-          "line": 6610
+          "line": 6609
         },
         {
           "id": "a6d849d95c55d553015a2970",
           "fingerprint": "bf4e063166641b2d52a3a0fb",
           "item": "fn start_controller_cluster",
-          "line": 6649
+          "line": 6648
         },
         {
           "id": "8cc23b3de51bbc52533c3ea8",
           "fingerprint": "41eb60eee0bd0e393e74d0df",
           "item": "fn bootstrap_broker_against_controller",
-          "line": 6888
+          "line": 6887
         },
         {
           "id": "202f38b25fdaf632d3be4009",
           "fingerprint": "13001c0e752116bd51c53721",
           "item": "fn shutdown_controller_cluster",
-          "line": 7016
+          "line": 7015
         }
       ],
       "owner": "broker",
@@ -1700,7 +1700,7 @@
           "id": "8895e852d36c6c4ae6c94696",
           "fingerprint": "a236422f00598205b2ff717d",
           "item": "fn new_controller_mode_message_store",
-          "line": 5971
+          "line": 5970
         }
       ],
       "owner": "broker",
@@ -1738,7 +1738,7 @@
           "id": "49d7d37cd53bb0360ffa9e98",
           "fingerprint": "fc95bb9dd1e409338174f0ca",
           "item": "mod tests",
-          "line": 5272
+          "line": 5271
         }
       ],
       "owner": "broker",
@@ -1776,7 +1776,7 @@
           "id": "76c8a751ce4984912169a2f1",
           "fingerprint": "7fc8adc251a6107872dc0c3c",
           "item": "fn new_controller_mode_message_store",
-          "line": 5968
+          "line": 5967
         }
       ],
       "owner": "broker",
@@ -1852,19 +1852,19 @@
           "id": "92609ec0385d9957c9b44465",
           "fingerprint": "c9fbc45e253b8c283e8e6c20",
           "item": "fn set_parent_topic_message_type",
-          "line": 6374
+          "line": 6373
         },
         {
           "id": "bc0c25747e32974c239bfcad",
           "fingerprint": "931bd603377355c5e604a759",
           "item": "fn set_parent_topic_lite_expiration",
-          "line": 6388
+          "line": 6387
         },
         {
           "id": "741868e10a001b222400dd90",
           "fingerprint": "fc2788313c97067fb0425e87",
           "item": "fn seed_lite_topic_publish_route",
-          "line": 6422
+          "line": 6421
         }
       ],
       "owner": "broker",
@@ -1981,10 +1981,10 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "e7aebd764725945d0f11e190",
-          "fingerprint": "995757a8f1d9489db542137a",
+          "id": "68303e8d7b3e8edfde882ba1",
+          "fingerprint": "c31c08686cbcb1bfe9f567f2",
           "item": "mod tests",
-          "line": 526
+          "line": 520
         }
       ],
       "owner": "broker",
@@ -2000,10 +2000,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "7105fb1d724c870bb4e292b6",
-          "fingerprint": "12c4f3a386f6e5ec7e73262c",
+          "id": "5cf05b5ce90918bb02a390eb",
+          "fingerprint": "4b5ca638cadae46f62d2b5cc",
           "item": "<module>",
-          "line": 32
+          "line": 30
         }
       ],
       "owner": "broker",
@@ -2022,13 +2022,13 @@
           "id": "39dedeef6192649d8ab56202",
           "fingerprint": "f1e3e11c57c2a457bc663923",
           "item": "struct EscapeBridge",
-          "line": 89
+          "line": 87
         },
         {
           "id": "5a9ae3b8f5e1181c84e7a47e",
           "fingerprint": "71909a0f1bdd1c0f54fed283",
           "item": "fn new",
-          "line": 93
+          "line": 91
         }
       ],
       "owner": "broker",
@@ -2974,7 +2974,7 @@
           "id": "70a0dc47a65ed1ef366bf92f",
           "fingerprint": "600ea6ef3e0e04c93cb77f99",
           "item": "mod tests",
-          "line": 824
+          "line": 825
         }
       ],
       "owner": "broker",
@@ -2993,31 +2993,31 @@
           "id": "722ec2b6282ec420ff76a949",
           "fingerprint": "a84b5e711b250c7639696af4",
           "item": "fn new_manager",
-          "line": 831
+          "line": 832
         },
         {
           "id": "59e369b48baebac73a4a99ef",
           "fingerprint": "0c90022bdbadcfdd3e0abfa1",
           "item": "fn consumer_offset_manager_persists_offsets_to_rocksdb_and_loads_after_restart",
-          "line": 1037
+          "line": 1038
         },
         {
           "id": "9c904132dd9a542001b883c6",
           "fingerprint": "507b9f9640d80f2d0ae706be",
           "item": "fn consumer_offset_manager_persists_offsets_to_rocksdb_and_loads_after_restart",
-          "line": 1062
+          "line": 1063
         },
         {
           "id": "d45cec3ce8e736180dc98060",
           "fingerprint": "0c90022bdbadcfdd3e0abfa1",
           "item": "fn consumer_offset_manager_clean_group_deletes_offsets_from_rocksdb",
-          "line": 1091
+          "line": 1092
         },
         {
           "id": "aebd27c96949c1eb443fee47",
           "fingerprint": "507b9f9640d80f2d0ae706be",
           "item": "fn consumer_offset_manager_clean_group_deletes_offsets_from_rocksdb",
-          "line": 1116
+          "line": 1117
         }
       ],
       "owner": "broker",
@@ -3067,13 +3067,13 @@
           "id": "2069a84d3228185c2b6137ad",
           "fingerprint": "64aeef953d73c7ceeb42fc2e",
           "item": "fn consumer_offset_manager_persists_offsets_to_rocksdb_and_loads_after_restart",
-          "line": 1058
+          "line": 1059
         },
         {
           "id": "09a6b8ad7035a2e70af6d7d0",
           "fingerprint": "12dc5bbd07ea50d9cebb81aa",
           "item": "fn consumer_offset_manager_clean_group_deletes_offsets_from_rocksdb",
-          "line": 1111
+          "line": 1112
         }
       ],
       "owner": "broker",
@@ -3155,7 +3155,7 @@
           "id": "8221031bf80988864a30e248",
           "fingerprint": "2f06ba0db547e4ac40ef846e",
           "item": "mod tests",
-          "line": 1862
+          "line": 1668
         }
       ],
       "owner": "broker",
@@ -3174,13 +3174,13 @@
           "id": "567d13f4e979a40d1426ab20",
           "fingerprint": "f465191d99c6619e9f085a81",
           "item": "fn new",
-          "line": 136
+          "line": 125
         },
         {
           "id": "e33da0be4d38b52596707b7f",
           "fingerprint": "421ad067bec500ede5c03ab2",
           "item": "fn new_with_hook",
-          "line": 150
+          "line": 139
         }
       ],
       "owner": "broker",
@@ -3199,7 +3199,7 @@
           "id": "97b1f12c6f1f6807819123e2",
           "fingerprint": "ed0b66ec973440a3d97fba14",
           "item": "<module>",
-          "line": 118
+          "line": 107
         }
       ],
       "owner": "broker",
@@ -3218,31 +3218,31 @@
           "id": "5f3a82dc54b5aa2bc74e812e",
           "fingerprint": "7474a0c706dd18e7182c4100",
           "item": "struct BrokerOuterAPI",
-          "line": 128
+          "line": 117
         },
         {
           "id": "751ba0e166ef698f935a6118",
           "fingerprint": "b697712b4fd53a8b261a3452",
           "item": "fn create_request",
-          "line": 170
+          "line": 159
         },
         {
           "id": "a2c81d66853294792bb76b20",
           "fingerprint": "f48adad5f5125150147ccdc3",
           "item": "fn start",
-          "line": 192
+          "line": 181
         },
         {
           "id": "9f9dd95f9422b66bcf769033",
           "fingerprint": "0ffd5b11d0497bc0ddd8b5c1",
           "item": "fn register_broker_all",
-          "line": 224
+          "line": 213
         },
         {
           "id": "bcc9d7c0344f003c8eb10fc2",
           "fingerprint": "09d1babfd28c6ab1216a55d3",
           "item": "fn register_single_topic_all",
-          "line": 339
+          "line": 328
         }
       ],
       "owner": "broker",
@@ -3261,7 +3261,7 @@
           "id": "4b8c5bd3e19be3adaeebbe06",
           "fingerprint": "f2d86483675652fed9ff45b3",
           "item": "fn rpc_response_body_as_bytes",
-          "line": 798
+          "line": 787
         }
       ],
       "owner": "broker",
@@ -3277,10 +3277,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "d7a2f1d04d667b26885353ab",
-          "fingerprint": "41f2cdfc6c8fb2cfdc2aba69",
+          "id": "c57a804764738385eb080155",
+          "fingerprint": "57b465079744c845f1f6cded",
           "item": "fn close_channel",
-          "line": 1618
+          "line": 1586
         }
       ],
       "owner": "broker",
@@ -3524,73 +3524,73 @@
           "id": "6a5f588027f537f2012ef292",
           "fingerprint": "ad961926a6b3fa8e3506899e",
           "item": "fn create_test_channel",
-          "line": 812
+          "line": 813
         },
         {
           "id": "d1b553f5936edd5bfec74057",
           "fingerprint": "7d426f36baa73733431a25b9",
           "item": "fn create_test_channel",
-          "line": 813
+          "line": 814
         },
         {
           "id": "681c4ba7e2963e225cabf174",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn set_commitlog_read_mode_updates_store_config",
-          "line": 872
+          "line": 873
         },
         {
           "id": "44e28a71823dd9f7df0b00fe",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn set_commitlog_read_mode_updates_store_config",
-          "line": 893
+          "line": 894
         },
         {
           "id": "bd94e2de28d88d4e3d4cc00a",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn update_broker_config_applies_supported_runtime_properties",
-          "line": 923
+          "line": 924
         },
         {
           "id": "3380e5abfb2fb1e932b28731",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn update_broker_config_rejects_unsupported_or_invalid_keys",
-          "line": 953
+          "line": 954
         },
         {
           "id": "42b3fe05df03ef1859a277d0",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn update_broker_config_rejects_unsupported_or_invalid_keys",
-          "line": 970
+          "line": 971
         },
         {
           "id": "7f0dd913b579b06691d597c2",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn export_rocksdb_config_without_rocksdb_returns_not_supported",
-          "line": 994
+          "line": 995
         },
         {
           "id": "287c5351521112dd50f536f7",
           "fingerprint": "7398fa5542b0fb900ed3ed9e",
           "item": "fn export_rocksdb_config_to_json_writes_requested_json_files",
-          "line": 1033
+          "line": 1034
         },
         {
           "id": "e75c94a00b4f0ecaa2772d72",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn export_rocksdb_config_to_json_writes_requested_json_files",
-          "line": 1067
+          "line": 1068
         },
         {
           "id": "5402e94fd81c6e5f19f697dc",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn switch_timer_engine_accepts_file_time_wheel_and_rejects_rocksdb",
-          "line": 1109
+          "line": 1110
         },
         {
           "id": "db00281e459e68acb342c45b",
           "fingerprint": "8365a29f2e0b194a44c8c250",
           "item": "fn switch_timer_engine_accepts_file_time_wheel_and_rejects_rocksdb",
-          "line": 1130
+          "line": 1131
         }
       ],
       "owner": "broker",
@@ -3628,7 +3628,7 @@
           "id": "6d8710f2b39cec8112884bc4",
           "fingerprint": "f6aa702d2f2fe84c94493c2c",
           "item": "mod tests",
-          "line": 747
+          "line": 748
         }
       ],
       "owner": "broker",
@@ -3777,7 +3777,7 @@
           "id": "5d9006742c3f2b744aa8086b",
           "fingerprint": "39d89d0e12ba83f496be8b14",
           "item": "fn export_rocksdb_config_to_json_writes_requested_json_files",
-          "line": 1055
+          "line": 1056
         }
       ],
       "owner": "broker",
@@ -8736,7 +8736,7 @@
           "id": "8bf3f8c3bde8bc9ff5deb534",
           "fingerprint": "be9931ad72a080622023ec77",
           "item": "mod tests",
-          "line": 1149
+          "line": 1117
         }
       ],
       "owner": "broker",
@@ -8755,13 +8755,7 @@
           "id": "529306365dcd7f8527f82186",
           "fingerprint": "e4222cc5b41a6946e1a2a583",
           "item": "fn add_retry_topic_if_not_exist",
-          "line": 213
-        },
-        {
-          "id": "33f1425a483caaa93bee0e51",
-          "fingerprint": "66290360b355e919014b7434",
-          "item": "fn decode_msg_list",
-          "line": 1093
+          "line": 211
         }
       ],
       "owner": "broker",
@@ -8777,10 +8771,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "fa14eb65080bd6a9db4b0248",
-          "fingerprint": "d6f720fae004a5e38e5832b7",
+          "id": "63eb864d6039ccc98f780921",
+          "fingerprint": "8db402e0e424b019db5d0de1",
           "item": "<module>",
-          "line": 46
+          "line": 43
         }
       ],
       "owner": "broker",
@@ -8799,43 +8793,31 @@
           "id": "c6eafe013eb1c9079b8d7f3c",
           "fingerprint": "b467ef1eb4530d360b4e21ca",
           "item": "struct PopReviveService",
-          "line": 75
+          "line": 73
         },
         {
           "id": "44a93d7efd7ddb5c3f587f4f",
           "fingerprint": "16da3e21f2d849b6151d0296",
           "item": "fn new",
-          "line": 89
-        },
-        {
-          "id": "71ba8ea93896c53c8e4859d0",
-          "fingerprint": "0504b7b96404f53351e87b87",
-          "item": "fn get_revive_message",
-          "line": 233
+          "line": 87
         },
         {
           "id": "2e10586c7acd37eda9473e25",
           "fingerprint": "aaa44446a6aef65913e54d50",
           "item": "fn start",
-          "line": 320
+          "line": 291
         },
         {
           "id": "33ae4398796d1baa43d250ee",
           "fingerprint": "929ebab0e925f0c8956396ae",
           "item": "fn merge_and_revive",
-          "line": 743
+          "line": 714
         },
         {
           "id": "ce9b1b12dedc07fcb3354257",
           "fingerprint": "42258d3cd6f23c6cc04c0b90",
           "item": "fn revive_msg_from_ck",
-          "line": 931
-        },
-        {
-          "id": "a87e2df18f727e04fc6a8ec0",
-          "fingerprint": "4aee9eb79c290e9b68457ccc",
-          "item": "fn decode_msg_list",
-          "line": 1086
+          "line": 902
         }
       ],
       "owner": "broker",
@@ -8854,7 +8836,7 @@
           "id": "9b3a5811042ad5f63395d576",
           "fingerprint": "02c6142b24f749813c2571e4",
           "item": "fn re_put_ck",
-          "line": 926
+          "line": 897
         }
       ],
       "owner": "broker",
@@ -9110,7 +9092,7 @@
           "id": "08be2299b6e6ba93e88d7a50",
           "fingerprint": "59a3cbceeb7b13b1678da867",
           "item": "mod tests",
-          "line": 518
+          "line": 517
         }
       ],
       "owner": "broker",
@@ -9129,7 +9111,7 @@
           "id": "eb7adebece6c6ad8a35fd2f5",
           "fingerprint": "76ecaae1196aa4a968807fa2",
           "item": "<module>",
-          "line": 42
+          "line": 41
         }
       ],
       "owner": "broker",
@@ -9148,13 +9130,13 @@
           "id": "9ddb0b0b65df4023b0d9acab",
           "fingerprint": "21b67ce4484000f22adc88c2",
           "item": "struct QueryAssignmentProcessor",
-          "line": 69
+          "line": 68
         },
         {
           "id": "89111264b9a81847893f892f",
           "fingerprint": "c1a5d4336979d8ceba89d7b1",
           "item": "fn new",
-          "line": 105
+          "line": 104
         }
       ],
       "owner": "broker",
@@ -9173,7 +9155,7 @@
           "id": "49e6078ea92644a5612a6a28",
           "fingerprint": "78e8d0e3318496eb8030e014",
           "item": "<module>",
-          "line": 41
+          "line": 40
         }
       ],
       "owner": "broker",
@@ -9192,25 +9174,25 @@
           "id": "5bb5fbc9b99213ba17b8e43e",
           "fingerprint": "f20c4029acdc5537be4b952b",
           "item": "fn process_request",
-          "line": 79
+          "line": 78
         },
         {
           "id": "5e4537054f5a37413400992a",
           "fingerprint": "1190f1521118c0092908349a",
           "item": "fn process_request_inner",
-          "line": 137
+          "line": 136
         },
         {
           "id": "001c83b583fdd3a5d81191b7",
           "fingerprint": "4c674622fd56f62a827363b0",
           "item": "fn query_assignment",
-          "line": 165
+          "line": 164
         },
         {
           "id": "63689a81a7fb6665eb27fc7d",
           "fingerprint": "11e8cdac94d6fd9c6317d70c",
           "item": "fn set_message_request_mode",
-          "line": 448
+          "line": 447
         }
       ],
       "owner": "broker",
@@ -11439,25 +11421,25 @@
           "id": "6e4987e1015a0fb3e6993dd4",
           "fingerprint": "18835d158daabf3d329402fa",
           "item": "fn new",
-          "line": 76
+          "line": 75
         },
         {
           "id": "6b75f566fb194d9409f21018",
           "fingerprint": "41740f08e6fc18e8dd0d2aeb",
           "item": "fn new",
-          "line": 77
+          "line": 76
         },
         {
           "id": "e6c863adbe25bb6fab315d98",
           "fingerprint": "a4e644e91e56a7d6923f8c32",
           "item": "fn new",
-          "line": 78
+          "line": 77
         },
         {
           "id": "e0ea561348f7c1d893b43653",
           "fingerprint": "f752bbb635a562e1db2c5851",
           "item": "fn new",
-          "line": 79
+          "line": 78
         }
       ],
       "owner": "broker",
@@ -11476,7 +11458,7 @@
           "id": "324ddfe2023e4f39b847b1c2",
           "fingerprint": "a18476b4cd9b006627cbf6ca",
           "item": "<module>",
-          "line": 33
+          "line": 30
         }
       ],
       "owner": "broker",
@@ -11495,37 +11477,37 @@
           "id": "ec59d1697ee9c14859370a2d",
           "fingerprint": "7330763dd4cc3cb43f2ff203",
           "item": "struct TopicRouteInfoManager",
-          "line": 47
+          "line": 46
         },
         {
           "id": "f55b3139a383e47f28ee86c0",
           "fingerprint": "6ad5bc76a129e7681ad5c6c7",
           "item": "struct TopicRouteInfoManager",
+          "line": 48
+        },
+        {
+          "id": "200327696bbc467ba7dd3300",
+          "fingerprint": "663e09ded3f099dd2f77a922",
+          "item": "struct TopicRouteInfoManager",
           "line": 49
         },
         {
-          "id": "8ff686726ee0a9c04a448c1b",
-          "fingerprint": "0090fd6dff22df5634b97cab",
+          "id": "db304471f7949401de1f8eaf",
+          "fingerprint": "bbf292ebcf96cdb6e9e25b56",
           "item": "struct TopicRouteInfoManager",
           "line": 50
-        },
-        {
-          "id": "4f029f1d2007a8dec1222963",
-          "fingerprint": "deb37b10d807fc5280457f4c",
-          "item": "struct TopicRouteInfoManager",
-          "line": 51
         },
         {
           "id": "465b44de9a8596b5b9233bd1",
           "fingerprint": "9e6c94bee503cc16588ad18c",
           "item": "struct TopicRouteInfoManager",
-          "line": 52
+          "line": 51
         },
         {
           "id": "1c3bb3e722c472b0b9542b35",
           "fingerprint": "4e347ab555e4793756c33dff",
           "item": "fn new",
-          "line": 73
+          "line": 72
         }
       ],
       "owner": "broker",
@@ -11544,31 +11526,31 @@
           "id": "18d34c075c0bf08e6a5e86de",
           "fingerprint": "fdf612572bdf9f299c09f372",
           "item": "fn clean_none_route_topic",
-          "line": 232
+          "line": 231
         },
         {
           "id": "d91dbeae194dd13456099eb8",
           "fingerprint": "4e1166118cd5d7f93aa849d5",
           "item": "fn update_subscribe_info_table",
-          "line": 252
+          "line": 251
         },
         {
           "id": "102031d8a0507f5b1979bc11",
           "fingerprint": "70cc82689110bb25394e009c",
           "item": "fn update_topic_route_table",
-          "line": 272
+          "line": 271
         },
         {
           "id": "b398c18f5a296ebbf1aadee1",
           "fingerprint": "38000162422eb7e87e62f0bf",
           "item": "fn update_topic_route_table",
-          "line": 285
+          "line": 283
         },
         {
-          "id": "87cf5c7b34260711dc2cc8b0",
-          "fingerprint": "e5bd5c285d0dcfc7f037f16d",
+          "id": "e04aab519acf51460ab8dae0",
+          "fingerprint": "39a4904e9f58d28949fcde81",
           "item": "fn update_topic_publish_info",
-          "line": 292
+          "line": 290
         }
       ],
       "owner": "broker",
@@ -11832,86 +11814,11 @@
           "id": "0df418b2bfa1eb375484df4b",
           "fingerprint": "ceb7426db206149efff3aa79",
           "item": "mod tests",
-          "line": 1089
+          "line": 1103
         }
       ],
       "owner": "broker",
       "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "2aa268e3970a7d785cd1b357",
-      "path": "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "912386fe49963f1825e6ddda",
-          "fingerprint": "3403bd02e9990eef4885382a",
-          "item": "fn transaction_check_uses_latest_op_message_timestamp_when_ops_exist",
-          "line": 1122
-        },
-        {
-          "id": "09b4e099e399edc46bf1f040",
-          "fingerprint": "cd7271c6fdafb714af9359e7",
-          "item": "fn transaction_check_uses_latest_op_message_timestamp_when_ops_exist",
-          "line": 1130
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "f3a5cb54b78e6a3b50c9264e",
-      "path": "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "83a412956ef8d724c1fb65a7",
-          "fingerprint": "eb6d1d88f60d4057ea97e2eb",
-          "item": "<module>",
-          "line": 35
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "eff3a7accc24f1ea12a9f4fd",
-      "path": "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "a15c5ab8f3a86beb40d573db",
-          "fingerprint": "f40d8a859a8df8eee2a23075",
-          "item": "fn is_check_needed",
-          "line": 637
-        },
-        {
-          "id": "bed043af907bbcc649351cb4",
-          "fingerprint": "5d9f5d3d80a3f0cddd5701d2",
-          "item": "fn transaction_check_needed",
-          "line": 962
-        },
-        {
-          "id": "21a4952e9ba42446e3813c57",
-          "fingerprint": "e554f12cbbdc45db3f47d690",
-          "item": "fn transaction_check_needed",
-          "line": 968
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
       "remove_by": "M05",
       "adr": "ADR-002"
     },
@@ -11923,10 +11830,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "8424c9f8d2a2be048958e1ee",
-          "fingerprint": "08a014f2ba676726c9756a65",
+          "id": "60222c0ff3742dd639f974de",
+          "fingerprint": "7464960cd9ce9731e83c7154",
           "item": "<module>",
-          "line": 36
+          "line": 33
         }
       ],
       "owner": "broker",
@@ -11945,26 +11852,7 @@
           "id": "8104b9edcf40582040c04b87",
           "fingerprint": "ab8b7357dcfad74910945f80",
           "item": "fn set_transactional_op_batch_service_start",
-          "line": 88
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "4ca7fe79bd803bf204a6d1b1",
-      "path": "rocketmq-broker/src/transaction/queue/transactional_message_bridge.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "60bc1d4c11f1579b88727649",
-          "fingerprint": "a2c790d604c2aeee49ca5911",
-          "item": "fn get_message",
-          "line": 182
+          "line": 108
         }
       ],
       "owner": "broker",
@@ -11980,10 +11868,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "215312fe8a29b6726059aea2",
-          "fingerprint": "7661242dac90daec29a47411",
+          "id": "90f7d694889c075a7c018060",
+          "fingerprint": "a22c599ab4b2df726111ae8b",
           "item": "<module>",
-          "line": 39
+          "line": 36
         }
       ],
       "owner": "broker",
@@ -12002,19 +11890,19 @@
           "id": "dbe8571cee0d6b00b91bc297",
           "fingerprint": "b0941b820159bfd879a40a36",
           "item": "struct TransactionalMessageBridge",
-          "line": 54
+          "line": 51
         },
         {
           "id": "e6971ba1dde79d577dea1c12",
           "fingerprint": "1fe88213f7fb3cfc3eb42806",
           "item": "fn new",
-          "line": 61
+          "line": 58
         },
         {
           "id": "deaa0db94be5c940fd67b30d",
           "fingerprint": "6a1e1f826db30130ada0a57e",
           "item": "fn select_topic_config",
-          "line": 205
+          "line": 167
         }
       ],
       "owner": "broker",
@@ -12033,7 +11921,7 @@
           "id": "3ebee11f3316e7dc0247f23e",
           "fingerprint": "9f09f59d6886d07b7235519b",
           "item": "fn put_message_return_result",
-          "line": 369
+          "line": 331
         }
       ],
       "owner": "broker",

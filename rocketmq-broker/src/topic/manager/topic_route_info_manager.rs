@@ -21,9 +21,6 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_client_rust::factory::mq_client_instance::topic_route_data2topic_publish_info;
-use rocketmq_client_rust::factory::mq_client_instance::topic_route_data2topic_subscribe_info;
-use rocketmq_client_rust::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -37,6 +34,8 @@ use tracing::info;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::topic::route::topic_route_to_subscribe_queues;
+use crate::topic::route::BrokerPublishRoute;
 
 const GET_TOPIC_ROUTE_TIMEOUT: u64 = 3000;
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
@@ -47,7 +46,7 @@ pub(crate) struct TopicRouteInfoManager<MS: MessageStore> {
     pub(crate) topic_route_table: ArcMut<HashMap<CheetahString /* Topic */, TopicRouteData>>,
     pub(crate) broker_addr_table:
         ArcMut<HashMap<CheetahString /* Broker Name */, HashMap<u64 /* brokerId */, CheetahString /* address */>>>,
-    pub(crate) topic_publish_info_table: ArcMut<HashMap<CheetahString /* topic */, TopicPublishInfo>>,
+    pub(crate) topic_publish_info_table: ArcMut<HashMap<CheetahString /* topic */, BrokerPublishRoute>>,
     pub(crate) topic_subscribe_info_table: ArcMut<HashMap<CheetahString /* topic */, HashSet<MessageQueue>>>,
     pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     running: Arc<AtomicBool>,
@@ -235,7 +234,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
     fn update_subscribe_info_table(&self, topic: CheetahString, topic_route_data: &TopicRouteData) -> bool {
         let mut tmp = TopicRouteData::from_existing(topic_route_data);
         tmp.topic_queue_mapping_by_broker = None;
-        let new_subscribe_info = topic_route_data2topic_subscribe_info(topic.as_str(), &tmp);
+        let new_subscribe_info = topic_route_to_subscribe_queues(topic.as_str(), &tmp);
         let old_subscribe_info = self
             .topic_subscribe_info_table
             .get(&topic)
@@ -272,8 +271,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
                 .mut_from_ref()
                 .insert(bd.broker_name().clone(), bd.broker_addrs().clone());
         }
-        let mut publish_info = topic_route_data2topic_publish_info(topic.as_str(), topic_route_data);
-        publish_info.have_topic_router_info = true;
+        let publish_info = BrokerPublishRoute::from_topic_route_data(topic.as_str(), topic_route_data);
         self.update_topic_publish_info(&topic, publish_info);
 
         let clone_topic_route_data = TopicRouteData::from_existing(topic_route_data);
@@ -288,7 +286,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
     }
 
     #[inline]
-    fn update_topic_publish_info(&self, topic: &CheetahString, info: TopicPublishInfo) {
+    fn update_topic_publish_info(&self, topic: &CheetahString, info: BrokerPublishRoute) {
         self.topic_publish_info_table.mut_from_ref().insert(topic.clone(), info);
     }
 
@@ -296,15 +294,15 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
     fn is_need_update_topic_route_info(&self, topic: &CheetahString) -> bool {
         let prev = self.topic_publish_info_table.get(topic);
         if let Some(prev) = prev {
-            !prev.ok()
+            !prev.is_usable()
         } else {
             true
         }
     }
 
-    pub async fn try_to_find_topic_publish_info(&self, topic: &CheetahString) -> Option<TopicPublishInfo> {
+    pub async fn try_to_find_topic_publish_info(&self, topic: &CheetahString) -> Option<BrokerPublishRoute> {
         let mut topic_publish_info = self.topic_publish_info_table.get(topic).cloned();
-        if topic_publish_info.is_none() || !topic_publish_info.as_ref().unwrap().ok() {
+        if topic_publish_info.is_none() || !topic_publish_info.as_ref().unwrap().is_usable() {
             self.update_topic_route_info_from_name_server_ext(topic, true, false)
                 .await;
             topic_publish_info = self.topic_publish_info_table.get(topic).cloned();

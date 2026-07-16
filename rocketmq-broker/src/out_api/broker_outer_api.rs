@@ -16,31 +16,26 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::out_api::pull::build_pull_message_request;
+use crate::out_api::pull::decode_pull_response;
+use crate::out_api::pull::process_pull_response;
+use crate::out_api::send::build_send_message_request;
+use crate::out_api::send::process_send_response;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dns_lookup::lookup_host;
-use rocketmq_client_rust::consumer::pull_result::PullResult;
-use rocketmq_client_rust::consumer::pull_status::PullStatus;
-use rocketmq_client_rust::producer::send_result::SendResult;
-use rocketmq_client_rust::producer::send_status::SendStatus;
-use rocketmq_client_rust::PullResultExt;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::crc32_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::result::PullOutcome;
+use rocketmq_model::result::SendResult;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RemotingClientShutdownReport;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
@@ -81,9 +76,6 @@ use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinO
 use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
 use rocketmq_remoting::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
@@ -93,10 +85,7 @@ use rocketmq_remoting::protocol::header::namesrv::register_broker_header::Regist
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
-use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
-use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
@@ -850,30 +839,9 @@ impl BrokerOuterAPI {
         offset: i64,
         max_nums: i32,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<(Option<PullResult>, String, bool)> {
-        let request_header = PullMessageRequestHeader {
-            consumer_group: consumer_group.clone(),
-            topic: topic.clone(),
-            queue_id,
-            queue_offset: offset,
-            max_msg_nums: max_nums,
-            sys_flag: PullSysFlag::build_sys_flag(false, false, true, false) as i32,
-            commit_offset: 0,
-            suspend_timeout_millis: 0,
-            subscription: Some(CheetahString::from_static_str(SubscriptionData::SUB_ALL)),
-            sub_version: current_millis() as i64,
-            expression_type: Some(CheetahString::from_static_str(ExpressionType::TAG)),
-            max_msg_bytes: Some(i32::MAX),
-            topic_request: Some(TopicRequestHeader {
-                lo: None,
-                rpc: Some(RpcRequestHeader {
-                    broker_name: Some(broker_name.clone()),
-                    ..Default::default()
-                }),
-            }),
-            ..Default::default()
-        };
-        let request_command = RemotingCommand::create_request_command(RequestCode::PullMessage, request_header);
+    ) -> rocketmq_error::RocketMQResult<(Option<PullOutcome<MessageExt>>, String, bool)> {
+        let request_command =
+            build_pull_message_request(broker_name, consumer_group, topic, queue_id, offset, max_nums);
         match self
             .remoting_client
             .invoke_request(Some(broker_addr), request_command, timeout_millis)
@@ -881,13 +849,13 @@ impl BrokerOuterAPI {
         {
             Ok(response) => {
                 let code = response.code();
-                let mut pull_result_ext = match process_pull_response(response, broker_addr) {
+                let pull_response = match process_pull_response(response, broker_addr) {
                     Ok(value) => value,
                     Err(_) => return Ok((None, format!("Response Code:{code}"), true)),
                 };
-                let name = pull_result_ext.pull_result.pull_status().to_string();
-                process_pull_result(&mut pull_result_ext, broker_name, queue_id);
-                Ok((Some(pull_result_ext.pull_result), name, false))
+                let outcome = decode_pull_response(pull_response, broker_name, queue_id);
+                let name = outcome.pull_status().to_string();
+                Ok((Some(outcome), name, false))
             }
             Err(e) => Ok((None, e.to_string(), true)),
         }
@@ -1619,74 +1587,6 @@ impl BrokerOuterAPI {
     }
 }
 
-fn process_pull_result(pull_result: &mut PullResultExt, broker_name: &CheetahString, queue_id: i32) {
-    if *pull_result.pull_result.pull_status() == PullStatus::Found {
-        let mut bytes = pull_result.message_binary.take().unwrap_or_default();
-        let mut message_list = MessageDecoder::decodes_batch(&mut bytes, true, true);
-        for message in message_list.iter_mut() {
-            let tra_flag = message.property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_TRANSACTION_PREPARED,
-            ));
-            if tra_flag.is_some() && tra_flag.unwrap() == "true" {
-                if let Some(id) = message.property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                )) {
-                    message.set_transaction_id(id);
-                }
-            }
-            MessageAccessor::put_property(
-                message,
-                CheetahString::from_static_str(MessageConst::PROPERTY_MIN_OFFSET),
-                pull_result.pull_result.min_offset().to_string().into(),
-            );
-            MessageAccessor::put_property(
-                message,
-                CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET),
-                pull_result.pull_result.max_offset().to_string().into(),
-            );
-            message.set_broker_name(broker_name.clone());
-            message.set_queue_id(queue_id);
-            if let Some(offset_delta) = pull_result.offset_delta {
-                message.set_queue_offset(message.queue_offset + offset_delta);
-            }
-        }
-    }
-}
-
-fn process_pull_response(
-    mut response: RemotingCommand,
-    addr: &CheetahString,
-) -> rocketmq_error::RocketMQResult<PullResultExt> {
-    let pull_status = match ResponseCode::from(response.code()) {
-        ResponseCode::Success => PullStatus::Found,
-        ResponseCode::PullNotFound => PullStatus::NoNewMsg,
-        ResponseCode::PullRetryImmediately => PullStatus::NoMatchedMsg,
-        ResponseCode::PullOffsetMoved => PullStatus::OffsetIllegal,
-        _ => {
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "pull_message",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(addr.to_string()),
-            })
-        }
-    };
-    let response_header = response.decode_command_custom_header::<PullMessageResponseHeader>()?;
-    let pull_result = PullResultExt {
-        pull_result: PullResult::new(
-            pull_status,
-            response_header.next_begin_offset as u64,
-            response_header.min_offset as u64,
-            response_header.max_offset as u64,
-            Some(vec![]),
-        ),
-        suggest_which_broker_id: response_header.suggest_which_broker_id,
-        message_binary: response.take_body(),
-        offset_delta: response_header.offset_delta,
-    };
-    Ok(pull_result)
-}
-
 struct RegisterBrokerRequestParts {
     header: RegisterBrokerRequestHeader,
     body: Vec<u8>,
@@ -1738,11 +1638,6 @@ fn dns_lookup_address_by_domain(domain: &str) -> Vec<CheetahString> {
     address_list
 }
 
-fn build_send_message_request(msg: MessageExt, group: CheetahString) -> RemotingCommand {
-    let header = build_send_message_request_header_v2(msg, group);
-    RemotingCommand::create_request_command(RequestCode::SendMessage, header)
-}
-
 fn empty_broker_member_group(cluster_name: &CheetahString, broker_name: &CheetahString) -> BrokerMemberGroup {
     BrokerMemberGroup::new(cluster_name.clone(), broker_name.clone())
 }
@@ -1762,95 +1657,6 @@ fn broker_member_group_from_route_data(
         }
     }
     broker_member_group
-}
-
-fn build_send_message_request_header_v2(msg: MessageExt, group: CheetahString) -> SendMessageRequestHeaderV2 {
-    let header = SendMessageRequestHeader {
-        producer_group: group,
-        topic: msg.topic().clone(),
-        default_topic: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
-        default_topic_queue_nums: 8,
-        queue_id: msg.queue_id,
-        sys_flag: msg.sys_flag,
-        born_timestamp: msg.born_timestamp,
-        flag: msg.get_flag(),
-        properties: Some(MessageDecoder::message_properties_to_string(msg.get_properties())),
-        reconsume_times: Some(msg.reconsume_times),
-        batch: Some(false),
-        ..Default::default()
-    };
-    SendMessageRequestHeaderV2::create_send_message_request_header_v2_with_move(header)
-}
-
-pub fn process_send_response(
-    broker_name: &CheetahString,
-    uniq_msg_id: CheetahString,
-    queue_id: i32,
-    topic: CheetahString,
-    response: &RemotingCommand,
-) -> rocketmq_error::RocketMQResult<SendResult> {
-    let mut send_status: Option<SendStatus> = None;
-
-    // Match the response code to the corresponding SendStatus
-    match ResponseCode::from(response.code()) {
-        ResponseCode::FlushDiskTimeout => send_status = Some(SendStatus::FlushDiskTimeout),
-        ResponseCode::FlushSlaveTimeout => send_status = Some(SendStatus::FlushSlaveTimeout),
-        ResponseCode::SlaveNotAvailable => send_status = Some(SendStatus::SlaveNotAvailable),
-        ResponseCode::Success => send_status = Some(SendStatus::SendOk),
-        _ => (),
-    };
-
-    // If send_status is not None, process the response
-    if let Some(status) = send_status {
-        let response_header = response.decode_command_custom_header::<SendMessageResponseHeader>()?;
-
-        let message_queue = MessageQueue::from_parts(topic, broker_name, queue_id);
-
-        let mut send_result = SendResult::new(
-            status,
-            Some(uniq_msg_id),
-            Some(response_header.msg_id().to_string()),
-            Some(message_queue),
-            response_header.queue_offset() as u64,
-        );
-
-        send_result.set_transaction_id(
-            response_header
-                .transaction_id()
-                .map_or("".to_string(), |s| s.to_string()),
-        );
-        if let Some(recall_handle) = response_header.recall_handle() {
-            send_result.set_recall_handle(recall_handle.to_string());
-        }
-        if let Some(region_id) = response
-            .get_ext_fields()
-            .unwrap()
-            .get(MessageConst::PROPERTY_MSG_REGION)
-        {
-            send_result.set_region_id(region_id.to_string());
-        } else {
-            send_result.set_region_id(mix_all::DEFAULT_TRACE_REGION_ID.to_string());
-        }
-
-        if let Some(trace_on) = response
-            .get_ext_fields()
-            .unwrap()
-            .get(MessageConst::PROPERTY_TRACE_SWITCH)
-        {
-            send_result.set_trace_on(trace_on == "true");
-        } else {
-            send_result.set_trace_on(false);
-        }
-        return Ok(send_result);
-    }
-
-    // If send_status is None, we throw an error
-    Err(RocketMQError::BrokerOperationFailed {
-        operation: "send_message",
-        code: response.code(),
-        message: response.remark().map_or("".to_string(), |s| s.to_string()),
-        broker_addr: None,
-    })
 }
 
 #[cfg(test)]
