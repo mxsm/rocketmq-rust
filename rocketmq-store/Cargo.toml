@@ -64,7 +64,7 @@ rocketmq-store-local = { workspace = true }
 rocketmq-store-rocksdb = { workspace = true, optional = true }
 rocketmq-observability = { workspace = true }
 rocketmq-runtime  = { workspace = true }
-rocketmq-tieredstore = { version = "1.0.0", path = "../rocketmq-tieredstore", optional = true }
+rocketmq-tieredstore = { workspace = true, optional = true }
 
 #tools
 dirs.workspace = true
