@@ -17,16 +17,7 @@ use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBroker
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::PutMessageStatus;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SyncFlushRuntimeInfo {
-    pub queue_depth: u64,
-    pub enqueue_total: u64,
-    pub completed_total: u64,
-    pub timeout_total: u64,
-    pub oldest_wait_millis: u64,
-    pub max_wait_millis: u64,
-    pub wait_total_millis: u64,
-}
+pub use rocketmq_store_local::flush::SyncFlushRuntimeInfo;
 
 /// The `RocketMQFlushManager` trait defines the operations for managing the flushing of messages to
 /// disk in RocketMQ.

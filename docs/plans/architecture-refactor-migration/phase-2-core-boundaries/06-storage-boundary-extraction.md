@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03（含 M06-03a～M06-03bb）已完成，继续 M06-04 |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04 已完成，继续 PR-M06-05 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -78,12 +78,12 @@
 
 ### PR-M06-04：机械迁移 Flush 与 Group Commit
 
-- [ ] 入口：`[TEST]` M02 的 `try_flush`、legacy adapter 和 SyncFlush/ack 契约测试全部通过；任何行为缺陷先回 M02 修复。
-- [ ] `[DEV]` 只迁移 flush manager、group-commit request/worker 和 checkpoint 接线；canonical `try_flush` 与 R0 `flush() -> i64` adapter 语义保持不变。
-- [ ] `[DEV]` 所有 SyncFlush/ack 继续只调用 `try_flush`；legacy adapter 留 facade，不作为内部确认入口。
-- [ ] `[TEST]` focused test：I/O failure、同批 waiter、group-commit batching、watermark 单调性和 crash/restart。
-- [ ] `[REV]` 以机械迁移 diff 审查，没有顺带调整 batch 阈值、fsync 策略、错误分类或默认配置。
-- [ ] 回滚点：flush delegation 指回迁移前模块；不得回滚 M02 正确性契约或恢复 `i64` ack 判定。
+- [x] 入口：`[TEST]` M02 的 `try_flush`、legacy adapter 和 SyncFlush/ack 契约测试全部通过；任何行为缺陷先回 M02 修复。
+- [x] `[DEV]` 只迁移 flush manager、group-commit request/worker 和 checkpoint 接线；canonical `try_flush` 与 R0 `flush() -> i64` adapter 语义保持不变。
+- [x] `[DEV]` 所有 SyncFlush/ack 继续只调用 `try_flush`；legacy adapter 留 facade，不作为内部确认入口。
+- [x] `[TEST]` focused test：I/O failure、同批 waiter、group-commit batching、watermark 单调性和 crash/restart。
+- [x] `[REV]` 以机械迁移 diff 审查，没有顺带调整 batch 阈值、fsync 策略、错误分类或默认配置。
+- [x] 回滚点：flush delegation 指回迁移前模块；不得回滚 M02 正确性契约或恢复 `i64` ack 判定。
 
 ### PR-M06-05：迁移 CQ 与 Index
 
@@ -2044,3 +2044,105 @@ python scripts/arc_mut_guard.py
   因此可整体 revert 父 PR。回滚不得恢复已由 contract 禁止的 Local/Store 双 owner。
 - [x] `[INVENTORY]` PR-M06-03 父项关闭，M06 整体仍进行中且 Exit Checklist 保持未完成。82 个顶层工作包更新为
   31 已完成、0 进行中、51 未开始，即 51 个尚未完成；下一工作包为 PR-M06-04。
+
+## M06-04a GroupCommit request and runtime stats owner extraction evidence
+
+- [x] `[ENTRY]` `failed_canonical_flush_marks_store_unwriteable_and_legacy_flush_keeps_watermark` 1/1、
+  `default_flush_manager::tests` 9/9 与 `store_api_legacy_adapter` 9/9 在迁移前通过；canonical `try_flush`、R0
+  `flush() -> i64` adapter、SyncFlush/ack 和 typed failure 基线均未发现待回 M02 的缺陷。
+- [x] `[DEV/OWNER]` 新增 `rocketmq-store-local::flush::group_commit`，唯一拥有泛型 `GroupCommitRequest<E>`、
+  neutral `GroupCommitStatus`、batch success/error completion、deadline/enqueue timestamp 与 `SyncFlushStats`；Store 内部
+  `group_commit_request` 收敛为 `GroupCommitRequest<StoreError>` type alias，公开 `SyncFlushRuntimeInfo` 旧路径改为精确 re-export。
+- [x] `[ADAPTER/COMPAT]` Store `DefaultFlushManager` 继续把 `Flushed/TimedOut` 穷尽映射为
+  `PutOk/FlushDiskTimeout`，保留同批单次 flush、typed error `Arc` 身份、health recorder 先记录一次、queue-depth/wait-time
+  统计和 timeout 行为；未修改 channel 容量 1024、最多 1000 次重试、1ms 间隔、fsync 策略、checkpoint 或默认配置。
+- [x] `[TEST/CONTRACT]` Local 新增 final-watermark 双 waiter、共享 typed error 和 zero-timeout 3/3；Store 原 GroupCommit
+  回归 9/9。新增 `test_m06_flush_local_contract.py` 1/1，锁定六个 canonical owner、Store type alias/re-export/import 和
+  禁止 duplicate struct/batch/stats implementation。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency、AGENTS routing、
+  enforcing runtime audit 与 diff check 全部通过。ArcMut 仅因新增 Local import 产生既有 `ArcMut`/`WeakArcMut` 各一处 token
+  relocation，按 ADR-013 一对一 approval 更新后仍为 1,171 identities/3,233 occurrences，零新增债务。
+- [x] `[INVENTORY/SCOPE]` M06-04a 只关闭 request/batch/runtime-stats owner；`FlushProgress`、queue flush/commit I/O、
+  GroupCommit worker/checkpoint、AsyncFlush/CommitRealTime worker 和最终 facade 分别留给 M06-04b～e。82 个顶层工作包为
+  31 已完成、1 进行中、50 未开始，即仍有 51 个尚未完成。
+
+## M06-04b mapped-file queue flush/commit driver extraction evidence
+
+- [x] `[DEV/OWNER]` 新增 `rocketmq-store-local::flush::queue`，唯一拥有 `FlushProgress`、segment flush/commit outcome、
+  final durable watermark/timestamp 计算和 legacy commit-result 判定；Store `consume_queue::mapped_file_queue::FlushProgress`
+  改为 canonical Local 类型的精确 re-export。
+- [x] `[ADAPTER/COMPAT]` Store `MappedFileQueue` 继续提供 ArcSwap snapshot、具体 mapped-file 查找、`try_flush`/`commit`
+  I/O 和 Local runtime-state 写回；Local driver 注入 offset/return-first 参数并保持原有 `file_from_offset + position` 算法。
+  `flush_least_pages == 0` 才替换 timestamp，I/O error 在写回 durable watermark 前原样返回，legacy `flush()` 和 `commit()`
+  布尔语义均未改变。
+- [x] `[TEST]` Local 新增 empty/thorough/partial/error flush 与 commit legacy contract 5/5；Store MappedFileQueue 原回归
+  11/11、FlushManager 原回归 9/9，并新增 legacy/canonical `FlushProgress` 编译期类型身份 1/1。
+- [x] `[CONTRACT/REV]` M06 flush owner contract 扩展为 12 个 queue/group-commit owner 与 Store re-export/driver adapter，
+  定向 1/1。Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency、ArcMut zero-growth、
+  AGENTS routing、enforcing runtime audit 和 diff check 全部通过；本切片没有 ArcMut baseline 变化。
+- [x] `[SCOPE]` 未修改 batch/channel/retry/fsync/checkpoint/default config；GroupCommit worker/checkpoint、
+  AsyncFlush/CommitRealTime worker 和最终 facade 继续由 M06-04c～e 承接。顶层统计仍为 31 已完成、1 进行中、
+  50 未开始，即 51 个尚未完成。
+
+## M06-04c GroupCommit worker and checkpoint owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local `run_group_commit_worker` 现唯一拥有 request channel drain、同批最大 target offset、取消时尾批
+  flush、forced/I/O error fan-out、最多 1000 次 flush、1ms retry policy、deadline stop 和正 timestamp checkpoint 判定；
+  `GROUP_COMMIT_CHANNEL_CAPACITY=1024` 与 `GroupCommitWorkerConfig::legacy()` 冻结原 R0 参数。
+- [x] `[ADAPTER/RUNTIME]` Store `GroupCommitService::start` 只创建既有 TaskGroup/channel，并注入 flush I/O、当前 durable
+  watermark/timestamp、`StoreCheckpoint::set_physic_msg_timestamp`、health recorder 与 timer adapter。Local 不创建 runtime/task，
+  retry sleep 通过 Store scheduler adapter 执行，enforcing runtime audit 因而保持零 action-required 增量。
+- [x] `[COMPAT]` blocking-pool flush helper 直接返回 canonical Local `FlushProgress`，不再复制中间 result；Store error mapping
+  仍保留 `MappedFileError -> StoreError` 和 runtime task failure -> `InvalidState`，同一 `Arc<StoreError>` 继续同时提供给 health
+  recorder 与全批 waiter。channel、batch、重试、checkpoint、fsync 和 shutdown 顺序均未改变。
+- [x] `[TEST/CONTRACT]` Local GroupCommit suite 从 3 扩展为 5/5，新增双 waiter worker batching/checkpoint 与 forced-error
+  单次记录/共享 `Arc`；Store FlushManager 原回归 9/9。source contract 新增 Local worker/config/ports owner，并禁止 Store
+  留存 `for 0..1000` 和 `rx_in.try_recv` worker 算法。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency、AGENTS routing、
+  enforcing runtime audit 和 diff check 通过。ArcMut 3 个既有 occurrence（测试 glob、flush helper `ArcMut` 参数、
+  `WeakArcMut` import）按 ADR-013 一对一 relocation 后仍为 1,171 identities/3,233 occurrences，零新增债务。
+- [x] `[SCOPE]` 本切片不迁移 AsyncFlush/CommitRealTime worker 或最终 FlushManager facade；它们继续由 M06-04d/e
+  承接。顶层统计保持 31 已完成、1 进行中、50 未开始，即 51 个尚未完成。
+
+## M06-04d AsyncFlush and CommitRealTime worker owner extraction evidence
+
+- [x] `[DEV/OWNER]` 新增 Local `flush::worker`，由 `run_flush_real_time_worker` 唯一拥有 periodic/thorough interval、
+  final flush、checkpoint 判定与 failure phase 分类；`run_commit_real_time_worker` 唯一拥有 commit loop、thorough interval、
+  final commit、flush wakeup 和 checkpoint 判定。两类 legacy config 均由 Store 配置投影一次后传入 Local。
+- [x] `[ADAPTER/RUNTIME]` Store 继续拥有 `TaskGroup`、`CancellationToken`、`Notify`、blocking executor、具体 mapped-file
+  flush/commit I/O、`StoreCheckpoint`、health/log callback 与 `WeakArcMut<dyn FlushManager>` wakeup adapter。Local 不创建
+  runtime/task 且不直接调用 timer；delay 由 Store 注入，enforcing runtime audit 保持零 action-required 增量。
+- [x] `[COMPAT]` AsyncFlush 仍按原 `flush_interval`、`flush_thorough_interval` 与 timed/notify 策略运行，取消后执行原次数
+  final flush；CommitRealTime 仍保持 commit 后唤醒 flush、positive timestamp checkpoint 与 final commit 顺序。旧
+  `DefaultFlushManager` public facade、GroupCommit channel/retry/fsync 及错误到 health 的映射均未改变。
+- [x] `[TEST/CONTRACT]` Local 新增 cancelled final flush/checkpoint、periodic failure phase + final flush、commit progress
+  wakeup + final commit checkpoint 3/3；Store `default_flush_manager::tests` 原回归 9/9。M06 flush source contract 1/1
+  扩展锁定两个 Local runner/config/ports owner，并禁止 Store 留存旧 timestamp 驱动循环。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency、AGENTS routing、
+  enforcing runtime audit 与 diff check 通过。3 个既有 ArcMut occurrence（测试 glob、module `ArcMut` import、commit helper
+  参数）按 ADR-013 一对一 relocation 后仍为 1,171 identities/3,233 occurrences，零新增债务。
+- [x] `[SCOPE]` 本切片不收口最终 FlushManager facade、SyncFlush/ack adapter 或 compatibility ledger；它们继续由
+  M06-04e 承接。顶层统计保持 31 已完成、1 进行中、50 未开始，即 51 个尚未完成。
+
+## M06-04e FlushManager facade and parent closeout evidence
+
+- [x] `[DEV/OWNER]` 新增 Local 泛型 `FlushManagerRoot<A>`，唯一拥有完整 composition adapter；Store 旧
+  `DefaultFlushManager` 收敛为仅含 `FlushManagerRoot<DefaultFlushManagerAdapter>` 的单字段 facade，并通过窄
+  `Deref/DerefMut` 委托保持构造、trait 与内部调用兼容。
+- [x] `[ADAPTER/COMPAT]` Store adapter 继续持有 `MessageStoreConfig`、三个 service lifecycle、MappedFileQueue、
+  SyncFlush stats 与 health recorder；`GroupCommitStatus` 仍穷尽映射为 `PutOk/FlushDiskTimeout`。source contract 禁止
+  facade 内部调用 legacy `.flush()`，所有确认路径继续只经 `try_flush`/durable watermark。
+- [x] `[LEDGER]` `06-storage-local-compatibility-ledger.md` 升级为 M06-03/M06-04 快照，冻结
+  `flush::{root,group_commit,queue,worker}` canonical owner、Store-only 外部 adapter、下一 major 删除窗口与分 PR 回滚规则。
+- [x] `[TEST]` Local `FlushManagerRoot` identity/mutable-owner 2/2、Store FlushManager 9/9、Local all-feature unit/integration/
+  doctest 全绿、Store all-feature lib 545/545；I/O failure、同批 waiter、batching、watermark 单调性与 crash-before-flush
+  均由上述 suite 覆盖。
+- [x] `[CONTRACT]` M06 flush owner contract 1/1，完整 M06 owner/adapter/mutation contract 160/160（755.875s）；
+  compatibility ledger 定向 mutation test 1/1。契约锁定单字段 facade、Local root、无 duplicate owner 与 feature 转发。
+- [x] `[REV]` Local/Store strict Clippy、root workspace `--no-deps --all-targets --all-features -D warnings` Clippy、workspace
+  fmt、architecture dependency、ArcMut zero-growth、AGENTS routing、enforcing runtime audit 和 diff check 全部退出码 0。
+  唯一 facade field relocation 按 ADR-013 一对一更新后仍为 1,171 identities/3,233 occurrences，零新增债务。
+- [x] `[MAIN/ROLLBACK]` `git fetch origin main` 后分支相对 `origin/main` 为 0 behind；旧 Store public path、feature、默认配置、
+  batch/channel/retry/fsync/checkpoint 与磁盘格式未改变，可整体 revert PR-M06-04，但不得恢复双 owner 或 `i64` ack 判定。
+- [x] `[INVENTORY]` PR-M06-04 父项关闭，M06 整体仍进行中且 Exit Checklist 保持未完成。82 个顶层工作包更新为
+  32 已完成、0 进行中、50 未开始，即 50 个尚未完成；下一工作包为 PR-M06-05。

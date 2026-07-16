@@ -12,6 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::store_error::StoreError;
+use rocketmq_store_local::flush::root::FlushManagerRoot;
 
-pub(crate) type GroupCommitRequest = rocketmq_store_local::flush::group_commit::GroupCommitRequest<StoreError>;
+#[test]
+fn flush_manager_root_preserves_exclusive_adapter_identity() {
+    let root = FlushManagerRoot::new(String::from("flush-adapter"));
+
+    assert_eq!(root.adapter(), "flush-adapter");
+    assert_eq!(root.into_adapter(), "flush-adapter");
+}
+
+#[test]
+fn flush_manager_root_exposes_one_mutable_adapter_owner() {
+    let mut root = FlushManagerRoot::new(vec![1_u64, 2]);
+
+    root.adapter_mut().push(3);
+
+    assert_eq!(root.adapter(), &[1, 2, 3]);
+}

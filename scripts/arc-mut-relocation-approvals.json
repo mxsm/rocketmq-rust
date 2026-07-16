@@ -295,6 +295,60 @@
       "from": "ff32c4ce45d7a75051d09d81",
       "to": "0810b733f105ac040a2584ba",
       "reason": "Moving the existing LocalFileMessageStore field into the Store adapter owned by the Local CommitLog root changed its token context within the same struct CommitLog item without adding an occurrence"
+    },
+    {
+      "identity": "3739e726bed526a639c25377",
+      "from": "d16230a40f2e4fe0c5107d8c",
+      "to": "4a3ceae0adde98d4e37bfbbe",
+      "reason": "Importing the canonical Local group-commit owner changed the module import order around the existing ArcMut import without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "3c663e49572a9aa0b69c5ffb",
+      "from": "ca420a570de170114791491c",
+      "to": "c701bcf628553b4ebbb79f02",
+      "reason": "Importing the canonical Local group-commit owner changed the module import order around the existing WeakArcMut import without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "527ebe3ad5a4c0369200bcb4",
+      "from": "7df959ac2647d4593e2fedc5",
+      "to": "23348ceae91879a47f8cd4a6",
+      "reason": "Moving the group-commit worker loop to Local changed adjacent test imports around the existing use super glob without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "05fa6e11b73b578d790f0703",
+      "from": "8f665bb0d12d826483fa7234",
+      "to": "c01c59fd4c5ea4c6bf75efc4",
+      "reason": "Returning the canonical Local FlushProgress directly changed adjacent tokens around the existing flush helper ArcMut parameter without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "3c663e49572a9aa0b69c5ffb",
+      "from": "c701bcf628553b4ebbb79f02",
+      "to": "40abdeec7b706b7a903595f0",
+      "reason": "Importing the Local group-commit worker ports changed the module import order around the existing WeakArcMut import without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "527ebe3ad5a4c0369200bcb4",
+      "from": "23348ceae91879a47f8cd4a6",
+      "to": "142e50c0a2fe6071fa98ca69",
+      "reason": "Moving the async flush and commit worker loops to Local changed adjacent test imports around the existing use super glob without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "3739e726bed526a639c25377",
+      "from": "4a3ceae0adde98d4e37bfbbe",
+      "to": "ed90aef20d1d02193c746b52",
+      "reason": "Importing the canonical Local flush worker ports changed the module import order around the existing ArcMut import without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "05fa6e11b73b578d790f0703",
+      "from": "de65814644028765e153d7b3",
+      "to": "139cbea77af3f218c78c32eb",
+      "reason": "Returning the canonical Local commit worker progress changed adjacent tokens around the existing commit helper ArcMut parameter without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "05fa6e11b73b578d790f0703",
+      "from": "36ebcbd5dbe51b5bd2a7617d",
+      "to": "5e746a9e2da8b73ccddb4abc",
+      "reason": "Moving the existing mapped_file_queue ArcMut field into the Store adapter owned by the Local FlushManager root changed its token context within the same DefaultFlushManager item without adding an occurrence"
     }
   ]
 }
