@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06/PR-M06-07/PR-M06-08/PR-M06-09/PR-M06-10 已完成，继续 PR-M06-11 |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06/PR-M06-07/PR-M06-08/PR-M06-09/PR-M06-10/PR-M06-11 已完成，继续 PR-M06-12 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -146,14 +146,14 @@
 
 ### PR-M06-11：Store Facade、Tiered 反转与 Feature 所有权
 
-- [ ] 入口：`[ARCH]` Local/Rocks adapter均通过各自 corpus，R0 public path与feature baseline已冻结。
-- [ ] `[DEV]` 现有 store 只保 backend enum/factory、legacy config/trait、Tiered decorator和精确 re-export。
-- [ ] `[DEV]` tieredstore 改依赖 store-api；Local fallback/dispatch/lifecycle组合留 store facade。
-- [ ] `[DEV]` feature owner调整：Local owns fast/safe/io_uring，Rocks owns native rocks，facade弱转发并保alias。
-- [ ] `[TEST]` focused matrix：no-default/default/local/fast/safe/fast+safe/io_uring/rocks/tiered/observability；all-features不替代矩阵。
-- [ ] `[REV]` 检查 fast+safe 仍为当前优先级，facade无实现算法，legacy compile fixture通过。
-- [ ] `[HUMAN]` 批准R0 no-default可能因兼容re-export仍编译部分Local，不虚假宣称构建已变轻。
-- [ ] 回滚点：feature alias、factory、Tiered decorator、legacy re-export分别回滚；不得关闭旧路径。
+- [x] 入口：`[ARCH]` Local/Rocks adapter均通过各自 corpus，R0 public path与feature baseline已冻结。
+- [x] `[DEV]` 现有 store 只保 backend enum/factory、legacy config/trait、Tiered decorator和精确 re-export。
+- [x] `[DEV]` tieredstore 改依赖 store-api；Local fallback/dispatch/lifecycle组合留 store facade。
+- [x] `[DEV]` feature owner调整：Local owns fast/safe/io_uring，Rocks owns native rocks，facade弱转发并保alias。
+- [x] `[TEST]` focused matrix：no-default/default/local/fast/safe/fast+safe/io_uring/rocks/tiered/observability；all-features不替代矩阵。
+- [x] `[REV]` 检查 fast+safe 仍为当前优先级，facade无实现算法，legacy compile fixture通过。
+- [x] `[HUMAN]` 批准R0 no-default可能因兼容re-export仍编译部分Local，不虚假宣称构建已变轻。
+- [x] 回滚点：feature alias、factory、Tiered decorator、legacy re-export分别回滚；不得关闭旧路径。
 
 ### PR-M06-12：依赖图与消费方收口
 
@@ -2460,3 +2460,38 @@ python scripts/arc_mut_guard.py
   对照退出码同为 1。Store/Rocks/Broker package Clippy、workspace exact fmt/Clippy 与 `git diff --check` 通过。
 - [x] `[INVENTORY]` PR-M06-10 父项关闭；82 个顶层工作包更新为 38 已完成、0 进行中、44 未开始，即
   44 个尚未完成。M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-11。
+
+## M06-11 Store Facade、Tiered 反转与 Feature 所有权 evidence
+
+- [x] `[ARCH/DEPENDENCY]` `rocketmq-tieredstore` 直接依赖 backend-neutral `rocketmq-store-api` 并为 `TieredStore`
+  实现 `StoreLifecycle`；manifest/source 均无 Store facade、Local 或 Rocks 反向边。Store 继续作为 backend enum/factory、
+  legacy config/trait/public path、Tiered decorator 与精确 re-export 的长期组合边界。
+- [x] `[DEV/TIERED]` 新增 Store-owned `TieredStoreDecorator`，集中承接 Tiered lifecycle、CommitLog body resolver、
+  get/query/offset/timestamp、metrics 与 Store DTO/status/result 映射；`LocalFileMessageStore` 删除直接 Tiered owner imports 和
+  约 200 行内联映射，只保 fallback gate、dispatch 注册、Local CQ 判断与 lifecycle 顺序组合。测试专用 raw owner accessor 受
+  `#[cfg(test)]` 保护，生产 facade 不提供绕过 decorator 的入口。
+- [x] `[FEATURE/COMPAT]` Local owner 固定 `fast-load`/`safe-load`/`io_uring`，fast+safe 继续由 Local policy 选择 fast；
+  Rocks owner 独占 native rocks。Store 保留 `local_file_store=[]`、`data_store`、`rocksdb_store`/`rocksdb-store`、Tiered 与
+  observability 弱转发。`GenericMessageStore::LocalFileStore` 和 constructor 改为无条件兼容 facade，R0 no-default 可编译但
+  不虚假宣称已去除 Local。默认 feature 和旧 public path 均未关闭。
+- [x] `[TEST/MATRIX]` `cargo check -p rocketmq-store` 的 no-default、default、local、fast、safe、fast+safe、io_uring、
+  rocksdb_store、tieredstore、observability 十项精确矩阵逐项通过；Local fast/safe truth table 1/1、Tiered neutral lifecycle
+  1/1、Store Tiered write dispatch 1/1 与 Local-miss read fallback 1/1 通过。
+- [x] `[CONTRACT]` 新增 Store facade/Tiered source contract 5 项，并把 Local feature policy 纳入既有 CommitLog owner/import/
+  mutation/canonical definition 契约。完整 M06 contract 最终 195/195（603.261s）通过；前两轮各 194/195，依次暴露精确
+  import 未登记新 owner 函数及 canonical scanner 未识别 `pub const fn`，补充正/负向检查后全绿。
+- [x] `[ARC/RUNTIME/GOVERNANCE]` 7 条既有 ArcMut occurrence 因 Tiered import 搬移和 no-default Local compatibility
+  属性删除发生同 identity 一对一 fingerprint relocation；ADR-013 approval、promotion、compare、final guard、63 项单测与
+  24 fixtures 通过，台账保持 1,170 identities/3,232 occurrences，零新增债务。Architecture baseline、35 项单测、6 个
+  violation fixtures、runtime enforcing audit 与 AGENTS routing 通过。
+- [x] `[ERROR/GATE]` error architecture guard 仍仅复现 main 既有 11 项：Broker source stringification 1、MCP anyhow 8、
+  缺失治理文档 2；本包无新增 finding，故记录为 pre-existing failure 而不计为通过。
+- [x] `[FINAL]` Local all-feature lib 185/185、Tiered all-feature lib 55/55、Store all-feature lib 484/484、Store/Tiered
+  all-target/all-feature strict Clippy、workspace exact fmt 与 workspace all-target/all-feature strict Clippy 通过；最终
+  ArcMut/architecture guard、Python compile、82 项 checklist 计数（39/43）与 `git diff --check` 同步通过。
+- [x] `[COMPAT/ROLLBACK]` 独立
+  [`08-storage-facade-tiered-compatibility-ledger.md`](08-storage-facade-tiered-compatibility-ledger.md) 冻结 owner、R0 public/
+  feature 兼容面、精确矩阵、删除条件与分层回滚顺序。feature forwarding、factory、Tiered decorator 和 neutral lifecycle 可
+  分别回滚；legacy re-export/no-default Local path 始终保留，不得恢复第二 CommitLog 或 Tiered→Store 反向依赖。
+- [x] `[INVENTORY]` PR-M06-11 父项关闭；82 个顶层工作包更新为 39 已完成、0 进行中、43 未开始，即 43 个尚未完成。
+  M06 整体仍进行中且 Exit Checklist 保持未完成；唯一下一工作包为 PR-M06-12。

@@ -4980,6 +4980,7 @@ dependencies = [
  "rocketmq-error",
  "rocketmq-observability",
  "rocketmq-runtime",
+ "rocketmq-store-api",
  "serde",
  "serde_json",
  "tempfile",

@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 38 | 0 | 44 未开始；合计 44 尚未完成 | 82 |
+| PR 级工作包 | 39 | 0 | 43 未开始；合计 43 尚未完成 | 82 |
 | 里程碑 | 5（M01–M05） | 1（M06） | 6（M07–M12） | 12 |
 | 新增边界 crate | 7 | 0 | 3（proxy-core/cluster/local） | 10 |
 | 根 workspace package | 29 | — | 还差 3 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 44 个未开始工作包分布：M06-11～12 为 2 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
-M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-10 已完成单 CommitLog 的 RocksDB MessageStore adapter 与 parity；当前下一工作包为 PR-M06-11。
+剩余 43 个未开始工作包分布：M06-12 为 1 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
+M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-11 已完成 Store facade、Tiered 反转与 feature 所有权；当前下一工作包为 PR-M06-12。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -224,7 +224,14 @@ M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-10 已完成单 CommitLo
   - [x] 默认 Rocks 模式仅写 Rocks CQ/Index；`rocksdb_cq_double_write_enable=true` 才保留 Local 兼容镜像
   - [x] Local/Rocks pull parity、restart catch-up、offset-by-time、failure mapping 与无 uniq-key index 回归已覆盖
   - [x] 唯一 CommitLog、依赖方向、无 Client/Broker 泄漏、回滚点与独立兼容 ledger 已冻结
-- [ ] PR-M06-11：完成 Store facade、Tiered 反转与 feature 所有权
+- [x] PR-M06-11：完成 Store facade、Tiered 反转与 feature 所有权
+  - [x] `rocketmq-tieredstore` 只新增对 `rocketmq-store-api` 的中立生命周期依赖，无 Store/Local/Rocks 反向边
+  - [x] Store `TieredStoreDecorator` 独占状态/结果映射，Local facade 只保 fallback、dispatch 与 lifecycle 组合
+  - [x] Local 拥有 fast/safe/io_uring，Rocks 拥有 native rocks，Store 保留精确弱转发和 legacy alias
+  - [x] no-default 继续编译 Local 兼容 facade，默认 feature 与 R0 public path 未关闭
+  - [x] no-default/default/local/fast/safe/fast+safe/io_uring/rocks/tiered/observability 精确矩阵全部通过
+  - [x] Tiered lifecycle、写入 dispatch、读取 fallback、fast+safe 优先级与 195 项 M06 contract 通过
+  - [x] 独立兼容 ledger、7 条 ArcMut 一对一 relocation 与 39/43 顶层工作包盘点已冻结
 - [ ] PR-M06-12：完成依赖图与消费方收口
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

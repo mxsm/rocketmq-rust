@@ -655,6 +655,48 @@
       "from": "5382f21e9c57edc69e8ce15f",
       "to": "245ed505123e8e3fdf662db6",
       "reason": "Adding queue-offset synchronization changed adjacent context around the existing ArcConsumeQueue recovery snapshot reference"
+    },
+    {
+      "identity": "9df6be4b83a40eddcebc37be",
+      "from": "df8892b4836751d5d379388c",
+      "to": "ef5ed7a2fb3cfd78bc28e148",
+      "reason": "Removing direct Tiered owner imports from the Local facade changed adjacent context around the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "ec0a1d513dcd0a4ad320e84f",
+      "from": "4d9bcd63b3dd2262e3254491",
+      "to": "36361cc6ccd2b916d08d4dec",
+      "reason": "Making the Local compatibility variant unconditional changed the existing LocalFileMessageStore ArcMut fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "ec0a1d513dcd0a4ad320e84f",
+      "from": "75e9f9a305df80f03e3c9bf9",
+      "to": "f6a3c6581db220e1627690d6",
+      "reason": "Removing the Local feature gate shifted adjacent context around the existing RocksDBMessageStore ArcMut variant without adding an occurrence"
+    },
+    {
+      "identity": "ec0a1d513dcd0a4ad320e84f",
+      "from": "e96ae3c384ee7fbcd613705d",
+      "to": "98f940f936e81a1ad86d929b",
+      "reason": "Making the Local compatibility constructor unconditional changed its existing ArcMut parameter fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "b3122aae99a277a2853beb27",
+      "from": "f171049261f1e00a3a4e254a",
+      "to": "d7b58566f7b807cb9440287c",
+      "reason": "Making the Local compatibility variant unconditional changed the existing LocalFileMessageStore type-reference fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "b3122aae99a277a2853beb27",
+      "from": "6bec650670e3ac828a31834b",
+      "to": "27256aaa4c589a1fe086bd0b",
+      "reason": "Making the Local compatibility constructor unconditional changed its existing LocalFileMessageStore type-reference fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "018022cfeb7f1b25a1f61560",
+      "from": "d12110cb3e1bea1e077a8d2e",
+      "to": "1bfa5988a9b02ab0afb0a94d",
+      "reason": "Removing the Local feature gate shifted adjacent context around the existing RocksDBMessageStore variant without adding an occurrence"
     }
   ]
 }
