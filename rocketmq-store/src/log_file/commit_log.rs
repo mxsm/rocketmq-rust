@@ -14,6 +14,8 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -135,6 +137,7 @@ use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
+use rocketmq_store_local::commit_log::root::CommitLogRoot;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogRuntimeState;
 
@@ -276,21 +279,47 @@ macro_rules! lock_active_mapped_file_parts {
 }
 
 pub struct CommitLog {
-    mapped_file_queue: ArcMut<MappedFileQueue>,
-    message_store_config: Arc<MessageStoreConfig>,
-    broker_config: Arc<BrokerConfig>,
-    enabled_append_prop_crc: bool,
-    local_file_message_store: Option<ArcMut<LocalFileMessageStore>>,
-    dispatcher: ArcMut<CommitLogDispatcherDefault>,
-    runtime_state: CommitLogRuntimeState,
-    store_checkpoint: Arc<StoreCheckpoint>,
-    append_message_callback: Arc<DefaultAppendMessageCallback>,
-    put_message_lock: Arc<tokio::sync::Mutex<()>>,
-    topic_queue_lock: Arc<TopicQueueLock>,
-    topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
-    consume_queue_store: ConsumeQueueStore,
-    flush_manager: ArcMut<DefaultFlushManager>,
-    cold_data_check_service: Arc<ColdDataCheckService>,
+    root: CommitLogRoot<CommitLogAdapter>,
+}
+
+mod adapter {
+    /// Store-owned composition dependencies used by the legacy CommitLog facade.
+    #[doc(hidden)]
+    pub struct CommitLog {
+        pub(super) mapped_file_queue: super::ArcMut<super::MappedFileQueue>,
+        pub(super) message_store_config: super::Arc<super::MessageStoreConfig>,
+        pub(super) broker_config: super::Arc<super::BrokerConfig>,
+        pub(super) enabled_append_prop_crc: bool,
+        pub(super) local_file_message_store: Option<super::ArcMut<super::LocalFileMessageStore>>,
+        pub(super) dispatcher: super::ArcMut<super::CommitLogDispatcherDefault>,
+        pub(super) runtime_state: super::CommitLogRuntimeState,
+        pub(super) store_checkpoint: super::Arc<super::StoreCheckpoint>,
+        pub(super) append_message_callback: super::Arc<super::DefaultAppendMessageCallback>,
+        pub(super) put_message_lock: super::Arc<tokio::sync::Mutex<()>>,
+        pub(super) topic_queue_lock: super::Arc<super::TopicQueueLock>,
+        pub(super) topic_config_table:
+            super::Arc<super::DashMap<super::CheetahString, super::ArcMut<super::TopicConfig>>>,
+        pub(super) consume_queue_store: super::ConsumeQueueStore,
+        pub(super) flush_manager: super::ArcMut<super::DefaultFlushManager>,
+        pub(super) cold_data_check_service: super::Arc<super::ColdDataCheckService>,
+    }
+}
+
+#[doc(hidden)]
+pub use adapter::CommitLog as CommitLogAdapter;
+
+impl Deref for CommitLog {
+    type Target = CommitLogAdapter;
+
+    fn deref(&self) -> &Self::Target {
+        self.root.adapter()
+    }
+}
+
+impl DerefMut for CommitLog {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.root.adapter_mut()
+    }
 }
 
 impl CommitLog {
@@ -315,31 +344,33 @@ impl CommitLog {
             Some(allocate_mapped_file_service),
         ));
         Self {
-            mapped_file_queue: mapped_file_queue.clone(),
-            message_store_config: message_store_config.clone(),
-            broker_config,
-            enabled_append_prop_crc,
-            local_file_message_store: None,
-            dispatcher,
-            runtime_state: CommitLogRuntimeState::new(
-                message_store_config.linux_memory_lock_warn_only,
-                memory_lock_budget_bytes,
-            ),
-            store_checkpoint: store_checkpoint.clone(),
-            append_message_callback: Arc::new(DefaultAppendMessageCallback::new(
-                message_store_config.clone(),
-                topic_config_table.clone(),
-            )),
-            put_message_lock: Arc::new(Default::default()),
-            topic_queue_lock: Arc::new(TopicQueueLock::with_size(message_store_config.topic_queue_lock_num)),
-            topic_config_table,
-            consume_queue_store,
-            flush_manager: ArcMut::new(DefaultFlushManager::new(
-                message_store_config.clone(),
-                mapped_file_queue,
-                store_checkpoint,
-            )),
-            cold_data_check_service: Arc::new(Default::default()),
+            root: CommitLogRoot::new(CommitLogAdapter {
+                mapped_file_queue: mapped_file_queue.clone(),
+                message_store_config: message_store_config.clone(),
+                broker_config,
+                enabled_append_prop_crc,
+                local_file_message_store: None,
+                dispatcher,
+                runtime_state: CommitLogRuntimeState::new(
+                    message_store_config.linux_memory_lock_warn_only,
+                    memory_lock_budget_bytes,
+                ),
+                store_checkpoint: store_checkpoint.clone(),
+                append_message_callback: Arc::new(DefaultAppendMessageCallback::new(
+                    message_store_config.clone(),
+                    topic_config_table.clone(),
+                )),
+                put_message_lock: Arc::new(Default::default()),
+                topic_queue_lock: Arc::new(TopicQueueLock::with_size(message_store_config.topic_queue_lock_num)),
+                topic_config_table,
+                consume_queue_store,
+                flush_manager: ArcMut::new(DefaultFlushManager::new(
+                    message_store_config.clone(),
+                    mapped_file_queue,
+                    store_checkpoint,
+                )),
+                cold_data_check_service: Arc::new(Default::default()),
+            }),
         }
     }
 
@@ -849,11 +880,13 @@ impl CommitLog {
         put_message_context.set_topic_queue_table_key(topic_queue_key.clone());
         msg_batch.encoded_buff = encoded_buff;
 
-        let _topic_queue_guard = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
+        let topic_queue_lock = self.topic_queue_lock.clone();
+        let _topic_queue_guard = topic_queue_lock.lock(topic_queue_key.as_str()).await;
         self.assign_offset(&mut msg_batch.message_ext_broker_inner);
 
         let lock_wait_start = Instant::now();
-        let _put_message_lock = self.put_message_lock.lock().await;
+        let put_message_lock = self.put_message_lock.clone();
+        let _put_message_lock = put_message_lock.lock().await;
         let lock_wait_millis = lock_wait_start.elapsed().as_millis() as u64;
         self.runtime_state.set_begin_time_in_lock(time_utils::current_millis());
         let start_time = Instant::now();
@@ -861,11 +894,12 @@ impl CommitLog {
         msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = time_utils::current_millis() as i64;
 
         let append_attempt = {
-            let mapped_file_queue = &mut self.mapped_file_queue;
-            let message_store_config = self.message_store_config.as_ref();
-            let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
-            let append_message_callback = self.append_message_callback.as_ref();
-            let enabled_append_prop_crc = self.enabled_append_prop_crc;
+            let adapter = self.root.adapter_mut();
+            let mapped_file_queue = &mut adapter.mapped_file_queue;
+            let message_store_config = adapter.message_store_config.as_ref();
+            let (active_memory_lock, active_memory_lock_present) = adapter.runtime_state.active_memory_lock_parts();
+            let append_message_callback = adapter.append_message_callback.as_ref();
+            let enabled_append_prop_crc = adapter.enabled_append_prop_crc;
             CommitLogAppendAttempt::run(
                 mapped_file,
                 |mapped_file| mapped_file.is_full(),
@@ -1078,8 +1112,9 @@ impl CommitLog {
         msg.encoded_buff = Some(encoded_buff);
         let put_message_context = PutMessageContext::new(topic_queue_key.clone());
 
-        let _topic_queue_guard = if need_assign_offset {
-            let guard = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
+        let topic_queue_lock = need_assign_offset.then(|| self.topic_queue_lock.clone());
+        let _topic_queue_guard = if let Some(topic_queue_lock) = topic_queue_lock.as_ref() {
+            let guard = topic_queue_lock.lock(topic_queue_key.as_str()).await;
             self.assign_offset(&mut msg);
             Some(guard)
         } else {
@@ -1087,7 +1122,8 @@ impl CommitLog {
         };
 
         let lock_wait_start = Instant::now();
-        let _put_message_lock = self.put_message_lock.lock().await;
+        let put_message_lock = self.put_message_lock.clone();
+        let _put_message_lock = put_message_lock.lock().await;
         let lock_wait_millis = lock_wait_start.elapsed().as_millis() as u64;
         let begin_lock_timestamp = time_utils::current_millis();
         self.runtime_state.set_begin_time_in_lock(begin_lock_timestamp);
@@ -1098,10 +1134,11 @@ impl CommitLog {
         }
 
         let append_attempt = {
-            let mapped_file_queue = &mut self.mapped_file_queue;
-            let message_store_config = self.message_store_config.as_ref();
-            let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
-            let append_message_callback = self.append_message_callback.as_ref();
+            let adapter = self.root.adapter_mut();
+            let mapped_file_queue = &mut adapter.mapped_file_queue;
+            let message_store_config = adapter.message_store_config.as_ref();
+            let (active_memory_lock, active_memory_lock_present) = adapter.runtime_state.active_memory_lock_parts();
+            let append_message_callback = adapter.append_message_callback.as_ref();
             CommitLogAppendAttempt::run(
                 mapped_file,
                 |mapped_file| mapped_file.is_full(),
@@ -2687,7 +2724,8 @@ impl CommitLog {
         data_start: i32,
         data_length: i32,
     ) -> Result<bool, StoreError> {
-        let lock = self.put_message_lock.lock().await;
+        let put_message_lock = self.put_message_lock.clone();
+        let lock = put_message_lock.lock().await;
         let mapped_file = self
             .mapped_file_queue
             .get_last_mapped_file_mut_start_offset(start_offset as u64, true);

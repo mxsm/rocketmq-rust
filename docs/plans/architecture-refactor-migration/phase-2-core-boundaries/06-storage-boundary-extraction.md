@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au/M06-03av/M06-03aw/M06-03ax 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au/M06-03av/M06-03aw/M06-03ax/M06-03ay 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1957,3 +1957,27 @@ python scripts/arc_mut_guard.py
   已完成；flush/commit/group-commit 与 CQ timestamp 分别保留给 M06-04/M06-05。顶层 PR-M06-03 当前剩余 CommitLog 根结构、
   append/recovery composition owner 与 Store facade 收口；82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即
   52 个尚未完成。
+
+## M06-03ay CommitLog root owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增泛型 `commit_log::root::CommitLogRoot<A>`，唯一拥有完整 CommitLog composition adapter，
+  并只公开 immutable/mutable/consuming 三种窄借用方式；Local 根不感知 Store config、MappedFile、Broker、HA、CQ/Index 或 facade 类型。
+- [x] `[DEV/FACADE]` Store 旧 public `CommitLog` 类型和路径保持不变，但结构收敛为唯一字段
+  `CommitLogRoot<CommitLogAdapter>`；原 15 个 Store-specific dependency/state 字段机械集中到 `CommitLogAdapter`，
+  `Deref`/`DerefMut` 只承担遗留方法的过渡适配。构造顺序、默认值、MappedFileQueue/flush-manager 共享身份均未改变。
+- [x] `[COMPAT]` 两条 put-message 路径继续按 topic-queue lock → put-message lock → append-attempt 顺序执行；为保持根 facade
+  下的安全拆分借用，仅克隆既有 `Arc` lock handle 后获取同一锁，不增加 task/thread/channel，也不改变 offset assignment、timestamp、
+  active memory lock、EOF roll/retry、CRC 或 result mapping。`append_data` 同样仍获取原 put-message mutex。
+- [x] `[TEST]` Local root integration 2/2、Store root compile 与 put-message lock focused 1/1 通过；Local all-feature crate
+  104/104 及全部 integration/doctest、Store lib 537/537 通过。覆盖 adapter identity、唯一可变 owner、既有 lock statistics，
+  并由 Store 全量回归覆盖 append/load/recovery/lifecycle 路径。
+- [x] `[CONTRACT]` 新增 root owner/facade baseline 与 5 类 mutation，冻结 Local 单字段 generic owner、四个借用/消费方法、module export、
+  Store 单字段 facade、15 字段 composition adapter、构造与 Deref flow、两个回归测试；原 runtime-state contract 改为验证 Local root 所拥有
+  adapter 内仍只有一个 canonical `CommitLogRuntimeState`。定向 5/5 与完整 M06 contract 158/158 通过（759.554s）。
+- [x] `[GOVERNANCE/REV]` `ArcMut` owner relocation 经 6 条逐项 approval 和生成式 baseline promotion 审核，迁移前后均为
+  1,171 个 identity、3,233 个 occurrence，债务零增长；ArcMut guard 复跑通过。Local/Store all-target/all-feature Clippy、
+  workspace fmt、diff check、architecture dependency guard、AGENTS routing 与 enforcing runtime audit 通过。本切片未修改 typed error
+  mapping 或敏感字段，最近 error architecture 结果仍仅为历史 1 处 Broker source stringification、8 处 MCP `anyhow` 和 2 份缺失治理文档。
+- [x] `[INVENTORY/SCOPE]` 本切片关闭 CommitLog 根结构 owner；MappedFileQueue 本阶段范围也已完成。PR-M06-03 仅剩 append/recovery
+  composition method owner 与 Store facade 最终收口，flush/group-commit、CQ/Index、HA、Timer/POP 仍分别保留给 M06-04..07。
+  顶层统计不变：30 已完成、1 进行中、51 未开始，即 52 个尚未完成。

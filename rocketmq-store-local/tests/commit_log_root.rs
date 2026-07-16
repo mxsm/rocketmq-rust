@@ -12,19 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod abnormal_recovery;
-pub mod append;
-pub mod append_attempt;
-pub mod append_frame;
-pub mod header;
-pub mod load;
-pub mod load_orchestration;
-pub mod loader;
-pub mod memory_lock;
-pub mod normal_recovery;
-pub mod record;
-pub mod record_parser;
-pub mod recovery;
-pub mod recovery_orchestration;
-pub mod root;
-pub mod runtime_state;
+use rocketmq_store_local::commit_log::root::CommitLogRoot;
+
+#[test]
+fn commit_log_root_preserves_exclusive_adapter_identity() {
+    let root = CommitLogRoot::new(String::from("commitlog-adapter"));
+
+    assert_eq!(root.adapter(), "commitlog-adapter");
+    assert_eq!(root.into_adapter(), "commitlog-adapter");
+}
+
+#[test]
+fn commit_log_root_exposes_one_mutable_adapter_owner() {
+    let mut root = CommitLogRoot::new(vec![1_u64, 2]);
+
+    root.adapter_mut().push(3);
+
+    assert_eq!(root.adapter(), &[1, 2, 3]);
+}

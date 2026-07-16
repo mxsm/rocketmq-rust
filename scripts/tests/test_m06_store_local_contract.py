@@ -144,6 +144,7 @@ COMMIT_LOG_RECOVERY_ORCHESTRATION_PATH = Path(
 COMMIT_LOG_RUNTIME_STATE_PATH = Path(
     "rocketmq-store-local/src/commit_log/runtime_state.rs"
 )
+COMMIT_LOG_ROOT_PATH = Path("rocketmq-store-local/src/commit_log/root.rs")
 STORE_APPEND_CALLBACK_PATH = Path(
     "rocketmq-store/src/base/append_message_callback.rs"
 )
@@ -8891,8 +8892,11 @@ def commit_log_runtime_state_contract_violations(
     ):
         violations.append("Store CommitLog lock runtime-info facade changed")
     store_commit_log_fields = dict(active_struct_fields(store, "CommitLog"))
-    if store_commit_log_fields.get("runtime_state") != "CommitLogRuntimeState":
-        violations.append("Store CommitLog must hold one canonical Local runtime-state owner")
+    store_adapter_fields = dict(store_commit_log_adapter_fields(store))
+    if store_commit_log_fields != {"root": "CommitLogRoot<CommitLogAdapter>"}:
+        violations.append("Store CommitLog must remain a single-field Local root facade")
+    if store_adapter_fields.get("runtime_state") != "super::CommitLogRuntimeState":
+        violations.append("Store CommitLog adapter must hold one canonical Local runtime-state owner")
     for legacy_field in (
         "confirm_offset",
         "put_message_lock_stats",
@@ -8901,7 +8905,7 @@ def commit_log_runtime_state_contract_violations(
         "active_memory_lock_present",
         "last_load_statistics",
     ):
-        if legacy_field in store_commit_log_fields:
+        if legacy_field in store_adapter_fields:
             violations.append(f"Store retained legacy CommitLog state field: {legacy_field}")
     for item in expected_structs:
         if re.search(rf"\bstruct\s+{item}\b", store_active):
@@ -8935,6 +8939,98 @@ def commit_log_runtime_state_contract_violations(
     for test_name in required_tests:
         if named_function_body(local_tests, test_name) is None:
             violations.append(f"Local CommitLog runtime-state regression changed: {test_name}")
+    return violations
+
+
+def store_commit_log_adapter_fields(source: str) -> list[tuple[str, str]]:
+    marker = "mod adapter {"
+    if marker not in source:
+        return []
+    adapter_source = source.split(marker, maxsplit=1)[1].split(
+        "pub use adapter::CommitLog as CommitLogAdapter;", maxsplit=1
+    )[0]
+    return active_struct_fields(adapter_source, "CommitLog")
+
+
+def commit_log_root_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+
+    if len(re.findall(r"\bpub\s+struct\s+CommitLogRoot\s*<\s*A\s*>", active)) != 1:
+        violations.append("Local CommitLog root owner definition changed")
+    if active_struct_fields(production, "CommitLogRoot") != [("adapter", "A")]:
+        violations.append("Local CommitLog root must exclusively own one generic adapter")
+    expected_methods = {
+        "new": "Self{adapter}",
+        "adapter": "&self.adapter",
+        "adapter_mut": "&mutself.adapter",
+        "into_adapter": "self.adapter",
+    }
+    for method, expected_body in expected_methods.items():
+        if compact_rust(named_function_body(production, method) or "") != expected_body:
+            violations.append(f"Local CommitLog root behavior changed: {method}")
+    if active_rust_source(module).count("pub mod root;") != 1:
+        violations.append("Local commit_log module must expose root exactly once")
+    if any(re.search(rf"\b{token}\b", active) for token in ("ArcMut", "MappedFile", "MessageStoreConfig", "unsafe")):
+        violations.append("Local CommitLog root absorbed Store implementation dependencies")
+
+    expected_import = "use rocketmq_store_local::commit_log::root::CommitLogRoot"
+    root_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store)
+        if kind == "use" and not visibility and "commit_log::root" in body
+    }
+    if root_imports != {expected_import}:
+        violations.append("Store CommitLog root import must be direct and exact")
+    if active_struct_fields(store, "CommitLog") != [
+        ("root", "CommitLogRoot<CommitLogAdapter>")
+    ]:
+        violations.append("Store CommitLog facade must own only the Local root")
+    expected_adapter_fields = [
+        ("mapped_file_queue", "super::ArcMut<super::MappedFileQueue>"),
+        ("message_store_config", "super::Arc<super::MessageStoreConfig>"),
+        ("broker_config", "super::Arc<super::BrokerConfig>"),
+        ("enabled_append_prop_crc", "bool"),
+        ("local_file_message_store", "Option<super::ArcMut<super::LocalFileMessageStore>>"),
+        ("dispatcher", "super::ArcMut<super::CommitLogDispatcherDefault>"),
+        ("runtime_state", "super::CommitLogRuntimeState"),
+        ("store_checkpoint", "super::Arc<super::StoreCheckpoint>"),
+        ("append_message_callback", "super::Arc<super::DefaultAppendMessageCallback>"),
+        ("put_message_lock", "super::Arc<tokio::sync::Mutex<()>>"),
+        ("topic_queue_lock", "super::Arc<super::TopicQueueLock>"),
+        (
+            "topic_config_table",
+            "super::Arc<super::DashMap<super::CheetahString, super::ArcMut<super::TopicConfig>>>",
+        ),
+        ("consume_queue_store", "super::ConsumeQueueStore"),
+        ("flush_manager", "super::ArcMut<super::DefaultFlushManager>"),
+        ("cold_data_check_service", "super::Arc<super::ColdDataCheckService>"),
+    ]
+    if store_commit_log_adapter_fields(store) != expected_adapter_fields:
+        violations.append("Store CommitLog composition adapter field set changed")
+    store_compact = compact_rust(source_without_cfg_test_items(store))
+    for flow in (
+        "pubuseadapter::CommitLogasCommitLogAdapter;",
+        "root:CommitLogRoot::new(CommitLogAdapter{",
+        "typeTarget=CommitLogAdapter;",
+        "self.root.adapter()",
+        "self.root.adapter_mut()",
+    ):
+        if flow not in store_compact:
+            violations.append(f"Store CommitLog root facade flow changed: {flow}")
+
+    for test_name in (
+        "commit_log_root_preserves_exclusive_adapter_identity",
+        "commit_log_root_exposes_one_mutable_adapter_owner",
+    ):
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local CommitLog root regression changed: {test_name}")
     return violations
 
 
@@ -14658,8 +14754,9 @@ class StoreLocalContractTests(unittest.TestCase):
                 local,
                 module,
                 store.replace(
-                    "    runtime_state: CommitLogRuntimeState,",
-                    "    confirm_offset: i64,\n    runtime_state: CommitLogRuntimeState,",
+                    "        pub(super) runtime_state: super::CommitLogRuntimeState,",
+                    "        pub(super) confirm_offset: i64,\n"
+                    "        pub(super) runtime_state: super::CommitLogRuntimeState,",
                     1,
                 ),
                 local_tests,
@@ -14696,6 +14793,46 @@ class StoreLocalContractTests(unittest.TestCase):
                         module_source,
                         store_source,
                         test_source,
+                    ),
+                )
+
+    def test_commit_log_root_has_one_local_owner_and_exact_store_facade(self) -> None:
+        local = (ROOT / COMMIT_LOG_ROOT_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_root.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            [],
+            commit_log_root_contract_violations(local, module, store, local_tests),
+        )
+
+    def test_commit_log_root_rejects_owner_facade_and_test_mutations(self) -> None:
+        local = (ROOT / COMMIT_LOG_ROOT_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_root.rs").read_text(
+            encoding="utf-8"
+        )
+        mutations = (
+            ("root copied state", local.replace("    adapter: A,", "    adapter: A,\n    copied_offset: i64,", 1), module, store, local_tests),
+            ("module removed", local, module.replace("pub mod root;", "", 1), store, local_tests),
+            ("Store retained field", local, module, store.replace("    root: CommitLogRoot<CommitLogAdapter>,", "    root: CommitLogRoot<CommitLogAdapter>,\n    copied_offset: i64,", 1), local_tests),
+            ("Store adapter field removed", local, module, store.replace("        pub(super) broker_config: super::Arc<super::BrokerConfig>,", "", 1), local_tests),
+            ("regression renamed", local, module, store, local_tests.replace("fn commit_log_root_exposes_one_mutable_adapter_owner()", "fn commit_log_root_mutation_regression_removed()", 1)),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    commit_log_root_contract_violations(
+                        local_source, module_source, store_source, test_source
                     ),
                 )
 
@@ -21846,6 +21983,7 @@ mod tests""",
                 "recovery_orchestration.rs",
                 "record.rs",
                 "record_parser.rs",
+                "root.rs",
                 "runtime_state.rs",
             },
             {path.name for path in canonical_dir.glob("*.rs")},
