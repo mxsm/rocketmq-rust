@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 35 | 0 | 47 未开始；合计 47 尚未完成 | 82 |
+| PR 级工作包 | 36 | 0 | 46 未开始；合计 46 尚未完成 | 82 |
 | 里程碑 | 5（M01–M05） | 1（M06） | 6（M07–M12） | 12 |
 | 新增边界 crate | 6 | 0 | 4（store-rocksdb、proxy-core/cluster/local） | 10 |
 | 根 workspace package | 28 | — | 还差 4 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 47 个未开始工作包分布：M06-08～12 为 5 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
-M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-07 已完成 Timer/POP/Local Services owner 迁移；当前下一工作包为 PR-M06-08。
+剩余 46 个未开始工作包分布：M06-09～12 为 4 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
+M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-08 已完成 LocalFileMessageStore composition 与 normalized config 边界；当前下一工作包为 PR-M06-09。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -205,7 +205,12 @@ M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-07 已完成 Timer/POP/L
   - [x] Store Timer 保留 MessageExt/CommitLog/CQ/config/DataVersion/file I/O adapter，stats 保留 Broker/TaskGroup lifecycle adapter
   - [x] Local hook registry 接入真实 put-message hook 路径，注册顺序和 legacy getter 保持不变
   - [x] Timer/POP/重启恢复/服务生命周期、Store 全量、runtime/architecture/Clippy 门禁通过并冻结 35/47 盘点
-- [ ] PR-M06-08：收敛 LocalFileMessageStore facade、composition 与 config
+- [x] PR-M06-08：收敛 LocalFileMessageStore facade、composition 与 config
+  - [x] Local canonical 拥有 lifecycle/query/reput/cleanup policy 与 `LocalStoreComposition` root
+  - [x] legacy `MessageStoreConfig` 保持 Serde/default/alias envelope，并投影 immutable `LocalBackendConfig`
+  - [x] Store 公共 `LocalFileMessageStore` 路径不变，仅连接 Broker/CommitLog/CQ/runtime effect adapter
+  - [x] public-path doctest、config、lifecycle/query/reput/cleanup、Store/Local 回归与架构门禁通过
+  - [x] 兼容 ledger、回滚点与 36/46 顶层工作包盘点已冻结
 - [ ] PR-M06-09：创建 RocksDB foundation
 - [ ] PR-M06-10：实现 RocksDB MessageStore adapter 与 parity
 - [ ] PR-M06-11：完成 Store facade、Tiered 反转与 feature 所有权

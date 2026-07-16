@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06/PR-M06-07 已完成，继续 PR-M06-08 |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06/PR-M06-07/PR-M06-08 已完成，继续 PR-M06-09 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -121,12 +121,12 @@
 
 ### PR-M06-08：LocalFileMessageStore Facade、Composition 与 Config
 
-- [ ] 入口：`[ARCH]` Local 子模块已分别通过 focused test，公开 `LocalFileMessageStore`、Serde/default/alias 基线已冻结。
-- [ ] `[DEV]` 保留 public type/facade，内部按 lifecycle/query/reput/cleanup 组合已迁模块；config 分为旧 Serde envelope 与 normalized backend config。
-- [ ] `[DEV]` 仅做 composition 和机械拆分；任何 lifecycle/query 行为修复进入独立 PR 并先加回归测试。
-- [ ] `[TEST]` focused test：public-path compile、config round-trip/default、load/start/shutdown/destroy、query/reput/cleanup。
-- [ ] `[REV]` 检查约 500 行审查信号与约 800 行上限、模块单向依赖、facade 无算法回流。
-- [ ] 回滚点：LocalFileMessageStore composition 指回上一组合实现，旧 config envelope 与数据目录保持。
+- [x] 入口：`[ARCH]` Local 子模块已分别通过 focused test，公开 `LocalFileMessageStore`、Serde/default/alias 基线已冻结。
+- [x] `[DEV]` 保留 public type/facade，内部按 lifecycle/query/reput/cleanup 组合已迁模块；config 分为旧 Serde envelope 与 normalized backend config。
+- [x] `[DEV]` 仅做 composition 和机械拆分；任何 lifecycle/query 行为修复进入独立 PR 并先加回归测试。
+- [x] `[TEST]` focused test：public-path compile、config round-trip/default、load/start/shutdown/destroy、query/reput/cleanup。
+- [x] `[REV]` 检查约 500 行审查信号与约 800 行上限、模块单向依赖、facade 无算法回流。
+- [x] 回滚点：LocalFileMessageStore composition 指回上一组合实现，旧 config envelope 与数据目录保持。
 
 ### PR-M06-09：创建 RocksDB Foundation
 
@@ -2368,3 +2368,34 @@ python scripts/arc_mut_guard.py
   Local/Store 双 owner，既有 timer/POP 持久数据无需迁移。
 - [x] `[INVENTORY]` PR-M06-07 父项关闭；82 个顶层工作包更新为 35 已完成、0 进行中、47 未开始，即
   47 个尚未完成。M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-08。
+
+## M06-08 LocalFileMessageStore composition and config evidence
+
+- [x] `[ARCH/SCOPE]` 冻结 Store 公共 `LocalFileMessageStore` 类型路径、126 方法 legacy `MessageStore` trait、
+  `MessageStoreConfig` Serde/default/camelCase/snake_case alias、CommitLog 多路径和现有数据目录；本包不改变消息、
+  lifecycle、query/reput/cleanup 行为，不修改 wire/storage bytes，也不触碰 RocksDB/Tiered owner。
+- [x] `[DEV/OWNER]` Local canonical 新增 `message_store::{lifecycle,query,reput,cleanup}` 和
+  `message_store::local_file_message_store::LocalStoreComposition`；lifecycle atomic state、index safety/degradation、
+  reput end-offset/availability/behind 与 disk-pressure/manual-delete policy 不再由 Store 重复定义。
+- [x] `[DEV/CONFIG]` Local `config::backend::LocalBackendConfig` 为 immutable normalized backend config，拥有规范化
+  root/CommitLog paths、recovery、query、reput、cleanup 与 I/O hint 值；Store `MessageStoreConfig` 继续作为唯一 legacy
+  Serde envelope，并通过 `normalized_local_backend_config()` 完成默认值、alias、多路径和 ratio clamp 投影。
+- [x] `[DEV/ADAPTER]` Store public facade 保持原路径和构造签名，组合 Local root，仅保留 Broker/MessageExt、CommitLog/CQ/
+  Index、文件锁、TaskGroup、checkpoint、日志和 RunningFlags 等具体副作用 adapter。background-index、reput 与 cleanup
+  adapter 只消费 Local policy；没有把 Common、Remoting、Broker、ArcMut 或 detached task 带入 Local。
+- [x] `[TEST]` public-path doctest 和 source contract 锁定 legacy facade/Local root；Local 184 unit tests及全部
+  integration/doctest、Store LocalFileMessageStore focused 83/83、config 35/35 和 composition compile/projection 回归通过。
+  load/start/shutdown/destroy、recovery lifecycle、query safety、reput committed/uncommitted 和 cleanup 阈值/手工重试均被覆盖。
+- [x] `[RUNTIME/DEPENDENCY]` Local composition 模块保持 runtime-neutral，manifest/source 不含 Store/Common/Remoting/Broker、
+  `MessageExt`、ArcMut、ScheduledTaskGroup 或 `tokio::spawn`；既有 Store TaskGroup、blocking executor 与 shutdown 顺序不变。
+- [x] `[REV]` 新增 Local composition/config 模块均低于 800 行并保持单向依赖。Store 9K legacy 文件的物理搬移会把
+  既有 ArcMut occurrence 变成新 path identity，违反 ADR-013 monotonic guard，因此不以扩大台账换取行数指标；126 方法
+  compatibility trait adapter 与同文件 tests 保留到 PR-M06-12 capability 收敛，新增 lifecycle/query/reput/cleanup 算法
+  均位于 Local，Store 仅保留 effect orchestration。
+- [x] `[ARC/COMPAT]` 14 条既有 occurrence 因 composition 字段和 policy 参数发生同 item 一对一 fingerprint relocation，
+  已按 ADR-013 精确批准并完成 monotonic promotion/compare；ledger 保持 1,171 identities/3,233 occurrences，零新增债务。
+- [x] `[LEDGER/ROLLBACK]` compatibility ledger 冻结 Local composition/config owner、Store-only effect ports、R0 public path、
+  removal milestone 与验证快照。可整体 revert 本 PR 使 facade 恢复直接状态/决策；旧 config envelope、数据目录和磁盘内容
+  无需迁移，且不得回滚 M06-03～07 已完成 owner。
+- [x] `[INVENTORY]` PR-M06-08 父项关闭；82 个顶层工作包更新为 36 已完成、0 进行中、46 未开始，即
+  46 个尚未完成。M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-09。

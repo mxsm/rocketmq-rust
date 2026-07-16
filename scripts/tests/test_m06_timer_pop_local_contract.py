@@ -160,7 +160,7 @@ class M06TimerPopLocalContractTests(unittest.TestCase):
         self.assertNotIn("rocketmq-store =", local_manifest)
         self.assertNotIn("rocketmq_common", local_sources)
         self.assertNotIn("rocketmq_remoting", local_sources)
-        self.assertNotIn("LocalFileMessageStore", local_sources)
+        self.assertNotIn("pub struct LocalFileMessageStore {", local_sources)
         self.assertNotIn("BrokerIdentity", local_sources)
         self.assertNotIn("DataVersion", local_sources)
         self.assertNotIn("tokio::spawn", local_sources)

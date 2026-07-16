@@ -12,6 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! The legacy local-file facade and the normalized Local composition remain
+//! available through their public compatibility paths.
+//!
+//! ```
+//! use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+//! use rocketmq_store_local::message_store::local_file_message_store::LocalStoreComposition;
+//!
+//! let _ = std::mem::size_of::<LocalFileMessageStore>();
+//! let _ = std::mem::size_of::<LocalStoreComposition>();
+//! ```
+
 #![allow(dead_code)]
 #![allow(unused_variables)]
 

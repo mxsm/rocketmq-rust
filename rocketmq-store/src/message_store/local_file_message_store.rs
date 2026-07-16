@@ -106,6 +106,13 @@ use rocketmq_store_local::commit_log::recovery_orchestration::drive_commit_log_r
 use rocketmq_store_local::commit_log::recovery_orchestration::optimized_recovery_requested;
 use rocketmq_store_local::commit_log::recovery_orchestration::CommitLogRecoveryStep;
 use rocketmq_store_local::hook::HookRegistry;
+use rocketmq_store_local::message_store::cleanup::CleanupPolicy as LocalCleanupPolicy;
+use rocketmq_store_local::message_store::cleanup::DiskCleanDecision;
+use rocketmq_store_local::message_store::cleanup::DiskUsageState;
+use rocketmq_store_local::message_store::cleanup::ManualDeleteTracker;
+use rocketmq_store_local::message_store::lifecycle::LocalStoreState;
+use rocketmq_store_local::message_store::reput::ReputPolicy;
+use rocketmq_store_local::message_store::LocalStoreComposition;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -269,46 +276,6 @@ fn murmur3_x64_128_bytes(bytes: &[u8], seed: u32) -> [u8; 16] {
     result
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-enum StoreLifecycleState {
-    Created = 0,
-    Initialized = 1,
-    Started = 2,
-    Shutdown = 3,
-    RecoveringConsumeQueue = 4,
-    RecoveringCommitLog = 5,
-    RecoveringTopicQueueTable = 6,
-}
-
-impl StoreLifecycleState {
-    #[inline]
-    fn from_u8(value: u8) -> Self {
-        match value {
-            1 => Self::Initialized,
-            2 => Self::Started,
-            3 => Self::Shutdown,
-            4 => Self::RecoveringConsumeQueue,
-            5 => Self::RecoveringCommitLog,
-            6 => Self::RecoveringTopicQueueTable,
-            _ => Self::Created,
-        }
-    }
-
-    #[inline]
-    fn as_u8(self) -> u8 {
-        self as u8
-    }
-
-    #[inline]
-    fn is_recovering(self) -> bool {
-        matches!(
-            self,
-            Self::RecoveringConsumeQueue | Self::RecoveringCommitLog | Self::RecoveringTopicQueueTable
-        )
-    }
-}
-
 struct StoreLockGuard {
     file: File,
 }
@@ -323,6 +290,7 @@ impl Drop for StoreLockGuard {
 ///Using local files to store message data, which is also the default method.
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
+    composition: LocalStoreComposition,
     broker_config: Arc<BrokerConfig>,
     put_message_hook_list: HookRegistry<dyn PutMessageHook + Send + Sync>,
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
@@ -339,7 +307,6 @@ pub struct LocalFileMessageStore {
     tiered_store: Option<Arc<TieredStore>>,
     broker_init_max_offset: Arc<AtomicI64>,
     state_machine_version: Arc<AtomicI64>,
-    lifecycle_state: Arc<AtomicU8>,
     controller_epoch_start_offset: Arc<AtomicI64>,
     shutdown: Arc<AtomicBool>,
     background_index_query_degradation_total: Arc<AtomicU64>,
@@ -463,6 +430,8 @@ impl LocalFileMessageStore {
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
     ) -> Result<Self, StoreError> {
+        let local_backend_config = message_store_config.normalized_local_backend_config();
+        let cleanup_policy = LocalCleanupPolicy::new(local_backend_config.cleanup);
         let (delay_level_table, max_delay_level) = parse_delay_level(message_store_config.message_delay_level.as_str());
         let running_flags = Arc::new(RunningFlags::new());
         let store_health_recorder = StoreHealthRecorder::new(running_flags.clone());
@@ -545,6 +514,7 @@ impl LocalFileMessageStore {
         });
         Ok(Self {
             message_store_config: message_store_config.clone(),
+            composition: LocalStoreComposition::new(local_backend_config),
             broker_config,
             put_message_hook_list: HookRegistry::new(),
             topic_config_table,
@@ -562,7 +532,6 @@ impl LocalFileMessageStore {
             tiered_store,
             broker_init_max_offset: Arc::new(AtomicI64::new(-1)),
             state_machine_version: Arc::new(AtomicI64::new(0)),
-            lifecycle_state: Arc::new(AtomicU8::new(StoreLifecycleState::Created.as_u8())),
             controller_epoch_start_offset: Arc::new(AtomicI64::new(-1)),
             shutdown: Arc::new(AtomicBool::new(false)),
             background_index_query_degradation_total: Arc::new(AtomicU64::new(0)),
@@ -584,6 +553,7 @@ impl LocalFileMessageStore {
                 message_store_config.clone(),
                 commit_log.clone(),
                 running_flags.clone(),
+                cleanup_policy,
             )),
             correct_logic_offset_service: Arc::new(CorrectLogicOffsetService::new(
                 commit_log.clone(),
@@ -970,19 +940,20 @@ impl LocalFileMessageStore {
     }
 
     #[inline]
-    fn lifecycle_state(&self) -> StoreLifecycleState {
-        StoreLifecycleState::from_u8(self.lifecycle_state.load(Ordering::Acquire))
+    fn lifecycle_state(&self) -> LocalStoreState {
+        self.composition.lifecycle().state()
     }
 
     #[inline]
-    fn set_lifecycle_state(&self, state: StoreLifecycleState) {
-        self.lifecycle_state.store(state.as_u8(), Ordering::Release);
+    fn set_lifecycle_state(&self, state: LocalStoreState) {
+        self.composition.lifecycle().transition_to(state);
     }
 
     #[inline]
     fn is_store_available_for_io(&self) -> bool {
-        let state = self.lifecycle_state();
-        state != StoreLifecycleState::Shutdown && !state.is_recovering() && !self.shutdown.load(Ordering::Acquire)
+        self.composition
+            .lifecycle()
+            .is_available_for_io(self.shutdown.load(Ordering::Acquire))
     }
 
     fn message_store_arc_or_error(&self, operation: &str) -> Result<ArcMut<LocalFileMessageStore>, StoreError> {
@@ -1250,8 +1221,7 @@ impl LocalFileMessageStore {
         recovery_plan.set_consume_queue_recovery_concurrency(ConsumeQueueRecoveryConcurrency::new(
             self.message_store_config
                 .enable_local_file_consume_queue_recovery_concurrently,
-            self.message_store_config
-                .effective_local_file_consume_queue_recovery_parallelism(),
+            self.composition.config().recovery.consume_queue_parallelism,
         ));
         let mut recovery_executor = RecoveryExecutor::new(recovery_plan);
         info!(
@@ -1274,7 +1244,7 @@ impl LocalFileMessageStore {
                 .consume_queue_recovery_concurrency
                 .local_file_parallelism
         );
-        self.set_lifecycle_state(StoreLifecycleState::RecoveringConsumeQueue);
+        self.set_lifecycle_state(LocalStoreState::RecoveringConsumeQueue);
         let recover_consume_queue = recovery_executor
             .run_phase(RecoveryPhase::ConsumeQueue, self.recover_consume_queue())
             .await;
@@ -1286,7 +1256,7 @@ impl LocalFileMessageStore {
             .plan_mut()
             .set_max_consume_queue_physical_offset(dispatch_recovery_offset);
 
-        self.set_lifecycle_state(StoreLifecycleState::RecoveringCommitLog);
+        self.set_lifecycle_state(LocalStoreState::RecoveringCommitLog);
         let recover_commit_log = if last_exit_ok {
             recovery_executor
                 .run_phase(
@@ -1303,13 +1273,13 @@ impl LocalFileMessageStore {
                 .await
         };
 
-        self.set_lifecycle_state(StoreLifecycleState::RecoveringTopicQueueTable);
+        self.set_lifecycle_state(LocalStoreState::RecoveringTopicQueueTable);
         let recover_topic_queue_table = recovery_executor
             .run_phase(RecoveryPhase::TopicQueueTable, async {
                 self.recover_topic_queue_table();
             })
             .await;
-        if self.lifecycle_state() != StoreLifecycleState::Shutdown {
+        if self.lifecycle_state() != LocalStoreState::Shutdown {
             self.set_lifecycle_state(previous_state);
         }
         recovery_executor.plan_mut().set_commit_log_offsets(
@@ -1422,9 +1392,7 @@ impl LocalFileMessageStore {
         if self.broker_config.recover_concurrently && self.message_store_config.is_enable_rocksdb_store() {
             self.consume_queue_store.recover_concurrently().await;
         } else if self.broker_config.recover_concurrently && self.is_local_file_consume_queue_recover_concurrently() {
-            let parallelism = self
-                .message_store_config
-                .effective_local_file_consume_queue_recovery_parallelism();
+            let parallelism = self.composition.config().recovery.consume_queue_parallelism;
             let summary = self
                 .consume_queue_store
                 .recover_concurrently_with_summary(parallelism)
@@ -1791,6 +1759,7 @@ impl LocalFileMessageStore {
             .run_once(
                 self.commit_log.clone(),
                 self.message_store_config.clone(),
+                self.composition.reput(),
                 self.dispatcher.clone(),
                 self.notify_message_arrive_in_batch,
                 message_store,
@@ -1920,23 +1889,23 @@ impl MessageStore for LocalFileMessageStore {
     async fn start(&mut self) -> Result<(), StoreError> {
         self.validate_supported_configuration()?;
         match self.lifecycle_state() {
-            StoreLifecycleState::Initialized => {}
-            StoreLifecycleState::Created => {
+            LocalStoreState::Initialized => {}
+            LocalStoreState::Created => {
                 return Err(StoreError::InvalidState(
                     "message store must be initialized before start".to_string(),
                 ));
             }
-            StoreLifecycleState::Started => {
+            LocalStoreState::Started => {
                 return Err(StoreError::InvalidState("message store is already started".to_string()));
             }
-            StoreLifecycleState::Shutdown => {
+            LocalStoreState::Shutdown => {
                 return Err(StoreError::InvalidState(
                     "message store is shutdown; call init before start".to_string(),
                 ));
             }
-            StoreLifecycleState::RecoveringConsumeQueue
-            | StoreLifecycleState::RecoveringCommitLog
-            | StoreLifecycleState::RecoveringTopicQueueTable => {
+            LocalStoreState::RecoveringConsumeQueue
+            | LocalStoreState::RecoveringCommitLog
+            | LocalStoreState::RecoveringTopicQueueTable => {
                 return Err(StoreError::InvalidState(
                     "message store is recovering; start is not allowed".to_string(),
                 ));
@@ -1963,6 +1932,7 @@ impl MessageStore for LocalFileMessageStore {
             self.reput_message_service.start(
                 self.commit_log.clone(),
                 self.message_store_config.clone(),
+                self.composition.reput(),
                 self.dispatcher.clone(),
                 self.notify_message_arrive_in_batch,
                 message_store_arc,
@@ -2003,7 +1973,7 @@ impl MessageStore for LocalFileMessageStore {
         match start_result {
             Ok(()) => {
                 self.shutdown.store(false, Ordering::Release);
-                self.set_lifecycle_state(StoreLifecycleState::Started);
+                self.set_lifecycle_state(LocalStoreState::Started);
                 Ok(())
             }
             Err(error) => {
@@ -2025,16 +1995,16 @@ impl MessageStore for LocalFileMessageStore {
     async fn init(&mut self) -> Result<(), StoreError> {
         self.validate_supported_configuration()?;
         match self.lifecycle_state() {
-            StoreLifecycleState::Created | StoreLifecycleState::Shutdown => {}
-            StoreLifecycleState::Initialized => return Ok(()),
-            StoreLifecycleState::Started => {
+            LocalStoreState::Created | LocalStoreState::Shutdown => {}
+            LocalStoreState::Initialized => return Ok(()),
+            LocalStoreState::Started => {
                 return Err(StoreError::InvalidState(
                     "message store cannot be initialized while started".to_string(),
                 ));
             }
-            StoreLifecycleState::RecoveringConsumeQueue
-            | StoreLifecycleState::RecoveringCommitLog
-            | StoreLifecycleState::RecoveringTopicQueueTable => {
+            LocalStoreState::RecoveringConsumeQueue
+            | LocalStoreState::RecoveringCommitLog
+            | LocalStoreState::RecoveringTopicQueueTable => {
                 return Err(StoreError::InvalidState(
                     "message store cannot be initialized while recovering".to_string(),
                 ));
@@ -2088,7 +2058,7 @@ impl MessageStore for LocalFileMessageStore {
             }
         }
         self.shutdown.store(false, Ordering::Release);
-        self.set_lifecycle_state(StoreLifecycleState::Initialized);
+        self.set_lifecycle_state(LocalStoreState::Initialized);
         Ok(())
     }
 
@@ -2098,12 +2068,9 @@ impl MessageStore for LocalFileMessageStore {
         let previous_state = self.lifecycle_state();
         if !self.shutdown.load(Ordering::Acquire) {
             self.shutdown.store(true, Ordering::Release);
-            self.set_lifecycle_state(StoreLifecycleState::Shutdown);
+            self.set_lifecycle_state(LocalStoreState::Shutdown);
 
-            if matches!(
-                previous_state,
-                StoreLifecycleState::Created | StoreLifecycleState::Shutdown
-            ) {
+            if matches!(previous_state, LocalStoreState::Created | LocalStoreState::Shutdown) {
                 self.release_store_lock();
                 let _ = self.transient_store_pool.destroy();
                 return Ok(report);
@@ -2318,7 +2285,7 @@ impl MessageStore for LocalFileMessageStore {
         message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult> {
         let lifecycle_state = self.lifecycle_state();
-        if lifecycle_state == StoreLifecycleState::Shutdown || lifecycle_state.is_recovering() {
+        if lifecycle_state == LocalStoreState::Shutdown || lifecycle_state.is_recovering() {
             warn!("message store is not available, so getMessage is forbidden");
             return None;
         }
@@ -3074,8 +3041,10 @@ impl MessageStore for LocalFileMessageStore {
         );
         result.insert(
             "backgroundIndexRebuildEffectiveEnable".to_string(),
-            self.message_store_config
-                .effective_background_index_rebuild_enable()
+            self.composition
+                .config()
+                .recovery
+                .background_index_rebuild_enabled
                 .to_string(),
         );
         result.insert(
@@ -3311,11 +3280,14 @@ impl MessageStore for LocalFileMessageStore {
     ) -> Option<QueryMessageResult> {
         let mut query_message_result = QueryMessageResult::default();
         let index_safe_phyoffset = self.current_index_safe_offset();
-        let index_confirm_phyoffset = self.get_confirm_offset().max(0);
+        let index_safety = self
+            .composition
+            .query()
+            .index_safety(index_safe_phyoffset, self.get_confirm_offset());
         query_message_result.set_index_query_safety(
-            !self.message_store_config.message_index_enable || index_safe_phyoffset >= index_confirm_phyoffset,
-            index_safe_phyoffset,
-            index_confirm_phyoffset,
+            index_safety.safe,
+            index_safety.safe_offset,
+            index_safety.confirm_offset,
         );
         let mut last_query_msg_time = end_timestamp;
         for i in 1..3 {
@@ -3362,7 +3334,11 @@ impl MessageStore for LocalFileMessageStore {
             }
         }
 
-        if query_message_result.buffer_total_size == 0 && !query_message_result.index_query_safe {
+        if self
+            .composition
+            .query()
+            .should_record_degradation(query_message_result.buffer_total_size == 0, index_safety)
+        {
             self.background_index_query_degradation_total
                 .fetch_add(1, Ordering::Relaxed);
         }
@@ -4020,7 +3996,6 @@ impl MessageStore for LocalFileMessageStore {
             .map(|ha_service| ha_service.get_runtime_info(self.commit_log.get_max_offset()))
     }
 }
-
 #[derive(Default)]
 pub struct CommitLogDispatcherDefault {
     dispatcher_vec: Vec<Arc<dyn CommitLogDispatcher>>,
@@ -4546,7 +4521,6 @@ impl BackgroundIndexRebuildWorker {
         }
     }
 }
-
 struct ReputMessageService {
     shutdown_token: CancellationToken,
     new_message_notify: Arc<Notify>,
@@ -4580,6 +4554,7 @@ impl ReputMessageService {
         &mut self,
         commit_log: ArcMut<CommitLog>,
         message_store_config: Arc<MessageStoreConfig>,
+        policy: ReputPolicy,
         dispatcher: ArcMut<CommitLogDispatcherDefault>,
         notify_message_arrive_in_batch: bool,
         message_store: ArcMut<LocalFileMessageStore>,
@@ -4609,6 +4584,7 @@ impl ReputMessageService {
             reput_from_offset,
             commit_log,
             message_store_config,
+            policy,
             dispatcher: dispatcher.clone(),
             notify_message_arrive_in_batch,
             message_store: message_store.clone(),
@@ -4750,6 +4726,7 @@ impl ReputMessageService {
         &mut self,
         commit_log: ArcMut<CommitLog>,
         message_store_config: Arc<MessageStoreConfig>,
+        policy: ReputPolicy,
         dispatcher: ArcMut<CommitLogDispatcherDefault>,
         notify_message_arrive_in_batch: bool,
         message_store: ArcMut<LocalFileMessageStore>,
@@ -4766,6 +4743,7 @@ impl ReputMessageService {
                 reput_from_offset,
                 commit_log,
                 message_store_config,
+                policy,
                 dispatcher,
                 notify_message_arrive_in_batch,
                 message_store,
@@ -4829,6 +4807,7 @@ struct ReputMessageServiceInner {
     reput_from_offset: Arc<AtomicI64>,
     commit_log: ArcMut<CommitLog>,
     message_store_config: Arc<MessageStoreConfig>,
+    policy: ReputPolicy,
     dispatcher: ArcMut<CommitLogDispatcherDefault>,
     notify_message_arrive_in_batch: bool,
     message_store: ArcMut<LocalFileMessageStore>,
@@ -4989,29 +4968,35 @@ impl ReputMessageServiceInner {
     }
 
     fn is_commit_log_available(&self) -> bool {
-        self.reput_from_offset.load(Ordering::Relaxed) < self.get_reput_end_offset()
+        self.policy.is_available(
+            self.reput_from_offset.load(Ordering::Relaxed),
+            self.commit_log.get_confirm_offset(),
+            self.commit_log.get_max_offset(),
+        )
     }
 
     fn has_unconfirmed_commit_log(&self) -> bool {
-        !self.message_store_config.read_uncommitted
-            && self.reput_from_offset.load(Ordering::Relaxed) < self.commit_log.get_max_offset()
-            && !self.is_commit_log_available()
+        self.policy.has_unconfirmed(
+            self.reput_from_offset.load(Ordering::Relaxed),
+            self.commit_log.get_confirm_offset(),
+            self.commit_log.get_max_offset(),
+        )
     }
 
     fn get_reput_end_offset(&self) -> i64 {
-        match self.message_store_config.read_uncommitted {
-            true => self.commit_log.get_max_offset(),
-            false => self.commit_log.get_confirm_offset(),
-        }
+        self.policy
+            .end_offset(self.commit_log.get_confirm_offset(), self.commit_log.get_max_offset())
     }
 
     fn record_dispatch_behind_bytes(&self) {
-        let behind = self
-            .get_reput_end_offset()
-            .saturating_sub(self.reput_from_offset.load(Ordering::Relaxed));
+        let behind = self.policy.behind_bytes(
+            self.reput_from_offset.load(Ordering::Relaxed),
+            self.commit_log.get_confirm_offset(),
+            self.commit_log.get_max_offset(),
+        );
         self.message_store
             .store_stats_service
-            .set_reput_dispatch_behind_bytes(behind.max(0) as u64);
+            .set_reput_dispatch_behind_bytes(behind);
     }
 
     pub fn reput_from_offset(&self) -> i64 {
@@ -5181,17 +5166,12 @@ fn store_path_disk_used_ratio(path: &str) -> f64 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct DiskCleanDecision {
-    should_delete: bool,
-    clean_immediately: bool,
-}
-
 struct CleanCommitLogService {
     message_store_config: Arc<MessageStoreConfig>,
     commit_log: ArcMut<CommitLog>,
     running_flags: Arc<RunningFlags>,
-    manual_delete_requests: AtomicI32,
+    cleanup_policy: LocalCleanupPolicy,
+    manual_delete_tracker: ManualDeleteTracker,
     #[cfg(test)]
     disk_clean_decision_override: StdMutex<Option<DiskCleanDecision>>,
 }
@@ -5203,12 +5183,14 @@ impl CleanCommitLogService {
         message_store_config: Arc<MessageStoreConfig>,
         commit_log: ArcMut<CommitLog>,
         running_flags: Arc<RunningFlags>,
+        cleanup_policy: LocalCleanupPolicy,
     ) -> Self {
         Self {
             message_store_config,
             commit_log,
             running_flags,
-            manual_delete_requests: AtomicI32::new(0),
+            cleanup_policy,
+            manual_delete_tracker: ManualDeleteTracker::new(Self::MAX_MANUAL_DELETE_FILE_TIMES),
             #[cfg(test)]
             disk_clean_decision_override: StdMutex::new(None),
         }
@@ -5222,7 +5204,7 @@ impl CleanCommitLogService {
         let is_time_up = util_all::is_it_time_to_do(&self.message_store_config.delete_when);
         let disk_decision = self.is_space_to_delete();
         let is_manual_delete = self.consume_manual_delete_request();
-        let clean_at_once = self.message_store_config.clean_file_forcibly_enable && disk_decision.clean_immediately;
+        let clean_at_once = self.cleanup_policy.clean_file_forcibly_enabled() && disk_decision.clean_immediately;
         let delete_count = if is_time_up || disk_decision.should_delete || is_manual_delete {
             self.commit_log.mut_from_ref().delete_expired_files_by_time(
                 expired_time,
@@ -5251,17 +5233,17 @@ impl CleanCommitLogService {
     }
 
     fn execute_delete_files_manually(&self) {
-        self.manual_delete_requests
-            .store(Self::MAX_MANUAL_DELETE_FILE_TIMES, Ordering::SeqCst);
+        self.manual_delete_tracker.request();
         info!("executeDeleteFilesManually was invoked");
     }
 
     fn consume_manual_delete_request(&self) -> bool {
-        self.manual_delete_requests
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |requests| {
-                (requests > 0).then_some(requests - 1)
-            })
-            .is_ok()
+        self.manual_delete_tracker.consume()
+    }
+
+    #[cfg(test)]
+    fn remaining_manual_delete_requests(&self) -> i32 {
+        self.manual_delete_tracker.remaining()
     }
 
     #[cfg(test)]
@@ -5282,72 +5264,76 @@ impl CleanCommitLogService {
             return decision;
         }
 
-        let warning_ratio = self.disk_space_warning_level_ratio();
-        let clean_forcibly_ratio = self.disk_space_clean_forcibly_ratio();
         let (min_physic_ratio, min_store_path) = self.min_physic_disk_ratio();
 
-        if min_physic_ratio > warning_ratio {
-            if self.running_flags.get_and_make_disk_full() {
-                error!(
-                    "physic disk maybe full soon {}, so mark disk full, storePathPhysic={}",
-                    min_physic_ratio,
-                    min_store_path.as_deref().unwrap_or("")
-                );
+        match self.cleanup_policy.classify(min_physic_ratio) {
+            DiskUsageState::Warning => {
+                if self.running_flags.get_and_make_disk_full() {
+                    error!(
+                        "physic disk maybe full soon {}, so mark disk full, storePathPhysic={}",
+                        min_physic_ratio,
+                        min_store_path.as_deref().unwrap_or("")
+                    );
+                }
+                return DiskCleanDecision {
+                    should_delete: true,
+                    clean_immediately: true,
+                };
             }
-            return DiskCleanDecision {
-                should_delete: true,
-                clean_immediately: true,
-            };
-        } else if min_physic_ratio > clean_forcibly_ratio {
-            return DiskCleanDecision {
-                should_delete: true,
-                clean_immediately: true,
-            };
-        } else if !self.running_flags.get_and_make_disk_ok() {
-            info!(
-                "physic disk space OK {}, so mark disk ok, storePathPhysic={}",
-                min_physic_ratio,
-                min_store_path.as_deref().unwrap_or("")
-            );
+            DiskUsageState::Forcible => {
+                return DiskCleanDecision {
+                    should_delete: true,
+                    clean_immediately: true,
+                };
+            }
+            DiskUsageState::Reclaim | DiskUsageState::Healthy => {
+                if !self.running_flags.get_and_make_disk_ok() {
+                    info!(
+                        "physic disk space OK {}, so mark disk ok, storePathPhysic={}",
+                        min_physic_ratio,
+                        min_store_path.as_deref().unwrap_or("")
+                    );
+                }
+            }
         }
 
         let store_path_logics = LocalFileMessageStore::get_store_path_logic(&self.message_store_config);
         let logics_ratio = store_path_disk_used_ratio(store_path_logics.as_str());
-        if logics_ratio > warning_ratio {
-            if self.running_flags.get_and_make_logic_disk_full() {
-                error!("logics disk maybe full soon {}, so mark disk full", logics_ratio);
+        match self.cleanup_policy.classify(logics_ratio) {
+            DiskUsageState::Warning => {
+                if self.running_flags.get_and_make_logic_disk_full() {
+                    error!("logics disk maybe full soon {}, so mark disk full", logics_ratio);
+                }
+                return DiskCleanDecision {
+                    should_delete: true,
+                    clean_immediately: true,
+                };
             }
-            return DiskCleanDecision {
-                should_delete: true,
-                clean_immediately: true,
-            };
-        } else if logics_ratio > clean_forcibly_ratio {
-            return DiskCleanDecision {
-                should_delete: true,
-                clean_immediately: true,
-            };
-        } else if !self.running_flags.get_and_make_logic_disk_ok() {
-            info!("logics disk space OK {}, so mark disk ok", logics_ratio);
+            DiskUsageState::Forcible => {
+                return DiskCleanDecision {
+                    should_delete: true,
+                    clean_immediately: true,
+                };
+            }
+            DiskUsageState::Reclaim | DiskUsageState::Healthy => {
+                if !self.running_flags.get_and_make_logic_disk_ok() {
+                    info!("logics disk space OK {}, so mark disk ok", logics_ratio);
+                }
+            }
         }
 
-        let max_used_ratio = self.disk_max_used_space_ratio();
-        if min_physic_ratio < 0.0 || min_physic_ratio > max_used_ratio {
+        let decision = self.cleanup_policy.decide(min_physic_ratio, logics_ratio);
+        if self.cleanup_policy.classify(min_physic_ratio) == DiskUsageState::Reclaim {
             info!("commitLog disk maybe full soon, so reclaim space, {}", min_physic_ratio);
-            return DiskCleanDecision {
-                should_delete: true,
-                clean_immediately: false,
-            };
+            return decision;
         }
 
-        if logics_ratio < 0.0 || logics_ratio > max_used_ratio {
+        if self.cleanup_policy.classify(logics_ratio) == DiskUsageState::Reclaim {
             info!("consumeQueue disk maybe full soon, so reclaim space, {}", logics_ratio);
-            return DiskCleanDecision {
-                should_delete: true,
-                clean_immediately: false,
-            };
+            return decision;
         }
 
-        DiskCleanDecision::default()
+        decision
     }
 
     fn min_physic_disk_ratio(&self) -> (f64, Option<String>) {
@@ -5376,16 +5362,15 @@ impl CleanCommitLogService {
     }
 
     fn disk_space_warning_level_ratio(&self) -> f64 {
-        (self.message_store_config.disk_space_warning_level_ratio as f64 / 100.0).clamp(0.35, 0.90)
+        self.cleanup_policy.disk_warning_ratio()
     }
 
     fn disk_space_clean_forcibly_ratio(&self) -> f64 {
-        (self.message_store_config.disk_space_clean_forcibly_ratio as f64 / 100.0).clamp(0.30, 0.85)
+        self.cleanup_policy.disk_clean_forcibly_ratio()
     }
 
     fn disk_max_used_space_ratio(&self) -> f64 {
-        let ratio = self.message_store_config.disk_max_used_space_ratio.clamp(10, 95);
-        ratio as f64 / 100.0
+        self.cleanup_policy.disk_max_used_ratio()
     }
 }
 
@@ -5457,7 +5442,6 @@ impl CorrectLogicOffsetService {
         }
     }
 }
-
 struct FlushConsumeQueueService {
     message_store_config: Arc<MessageStoreConfig>,
     consume_queue_store: ConsumeQueueStore,
@@ -5584,7 +5568,6 @@ impl FlushConsumeQueueService {
         }
     }
 }
-
 pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
     let mut delay_level_table = BTreeMap::new();
 
@@ -5683,7 +5666,6 @@ mod tests {
     use super::LocalFileMessageStore;
     use super::ReputMessageService;
     use super::ReputMessageServiceInner;
-    use super::StoreLifecycleState;
     use crate::base::dispatch_request::DispatchRequest;
     use crate::base::message_arriving_listener::MessageArrivingListener;
     use crate::base::message_result::PutMessageResult;
@@ -5713,6 +5695,7 @@ mod tests {
     use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
     use crate::store_error::StoreError;
     use crate::store_path_config_helper::get_store_checkpoint;
+    use rocketmq_store_local::message_store::lifecycle::LocalStoreState;
 
     fn new_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
         new_configured_test_store(temp_dir, MessageStoreConfig::default())
@@ -5858,10 +5841,12 @@ mod tests {
     }
 
     fn reput_inner_for_store(store: ArcMut<LocalFileMessageStore>) -> ReputMessageServiceInner {
+        let policy = store.composition.reput();
         ReputMessageServiceInner {
             reput_from_offset: Arc::new(AtomicI64::new(0)),
             commit_log: store.commit_log.clone(),
             message_store_config: store.message_store_config.clone(),
+            policy,
             dispatcher: store.dispatcher.clone(),
             notify_message_arrive_in_batch: false,
             message_store: store,
@@ -5921,11 +5906,17 @@ mod tests {
         store.reput_message_service.set_reput_from_offset(0);
         let commit_log = store.commit_log.clone();
         let message_store_config = store.message_store_config.clone();
+        let reput_policy = store.composition.reput();
         let dispatcher = store.dispatcher.clone();
         let message_store = store.clone();
-        store
-            .reput_message_service
-            .start(commit_log, message_store_config, dispatcher, false, message_store);
+        store.reput_message_service.start(
+            commit_log,
+            message_store_config,
+            reput_policy,
+            dispatcher,
+            false,
+            message_store,
+        );
 
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
@@ -6869,7 +6860,7 @@ mod tests {
     async fn read_and_write_are_rejected_while_recovering() {
         let temp_dir = tempdir().unwrap();
         let mut store = new_test_store(&temp_dir);
-        store.set_lifecycle_state(StoreLifecycleState::RecoveringCommitLog);
+        store.set_lifecycle_state(LocalStoreState::RecoveringCommitLog);
 
         let topic = CheetahString::from_static_str("recovering-io-topic");
         let group = CheetahString::from_static_str("recovering-io-group");
@@ -6886,13 +6877,13 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let mut store = new_test_store(&temp_dir);
 
-        assert_eq!(store.lifecycle_state(), StoreLifecycleState::Created);
+        assert_eq!(store.lifecycle_state(), LocalStoreState::Created);
         store.recover(true).await;
-        assert_eq!(store.lifecycle_state(), StoreLifecycleState::Created);
+        assert_eq!(store.lifecycle_state(), LocalStoreState::Created);
 
         store.init().await.expect("init store");
         store.recover(false).await;
-        assert_eq!(store.lifecycle_state(), StoreLifecycleState::Initialized);
+        assert_eq!(store.lifecycle_state(), LocalStoreState::Initialized);
     }
 
     #[tokio::test]
@@ -7308,7 +7299,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let mut store = new_test_store(&temp_dir);
 
-        store.set_lifecycle_state(StoreLifecycleState::RecoveringConsumeQueue);
+        store.set_lifecycle_state(LocalStoreState::RecoveringConsumeQueue);
         let start_error = store
             .start()
             .await
@@ -7318,7 +7309,7 @@ mod tests {
             StoreError::InvalidState(message) if message.contains("recovering")
         ));
 
-        store.set_lifecycle_state(StoreLifecycleState::RecoveringTopicQueueTable);
+        store.set_lifecycle_state(LocalStoreState::RecoveringTopicQueueTable);
         let init_error = store.init().await.expect_err("init should be rejected during recovery");
         assert!(matches!(
             init_error,
@@ -8819,18 +8810,12 @@ mod tests {
         store.clean_commit_log_service.execute_delete_files_manually();
 
         assert_eq!(
-            store
-                .clean_commit_log_service
-                .manual_delete_requests
-                .load(Ordering::SeqCst),
+            store.clean_commit_log_service.remaining_manual_delete_requests(),
             CleanCommitLogService::MAX_MANUAL_DELETE_FILE_TIMES
         );
         assert!(store.clean_commit_log_service.consume_manual_delete_request());
         assert_eq!(
-            store
-                .clean_commit_log_service
-                .manual_delete_requests
-                .load(Ordering::SeqCst),
+            store.clean_commit_log_service.remaining_manual_delete_requests(),
             CleanCommitLogService::MAX_MANUAL_DELETE_FILE_TIMES - 1
         );
     }
@@ -8848,14 +8833,18 @@ mod tests {
             mix_all::MULTI_PATH_SPLITTER.as_str(),
             existing_path.display()
         );
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+            store_path_commit_log: Some(store_path_commit_log.into()),
+            ..MessageStoreConfig::default()
+        });
+        let cleanup_policy =
+            super::LocalCleanupPolicy::new(message_store_config.normalized_local_backend_config().cleanup);
         let service = CleanCommitLogService::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
-                store_path_commit_log: Some(store_path_commit_log.into()),
-                ..MessageStoreConfig::default()
-            }),
+            message_store_config,
             store.commit_log.clone(),
             store.running_flags.clone(),
+            cleanup_policy,
         );
 
         let (ratio, selected_path) = service.min_physic_disk_ratio();

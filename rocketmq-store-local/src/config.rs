@@ -17,6 +17,8 @@ use std::fmt;
 use serde::Deserialize;
 use serde::Deserializer;
 
+pub mod backend;
+
 #[derive(Debug, Copy, Clone, Default, PartialEq)]
 pub enum FlushDiskType {
     SyncFlush,

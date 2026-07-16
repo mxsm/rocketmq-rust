@@ -10568,7 +10568,7 @@ def storage_local_compatibility_ledger_violations(
 ) -> list[str]:
     violations: list[str] = []
     required_ledger_fragments = (
-        "# M06-03/M06-04/M06-05/M06-06/M06-07 Local 存储兼容与所有权 Ledger",
+        "# M06-03～M06-08 Local 存储兼容与所有权 Ledger",
         "## Canonical ownership",
         "`rocketmq-store-local::mapped_file`",
         "`rocketmq-store-local::base::allocate_mapped_file_service`",
@@ -10583,12 +10583,14 @@ def storage_local_compatibility_ledger_violations(
         "`rocketmq-store-local::pop`",
         "`rocketmq-store-local::stats`",
         "`rocketmq-store-local::{filter,services,hook}`",
+        "`rocketmq-store-local::message_store::{lifecycle,query,reput,cleanup,local_file_message_store}`",
+        "`rocketmq-store-local::config::backend`",
         "## Feature compatibility",
         "`default = []`",
         "## Retained Store-only ports",
         "HA/replication/transfer 仅保留具体 socket/network",
         "Timer 仅保留 `MessageExt`/CommitLog/CQ effect",
-        "- M06-08：",
+        "LocalFileMessageStore` 继续保留公共 facade",
         "## Compatibility and removal rules",
         "下一 major",
         "## Closeout evidence",
