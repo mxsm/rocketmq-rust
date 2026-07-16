@@ -697,8 +697,8 @@ def check_source_stringification_allowlist() -> list[Finding]:
             "FlushFailed(#[source] io::Error)",
         ],
         ROOT / "rocketmq-store" / "src" / "message_store" / "rocksdb_message_store.rs": [
-            "map_err(StoreError::rocksdb)",
-            "StoreError::rocksdb(error)",
+            "RocksDbMessageStoreError::Backend { source } => StoreError::rocksdb(source)",
+            "RocksDbMessageStoreError::Local { source } => StoreError::Storage(source.to_string())",
         ],
     }
     findings: list[Finding] = []

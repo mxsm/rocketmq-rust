@@ -33,6 +33,9 @@ rocksdb.workspace = true
 rocketmq-error.workspace = true
 rocketmq-observability.workspace = true
 rocketmq-runtime.workspace = true
+rocketmq-store-api.workspace = true
+rocketmq-store-local.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 

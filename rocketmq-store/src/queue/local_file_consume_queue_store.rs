@@ -163,6 +163,21 @@ impl Inner {
 }
 
 impl ConsumeQueueStore {
+    pub(crate) fn advance_topic_queue_offset(&self, topic: &str, queue_id: i32, next_offset: i64) {
+        self.inner
+            .queue_offset_operator
+            .advance_queue_offset(CheetahString::from_string(format!("{topic}-{queue_id}")), next_offset);
+    }
+
+    pub(crate) fn replace_topic_queue_table(&self, topic_queue_table: HashMap<CheetahString, i64>) {
+        self.inner
+            .queue_offset_operator
+            .set_topic_queue_table(topic_queue_table.clone());
+        self.inner
+            .queue_offset_operator
+            .set_lmq_topic_queue_table(topic_queue_table);
+    }
+
     fn snapshot_consume_queues(&self) -> Vec<ArcConsumeQueue> {
         self.inner
             .consume_queue_table

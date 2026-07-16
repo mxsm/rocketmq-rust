@@ -180,6 +180,15 @@ impl IndexRocksDbKey {
         Self::new(topic, INDEX_KEY_TYPE, key, Some(uniq_key.into()), store_time, offset_py)
     }
 
+    pub fn normal_key_without_uniq(
+        topic: impl Into<String>,
+        key: impl Into<String>,
+        store_time: i64,
+        offset_py: i64,
+    ) -> Result<Self, RocketMQError> {
+        Self::new(topic, INDEX_KEY_TYPE, key, None, store_time, offset_py)
+    }
+
     pub fn tag_key(
         topic: impl Into<String>,
         tag: impl Into<String>,
@@ -188,6 +197,15 @@ impl IndexRocksDbKey {
         offset_py: i64,
     ) -> Result<Self, RocketMQError> {
         Self::new(topic, INDEX_TAG_TYPE, tag, Some(uniq_key.into()), store_time, offset_py)
+    }
+
+    pub fn tag_key_without_uniq(
+        topic: impl Into<String>,
+        tag: impl Into<String>,
+        store_time: i64,
+        offset_py: i64,
+    ) -> Result<Self, RocketMQError> {
+        Self::new(topic, INDEX_TAG_TYPE, tag, None, store_time, offset_py)
     }
 
     pub fn unique_key(

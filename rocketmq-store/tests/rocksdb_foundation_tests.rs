@@ -1254,7 +1254,11 @@ fn rocksdb_timer_dispatcher_respects_timer_rocksdb_enable_and_flushes_batches() 
             .expect("dispatcher-written timer record should exist"),
         timer_record(1_000, "uniqA", 100, 10, TimerRocksDbAction::Put)
     );
-    assert_eq!(enabled_dispatcher.dispatch_progress_offset(0), Some(1));
+    assert_eq!(
+        enabled_dispatcher.dispatch_progress_offset(777),
+        Some(777),
+        "timer dispatch progress must stay in physical CommitLog offset units"
+    );
 }
 
 #[test]
@@ -2968,6 +2972,15 @@ fn rocksdb_message_store_dispatcher_dual_writes_commitlog_dispatch_to_rocksdb_cq
 
     message_store.local_file_store_mut().do_dispatch(&mut request);
     message_store.flush();
+
+    assert_eq!(message_store.get_dispatcher_list().len(), 2);
+    assert!(
+        message_store
+            .local_file_store()
+            .get_consume_queue(&CheetahString::from_static_str("TopicA"), 3)
+            .is_none(),
+        "default RocksDB mode must not maintain a hidden Local consume-queue mirror"
+    );
 
     assert_eq!(
         message_store

@@ -85,7 +85,7 @@ impl MessageRocksDbStorage {
             batch.put_cf(cf, encoded_key, encoded_value);
         }
 
-        if let Some(last_record) = records.last().filter(|record| record.is_unique_progress_record()) {
+        if let Some(last_record) = records.last() {
             let last_offset_py = self.get_last_offset_py(cf)?;
             if last_record.offset_py > last_offset_py {
                 batch.put_cf(cf, LAST_OFFSET_PY.to_vec(), encode_i64(last_record.offset_py));
@@ -459,6 +459,14 @@ impl IndexRocksDbRecord {
 
     fn key(&self) -> Result<IndexRocksDbKey, RocketMQError> {
         if let Some(key) = &self.key {
+            if self.uniq_key.is_empty() {
+                return IndexRocksDbKey::normal_key_without_uniq(
+                    self.topic.clone(),
+                    key.clone(),
+                    self.store_time,
+                    self.offset_py,
+                );
+            }
             return IndexRocksDbKey::normal_key(
                 self.topic.clone(),
                 key.clone(),
@@ -468,6 +476,14 @@ impl IndexRocksDbRecord {
             );
         }
         if let Some(tag) = &self.tag {
+            if self.uniq_key.is_empty() {
+                return IndexRocksDbKey::tag_key_without_uniq(
+                    self.topic.clone(),
+                    tag.clone(),
+                    self.store_time,
+                    self.offset_py,
+                );
+            }
             return IndexRocksDbKey::tag_key(
                 self.topic.clone(),
                 tag.clone(),
@@ -482,10 +498,6 @@ impl IndexRocksDbRecord {
             self.store_time,
             self.offset_py,
         )
-    }
-
-    fn is_unique_progress_record(&self) -> bool {
-        self.key.as_deref().unwrap_or_default().is_empty() && self.tag.as_deref().unwrap_or_default().is_empty()
     }
 }
 

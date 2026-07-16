@@ -25,6 +25,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -39,6 +40,7 @@ use rocketmq_store::config::flush_disk_type::FlushDiskType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
 use rocketmq_store::message_store::GenericMessageStore;
+use rocketmq_store::store_error::StoreErrorKind;
 use tempfile::TempDir;
 
 fn rocksdb_store_config(temp_dir: &TempDir) -> MessageStoreConfig {
@@ -230,6 +232,11 @@ async fn rocksdb_query_message_after_dispatch() {
     let key = CheetahString::from_static_str("rocksdb-query-key");
 
     let mut store = new_test_store(&temp_dir);
+    assert_eq!(
+        store.get_dispatcher_list().len(),
+        2,
+        "default Rocks mode owns CQ and Index dispatch only"
+    );
     store.init().await.expect("init store");
     assert!(store.load().await, "load store");
     store.start().await.expect("start store");
@@ -239,8 +246,27 @@ async fn rocksdb_query_message_after_dispatch() {
 
     let put_result = store.put_message(msg).await;
     assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+    let append_result = put_result.append_message_result().expect("append result");
 
     store.reput_once().await;
+    assert_eq!(
+        store.rocksdb_index_service().pending_len(),
+        0,
+        "reput must drain the RocksDB index batch"
+    );
+
+    let indexed_offsets = store
+        .message_rocksdb_storage()
+        .query_offsets_for_index(
+            topic.as_str(),
+            rocketmq_common::common::message::MessageConst::INDEX_KEY_TYPE,
+            key.as_str(),
+            append_result.store_timestamp,
+            append_result.store_timestamp,
+            10,
+        )
+        .expect("query RocksDB index directly after reput");
+    assert_eq!(indexed_offsets.len(), 1, "reput must flush the RocksDB index batch");
 
     let result = store
         .query_message(&topic, &key, 10, 0, i64::MAX)
@@ -341,5 +367,146 @@ async fn rocksdb_recovery_skips_dirty_tail() {
     assert_eq!(
         reloaded.get_commit_log_offset_in_queue(&topic, 0, 0),
         append_result.wrote_offset
+    );
+}
+
+#[tokio::test]
+async fn rocks_adapter_matches_the_frozen_local_pull_contract() {
+    let rocks_dir = TempDir::new().expect("create RocksDB temp dir");
+    let topic = CheetahString::from_static_str("adapter-parity-topic");
+    let group = CheetahString::from_static_str("adapter-parity-group");
+    let mut rocks = new_test_store(&rocks_dir);
+
+    rocks.init().await.expect("init Rocks parity store");
+    assert!(rocks.load().await, "load Rocks parity store");
+    rocks.start().await.expect("start Rocks parity store");
+    let rocks_put = rocks
+        .put_message(build_test_message(&topic, 0, b"adapter-parity-body"))
+        .await;
+    assert_eq!(rocks_put.put_message_status(), PutMessageStatus::PutOk);
+    rocks.reput_once().await;
+
+    let rocks_found = rocks
+        .get_message(&group, &topic, 0, 0, 32, None)
+        .await
+        .expect("Rocks found result");
+    assert_eq!(rocks_found.status(), Some(GetMessageStatus::Found));
+    assert_eq!(rocks_found.message_count(), 1);
+    assert_eq!(rocks.get_min_offset_in_queue(&topic, 0), 0);
+    assert_eq!(rocks.get_max_offset_in_queue(&topic, 0), 1);
+
+    let rocks_overflow = rocks
+        .get_message(&group, &topic, 0, 1, 32, None)
+        .await
+        .expect("Rocks overflow result");
+    assert_eq!(rocks_overflow.status(), Some(GetMessageStatus::OffsetOverflowOne));
+    assert_eq!(rocks_overflow.next_begin_offset(), 1);
+}
+
+#[tokio::test]
+async fn explicit_double_write_keeps_the_local_compatibility_mirror() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let topic = CheetahString::from_static_str("rocksdb-double-write-topic");
+    let mut config = rocksdb_store_config(&temp_dir);
+    config.rocksdb_cq_double_write_enable = true;
+    let mut store = new_test_store_with_config(config);
+    store.init().await.expect("init store");
+    assert!(store.load().await, "load store");
+    store.start().await.expect("start store");
+
+    let put_result = store
+        .put_message(build_test_message(&topic, 0, b"explicit-double-write"))
+        .await;
+    assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+    store.reput_once().await;
+
+    assert_eq!(store.get_dispatcher_list().len(), 4);
+    assert!(store.local_file_store().get_consume_queue(&topic, 0).is_some());
+    assert_eq!(store.get_max_offset_in_queue(&topic, 0), 1);
+}
+
+#[tokio::test]
+async fn restart_reput_advances_the_single_local_wal_queue_offset() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let topic = CheetahString::from_static_str("rocksdb-restart-catchup-topic");
+    let mut writer = new_test_store(&temp_dir);
+    writer.init().await.expect("init writer");
+    assert!(writer.load().await, "load writer");
+
+    let first = writer
+        .put_message(build_test_message(&topic, 0, b"first-before-reput"))
+        .await;
+    assert_eq!(first.put_message_status(), PutMessageStatus::PutOk);
+    assert_eq!(
+        first
+            .append_message_result()
+            .expect("first append result")
+            .logics_offset,
+        0
+    );
+    writer.flush();
+    writer.close_rocksdb();
+    drop(writer);
+
+    let mut reloaded = new_test_store(&temp_dir);
+    reloaded.init().await.expect("init reloaded store");
+    assert!(reloaded.load().await, "load reloaded store");
+    reloaded.reput_once().await;
+    assert_eq!(reloaded.get_max_offset_in_queue(&topic, 0), 1);
+
+    let second = reloaded
+        .put_message(build_test_message(&topic, 0, b"second-after-reput"))
+        .await;
+    assert_eq!(second.put_message_status(), PutMessageStatus::PutOk);
+    assert_eq!(
+        second
+            .append_message_result()
+            .expect("second append result")
+            .logics_offset,
+        1,
+        "RocksDB catch-up must advance the Local WAL queue-offset allocator"
+    );
+}
+
+#[test]
+fn rocksdb_time_lookup_and_failure_mapping_stay_on_the_legacy_contract() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let topic = CheetahString::from_static_str("rocksdb-time-topic");
+    let mut store = new_test_store(&temp_dir);
+    for (queue_offset, store_timestamp) in [(0, 1_000), (1, 2_000), (2, 3_000)] {
+        store.local_file_store_mut().do_dispatch(&mut DispatchRequest {
+            topic: topic.clone(),
+            queue_id: 0,
+            commit_log_offset: queue_offset * 100,
+            msg_size: 10,
+            consume_queue_offset: queue_offset,
+            store_timestamp,
+            success: true,
+            ..DispatchRequest::default()
+        });
+    }
+
+    assert_eq!(store.get_offset_in_queue_by_time(&topic, 0, 2_500), 2);
+    assert_eq!(
+        store.get_offset_in_queue_by_time_with_boundary(&topic, 0, 2_500, BoundaryType::Upper),
+        1
+    );
+
+    store.close_rocksdb();
+    let error = store
+        .try_get_max_offset_in_queue(&topic, 0)
+        .expect_err("closed RocksDB must expose a typed error");
+    assert_eq!(error.kind(), StoreErrorKind::RocksDb);
+    assert_eq!(store.get_max_offset_in_queue(&topic, 0), 0);
+    assert_eq!(store.get_commit_log_offset_in_queue(&topic, 0, 0), -1);
+    let flush_error = store.try_flush().expect_err("closed RocksDB flush must fail");
+    assert_eq!(flush_error.kind(), StoreErrorKind::RocksDb);
+    assert_eq!(
+        store
+            .health_snapshot()
+            .last_flush_error
+            .expect("flush failure must be reflected in health")
+            .kind,
+        StoreErrorKind::RocksDb
     );
 }

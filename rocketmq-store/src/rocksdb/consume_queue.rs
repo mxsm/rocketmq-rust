@@ -19,6 +19,7 @@ use tracing::warn;
 
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::rocksdb::store::RocksDbStore;
 
 pub use rocketmq_store_rocksdb::consume_queue::ConsumeQueueBatchEntry;
@@ -62,17 +63,43 @@ impl RocksDbConsumeQueueDispatch for DispatchRequest {
 
 pub struct CommitLogDispatcherBuildRocksDbConsumeQueue {
     store: Weak<RocksDbStore>,
+    local_queue_offsets: Option<ConsumeQueueStore>,
 }
 
 impl CommitLogDispatcherBuildRocksDbConsumeQueue {
     pub fn new(consume_queue_store: RocksDbConsumeQueueStore) -> Self {
         Self {
             store: consume_queue_store.downgrade_store(),
+            local_queue_offsets: None,
+        }
+    }
+
+    pub(crate) fn new_with_local_queue_offsets(
+        consume_queue_store: RocksDbConsumeQueueStore,
+        local_queue_offsets: ConsumeQueueStore,
+    ) -> Self {
+        Self {
+            store: consume_queue_store.downgrade_store(),
+            local_queue_offsets: Some(local_queue_offsets),
         }
     }
 
     fn consume_queue_store(&self) -> Option<RocksDbConsumeQueueStore> {
         self.store.upgrade().map(RocksDbConsumeQueueStore::new)
+    }
+
+    fn advance_local_queue_offsets(&self, dispatch_requests: &[DispatchRequest]) {
+        let Some(local_queue_offsets) = self.local_queue_offsets.as_ref() else {
+            return;
+        };
+        for request in dispatch_requests {
+            let message_count = i64::from(request.batch_size.max(1));
+            local_queue_offsets.advance_topic_queue_offset(
+                request.topic.as_str(),
+                request.queue_id,
+                request.consume_queue_offset.saturating_add(message_count),
+            );
+        }
     }
 }
 
@@ -83,8 +110,9 @@ impl CommitLogDispatcher for CommitLogDispatcherBuildRocksDbConsumeQueue {
             return;
         };
         let request: &DispatchRequest = dispatch_request;
-        if let Err(error) = consume_queue_store.put_message_position(std::slice::from_ref(request)) {
-            error!(error = %error, "failed to dispatch consume queue entry to RocksDB");
+        match consume_queue_store.put_message_position(std::slice::from_ref(request)) {
+            Ok(()) => self.advance_local_queue_offsets(std::slice::from_ref(request)),
+            Err(error) => error!(error = %error, "failed to dispatch consume queue entry to RocksDB"),
         }
     }
 
@@ -93,8 +121,9 @@ impl CommitLogDispatcher for CommitLogDispatcherBuildRocksDbConsumeQueue {
             warn!("RocksDB consume queue dispatcher skipped batch because store owner was dropped");
             return;
         };
-        if let Err(error) = consume_queue_store.put_message_position(dispatch_requests) {
-            error!(error = %error, "failed to dispatch consume queue batch to RocksDB");
+        match consume_queue_store.put_message_position(dispatch_requests) {
+            Ok(()) => self.advance_local_queue_offsets(dispatch_requests),
+            Err(error) => error!(error = %error, "failed to dispatch consume queue batch to RocksDB"),
         }
     }
 

@@ -30418,10 +30418,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "373e37c655b09fa3fa8782d3",
-          "fingerprint": "5374125d11aad32cd42c32a5",
+          "id": "b080c014ce7957ffecaf38e5",
+          "fingerprint": "5040e978b1132c03d77be1ff",
           "item": "fn try_new",
-          "line": 461
+          "line": 468
         },
         {
           "id": "159edd577ca779c3c2632b4e",
@@ -31258,25 +31258,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "fa52ac3e9b272361cdba0188",
-      "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "86a0980956e41686ba212b92",
-          "fingerprint": "17c678ce000a4a9b56417de2",
-          "item": "mod tests",
-          "line": 1317
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "cf408d395eb396cbf7df57a0",
       "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
       "symbol": "ArcConsumeQueue",
@@ -31328,10 +31309,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "76d3e08efedb5f9bbf9d7aaa",
-          "fingerprint": "7d407f07c89acc1881cb29ac",
+          "id": "81de4656756d99a5ed707f59",
+          "fingerprint": "bfecad03e5a1dacb9d9c0946",
           "item": "fn try_new",
-          "line": 171
+          "line": 164
         }
       ],
       "owner": "store",
@@ -31347,10 +31328,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "5a33ebefe7242b8afcf169b8",
-          "fingerprint": "41f87ee215213ec739eb9e52",
+          "id": "05756ac594343e2aa5842ec6",
+          "fingerprint": "a2aa105c545a80916bef24e7",
           "item": "<module>",
-          "line": 38
+          "line": 36
         }
       ],
       "owner": "store",
@@ -31366,8 +31347,8 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "caa14c60bb80ffbac859897e",
-          "fingerprint": "587b3a5840ff76a33ad5891e",
+          "id": "88d3afe5ff8345c6b7776ca5",
+          "fingerprint": "7760ff90906c0a2ad8a6f1ed",
           "item": "struct RocksDBMessageStore",
           "line": 99
         },
@@ -31435,16 +31416,16 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "7217cfdc72cb68126a2fa1ea",
-          "fingerprint": "fadb54b95358679af7cd6838",
+          "id": "d7778296ef81fa5710955ef8",
+          "fingerprint": "1b5fe677b77fbc85bd4a10e0",
           "item": "struct RocksDBMessageStore",
           "line": 99
         },
         {
-          "id": "0f2416ce0631c9a775a8afed",
-          "fingerprint": "8675ad954505327cd1e6bc06",
+          "id": "c87d53335c3f33da58ea4ae7",
+          "fingerprint": "1124fc2f41cc04b78f96b159",
           "item": "fn try_new",
-          "line": 171
+          "line": 164
         },
         {
           "id": "469fca8acbcdffb24d78089f",
@@ -31459,10 +31440,10 @@
           "line": 219
         },
         {
-          "id": "d2727c917a253722cd0ee0b2",
-          "fingerprint": "465bd9e49038d6cc28e67595",
+          "id": "c46762e268005ebf4890fc46",
+          "fingerprint": "ab1f5d5d2cee113717e52571",
           "item": "fn local_file_store_arc",
-          "line": 223
+          "line": 209
         }
       ],
       "owner": "store",
@@ -31497,8 +31478,8 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "ee1f9e08b3c6ac8fe2c2bd45",
-          "fingerprint": "1fbebd4c8c89be6e91769a69",
+          "id": "35c5d503f8b36fc49ec70861",
+          "fingerprint": "2320295b01c9b700dc97e602",
           "item": "<module>",
           "line": 98
         }
@@ -31516,28 +31497,28 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "c8099e11fa2e119b2932312a",
-          "fingerprint": "e8391d6392ff8a985f56a943",
+          "id": "543d913b3a6e9eb308b2bbe4",
+          "fingerprint": "fbda364caa7a8ce8568e0f3d",
           "item": "struct RocksDBMessageStore",
           "line": 98
         },
         {
-          "id": "bb0147f5be1178b4639d9343",
-          "fingerprint": "bc61bcc7323b27a2a6735f1a",
+          "id": "ae5724dfc8f328477d71af16",
+          "fingerprint": "649b55e661a16313116e2a8d",
           "item": "impl fmt",
-          "line": 112
+          "line": 132
         },
         {
-          "id": "833ee86eb927e190d1e04d33",
-          "fingerprint": "297cb6ed5669e79b8559799c",
+          "id": "591e5c14393284cd5ad89ece",
+          "fingerprint": "4c44c06d9ebf377cdfcc9fe6",
           "item": "impl RocksDBMessageStore",
-          "line": 121
+          "line": 141
         },
         {
-          "id": "b3f21af1ba271d14f5d7b9bc",
-          "fingerprint": "f9205fca1d3d3bdfa865418f",
+          "id": "06d8af4802b3a5f1aa74aaaa",
+          "fingerprint": "4d3b576bd7f831338a1dcfcd",
           "item": "impl MessageStore",
-          "line": 617
+          "line": 519
         },
         {
           "id": "341382aaa28e8ab34ce695dd",
@@ -32046,10 +32027,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "5382f21e9c57edc69e8ce15f",
-          "fingerprint": "51ec25c581e3c61e2d379be7",
+          "id": "245ed505123e8e3fdf662db6",
+          "fingerprint": "bd4e787107a84d1fe81f319c",
           "item": "fn snapshot_consume_queues",
-          "line": 166
+          "line": 181
         },
         {
           "id": "fea8d23497ae9079ebe2628d",
@@ -34162,10 +34143,10 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "d669c819d8a2768cd6554afa",
-          "fingerprint": "ad68a067d07a52b963291688",
+          "id": "91d68eabb397d4feb1a19a09",
+          "fingerprint": "925fdcb3e9addb9d2631c017",
           "item": "<module>",
-          "line": 40
+          "line": 41
         }
       ],
       "owner": "store",

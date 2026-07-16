@@ -24,11 +24,14 @@ pub mod iterator;
 pub mod key;
 pub mod maintenance;
 pub mod message;
+pub mod message_store;
 pub mod options;
 #[doc(hidden)]
 pub mod runtime;
 pub mod snapshot;
 pub mod store;
+pub mod timer;
+pub mod transaction;
 pub mod value;
 
 pub use config::RocksDbConfig;

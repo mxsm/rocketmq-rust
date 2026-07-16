@@ -458,9 +458,14 @@ impl LocalFileMessageStore {
         let build_consume_queue: Arc<dyn CommitLogDispatcher> =
             Arc::new(CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone()));
 
-        let mut dispatcher = ArcMut::new(CommitLogDispatcherDefault {
-            dispatcher_vec: vec![build_consume_queue, build_index],
-        });
+        let keep_local_derived_dispatchers =
+            !message_store_config.is_enable_rocksdb_store() || message_store_config.rocksdb_cq_double_write_enable;
+        let dispatcher_vec = if keep_local_derived_dispatchers {
+            vec![build_consume_queue, build_index]
+        } else {
+            Vec::new()
+        };
+        let mut dispatcher = ArcMut::new(CommitLogDispatcherDefault { dispatcher_vec });
 
         let memory_lock_budget_bytes = Self::effective_linux_memory_lock_budget_bytes(message_store_config.as_ref());
         let transient_store_pool = TransientStorePool::new_with_memory_lock_budget(
@@ -1436,6 +1441,10 @@ impl LocalFileMessageStore {
 
     pub fn consume_queue_store_mut(&mut self) -> &mut ConsumeQueueStore {
         &mut self.consume_queue_store
+    }
+
+    pub(crate) fn replace_topic_queue_table(&self, topic_queue_table: HashMap<CheetahString, i64>) {
+        self.consume_queue_store.replace_topic_queue_table(topic_queue_table);
     }
 
     fn delete_file(&mut self, file_name: String) {

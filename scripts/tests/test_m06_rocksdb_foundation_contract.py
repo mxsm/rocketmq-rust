@@ -42,6 +42,9 @@ FOUNDATION_MODULES = {
     "runtime",
     "snapshot",
     "store",
+    "timer",
+    "transaction",
+    "message_store",
     "value",
 }
 
@@ -153,17 +156,25 @@ class RocksDbFoundationContractTests(unittest.TestCase):
         self.assertIn("pub struct CommitLogDispatcherBuildRocksDbIndex", index)
         self.assertIn("pub struct RocksDBMessageStore", message_store)
 
-        for module in FOUNDATION_MODULES - {"config", "consume_queue", "index", "runtime"}:
+        for module in FOUNDATION_MODULES - {
+            "config",
+            "consume_queue",
+            "index",
+            "runtime",
+            "timer",
+            "transaction",
+            "message_store",
+        }:
             facade = read(f"rocketmq-store/src/rocksdb/{module}.rs")
             self.assertIn(f"rocketmq_store_rocksdb::{module}::", facade)
 
-    def test_timer_transaction_and_message_store_adapter_remain_for_next_package(self) -> None:
+    def test_timer_transaction_and_message_store_kernel_move_to_owner(self) -> None:
         self.assertTrue((STORE_CRATE / "src/rocksdb/timer.rs").is_file())
         self.assertTrue((STORE_CRATE / "src/rocksdb/transaction.rs").is_file())
         self.assertTrue((STORE_CRATE / "src/message_store/rocksdb_message_store.rs").is_file())
-        self.assertFalse((ROCKS_CRATE / "src/timer.rs").exists())
-        self.assertFalse((ROCKS_CRATE / "src/transaction.rs").exists())
-        self.assertFalse((ROCKS_CRATE / "src/message_store.rs").exists())
+        self.assertTrue((ROCKS_CRATE / "src/timer.rs").is_file())
+        self.assertTrue((ROCKS_CRATE / "src/transaction.rs").is_file())
+        self.assertTrue((ROCKS_CRATE / "src/message_store.rs").is_file())
 
 
 if __name__ == "__main__":

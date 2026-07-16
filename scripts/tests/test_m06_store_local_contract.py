@@ -2873,8 +2873,31 @@ def kernel_facade_boundary_uses(
     }
     boundary_uses: list[tuple[Path, str]] = []
     for path in sorted(records_by_path, key=str):
+        local_aliases = {
+            alias: body
+            for _, _, body, _ in records_by_path[path]
+            if body.removeprefix("::").startswith("rocketmq_store_local")
+            for alias in re.findall(r"\bas\s+([A-Za-z_][A-Za-z0-9_]*)", body)
+        }
+        mapped_file_aliases = {
+            alias
+            for alias, target in local_aliases.items()
+            if "mapped_file" in target
+            or any(
+                record_body.removeprefix("::").startswith(f"{alias}::")
+                and "mapped_file" in record_body
+                for _, _, record_body, _ in records_by_path[path]
+            )
+        }
         for kind, visibility, body, statement in records_by_path[path]:
             rooted_at_local = body.removeprefix("::").startswith("rocketmq_store_local")
+            declared_aliases = re.findall(r"\bas\s+([A-Za-z_][A-Za-z0-9_]*)", body)
+            root_segment = body.removeprefix("::").split("::", 1)[0]
+            mapped_file_boundary = (
+                (rooted_at_local and "mapped_file" in body)
+                or root_segment in mapped_file_aliases
+                or any(alias in mapped_file_aliases for alias in declared_aliases)
+            )
             exact_native_memory_facade = (
                 kind == "use"
                 and visibility == "pub"
@@ -2883,11 +2906,12 @@ def kernel_facade_boundary_uses(
             )
             canonical_alias_or_tree = (
                 rooted_at_local
+                and (kind == "extern crate" or mapped_file_boundary)
                 and ("{" in body or re.search(r"\bas\b", body))
                 and not exact_native_memory_facade
             )
             public_use = kind == "use" and visibility.startswith("pub")
-            public_glob = public_use and "*" in body
+            public_glob = public_use and "*" in body and mapped_file_boundary
             public_kernel_item = public_use and any(
                 re.search(rf"\b{re.escape(item)}\b", body)
                 for item in KERNEL_ITEMS
@@ -19196,13 +19220,10 @@ pub(crate) use local_kernel::*;
             kernel_facade_boundary_uses({facade: source}),
         )
 
-    def test_store_policy_rejects_every_public_glob(self) -> None:
+    def test_store_policy_ignores_unrelated_public_glob(self) -> None:
         facade = Path("public_glob.rs")
         source = "pub(crate) use any_alias::any_module::*;"
-        self.assertEqual(
-            [(facade, "pub(crate) use any_alias::any_module::*")],
-            kernel_facade_boundary_uses({facade: source}),
-        )
+        self.assertEqual([], kernel_facade_boundary_uses({facade: source}))
 
     def test_kernel_owner_scanner_rejects_enum_and_union_duplicates(self) -> None:
         enum_owner = Path("enum.rs")
@@ -22366,6 +22387,7 @@ mod tests""",
                 "recovery_orchestration.rs",
                 "record.rs",
                 "record_parser.rs",
+                "read.rs",
                 "root.rs",
                 "runtime_state.rs",
             },

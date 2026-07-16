@@ -12,6 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) use rocketmq_store_rocksdb::runtime::spawn_io;
-#[cfg(test)]
 pub(crate) use rocketmq_store_rocksdb::runtime::RocksDbRuntimeScope;

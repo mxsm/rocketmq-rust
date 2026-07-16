@@ -69,6 +69,14 @@ impl QueueOffsetOperator {
     }
 
     #[inline]
+    pub fn advance_queue_offset(&self, topic_queue_key: CheetahString, offset: i64) {
+        self.topic_queue_table
+            .entry(topic_queue_key)
+            .and_modify(|current| *current = (*current).max(offset))
+            .or_insert(offset);
+    }
+
+    #[inline]
     pub fn get_batch_queue_offset(&self, topic_queue_key: &CheetahString) -> i64 {
         *self.batch_topic_queue_table.entry(topic_queue_key.clone()).or_insert(0)
     }
