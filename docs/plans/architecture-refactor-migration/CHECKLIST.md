@@ -29,15 +29,15 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 30 | 1（PR-M06-03） | 51 未开始；合计 52 尚未完成 | 82 |
+| PR 级工作包 | 31 | 0 | 51 未开始；合计 51 尚未完成 | 82 |
 | 里程碑 | 5（M01–M05） | 1（M06） | 6（M07–M12） | 12 |
 | 新增边界 crate | 6 | 0 | 4（store-rocksdb、proxy-core/cluster/local） | 10 |
 | 根 workspace package | 28 | — | 还差 4 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
 剩余 51 个未开始工作包分布：M06-04～12 为 9 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
-M10 为 5 个、M11 为 12 个、M12 为 6 个。当前 M06-03 的 MappedFileQueue、CommitLog 根 owner、append-attempt
-composition 与 recovery completion owner 已完成，仅剩 Store facade 最终收口，因此尚未勾选父项。
+M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-03 的 Local crate、MappedFile/Queue 与 CommitLog append/load/recovery
+owner、Store compatibility facade 和 ledger 已完成；下一顶层工作包为 PR-M06-04。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -122,7 +122,7 @@ composition 与 recovery completion owner 已完成，仅剩 Store facade 最终
 
 - [x] PR-M06-01：完成 Store capability spike
 - [x] PR-M06-02：迁移中立 receipt/read result 与 compatibility bridge
-- [ ] PR-M06-03：创建 Local crate 并迁移 CommitLog/load/recovery
+- [x] PR-M06-03：创建 Local crate 并迁移 CommitLog/load/recovery
   - [x] M06-03a：创建 Local leaf foundation 并迁移六个纯 MappedFile leaf
   - [x] M06-03b：迁移 CommitLog load/recovery 中立规划值与纯 planner
   - [x] M06-03c：迁移 mapped-file progress 与 reference lifecycle kernel
@@ -179,6 +179,7 @@ composition 与 recovery completion owner 已完成，仅剩 Store facade 最终
   - [x] M06-03ay：迁移 CommitLog 根 owner 到 Local 泛型 `CommitLogRoot`，Store 旧 `CommitLog` 收敛为单字段 facade 与 composition adapter
   - [x] M06-03az：迁移 CommitLog append outcome resolution owner 到 Local，Store 仅保留 status/log/lock/flush/HA adapter
   - [x] M06-03ba：迁移 CommitLog recovery completion owner 到 Local，Store 四条 recovery 路径统一为 completion side-effect adapter
+  - [x] M06-03bb：冻结 Local/Store compatibility ledger、feature/re-export/facade contract 并完成父项收口
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer

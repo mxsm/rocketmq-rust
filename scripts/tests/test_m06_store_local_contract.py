@@ -113,6 +113,9 @@ RECOVERY_CONSUME_QUEUE_PATH = Path(
 RECOVERY_COMPLETION_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/completion.rs"
 )
+STORAGE_LOCAL_LEDGER_PATH = Path(
+    "docs/plans/architecture-refactor-migration/phase-2-core-boundaries/06-storage-local-compatibility-ledger.md"
+)
 ABNORMAL_CONFIRM_CANDIDATE_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/confirm_candidate.rs"
 )
@@ -10554,6 +10557,103 @@ def recovery_completion_owner_violations(
     return violations
 
 
+def storage_local_compatibility_ledger_violations(
+    ledger: str,
+    local_manifest: str,
+    store_manifest: str,
+    store_commit_log: str,
+    store_mapped_file: str,
+    store_recovery: str,
+    store_allocate_service: str,
+) -> list[str]:
+    violations: list[str] = []
+    required_ledger_fragments = (
+        "# M06-03 Local 存储兼容与所有权 Ledger",
+        "## Canonical ownership",
+        "`rocketmq-store-local::mapped_file`",
+        "`rocketmq-store-local::base::allocate_mapped_file_service`",
+        "`rocketmq-store-local::commit_log::{load,loader,load_orchestration}`",
+        "`rocketmq-store-local::commit_log::{normal_recovery,abnormal_recovery,recovery,recovery_orchestration}`",
+        "`rocketmq-store-local::commit_log::{runtime_state,root}`",
+        "## Feature compatibility",
+        "`default = []`",
+        "## Retained Store-only ports",
+        "- M06-04：",
+        "- M06-05：",
+        "- M06-06：",
+        "- M06-07：",
+        "- M06-08：",
+        "## Compatibility and removal rules",
+        "下一 major",
+        "## Closeout evidence",
+    )
+    if any(fragment not in ledger for fragment in required_ledger_fragments):
+        violations.append("M06-03 storage Local compatibility ledger is incomplete")
+
+    local = tomllib.loads(local_manifest)
+    local_features = local.get("features", {})
+    expected_local_features = {
+        "default": [],
+        "fast-load": [],
+        "safe-load": [],
+        "io_uring": ["dep:tokio-uring"],
+    }
+    for feature, expected in expected_local_features.items():
+        if local_features.get(feature) != expected:
+            violations.append(f"Local storage feature changed: {feature}")
+    forbidden_dependencies = {
+        "rocketmq-store",
+        "rocketmq-broker",
+        "rocketmq-remoting",
+        "rocksdb",
+        "rocketmq-store-rocksdb",
+        "rocketmq-tieredstore",
+    }
+    if forbidden_dependencies.intersection(local.get("dependencies", {})):
+        violations.append("Local storage manifest gained a forbidden facade/backend dependency")
+
+    store = tomllib.loads(store_manifest)
+    store_features = store.get("features", {})
+    expected_forwarding = {
+        "default": ["local_file_store", "fast-load"],
+        "io_uring": ["rocketmq-store-local/io_uring"],
+        "fast-load": ["rocketmq-store-local/fast-load"],
+        "safe-load": ["rocketmq-store-local/safe-load"],
+    }
+    for feature, expected in expected_forwarding.items():
+        if store_features.get(feature) != expected:
+            violations.append(f"Store compatibility feature changed: {feature}")
+
+    compact_commit_log = compact_rust(source_without_cfg_test_items(store_commit_log))
+    if "pubstructCommitLog{root:CommitLogRoot<CommitLogAdapter>,}" not in compact_commit_log:
+        violations.append("Store CommitLog is no longer a single-field Local-root facade")
+    if compact_commit_log.count("pubuseadapter::CommitLogasCommitLogAdapter;") != 1:
+        violations.append("Store CommitLog composition adapter identity changed")
+
+    mapped_reexports = (
+        "pub use rocketmq_store_local::mapped_file::MappedFile;",
+        "pub use rocketmq_store_local::mapped_file::MappedFileError;",
+        "pub use rocketmq_store_local::mapped_file::MappedFileMetrics;",
+        "pub use rocketmq_store_local::mapped_file::MappedFileResult;",
+    )
+    if any(reexport not in store_mapped_file for reexport in mapped_reexports):
+        violations.append("Store mapped-file compatibility re-exports changed")
+    recovery_reexports = (
+        "pub use rocketmq_store_local::commit_log::record::is_blank_message;",
+        "pub use rocketmq_store_local::commit_log::recovery::RecoveryStatistics;",
+    )
+    if any(reexport not in store_recovery for reexport in recovery_reexports):
+        violations.append("Store recovery compatibility re-exports changed")
+    if (
+        store_allocate_service.count(
+            "pub use rocketmq_store_local::base::allocate_mapped_file_service::AllocateMappedFileService;"
+        )
+        != 1
+    ):
+        violations.append("Store allocation-service compatibility re-export changed")
+    return violations
+
+
 def store_recovery_consume_queue_adapter_violations(
     commit_log: str,
     production_sources: dict[Path, str],
@@ -16752,6 +16852,62 @@ mod tests {
             "abnormal_completion_preserves_confirm_and_truncation_watermarks",
         ):
             self.assertIn(f"fn {test_name}()", tests)
+
+    def test_storage_local_compatibility_ledger_matches_owner_and_feature_snapshot(self) -> None:
+        ledger = (ROOT / STORAGE_LOCAL_LEDGER_PATH).read_text(encoding="utf-8")
+        local_manifest = (LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8")
+        store_manifest = (STORE_CRATE / "Cargo.toml").read_text(encoding="utf-8")
+        store_commit_log = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        store_mapped_file = (STORE_CRATE / "src" / "log_file" / "mapped_file.rs").read_text(encoding="utf-8")
+        store_recovery = (ROOT / STORE_COMMIT_LOG_RECOVERY_PATH).read_text(encoding="utf-8")
+        store_allocate_service = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+
+        def violations(
+            *,
+            candidate_ledger: str = ledger,
+            candidate_local_manifest: str = local_manifest,
+            candidate_store_manifest: str = store_manifest,
+            candidate_commit_log: str = store_commit_log,
+        ) -> list[str]:
+            return storage_local_compatibility_ledger_violations(
+                candidate_ledger,
+                candidate_local_manifest,
+                candidate_store_manifest,
+                candidate_commit_log,
+                store_mapped_file,
+                store_recovery,
+                store_allocate_service,
+            )
+
+        self.assertEqual([], violations())
+        mutations = (
+            {"candidate_ledger": ledger.replace("`default = []`", "`default = [fast-load]`", 1)},
+            {"candidate_ledger": ledger.replace("- M06-06：", "- M06-09：", 1)},
+            {
+                "candidate_local_manifest": local_manifest.replace(
+                    "default = []",
+                    'default = ["fast-load"]',
+                    1,
+                )
+            },
+            {
+                "candidate_store_manifest": store_manifest.replace(
+                    'safe-load = ["rocketmq-store-local/safe-load"]',
+                    "safe-load = []",
+                    1,
+                )
+            },
+            {
+                "candidate_commit_log": store_commit_log.replace(
+                    "root: CommitLogRoot<CommitLogAdapter>,",
+                    "root: CommitLogRoot<CommitLogAdapter>,\n    duplicate_owner: bool,",
+                    1,
+                )
+            },
+        )
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(ledger_mutation=mutation_index):
+                self.assertNotEqual([], violations(**mutation))
 
     def test_store_recovery_consume_queue_paths_delegate_once_and_reject_adapter_mutations(self) -> None:
         commit_log_path = Path("rocketmq-store/src/log_file/commit_log.rs")

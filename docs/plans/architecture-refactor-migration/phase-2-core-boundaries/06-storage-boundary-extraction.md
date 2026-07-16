@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au/M06-03av/M06-03aw/M06-03ax/M06-03ay/M06-03az/M06-03ba 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03（含 M06-03a～M06-03bb）已完成，继续 M06-04 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -69,12 +69,12 @@
 
 ### PR-M06-03：创建 Local crate 并迁 CommitLog/load/recovery
 
-- [ ] 入口：`[ARCH]` 确认 M02 `try_flush` 契约和 recovery golden 已冻结；本 PR 不搬 flush/group-commit，也不修改恢复行为。
-- [ ] `[DEV]` 创建 `rocketmq-store-local`，`default = []`，拥有 fast-load/safe-load/io_uring。
-- [ ] `[DEV]` 机械迁移 CommitLog append/load/recovery、MappedFile 与所需最小 config；store 旧深路径精确 re-export。
-- [ ] `[TEST]` focused test：dirty-tail truncate、CRC、segment roll、load/recovery 和 crash-before-flush golden。
-- [ ] `[REV]` 检查唯一 CommitLog owner、文件格式不变，Local 不依赖 Rocks/Tiered/store facade/Broker/remoting。
-- [ ] 回滚点：store facade factory 指回原 CommitLog/load/recovery 实现；旧 public path 与磁盘数据不变。
+- [x] 入口：`[ARCH]` 确认 M02 `try_flush` 契约和 recovery golden 已冻结；本 PR 不搬 flush/group-commit，也不修改恢复行为。
+- [x] `[DEV]` 创建 `rocketmq-store-local`，`default = []`，拥有 fast-load/safe-load/io_uring。
+- [x] `[DEV]` 机械迁移 CommitLog append/load/recovery、MappedFile 与所需最小 config；store 旧深路径精确 re-export。
+- [x] `[TEST]` focused test：dirty-tail truncate、CRC、segment roll、load/recovery 和 crash-before-flush golden。
+- [x] `[REV]` 检查唯一 CommitLog owner、文件格式不变，Local 不依赖 Rocks/Tiered/store facade/Broker/remoting。
+- [x] 回滚点：store compatibility facade、旧 public path、feature 入口与磁盘数据不变；可整体回滚本 PR，但不得恢复双 owner。
 
 ### PR-M06-04：机械迁移 Flush 与 Group Commit
 
@@ -2024,3 +2024,23 @@ python scripts/arc_mut_guard.py
 - [x] `[INVENTORY/SCOPE]` CommitLog recovery completion composition 已由 Local 拥有；Store 只保留 MappedFile/CQ/runtime state 外部副作用
   adapter。PR-M06-03 仅剩最终 Store facade/legacy ledger 收口；flush/group-commit、CQ/Index、HA、Timer/POP 仍留给 M06-04..07。
   顶层统计保持 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03bb PR-M06-03 facade and ledger closeout evidence
+
+- [x] `[ENTRY/SCOPE]` M02 `try_flush`、dirty-tail/recovery golden 与 crash-before-flush 基线保持冻结；本父 PR 未迁移或修改
+  flush/group-commit、CQ/Index、HA、Timer/POP 或 `LocalFileMessageStore` composition，这些范围继续由 M06-04～08 独立承接。
+- [x] `[DEV/OWNER]` `rocketmq-store-local` 保持 `default = []` 并 canonical 拥有 fast-load/safe-load/io_uring、MappedFile/Queue、
+  AllocateMappedFileService、CommitLog append/load/recovery/runtime/root；Store `CommitLog` 为单字段 Local root facade，旧深路径继续通过
+  精确 re-export、type alias、config 投影和外部副作用 adapter 保持。
+- [x] `[LEDGER/COMPAT]` 新增 [`06-storage-local-compatibility-ledger.md`](06-storage-local-compatibility-ledger.md)，冻结七组 owner/facade、
+  feature forwarding、M06-04～08 保留 port、下一 major 删除条件和整体回滚规则；新增 source contract 将 ledger 与两个 manifest、
+  单字段 CommitLog facade、MappedFile/recovery/allocation-service re-export 绑定，并拒绝 5 类漂移。
+- [x] `[ISSUE]` GitHub [#8200](https://github.com/mxsm/rocketmq-rust/issues/8200) 记录父项目标、已完成范围、兼容边界、验收证据与回滚规则；
+  后续 PR 将以 `Closes #8200` 关联。
+- [x] `[TEST/REV]` ledger 定向 baseline/mutation 1/1 与完整 M06 owner/adapter/mutation contract 160/160 通过（741.912s）。
+  最终 Rust 快照的 Local all-feature 单元 104/104 及全部 integration/doctest、Store lib 537/537、Local/Store all-target/all-feature
+  strict Clippy、workspace fmt、architecture dependency、ArcMut zero-growth、AGENTS routing、enforcing runtime audit 与 diff check 均通过。
+- [x] `[MAIN/ROLLBACK]` `git fetch origin main` 后分支相对 `origin/main` 为 0 behind；旧 public path、feature 入口和磁盘格式未改变，
+  因此可整体 revert 父 PR。回滚不得恢复已由 contract 禁止的 Local/Store 双 owner。
+- [x] `[INVENTORY]` PR-M06-03 父项关闭，M06 整体仍进行中且 Exit Checklist 保持未完成。82 个顶层工作包更新为
+  31 已完成、0 进行中、51 未开始，即 51 个尚未完成；下一工作包为 PR-M06-04。
