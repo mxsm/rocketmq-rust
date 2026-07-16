@@ -40,7 +40,7 @@ pub mod bench_support {
     use cheetah_string::CheetahString;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::filter::expression_type::ExpressionType;
-    use rocketmq_rust::schedule::simple_scheduler::ScheduledShutdownReport;
+    use rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
     use serde::Serialize;

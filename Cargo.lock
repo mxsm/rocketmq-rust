@@ -4821,7 +4821,9 @@ dependencies = [
 name = "rocketmq-runtime"
 version = "1.0.0"
 dependencies = [
+ "chrono",
  "criterion",
+ "cron",
  "dashmap",
  "futures",
  "parking_lot",
@@ -4831,26 +4833,20 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
 name = "rocketmq-rust"
 version = "1.0.0"
 dependencies = [
- "anyhow",
- "chrono",
  "criterion",
- "cron",
- "parking_lot",
- "rocketmq-error",
  "rocketmq-observability",
  "rocketmq-runtime",
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "tracing",
- "uuid",
 ]
 
 [[package]]

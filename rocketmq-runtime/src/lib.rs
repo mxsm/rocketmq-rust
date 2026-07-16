@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![feature(async_fn_traits)]
+#![feature(unboxed_closures)]
+
 //! Runtime substrate for the RocketMQ Rust unified thread model.
 //!
 //! This crate standardizes how components own or borrow a Tokio runtime, how
@@ -33,10 +36,14 @@ pub mod error;
 pub mod handle;
 pub mod legacy;
 pub mod owner;
+pub mod schedule;
 pub mod scheduled;
 pub mod service_context;
+pub mod shutdown;
 pub mod shutdown_deadline;
 pub mod shutdown_report;
+pub mod signal;
+pub mod task;
 pub mod task_group;
 
 pub use actor::ActorRuntime;
@@ -55,16 +62,33 @@ pub use handle::RuntimeHandle;
 #[allow(deprecated)]
 pub use legacy::RocketMQRuntime;
 pub use owner::RuntimeOwner;
+pub use schedule::executor::ExecutorConfig;
+pub use schedule::executor::ExecutorPool;
+pub use schedule::executor::TaskExecutor;
+pub use schedule::scheduler::SchedulerConfig;
+pub use schedule::scheduler::TaskScheduler;
+pub use schedule::task::Task;
+pub use schedule::task::TaskContext;
+pub use schedule::task::TaskResult as LegacyTaskResult;
+pub use schedule::task::TaskStatus;
+pub use schedule::trigger::CronTrigger;
+pub use schedule::trigger::DelayTrigger;
+pub use schedule::trigger::DelayedIntervalTrigger;
+pub use schedule::trigger::IntervalTrigger;
+pub use schedule::trigger::Trigger;
 pub use scheduled::ScheduleMode;
 pub use scheduled::ScheduledTaskConfig;
 pub use scheduled::ScheduledTaskControl;
 pub use scheduled::ScheduledTaskGroup;
 pub use scheduled::ScheduledTaskSnapshot;
 pub use service_context::ServiceContext;
+pub use shutdown::Shutdown;
 pub use shutdown_deadline::ShutdownDeadline;
 pub use shutdown_report::ShutdownAnnotation;
 pub use shutdown_report::ShutdownReport;
 pub use shutdown_report::TaskSnapshot;
+pub use signal::wait_for_signal;
+pub use signal::wait_for_signal_result;
 pub use task_group::DetachedTaskPolicy;
 pub use task_group::TaskGroup;
 pub use task_group::TaskGroupChildLease;

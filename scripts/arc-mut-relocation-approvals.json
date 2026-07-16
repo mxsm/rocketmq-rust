@@ -697,6 +697,66 @@
       "from": "d12110cb3e1bea1e077a8d2e",
       "to": "1bfa5988a9b02ab0afb0a94d",
       "reason": "Removing the Local feature gate shifted adjacent context around the existing RocksDBMessageStore variant without adding an occurrence"
+    },
+    {
+      "identity": "07598cc82b290cf6ccd1015c",
+      "from": "dbc7f8aad78ead00898db6f7",
+      "to": "7591c8a7f36770677bbb8f3e",
+      "reason": "Migrating the Shutdown import to the runtime owner shifted adjacent context around the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "175b8d1d5f02ca7908ca9448",
+      "from": "5357bf96456826f1a3243694",
+      "to": "23fc45947c8ca7fd6fbeb571",
+      "reason": "Migrating ServiceManager imports to the runtime owner shifted adjacent context around the existing WeakArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "1be0f89c3e6ce50709be57c2",
+      "from": "c845bc7bbf5776198163b788",
+      "to": "a75d9ccd8a3b108bbc39aecb",
+      "reason": "Migrating ScheduledTaskManager to its runtime canonical path shifted adjacent context around the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "5df62979f53c21baacb842af",
+      "from": "fc0016f23323532d20d4140b",
+      "to": "ee6067072df88d552fb4d39d",
+      "reason": "Migrating ServiceManager imports to the runtime owner shifted adjacent context around the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "6486aba1bc6018c47bd698a7",
+      "from": "9ab6b883d47ec5e3b49501ff",
+      "to": "df2fc5cad60ad51d14f3ac05",
+      "reason": "Migrating the Shutdown import to the runtime owner shifted adjacent context around the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "72f12de4fca03f34082ea5c5",
+      "from": "50d85462508ec74c1c1d34de",
+      "to": "bb5cd5c2fb1cb81b8ab17615",
+      "reason": "Migrating wait_for_signal to the runtime owner shifted adjacent context around the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "8ba2f5c1ab30032586612234",
+      "from": "6ca766292bb8d36d29cb268f",
+      "to": "21be6cbed7f342e511d2d3b2",
+      "reason": "Migrating wait_for_signal to the runtime owner shifted adjacent context around the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "903e8713fe35fbfa5a604c97",
+      "from": "6cff617e3c1e0f9cc519991f",
+      "to": "594167f41d45f5059aa78fe4",
+      "reason": "Migrating ScheduledTaskManager to its runtime canonical path shifted adjacent context around the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "bf5e7606763443111e1658fa",
+      "from": "0bf0c1b342448d872b80c73f",
+      "to": "926d0f80492688c097020924",
+      "reason": "Migrating ServiceManager imports to the runtime owner shifted adjacent context around the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "db04dbe18d0035a9a9917eb6",
+      "from": "8cf224e67e403e9c041bddb3",
+      "to": "e1e3b99509ce5cd0c6593b07",
+      "reason": "Migrating ServiceManager imports to the runtime owner shifted adjacent context around the existing ArcMut import without adding an occurrence"
     }
   ]
 }

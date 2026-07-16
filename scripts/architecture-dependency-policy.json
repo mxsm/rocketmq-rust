@@ -194,6 +194,22 @@
         "ring",
         "aws-lc-rs"
       ]
+    },
+    {
+      "id": "new-boundaries-no-legacy-runtime",
+      "callers": [
+        "rocketmq-model",
+        "rocketmq-protocol",
+        "rocketmq-transport",
+        "rocketmq-security-api",
+        "rocketmq-store-api",
+        "rocketmq-store-local",
+        "rocketmq-store-rocksdb",
+        "rocketmq-proxy-core",
+        "rocketmq-proxy-cluster",
+        "rocketmq-proxy-local"
+      ],
+      "forbidden_targets": ["rocketmq-rust"]
     }
   ],
   "target_dag": {

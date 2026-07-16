@@ -12,20 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod service_task;
+//! Deprecated service-task compatibility paths.
 
-pub use service_task::run_service_manager_lifecycle_probe;
-pub use service_task::ServiceManager;
-pub use service_task::ServiceManagerLifecycleProbe;
-
-/// Helper macro to create a service thread implementation
-#[macro_export]
-macro_rules! service_manager {
-    ($service_type:ty) => {
-        impl $service_type {
-            pub fn create_service_task(self) -> $crate::task::service_task::ServiceManager<Self> {
-                $crate::task::service_task::ServiceManager::new(self)
-            }
-        }
-    };
-}
+pub use rocketmq_runtime::task::*;

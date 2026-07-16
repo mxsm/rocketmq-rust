@@ -17,9 +17,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
-use rocketmq_runtime::RuntimeHandle;
-use rocketmq_runtime::ShutdownReport;
-use rocketmq_runtime::TaskGroup;
+use crate::RuntimeHandle;
+use crate::ShutdownReport;
+use crate::TaskGroup;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::time::interval;
@@ -128,7 +128,7 @@ fn current_scheduler_handle(operation: &'static str) -> SchedulerResult<RuntimeH
         .map_err(|error| SchedulerError::SystemError(format!("{operation} requires a Tokio runtime: {error}")))
 }
 
-fn scheduler_runtime_error(operation: &'static str, error: rocketmq_runtime::RuntimeError) -> SchedulerError {
+fn scheduler_runtime_error(operation: &'static str, error: crate::RuntimeError) -> SchedulerError {
     SchedulerError::SystemError(format!("{operation} failed: {error}"))
 }
 
@@ -485,16 +485,6 @@ impl TaskScheduler {
         }
     }
 
-    async fn scheduler_loop(&self, thread_id: usize) {
-        let internal = self.clone_for_thread();
-        internal.scheduler_loop(thread_id).await;
-    }
-
-    async fn cleanup_loop(&self) {
-        let internal = self.clone_for_thread();
-        internal.cleanup_loop().await;
-    }
-
     async fn abort_failed_start(&self, scheduler_group: TaskGroup, error: SchedulerError) -> SchedulerResult<()> {
         *self.running.write().await = false;
         self.shutdown_notify.notify_waiters();
@@ -630,7 +620,7 @@ pub struct SchedulerStatus {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_runtime::RuntimeContext;
+    use crate::RuntimeContext;
     use std::future;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;

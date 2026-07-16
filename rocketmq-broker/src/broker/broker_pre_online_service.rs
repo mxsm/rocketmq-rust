@@ -27,9 +27,9 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::common::remoting_helper::RemotingHelper;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_rust::task::service_task::ServiceContext;
-use rocketmq_rust::task::service_task::ServiceTask;
-use rocketmq_rust::task::ServiceManager;
+use rocketmq_runtime::task::service_task::ServiceContext;
+use rocketmq_runtime::task::service_task::ServiceTask;
+use rocketmq_runtime::task::ServiceManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
@@ -463,7 +463,14 @@ where
     MS: MessageStore,
 {
     pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        self.service_manager.start().await
+        self.service_manager
+            .start()
+            .await
+            .map_err(|source| rocketmq_error::RocketMQError::BrokerAsyncTaskFailed {
+                task: "BrokerPreOnlineService",
+                context: "failed to start runtime-owned service task".to_string(),
+                source: Box::new(source),
+            })
     }
 
     pub async fn shutdown(&mut self) {

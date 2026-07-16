@@ -19,12 +19,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_runtime::RuntimeHandle;
-use rocketmq_runtime::ShutdownReport;
-use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskId;
+use crate::RuntimeError;
+use crate::RuntimeHandle;
+use crate::RuntimeResult;
+use crate::ShutdownReport;
+use crate::TaskGroup;
+use crate::TaskId;
 use serde::Serialize;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
@@ -213,15 +213,13 @@ pub struct ServiceManagerLifecycleProbe {
     pub shutdown_elapsed_us: u128,
 }
 
-fn spawn_service_task<F>(operation: &'static str, task_name: String, future: F) -> RocketMQResult<ServiceTaskHandle>
+fn spawn_service_task<F>(operation: &'static str, task_name: String, future: F) -> RuntimeResult<ServiceTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let handle = tokio::runtime::Handle::try_current().map_err(|error| {
-        RocketMQError::network_connection_failed(
-            "service-task",
-            format!("{operation} requires a Tokio runtime: {error}"),
-        )
+    let handle = tokio::runtime::Handle::try_current().map_err(|error| RuntimeError::LifecycleOperation {
+        operation,
+        message: format!("requires a Tokio runtime: {error}"),
     })?;
     let task_group = TaskGroup::root("rocketmq.service-manager", RuntimeHandle::new(handle));
     spawn_service_task_with_group(operation, task_name, task_group, future)
@@ -232,7 +230,7 @@ fn spawn_service_task_with_task_group<F>(
     task_name: String,
     parent_task_group: TaskGroup,
     future: F,
-) -> RocketMQResult<ServiceTaskHandle>
+) -> RuntimeResult<ServiceTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
@@ -245,16 +243,16 @@ fn spawn_service_task_with_group<F>(
     task_name: String,
     task_group: TaskGroup,
     future: F,
-) -> RocketMQResult<ServiceTaskHandle>
+) -> RuntimeResult<ServiceTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let task_id = task_group.spawn_service(task_name, future).map_err(|error| {
-        RocketMQError::network_connection_failed(
-            "service-task",
-            format!("{operation} failed to spawn service task: {error}"),
-        )
-    })?;
+    let task_id = task_group
+        .spawn_service(task_name, future)
+        .map_err(|error| RuntimeError::LifecycleOperation {
+            operation,
+            message: format!("failed to spawn service task: {error}"),
+        })?;
     Ok(ServiceTaskHandle::new(task_id, task_group))
 }
 
@@ -308,7 +306,7 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
     }
 
     /// Start the service thread
-    pub async fn start(&self) -> RocketMQResult<()> {
+    pub async fn start(&self) -> RuntimeResult<()> {
         let service_name = self.service.get_service_name();
 
         info!(
@@ -428,12 +426,12 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
     }
 
     /// Shutdown the service
-    pub async fn shutdown(&self) -> RocketMQResult<()> {
+    pub async fn shutdown(&self) -> RuntimeResult<()> {
         self.shutdown_with_interrupt(false).await
     }
 
     /// Shutdown the service with optional interrupt
-    pub async fn shutdown_with_interrupt(&self, interrupt: bool) -> RocketMQResult<()> {
+    pub async fn shutdown_with_interrupt(&self, interrupt: bool) -> RuntimeResult<()> {
         let service_name = self.service.get_service_name();
 
         info!(
@@ -656,7 +654,7 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
-    use rocketmq_runtime::RuntimeContext;
+    use crate::RuntimeContext;
     use tokio::time::sleep;
     use tokio::time::Duration;
 

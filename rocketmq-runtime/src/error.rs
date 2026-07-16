@@ -57,4 +57,7 @@ pub enum RuntimeError {
 
     #[error("scheduled task {name} already exists")]
     ScheduledTaskExists { name: Arc<str> },
+
+    #[error("runtime lifecycle operation {operation} failed: {message}")]
+    LifecycleOperation { operation: &'static str, message: String },
 }

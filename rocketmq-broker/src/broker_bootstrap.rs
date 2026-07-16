@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_observability::TelemetryRuntimeGuard;
+use rocketmq_runtime::wait_for_signal;
 use rocketmq_runtime::ServiceContext;
-use rocketmq_rust::wait_for_signal;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::error;
 use tracing::info;

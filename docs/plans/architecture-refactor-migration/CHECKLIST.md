@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 40 | 0 | 42 未开始；合计 42 尚未完成 | 82 |
-| 里程碑 | 6（M01–M06） | 0 | 6（M07–M12） | 12 |
+| PR 级工作包 | 41 | 0 | 41 未开始；合计 41 尚未完成 | 82 |
+| 里程碑 | 6（M01–M06） | 1（M07） | 5（M08–M12） | 12 |
 | 新增边界 crate | 7 | 0 | 3（proxy-core/cluster/local） | 10 |
 | 根 workspace package | 29 | — | 还差 3 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 42 个未开始工作包分布：M07 为 7 个、M08 为 6 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、
-M12 为 6 个。PR-M06-12 已完成依赖图与消费方收口，M06 Gate 已关闭；当前下一工作包为 PR-M07-01。
+剩余 41 个未开始工作包分布：M07 为 6 个、M08 为 6 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、
+M12 为 6 个。PR-M07-01 已完成 Legacy Runtime 排空；M07 继续进行，当前下一工作包为 PR-M07-02。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -246,7 +246,14 @@ M12 为 6 个。PR-M06-12 已完成依赖图与消费方收口，M06 Gate 已关
 
 任务文档：[`07-legacy-and-client-edge-burn-down.md`](phase-2-core-boundaries/07-legacy-and-client-edge-burn-down.md)
 
-- [ ] PR-M07-01：将 `rocketmq-rust` 生命周期能力迁入 runtime
+- [x] PR-M07-01：将 `rocketmq-rust` 生命周期能力迁入 runtime
+  - [x] schedule/task/shutdown/signal canonical owner 已迁入 `rocketmq-runtime`，legacy 只保精确 re-export shim
+  - [x] workspace 的 15 个 lifecycle consumer 文件已改用 runtime canonical path；Example 的 8 个 signal 旧路径作为 standalone 兼容面冻结
+  - [x] 新边界 crate 禁止依赖 `rocketmq-rust` 的显式 architecture policy 与 6 项 source contract 已落地
+  - [x] runtime 77 项、legacy 36 项、新旧路径差分 3 项、Broker scheduled 1 项、Client scheduled 4 项、Store 484 项通过
+  - [x] Example、Tauri backend、Web backend 按最近 AGENTS 的 fmt/Clippy/build 累计路线通过；未修改 dashboard-common，未触发 GPUI
+  - [x] Runtime audit、architecture guard/fixtures、ArcMut 63 项/24 fixtures、AGENTS routing 通过；typed-error 仅剩 main 既有 11 项
+  - [x] ADR-013 批准 10 条既有 ArcMut import 一对一 relocation，台账保持 1,170 identities/3,232 occurrences
 - [ ] PR-M07-02：删除 MCP 冗余 Client 边
 - [ ] PR-M07-03：完成 NameServer RouteLookup 反转
 - [ ] PR-M07-04：清零 Broker Client 边

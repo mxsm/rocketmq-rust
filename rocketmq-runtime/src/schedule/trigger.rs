@@ -23,7 +23,7 @@ use cron::Schedule;
 
 use crate::schedule::SchedulerError;
 
-/// Trigger trait for determining when tasks should run
+/// Trigger trait for determining when tasks should run.
 pub trait Trigger: Send + Sync {
     /// Get the next execution time after the given time
     fn next_execution_time(&self, after: SystemTime) -> Option<SystemTime>;
@@ -147,10 +147,6 @@ impl IntervalTrigger {
 
     pub fn every_hours(hours: u64) -> Self {
         Self::new(Duration::from_secs(hours * 3600))
-    }
-
-    fn increment_executed_count(&mut self) {
-        self.executed_count += 1;
     }
 }
 

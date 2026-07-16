@@ -18,10 +18,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
-use rocketmq_runtime::RuntimeHandle;
-use rocketmq_runtime::ShutdownReport;
-use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskId;
+use crate::RuntimeHandle;
+use crate::ShutdownReport;
+use crate::TaskGroup;
+use crate::TaskId;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
@@ -269,11 +269,6 @@ impl TaskExecutor {
             metrics: self.metrics.clone(),
             executions: self.executions.clone(),
         }
-    }
-
-    async fn run_task_internal(&self, task: Arc<Task>, execution_id: String, scheduled_time: SystemTime) {
-        let internal = self.clone_for_task();
-        internal.run_task_internal(task, execution_id, scheduled_time).await;
     }
 
     async fn task_group(&self, operation: &'static str) -> Result<TaskGroup, SchedulerError> {
@@ -555,7 +550,7 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
 
-    use rocketmq_runtime::RuntimeContext;
+    use crate::RuntimeContext;
 
     use super::*;
 
