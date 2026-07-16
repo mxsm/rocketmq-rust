@@ -40,11 +40,8 @@ change-planning = []
 [dependencies]
 rocketmq-admin-core   = { version = "1.0.0", path = "../rocketmq-admin/rocketmq-admin-core" }
 rocketmq-auth         = { workspace = true, optional = true }
-rocketmq-client-rust  = { workspace = true }
-rocketmq-common       = { workspace = true }
 rocketmq-error        = { workspace = true }
 rocketmq-observability = { workspace = true, optional = true }
-rocketmq-remoting     = { workspace = true }
 rocketmq-runtime      = { workspace = true }
 
 anyhow             = { workspace = true }

@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；PR-M07-01 已完成 |
+| 状态 | 进行中；PR-M07-01、PR-M07-02 已完成 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP15 `rocketmq-rust-drain`、WP18 `client-edge-burn-down`；完成 WP17 的 consumer 迁移 |
 | 前置条件 | model/protocol/transport/store-api canonical 边界稳定；Client allowlist/source guard 可用 |
@@ -58,11 +58,11 @@
 
 ### PR-M07-02：删除 MCP 冗余 Client 边
 
-- [ ] `[DEV]` 证明 MCP 源码未直接使用完整 Client 后删除 manifest 边；QueryFacade/AdminSession 继续经 admin-core。
-- [ ] `[TEST]` 运行 MCP check/test/streamable-http Clippy/doc 和默认 tool/resource contract。
-- [ ] `[TEST]` 确认 8 个默认只读/诊断 Tool 与 5 个 change-planning Tool 仍 `mutates_cluster: false`。
-- [ ] `[REV]` 检查没有通过 common/remoting re-export 绕过 source guard，stdio stdout 仍只含协议帧。
-- [ ] 回滚点：若 admin-core 缺少合法 capability，先扩展 admin-owned port；不恢复 MCP 直接 Client 边作为快捷方案。
+- [x] `[DEV]` 证明 MCP 源码未直接使用完整 Client 后删除 manifest 边；QueryFacade/AdminSession 继续经 admin-core。
+- [x] `[TEST]` 运行 MCP check/test/streamable-http Clippy/doc 和默认 tool/resource contract。
+- [x] `[TEST]` 确认 8 个默认只读/诊断 Tool 与 5 个 change-planning Tool 仍 `mutates_cluster: false`。
+- [x] `[REV]` 检查没有通过 common/remoting re-export 绕过 source guard，stdio stdout 仍只含协议帧。
+- [x] 回滚点：若 admin-core 缺少合法 capability，先扩展 admin-owned port；不恢复 MCP 直接 Client 边作为快捷方案。
 
 ### PR-M07-03：NameServer RouteLookup 反转
 
@@ -234,3 +234,31 @@ python scripts/arc_mut_guard.py
   detached work 或危险 ArcMut escape 搬回 legacy。
 - [x] `[INVENTORY]` PR-M07-01 父项关闭；82 个顶层工作包更新为 41 已完成、0 阻塞、41 未开始。M07 保持进行中，
   唯一下一工作包为 PR-M07-02 删除 MCP 冗余 Client 边。
+
+## PR-M07-02 MCP 冗余 Client 边清理 evidence
+
+- [x] `[DEPENDENCY/OWNER]` `rocketmq-mcp` manifest 与 lockfile 的 Client、common、remoting 三条未使用直接边已删除；
+  `cargo tree -p rocketmq-mcp -e normal -i rocketmq-client-rust` 精确证明 Client 仅经
+  `rocketmq-admin-core` 间接进入，MCP 的 direct normal tree 只保留自身实际 owner 依赖。
+- [x] `[SOURCE/FACADE]` MCP `src/` 与 `tests/` 不含 `rocketmq_client(_rust)::`、`rocketmq_common::` 或
+  `rocketmq_remoting::` 绕行；`AdminSession` 继续从 admin-core 的 Topic/Broker/Consumer/Cluster service 获取 capability，
+  QueryFacade 的 session factory 与 start/shutdown 行为未改变。
+- [x] `[CONTRACT/POLICY]` 新增 4 项 M07-02 contract，冻结 manifest、lockfile、source/facade 与 architecture baseline；
+  Client root manifest consumer 基线从 5 收敛到 4，删除 MCP 的 Client/common/remoting 例外，target allowlist 继续排除 MCP。
+- [x] `[TOOL/SECURITY]` 默认 catalog 精确保留 8 个只读/诊断 Tool；all-features catalog 精确新增 5 个
+  change-planning Tool。新增 Rust 合同逐一构造 create topic、topic config、topic permission、broker config、consumer
+  offset 五类计划，并证明全部 `mutates_cluster == false`、ephemeral、immutable；stdio integration 继续把 stdout 每行解析为
+  JSON-RPC 协议帧，未出现诊断日志污染。
+- [x] `[TEST/MCP]` `cargo check -p rocketmq-mcp`、default test（72 unit + 2 integration，1 个外部集群 E2E ignored）、
+  all-features test（89 unit + 2 integration，1 ignored）、streamable-http all-target strict Clippy 与 no-deps Rustdoc 全部通过；
+  tool/resource/prompt snapshot、2025-11-25 protocol、HTTP auth/security、sanitizer 与 read-only policy 均由同一矩阵覆盖。
+- [x] `[GOVERNANCE]` architecture baseline、35 项单测、1 clean/6 violation fixtures、ArcMut guard、63 项单测、24 fixtures、
+  AGENTS routing 与 Python compile 通过。未修改共享 public API、standalone manifest/lockfile 或 dashboard-common，因此不触发
+  Example、Tauri、Web、GPUI 的消费者重验；没有 runtime ownership/source 变更，因此不触发 runtime audit。
+- [x] `[ERROR]` error hygiene 仅复现 `main` 既有 11 项：Broker source stringification 1、MCP anyhow 8、缺失治理文档 2；
+  本工作包没有新增 finding，故记录为 pre-existing failure，不计为通过。
+- [x] `[FINAL/ROLLBACK]` root workspace exact fmt、all-target/all-feature strict Clippy 与 `git diff --check` 通过；Clippy 仅输出
+  不受 `-D warnings` 控制的 linker/future-incompat 提示。回滚可恢复代码前的依赖解析，但不得重新加入 MCP 的 Client/common/
+  remoting 直接边；若 admin-core capability 不足，必须先扩展 admin-owned port。
+- [x] `[INVENTORY]` PR-M07-02 父项关闭；82 个顶层工作包更新为 42 已完成、0 阻塞、40 未开始。M07 保持进行中，
+  唯一下一工作包为 PR-M07-03 NameServer RouteLookup 反转。

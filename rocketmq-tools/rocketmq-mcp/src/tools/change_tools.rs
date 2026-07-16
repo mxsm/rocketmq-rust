@@ -352,6 +352,72 @@ mod tests {
     }
 
     #[test]
+    fn every_change_planning_tool_returns_a_non_mutating_plan() {
+        let plans = [
+            plan_create_topic(PlanRequest {
+                cluster: "local-dev".to_string(),
+                reason: "contract verification".to_string(),
+                desired: CreateTopicDesiredState {
+                    topic: "orders".to_string(),
+                    read_queue_nums: Some(8),
+                    write_queue_nums: Some(8),
+                    perm: Some("read_write".to_string()),
+                },
+            }),
+            plan_update_topic_config(PlanRequest {
+                cluster: "local-dev".to_string(),
+                reason: "contract verification".to_string(),
+                desired: UpdateTopicConfigDesiredState {
+                    topic: "orders".to_string(),
+                    config_key: "message.type".to_string(),
+                    config_value: "normal".to_string(),
+                },
+            }),
+            plan_update_topic_perm(PlanRequest {
+                cluster: "local-dev".to_string(),
+                reason: "contract verification".to_string(),
+                desired: UpdateTopicPermissionsDesiredState {
+                    topic: "orders".to_string(),
+                    perm: "read_write".to_string(),
+                },
+            }),
+            plan_update_broker_config(PlanRequest {
+                cluster: "local-dev".to_string(),
+                reason: "contract verification".to_string(),
+                desired: UpdateBrokerConfigDesiredState {
+                    broker_name: "broker-a".to_string(),
+                    config_key: "flushDiskType".to_string(),
+                    config_value: "ASYNC_FLUSH".to_string(),
+                },
+            }),
+            plan_reset_consumer_offset(PlanRequest {
+                cluster: "local-dev".to_string(),
+                reason: "contract verification".to_string(),
+                desired: ResetConsumerOffsetDesiredState {
+                    topic: "orders".to_string(),
+                    consumer_group: "order-workers".to_string(),
+                    target_offset: Some(42),
+                    timestamp_millis: None,
+                },
+            }),
+        ];
+
+        assert_eq!(
+            plans.iter().map(|plan| plan.plan_type).collect::<Vec<_>>(),
+            vec![
+                ChangePlanType::CreateTopic,
+                ChangePlanType::UpdateTopicConfig,
+                ChangePlanType::UpdateTopicPermissions,
+                ChangePlanType::UpdateBrokerConfig,
+                ChangePlanType::ResetConsumerOffset,
+            ]
+        );
+        assert!(plans
+            .iter()
+            .all(|plan| { !plan.mutates_cluster && plan.ephemeral && plan.immutable }));
+    }
+
+    #[test]
     fn identical_requests_produce_deterministic_immutable_plans() {
         let request = PlanRequest {
             cluster: "local-dev".to_string(),
