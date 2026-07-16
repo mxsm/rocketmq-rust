@@ -12,4 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use rocketmq_store_local::transfer::segment::*;
+pub mod connection_state;
+pub mod connection_state_notification_request;
+pub mod error;
+pub mod flow;
+pub mod replication;
+pub mod transfer_engine;
+pub mod transfer_metrics;
+pub mod wire;

@@ -31,17 +31,4 @@ pub mod transfer_engine;
 pub mod transfer_metrics;
 pub(crate) mod wait_notify_object;
 
-/// Error types
-#[derive(Debug, thiserror::Error)]
-pub enum HAConnectionError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Transfer error: {0}")]
-    Transfer(#[from] crate::transfer::error::TransferError),
-    #[error("Connection error: {0}")]
-    Connection(String),
-    #[error("Service error: {0}")]
-    Service(String),
-    #[error("Invalid state: {0}")]
-    InvalidState(String),
-}
+pub use rocketmq_store_local::ha::error::HAConnectionError;

@@ -391,6 +391,84 @@
       "from": "a11bfa74e45d220c52e0b704",
       "to": "dc9a5d26c0ba593d39e51e29",
       "reason": "Wrapping the existing ArcMut Inner field in the Local ConsumeQueueStoreRoot changed its type context in the same ConsumeQueueStore item without adding an occurrence"
+    },
+    {
+      "identity": "0c6d085976904eb0c0658a73",
+      "from": "2de188e9a2188a5aa6759beb",
+      "to": "439c16b8ee37f0cfe7344fef",
+      "reason": "Replacing Store-owned controller replication fields with the Local ReplicationStateRoot changed adjacent context around the existing AutoSwitchHAService delegate ArcMut field without adding an occurrence"
+    },
+    {
+      "identity": "0c6d085976904eb0c0658a73",
+      "from": "5a0458c7313dff5c2dcaee6a",
+      "to": "81d67e0622537835e5ddd119",
+      "reason": "Replacing Store-owned controller replication fields with the Local ReplicationStateRoot changed adjacent context around the existing AutoSwitchHAService message_store ArcMut field without adding an occurrence"
+    },
+    {
+      "identity": "0c6d085976904eb0c0658a73",
+      "from": "288099b20b95998d5f711b38",
+      "to": "c35980021309c10d8bc30fdb",
+      "reason": "Constructing the Local ReplicationStateRoot changed adjacent constructor context around the existing AutoSwitchHAService ArcMut parameter without adding an occurrence"
+    },
+    {
+      "identity": "71a36d2fa63ab6135096c5ad",
+      "from": "c079e816f826af395a249ab0",
+      "to": "b312fa57e298d846a6443a2e",
+      "reason": "Importing Local replication state types changed module import context around the existing LocalFileMessageStore import without adding or moving an occurrence"
+    },
+    {
+      "identity": "b4c3e01bbf3af7d5bf73c267",
+      "from": "4278e7dc9d8a2bb4f49596ea",
+      "to": "06ba5bbcf23316cc0f7bd3c2",
+      "reason": "Replacing Store-owned controller replication fields with the Local ReplicationStateRoot changed adjacent field context around the existing LocalFileMessageStore type without adding an occurrence"
+    },
+    {
+      "identity": "5ba88f9581a8078b38af3d26",
+      "from": "c031170abfd3835b1203cf19",
+      "to": "168cb56afd15ebc5b7a5d606",
+      "reason": "Delegating epoch validation to the Local replication root changed adjacent control-flow context around the existing state-machine mut_from_ref call without adding an occurrence"
+    },
+    {
+      "identity": "ba0afeac215f411aba022228",
+      "from": "3e594689f4565d51f1781710",
+      "to": "7323fc7e3f26e3b431120ea1",
+      "reason": "Delegating follower frame planning and confirm-offset clamping to Local changed adjacent test context around the existing ArcMut type without adding an occurrence"
+    },
+    {
+      "identity": "ce94e255495f762a7dc1070c",
+      "from": "3083e5725c082bb425ae7692",
+      "to": "6a37fce28e859a599208c3a8",
+      "reason": "Delegating follower wire planning to Local changed adjacent test imports around the existing LocalFileMessageStore import without adding an occurrence"
+    },
+    {
+      "identity": "e24854c4cfa62b92b52ef485",
+      "from": "af0ee94d81fda0e079e210c1",
+      "to": "62a8c8336f52e3f9d909d4dd",
+      "reason": "Delegating confirm-offset clamping to Local changed adjacent expression context around the existing mut_from_ref call without adding an occurrence"
+    },
+    {
+      "identity": "d5bea7610998eabb9d519b8f",
+      "from": "5a0df04bd6e86b838afd0097",
+      "to": "76e2afae606de9686ac9f0a6",
+      "reason": "Moving transfer wire and offset decoder ownership to Local changed adjacent test imports around the existing use super glob without adding or moving an occurrence"
+    },
+    {
+      "identity": "9dec34f8e8fcbd86a27df716",
+      "from": "d68deca2ed4c4640bf82be16",
+      "to": "c74ed7423ea389a4a3364a24",
+      "reason": "Replacing Store-owned wire helpers with Local re-exports changed adjacent field context around the existing DefaultHAConnection ArcMut type without adding an occurrence"
+    },
+    {
+      "identity": "df1bbff1a0b81040b3fbf768",
+      "from": "2fde49c797eb7f2c055490d5",
+      "to": "cfbb908afb1111e0e6eb2aea",
+      "reason": "Replacing the Store-owned max acknowledged offset atomic with Local ReplicationProgress changed adjacent field context around the existing DefaultHAService ArcMut type without adding an occurrence"
+    },
+    {
+      "identity": "7cd3149aac39e3af8fc86d45",
+      "from": "e7c8f168db0bc1e6907dda5a",
+      "to": "e566573a107c0f26a85cbfe6",
+      "reason": "Replacing the Store-owned max acknowledged offset atomic with Local ReplicationProgress changed adjacent field context around the existing LocalFileMessageStore type without adding an occurrence"
     }
   ]
 }

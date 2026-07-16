@@ -12,4 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use rocketmq_store_local::transfer::segment::*;
+#[derive(Debug, thiserror::Error)]
+pub enum HAConnectionError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Transfer error: {0}")]
+    Transfer(#[from] crate::transfer::error::TransferError),
+    #[error("Connection error: {0}")]
+    Connection(String),
+    #[error("Service error: {0}")]
+    Service(String),
+    #[error("Invalid state: {0}")]
+    InvalidState(String),
+}

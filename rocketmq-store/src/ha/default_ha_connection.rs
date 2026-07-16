@@ -20,8 +20,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Buf;
-use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use futures_util::StreamExt;
@@ -38,7 +36,6 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tokio::time::timeout;
-use tokio_util::codec::Decoder;
 use tokio_util::codec::FramedRead;
 use tracing::error;
 use tracing::info;
@@ -67,30 +64,13 @@ use crate::transfer::batch::TransferPlan;
 use crate::transfer::planner::TransferPlanInput;
 use crate::transfer::planner::TransferPlanner;
 
-/// Transfer Header buffer size. Schema: physic offset and body size.
-/// Format: [physicOffset (8bytes)][bodySize (4bytes)]
-pub const TRANSFER_HEADER_SIZE: usize = 8 + 4;
-/// Controller transfer header extends the default header with confirm offset.
-/// Format: [physicOffset (8bytes)][bodySize (4bytes)][confirmOffset (8bytes)]
-pub(crate) const CONTROLLER_TRANSFER_HEADER_SIZE: usize = TRANSFER_HEADER_SIZE + 8;
-pub(crate) const DEFAULT_HA_TRANSFER_BATCH_SIZE: usize = 256 * 1024;
+pub(crate) use rocketmq_store_local::ha::wire::effective_ha_transfer_batch_size;
+pub(crate) use rocketmq_store_local::ha::wire::transfer_header_size;
+pub(crate) use rocketmq_store_local::ha::wire::OffsetDecoder;
+pub(crate) use rocketmq_store_local::ha::wire::OffsetFrame;
+pub(crate) use rocketmq_store_local::ha::wire::TransferHeader;
 
 type HAConnectionResult<T> = Result<T, HAConnectionError>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TransferHeader {
-    pub master_phy_offset: i64,
-    pub body_size: usize,
-    pub confirm_offset: Option<i64>,
-}
-
-pub(crate) const fn transfer_header_size(enable_controller_mode: bool) -> usize {
-    if enable_controller_mode {
-        CONTROLLER_TRANSFER_HEADER_SIZE
-    } else {
-        TRANSFER_HEADER_SIZE
-    }
-}
 
 pub(crate) fn encode_transfer_header(
     byte_buffer_header: &mut BytesMut,
@@ -99,55 +79,22 @@ pub(crate) fn encode_transfer_header(
     enable_controller_mode: bool,
     confirm_offset: i64,
 ) -> Bytes {
-    byte_buffer_header.clear();
-    byte_buffer_header.put_i64(master_phy_offset);
-    byte_buffer_header.put_i32(i32::try_from(body_size).expect("transfer body size exceeds i32"));
-    if enable_controller_mode {
-        byte_buffer_header.put_i64(confirm_offset);
-    }
-    byte_buffer_header.split().freeze()
-}
-
-pub(crate) const fn effective_ha_transfer_batch_size(configured_batch_size: usize) -> usize {
-    if configured_batch_size == 0 {
-        DEFAULT_HA_TRANSFER_BATCH_SIZE
-    } else {
-        configured_batch_size
-    }
+    rocketmq_store_local::ha::wire::encode_transfer_header(
+        byte_buffer_header,
+        master_phy_offset,
+        body_size,
+        enable_controller_mode,
+        confirm_offset,
+    )
+    .expect("HA transfer batches are bounded below i32::MAX by MessageStoreConfig")
 }
 
 pub(crate) fn decode_transfer_header(
     src: &[u8],
     enable_controller_mode: bool,
 ) -> Result<TransferHeader, HAConnectionError> {
-    let header_size = transfer_header_size(enable_controller_mode);
-    if src.len() < header_size {
-        return Err(HAConnectionError::Service(format!(
-            "transfer header underflow: expected at least {header_size} bytes, got {}",
-            src.len()
-        )));
-    }
-
-    let master_phy_offset = i64::from_be_bytes(src[0..8].try_into().expect("slice len 8"));
-    let body_size = i32::from_be_bytes(src[8..12].try_into().expect("slice len 4"));
-    if body_size < 0 {
-        return Err(HAConnectionError::Service(format!(
-            "transfer header contains negative body size: {body_size}"
-        )));
-    }
-    let confirm_offset = enable_controller_mode.then(|| {
-        i64::from_be_bytes(
-            src[TRANSFER_HEADER_SIZE..CONTROLLER_TRANSFER_HEADER_SIZE]
-                .try_into()
-                .expect("slice len 8"),
-        )
-    });
-
-    Ok(TransferHeader {
-        master_phy_offset,
-        body_size: body_size as usize,
-        confirm_offset,
-    })
+    rocketmq_store_local::ha::wire::decode_transfer_header(src, enable_controller_mode)
+        .map_err(|error| HAConnectionError::Service(error.to_string()))
 }
 
 pub struct DefaultHAConnection {
@@ -385,57 +332,6 @@ impl HAConnection for DefaultHAConnection {
 const READ_MAX_BUFFER_SIZE: usize = 1024 * 1024; // 1 MB
 const REPORT_HEADER_SIZE: usize = 8;
 const SELECT_TIMEOUT: Duration = Duration::from_millis(1000);
-
-#[derive(Debug)]
-pub(in crate::ha) struct OffsetFrame {
-    pub offset: i64,
-    pub broker_id: Option<i64>,
-}
-
-pub(in crate::ha) struct OffsetDecoder {
-    frame_size: usize,
-}
-
-impl OffsetDecoder {
-    pub const fn new(frame_size: usize) -> Self {
-        Self { frame_size }
-    }
-}
-
-impl Decoder for OffsetDecoder {
-    type Item = OffsetFrame;
-    type Error = std::io::Error;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if src.len() < self.frame_size {
-            return Ok(None); // not enough data yet
-        }
-
-        // ensure we work on 8-byte alignment
-        let aligned_size = src.len() - (src.len() % self.frame_size);
-        if aligned_size < self.frame_size {
-            return Ok(None);
-        }
-
-        let offset_bytes: [u8; 8] = src[..REPORT_HEADER_SIZE]
-            .try_into()
-            .expect("Slice with incorrect length");
-        let offset = i64::from_be_bytes(offset_bytes);
-        let broker_id = if self.frame_size >= CONTROLLER_REPORT_HEADER_SIZE {
-            Some(i64::from_be_bytes(
-                src[REPORT_HEADER_SIZE..CONTROLLER_REPORT_HEADER_SIZE]
-                    .try_into()
-                    .expect("Slice with incorrect length"),
-            ))
-        } else {
-            None
-        };
-
-        src.advance(self.frame_size);
-
-        Ok(Some(OffsetFrame { offset, broker_id }))
-    }
-}
 
 /// Read Socket Service
 /// The main node processes requests from the slave nodes, reads the maximum request offset of the
@@ -971,6 +867,9 @@ fn transfer_engine_kind(preference: TransferEnginePreference) -> TransferEngineK
 #[cfg(test)]
 mod tests {
     use bytes::BufMut;
+    use rocketmq_store_local::ha::wire::CONTROLLER_TRANSFER_HEADER_SIZE;
+    use rocketmq_store_local::ha::wire::DEFAULT_HA_TRANSFER_BATCH_SIZE;
+    use tokio_util::codec::Decoder;
 
     use super::*;
 

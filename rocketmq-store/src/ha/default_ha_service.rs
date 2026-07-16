@@ -15,8 +15,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU32;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -61,6 +59,7 @@ use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAError;
 use crate::store_error::HAResult;
+use rocketmq_store_local::ha::replication::ReplicationProgress;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HAConnectionRuntimeSnapshot {
@@ -78,7 +77,7 @@ pub struct DefaultHAService {
     accept_socket_service: Option<AcceptSocketService>,
     default_message_store: ArcMut<LocalFileMessageStore>,
     wait_notify_object: Arc<Notify>,
-    push2_slave_max_offset: Arc<AtomicU64>,
+    replication_progress: ReplicationProgress,
     group_transfer_service: Option<GroupTransferService>,
     ha_client: Option<GeneralHAClient>,
     ha_connection_state_notification_service: Option<HAConnectionStateNotificationService>,
@@ -94,7 +93,7 @@ impl DefaultHAService {
             accept_socket_service: None,
             default_message_store: message_store,
             wait_notify_object: Arc::new(Notify::new()),
-            push2_slave_max_offset: Arc::new(AtomicU64::new(0)),
+            replication_progress: ReplicationProgress::default(),
             group_transfer_service: None,
             ha_client: None,
             ha_connection_state_notification_service: None,
@@ -147,28 +146,7 @@ impl DefaultHAService {
     }
 
     pub async fn notify_transfer_some(&self, offset: i64) {
-        if offset < 0 {
-            return;
-        }
-
-        let mut value = self.push2_slave_max_offset.load(Ordering::Relaxed);
-
-        while (offset as u64) > value {
-            match self.push2_slave_max_offset.compare_exchange_weak(
-                value,
-                offset as u64,
-                Ordering::SeqCst,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    break;
-                }
-                Err(current_value) => {
-                    // Update failed, retry with the current value
-                    value = current_value;
-                }
-            }
-        }
+        self.replication_progress.record_ack(offset);
 
         if let Some(service) = &self.group_transfer_service {
             service.notify_transfer_some();
@@ -452,7 +430,7 @@ impl HAService for DefaultHAService {
     }
 
     fn get_push_to_slave_max_offset(&self) -> i64 {
-        self.push2_slave_max_offset.load(std::sync::atomic::Ordering::Relaxed) as i64
+        self.replication_progress.max_ack_offset()
     }
 
     fn get_runtime_info(&self, master_put_where: i64) -> HARuntimeInfo {
@@ -509,7 +487,7 @@ impl HAService for DefaultHAService {
 
     async fn is_slave_ok(&self, master_put_where: i64) -> bool {
         !self.connections.lock().await.is_empty()
-            && (master_put_where - self.push2_slave_max_offset.load(std::sync::atomic::Ordering::Relaxed) as i64)
+            && (master_put_where - self.replication_progress.max_ack_offset())
                 < (self
                     .default_message_store
                     .message_store_config_ref()
@@ -648,6 +626,7 @@ impl AcceptSocketService {
 mod tests {
     use std::collections::HashSet;
     use std::path::Path;
+    use std::sync::atomic::Ordering;
 
     use cheetah_string::CheetahString;
     use dashmap::DashMap;

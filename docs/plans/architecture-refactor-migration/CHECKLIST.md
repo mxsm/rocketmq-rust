@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 33 | 0 | 49 未开始；合计 49 尚未完成 | 82 |
+| PR 级工作包 | 34 | 0 | 48 未开始；合计 48 尚未完成 | 82 |
 | 里程碑 | 5（M01–M05） | 1（M06） | 6（M07–M12） | 12 |
 | 新增边界 crate | 6 | 0 | 4（store-rocksdb、proxy-core/cluster/local） | 10 |
 | 根 workspace package | 28 | — | 还差 4 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 49 个未开始工作包分布：M06-06～12 为 7 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
-M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-05 已完成 CQ/Index owner 迁移；当前下一工作包为 PR-M06-06。
+剩余 48 个未开始工作包分布：M06-07～12 为 6 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
+M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-06 已完成 HA/Replication/Transfer owner 迁移；当前下一工作包为 PR-M06-07。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -193,7 +193,12 @@ M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-05 已完成 CQ/Index ow
   - [x] M06-05e：迁移 40B IndexHeader 与 20B index entry/slot codec 到 Local
   - [x] M06-05f：迁移 IndexFile put/query driver 到 Local
   - [x] M06-05g：迁移 IndexService lifecycle/query/dispatch root，冻结 ledger 并完成父项验收
-- [ ] PR-M06-06：迁移 HA、Replication 与 Transfer
+- [x] PR-M06-06：迁移 HA、Replication 与 Transfer
+  - [x] 冻结 HA wire、replica offset/ack、leader/follower progress 与 transfer partial-write 契约
+  - [x] 迁移 transfer planner/segment/engine/metrics、flow-control 与 replication state root 到 Local
+  - [x] Store 仅保留 socket、Remoting/controller DTO、CommitLog/LocalFileMessageStore 与 lifecycle adapter
+  - [x] focused HA/transfer、Store all-feature lib、runtime audit、architecture/ArcMut guard 全部通过
+  - [x] 冻结兼容 ledger、回滚点与 34/48 顶层工作包盘点
 - [ ] PR-M06-07：迁移 Timer、POP 与 Local Services
 - [ ] PR-M06-08：收敛 LocalFileMessageStore facade、composition 与 config
 - [ ] PR-M06-09：创建 RocksDB foundation

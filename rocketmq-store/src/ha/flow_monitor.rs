@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -62,57 +60,37 @@ impl FlowMonitor {
 }
 
 struct FlowMonitorInner {
-    transferred_byte: AtomicI64,
-    transferred_byte_in_second: AtomicI64,
-    message_store_config: Arc<MessageStoreConfig>,
+    window: rocketmq_store_local::ha::flow::FlowControlWindow,
 }
 
 impl FlowMonitorInner {
     pub fn new(message_store_config: Arc<MessageStoreConfig>) -> Self {
         FlowMonitorInner {
-            transferred_byte: AtomicI64::new(0),
-            transferred_byte_in_second: AtomicI64::new(0),
-            message_store_config,
+            window: rocketmq_store_local::ha::flow::FlowControlWindow::new(
+                message_store_config.ha_flow_control_enable,
+                message_store_config.max_ha_transfer_byte_in_second,
+            ),
         }
     }
 
     pub fn calculate_speed(&self) {
-        let current_transferred = self.transferred_byte.load(Ordering::Relaxed);
-        self.transferred_byte_in_second
-            .store(current_transferred, Ordering::Relaxed);
-        self.transferred_byte.store(0, Ordering::Relaxed);
+        self.window.roll_window();
     }
 
     pub fn can_transfer_max_byte_num(&self) -> i32 {
-        if self.is_flow_control_enable() {
-            let max_bytes = self.max_transfer_byte_in_second() as i64;
-            let current_transferred = self.transferred_byte.load(Ordering::Relaxed);
-            let res = std::cmp::max(max_bytes - current_transferred, 0);
-
-            if res > i32::MAX as i64 {
-                i32::MAX
-            } else {
-                res as i32
-            }
-        } else {
-            i32::MAX
-        }
+        self.window.available_bytes()
     }
 
     pub fn add_byte_count_transferred(&self, count: i64) {
-        self.transferred_byte.fetch_add(count, Ordering::Relaxed);
+        self.window.record_transferred(count);
     }
 
     pub fn get_transferred_byte_in_second(&self) -> i64 {
-        self.transferred_byte_in_second.load(Ordering::Relaxed)
-    }
-
-    fn is_flow_control_enable(&self) -> bool {
-        self.message_store_config.ha_flow_control_enable
+        self.window.transferred_bytes_per_second()
     }
 
     pub fn max_transfer_byte_in_second(&self) -> usize {
-        self.message_store_config.max_ha_transfer_byte_in_second
+        self.window.max_bytes_per_second()
     }
 }
 

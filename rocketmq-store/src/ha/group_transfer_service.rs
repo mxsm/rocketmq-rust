@@ -37,17 +37,13 @@ use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::store_error::HAError;
 use crate::store_error::HAResult;
+use rocketmq_store_local::ha::replication::has_required_acks;
+use rocketmq_store_local::ha::replication::has_required_sync_state_set_acks;
+pub(crate) use rocketmq_store_local::ha::replication::GroupTransferRuntimeInfo;
 
 pub struct GroupTransferService {
     inner: Arc<GroupTransferServiceInner>,
     service_manager: ServiceManager<GroupTransferServiceInner>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct GroupTransferRuntimeInfo {
-    pub pending_request_count: u64,
-    pub pending_request_oldest_wait_millis: u64,
-    pub ack_notify_count: u64,
 }
 
 impl GroupTransferService {
@@ -263,50 +259,6 @@ impl ServiceTask for GroupTransferServiceInner {
     async fn on_wait_end(&self) {
         self.swap_requests().await;
     }
-}
-
-fn has_required_sync_state_set_acks(
-    sync_state_set: &std::collections::HashSet<i64>,
-    acked_replicas: &[HAAckedReplicaSnapshot],
-    next_offset: i64,
-) -> bool {
-    if sync_state_set.len() <= 1 {
-        return true;
-    }
-
-    let mut ack_nums = 1;
-    for replica in acked_replicas {
-        if replica
-            .slave_broker_id
-            .is_some_and(|slave_broker_id| sync_state_set.contains(&slave_broker_id))
-            && replica.slave_ack_offset >= next_offset
-        {
-            ack_nums += 1;
-        }
-        if ack_nums >= sync_state_set.len() {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn has_required_acks(required_acks: i32, acked_replicas: &[HAAckedReplicaSnapshot], next_offset: i64) -> bool {
-    if required_acks <= 1 {
-        return true;
-    }
-
-    let mut ack_nums = 1;
-    for replica in acked_replicas {
-        if replica.slave_ack_offset >= next_offset {
-            ack_nums += 1;
-        }
-        if ack_nums >= required_acks {
-            return true;
-        }
-    }
-
-    false
 }
 
 #[cfg(test)]

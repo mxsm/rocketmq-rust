@@ -12,14 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicI32;
-use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering;
-use std::sync::Mutex;
 
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::TimeUtils::current_millis;
@@ -43,22 +37,14 @@ use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAResult;
-
-#[derive(Default)]
-struct SyncStateTracker {
-    local_sync_state_set: HashSet<i64>,
-    remote_sync_state_set: HashSet<i64>,
-    connection_caught_up_time_table: HashMap<i64, u64>,
-}
+use rocketmq_store_local::ha::replication::EpochTransition;
+use rocketmq_store_local::ha::replication::HAReplicaRuntimeSnapshot;
+use rocketmq_store_local::ha::replication::ReplicationStateRoot;
 
 pub struct AutoSwitchHAService {
     delegate: ArcMut<DefaultHAService>,
     message_store: ArcMut<LocalFileMessageStore>,
-    is_master: AtomicBool,
-    sync_state_tracker: Mutex<SyncStateTracker>,
-    is_synchronizing_sync_state_set: AtomicBool,
-    local_broker_id: AtomicI64,
-    current_master_epoch: AtomicI32,
+    replication: ReplicationStateRoot,
 }
 
 impl AutoSwitchHAService {
@@ -67,11 +53,7 @@ impl AutoSwitchHAService {
         Self {
             delegate: ArcMut::new(DefaultHAService::new(message_store.clone())),
             message_store,
-            is_master: AtomicBool::new(is_master),
-            sync_state_tracker: Mutex::new(SyncStateTracker::default()),
-            is_synchronizing_sync_state_set: AtomicBool::new(false),
-            local_broker_id: AtomicI64::new(-1),
-            current_master_epoch: AtomicI32::new(0),
+            replication: ReplicationStateRoot::new(is_master),
         }
     }
 
@@ -113,44 +95,21 @@ impl AutoSwitchHAService {
     }
 
     pub fn set_local_broker_id(&self, local_broker_id: i64) {
-        self.local_broker_id.store(local_broker_id, Ordering::SeqCst);
+        self.replication.set_local_broker_id(local_broker_id);
         self.delegate
             .set_ha_client_reported_broker_id((local_broker_id >= 0).then_some(local_broker_id));
-
-        if self.is_master.load(Ordering::SeqCst) && local_broker_id >= 0 {
-            let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-            if tracker.local_sync_state_set.is_empty() {
-                tracker.local_sync_state_set.insert(local_broker_id);
-            }
-        }
     }
 
     pub fn get_local_sync_state_set(&self) -> HashSet<i64> {
-        let tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-        tracker.local_sync_state_set.clone()
+        self.replication.local_sync_state_set()
     }
 
     pub fn get_sync_state_set(&self) -> HashSet<i64> {
-        let tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-        if self.is_synchronizing_sync_state_set.load(Ordering::SeqCst) {
-            let mut sync_state_set =
-                HashSet::with_capacity(tracker.local_sync_state_set.len() + tracker.remote_sync_state_set.len());
-            sync_state_set.extend(tracker.local_sync_state_set.iter().copied());
-            sync_state_set.extend(tracker.remote_sync_state_set.iter().copied());
-            sync_state_set
-        } else {
-            tracker.local_sync_state_set.clone()
-        }
+        self.replication.sync_state_set()
     }
 
     pub fn set_sync_state_set(&self, sync_state_set: HashSet<i64>) {
-        {
-            let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-            self.is_synchronizing_sync_state_set.store(false, Ordering::SeqCst);
-            tracker.local_sync_state_set = sync_state_set;
-            tracker.remote_sync_state_set.clear();
-            tracker.connection_caught_up_time_table.clear();
-        }
+        self.replication.replace_sync_state_set(sync_state_set);
 
         let max_phy_offset = self.message_store.get_max_phy_offset();
         let current_confirm_offset = self.message_store.get_commit_log().get_confirm_offset_directly();
@@ -162,78 +121,27 @@ impl AutoSwitchHAService {
     }
 
     pub fn is_synchronizing_sync_state_set(&self) -> bool {
-        self.is_synchronizing_sync_state_set.load(Ordering::SeqCst)
+        self.replication.is_synchronizing_sync_state_set()
     }
 
     pub fn update_connection_last_caught_up_time(&self, slave_broker_id: i64, last_caught_up_time_ms: u64) {
-        let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-        let previous = tracker
-            .connection_caught_up_time_table
-            .get(&slave_broker_id)
-            .copied()
-            .unwrap_or_default();
-        tracker
-            .connection_caught_up_time_table
-            .insert(slave_broker_id, previous.max(last_caught_up_time_ms));
+        self.replication
+            .record_caught_up(slave_broker_id, last_caught_up_time_ms);
     }
 
     pub fn maybe_shrink_sync_state_set(&self) -> HashSet<i64> {
-        let local_broker_id = self.local_broker_id.load(Ordering::SeqCst);
         let now = current_millis();
         let timeout_millis = self
             .message_store
             .message_store_config_ref()
             .ha_max_time_slave_not_catchup as u64;
-
-        let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-        let mut next_sync_state_set = tracker.local_sync_state_set.clone();
-        let mut changed = false;
-
-        next_sync_state_set.retain(|broker_id| {
-            if *broker_id == local_broker_id {
-                return true;
-            }
-
-            match tracker.connection_caught_up_time_table.get(broker_id).copied() {
-                Some(last_caught_up_time) if now.saturating_sub(last_caught_up_time) <= timeout_millis => true,
-                _ => {
-                    changed = true;
-                    false
-                }
-            }
-        });
-
-        if changed {
-            self.is_synchronizing_sync_state_set.store(true, Ordering::SeqCst);
-            tracker.remote_sync_state_set = next_sync_state_set.clone();
-        }
-
-        next_sync_state_set
+        self.replication.maybe_shrink_sync_state_set(now, timeout_millis)
     }
 
     pub fn maybe_expand_in_sync_state_set(&self, slave_broker_id: i64, slave_max_offset: i64) -> Option<HashSet<i64>> {
-        {
-            let tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-            if tracker.local_sync_state_set.contains(&slave_broker_id) {
-                return None;
-            }
-        }
-
         let confirm_offset = self.message_store.get_commit_log().get_confirm_offset_directly();
-        if slave_max_offset < confirm_offset {
-            return None;
-        }
-
-        let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-        if tracker.local_sync_state_set.contains(&slave_broker_id) {
-            return None;
-        }
-
-        let mut next_sync_state_set = tracker.local_sync_state_set.clone();
-        next_sync_state_set.insert(slave_broker_id);
-        self.is_synchronizing_sync_state_set.store(true, Ordering::SeqCst);
-        tracker.remote_sync_state_set = next_sync_state_set.clone();
-        Some(next_sync_state_set)
+        self.replication
+            .maybe_expand_sync_state_set(slave_broker_id, slave_max_offset, confirm_offset)
     }
 
     pub fn update_confirm_offset_when_slave_ack(&self, slave_broker_id: i64) {
@@ -289,13 +197,7 @@ impl AutoSwitchHAService {
             return;
         };
 
-        let removed_from_sync_state_set = {
-            let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-            let removed_from_sync_state_set = tracker.local_sync_state_set.remove(&slave_broker_id);
-            tracker.remote_sync_state_set.remove(&slave_broker_id);
-            tracker.connection_caught_up_time_table.remove(&slave_broker_id);
-            removed_from_sync_state_set
-        };
+        let removed_from_sync_state_set = self.replication.remove_replica(slave_broker_id);
 
         if removed_from_sync_state_set {
             let max_phy_offset = self.message_store.get_max_phy_offset();
@@ -316,19 +218,7 @@ impl AutoSwitchHAService {
     }
 
     fn tracked_sync_state_set_size(&self) -> Option<usize> {
-        let tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-        if self.is_synchronizing_sync_state_set.load(Ordering::SeqCst) {
-            Some(
-                tracker
-                    .local_sync_state_set
-                    .len()
-                    .max(tracker.remote_sync_state_set.len()),
-            )
-        } else if !tracker.local_sync_state_set.is_empty() {
-            Some(tracker.local_sync_state_set.len())
-        } else {
-            None
-        }
+        self.replication.tracked_sync_state_set_size()
     }
 
     pub fn local_sync_state_set_size(&self, master_put_where: i64) -> usize {
@@ -355,64 +245,52 @@ impl AutoSwitchHAService {
         expected_sync_state_set_size: usize,
         runtime_info: &HARuntimeInfo,
     ) -> i64 {
-        let in_sync_connection_offsets = runtime_info
+        let replicas = runtime_info
             .ha_connection_info
             .iter()
-            .filter(|connection| connection.in_sync && connection.slave_ack_offset > 0)
-            .filter_map(|connection| i64::try_from(connection.slave_ack_offset).ok())
+            .filter_map(|connection| {
+                i64::try_from(connection.slave_ack_offset)
+                    .ok()
+                    .map(|slave_ack_offset| HAReplicaRuntimeSnapshot {
+                        slave_ack_offset,
+                        in_sync: connection.in_sync,
+                    })
+            })
             .collect::<Vec<_>>();
-
-        let candidate_offsets = if in_sync_connection_offsets.is_empty() {
-            runtime_info
-                .ha_connection_info
-                .iter()
-                .filter(|connection| connection.slave_ack_offset > 0)
-                .filter_map(|connection| i64::try_from(connection.slave_ack_offset).ok())
-                .collect::<Vec<_>>()
-        } else {
-            in_sync_connection_offsets
-        };
-
-        let expected_slave_count = expected_sync_state_set_size.saturating_sub(1);
-        if expected_slave_count > candidate_offsets.len() {
-            return current_confirm_offset;
-        }
-
-        candidate_offsets.into_iter().min().unwrap_or(max_phy_offset)
+        rocketmq_store_local::ha::replication::compute_confirm_offset(
+            current_confirm_offset,
+            max_phy_offset,
+            expected_sync_state_set_size,
+            &replicas,
+        )
     }
 
     fn clear_pending_sync_state_tracking(&self) {
-        let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-        self.is_synchronizing_sync_state_set.store(false, Ordering::SeqCst);
-        tracker.remote_sync_state_set.clear();
-        tracker.connection_caught_up_time_table.clear();
+        self.replication.clear_pending_sync_state_tracking();
     }
 
     fn apply_epoch_transition(&self, next_epoch: i32) -> bool {
-        let current_epoch = self.current_master_epoch.load(Ordering::SeqCst);
-        if next_epoch < current_epoch {
-            return false;
+        match self.replication.apply_epoch_transition(next_epoch) {
+            EpochTransition::Rejected => return false,
+            EpochTransition::Unchanged => {}
+            EpochTransition::Advanced { epoch } => {
+                let epoch_start_offset = self
+                    .message_store
+                    .get_max_phy_offset()
+                    .max(self.message_store.get_min_phy_offset());
+                let message_store = self.message_store.clone();
+                let message_store = message_store.mut_from_ref();
+                message_store.set_state_machine_version(epoch as i64);
+                message_store.set_controller_epoch_start_offset(epoch_start_offset);
+            }
         }
-
-        if next_epoch > current_epoch {
-            let epoch_start_offset = self
-                .message_store
-                .get_max_phy_offset()
-                .max(self.message_store.get_min_phy_offset());
-            self.current_master_epoch.store(next_epoch, Ordering::SeqCst);
-            let message_store = self.message_store.clone();
-            let message_store = message_store.mut_from_ref();
-            message_store.set_state_machine_version(next_epoch as i64);
-            message_store.set_controller_epoch_start_offset(epoch_start_offset);
-        }
-
         true
     }
 
     fn refresh_confirm_offset_after_role_change(&self) {
         let min_phy_offset = self.message_store.get_min_phy_offset();
         let max_phy_offset = self.message_store.get_max_phy_offset().max(min_phy_offset);
-        let next_confirm_offset = if self.is_master.load(Ordering::SeqCst) {
+        let next_confirm_offset = if self.replication.is_master() {
             max_phy_offset
         } else {
             self.message_store.get_commit_log().get_confirm_offset_directly()
@@ -424,7 +302,7 @@ impl AutoSwitchHAService {
     }
 
     pub fn current_master_epoch(&self) -> i32 {
-        self.current_master_epoch.load(Ordering::SeqCst)
+        self.replication.current_master_epoch()
     }
 }
 
@@ -441,15 +319,9 @@ impl HAService for AutoSwitchHAService {
         if !self.apply_epoch_transition(master_epoch) {
             return Ok(false);
         }
-        self.is_master.store(true, Ordering::SeqCst);
+        self.replication.set_master(true);
         self.clear_pending_sync_state_tracking();
-        let local_broker_id = self.local_broker_id.load(Ordering::SeqCst);
-        if local_broker_id >= 0 {
-            let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-            if tracker.local_sync_state_set.is_empty() {
-                tracker.local_sync_state_set.insert(local_broker_id);
-            }
-        }
+        self.replication.ensure_local_member();
         self.clear_master_target().await;
         self.refresh_confirm_offset_after_role_change();
         Ok(true)
@@ -468,7 +340,7 @@ impl HAService for AutoSwitchHAService {
         if !self.apply_epoch_transition(new_master_epoch) {
             return Ok(false);
         }
-        self.is_master.store(false, Ordering::SeqCst);
+        self.replication.set_master(false);
         if let Some(slave_id) = slave_id {
             self.set_local_broker_id(slave_id);
         }
@@ -532,7 +404,7 @@ impl HAService for AutoSwitchHAService {
 
     fn get_runtime_info(&self, master_put_where: i64) -> HARuntimeInfo {
         let mut runtime_info = self.delegate.get_runtime_info(master_put_where);
-        runtime_info.master = self.is_master.load(Ordering::SeqCst);
+        runtime_info.master = self.replication.is_master();
         runtime_info.in_sync_slave_nums = (self.local_sync_state_set_size(master_put_where) as i32 - 1).max(0);
         if runtime_info.master {
             let current_sync_state_set = self.get_local_sync_state_set();
