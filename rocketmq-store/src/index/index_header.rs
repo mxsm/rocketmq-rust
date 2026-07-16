@@ -12,24 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use bytes::Buf;
+use rocketmq_store_local::index::codec::IndexHeaderRecord;
+use rocketmq_store_local::index::codec::BEGIN_PHY_OFFSET;
+use rocketmq_store_local::index::codec::BEGIN_TIMESTAMP_OFFSET;
+use rocketmq_store_local::index::codec::END_PHY_OFFSET;
+use rocketmq_store_local::index::codec::END_TIMESTAMP_OFFSET;
+use rocketmq_store_local::index::codec::HASH_SLOT_COUNT_OFFSET;
+use rocketmq_store_local::index::codec::INDEX_COUNT_OFFSET;
+pub use rocketmq_store_local::index::codec::INDEX_HEADER_SIZE;
 
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
-
-pub const INDEX_HEADER_SIZE: usize = 40;
-const BEGIN_TIMESTAMP_INDEX: usize = 0;
-const END_TIMESTAMP_INDEX: usize = 8;
-const BEGIN_PHY_OFFSET_INDEX: usize = 16;
-const END_PHY_OFFSET_INDEX: usize = 24;
-const HASH_SLOT_COUNT_INDEX: usize = 32;
-const INDEX_COUNT_INDEX: usize = 36;
 
 /// Index File Header. Format
 /// ```text
@@ -68,44 +66,27 @@ impl IndexHeader {
     }
 
     pub fn load(&self) {
-        let mut buffer = self.mapped_file.get_bytes(0, INDEX_HEADER_SIZE).unwrap();
-        self.begin_timestamp.store(buffer.get_i64(), Ordering::Relaxed);
-        self.end_timestamp.store(buffer.get_i64(), Ordering::Relaxed);
-        self.begin_phy_offset.store(buffer.get_i64(), Ordering::Relaxed);
-        self.end_phy_offset.store(buffer.get_i64(), Ordering::Relaxed);
-        self.hash_slot_count.store(buffer.get_i32(), Ordering::Relaxed);
-        self.index_count.store(buffer.get_i32(), Ordering::Relaxed);
-        if self.index_count.load(Ordering::Relaxed) <= 0 {
-            self.index_count.store(1, Ordering::Relaxed);
-        }
+        let buffer = self.mapped_file.get_bytes(0, INDEX_HEADER_SIZE).unwrap();
+        let record = IndexHeaderRecord::decode(&buffer).expect("mapped index header must contain 40 bytes");
+        self.begin_timestamp.store(record.begin_timestamp, Ordering::Relaxed);
+        self.end_timestamp.store(record.end_timestamp, Ordering::Relaxed);
+        self.begin_phy_offset.store(record.begin_phy_offset, Ordering::Relaxed);
+        self.end_phy_offset.store(record.end_phy_offset, Ordering::Relaxed);
+        self.hash_slot_count.store(record.hash_slot_count, Ordering::Relaxed);
+        self.index_count.store(record.index_count, Ordering::Relaxed);
     }
 
     pub fn update_byte_buffer(&self) {
-        self.mapped_file.put_slice(
-            &self.begin_timestamp.load(Ordering::Acquire).to_be_bytes(),
-            BEGIN_TIMESTAMP_INDEX,
-        );
-
-        self.mapped_file.put_slice(
-            &self.end_timestamp.load(Ordering::Acquire).to_be_bytes(),
-            END_TIMESTAMP_INDEX,
-        );
-        self.mapped_file.put_slice(
-            &self.begin_phy_offset.load(Ordering::Acquire).to_be_bytes(),
-            BEGIN_PHY_OFFSET_INDEX,
-        );
-        self.mapped_file.put_slice(
-            &self.end_phy_offset.load(Ordering::Acquire).to_be_bytes(),
-            END_PHY_OFFSET_INDEX,
-        );
-        self.mapped_file.put_slice(
-            &self.hash_slot_count.load(Ordering::Acquire).to_be_bytes(),
-            HASH_SLOT_COUNT_INDEX,
-        );
-        self.mapped_file.put_slice(
-            &self.index_count.load(Ordering::Acquire).to_be_bytes(),
-            INDEX_COUNT_INDEX,
-        );
+        let encoded = IndexHeaderRecord {
+            begin_timestamp: self.begin_timestamp.load(Ordering::Acquire),
+            end_timestamp: self.end_timestamp.load(Ordering::Acquire),
+            begin_phy_offset: self.begin_phy_offset.load(Ordering::Acquire),
+            end_phy_offset: self.end_phy_offset.load(Ordering::Acquire),
+            hash_slot_count: self.hash_slot_count.load(Ordering::Acquire),
+            index_count: self.index_count.load(Ordering::Acquire),
+        }
+        .encode();
+        self.mapped_file.put_slice(&encoded, 0);
     }
 
     #[inline]
@@ -115,12 +96,9 @@ impl IndexHeader {
 
     pub fn set_begin_timestamp(&self, begin_timestamp: i64) {
         self.begin_timestamp.store(begin_timestamp, Ordering::Release);
-        self.mapped_file.write_bytes_segment(
-            begin_timestamp.to_be_bytes().as_ref(),
-            BEGIN_TIMESTAMP_INDEX,
-            0,
-            mem::size_of::<i64>(),
-        );
+        let encoded = begin_timestamp.to_be_bytes();
+        self.mapped_file
+            .write_bytes_segment(&encoded, BEGIN_TIMESTAMP_OFFSET, 0, encoded.len());
     }
 
     #[inline]
@@ -130,12 +108,9 @@ impl IndexHeader {
 
     pub fn set_end_timestamp(&self, end_timestamp: i64) {
         self.end_timestamp.store(end_timestamp, Ordering::Release);
-        self.mapped_file.write_bytes_segment(
-            end_timestamp.to_be_bytes().as_ref(),
-            END_TIMESTAMP_INDEX,
-            0,
-            mem::size_of::<i64>(),
-        );
+        let encoded = end_timestamp.to_be_bytes();
+        self.mapped_file
+            .write_bytes_segment(&encoded, END_TIMESTAMP_OFFSET, 0, encoded.len());
     }
 
     #[inline]
@@ -145,12 +120,9 @@ impl IndexHeader {
 
     pub fn set_begin_phy_offset(&self, begin_phy_offset: i64) {
         self.begin_phy_offset.store(begin_phy_offset, Ordering::Release);
-        self.mapped_file.write_bytes_segment(
-            begin_phy_offset.to_be_bytes().as_ref(),
-            BEGIN_PHY_OFFSET_INDEX,
-            0,
-            mem::size_of::<i64>(),
-        );
+        let encoded = begin_phy_offset.to_be_bytes();
+        self.mapped_file
+            .write_bytes_segment(&encoded, BEGIN_PHY_OFFSET, 0, encoded.len());
     }
 
     #[inline]
@@ -160,12 +132,9 @@ impl IndexHeader {
 
     pub fn set_end_phy_offset(&self, end_phy_offset: i64) {
         self.end_phy_offset.store(end_phy_offset, Ordering::SeqCst);
-        self.mapped_file.write_bytes_segment(
-            end_phy_offset.to_be_bytes().as_ref(),
-            END_PHY_OFFSET_INDEX,
-            0,
-            mem::size_of::<i64>(),
-        );
+        let encoded = end_phy_offset.to_be_bytes();
+        self.mapped_file
+            .write_bytes_segment(&encoded, END_PHY_OFFSET, 0, encoded.len());
     }
 
     #[inline]
@@ -175,12 +144,9 @@ impl IndexHeader {
 
     pub fn inc_hash_slot_count(&self) {
         let result = self.hash_slot_count.fetch_add(1, Ordering::AcqRel) + 1;
-        self.mapped_file.write_bytes_segment(
-            result.to_be_bytes().as_ref(),
-            HASH_SLOT_COUNT_INDEX,
-            0,
-            mem::size_of::<i32>(),
-        );
+        let encoded = result.to_be_bytes();
+        self.mapped_file
+            .write_bytes_segment(&encoded, HASH_SLOT_COUNT_OFFSET, 0, encoded.len());
     }
 
     #[inline]
@@ -190,11 +156,8 @@ impl IndexHeader {
 
     pub fn inc_index_count(&self) {
         let count = self.index_count.fetch_add(1, Ordering::AcqRel) + 1;
-        self.mapped_file.write_bytes_segment(
-            count.to_be_bytes().as_ref(),
-            INDEX_COUNT_INDEX,
-            0,
-            mem::size_of::<i32>(),
-        );
+        let encoded = count.to_be_bytes();
+        self.mapped_file
+            .write_bytes_segment(&encoded, INDEX_COUNT_OFFSET, 0, encoded.len());
     }
 }

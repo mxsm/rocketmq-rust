@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::fs;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
@@ -24,6 +26,34 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::time_millis_to_human_string;
+#[cfg(test)]
+use rocketmq_store_local::index::service::build_index_key;
+use rocketmq_store_local::index::service::build_index_key_into;
+#[cfg(test)]
+use rocketmq_store_local::index::service::build_index_key_with_type;
+use rocketmq_store_local::index::service::destroy_index_files;
+use rocketmq_store_local::index::service::drive_index_build_keys;
+use rocketmq_store_local::index::service::drive_index_service_put;
+use rocketmq_store_local::index::service::expired_index_file_count;
+use rocketmq_store_local::index::service::has_indexable_keys;
+use rocketmq_store_local::index::service::index_build_key_capacity;
+use rocketmq_store_local::index::service::index_flush_checkpoint_timestamp;
+use rocketmq_store_local::index::service::index_key_len;
+use rocketmq_store_local::index::service::index_safe_offset;
+use rocketmq_store_local::index::service::max_index_dispatch_offset;
+use rocketmq_store_local::index::service::plan_index_build;
+use rocketmq_store_local::index::service::plan_last_index_file;
+use rocketmq_store_local::index::service::query_index_files;
+use rocketmq_store_local::index::service::restore_index_safe_offset;
+use rocketmq_store_local::index::service::retry_index_file_create;
+use rocketmq_store_local::index::service::should_remove_unsafe_index_file;
+use rocketmq_store_local::index::service::shutdown_index_files;
+use rocketmq_store_local::index::service::total_index_file_size;
+use rocketmq_store_local::index::service::IndexBuildKeyKind;
+use rocketmq_store_local::index::service::IndexBuildPreflight;
+use rocketmq_store_local::index::service::IndexServiceFile;
+use rocketmq_store_local::index::service::IndexServiceRoot;
+use rocketmq_store_local::index::service::MAX_TRY_INDEX_FILE_CREATE;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -36,10 +66,13 @@ use crate::index::query_offset_result::QueryOffsetResult;
 use crate::store::running_flags::RunningFlags;
 use crate::store_path_config_helper::get_store_path_index;
 
-const MAX_TRY_IDX_CREATE: i32 = 3;
-
 #[derive(Clone)]
 pub struct IndexService {
+    root: IndexServiceRoot<IndexServiceAdapter>,
+}
+
+#[derive(Clone)]
+pub struct IndexServiceAdapter {
     hash_slot_num: u32,
     index_num: u32,
     store_path: String,
@@ -51,6 +84,36 @@ pub struct IndexService {
 
 impl IndexService {
     pub fn new(
+        message_store_config: Arc<MessageStoreConfig>,
+        store_checkpoint: Arc<StoreCheckpoint>,
+        running_flags: Arc<RunningFlags>,
+    ) -> Self {
+        Self {
+            root: IndexServiceRoot::new(IndexServiceAdapter::new(
+                message_store_config,
+                store_checkpoint,
+                running_flags,
+            )),
+        }
+    }
+}
+
+impl Deref for IndexService {
+    type Target = IndexServiceAdapter;
+
+    fn deref(&self) -> &Self::Target {
+        self.root.adapter()
+    }
+}
+
+impl DerefMut for IndexService {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.root.adapter_mut()
+    }
+}
+
+impl IndexServiceAdapter {
+    fn new(
         message_store_config: Arc<MessageStoreConfig>,
         store_checkpoint: Arc<StoreCheckpoint>,
         running_flags: Arc<RunningFlags>,
@@ -73,10 +136,7 @@ impl IndexService {
 
     pub fn shutdown(&self) {
         let mut list = self.index_file_list.write();
-        for index_file in list.iter() {
-            index_file.shutdown();
-        }
-        list.clear();
+        shutdown_index_files(&mut list, |index_file| index_file.shutdown());
     }
 
     pub fn load(&mut self, last_exit_ok: bool) -> bool {
@@ -110,7 +170,7 @@ impl IndexService {
                 };
             index_file.load();
 
-            if !last_exit_ok && index_file.get_end_timestamp() > checkpoint_timestamp {
+            if should_remove_unsafe_index_file(last_exit_ok, index_file.get_end_timestamp(), checkpoint_timestamp) {
                 index_file.destroy(0);
                 removed_unsafe_index_file = true;
                 continue;
@@ -120,18 +180,10 @@ impl IndexService {
             write_list.push(Arc::new(index_file));
         }
 
-        let loaded_index_safe_offset = write_list
-            .iter()
-            .rev()
-            .find(|index_file| index_file.has_entries())
-            .map(|index_file| index_file.get_end_phy_offset().max(0) as u64)
-            .unwrap_or(0);
         let restored_index_safe_offset = self.store_checkpoint.index_safe_phy_offset();
-        let effective_index_safe_offset = if removed_unsafe_index_file || loaded_index_safe_offset == 0 {
-            loaded_index_safe_offset
-        } else {
-            restored_index_safe_offset.max(loaded_index_safe_offset)
-        };
+        let effective_index_safe_offset =
+            restore_index_safe_offset(&write_list, restored_index_safe_offset, removed_unsafe_index_file);
+        let loaded_index_safe_offset = restore_index_safe_offset(&write_list, 0, true);
         self.store_checkpoint
             .set_index_safe_phy_offset(effective_index_safe_offset);
         info!(
@@ -148,19 +200,12 @@ impl IndexService {
     #[inline]
     pub fn get_total_size(&self) -> u64 {
         let index_file_list = self.index_file_list.read();
-        index_file_list
-            .first()
-            .map_or(0, |f| (f.get_file_size() * index_file_list.len()) as u64)
+        total_index_file_size(&index_file_list)
     }
 
     #[inline]
     pub fn get_max_dispatch_commit_log_offset(&self) -> Option<i64> {
-        self.index_file_list
-            .read()
-            .iter()
-            .rev()
-            .find(|index_file| index_file.has_entries())
-            .map(|index_file| index_file.get_end_phy_offset())
+        max_index_dispatch_offset(&self.index_file_list.read())
     }
 
     #[inline]
@@ -185,26 +230,11 @@ impl IndexService {
     pub fn delete_expired_file(&self, offset: u64) {
         let files = {
             let index_file_list = self.index_file_list.read();
-
-            if index_file_list.is_empty() {
+            let expired_count = expired_index_file_count(&index_file_list, offset);
+            if expired_count == 0 {
                 return;
             }
-
-            let Some(first_index_file) = index_file_list.first() else {
-                return;
-            };
-            let end_phy_offset = first_index_file.get_end_phy_offset() as u64;
-            if end_phy_offset >= offset {
-                return;
-            }
-
-            // Collect files to delete (all except the last one)
-            index_file_list
-                .iter()
-                .take(index_file_list.len() - 1)
-                .take_while(|f| (f.get_end_phy_offset() as u64) < offset)
-                .cloned()
-                .collect::<Vec<_>>()
+            index_file_list.iter().take(expired_count).cloned().collect::<Vec<_>>()
         };
 
         if !files.is_empty() {
@@ -241,10 +271,9 @@ impl IndexService {
     #[inline]
     pub fn destroy(&self) {
         let mut index_file_list = self.index_file_list.write();
-        index_file_list.iter().for_each(|f| {
+        destroy_index_files(&mut index_file_list, |f| {
             f.destroy(3000);
         });
-        index_file_list.clear();
     }
 
     pub fn query_offset(&self, topic: &str, key: &str, max_num: i32, begin: i64, end: i64) -> QueryOffsetResult {
@@ -278,55 +307,12 @@ impl IndexService {
                 )
         });
         let mut query_key = String::with_capacity(index_key_len(topic, key, query_index_type));
-        let query_key = build_key_into(&mut query_key, topic, key, query_index_type);
-        let mut phy_offsets = Vec::with_capacity(max_num as usize);
-        let mut index_last_update_timestamp = 0;
-        let mut index_last_update_phyoffset = 0;
-
-        {
-            let index_file_list = self.index_file_list.read();
-
-            if !index_file_list.is_empty() {
-                for i in (1..=index_file_list.len()).rev() {
-                    let f = &index_file_list[i - 1];
-                    let last_file = i == index_file_list.len();
-
-                    if last_file {
-                        index_last_update_timestamp = f.get_end_timestamp();
-                        index_last_update_phyoffset = f.get_end_phy_offset();
-                    }
-
-                    if f.is_time_matched(begin, end) {
-                        f.select_phy_offset(&mut phy_offsets, query_key, max_num as usize, begin, end);
-                    }
-
-                    if f.get_begin_timestamp() < begin {
-                        break;
-                    }
-
-                    if phy_offsets.len() >= max_num as usize {
-                        break;
-                    }
-                }
-            }
-        } // Read lock automatically released here
-
-        QueryOffsetResult::new(phy_offsets, index_last_update_timestamp, index_last_update_phyoffset)
+        let query_key = build_index_key_into(&mut query_key, topic, key, query_index_type);
+        query_index_files(&self.index_file_list.read(), query_key, max_num as usize, begin, end)
     }
 
     pub fn build_index(&self, dispatch_request: &DispatchRequest) {
         let tran_type = MessageSysFlag::get_transaction_value(dispatch_request.sys_flag);
-        match tran_type {
-            MessageSysFlag::TRANSACTION_NOT_TYPE
-            | MessageSysFlag::TRANSACTION_PREPARED_TYPE
-            | MessageSysFlag::TRANSACTION_COMMIT_TYPE => {}
-            MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
-                self.advance_index_safe_offset_for_request(dispatch_request);
-                return;
-            }
-            _ => {}
-        }
-
         let topic = dispatch_request.topic.as_str();
         let keys = dispatch_request.keys.as_str();
         let tags = dispatch_request
@@ -334,18 +320,27 @@ impl IndexService {
             .as_ref()
             .and_then(|properties| properties.get(MessageConst::PROPERTY_TAGS))
             .filter(|tags| !tags.is_empty());
-
-        let has_normal_key = keys.split(MessageConst::KEY_SEPARATOR).any(|key| !key.is_empty());
-        if dispatch_request.uniq_key.is_none() && !has_normal_key && tags.is_none() {
-            self.advance_index_safe_offset_for_request(dispatch_request);
-            return;
-        }
-
-        if self
-            .get_max_dispatch_commit_log_offset()
-            .is_some_and(|end_phy_offset| dispatch_request.commit_log_offset < end_phy_offset)
-        {
-            return;
+        let preflight = plan_index_build(
+            tran_type == MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
+            has_indexable_keys(
+                dispatch_request.uniq_key.as_ref().map(CheetahString::as_str),
+                keys,
+                tags.map(CheetahString::as_str),
+                MessageConst::KEY_SEPARATOR,
+            ),
+            dispatch_request.commit_log_offset,
+            dispatch_request.msg_size,
+            self.get_max_dispatch_commit_log_offset(),
+        );
+        match preflight {
+            IndexBuildPreflight::Build => {}
+            IndexBuildPreflight::AdvanceSafeOffset(safe_offset) => {
+                if let Some(safe_offset) = safe_offset {
+                    self.advance_index_safe_offset_to(safe_offset);
+                }
+                return;
+            }
+            IndexBuildPreflight::SkipOldOffset => return,
         }
 
         let index_file = self.retry_get_and_create_index_file();
@@ -361,88 +356,47 @@ impl IndexService {
                     dispatch_request.uniq_key.as_ref().map(CheetahString::as_str),
                     keys,
                     tags.map(CheetahString::as_str),
+                    MessageConst::KEY_SEPARATOR,
+                    MessageConst::INDEX_UNIQUE_TYPE,
+                    MessageConst::INDEX_TAG_TYPE,
                 ));
-                if let Some(ref uniq_key) = dispatch_request.uniq_key {
-                    let Some(index_file) = index_file_new.take() else {
-                        error!(
-                            "skip index uniq key {} because no writable index file is available, commitlog {}",
-                            uniq_key, dispatch_request.commit_log_offset
-                        );
-                        return;
-                    };
-                    index_file_new = self.put_key(
-                        index_file,
-                        dispatch_request,
-                        build_key_into(
-                            &mut index_key,
-                            topic,
-                            uniq_key.as_str(),
-                            Some(MessageConst::INDEX_UNIQUE_TYPE),
-                        ),
-                    );
-                    if index_file_new.is_none() {
-                        error!(
-                            "putKey error commitlog {} uniqkey {}",
-                            dispatch_request.commit_log_offset, uniq_key
-                        );
-                        return;
-                    }
-                }
-
-                if !keys.is_empty() {
-                    let keyset = keys.split(MessageConst::KEY_SEPARATOR);
-                    for key in keyset {
-                        if !key.is_empty() {
-                            let Some(index_file) = index_file_new.take() else {
-                                error!(
-                                    "skip index key {} because no writable index file is available, commitlog {}",
-                                    key, dispatch_request.commit_log_offset
-                                );
-                                return;
-                            };
-                            index_file_new = self.put_key(
-                                index_file,
-                                dispatch_request,
-                                build_key_into(&mut index_key, topic, key, None),
+                let key_outcome = drive_index_build_keys(
+                    dispatch_request.uniq_key.as_ref().map(CheetahString::as_str),
+                    keys,
+                    tags.map(CheetahString::as_str),
+                    MessageConst::KEY_SEPARATOR,
+                    MessageConst::INDEX_UNIQUE_TYPE,
+                    MessageConst::INDEX_TAG_TYPE,
+                    |kind, key, index_type| {
+                        let kind_name = match kind {
+                            IndexBuildKeyKind::Unique => "uniq key",
+                            IndexBuildKeyKind::Normal => "key",
+                            IndexBuildKeyKind::Tag => "tags",
+                        };
+                        let Some(index_file) = index_file_new.take() else {
+                            error!(
+                                "skip index {} {} because no writable index file is available, commitlog {}",
+                                kind_name, key, dispatch_request.commit_log_offset
                             );
-                            if index_file_new.is_none() {
-                                error!(
-                                    "putKey error commitlog {} key {} uniqkey {}",
-                                    dispatch_request.commit_log_offset,
-                                    key,
-                                    dispatch_request
-                                        .uniq_key
-                                        .as_ref()
-                                        .map_or("<none>", CheetahString::as_str)
-                                );
-                                return;
-                            }
+                            return false;
+                        };
+                        index_file_new = self.put_key(
+                            index_file,
+                            dispatch_request,
+                            build_index_key_into(&mut index_key, topic, key, index_type),
+                        );
+                        if index_file_new.is_none() {
+                            error!(
+                                "putKey error commitlog {} {} {}",
+                                dispatch_request.commit_log_offset, kind_name, key
+                            );
                         }
-                    }
+                        index_file_new.is_some()
+                    },
+                );
+                if key_outcome.advances_safe_offset() {
+                    self.advance_index_safe_offset_for_request(dispatch_request);
                 }
-
-                // Index tags
-                if let Some(tags) = tags {
-                    let Some(index_file) = index_file_new.take() else {
-                        error!(
-                            "skip index tags {} because no writable index file is available, commitlog {}",
-                            tags, dispatch_request.commit_log_offset
-                        );
-                        return;
-                    };
-                    index_file_new = self.put_key(
-                        index_file,
-                        dispatch_request,
-                        build_key_into(&mut index_key, topic, tags.as_str(), Some(MessageConst::INDEX_TAG_TYPE)),
-                    );
-                    if index_file_new.is_none() {
-                        error!(
-                            "putKey error commitlog {} tags {}",
-                            dispatch_request.commit_log_offset, tags
-                        );
-                    }
-                }
-                self.advance_index_safe_offset_for_request(dispatch_request);
             }
             None => {
                 error!("build index error, stop building index");
@@ -451,113 +405,84 @@ impl IndexService {
     }
 
     fn advance_index_safe_offset_for_request(&self, dispatch_request: &DispatchRequest) {
-        if dispatch_request.commit_log_offset < 0 || dispatch_request.msg_size <= 0 {
-            return;
+        if let Some(safe_offset) = index_safe_offset(dispatch_request.commit_log_offset, dispatch_request.msg_size) {
+            self.advance_index_safe_offset_to(safe_offset);
         }
-        let safe_offset = dispatch_request
-            .commit_log_offset
-            .saturating_add(i64::from(dispatch_request.msg_size));
-        self.advance_index_safe_offset_to(safe_offset);
     }
 
     #[inline]
-    fn put_key(&self, mut index_file: Arc<IndexFile>, msg: &DispatchRequest, idx_key: &str) -> Option<Arc<IndexFile>> {
-        loop {
-            if index_file.put_key(idx_key, msg.commit_log_offset, msg.store_timestamp) {
-                return Some(index_file);
-            }
-
-            warn!(
-                "Index file [{}] is full, trying to create another one",
-                index_file.get_file_name()
-            );
-
-            index_file = self.retry_get_and_create_index_file()?;
-        }
+    fn put_key(&self, index_file: Arc<IndexFile>, msg: &DispatchRequest, idx_key: &str) -> Option<Arc<IndexFile>> {
+        drive_index_service_put(
+            index_file,
+            |index_file| index_file.put_key(idx_key, msg.commit_log_offset, msg.store_timestamp),
+            |index_file| {
+                warn!(
+                    "Index file [{}] is full, trying to create another one",
+                    index_file.get_file_name()
+                );
+                self.retry_get_and_create_index_file()
+            },
+        )
     }
 
     fn retry_get_and_create_index_file(&self) -> Option<Arc<IndexFile>> {
-        for attempt in 1..=MAX_TRY_IDX_CREATE {
-            if let Some(index_file) = self.get_and_create_last_index_file() {
-                return Some(index_file);
-            }
-
-            warn!(
-                "Failed to create index file, attempt {}/{}",
-                attempt, MAX_TRY_IDX_CREATE
-            );
-            thread::sleep(Duration::from_secs(1));
-        }
-
-        self.running_flags.make_index_file_error();
-        error!(
-            "Failed to create index file after {} attempts, marking error flag",
-            MAX_TRY_IDX_CREATE
+        let index_file = retry_index_file_create(
+            MAX_TRY_INDEX_FILE_CREATE,
+            || self.get_and_create_last_index_file(),
+            |attempt, max_attempts| {
+                warn!("Failed to create index file, attempt {attempt}/{max_attempts}");
+                thread::sleep(Duration::from_secs(1));
+            },
         );
-        None
+        if index_file.is_none() {
+            self.running_flags.make_index_file_error();
+            error!(
+                "Failed to create index file after {} attempts, marking error flag",
+                MAX_TRY_INDEX_FILE_CREATE
+            );
+        }
+        index_file
     }
 
     pub fn get_and_create_last_index_file(&self) -> Option<Arc<IndexFile>> {
-        let mut index_file = None;
-        let mut prev_index_file = None;
-        let mut last_update_end_phy_offset = 0;
-        let mut last_update_index_timestamp = 0;
+        let seed = plan_last_index_file(&self.index_file_list.read());
+        if let Some(index_file) = seed.reusable {
+            return Some(index_file);
+        }
 
-        {
-            let read = self.index_file_list.read();
-            if let Some(tmp) = read.last().cloned() {
-                if !tmp.is_write_full() {
-                    index_file = Some(tmp);
-                } else {
-                    last_update_end_phy_offset = tmp.get_end_phy_offset();
-                    last_update_index_timestamp = tmp.get_end_timestamp();
-                    prev_index_file = Some(tmp);
-                }
+        let file_name = format!(
+            "{}{}{}",
+            self.store_path,
+            std::path::MAIN_SEPARATOR,
+            time_millis_to_human_string(current_millis() as i64)
+        );
+        let new_index_file = match IndexFile::try_new(
+            file_name.as_str(),
+            self.hash_slot_num as usize,
+            self.index_num as usize,
+            seed.previous_end_phy_offset,
+            seed.previous_end_timestamp,
+        ) {
+            Ok(index_file) => Arc::new(index_file),
+            Err(error) => {
+                error!("create index file {} failed: {}", file_name, error);
+                self.running_flags.make_index_file_error();
+                return None;
             }
-        } // Read lock released here
+        };
+        self.index_file_list.write().push(new_index_file.clone());
 
-        if index_file.is_none() {
-            let file_name = format!(
-                "{}{}{}",
-                self.store_path,
-                std::path::MAIN_SEPARATOR,
-                time_millis_to_human_string(current_millis() as i64)
-            );
-
-            let new_index_file = match IndexFile::try_new(
-                file_name.as_str(),
-                self.hash_slot_num as usize,
-                self.index_num as usize,
-                last_update_end_phy_offset,
-                last_update_index_timestamp,
-            ) {
-                Ok(index_file) => Arc::new(index_file),
-                Err(error) => {
-                    error!("create index file {} failed: {}", file_name, error);
-                    self.running_flags.make_index_file_error();
-                    return None;
-                }
-            };
-
-            {
-                let mut write = self.index_file_list.write();
-                write.push(new_index_file.clone());
-            } // Write lock released here
-
-            index_file = Some(new_index_file);
-
-            if let Some(prev_index_file) = prev_index_file {
-                let index_service = self.clone();
-                let fallback_index_file = prev_index_file.clone();
-                if let Err(error) = crate::runtime::spawn_detached_io("index-file-flush", move || {
-                    index_service.flush(Some(prev_index_file));
-                }) {
-                    warn!("failed to spawn index file flush task, flushing inline: {error}");
-                    self.flush(Some(fallback_index_file));
-                }
+        if let Some(previous_index_file) = seed.previous_full {
+            let index_service = self.clone();
+            let fallback_index_file = previous_index_file.clone();
+            if let Err(error) = crate::runtime::spawn_detached_io("index-file-flush", move || {
+                index_service.flush(Some(previous_index_file));
+            }) {
+                warn!("failed to spawn index file flush task, flushing inline: {error}");
+                self.flush(Some(fallback_index_file));
             }
         }
-        index_file
+        Some(new_index_file)
     }
 
     #[inline]
@@ -566,68 +491,49 @@ impl IndexService {
             return;
         };
 
-        let index_msg_timestamp = if index_file.is_write_full() {
-            index_file.get_end_timestamp() as u64
-        } else {
-            0
-        };
+        let index_msg_timestamp = index_flush_checkpoint_timestamp(index_file.as_ref());
 
         index_file.flush();
 
-        if index_msg_timestamp > 0 {
+        if let Some(index_msg_timestamp) = index_msg_timestamp {
             self.store_checkpoint.set_index_msg_timestamp(index_msg_timestamp);
             let _ = self.store_checkpoint.flush();
         }
     }
 }
 
-#[inline]
-fn build_key(topic: &str, key: &str) -> String {
-    let mut buffer = String::with_capacity(index_key_len(topic, key, None));
-    build_key_into(&mut buffer, topic, key, None);
-    buffer
-}
-
-#[inline]
-fn build_key_with_type(topic: &str, key: &str, index_type: &str) -> String {
-    let mut buffer = String::with_capacity(index_key_len(topic, key, Some(index_type)));
-    build_key_into(&mut buffer, topic, key, Some(index_type));
-    buffer
-}
-
-#[inline]
-fn build_key_into<'a>(buffer: &'a mut String, topic: &str, key: &str, index_type: Option<&str>) -> &'a str {
-    buffer.clear();
-    let required_len = index_key_len(topic, key, index_type);
-    if buffer.capacity() < required_len {
-        buffer.reserve(required_len - buffer.capacity());
+impl IndexServiceFile for IndexFile {
+    fn file_size(&self) -> usize {
+        IndexFile::get_file_size(self)
     }
 
-    buffer.push_str(topic);
-    buffer.push('#');
-    if let Some(index_type) = index_type {
-        buffer.push_str(index_type);
-        buffer.push('#');
+    fn has_entries(&self) -> bool {
+        IndexFile::has_entries(self)
     }
-    buffer.push_str(key);
-    buffer.as_str()
-}
 
-#[inline]
-fn index_key_len(topic: &str, key: &str, index_type: Option<&str>) -> usize {
-    topic.len() + key.len() + 1 + index_type.map_or(0, |index_type| index_type.len() + 1)
-}
+    fn is_write_full(&self) -> bool {
+        IndexFile::is_write_full(self)
+    }
 
-#[inline]
-fn index_build_key_capacity(topic: &str, uniq_key: Option<&str>, keys: &str, tags: Option<&str>) -> usize {
-    let normal_key_len = keys
-        .split(MessageConst::KEY_SEPARATOR)
-        .map(str::len)
-        .max()
-        .unwrap_or_default();
-    let unique_key_len = uniq_key.map_or(0, |uniq_key| uniq_key.len() + MessageConst::INDEX_UNIQUE_TYPE.len() + 1);
-    let typed_key_len = tags.map_or(0, |tags| tags.len() + MessageConst::INDEX_TAG_TYPE.len() + 1);
-    topic.len() + normal_key_len.max(unique_key_len).max(typed_key_len) + 1
+    fn begin_timestamp(&self) -> i64 {
+        IndexFile::get_begin_timestamp(self)
+    }
+
+    fn end_timestamp(&self) -> i64 {
+        IndexFile::get_end_timestamp(self)
+    }
+
+    fn end_phy_offset(&self) -> i64 {
+        IndexFile::get_end_phy_offset(self)
+    }
+
+    fn is_time_matched(&self, begin: i64, end: i64) -> bool {
+        IndexFile::is_time_matched(self, begin, end)
+    }
+
+    fn select_phy_offsets(&self, offsets: &mut Vec<i64>, key: &str, max_num: usize, begin: i64, end: i64) {
+        IndexFile::select_phy_offset(self, offsets, key, max_num, begin, end);
+    }
 }
 
 #[cfg(test)]
@@ -666,26 +572,50 @@ mod tests {
     #[test]
     fn test_build_key_formats() {
         // Test default key format: topic#key
-        let key1 = build_key("TestTopic", "key123");
+        let key1 = build_index_key("TestTopic", "key123");
         assert_eq!(key1, "TestTopic#key123");
 
         // Test key with type format: topic#indexType#key
-        let key2 = build_key_with_type("TestTopic", "tagValue", MessageConst::INDEX_TAG_TYPE);
+        let key2 = build_index_key_with_type("TestTopic", "tagValue", MessageConst::INDEX_TAG_TYPE);
         assert_eq!(key2, "TestTopic#T#tagValue");
     }
 
     #[test]
     fn index_build_key_capacity_covers_uniq_normal_and_tag_keys() {
         assert_eq!(
-            index_build_key_capacity("Topic", Some("uniq-longer"), "k1 k22", Some("Tag")),
+            index_build_key_capacity(
+                "Topic",
+                Some("uniq-longer"),
+                "k1 k22",
+                Some("Tag"),
+                MessageConst::KEY_SEPARATOR,
+                MessageConst::INDEX_UNIQUE_TYPE,
+                MessageConst::INDEX_TAG_TYPE,
+            ),
             index_key_len("Topic", "uniq-longer", Some(MessageConst::INDEX_UNIQUE_TYPE))
         );
         assert_eq!(
-            index_build_key_capacity("Topic", Some("u"), "short very-long-normal-key", Some("Tag")),
+            index_build_key_capacity(
+                "Topic",
+                Some("u"),
+                "short very-long-normal-key",
+                Some("Tag"),
+                MessageConst::KEY_SEPARATOR,
+                MessageConst::INDEX_UNIQUE_TYPE,
+                MessageConst::INDEX_TAG_TYPE,
+            ),
             index_key_len("Topic", "very-long-normal-key", None)
         );
         assert_eq!(
-            index_build_key_capacity("Topic", None, "k1", Some("longer-tag-value")),
+            index_build_key_capacity(
+                "Topic",
+                None,
+                "k1",
+                Some("longer-tag-value"),
+                MessageConst::KEY_SEPARATOR,
+                MessageConst::INDEX_UNIQUE_TYPE,
+                MessageConst::INDEX_TAG_TYPE,
+            ),
             index_key_len("Topic", "longer-tag-value", Some(MessageConst::INDEX_TAG_TYPE))
         );
     }

@@ -349,6 +349,48 @@
       "from": "36ebcbd5dbe51b5bd2a7617d",
       "to": "5e746a9e2da8b73ccddb4abc",
       "reason": "Moving the existing mapped_file_queue ArcMut field into the Store adapter owned by the Local FlushManager root changed its token context within the same DefaultFlushManager item without adding an occurrence"
+    },
+    {
+      "identity": "4714b50a5db7e365e1277797",
+      "from": "2b1947b856c6f62b944daea7",
+      "to": "7c2d1dfbeae5ce49f7533e15",
+      "reason": "Importing the canonical Local ConsumeQueue record codec changed module import order around the existing ArcMut import without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "e888994d2dffb2414eabf41f",
+      "from": "908ac4d844f63f9fa8f9eaf5",
+      "to": "503e77e0432d2b3970ba3080",
+      "reason": "Removing the Store-owned 20-byte encoding buffer changed adjacent fields around the existing message_store ArcMut field in the same ConsumeQueue item without adding or moving an occurrence"
+    },
+    {
+      "identity": "9270a3de926005280288825a",
+      "from": "c3911b66bb395cee473a8fdd",
+      "to": "8314ba26110b7eb720f1c700",
+      "reason": "Importing the Local ConsumeQueue extension kernels changed module import order around the existing ArcMut import without adding or moving a shared-mutation occurrence"
+    },
+    {
+      "identity": "f6e062bd61c7d022dbba10bc",
+      "from": "f6340bd732d61dbaf1b4b34e",
+      "to": "38fa048d17fb4053c86e67b7",
+      "reason": "Delegating the find-or-create sequence to the Local ConsumeQueue root changed the return type context in the same Store factory without adding or moving an ArcConsumeQueue occurrence"
+    },
+    {
+      "identity": "33f38c66e819f69a488c2fa6",
+      "from": "c05eae3d9ce2f72f54f81fdb",
+      "to": "2af6db1897196eb7f3f911f1",
+      "reason": "Wrapping the existing Store Inner adapter in the Local ConsumeQueue root changed constructor context in the same new function without adding or moving an ArcMut occurrence"
+    },
+    {
+      "identity": "991f88f179d9ab06421afada",
+      "from": "31b253386726bf592411e595",
+      "to": "b12555ea6d596f93db1ea125",
+      "reason": "Importing the Local ConsumeQueue root drivers changed module import order around the existing ArcMut import without adding or moving an occurrence"
+    },
+    {
+      "identity": "40726935f5b329eff2808715",
+      "from": "a11bfa74e45d220c52e0b704",
+      "to": "dc9a5d26c0ba593d39e51e29",
+      "reason": "Wrapping the existing ArcMut Inner field in the Local ConsumeQueueStoreRoot changed its type context in the same ConsumeQueueStore item without adding an occurrence"
     }
   ]
 }

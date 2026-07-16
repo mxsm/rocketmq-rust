@@ -34,6 +34,9 @@ use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBroker
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_rust::ArcMut;
+use rocketmq_store_local::consume_queue::root::clamp_consume_queue_offset;
+use rocketmq_store_local::consume_queue::root::find_or_create_consume_queue as drive_find_or_create_consume_queue;
+use rocketmq_store_local::consume_queue::root::ConsumeQueueStoreRoot;
 use tokio::sync::Semaphore;
 use tracing::error;
 use tracing::info;
@@ -56,7 +59,7 @@ use crate::store_path_config_helper::get_store_path_consume_queue;
 
 #[derive(Clone)]
 pub struct ConsumeQueueStore {
-    inner: ArcMut<Inner>,
+    inner: ConsumeQueueStoreRoot<ArcMut<Inner>>,
 }
 
 struct ConsumeQueueRecoveryResult {
@@ -453,13 +456,13 @@ impl ConsumeQueueStore {
     #[inline]
     pub fn new(message_store_config: Arc<MessageStoreConfig>, broker_config: Arc<BrokerConfig>) -> Self {
         Self {
-            inner: ArcMut::new(Inner {
+            inner: ConsumeQueueStoreRoot::new(ArcMut::new(Inner {
                 message_store: None,
                 message_store_config,
                 broker_config,
                 queue_offset_operator: Default::default(),
                 consume_queue_table: Arc::new(Default::default()),
-            }),
+            })),
         }
     }
 
@@ -765,66 +768,70 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     ) -> i64 {
         let logic = self.find_or_create_consume_queue(topic, queue_id);
         let result_offset = logic.get_offset_in_queue_by_time_with_boundary(timestamp, boundary_type);
-        result_offset
-            .max(logic.get_min_offset_in_queue())
-            .min(logic.get_max_offset_in_queue())
+        clamp_consume_queue_offset(
+            result_offset,
+            logic.get_min_offset_in_queue(),
+            logic.get_max_offset_in_queue(),
+        )
     }
 
     fn find_or_create_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> ArcConsumeQueue {
-        // Fast path: check if queue already exists
-        {
-            let consume_queue_table = self.inner.consume_queue_table.lock();
-            if let Some(topic_map) = consume_queue_table.get(topic) {
-                if let Some(queue) = topic_map.get(&queue_id) {
-                    return queue.clone();
-                }
-            }
-        }
-
-        // Slow path: create new consume queue without holding lock
-        // Get topic config and determine queue type (lock-free)
-        let message_store = self
-            .inner
-            .message_store
-            .as_ref()
-            .expect("MessageStore must be set before creating consume queues");
-        let topic_config = message_store.get_topic_config(topic);
-        let cq_type = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
-
-        // Create the queue object (expensive operation, no lock held)
-        let new_queue: ArcConsumeQueue = match cq_type {
-            CQType::SimpleCQ | CQType::RocksDBCQ => {
-                let consume_queue = ConsumeQueue::new(
-                    topic.clone(),
-                    queue_id,
-                    CheetahString::from_string(get_store_path_consume_queue(
-                        self.inner.message_store_config.store_path_root_dir.as_str(),
-                    )),
-                    self.inner.message_store_config.get_mapped_file_size_consume_queue(),
-                    self.inner.message_store.clone().unwrap(),
-                );
-                ArcMut::new(Box::new(consume_queue))
-            }
-            CQType::BatchCQ => {
-                let consume_queue = BatchConsumeQueue::new(
-                    topic.clone(),
-                    queue_id,
-                    CheetahString::from_string(get_store_path_batch_consume_queue(
-                        self.inner.message_store_config.store_path_root_dir.as_str(),
-                    )),
-                    self.inner.message_store_config.mapper_file_size_batch_consume_queue,
-                    None,
-                    self.inner.message_store_config.clone(),
-                );
-                ArcMut::new(Box::new(consume_queue))
-            }
-        };
-
-        //Insert into table with triple-check pattern (prevents race conditions)
-        let mut consume_queue_table = self.inner.consume_queue_table.lock();
-        let topic_map = consume_queue_table.entry(topic.clone()).or_default();
-
-        topic_map.entry(queue_id).or_insert(new_queue).clone()
+        drive_find_or_create_consume_queue(
+            || {
+                self.inner
+                    .consume_queue_table
+                    .lock()
+                    .get(topic)
+                    .and_then(|topic_map| topic_map.get(&queue_id).cloned())
+            },
+            || {
+                let message_store = self
+                    .inner
+                    .message_store
+                    .as_ref()
+                    .expect("MessageStore must be set before creating consume queues");
+                let topic_config = message_store.get_topic_config(topic);
+                let cq_type = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
+                let new_queue: ArcConsumeQueue = match cq_type {
+                    CQType::SimpleCQ | CQType::RocksDBCQ => {
+                        let consume_queue = ConsumeQueue::new(
+                            topic.clone(),
+                            queue_id,
+                            CheetahString::from_string(get_store_path_consume_queue(
+                                self.inner.message_store_config.store_path_root_dir.as_str(),
+                            )),
+                            self.inner.message_store_config.get_mapped_file_size_consume_queue(),
+                            self.inner.message_store.clone().unwrap(),
+                        );
+                        ArcMut::new(Box::new(consume_queue))
+                    }
+                    CQType::BatchCQ => {
+                        let consume_queue = BatchConsumeQueue::new(
+                            topic.clone(),
+                            queue_id,
+                            CheetahString::from_string(get_store_path_batch_consume_queue(
+                                self.inner.message_store_config.store_path_root_dir.as_str(),
+                            )),
+                            self.inner.message_store_config.mapper_file_size_batch_consume_queue,
+                            None,
+                            self.inner.message_store_config.clone(),
+                        );
+                        ArcMut::new(Box::new(consume_queue))
+                    }
+                };
+                new_queue
+            },
+            |new_queue| {
+                self.inner
+                    .consume_queue_table
+                    .lock()
+                    .entry(topic.clone())
+                    .or_default()
+                    .entry(queue_id)
+                    .or_insert(new_queue)
+                    .clone()
+            },
+        )
     }
 
     fn find_consume_queue_map(&self, topic: &CheetahString) -> Option<HashMap<i32, ArcConsumeQueue>> {

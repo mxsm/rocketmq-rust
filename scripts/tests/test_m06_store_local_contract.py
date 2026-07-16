@@ -10568,7 +10568,7 @@ def storage_local_compatibility_ledger_violations(
 ) -> list[str]:
     violations: list[str] = []
     required_ledger_fragments = (
-        "# M06-03/M06-04 Local 存储兼容与所有权 Ledger",
+        "# M06-03/M06-04/M06-05 Local 存储兼容与所有权 Ledger",
         "## Canonical ownership",
         "`rocketmq-store-local::mapped_file`",
         "`rocketmq-store-local::base::allocate_mapped_file_service`",
@@ -10576,10 +10576,11 @@ def storage_local_compatibility_ledger_violations(
         "`rocketmq-store-local::commit_log::{normal_recovery,abnormal_recovery,recovery,recovery_orchestration}`",
         "`rocketmq-store-local::commit_log::{runtime_state,root}`",
         "`rocketmq-store-local::flush::{root,group_commit,queue,worker}`",
+        "`rocketmq-store-local::consume_queue::{record,single,batch,extension,root}`",
+        "`rocketmq-store-local::index::{codec,file,service,dispatch}`",
         "## Feature compatibility",
         "`default = []`",
         "## Retained Store-only ports",
-        "- M06-05：",
         "- M06-06：",
         "- M06-07：",
         "- M06-08：",
@@ -10588,7 +10589,7 @@ def storage_local_compatibility_ledger_violations(
         "## Closeout evidence",
     )
     if any(fragment not in ledger for fragment in required_ledger_fragments):
-        violations.append("M06-03 storage Local compatibility ledger is incomplete")
+        violations.append("M06 storage Local compatibility ledger is incomplete")
 
     local = tomllib.loads(local_manifest)
     local_features = local.get("features", {})

@@ -29,15 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 32 | 0 | 50 未开始；合计 50 尚未完成 | 82 |
+| PR 级工作包 | 33 | 0 | 49 未开始；合计 49 尚未完成 | 82 |
 | 里程碑 | 5（M01–M05） | 1（M06） | 6（M07–M12） | 12 |
 | 新增边界 crate | 6 | 0 | 4（store-rocksdb、proxy-core/cluster/local） | 10 |
 | 根 workspace package | 28 | — | 还差 4 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 50 个未开始工作包分布：M06-05～12 为 8 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
-M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-04 已完成 Flush/GroupCommit owner 迁移；当前下一工作包为
-PR-M06-05。
+剩余 49 个未开始工作包分布：M06-06～12 为 7 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
+M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-05 已完成 CQ/Index owner 迁移；当前下一工作包为 PR-M06-06。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -186,7 +185,14 @@ PR-M06-05。
   - [x] M06-04c：迁移 GroupCommit worker 驱动与 checkpoint completion owner
   - [x] M06-04d：迁移 AsyncFlush/CommitRealTime worker 驱动与生命周期 owner
   - [x] M06-04e：收敛 FlushManager facade、SyncFlush/ack adapter、兼容 ledger 与父项验收
-- [ ] PR-M06-05：迁移 CQ 与 Index
+- [x] PR-M06-05：迁移 CQ 与 Index
+  - [x] M06-05a：迁移 canonical 20B CQ record codec 与边界校验到 Local
+  - [x] M06-05b：迁移 SingleConsumeQueue scan/search/recovery kernel 到 Local
+  - [x] M06-05c：迁移 BatchConsumeQueue 与 CQExt storage kernel 到 Local
+  - [x] M06-05d：迁移 ConsumeQueue root/store/dispatch owner，Store 保留 composition adapter
+  - [x] M06-05e：迁移 40B IndexHeader 与 20B index entry/slot codec 到 Local
+  - [x] M06-05f：迁移 IndexFile put/query driver 到 Local
+  - [x] M06-05g：迁移 IndexService lifecycle/query/dispatch root，冻结 ledger 并完成父项验收
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer
 - [ ] PR-M06-07：迁移 Timer、POP 与 Local Services
 - [ ] PR-M06-08：收敛 LocalFileMessageStore facade、composition 与 config

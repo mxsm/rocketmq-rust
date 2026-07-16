@@ -17,10 +17,6 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use bytes::Buf;
-use bytes::BufMut;
-use bytes::Bytes;
-use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
@@ -31,6 +27,19 @@ use rocketmq_common::common::mix_all::is_lmq;
 use rocketmq_common::common::mix_all::LMQ_QUEUE_ID;
 use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
 use rocketmq_rust::ArcMut;
+use rocketmq_store_local::consume_queue::record::ConsumeQueueRecord;
+pub use rocketmq_store_local::consume_queue::record::CQ_STORE_UNIT_SIZE;
+pub use rocketmq_store_local::consume_queue::record::MSG_TAG_OFFSET_INDEX;
+use rocketmq_store_local::consume_queue::root::drive_consume_queue_dispatch;
+use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchMetadata;
+use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchMode;
+use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchOutcome;
+use rocketmq_store_local::consume_queue::single::find_min_offset_record;
+use rocketmq_store_local::consume_queue::single::plan_truncate_records;
+use rocketmq_store_local::consume_queue::single::scan_recovery_records;
+use rocketmq_store_local::consume_queue::single::search_queue_offset_by_time;
+use rocketmq_store_local::consume_queue::single::ConsumeQueueTimeBoundary;
+use rocketmq_store_local::consume_queue::single::ConsumeQueueTruncatePlan;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -54,9 +63,6 @@ use crate::queue::CqUnit;
 use crate::queue::FileQueueLifeCycle;
 use crate::store_path_config_helper::get_store_path_consume_queue_ext;
 
-pub const CQ_STORE_UNIT_SIZE: i32 = 20;
-pub const MSG_TAG_OFFSET_INDEX: i32 = 12;
-
 ///
 /// ConsumeQueue's store unit. Format:
 ///
@@ -74,7 +80,6 @@ pub struct ConsumeQueue<MS> {
     mapped_file_queue: MappedFileQueue,
     topic: CheetahString,
     queue_id: i32,
-    byte_buffer_index: BytesMut,
     store_path: CheetahString,
     mapped_file_size: i32,
     max_physic_offset: Arc<AtomicI64>,
@@ -115,7 +120,6 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             mapped_file_queue,
             topic,
             queue_id,
-            byte_buffer_index: BytesMut::with_capacity(CQ_STORE_UNIT_SIZE as usize),
             store_path,
             mapped_file_size,
             max_physic_offset: Arc::new(AtomicI64::new(-1)),
@@ -135,59 +139,44 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
     #[inline]
     pub fn truncate_dirty_logic_files_handler(&mut self, phy_offset: i64, delete_file: bool) {
         self.set_max_physic_offset(phy_offset);
-        let mut max_ext_addr = 1i64;
         let mut should_delete_file = false;
         let mapped_file_size = self.mapped_file_size;
         loop {
-            let mapped_file_option = self.mapped_file_queue.get_last_mapped_file();
-            if mapped_file_option.is_none() {
+            let Some(mapped_file) = self.mapped_file_queue.get_last_mapped_file() else {
                 break;
-            }
-            let mapped_file = mapped_file_option.unwrap();
+            };
             mapped_file.set_wrote_position(0);
             mapped_file.set_committed_position(0);
             mapped_file.set_flushed_position(0);
 
-            for index in 0..(mapped_file_size / CQ_STORE_UNIT_SIZE) {
-                let bytes_option =
-                    mapped_file.get_bytes((index * CQ_STORE_UNIT_SIZE) as usize, CQ_STORE_UNIT_SIZE as usize);
-                if bytes_option.is_none() {
-                    break;
+            let plan = plan_truncate_records(
+                mapped_file_size,
+                phy_offset,
+                |relative_offset| {
+                    mapped_file
+                        .get_bytes(relative_offset as usize, CQ_STORE_UNIT_SIZE as usize)
+                        .and_then(|bytes| ConsumeQueueRecord::decode(bytes.as_ref()))
+                },
+                Self::is_ext_addr,
+            );
+            match plan {
+                ConsumeQueueTruncatePlan::RetryFile => {
+                    if !should_delete_file {
+                        continue;
+                    }
                 }
-                let mut byte_buffer = bytes_option.unwrap();
-                let offset = byte_buffer.get_i64();
-                let size = byte_buffer.get_i32();
-                let tags_code = byte_buffer.get_i64();
-                if 0 == index {
-                    if offset >= phy_offset {
-                        should_delete_file = true;
-                        break;
-                    } else {
-                        let pos = index * CQ_STORE_UNIT_SIZE + CQ_STORE_UNIT_SIZE;
-                        mapped_file.set_wrote_position(pos);
-                        mapped_file.set_committed_position(pos);
-                        mapped_file.set_flushed_position(pos);
-                        self.set_max_physic_offset(offset + size as i64);
-                        if Self::is_ext_addr(tags_code) {
-                            max_ext_addr = tags_code;
-                        }
+                ConsumeQueueTruncatePlan::DeleteFile => should_delete_file = true,
+                ConsumeQueueTruncatePlan::Retain {
+                    valid_bytes,
+                    max_physical_offset,
+                    max_extension_address: _,
+                } => {
+                    mapped_file.set_wrote_position(valid_bytes);
+                    mapped_file.set_committed_position(valid_bytes);
+                    mapped_file.set_flushed_position(valid_bytes);
+                    if let Some(max_physical_offset) = max_physical_offset {
+                        self.set_max_physic_offset(max_physical_offset);
                     }
-                } else if offset >= 0 && size > 0 {
-                    if offset >= phy_offset {
-                        return;
-                    }
-                    let pos = index * CQ_STORE_UNIT_SIZE + CQ_STORE_UNIT_SIZE;
-                    mapped_file.set_wrote_position(pos);
-                    mapped_file.set_committed_position(pos);
-                    mapped_file.set_flushed_position(pos);
-                    self.set_max_physic_offset(offset + size as i64);
-                    if Self::is_ext_addr(tags_code) {
-                        max_ext_addr = tags_code;
-                    }
-                    if pos == mapped_file_size {
-                        return;
-                    }
-                } else {
                     return;
                 }
             }
@@ -201,10 +190,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             }
         }
         if self.is_ext_read_enable() {
-            self.consume_queue_ext
-                .as_ref()
-                .unwrap()
-                .truncate_by_max_address(max_ext_addr);
+            self.consume_queue_ext.as_ref().unwrap().truncate_by_max_address(1);
         }
     }
 
@@ -233,10 +219,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             );
             return true;
         }
-        self.byte_buffer_index.clear();
-        self.byte_buffer_index.put_i64(offset);
-        self.byte_buffer_index.put_i32(size);
-        self.byte_buffer_index.put_i64(tags_code);
+        let encoded_record = ConsumeQueueRecord::new(offset, size, tags_code).encode();
 
         let expect_logic_offset = cq_offset * CQ_STORE_UNIT_SIZE as i64;
         if let Some(mapped_file) = self
@@ -285,7 +268,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                 }
             }
             self.set_max_physic_offset(offset + size as i64);
-            mapped_file.append_message_bytes(self.byte_buffer_index.as_ref())
+            mapped_file.append_message_bytes(&encoded_record)
         } else {
             false
         }
@@ -293,12 +276,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
 
     #[inline]
     fn fill_pre_blank(&self, mapped_file: &Arc<DefaultMappedFile>, until_where: i64) {
-        let mut bytes_mut = BytesMut::with_capacity(CQ_STORE_UNIT_SIZE as usize);
-
-        bytes_mut.put_i64(0);
-        bytes_mut.put_i32(i32::MAX);
-        bytes_mut.put_i64(0);
-        let bytes = bytes_mut.freeze();
+        let bytes = ConsumeQueueRecord::pre_blank().encode();
         let until =
             (until_where % self.mapped_file_queue.get_mapped_file_size_config() as i64) as i32 / CQ_STORE_UNIT_SIZE;
         for n in 0..until {
@@ -384,22 +362,6 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
         }
     }
 
-    #[inline]
-    fn read_queue_time_entry(buffer: &[u8], relative_offset: i32) -> Option<(i64, i32)> {
-        let start = usize::try_from(relative_offset).ok()?;
-        let record = buffer.get(start..start.checked_add(12)?)?;
-        let physical_offset = i64::from_be_bytes(record[0..8].try_into().ok()?);
-        let message_size = i32::from_be_bytes(record[8..12].try_into().ok()?);
-        Some((physical_offset, message_size))
-    }
-
-    #[inline]
-    fn middle_queue_offset(low: i32, high: i32) -> i32 {
-        let low_unit = low / CQ_STORE_UNIT_SIZE;
-        let high_unit = high / CQ_STORE_UNIT_SIZE;
-        ((low_unit + high_unit) / 2) * CQ_STORE_UNIT_SIZE
-    }
-
     /// Binary search within a mapped file to find the offset by timestamp.
     ///
     /// # Arguments
@@ -439,221 +401,26 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             None => return 0,
         };
 
-        let queue_unit_count = buffer.len() as i32 / CQ_STORE_UNIT_SIZE;
-        if queue_unit_count <= 0 {
-            return 0;
-        }
-
         let mapped_file_from_offset = mapped_file.get_file_from_offset() as i64;
-        let ceiling = (queue_unit_count - 1) * CQ_STORE_UNIT_SIZE;
-        let mut floor = if min_logic_offset > mapped_file_from_offset {
-            (min_logic_offset - mapped_file_from_offset) as i32
-        } else {
-            0
+        let boundary = match boundary_type {
+            BoundaryType::Lower => ConsumeQueueTimeBoundary::Lower,
+            BoundaryType::Upper => ConsumeQueueTimeBoundary::Upper,
         };
-        let floor_remainder = floor % CQ_STORE_UNIT_SIZE;
-        if floor_remainder != 0 {
-            floor += CQ_STORE_UNIT_SIZE - floor_remainder;
-        }
-        if floor > ceiling {
-            return 0;
-        }
-
-        let mut timestamp_cache = Vec::with_capacity(16);
-        let mut pickup_store_time = |relative_offset: i32, phy_offset: i64, size: i32| {
-            if let Some((_, store_time)) = timestamp_cache.iter().find(|(offset, _)| *offset == relative_offset) {
-                return *store_time;
-            }
-            let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
-            timestamp_cache.push((relative_offset, store_time));
-            store_time
-        };
-
-        let mut low = floor;
-        let mut high = ceiling;
-        let mut target_offset = -1i32;
-        let mut left_offset = -1i32;
-        let mut right_offset = -1i32;
-
-        // Handle corner cases first:
-        // 1. store time of (high) < timestamp
-        // 2. store time of (low) > timestamp
-
-        // Handle case 1: ceiling store time < timestamp
-        if let Some((phy_offset, size)) = Self::read_queue_time_entry(buffer, ceiling) {
-            if phy_offset >= min_physic_offset && size > 0 {
-                let store_time = pickup_store_time(ceiling, phy_offset, size);
-                if store_time >= 0 && store_time < timestamp {
-                    return match boundary_type {
-                        BoundaryType::Lower => {
-                            (mapped_file_from_offset + ceiling as i64 + CQ_STORE_UNIT_SIZE as i64)
-                                / CQ_STORE_UNIT_SIZE as i64
-                        }
-                        BoundaryType::Upper => (mapped_file_from_offset + ceiling as i64) / CQ_STORE_UNIT_SIZE as i64,
-                    };
-                }
-            }
-        }
-
-        // Handle case 2: floor store time > timestamp
-        if let Some((phy_offset, size)) = Self::read_queue_time_entry(buffer, floor) {
-            if phy_offset >= min_physic_offset && size > 0 {
-                let store_time = pickup_store_time(floor, phy_offset, size);
-                if store_time >= 0 && store_time > timestamp {
-                    return match boundary_type {
-                        BoundaryType::Lower => mapped_file_from_offset / CQ_STORE_UNIT_SIZE as i64,
-                        BoundaryType::Upper => 0,
-                    };
-                }
-            }
-        }
-
-        // Perform binary search
-        while high >= low {
-            let mid_offset = Self::middle_queue_offset(low, high);
-            let Some((phy_offset, size)) = Self::read_queue_time_entry(buffer, mid_offset) else {
-                break;
-            };
-
-            // Skip invalid physical offsets
-            if phy_offset < min_physic_offset {
-                low = mid_offset + CQ_STORE_UNIT_SIZE;
-                left_offset = mid_offset;
-                continue;
-            }
-
-            let logic_offset = mapped_file_from_offset + mid_offset as i64;
-            if size <= 0 || logic_offset < min_logic_offset {
-                return 0;
-            }
-
-            let store_time = pickup_store_time(mid_offset, phy_offset, size);
-            if store_time < 0 {
-                warn!("Failed to query store timestamp for commit log offset: {}", phy_offset);
-                return 0;
-            }
-
-            match store_time.cmp(&timestamp) {
-                std::cmp::Ordering::Equal => {
-                    target_offset = mid_offset;
-                    break;
-                }
-                std::cmp::Ordering::Less => {
-                    low = mid_offset + CQ_STORE_UNIT_SIZE;
-                    left_offset = mid_offset;
-                }
-                std::cmp::Ordering::Greater => {
-                    high = mid_offset - CQ_STORE_UNIT_SIZE;
-                    right_offset = mid_offset;
-                }
-            }
-        }
-
-        let offset: i64 = if target_offset != -1 {
-            // We found ONE matched record. Adjacent records can share the same
-            // store-timestamp, so locate the requested boundary with a second
-            // binary search instead of scanning every duplicate.
-            match boundary_type {
-                BoundaryType::Lower => {
-                    let mut duplicate_low = floor;
-                    let mut duplicate_high = target_offset;
-                    let mut first_match = target_offset;
-                    while duplicate_high >= duplicate_low {
-                        let attempt = Self::middle_queue_offset(duplicate_low, duplicate_high);
-                        let Some((physical_offset, message_size)) = Self::read_queue_time_entry(buffer, attempt) else {
-                            break;
-                        };
-                        if physical_offset < min_physic_offset {
-                            duplicate_low = attempt + CQ_STORE_UNIT_SIZE;
-                            continue;
-                        }
-                        let logic_offset = mapped_file_from_offset + attempt as i64;
-                        if message_size <= 0 || logic_offset < min_logic_offset {
-                            duplicate_low = attempt + CQ_STORE_UNIT_SIZE;
-                            continue;
-                        }
-                        let message_store_timestamp = pickup_store_time(attempt, physical_offset, message_size);
-                        if message_store_timestamp < 0 {
-                            break;
-                        }
-                        if message_store_timestamp < timestamp {
-                            duplicate_low = attempt + CQ_STORE_UNIT_SIZE;
-                        } else {
-                            first_match = attempt;
-                            duplicate_high = attempt - CQ_STORE_UNIT_SIZE;
-                        }
-                    }
-                    first_match as i64
-                }
-                BoundaryType::Upper => {
-                    let mut duplicate_low = target_offset;
-                    let mut duplicate_high = ceiling;
-                    let mut last_match = target_offset;
-                    while duplicate_high >= duplicate_low {
-                        let attempt = Self::middle_queue_offset(duplicate_low, duplicate_high);
-                        let Some((physical_offset, message_size)) = Self::read_queue_time_entry(buffer, attempt) else {
-                            break;
-                        };
-                        if physical_offset < min_physic_offset {
-                            duplicate_low = attempt + CQ_STORE_UNIT_SIZE;
-                            continue;
-                        }
-                        let logic_offset = mapped_file_from_offset + attempt as i64;
-                        if message_size <= 0 || logic_offset < min_logic_offset {
-                            duplicate_high = attempt - CQ_STORE_UNIT_SIZE;
-                            continue;
-                        }
-                        let message_store_timestamp = pickup_store_time(attempt, physical_offset, message_size);
-                        if message_store_timestamp < 0 {
-                            break;
-                        }
-                        if message_store_timestamp <= timestamp {
-                            last_match = attempt;
-                            duplicate_low = attempt + CQ_STORE_UNIT_SIZE;
-                        } else {
-                            duplicate_high = attempt - CQ_STORE_UNIT_SIZE;
-                        }
-                    }
-                    last_match as i64
-                }
-            }
-        } else {
-            // Given timestamp does not have any message records. But we have a range enclosing
-            // the timestamp.
-            /*
-             * Consider the follow case: t2 has no consume queue entry and we are searching
-             * offset of t2 for lower and upper boundaries.
-             *  --------------------------
-             *   timestamp   Consume Queue
-             *       t1          1
-             *       t1          2
-             *       t1          3
-             *       t3          4
-             *       t3          5
-             *   --------------------------
-             * Now, we return 3 as upper boundary of t2 and 4 as its lower boundary. It looks
-             * contradictory at first sight, but it does make sense when performing range
-             * queries.
-             */
-            match boundary_type {
-                BoundaryType::Lower => {
-                    if right_offset != -1 {
-                        right_offset as i64
-                    } else {
-                        return 0;
-                    }
-                }
-                BoundaryType::Upper => {
-                    if left_offset != -1 {
-                        left_offset as i64
-                    } else {
-                        return 0;
-                    }
-                }
-            }
-        };
-
-        (mapped_file_from_offset + offset) / CQ_STORE_UNIT_SIZE as i64
+        search_queue_offset_by_time(
+            buffer,
+            mapped_file_from_offset,
+            min_logic_offset,
+            min_physic_offset,
+            timestamp,
+            boundary,
+            |physical_offset, message_size| commit_log.pickup_store_timestamp(physical_offset, message_size),
+            |physical_offset| {
+                warn!(
+                    "Failed to query store timestamp for commit log offset: {}",
+                    physical_offset
+                );
+            },
+        )
     }
 }
 
@@ -687,49 +454,44 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
         let mapped_file_size_logics = self.mapped_file_size;
         let mut mapped_file = mapped_files.get(index).unwrap();
         let mut process_offset = mapped_file.get_file_from_offset();
-        let mut mapped_file_offset = 0i64;
         let mut max_ext_addr = 1i64;
-        loop {
-            for index in 0..(mapped_file_size_logics / CQ_STORE_UNIT_SIZE) {
-                let bytes_option =
-                    mapped_file.get_bytes((index * CQ_STORE_UNIT_SIZE) as usize, CQ_STORE_UNIT_SIZE as usize);
-                if bytes_option.is_none() {
-                    break;
-                }
-                let mut byte_buffer = bytes_option.unwrap();
-                let offset = byte_buffer.get_i64();
-                let size = byte_buffer.get_i32();
-                let tags_code = byte_buffer.get_i64();
-                if offset >= 0 && size > 0 {
-                    mapped_file_offset = (index * CQ_STORE_UNIT_SIZE) as i64 + CQ_STORE_UNIT_SIZE as i64;
-                    self.set_max_physic_offset(offset + size as i64);
-                    if ConsumeQueue::<MS>::is_ext_addr(tags_code) {
-                        max_ext_addr = tags_code;
-                    }
-                    //println!("offset {}, size {}, tags_code {}", offset, size, tags_code);
-                } else {
-                    info!(
-                        "recover current consume queue file over,  {}, {} {} {}",
-                        mapped_file.get_file_name(),
-                        offset,
-                        size,
-                        tags_code
-                    );
-                    break;
-                }
+        let mapped_file_offset = loop {
+            let scan = scan_recovery_records(
+                mapped_file_size_logics,
+                |relative_offset| {
+                    mapped_file
+                        .get_bytes(relative_offset as usize, CQ_STORE_UNIT_SIZE as usize)
+                        .and_then(|bytes| ConsumeQueueRecord::decode(bytes.as_ref()))
+                },
+                ConsumeQueue::<MS>::is_ext_addr,
+            );
+            let mapped_file_offset = i64::from(scan.valid_bytes);
+            if let Some(max_physical_offset) = scan.max_physical_offset {
+                self.set_max_physic_offset(max_physical_offset);
             }
-            if mapped_file_offset == mapped_file_size_logics as i64 {
+            if let Some(max_extension_address) = scan.max_extension_address {
+                max_ext_addr = max_extension_address;
+            }
+            if let Some(record) = scan.stopped_record {
+                info!(
+                    "recover current consume queue file over,  {}, {} {} {}",
+                    mapped_file.get_file_name(),
+                    record.physical_offset,
+                    record.message_size,
+                    record.tags_code
+                );
+            }
+            if scan.fills_file(mapped_file_size_logics) {
                 index += 1;
                 if index >= mapped_files.len() {
                     info!(
                         "recover last consume queue file over, last mapped file {}",
                         mapped_file.get_file_name()
                     );
-                    break;
+                    break mapped_file_offset;
                 } else {
                     mapped_file = mapped_files.get(index).unwrap();
                     process_offset = mapped_file.get_file_from_offset();
-                    mapped_file_offset = 0;
                     info!("recover next consume queue file, {}", mapped_file.get_file_name());
                 }
             } else {
@@ -738,9 +500,9 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
                     mapped_file.get_file_name(),
                     process_offset + (mapped_file_offset as u64),
                 );
-                break;
+                break mapped_file_offset;
             }
-        }
+        };
         process_offset += mapped_file_offset as u64;
         self.mapped_file_queue.set_flushed_where(process_offset as i64);
         self.mapped_file_queue.set_committed_where(process_offset as i64);
@@ -969,13 +731,16 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
         }
         if let Some(last_record) = last_record {
             let last_record_pos = (last_record.start_offset - last_mapped_file.get_file_from_offset()) as usize;
-            let mut bytes = last_record
+            let bytes = last_record
                 .mapped_file
                 .as_ref()
                 .unwrap()
                 .get_bytes(last_record_pos, last_record.size as usize)
                 .unwrap();
-            let commit_log_offset = bytes.get_i64();
+            let Some(last_record) = ConsumeQueueRecord::decode(bytes.as_ref()) else {
+                return;
+            };
+            let commit_log_offset = last_record.physical_offset;
             if commit_log_offset < min_commit_log_offset {
                 self.min_logic_offset.store(
                     max_readable_position as i64 + last_mapped_file.get_file_from_offset() as i64,
@@ -995,30 +760,27 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
         let mapped_files = self.mapped_file_queue.get_mapped_files().load().clone();
         for mapped_file in mapped_files.iter() {
             let read_position = mapped_file.get_read_position();
-            let mut pos = 0;
-            while pos + CQ_STORE_UNIT_SIZE <= read_position {
-                let Some(mut bytes) = mapped_file.get_bytes(pos as usize, CQ_STORE_UNIT_SIZE as usize) else {
-                    break;
-                };
-                let offset_py = bytes.get_i64();
-                let size = bytes.get_i32();
-                let tags_code = bytes.get_i64();
-                if offset_py >= min_commit_log_offset && size > 0 {
-                    self.min_logic_offset
-                        .store(mapped_file.get_file_from_offset() as i64 + pos as i64, Ordering::SeqCst);
-                    if ConsumeQueue::<MS>::is_ext_addr(tags_code) {
-                        min_ext_addr = tags_code;
-                    }
-                    if self.is_ext_read_enable() {
-                        self.consume_queue_ext
-                            .as_ref()
-                            .unwrap()
-                            .truncate_by_min_address(min_ext_addr);
-                    }
-                    return;
-                }
-                pos += CQ_STORE_UNIT_SIZE;
+            let Some(selected) = find_min_offset_record(read_position, min_commit_log_offset, |relative_offset| {
+                mapped_file
+                    .get_bytes(relative_offset as usize, CQ_STORE_UNIT_SIZE as usize)
+                    .and_then(|bytes| ConsumeQueueRecord::decode(bytes.as_ref()))
+            }) else {
+                continue;
+            };
+            self.min_logic_offset.store(
+                mapped_file.get_file_from_offset() as i64 + i64::from(selected.relative_offset),
+                Ordering::SeqCst,
+            );
+            if ConsumeQueue::<MS>::is_ext_addr(selected.record.tags_code) {
+                min_ext_addr = selected.record.tags_code;
             }
+            if self.is_ext_read_enable() {
+                self.consume_queue_ext
+                    .as_ref()
+                    .unwrap()
+                    .truncate_by_min_address(min_ext_addr);
+            }
+            return;
         }
 
         if self.is_ext_read_enable() {
@@ -1031,58 +793,62 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
 
     #[inline]
     fn put_message_position_info_wrapper(&mut self, request: &DispatchRequest) {
-        let max_retries = 30i32;
+        const MAX_RETRIES: usize = 30;
         let can_write = self.message_store.get_running_flags().is_cq_writeable();
-        let mut i = 0i32;
-        while i < max_retries && can_write {
-            let mut tags_code = request.tags_code;
-            if self.is_ext_write_enable() {
-                let ext_addr = self.consume_queue_ext.as_ref().unwrap().put(CqExtUnit::new(
+        let outcome = drive_consume_queue_dispatch(
+            ConsumeQueueDispatchMode::Single,
+            ConsumeQueueDispatchMetadata {
+                message_base_offset: request.msg_base_offset,
+                batch_size: request.batch_size,
+            },
+            can_write,
+            MAX_RETRIES,
+            |attempt| {
+                let mut tags_code = request.tags_code;
+                if self.is_ext_write_enable() {
+                    let ext_addr = self.consume_queue_ext.as_ref().unwrap().put(CqExtUnit::new(
+                        tags_code,
+                        request.store_timestamp,
+                        request.bit_map.clone(),
+                    ));
+
+                    if ConsumeQueue::<MS>::is_ext_addr(ext_addr) {
+                        tags_code = ext_addr;
+                    } else {
+                        warn!(
+                            "Save consume queue extend fail, So just save tagsCode!  topic:{}, queueId:{}, offset:{}",
+                            self.topic, self.queue_id, request.commit_log_offset,
+                        )
+                    }
+                }
+
+                let appended = self.put_message_position_info(
+                    request.commit_log_offset,
+                    request.msg_size,
                     tags_code,
-                    request.store_timestamp,
-                    request.bit_map.clone(),
-                ));
-
-                if ConsumeQueue::<MS>::is_ext_addr(ext_addr) {
-                    tags_code = ext_addr;
-                } else {
-                    warn!(
-                        "Save consume queue extend fail, So just save tagsCode!  topic:{}, queueId:{}, offset:{}",
-                        self.topic, self.queue_id, request.commit_log_offset,
-                    )
-                }
-            }
-
-            if self.put_message_position_info(
-                request.commit_log_offset,
-                request.msg_size,
-                tags_code,
-                request.consume_queue_offset,
-            ) {
-                let message_store_config = self.message_store.get_message_store_config();
-                let store_checkpoint = self.message_store.get_store_checkpoint();
-                if message_store_config.broker_role == BrokerRole::Slave
-                    || message_store_config.enable_dledger_commit_log
-                {
-                    store_checkpoint.set_physic_msg_timestamp(request.store_timestamp as u64);
-                }
-                store_checkpoint.set_logics_msg_timestamp(request.store_timestamp as u64);
-
-                if check_multi_dispatch_queue(message_store_config, request) {
-                    self.multi_dispatch_lmq_queue(request, max_retries);
-                }
-
-                //if (MultiDispatchUtils.checkMultiDispatchQueue(this.messageStore.
-                // getMessageStoreConfig(), request)) {
-                // multiDispatchLmqQueue(request, maxRetries);                 }
-                return;
-            } else {
-                warn!(
-                    "[BUG]put commit log position info to {}:{} failed, retry {} times",
-                    self.topic, self.queue_id, i
+                    request.consume_queue_offset,
                 );
+                if !appended {
+                    warn!(
+                        "[BUG]put commit log position info to {}:{} failed, retry {} times",
+                        self.topic, self.queue_id, attempt
+                    );
+                }
+                appended
+            },
+        );
+        if matches!(outcome, ConsumeQueueDispatchOutcome::Appended { .. }) {
+            let message_store_config = self.message_store.get_message_store_config();
+            let store_checkpoint = self.message_store.get_store_checkpoint();
+            if message_store_config.broker_role == BrokerRole::Slave || message_store_config.enable_dledger_commit_log {
+                store_checkpoint.set_physic_msg_timestamp(request.store_timestamp as u64);
             }
-            i += 1;
+            store_checkpoint.set_logics_msg_timestamp(request.store_timestamp as u64);
+
+            if check_multi_dispatch_queue(message_store_config, request) {
+                self.multi_dispatch_lmq_queue(request, MAX_RETRIES as i32);
+            }
+            return;
         }
         error!("[BUG]consume queue can not write, {} {}", self.topic, self.queue_id);
         self.message_store.get_running_flags().make_logics_queue_error();
@@ -1205,15 +971,12 @@ impl Iterator for ConsumeQueueIterator {
                 let start = value.start_offset as usize + (self.counter * CQ_STORE_UNIT_SIZE) as usize;
                 self.counter += 1;
                 let end = start + CQ_STORE_UNIT_SIZE as usize;
-                let mut bytes = Bytes::copy_from_slice(&mmp[start..end]);
-                let pos = bytes.get_i64();
-                let size = bytes.get_i32();
-                let tags_code = bytes.get_i64();
+                let record = ConsumeQueueRecord::decode(&mmp[start..end])?;
                 let mut cq_unit = CqUnit {
                     queue_offset: start as i64 / CQ_STORE_UNIT_SIZE as i64,
-                    size,
-                    pos,
-                    tags_code,
+                    size: record.message_size,
+                    pos: record.physical_offset,
+                    tags_code: record.tags_code,
                     ..CqUnit::default()
                 };
 
@@ -1456,5 +1219,59 @@ mod tests {
             consume_queue.get_total_size(),
             base_total_size + ext_queue.get_total_size()
         );
+    }
+
+    #[test]
+    fn truncate_dirty_logic_files_applies_the_local_retained_prefix() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-truncate-topic");
+        let mut consume_queue = new_test_consume_queue(&temp_dir, &topic, (4 * CQ_STORE_UNIT_SIZE) as usize);
+
+        for (queue_offset, commit_log_offset) in [(0_i64, 0_i64), (1, 32), (2, 64)] {
+            consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+                topic: topic.clone(),
+                queue_id: 0,
+                commit_log_offset,
+                msg_size: 32,
+                consume_queue_offset: queue_offset,
+                success: true,
+                ..DispatchRequest::default()
+            });
+        }
+
+        consume_queue.truncate_dirty_logic_files_handler(64, true);
+
+        let mapped_file = consume_queue
+            .mapped_file_queue
+            .get_last_mapped_file()
+            .expect("retained mapped file");
+        assert_eq!(mapped_file.get_wrote_position(), 2 * CQ_STORE_UNIT_SIZE);
+        assert_eq!(mapped_file.get_committed_position(), 2 * CQ_STORE_UNIT_SIZE);
+        assert_eq!(mapped_file.get_flushed_position(), 2 * CQ_STORE_UNIT_SIZE);
+        assert_eq!(consume_queue.get_max_physic_offset(), 64);
+    }
+
+    #[test]
+    fn correct_min_offset_applies_the_local_record_match() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-min-offset-topic");
+        let mut consume_queue = new_test_consume_queue(&temp_dir, &topic, (4 * CQ_STORE_UNIT_SIZE) as usize);
+
+        for (queue_offset, commit_log_offset) in [(0_i64, 0_i64), (1, 32), (2, 64)] {
+            consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+                topic: topic.clone(),
+                queue_id: 0,
+                commit_log_offset,
+                msg_size: 32,
+                consume_queue_offset: queue_offset,
+                success: true,
+                ..DispatchRequest::default()
+            });
+        }
+
+        consume_queue.correct_min_offset(32);
+
+        assert_eq!(consume_queue.get_min_logic_offset(), CQ_STORE_UNIT_SIZE as i64);
+        assert_eq!(consume_queue.get_min_offset_in_queue(), 1);
     }
 }

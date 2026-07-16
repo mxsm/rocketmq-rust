@@ -14,9 +14,16 @@
 
 use std::path::PathBuf;
 
-use bytes::Buf;
 use cheetah_string::CheetahString;
 use rocketmq_rust::ArcMut;
+use rocketmq_store_local::consume_queue::extension::cq_ext_capacity_available;
+use rocketmq_store_local::consume_queue::extension::cq_ext_file_before_min;
+use rocketmq_store_local::consume_queue::extension::decorate_cq_ext_offset;
+use rocketmq_store_local::consume_queue::extension::is_cq_ext_address;
+use rocketmq_store_local::consume_queue::extension::plan_cq_ext_append;
+use rocketmq_store_local::consume_queue::extension::scan_cq_ext_recovery;
+use rocketmq_store_local::consume_queue::extension::undecorate_cq_ext_address;
+use rocketmq_store_local::consume_queue::extension::CqExtAppendPlan;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -26,12 +33,6 @@ use crate::consume_queue::cq_ext_unit::MAX_EXT_UNIT_SIZE;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
-
-const END_BLANK_DATA_LENGTH: usize = 4;
-
-/// Addr can not exceed this value. For compatible.
-const MAX_ADDR: i64 = i32::MIN as i64 - 1;
-const MAX_REAL_OFFSET: i64 = MAX_ADDR - i64::MIN;
 
 #[derive(Clone)]
 pub struct ConsumeQueueExt {
@@ -69,25 +70,17 @@ impl ConsumeQueueExt {
     }
 
     pub fn is_ext_addr(address: i64) -> bool {
-        address <= MAX_ADDR
+        is_cq_ext_address(address)
     }
 
     #[inline]
     fn decorate(offset: i64) -> i64 {
-        if !Self::is_ext_addr(offset) {
-            offset + i64::MIN
-        } else {
-            offset
-        }
+        decorate_cq_ext_offset(offset)
     }
 
     #[inline]
     fn undecorate(address: i64) -> i64 {
-        if Self::is_ext_addr(address) {
-            address - i64::MIN
-        } else {
-            address
-        }
+        undecorate_cq_ext_address(address)
     }
 
     #[inline]
@@ -130,8 +123,9 @@ impl ConsumeQueueExt {
         let mapped_files = self.mapped_file_queue.get_mapped_files().load().clone();
 
         for mapped_file in mapped_files.iter() {
-            let file_tail_offset = mapped_file.get_file_from_offset() as i64 + self.mapped_file_size as i64;
-            if file_tail_offset < real_offset {
+            let file_from_offset = mapped_file.get_file_from_offset() as i64;
+            if cq_ext_file_before_min(file_from_offset, self.mapped_file_size, real_offset) {
+                let file_tail_offset = file_from_offset + self.mapped_file_size as i64;
                 info!(
                     "Destroy consume queue ext by min: file={}, fileTailOffset={}, minOffset={}",
                     mapped_file.get_file_name(),
@@ -168,31 +162,9 @@ impl ConsumeQueueExt {
         let mut process_offset = 0i64;
         for (index, mapped_file) in mapped_files.iter().enumerate() {
             let read_position = mapped_file.get_read_position() as usize;
-            let mut mapped_file_offset = 0usize;
-
-            loop {
-                let size_prefix_len = i16::BITS as usize / 8;
-                if mapped_file_offset + size_prefix_len > read_position {
-                    break;
-                }
-
-                let remaining = read_position - mapped_file_offset;
-                let Some(mut buffer) = mapped_file.get_bytes_readable_checked(mapped_file_offset, remaining) else {
-                    break;
-                };
-
-                let before = buffer.remaining();
-                let mut ext_unit = CqExtUnit::default();
-                ext_unit.read_by_skip(&mut buffer);
-                let consumed = before - buffer.remaining();
-
-                if ext_unit.size() > 0 && consumed == ext_unit.size() as usize {
-                    mapped_file_offset += ext_unit.size() as usize;
-                    continue;
-                }
-
-                break;
-            }
+            let mapped_file_offset = mapped_file
+                .get_bytes_readable_checked(0, read_position)
+                .map_or(0, |buffer| scan_cq_ext_recovery(buffer.as_ref()));
 
             process_offset = mapped_file.get_file_from_offset() as i64 + mapped_file_offset as i64;
 
@@ -223,7 +195,7 @@ impl ConsumeQueueExt {
             return 1;
         }
 
-        if self.mapped_file_queue.get_max_offset() + size as i64 > MAX_REAL_OFFSET {
+        if !cq_ext_capacity_available(self.mapped_file_queue.get_max_offset(), size) {
             warn!(
                 "Capacity of ext is maximum!{}, {}",
                 self.mapped_file_queue.get_max_offset(),
@@ -248,17 +220,18 @@ impl ConsumeQueueExt {
             };
 
             let wrote_position = mapped_file.get_wrote_position();
-            let blank_size = self.mapped_file_size - wrote_position - END_BLANK_DATA_LENGTH as i32;
-
-            if size > blank_size {
-                self.fill_to_end(mapped_file.as_ref(), wrote_position);
-                info!(
-                    "No enough space(need:{}, has:{}) of file {}, so fill to end",
-                    size,
-                    blank_size,
-                    mapped_file.get_file_name()
-                );
-                continue;
+            match plan_cq_ext_append(self.mapped_file_size, wrote_position, size) {
+                CqExtAppendPlan::FillToEnd { blank_size } => {
+                    self.fill_to_end(mapped_file.as_ref(), wrote_position);
+                    info!(
+                        "No enough space(need:{}, has:{}) of file {}, so fill to end",
+                        size,
+                        blank_size,
+                        mapped_file.get_file_name()
+                    );
+                    continue;
+                }
+                CqExtAppendPlan::Append => {}
             }
 
             let mut ext_unit = cq_ext_unit.clone();

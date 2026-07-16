@@ -15,6 +15,8 @@
 pub mod base;
 pub mod commit_log;
 pub mod config;
+pub mod consume_queue;
 pub mod flush;
+pub mod index;
 pub mod mapped_file;
 pub mod utils;
