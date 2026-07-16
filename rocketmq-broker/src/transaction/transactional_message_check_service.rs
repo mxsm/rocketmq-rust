@@ -15,9 +15,9 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use rocketmq_rust::task::service_task::ServiceContext;
-use rocketmq_rust::task::service_task::ServiceTask;
-use rocketmq_rust::task::ServiceManager;
+use rocketmq_runtime::task::service_task::ServiceContext;
+use rocketmq_runtime::task::service_task::ServiceTask;
+use rocketmq_runtime::task::ServiceManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
@@ -88,7 +88,14 @@ impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
 
 impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
     pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        self.task_impl.start().await
+        self.task_impl
+            .start()
+            .await
+            .map_err(|source| rocketmq_error::RocketMQError::BrokerAsyncTaskFailed {
+                task: "TransactionalMessageCheckService",
+                context: "failed to start runtime-owned service task".to_string(),
+                source: Box::new(source),
+            })
     }
 
     pub async fn shutdown(&mut self) {

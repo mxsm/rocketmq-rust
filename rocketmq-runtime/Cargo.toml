@@ -28,15 +28,18 @@ description.workspace  = true
 rust-version.workspace = true
 
 [dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+cron = "0.17"
 dashmap.workspace = true
 futures.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }

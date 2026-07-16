@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 已批准，等待 M04–M06 |
+| 状态 | 进行中；PR-M07-01 已完成 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP15 `rocketmq-rust-drain`、WP18 `client-edge-burn-down`；完成 WP17 的 consumer 迁移 |
 | 前置条件 | model/protocol/transport/store-api canonical 边界稳定；Client allowlist/source guard 可用 |
@@ -49,12 +49,12 @@
 
 ### PR-M07-01：`rocketmq-rust` 生命周期能力迁入 runtime
 
-- [ ] `[ARCH]` 固定 schedule/task/shutdown/wait-for-signal 的 owner、public compatibility 和退出顺序。
-- [ ] `[DEV]` 等价迁移到 `rocketmq-runtime`；legacy 路径精确 re-export，不迁 ArcMut/WeakArcMut/SyncUnsafeCellWrapper。
-- [ ] `[DEV]` workspace 内部 consumer 改用 runtime canonical path，新 crate policy 禁止依赖 `rocketmq-rust`。
-- [ ] `[TEST]` 对 schedule/cancel/signal/shutdown 做新旧路径差分和 runtime audit。
-- [ ] `[REV]` 检查无第二套 RuntimeOwner、无 detached task/thread、legacy 无新 owner 代码。
-- [ ] 回滚点：consumer 恢复 legacy import，canonical runtime API 保留；不恢复已删除的危险 ArcMut escape。
+- [x] `[ARCH]` 固定 schedule/task/shutdown/wait-for-signal 的 owner、public compatibility 和退出顺序。
+- [x] `[DEV]` 等价迁移到 `rocketmq-runtime`；legacy 路径精确 re-export，不迁 ArcMut/WeakArcMut/SyncUnsafeCellWrapper。
+- [x] `[DEV]` workspace 内部 consumer 改用 runtime canonical path，新 crate policy 禁止依赖 `rocketmq-rust`。
+- [x] `[TEST]` 对 schedule/cancel/signal/shutdown 做新旧路径差分和 runtime audit。
+- [x] `[REV]` 检查无第二套 RuntimeOwner、无 detached task/thread、legacy 无新 owner 代码。
+- [x] 回滚点：consumer 恢复 legacy import，canonical runtime API 保留；不恢复已删除的危险 ArcMut escape。
 
 ### PR-M07-02：删除 MCP 冗余 Client 边
 
@@ -201,3 +201,36 @@ python scripts/arc_mut_guard.py
 - 向 M08 交付中立 DTO/port、Proxy 临时 Client 边清单和 allowlist target rule。
 - 向 M09 交付 legacy/admin/common compatibility ledger 和 standalone consumer 证据。
 - 向 M11 交付 ServiceContext 注入、runtime drain 与剩余 ArcMut ledger。
+
+## PR-M07-01 Legacy Runtime 排空 evidence
+
+- [x] `[ARCH/OWNER]` schedule executor/scheduler/task/trigger、ScheduledTaskManager、ServiceManager、broadcast
+  Shutdown 与 process signal handler 的 canonical owner 全部迁入 `rocketmq-runtime`；`rocketmq-rust` 的 schedule/task/shutdown
+  文件只含精确 re-export，`wait_for_signal` 与 `service_manager!` 从 runtime 根重导出。ArcMut、WeakArcMut、
+  SyncUnsafeCellWrapper、锁和队列均留在 legacy，没有借迁移扩大 runtime 职责。
+- [x] `[DEPENDENCY/POLICY]` runtime 生产 manifest 保持零 RocketMQ 内部依赖；legacy 生产依赖收缩为 runtime、serde、tokio，
+  tracing 仅供自带 example 的 dev-dependency。新增 `new-boundaries-no-legacy-runtime` 精确覆盖 10 个目标新边界 crate，
+  禁止它们直接依赖 `rocketmq-rust`，且 target DAG 的 `rocketmq-runtime=[]` 保持不变。
+- [x] `[CONSUMER]` root workspace 的 15 个 lifecycle consumer 文件已改用 runtime canonical path：schedule 4、service task 6、
+  broadcast shutdown 2、process signal 3；standalone Example 的 8 个 signal 旧路径作为公开兼容面保留并由 contract 冻结。
+- [x] `[COMPAT/ERROR]` 三项 Rust 差分测试证明 Shutdown、ScheduledTaskManager、ServiceManager 的 canonical/legacy 类型身份
+  一致，并覆盖 signal delivery、schedule/cancel、service start/shutdown。owner API 统一返回 `RuntimeResult`，已有 Broker 领域签名
+  使用 `BrokerAsyncTaskFailed` typed source 保留错误链；signal registration 新增 fallible API，旧 `wait_for_signal()` 继续返回 `()`
+  并记录失败，不再 panic。既有 AsyncFnMut nightly gate 随 schedule owner 原样迁移，未新增第二种 gate 或行为。
+- [x] `[TEST]` runtime 77 项、legacy 33 unit + 3 compatibility、Broker scheduled 1、Client scheduled 4、Store all-feature
+  lib 484、M07-01 source contract 6 项通过；Broker/Client/Store/NameServer/Remoting all-feature compile 通过。
+- [x] `[STANDALONE]` Example fmt/Clippy、Tauri backend fmt/all-feature Clippy、Web backend fmt/all-feature Clippy/all-target
+  build 按最近 AGENTS 通过；共享依赖变化同步更新三份 lockfile。未修改 dashboard-common，因此未运行或宣称 GPUI 验证。
+- [x] `[GOVERNANCE]` architecture baseline、35 项单测、6 个 violation fixtures、runtime enforcing audit、AGENTS routing、
+  ArcMut 裸 guard/63 项单测/24 fixtures 通过。10 个既有 ArcMut/WeakArcMut import 因 canonical import 调整发生同 identity
+  一对一 fingerprint relocation，按 ADR-013 批准后台账保持 1,170 identities/3,232 occurrences，零新增债务。
+- [x] `[ERROR]` 首轮 typed-error guard 发现本包新增 FlowMonitor source stringification；改为直接返回 RuntimeResult，并将
+  Broker 兼容签名改为 typed source 后复核只剩 main 既有 11 项（Broker 1、MCP 8、缺失治理文档 2）。该既有门禁失败未计为通过。
+- [x] `[FINAL]` root workspace exact fmt、all-target/all-feature strict Clippy、M07-01 contract、architecture/ArcMut final guard、
+  82 项 checklist 计数（41/41）与 `git diff --check` 通过；Clippy 仅输出不受 `-D warnings` 控制的 linker/future-incompat 提示。
+- [x] `[COMPAT/ROLLBACK]` 独立
+  [`10-legacy-runtime-compatibility-ledger.md`](10-legacy-runtime-compatibility-ledger.md) 冻结 owner、退出顺序、consumer、
+  public path、nightly/error 约束与回滚层级。consumer 可先恢复 legacy import，canonical owner 保留；不得把 owner 代码、
+  detached work 或危险 ArcMut escape 搬回 legacy。
+- [x] `[INVENTORY]` PR-M07-01 父项关闭；82 个顶层工作包更新为 41 已完成、0 阻塞、41 未开始。M07 保持进行中，
+  唯一下一工作包为 PR-M07-02 删除 MCP 冗余 Client 边。

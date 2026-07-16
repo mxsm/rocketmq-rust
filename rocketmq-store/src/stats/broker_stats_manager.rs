@@ -31,8 +31,8 @@ use rocketmq_common::common::stats::stats_item::StatsItem;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_common::common::stats::Stats;
 use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_error::RocketMQResult;
-use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
+use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
+use rocketmq_runtime::RuntimeResult;
 use tokio::time::Duration;
 use tracing::info;
 use tracing::warn;
@@ -170,7 +170,7 @@ impl BrokerStatsManager {
         );
     }
 
-    fn track_sampling_task(&self, task_id: RocketMQResult<TaskId>, task_name: &str) {
+    fn track_sampling_task(&self, task_id: RuntimeResult<TaskId>, task_name: &str) {
         match task_id {
             Ok(task_id) => self.task_ids.lock().push(task_id),
             Err(error) => warn!("Failed to start BrokerStatsManager scheduled task {task_name}: {error}"),

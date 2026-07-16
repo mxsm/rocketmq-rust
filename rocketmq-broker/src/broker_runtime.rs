@@ -47,7 +47,6 @@ use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
-use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
@@ -60,12 +59,12 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
+use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
 use rocketmq_store::base::message_store::MessageStore;
@@ -1615,7 +1614,7 @@ impl BrokerRuntime {
     pub(crate) async fn shutdown_scheduled_tasks_with_timeout(
         &self,
         timeout: Duration,
-    ) -> rocketmq_rust::schedule::simple_scheduler::ScheduledShutdownReport {
+    ) -> rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport {
         let report = self.scheduled_task_manager.shutdown_all(timeout).await;
         if !report.is_healthy() {
             warn!(
@@ -2659,7 +2658,7 @@ impl BrokerRuntime {
         }
     }
 
-    fn log_scheduled_task_start(task_name: &str, task_id: RocketMQResult<u64>) {
+    fn log_scheduled_task_start(task_name: &str, task_id: rocketmq_runtime::RuntimeResult<u64>) {
         if let Err(error) = task_id {
             error!("Failed to start scheduled task {task_name}: {error}");
         }
@@ -5504,11 +5503,8 @@ mod tests {
 
         let service_report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(
-            service_report
-                .children
-                .iter()
-                .any(|child| child.name
-                    == rocketmq_rust::schedule::simple_scheduler::LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY),
+            service_report.children.iter().any(|child| child.name
+                == rocketmq_runtime::schedule::simple_scheduler::LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY),
             "{}",
             service_report.to_json()
         );
@@ -5795,7 +5791,7 @@ mod tests {
                     async move {
                         let _marker = DropMarker(dropped);
                         started.store(true, Ordering::Release);
-                        future::pending::<RocketMQResult<()>>().await
+                        future::pending::<rocketmq_runtime::RuntimeResult<()>>().await
                     }
                 }
             })

@@ -22,7 +22,7 @@ use std::time::SystemTime;
 
 use uuid::Uuid;
 
-/// Task execution result
+/// Task execution result.
 #[derive(Debug, Clone)]
 pub enum TaskResult {
     Success(Option<String>),

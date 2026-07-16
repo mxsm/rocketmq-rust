@@ -13,8 +13,6 @@
 // limitations under the License.
 
 #![feature(sync_unsafe_cell)]
-#![feature(async_fn_traits)]
-#![feature(unboxed_closures)]
 #![allow(dead_code)]
 
 mod arc_mut;
@@ -34,6 +32,8 @@ pub use blocking_queue::BlockingQueue as RocketMQBlockingQueue;
 pub use count_down_latch::CountDownLatch;
 /// Re-export rocketmq main.
 pub use rocketmq::main;
+pub use rocketmq_runtime::service_manager;
+pub use rocketmq_runtime::wait_for_signal;
 pub use rocketmq_tokio_lock::RocketMQTokioMutex;
 pub use rocketmq_tokio_lock::RocketMQTokioRwLock;
 pub use schedule::executor::ExecutorConfig;
@@ -53,26 +53,3 @@ pub use schedule::trigger::Trigger;
 pub use shutdown::Shutdown;
 /// Re-export tokio module.
 pub use tokio as rocketmq;
-
-/// On unix platforms we want to intercept SIGINT and SIGTERM
-/// This method returns if either are signalled
-#[cfg(unix)]
-pub async fn wait_for_signal() {
-    use tokio::signal::unix::signal;
-    use tokio::signal::unix::SignalKind;
-    use tracing::info;
-    let mut term = signal(SignalKind::terminate()).expect("failed to register signal handler");
-    let mut int = signal(SignalKind::interrupt()).expect("failed to register signal handler");
-
-    tokio::select! {
-        _ = term.recv() => info!("Received SIGTERM"),
-        _ = int.recv() => info!("Received SIGINT"),
-    }
-}
-
-#[cfg(windows)]
-/// ctrl_c is the cross-platform way to intercept the equivalent of SIGINT
-/// This method returns if this occurs
-pub async fn wait_for_signal() {
-    let _ = tokio::signal::ctrl_c().await;
-}

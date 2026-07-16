@@ -61,7 +61,7 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
+use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
 use rocketmq_rust::WeakArcMut;

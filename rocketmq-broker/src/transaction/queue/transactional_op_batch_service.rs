@@ -18,9 +18,9 @@ use std::time::Duration;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_rust::task::service_task::ServiceContext;
-use rocketmq_rust::task::service_task::ServiceTask;
-use rocketmq_rust::task::ServiceManager;
+use rocketmq_runtime::task::service_task::ServiceContext;
+use rocketmq_runtime::task::service_task::ServiceTask;
+use rocketmq_runtime::task::ServiceManager;
 use rocketmq_rust::WeakArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
@@ -53,7 +53,14 @@ where
     }
 
     pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
-        self.service_manager.start().await
+        self.service_manager
+            .start()
+            .await
+            .map_err(|source| rocketmq_error::RocketMQError::BrokerAsyncTaskFailed {
+                task: "TransactionalOpBatchService",
+                context: "failed to start runtime-owned service task".to_string(),
+                source: Box::new(source),
+            })
     }
 
     pub async fn shutdown(&self) {
