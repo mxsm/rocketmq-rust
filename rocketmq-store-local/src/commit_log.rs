@@ -12,9 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod abnormal_recovery;
 pub mod append;
+pub mod append_attempt;
+pub mod append_frame;
+pub mod header;
 pub mod load;
+pub mod load_orchestration;
+pub mod loader;
 pub mod memory_lock;
+pub mod normal_recovery;
 pub mod record;
 pub mod record_parser;
 pub mod recovery;
+pub mod recovery_orchestration;
+pub mod root;
+pub mod runtime_state;

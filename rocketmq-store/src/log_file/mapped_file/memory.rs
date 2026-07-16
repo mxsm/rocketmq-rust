@@ -12,4 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
+pub use rocketmq_store_local::mapped_file::MmapRegionSlice;
+pub use rocketmq_store_local::mapped_file::NativeMappedMemory as StoreMappedMemory;

@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03（含 M06-03a～M06-03bb）已完成，继续 M06-04 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -69,12 +69,12 @@
 
 ### PR-M06-03：创建 Local crate 并迁 CommitLog/load/recovery
 
-- [ ] 入口：`[ARCH]` 确认 M02 `try_flush` 契约和 recovery golden 已冻结；本 PR 不搬 flush/group-commit，也不修改恢复行为。
-- [ ] `[DEV]` 创建 `rocketmq-store-local`，`default = []`，拥有 fast-load/safe-load/io_uring。
-- [ ] `[DEV]` 机械迁移 CommitLog append/load/recovery、MappedFile 与所需最小 config；store 旧深路径精确 re-export。
-- [ ] `[TEST]` focused test：dirty-tail truncate、CRC、segment roll、load/recovery 和 crash-before-flush golden。
-- [ ] `[REV]` 检查唯一 CommitLog owner、文件格式不变，Local 不依赖 Rocks/Tiered/store facade/Broker/remoting。
-- [ ] 回滚点：store facade factory 指回原 CommitLog/load/recovery 实现；旧 public path 与磁盘数据不变。
+- [x] 入口：`[ARCH]` 确认 M02 `try_flush` 契约和 recovery golden 已冻结；本 PR 不搬 flush/group-commit，也不修改恢复行为。
+- [x] `[DEV]` 创建 `rocketmq-store-local`，`default = []`，拥有 fast-load/safe-load/io_uring。
+- [x] `[DEV]` 机械迁移 CommitLog append/load/recovery、MappedFile 与所需最小 config；store 旧深路径精确 re-export。
+- [x] `[TEST]` focused test：dirty-tail truncate、CRC、segment roll、load/recovery 和 crash-before-flush golden。
+- [x] `[REV]` 检查唯一 CommitLog owner、文件格式不变，Local 不依赖 Rocks/Tiered/store facade/Broker/remoting。
+- [x] 回滚点：store compatibility facade、旧 public path、feature 入口与磁盘数据不变；可整体回滚本 PR，但不得恢复双 owner。
 
 ### PR-M06-04：机械迁移 Flush 与 Group Commit
 
@@ -1044,3 +1044,1003 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` M06-03x 只迁移 CommitLog active memory-lock target 纯 planner；不修改 config owner、实际 mlock/
   munlock、budget/accounting、mapped-file I/O、unsafe、错误/可观测性、async/runtime、flush/group commit、CQ/Index、
   HA、Timer/POP 或持久格式。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03y mapped-file cache-residency range validation evidence
+
+- [x] `[DEV]` `MappedFileProgress::is_valid_cache_range(position, size)` 现为 cache-residency 纯范围校验的唯一
+  canonical owner；`DefaultMappedFile` 同名私有 helper 只精确委托一次。Linux `mincore` 页规划/分配、Windows 与
+  macOS 平台 adapter、mapped-memory 指针、指标与 cache hit/miss 编排仍归 Store 所有，三个 `is_loaded` caller
+  的 cfg 与调用流保持不变。
+- [x] `[COMPAT/SEMANTICS]` 冻结 signed position 在转换前拒绝负值、零 size 拒绝、start 等于 file size 拒绝、
+  end 等于 file size 接受、越界拒绝和 `checked_add` 溢出 fail-closed。file size 与 position 继续使用既有
+  `as usize` 顺序和 32 位截断语义；未改为 `try_from`、`saturating_add` 或 `wrapping_add`，也未修改平台实际
+  residency 探测算法。
+- [x] `[TEST]` TDD RED 由 Local fixture 的 8 个 E0599 证明 owner 缺失；GREEN 后 Local cache-range focused
+  1/1、完整 mapped-file kernel 14/14、Local lib 69/69 与 all-feature 全量通过，Store invalid-range 1/1 和
+  `DefaultMappedFile` 30/30 通过。M06 source/mutation contract 新增 owner/adapter 两项，从 109 增至 111 项，
+  focused 2/2 与完整 111/111（463.581s）均通过；独立审查修复 detached-boundary near miss 后再次完整运行
+  111/111（416.541s）通过。
+- [x] `[CONTRACT]` contract 锁定 Local 精确签名/body/statement order、唯一非 cfg owner、Store 私有 exact
+  wrapper、Linux/Windows/macOS 三个 caller 和四个 production reference。mutation 覆盖 negative/zero/start/end、
+  `checked_add`、wrong operands、overflow、`as usize`/`try_from`/saturating/wrapping、wrapper visibility/extra logic/
+  missing caller、cfg/cfg_attr/duplicate/post-test，以及变量改名、alias chain、跨文件 direct copy 与 split-helper
+  use-alias 重构；无 guard 的无关 `checked_add`、返回 true 的 zero-range，以及仅把 `position < file_size` 赋给
+  未参与返回值的 `_observed_only` near miss 均保持零误报，起点边界必须与 `checked_add` 位于同一布尔链。
+- [x] `[FEATURE/PLATFORM]` 未修改 manifest、feature 或依赖。Local 七组与 Store 七组有效 feature closure、两
+  crate all-target/all-feature package Clippy、root exact workspace Clippy、Local strict Rustdoc 均通过；Store
+  普通 Rustdoc只复现 4 个未触及的 invalid-HTML warning。裸 Store `--no-default-features` 继续复现既有空 backend
+  enum 的 124 个 E0004 与 unused `ArcMut`，未标记为通过。Windows 固定隔离 target 通过 Local 1/1、Store 1/1
+  和两 crate all-feature check，cleanup 删除 9,554 files/8.6 GiB 并确认路径不存在。WSL/Linux 同一验证均通过；
+  首轮最后命令曾因 PowerShell 管道注入 `--all-features\r` 失败，cleanup 删除 6,737 files/3.6 GiB；以 LF base64
+  wrapper 重跑 Store all-feature check 后通过，第二次 cleanup 删除 3,623 files/2.9 GiB，固定路径最终不存在。
+- [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、AGENTS routing、workspace
+  fmt、Python compile 与 diff 检查均通过。一次误用 `arc_mut_guard.py --current-milestone M06` 只报告 642 个既有
+  M05 过期 baseline，未计为 gate；正确无参数 final guard 通过。error hygiene 只复现未触及的 Broker source
+  stringification、MCP anyhow 与两份缺失治理文档基线。
+- [x] `[SCOPE]` M06-03y 只迁移 cache-residency 纯范围校验；不迁移或修改 `mincore`/VirtualQuery、page planning、
+  allocation、pointer/unsafe、metrics、错误/可观测性、mapped-file I/O、async/runtime、flush/group commit、CQ/Index、
+  HA、Timer/POP 或持久格式。PR-M06-03 父项、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03z Linux mapped-file cache-residency page-planning evidence
+
+- [x] `[DEV]` `MappedFileCacheResidencyPlan` 与 `plan_mapped_file_cache_residency` 现为 Linux cache-residency
+  对齐地址、检查长度和 residency 页数的唯一 canonical owner；Local 只处理数值型地址与范围，不拥有或解引用
+  mapped-memory 指针。Store Linux adapter 保留 M06-03y 范围校验、`get_page_size`、mapped pointer 获取、`Vec`
+  分配、`mincore`、residency 结果判定与 metrics 编排，并以 fully-qualified path 精确调用 planner 一次；Windows 与
+  macOS adapter 未修改。
+- [x] `[COMPAT/SEMANTICS]` 冻结既有 `position as usize`、`page_size.max(1)`、base+position 和 page-offset+size
+  两处 `saturating_add`、向下 alignment、page offset、`div_ceil` 与零 page-count 返回 `None` 的顺序。极值输入保持
+  不 panic；未在 planner 重复增加 zero-size/range validation，因此 aligned zero-size 返回 `None`、misaligned
+  zero-size 仍产生既有非零原语义 plan，实际 Store caller 继续由 M06-03y 在调用前拒绝零 size。
+- [x] `[TEST]` Rust TDD RED 由 Local fixture 的 2 个 E0432 证明 owner/type 缺失；GREEN 后 planner focused 1/1、
+  mapped-file kernel 15/15、Local lib 69/69、Local default/all-feature 全量、Store invalid-range 1/1 与
+  `DefaultMappedFile` 30/30 均通过。M06 source/mutation contract 新增 owner/adapter 两项，从 111 增至 113 项，
+  初始 focused 2/2（32.781s）与审查前候选完整 113/113（429.103s）均通过。首次独立审查仍发现 helper 参数/tuple
+  返回角色顺序漏检及 plan result 字段错接误报 2 个 Important；修复 TDD RED 由 swapped parameters、swapped return、
+  两者同时的 3 个漏报与 scrambled fields 的 1 个误报证明。GREEN 后修复候选 z focused 2/2（36.206s）、y+z
+  focused 4/4（61.891s）与完整 113/113（433.456s）均通过；独立技术复审再跑完整 113/113（435.787s）通过。
+- [x] `[CONTRACT]` contract 锁定 plan struct 的 `Copy/Eq`、公开字段顺序/类型、planner 签名/body/statement order/
+  visibility/cfg、唯一 Local owner，以及 Linux Store guard→page-size→base-address→单次 planner→allocation→`mincore`
+  →result 的精确 dataflow。mutation 覆盖 cast/max、两处 saturating add、alignment/subtraction、`div_ceil`、zero guard、
+  plan 字段映射与 Store 参数/字段消费，并覆盖 cfg/cfg_attr/duplicate/post-test、变量改名/alias、direct/cfg copy 和跨文件
+  split-helper use-alias 完整副本。审查修复后 helper contract 结构化保留 start/page 参数索引与 aligned/offset tuple 返回
+  索引，不依赖固定参数或返回顺序；result contract 从对应 3×`usize` struct 解析字段顺序和 shorthand/显式 initializer，
+  逐字段绑定 aligned/checked-len/page-count 角色。swapped helper parameters/returns 及组合仍识别完整副本，正确显式字段
+  仍命中，而 scrambled fields、单独 saturating-add/alignment/div-ceil 与缺少后续角色均保持零误报。
+- [x] `[FEATURE/PLATFORM]` 未修改 manifest、feature 或依赖。Local 与 Store 各七组有效 feature closure、两 crate
+  all-target/all-feature package Clippy、root exact workspace Clippy、Local strict Rustdoc 均通过；Store 普通 Rustdoc
+  只复现 4 个未触及的 invalid-HTML warning。WSL/Linux 固定隔离 target 通过 Local planner 1/1、Store invalid-range
+  1/1 和两 crate all-feature check，cleanup 删除 10,948 files/12.6 GiB 并确认固定路径不存在。
+- [x] `[REV]` architecture 35 项+fixtures+baseline、ArcMut 63 项+24 fixtures+final guard、AGENTS routing、workspace
+  fmt、Python compile 与 diff 检查均通过。初次 ArcMut final 因新增 import 的相邻上下文产生同 item 1 NEW/1 STALE；
+  Store 改用 fully-qualified planner 调用后复核通过，baseline 与 relocation approval 保持零改动。error hygiene 只复现
+  未触及的 Broker source stringification、MCP anyhow 与两份缺失治理文档基线。首次独立审查的 2 个 Important 已在
+  `6ab8c390c` 修复；同一审查者对修复快照签署 Critical/Important/Minor = 0/0/0、`Approved`。
+- [x] `[SCOPE]` M06-03z 只迁移 Linux cache-residency 纯整数 page planning；不迁移范围校验、实际 `mincore`、
+  allocation、pointer/unsafe、metrics、错误/可观测性、mapped-file I/O、Windows/macOS adapter、async/runtime、flush/
+  group commit、CQ/Index、HA、Timer/POP 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和
+  M06-04..12 保持未完成。
+
+## M06-03aa CommitLog loader orchestration extraction evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::loader::CommitLogLoader` 现为 CommitLog 目录发现、全量 metadata
+  校验、mapping plan、ordered parallel/sequential mapping、recovery hints、fully-loaded position 与 statistics
+  归约的唯一 canonical owner。Local loader 状态保持非泛型，通过公开 `CommitLogLoadAdapter<T>` 函数表接收
+  `open`、HRTB `recovery_mapping` 与 `mark_fully_loaded` 三个窄 target 操作，不依赖 Store representation。
+- [x] `[COMPAT/SEMANTICS]` Store 保留同名 `CommitLogLoader` 薄 wrapper 和原有 `new`、
+  `new_with_recovery_mmap_advice`、`new_with_recovery_hints`、`with_lazy_mmap`、`load_optimized` 调用面；wrapper
+  只持有非泛型 Local loader。`load_optimized` 在旧 item 内以类型推断闭包适配 recovery/position，旧
+  `create_mapped_file` item 负责 eager/lazy `DefaultMappedFile` open。缺失目录零 elapsed、空目录 elapsed、先校验后
+  mmap、并行稳定顺序、最后文件 eager、hint 失败非致命与 position/statistics 语义保持不变。
+- [x] `[TEST]` TDD RED 由 Local fixture 的 unresolved loader/adapter import 证明 owner/API 缺失；GREEN 后 Local
+  fake-target fixture 3/3 与 Store loader compatibility/behavior 16/16 通过。M06 source/mutation contract 新增 Local
+  owner 与 Store narrow-wrapper 两项，从 113 增至 115；按本切片范围运行 loader、mapping、hint、validation、
+  discovery 的关联 contract/mutation 13/13 通过。主线程候选快照 gate 前两轮暴露 canonical 文件清单、Local loader
+  别名边界和两处旧 Store mutation fixture 未同步；逐项修复并 targeted 复核后，完整 contract 最终 115/115 通过
+  （444.612s）。
+- [x] `[CONTRACT]` contract 锁定非泛型 Local loader 字段与 constructor defaults、函数表字段/HRTB、完整
+  discovery→validation→plan→mapping→hint→position→statistics 顺序、并行 ordered collection/reduction、唯一 Local
+  adapter/loader owner，以及 Store 五个公开委托、单次函数表构造与 `create_mapped_file` 映射。跨文件 copy guard
+  拒绝 direct/use-alias/cfg/cfg_attr/post-test 的完整编排副本，`#[cfg(test)]` decoy 与缺少 summary 的 near miss 保持零误报。
+- [x] `[FEATURE/PLATFORM]` 未修改 manifest、feature 或依赖。Local 与 Store 的 all-target/all-feature package
+  Clippy 均以 `-D warnings` 通过；Local/Store focused behavior 在 Windows 通过，函数表只传递平台既有 mmap 与
+  prefetch adapter，不新增 runtime、unsafe 或平台 I/O owner。
+- [x] `[REV]` ArcMut 63 项、24 fixtures、ADR-013 monotonic promotion/compare 与更新 ledger 后的裸 final guard
+  全部通过；ledger 保持 1,232 identities，occurrences 从 3,375 降至 3,372。tracked approvals 保留历史并追加 5 条
+  同 item 一对一 fingerprint relocation；parallel、sequential 与 hint 三个旧 Store occurrence 已删除。Store 使用
+  fully-qualified Local loader 路径，未放宽 mapped-file kernel alias guard。workspace fmt、Python compile 与 diff 检查
+  通过，repo ArcMut guard/baseline schema 未放宽。
+- [x] `[SCOPE]` M06-03aa 只迁移 CommitLog loader 完整编排；不迁移 `DefaultMappedFile` representation、实际 mmap/
+  prefetch 平台执行、CommitLog append/recovery state、flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership
+  或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ab MappedFile raw byte/progress owner extraction evidence
+
+- [x] `[DEV]` `rocketmq-store-local::mapped_file::MappedFileRawCore` 现为 `MappedFileProgress` 与 mapped-file 原始字节/
+  范围算法的唯一 canonical owner，并由 `mapped_file` 根精确导出。Local core 不持有 mmap、文件、`ArcMut`、平台指针或
+  Store 类型；调用方通过 `FnOnce` provider 延迟借入 `&[u8]`/`&mut [u8]`。它统一拥有 file/full/read/write/commit/flush progress、normal/
+  transient readable position、copied/checked read、append update/no-update、direct range/commit、segment/indexed write、
+  raw/readable slice、append/flush/timestamp 记录以及 lock/cache 校验委托。
+- [x] `[COMPAT/SEMANTICS]` `DefaultMappedFile` 的 `progress: MappedFileProgress` 已替换为唯一
+  `raw_core: MappedFileRawCore`；原始读写方法把延迟 mmap provider 委托 Local，Local 先按旧顺序校验范围、再 materialize
+  mapping；有效 target 但无效 source 仍会先取得 mapping。provider 返回短 slice 时以 `None`/`false` fail-closed，不由安全
+  公开 API 索引 panic。callback append 的消息编排与 metrics
+  仍在 Store，成功结果继续由 core 记录 append progress/timestamp。迁移机械保留原 `+`、cast 与比较表达式，不引入
+  `checked_add` 或 overflow 行为修复；`get_slice` exact-end 仍拒绝，`put_slice` exact-end 仍允许，零长度规则与
+  `data.len() == length` 优先分支不变。公开操作以 update/no-update、normal/transient 等命名区分，不新增 positional bool。
+  `flush_range` 保持“范围校验→开始计时→transient committed 更新→mmap flush→metrics”顺序。
+- [x] `[TEST]` TDD RED 由 `cargo test -p rocketmq-store-local --test mapped_file_raw_core` 的 E0432 证明
+  `mapped_file::raw`/`MappedFileRawCore` owner 缺失；初始 GREEN 后 Local raw fixture 9/9、Local default/all-feature 全量和
+  `DefaultMappedFile` 30/30 均通过。独立审查的 lazy invalid-request 回归先稳定 RED，再由延迟 provider 修复为 GREEN；
+  Local provider/短 slice fixture 增至 10/10，Store `DefaultMappedFile` 增至 31/31。M06 source/mutation contract 新增 Local owner 与 Store adapter 两项，新增/关联
+  targeted 4/4 通过。首次完整 117 项运行（363.862s）发现 12 项旧契约仍匹配 Store `progress` 直连；将 owner/
+  reference 图与拒绝变异 fixture 精确同步为 `kernel -> raw core -> Store adapter` 后，lock/cache/warmup/progress-policy
+  的正向与反向门禁均通过，审查前完整 M06 contract 117/117（446.831s）通过；两项 Important 修复后最终 117/117
+  （451.885s）再次通过。
+- [x] `[CONTRACT]` contract 锁定唯一 Local struct/字段/import/root re-export、45 个公开命名操作、无 cfg/positional bool/
+  mmap/storage/platform owner，以及 copied/checked read、append、direct write、segment/indexed write、raw slice、commit 与
+  flush-range 的关键 body。Store contract 锁定唯一 raw-core 字段/初始化、纯 raw 方法的单次委托、选择/zero-copy/
+  flush adapter 的必要调用和延迟 provider，并拒绝 eager mmap 求值、短 slice 直接索引、exact-end、progress update、
+  `data.len() == length`、direct zero commit、导入别名、cfg、重复 owner、手写 Store raw policy 与 normal/transient 接错等 mutation。
+- [x] `[FEATURE/PLATFORM]` 未修改 manifest、feature 或依赖。Local 七组显式 closure 加 all-feature、Store default/
+  六组有效 closure 加 all-feature、两 crate all-target/all-feature package Clippy、root exact workspace Clippy 与 Local
+  strict Rustdoc 均通过；Store 普通 Rustdoc只复现 4 个未触及的 invalid-HTML warning。裸 Store
+  `--no-default-features` 继续精确复现既有空 backend enum 的 124 个 E0004 与 unused `ArcMut`，未标记为通过。
+  审查前 Windows 固定隔离 target 通过 Local 9/9、Store 30/30 和两 crate all-feature check，cleanup 删除 11,108 files/
+  14,262,496,513 bytes；WSL/Linux 同组验证通过，cleanup 删除 10,928 files/13,240,484,920 bytes，两固定路径最终均不存在。
+- [x] `[REV]` architecture baseline+35 tests、ArcMut 63 tests+24 fixtures+final guard、AGENTS routing、workspace fmt、
+  Python compile 与 diff 检查均通过。ArcMut 初扫只产生同 identity、同 `impl DefaultMappedFile` item 的 1 NEW/1 STALE；
+  按 ADR-013 完成一对一 relocation approval 与 monotonic promotion/compare，ledger 保持 1,232 identities/3,372
+  occurrences，无跨 item 新债务。error hygiene 只复现未触及的 Broker source stringification、MCP anyhow 与两份缺失
+  治理文档基线。首次独立审查以 Critical/Important/Minor = 0/2/0 要求修复 eager lazy-mmap 与短 slice panic；
+  两项均经 RED→GREEN 与 mutation contract 修复，同一审查者对最终快照签署 0/0/0、`Approved`。
+- [x] `[SCOPE]` M06-03ab 只迁移 `DefaultMappedFile` raw byte/progress owner；不迁移 select/result/`ArcMut` mapping、
+  storage/reference lifecycle、实际 mmap flush、平台 lock/warm/cache 探测、metrics、transient pool、公开 `MappedFile`
+  trait、flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、
+  M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ac CommitLog append frame kernel extraction evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::append_frame::AppendFrameKernel` 现为 append frame runtime
+  字段 finalization、segment-roll 判定与 blank marker 编码的唯一 canonical owner。Local 以命名
+  `HostWidth::{Ipv4,Ipv6}` 区分 host 布局，并返回命名 `AppendFrameCrcPlan`；不依赖 Store/common/
+  `rocketmq-rust`，不持有 `MessageExt`、config、`DashMap`、`ArcMut`、mapped file 或 CRC32 执行器。
+  Store 的标准、batch 与 zero-copy callback 只提供业务计算后的标量和借入字节切片。
+- [x] `[COMPAT/SEMANTICS]` 固定布局保持 queue offset `20..28`、physical offset `28..36`、IPv4
+  store timestamp `56..64`、IPv6 store timestamp `68..76`；仅 `encoded_len + 8 > max_blank`
+  才 roll。blank marker 仍是 `[max_blank big-endian][BLANK_MAGIC_CODE big-endian]` 八字节，EOF
+  实际只写八字节但结果 `wrote_bytes = max_blank`。标准与 zero-copy 由 Local 计算完全相同的 CRC
+  covered/trailer range，Store 仍在原位置执行 `crc32`/`create_crc32`；batch 保留原
+  `if enabled_append_prop_crc { let _check_size = msg_len - crc32_reserved_length; }` no-op 算术。
+  prepared/rollback transaction 的 queue offset 归零 gate、message-id、result/context、metrics 与业务配置
+  均留在 Store。三个 EOF 分支保持“roll 判定→scratch mutex lock→clear→Local marker 编码→`put_slice`
+  →原时点计时/实际 I/O”的次序，marker 不在加锁前构造；普通 `i32` `+`/`-`/cast/panic 行为未改成
+  checked、saturating 或 fail-closed 策略。Local safe finalization API 已明确记录短 frame 与旧算术的
+  `# Panics` 不变量。
+- [x] `[TEST]` TDD RED 由 `cargo test -p rocketmq-store-local --test commit_log_append_frame_kernel`
+  的四个 E0432 证明 `commit_log::append_frame` owner 尚不存在；GREEN 后 Local kernel fixture 7/7、
+  Store callback focused 2/2、Local default/all-feature 全量和 Store default/all-feature check 均通过。
+  M06 contract 在既有 append source/value 两项测试内扩充唯一 owner、adapter、exact-body、dataflow/order
+  与 mutation guard，关联 focused 2/2（3.516s）通过并保持完整 suite 为 117 项。主线程首次完整运行
+  116/117（496.243s），准确暴露旧 planning canonical 文件集合未登记新增 `append_frame.rs`；最小补齐清单后
+  失败项 focused 1/1（2.637s）通过，最终候选快照完整 117/117（508.371s）通过。独立初审以
+  Critical/Important/Minor = 0/1/0 指出 Store adapter contract 未精确冻结三条 finalizer 参数、第三条
+  zero-copy EOF scratch write 与 EOF/normal 两个分路径 timer；审查者证明“改名第三个 write、normal timer
+  后移、standard queue/physical 对调、reserved length 改 0、把两个 timer 都放入 EOF 分支”五个 mutation
+  最初均漏杀。收紧 contract 后五项全部被杀死，新增 source/mutation focused 1/1（44.699s）通过；该
+  contract-only 修复后的最终候选由主线程完整重跑 117/117（519.061s）通过；原 reviewer 复放五项
+  mutation 并额外验证 batch/zero-copy 参数错接后，以 Critical/Important/Minor = 0/0/0 Approved。
+- [x] `[CONTRACT]` contract 锁定五个 Local owner 的唯一 production 定义、root module、精确 enum/
+  struct/常量/方法签名与 body、`HostWidth` timestamp 映射、strict roll、blank big-endian 次序、CRC
+  range 和 batch disabled plan；拒绝 positional bool、Store/common/`ArcMut`/mapped-file/CRC execution
+  owner。Store contract 锁定三次 roll、三次“lock→clear→marker→scratch”、两次标准/zero-copy
+  finalization与一次 batch finalization的完整 frame slice/queue/physical/timestamp/host/CRC-reserved 参数
+  顺序和值、三条 EOF `write_bytes_segment`、zero-copy `first timer < EOF write < EOF return < second timer
+  < direct buffer` 的分路径边界、两条 transaction gate、两条 CRC 执行与原 callback/I/O/计时 dataflow，
+  并拒绝固定偏移、blank magic、roll 算法或 batch CRC 算术回流。mutation 覆盖 `>`→`>=`、
+  offset/timestamp 漂移、blank 字段错接、CRC 条件、Host bool、cfg owner、错误 adapter 参数、缺失委托、
+  transaction offset、checked batch subtraction、Store 固定切片与 blank import。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature 或依赖。Local/Store 共 12 组有效 feature closure、两
+  crate all-target/all-feature package Clippy、root exact workspace Clippy、workspace fmt、Local strict
+  Rustdoc 均通过；Store 普通 Rustdoc 只复现四条未触及的 invalid-HTML warning。architecture 35/35、
+  fixtures 与 baseline，ArcMut 63/63、24 fixtures 与裸 final guard，以及 AGENTS routing 均通过；ArcMut
+  ledger 保持 1,232 identities/3,372 occurrences，未新增 relocation approval 或 baseline 债务。
+  error hygiene 只复现未触及的 Broker source stringification 1、MCP anyhow 8 与缺失治理文档 2；裸
+  Store `--no-default-features` 只复现既有 124 个 E0004 与一个 unused `ArcMut`，两者均未标记为通过。
+- [x] `[SCOPE]` M06-03ac 只迁移 append frame finalization/roll/blank 纯字节 kernel；不迁移或修改实际
+  mapped-file I/O、CRC32 算法执行、message/config/topic/transaction/result/context/timing/metrics、flush/
+  group commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/
+  TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ad CommitLog append TOTALSIZE and batch traversal extraction evidence
+
+- [x] `[DEV]` `rocketmq-store-local::commit_log::append_frame::AppendFrameKernel::declared_frame_length`
+  现为 CommitLog append `TOTALSIZE` offset-zero big-endian 解码的唯一 owner；公开 seam 明确记录短 slice
+  的 `# Panics`，并保留 `[0..4]`、`try_into`、`unwrap` 与 signed `i32` 语义。命名
+  `AppendBatchFrameCursor` 唯一持有 `total_msg_len/msg_pos/index/msg_num`，命名 `AppendBatchFrame`
+  只暴露 declared length、start/end、index、cumulative length 与命名 `physical_offset(wrote_offset)`；后者
+  精确保留 `wrote_offset + cumulative as i64 - declared as i64` 的旧左结合和 debug overflow seam。
+- [x] `[COMPAT/ORDER]` batch cursor 采用两阶段推进：`next` 只执行 strict `<` gate、Local length decode、
+  普通 `i32 +=` cumulative update 与 descriptor 构造；Store 先用 cumulative length 判定 roll，之后才求
+  physical offset/end、patch frame、保留 batch CRC no-op、更新 context，最后调用 `finish_frame`，并按旧顺序执行
+  `msg_num += 1; msg_pos += declared_len as usize; index += 1`。因此 roll 路径不触发 lazy end/physical
+  calculation 或 consumed-state advance；成功结果仍取 cursor 的 cumulative bytes 与 message count。
+- [x] `[TEST]` TDD RED 以 1 个 E0432 与 3 个 E0599 证明 Local cursor/decoder seam 尚不存在；GREEN 后
+  Local golden/panic/legacy anomaly fixture 14/14 通过，覆盖正负 big-endian prefix、短 prefix panic、两帧
+  cumulative/physical offset、zero-length non-progress、malformed tail、malformed rolling frame 的 lazy order，
+  以及第一帧 `cumulative == declared` 时 `physical_offset(i64::MAX)` 在旧式第一步 addition 上 debug panic。
+  Store callback 既有 focused 2/2 保持通过。未新增 Store runtime batch fixture：直接复用
+  `DefaultMappedFile` 会新增 transitive ArcMut wrapper occurrence，而为两条断言引入完整 fake 会扩大高触达 callback
+  测试模块与范围；因此 batch success parity、second-frame roll 和 context/finish order 由 Local golden 与精确 Store
+  adapter/mutation contract 联合验证。初审修复后关联 owner/adapter/mutation contract 2/2（87.897s）通过；
+  修复前候选快照完整 M06 contract 曾为 117/117（527.592s），本次初审修复后的完整 117 项复跑留主线程完成。
+- [x] `[CONTRACT]` Local contract 锁定 decoder、descriptor、cursor 字段、签名、精确 body、Default delegation、
+  lazy end、左结合 physical offset 与 `next -> Store consume -> finish_frame` 顺序；Store contract 锁定标准/zero-copy
+  各一次 Local decoder、唯一 batch cursor、cumulative roll、physical/finalizer/CRC/context/finish 顺序及成功结果来源。
+  mutation 拒绝 BE→LE、`[0..4]`→`[1..5]`、`<`→`<=`、checked/saturating cumulative、physical offset
+  括号重组、checked/saturating physical arithmetic、finish 内推进重排、Store 直接 `from_be_bytes`/固定 prefix、
+  手写 cursor/physical arithmetic、提前/遗漏 finish 与 roll 前求 end。
+- [x] `[REVIEW FIX]` 初审 Critical/Important/Minor = 0/1/1。Important 指出“Local 先算 relative delta、Store
+  再加 wrote offset”会把旧左结合改成 `wrote + (cumulative - declared)`，从而改变 overflow 行为；现由 Local
+  `physical_offset` 单点拥有原表达式，并由 golden、debug-overflow 与 regroup/checked/saturating/Store-handwrite
+  mutations 冻结。Minor 指出公开 cursor 文档混淆 decoded cumulative 与 finished consumed state，并把 `msg_num`
+  误写为 yielded count；现已明确 `next` 只推进 decoded total，非-roll frame 完整消费且 context 更新后才以最近
+  descriptor length 恰好调用一次 `finish_frame`，roll 禁止调用，`msg_num` 只统计 finished frame。修复后 Local
+  focused 14/14、最终完整 M06 contract 117/117（554.074s）通过；原 reviewer 复放 regroup/checked/saturating/
+  Store-handwrite mutations 后以 Critical/Important/Minor = 0/0/0 Approved。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature 或依赖。Local default/all-feature 全量测试与 Store
+  default/all-feature check 通过；两 crate all-target/all-feature package Clippy、root exact workspace Clippy、
+  workspace fmt、Python compile、diff check 与 Local strict Rustdoc 通过，Store 普通 Rustdoc 只复现四条未触及的
+  invalid-HTML warning。architecture 35/35+fixtures+baseline、ArcMut 63/63+24 fixtures+final guard 与 AGENTS
+  routing 通过；本切片新增 ArcMut 为 0，未新增 relocation approval 或 baseline 债务。新增 cursor 初次 package
+  Clippy 精确暴露 `new_without_default`，以 `Default -> Self::new()` 修复后复跑通过。
+- [x] `[SCOPE]` M06-03ad 只迁移 append TOTALSIZE 解码与 batch frame traversal owner；Store 继续持有
+  message/config/topic/transaction、CRC 执行/no-op、context、message-id、timer/result 与 MappedFile I/O。
+  recovery/header/encoder、MappedFile raw/flush、CQ/Index、HA、Timer/POP、runtime ownership 与持久格式均未修改。
+  PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ae CommitLog fixed-header and timestamp probe extraction evidence
+
+- [x] `[DEV/API]` 新增 `rocketmq-store-local::commit_log::header` 作为 CommitLog fixed-header 唯一 owner，冻结
+  magic/sysflag 位置 `4/36`、born/store IPv6 flags `0x10/0x20`、host 长度 `8/20`、Store timestamp
+  位置 `56/68` 与 V1/V2 magic。`HostWidth` 类型及 variants 保持公开，以原路径
+  `commit_log::append_frame::HostWidth` 精确 re-export；flags 与四个选择/长度方法保持 `pub(crate)`，不为测试扩大
+  API。V1/V2 magic 仍由 `commit_log::record` 精确 re-export，兼容既有调用路径。
+- [x] `[COMPAT/ORDER]` recovery probe 依次读取 magic `(4,4)`、sysflag `(36,4)` 与按 born-host flag
+  选择的 timestamp `(56|68,8)`；只有 provider 返回 `None` 才按零值回退，provider 返回 `Some` 短字段继续
+  保留 direct-slice panic。无效 magic 在 sysflag read 前立即返回，零 timestamp 返回 `None`。严格 frame reader
+  保留 big-endian 直接索引与短 frame panic；Store recovery 只传
+  `|offset, len| mapped_file.get_bytes(offset, len)`，checkpoint safe-index/normal 分支、两处 `<=`、最小时间戳与
+  logging 保持 Store 所有。`pickup_store_timestamp` 保留范围、`get_message` 和 `-1` sentinel，并以 fully-qualified
+  Local strict reader 读取 buffer。
+- [x] `[TEST]` RED replay 临时移除 `pub mod header` 后精确得到 6 个 E0432，证明 append/record/parser 的新 owner
+  seam 缺失；恢复模块后 Local header focused 10/10 通过。golden 覆盖 V1 IPv4、V2 IPv6、`0x10/0x20` 独立
+  born/store flag、精确 read sequence、missing magic/sysflag/timestamp 零回退、invalid magic short-circuit、zero
+  timestamp、provider `Some-short` panic、strict IPv4/IPv6 big-endian 及两个 strict short-frame panic。Local
+  default/all-feature 全量测试均通过。未新增 Store runtime wrapper fixture：构造真实 `DefaultMappedFile` 会引入
+  transitive ArcMut 测试指纹，而 Local golden 与精确 Store adapter contract 已覆盖本切片的两条 Store 调用路径。
+- [x] `[CONTRACT]` dedicated header owner/adapter contract 锁定常量、唯一 owner、窄 visibility、`HostWidth` 四方法、
+  probe/strict/helper exact body 与 panic 文档、record/append compatibility re-export、parser host-width delegation、
+  recovery closure/checkpoint/logging 及 pickup strict adapter。mutation matrix 拒绝四个 offset、两个 flag、两个 host
+  length、V1/V2 magic、BE→LE、read width、missing→非零、zero timestamp 接受、invalid magic 后继续读 sysflag、
+  `Some-short` 变 checked fallback、strict checked slice/`Option`、Store 两处 checkpoint 与 pickup 的 `<=`→`<`、
+  parser/append 手写布局及 Store/parser/append 重复常量；dedicated 1/1 与受影响既有 planning/append/record 4/4
+  均通过，主线程最终完整 M06 contract 118/118 通过（553.420s）。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature、依赖、runtime ownership、unsafe 或 error mapping。Store
+  default/all-feature check、两 crate all-target/all-feature package Clippy、root exact workspace Clippy、workspace fmt、
+  Local strict Rustdoc 与 AGENTS routing 通过；Store 普通 Rustdoc 只复现四条未触及的 invalid-HTML warning。
+  architecture 35/35+fixtures+baseline、ArcMut 63/63+24 fixtures+final guard 通过。初次 ArcMut final 因删除 recovery
+  旧 magic import 的相邻 token context 产生同 identity 的 1 NEW/1 STALE；现以带原因的最窄 `unused_imports`
+  compatibility import 保持既有 `DefaultMappedFile` fingerprint，最终新增 ArcMut 为 0，未新增 relocation approval
+  或 baseline 债务。初次 Store package Clippy 的 `useless_asref` 已通过直接传 buffer 修复并复跑通过。独立审查
+  Critical/Important/Minor = 0/0/0，另行复跑 header 10/10、record parser 3/3 与 dedicated contract 1/1 通过。
+- [x] `[SCOPE]` M06-03ae 只迁移 fixed-header layout、host-width 选择与 timestamp probe/strict read；不迁移或修改
+  M06-03ad cursor/TOTALSIZE、append CRC/body encoder、record parser bounded reader/error order、recovery scan loop、
+  flush/group commit、CQ/Index、HA、Timer/POP、MappedFile lifecycle/I/O、checkpoint policy、runtime ownership 或持久格式。
+  PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03af0 CommitLog EOF retry encoded buffer ownership evidence
+
+- [x] `[DEV/API]` `AppendMessageCallback` trait 现明确 EOF ownership：实现若 `take` message 的 encoded buffer，
+  返回 `AppendMessageStatus::EndOfFile` 前必须归还同一个 buffer，供 caller 在下一 CommitLog segment 重试；不得
+  clone 或 re-encode。`DefaultAppendMessageCallback` 的 standard、batch、zero-copy 三条 EOF branch 各只新增一条
+  `encoded_buff = Some(original_bytes_mut)`，位置严格在 blank-marker write 后、EOF result return 前；成功、error、
+  fallback 与其他字段/状态不变。
+- [x] `[TEST/RED]` 512B deterministic 端到端 RED 的实际编码尺寸与预分析一致：single 先写 340B seed，170B
+  message 因剩余 172B 不满足 `170 + 8` 而 roll；batch 先写 170B seed，两个 170B frame 的第一个已遍历、第二个
+  cumulative 340B 因剩余 342B 不满足 `340 + 8` 而 roll。基线 second callback 分别在
+  `do_append` 第 153 行和 `do_append_batch` 第 256 行的第二次 `take().unwrap()` panic（2 failed，46.4s）。
+  callback-level RED 同时证明 standard/batch/zero-copy EOF 后 buffer 均为 `None`（3 failed，28.0s）。
+- [x] `[TEST/GREEN]` 修复后端到端 single 精确得到 `PutOk/wrote_offset=512/wrote_bytes=170/msg_num=1`，batch
+  精确得到 `PutOk/wrote_offset=512/wrote_bytes=340/msg_num=2`；两次 public put 各只累计两次 lock acquire，证明
+  EOF retry 仍在同一次 put lock 临界区内完成。两条 focused 各 1/1 通过。callback 级复用既有
+  `DefaultMappedFile` fixture/fingerprint，在同一测试中分别验证 standard、batch、zero-copy EOF 后 buffer `Some`
+  且下一 segment retry `PutOk`，最终 1/1 通过。
+- [x] `[CONTRACT]` Store adapter contract 先结构化提取三条 `SegmentAppendDecision::Roll` branch，再逐条校验唯一
+  exact assignment、blank-marker write `<` restore `<` EOF return 的 branch-local 顺序，并禁止 restore region 的
+  clone/re-encode；不是全文件字符串计数。mutation matrix 对三条路径分别拒绝删除 restore、移到 return 后、写错
+  `msg_inner/msg_batch` 字段及 `BytesMut::clone`，并以负向 mutation 证明 trait ownership 文档 guard 可拒绝必需片段
+  退化；最终 focused contract 1/1 通过（127.606s），主线程完整 M06 contract 118/118 通过（674.963s）。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature、依赖、编码格式、CRC、cursor、queue/context、result 字段、
+  MappedFile I/O 或 runtime ownership。Store all-target/all-feature package Clippy、Local default/all-feature 全量测试、
+  workspace formatter与 diff check 通过。architecture 35/35+fixtures+baseline、ArcMut 63/63+24 fixtures+final guard、
+  AGENTS routing 均通过。初次 callback helper 新增显式 imports/返回类型造成 1 NEW/1 STALE import 与两个 transitive
+  `DefaultMappedFile` references，收敛后又剩一个 constructor reference；最终把三场景合并复用原测试函数内唯一既有
+  constructor fingerprint，新增 ArcMut occurrence 为 0，未修改 baseline 或 relocation approval。独立审查初次
+  Critical/Important/Minor = 0/0/1，仅指出 trait 文档 guard 缺少负向 mutation；补齐并复跑后最终 0/0/0 Approved。
+- [x] `[SCOPE]` M06-03af0 只修复 EOF retry encoded buffer 所有权并新增 focused tests/contract；不 clone、
+  re-encode 或改变其他 EOF 状态，不迁移 append/recovery owner，不修改 flush/group commit、CQ/Index、HA、Timer/POP、
+  MappedFile lifecycle、runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和
+  M06-04..12 保持未完成。
+
+## M06-03af CommitLog bounded append-attempt orchestration evidence
+
+- [x] `[DEV/API]` 新增纯同步
+  `rocketmq-store-local::commit_log::append_attempt::CommitLogAppendAttempt::run`，以 initial segment 加四个 closure 接收
+  `is_full/acquire/lock_active/append` 操作，只依赖 Local `AppendMessageResult/AppendMessageStatus`。显式 outcome
+  区分 `Completed::{PutOk, RetryRejected}` 与
+  `Aborted::{InitialSegmentUnavailable, InitialActiveLockFailed, InitialMessageIllegal, InitialUnknown,
+  RolledSegmentUnavailable, RolledActiveLockFailed}`；roll 完成结果携带旧 segment，rolled abort 同时保留首次 EOF
+  result 与旧 segment，Store 无需从状态码反推控制流。
+- [x] `[COMPAT/ORDER]` 编排严格冻结旧顺序：initial `Some` 只检查一次 `is_full`，`None/full` 只 acquire 一次，
+  active lock 后 append；只有首次 `EndOfFile` 可再执行一次 acquire、active lock 与 append，retry 的任何非 `PutOk`
+  状态均成为 `RetryRejected`，不存在第三次尝试。DropProbe 另行冻结 full initial 的 acquire RHS 先于旧 segment
+  drop；Store 两条 rolled abort 先 release put lock、drop topic guard、记录原日志，再显式 drop old 并 return，且不走
+  warm unlock。其余 put-lock 计时、observability、慢写 warning、warm unlock、offset/stats、flush/HA 与失败 warning 顺序不变。
+- [x] `[DEV/ADAPTER]` Store single/batch 各保留一条 exact closure adapter。为满足 borrow checker，active-memory-lock
+  实现机械拆为无 `DefaultMappedFile` 类型参数的 parts helper；single、batch 与既有 test wrapper 共同调用私有
+  `lock_active_mapped_file_parts!`，其内部只求值一次 mapped-file expression，并保留全 production 唯一的 mapped-file
+  `lock_region_with` adapter。既有 default wrapper 继续一对一委托，未 clone lock、`Arc` 或 `ArcMut`。Local owner
+  不包含 `MessageExt*`、`MappedFile*`、Store status enum、Tokio、`Instant` 或 `ArcMut`，也不拥有 mmap/I/O、日志、
+  计时及后处理策略。
+- [x] `[TEST/RED/GREEN]` RED 首先以缺少 `append_attempt` module 得到 4 个 `E0432` unresolved-import，并以
+  Store 尚未接入 seam 得到 9 项 focused contract 违规。GREEN 后 Local event/drop exhaustive fixture 8/8 通过；
+  fixture 的 `Segment` 刻意不实现 `Clone`，同时证明 `run` 不要求 `Clone` bound；
+  既有 512B af0 single/batch 回归各 1/1，通过结果仍分别为 `PutOk/offset=512/wrote=170/msg_num=1` 与
+  `PutOk/offset=512/wrote=340/msg_num=2`。Local default 与 all-feature 全量测试均通过。
+- [x] `[CONTRACT]` dedicated contract 固定 Local module/owner/import、outcome shape、generic closure signature、
+  acquire/lock/append 上界、事件与 drop 顺序、retry status 全覆盖；同时固定 Store 两条完整 closure call、八类 outcome
+  到唯一 `PutMessageStatus` 的逐 arm 映射、rolled abort 生命周期、唯一 macro lock-region owner、active-lock
+  parts/wrapper 委托以及 af0 回归。mutation matrix 拒绝 is-full 绕过、
+  acquire/drop 逆序、缺锁、错误 segment、第三次 append、retry 状态遗漏、clone/cfg/duplicate、import alias、两条
+  adapter 参数/append 变异、batch illegal/unknown status 对调、错误 result 映射、old 提前/遗漏 drop、wrapper 加逻辑/
+  clone、错误 API 文档及测试删除；memory-lock focused 3/3、append-attempt focused 2/2 通过。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature、依赖、公开 wire/storage 格式或 runtime ownership。Local/Store
+  all-target/all-feature package Clippy、workspace fmt/diff、architecture 35/35+fixtures+baseline、ArcMut
+  63/63+24 fixtures+final guard 与 AGENTS routing 均通过。active-lock 首版 parts 签名曾产生 1 NEW/2 STALE
+  `DefaultMappedFile` 指纹；最终改为 generic lock-region closure 并复用既有三个 wrapper/type-reference 指纹，未修改
+  ArcMut baseline 或 relocation approval。主线程首次完整 M06 contract 120 项暴露 2 项契约登记缺口：canonical directory
+  尚未登记 `append_attempt.rs`，既有 memory-lock config adapter 尚未冻结新增 parts helper 的 target 类型；补充精确文件集合、
+  target 引用计数、parts helper 完整签名与 closure bound，并加入两条类型替换 mutation 后 focused 2/2 通过，最终完整
+  M06 contract 120/120 通过（602.201s）。实现与契约修正两轮独立复审均为 Critical/Important/Minor = 0/0/0。
+- [x] `[SCOPE]` M06-03af 只迁移 bounded append-attempt 控制流；Store 继续拥有 message encode、MappedFile queue/I/O、
+  active memory-lock syscall、topic/put lock、计时/日志/result mapping、warm/offset/stats/flush/HA。未迁移或修改
+  append-frame/CRC、recovery、flush/group commit、CQ/Index、HA、Timer/POP、runtime ownership 或持久格式。
+  PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ag CommitLog standard recovery declared-frame read owner extraction evidence
+
+- [x] `[DEV/API]` 在 Local `commit_log::record` 新增纯同步 `read_declared_frame(position, read)`；callback 为
+  `FnMut(usize, usize) -> Option<Bytes>`，返回 `(Option<Bytes>, usize)`。Local owner 只解释四字节 big-endian signed
+  frame size，不依赖 `MappedFile`、`MessageExt*`、Store、Tokio 或 `ArcMut`。
+- [x] `[COMPAT/ORDER]` 冻结原 standard recovery 一次性读取语义：先且仅先读 `(position, 4)`；缺头或非正长度返回
+  `(None, 0)` 且不读正文；successful short header 保持 `Buf::get_i32` exact-read 前置条件并按 Rustdoc `# Panics`
+  明示 panic；正长度再且仅再读 `(position, declared_size)`，缺正文仍返回 `(None, declared_size)`。不新增 body
+  length、format 或 CRC 校验，两次读取使用同一 position。
+- [x] `[DEV/ADAPTER]` 删除 Store `get_simple_message_bytes`；standard `recover_normally` 与 `recover_abnormally` 各保留
+  一条 `mapped_file.get_bytes(position, size)` closure adapter。`recover_normally_optimized`、
+  `recover_abnormally_optimized` 与 `CommitLogFrameCursor` 未修改；既有日志、SourceEnded/InvalidRecord、checked-add、
+  dispatch、checkpoint 与 truncate 顺序保持不变。
+- [x] `[TEST/RED/GREEN]` RED 先得到缺少 `read_declared_frame` 的 `E0432`。GREEN 后 Local focused 5/5 通过，覆盖
+  exact read events/参数、big-endian、缺失/短头、零/负长度、缺正文保留长度与成功读取；Store standard normal/abnormal
+  dirty-tail recovery 2/2 通过。Local 与 Store all-target/all-feature package Clippy 均通过。
+- [x] `[CONTRACT]` dedicated baseline+mutation 2/2、canonical owner/facade 2/2 通过。契约固定 Local 唯一非 cfg owner、
+  exact signature/body/panic 文档、无 Store/runtime 类型，以及 standard normal/abnormal 各一次和 optimized 零次调用；
+  mutation matrix 拒绝 header 长度、little-endian、`< 0`、第二次 offset/长度、缺正文 size 归零、short-header
+  fail-closed、cfg/duplicate/import alias、Store policy copy、adapter 参数、optimized 接入及回归测试删除。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature、依赖、baseline、relocation approval、公开 wire/storage 格式或 runtime
+  ownership。architecture 35/35+fixtures+baseline、ArcMut 63/63+24 fixtures+final guard 与 AGENTS routing 均通过；
+  ArcMut NEW/STALE 为 0/0。workspace fmt 与 diff check 通过；主线程完整 M06 contract 122/122 通过（608.436s）。
+  独立复审 Critical/Important/Minor = 0/0/0，确认两条 standard adapter 的 recovery 顺序与 optimized 零调用不变。
+- [x] `[SCOPE]` M06-03ag 只迁移 standard recovery declared-frame read owner；不迁移或修改 optimized cursor、record
+  parser、CRC/body validation、append、flush/group commit、CQ/Index、HA、Timer/POP、MappedFile lifecycle、runtime
+  ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03ah CommitLog normal recovery segment orchestration extraction evidence
+
+- [x] `[DEV/API]` 新增纯同步、runtime-neutral 的
+  `rocketmq-store-local::commit_log::normal_recovery`，由 `NormalRecoveryRecord<R>`、
+  `NormalRecoveryObservation`、`NormalRecoverySegmentOutcome<E>` 与
+  `NormalRecoveryState::drive_segment` 唯一拥有 normal recovery 单 segment record-loop 编排。driver 通过泛型
+  `Next/Started/Observe` closure 接收 adapter，不引入 `dyn`、`Clone`、`Send/Sync/'static`、`ArcMut`、
+  `MappedFile`、Store 类型或 `unsafe`。
+- [x] `[COMPAT/ORDER]` 冻结原 normal recovery 顺序和所有权：segment state transition 先于 started hook；Message
+  state transition 先于 observe；Blank/Invalid observe 先于 state transition；SourceEnded 不触发 observe；payload
+  由 driver 持有并在 observe 返回或 state rejection 后释放。adapter error 保留原错误身份，state error 独立返回，
+  Stop/ContinueNext 后不再读取下一条 record。
+- [x] `[DEV/ADAPTER]` Store `recover_normally_optimized` 与 `recover_normally` 各且仅各调用一次
+  `drive_segment`，不再直接调用 normal recovery `apply`。optimized 保留 `BatchMessageIterator`、
+  `RecoveryContext::process_message`、成功 message 后 `file_processed`、ContinueNext 后 `files_processed/index`
+  更新；standard 保留 `read_declared_frame`、checked cursor advance 与 parser。两条 abnormal recovery 路径不接入
+  该 driver；dispatch、warning、summary、checkpoint 与 truncate 顺序不变。
+- [x] `[TEST]` Local orchestration focused 7/7、Local all-feature test suite 与 Store CommitLog recovery 19/19 通过。
+  覆盖 segment-start state failure、started/next 顺序、adapter error identity、standard/optimized SourceEnded 分歧、
+  Message/Blank/Invalid observe/drop 顺序、offset overflow fail-closed、bounded next calls、跨 segment 水位、dirty-tail
+  truncate、controller/dup gate 与 RocksDB restart parity。
+- [x] `[CONTRACT]` dedicated baseline+mutation 6/6 与完整 M06 contract 124/124 通过（635.252s）。契约固定三个 enum、
+  `drive_segment` exact signature/body/closure bounds、唯一非 cfg owner、无动态/Store/runtime 边界、两条 normal Store
+  adapter 各一次调用、abnormal 零调用、policy construction、空文件短路、adapter error、summary/final write dataflow、
+  原 adapter 统计/日志顺序及七个 regression test。mutation matrix 拒绝 variant/field、transition/observe 顺序、
+  SourceEnded observe、error/outcome、closure bound、Clone/dyn、cfg/import alias、Store 直接 state policy、调用次数、
+  abnormal 接入、adapter/summary 顺序、空文件旁路、错误继续及 regression test 删除。
+- [x] `[FEATURE/REV]` 未修改 manifest、feature、依赖、baseline、relocation approval、runtime ownership 或公开
+  wire/storage 格式。Local 与 Store package Clippy、workspace fmt、workspace all-target/all-feature Clippy、architecture
+  35/35+baseline、ArcMut 63/63+final guard、AGENTS routing、Python compile 与 diff check 均通过；ArcMut 未新增。
+  独立复审确认生产语义无 Critical/Important/Minor 问题，并将 summary、empty-file 与 adapter-error 三项结构缺口
+  补入 mutation contract。
+- [x] `[SCOPE]` M06-03ah 只迁移 normal recovery 单 segment record-loop 编排；不迁移实际 MappedFile I/O、record
+  parser、abnormal recovery 编排、CommitLog 根 owner、完整 append/load、flush/group commit、CQ/Index、HA、Timer/POP、
+  runtime ownership 或持久格式。PR-M06-03 父项、入口/DEV/TEST/REV、M06 Exit Checklist 和 M06-04..12 保持未完成。
+
+## M06-03 MappedFile canonical owner extraction evidence
+
+- [x] `[DEV/API]` `rocketmq-store-local::mapped_file` 现为 `MappedFile` trait、泛型
+  `DefaultMappedFile<M>`、unsafe `MappedMemory` backend contract、`SelectMappedBufferResult<M>`、reference
+  lifecycle、mapping/raw/file kernel 与平台 FFI 的 canonical owner。Store 原公开路径以精确 re-export、
+  `DefaultMappedFile<StoreMappedMemory>` type alias 和 `MappedFileAppend` 业务 append extension 保持兼容；
+  `CommitLogLoadAdapter` 的 recovery mapping 已收窄为中立 `&[u8]`，Local 不再依赖 Store mapping 类型。
+- [x] `[COMPAT/SAFETY]` Store compatibility backend 由 `Arc<MmapMut>` 保持 mapping/zero-copy region 生命周期，
+  mapped-file owner 不再持有 `ArcMut`。删除安全的 whole-map `get_mapped_file_mut(&self) -> &mut [u8]` escape，
+  内部写路径改用带完整 `# Safety` 契约的 `mapped_file_mut_parts`；select result 的 mutable slice 同时要求
+  `unsafe` 调用和 `&mut self`。旧 Store module path、append result/status、compaction 显式拒绝、lazy mmap、
+  flush/progress、warmup、memory lock、cache residency 与 zero-copy 行为保持原 adapter 语义。
+- [x] `[TEST/CONTRACT]` `cargo test -p rocketmq-store-local --all-features` 全部通过（crate 单测 99/99，
+  所有 integration suite 通过），其中新的 DefaultMappedFile owner focused 30/30；Store recovery compatibility
+  2/2 与 compaction adapter 1/1 通过。新增 mapped-file owner/facade/backend leak 契约，并同步更新 raw、mapping、
+  cache、warmup、memory-lock、loader 与 FFI mutation matrix；最终完整 M06 contract 126/126 通过
+  （632.603s）。Windows prefetch 错误保留 typed `io::Error` source，不再 stringification。
+- [x] `[ARC/ARCH]` ArcMut ledger 从 1,232 identities/3,372 occurrences 降至
+  1,171 identities/3,233 occurrences；`current_milestone` 保持 M05，未新增 relocation approval 或 baseline
+  债务。ArcMut final guard、architecture dependency baseline、AGENTS routing、workspace fmt、两 crate package
+  check/Clippy、root 28-package all-target/all-feature Clippy、Local strict Rustdoc、Python compile 与 diff check
+  均通过。error architecture guard 的本切片 source-stringification 回归已清零，仅复现未触及的 Broker 1 项、
+  MCP anyhow 8 项与缺失治理文档 2 项，未将其误记为通过。
+- [x] `[INVENTORY/SCOPE]` 总 checklist 已按 82 个顶层 PR 工作包复核：30 已完成、M06-03 进行中、
+  51 未开始，合计 52 个尚未完成；root workspace 为 28/32，尚缺 store-rocksdb 与 proxy-core/cluster/local
+  四个目标 crate。本切片不关闭 PR-M06-03：CommitLog 根 append/load/recovery owner 与 facade 仍需收口；
+  M06-04..12 的 flush/group commit、CQ/Index、HA、Timer/POP、RocksDB 与 Store facade，以及 M07..M12 均未勾选。
+
+## M06-03 native mmap and CommitLog loader owner extraction evidence
+
+- [x] `[DEV/API]` Local `mapped_file` 现直接拥有 `NativeMappedMemory` 与 `MmapRegionSlice`；
+  `DefaultMappedFile`、`SelectMappedBufferResult` 的默认 backend 均指向 native owner。Local
+  `CommitLogLoader::load_optimized` 直接创建 native mapping，泛型测试/扩展入口收敛为 `load_with_adapter`，
+  native open、lazy-read-only 历史文件策略与 fully-loaded position adapter 不再由 Store 构造。
+- [x] `[COMPAT/OWNER]` Store `mapped_file::memory` 仅精确 re-export native backend/region，原
+  `StoreMappedMemory` 名称通过明确 alias 保持；Store `DefaultMappedFile` 与 select result 继续以专用 type alias
+  保持既有类型推导。Store `commit_log_loader` production 区只保留 `LoadStatistics`、
+  `RecoveryFilePrefetch`、`RecoveryMmapAdvice`、`CommitLogLoader` 四条精确 re-export，原 wrapper、函数表 adapter、
+  文件发现、mapping 创建与 memory-hint 编排均已删除。
+- [x] `[TEST]` Local fake/native loader integration 4/4、Store loader compatibility 16/16、Local
+  DefaultMappedFile focused 30/30 与 `cargo test -p rocketmq-store-local --all-features` 全部通过；
+  `cargo check`、all-target/all-feature package Clippy（Local/Store）、workspace fmt、root workspace
+  all-target/all-feature Clippy及 Local strict Rustdoc 均通过。
+- [x] `[CONTRACT]` mapped-file/native owner、Store exact-facade、loader native adapter 与 alias-bypass mutation
+  契约已同步；修正测试从已删除 Store wrapper 转向精确 facade 所有权验证。最终完整 M06 contract
+  126/126 通过（603.347s）；合法 `NativeMappedMemory as StoreMappedMemory` facade 与 crate/module/glob alias
+  绕过检测均由独立 mutation 保持 fail-closed。
+- [x] `[ARC/ARCH]` 本切片未新增 `ArcMut` identity/occurrence 或 baseline/relocation approval；ArcMut final
+  guard、architecture dependency baseline 与 AGENTS routing 均通过。error architecture guard 仍仅复现未触及的
+  Broker source-stringification 1 项、MCP anyhow 8 项和治理文档缺失 2 项，未将非零基线误记为通过。
+- [x] `[INVENTORY/SCOPE]` 本切片关闭 native mmap/load owner 内部工作，但不关闭顶层 PR-M06-03；
+  CommitLog 根 append/load/recovery owner、Store facade 最终收口仍待完成。82 个顶层工作包统计保持
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
+
+## M06-03ai abnormal recovery segment orchestration extraction evidence
+
+- [x] `[DEV/API]` Local 新增 runtime-neutral `commit_log::abnormal_recovery`，由
+  `AbnormalRecoveryRecord<R>`、`AbnormalRecoveryObservation`、`AbnormalRecoverySegmentOutcome<E>` 与
+  `AbnormalRecoveryState::drive_abnormal_segment` 唯一拥有 abnormal recovery 单 segment record-loop。
+  driver 通过泛型 next/started/observe closure 接收 adapter，不引入 Store、MappedFile、消息类型、runtime、
+  `dyn`、`ArcMut` 或 `unsafe` 边界。
+- [x] `[ORDER/FAIL-CLOSED]` segment-start 与 message/blank 状态转换先于 observation；invalid warning observation
+  先于状态转换；source-end 不触发 observation。dispatch/skip、file-end hook、standard stop 与 optimized next
+  保持策略差异；adapter error 保留原错误身份，state error 和 unexpected action 以 typed outcome 返回，生产路径
+  不使用 panic/unreachable。payload 在 observation 返回或 state rejection 后由 driver 释放，不要求 `Clone`。
+- [x] `[DEV/ADAPTER]` Store `recover_abnormally` 与 `recover_abnormally_optimized` 各且仅各调用一次
+  `drive_abnormal_segment`，不再直接 `apply` `SegmentStarted/MessageAccepted/Blank/InvalidRecord/SourceEnded`。
+  Store 仅保留 declared-frame/batch 读取、record parser、confirm gate 输入、dispatch/file-end hook、warning、
+  optimized file statistics 与最终 checkpoint/CQ truncate/MappedFile 水位写回；两条路径仍使用原 raw input size
+  计算 confirm candidate，且 dispatch 与 skip 都计入 optimized 已处理文件。
+- [x] `[TEST/CONTRACT]` Local abnormal orchestration 6/6、Store recovery integration 19/19、Store CommitLog
+  filtered lib tests 35/35 与 Local all-feature 全量均通过。新增 owner/order/payload/error/adapter mutation contract，
+  并将原 Store direct-event contract 收敛为 exact Local driver seam；最终完整 M06 contract 128/128 通过
+  （591.305s）。
+- [x] `[FEATURE/ARCH]` Local/Store all-target/all-feature package Clippy、workspace fmt/diff check、ArcMut final
+  guard、architecture dependency baseline 与 AGENTS routing 均通过；未修改 manifest、feature、持久格式、
+  runtime ownership、ArcMut baseline 或 relocation approval。error architecture guard 仅复现未触及的 Broker
+  source-stringification 1 项、MCP anyhow 8 项和治理文档缺失 2 项，未将非零基线误记为通过。
+- [x] `[INVENTORY/SCOPE]` M06-03ai 关闭 abnormal 单 segment 编排内部工作，但顶层 PR-M06-03 仍未关闭：
+  CommitLog 根结构、外层 append/recovery composition 与 Store facade 仍需最终收口。顶层统计保持 82 个工作包中
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
+
+## M06-03aj CommitLog load outer orchestration extraction evidence
+
+- [x] `[DEV/API]` Local 新增 runtime-neutral `commit_log::load_orchestration`，由
+  `CommitLogLoadStep`、`CommitLogLoadObservation<E>`、`safe_load_requested` 与
+  `drive_commit_log_load` 唯一拥有 CommitLog safe/optimized/sequential 外层决策。公开 seam 使用泛型
+  execute/observe closure，不引入 Store、MappedFile、config、runtime、`dyn`、`ArcMut` 或 `unsafe` 边界。
+- [x] `[COMPAT/ORDER]` `ROCKETMQ_SAFE_LOAD` 继续只接受 `1` 或大小写不敏感的 `true`，不 trim 或扩展
+  truth value。forced-safe 只执行 sequential；optimized `Ok(true)` 成功，`Ok(false)` 终止且不 fallback；
+  只有 optimized adapter error 先 observation、后执行 sequential fallback。sequential adapter error 以 typed
+  observation fail-closed 为 `false`，生产路径不 panic/unwrap/expect，也不要求 error `Clone`。
+- [x] `[DEV/ADAPTER]` Store `CommitLog::load` 只读取环境值，并把 `load_optimized` 与 `load_sequential`
+  映射为两个 exact step adapter；safe/optimized/rejected/fallback legacy 日志保持原文。optimized 成功路径在
+  统计日志后、返回 `Ok(true)` 前执行一次 `mapped_file_queue.check_self()`；sequential 的 load/check/log 顺序不变。
+- [x] `[TEST/CONTRACT]` Local 新增 6 项 truth-table、terminal outcome、fallback observation order 与 adapter-error
+  回归测试；Local all-feature 全量、Store CommitLog filtered lib 35/35、Store recovery integration 19/19 均通过。
+  M06 contract 新增 owner/signature/order/import/legacy-log/adapter/test mutation 约束，并修正一条旧 abnormal mutation
+  对 rustfmt 换行敏感的夹具；最终完整 contract 130/130 通过（599.364s）。
+- [x] `[QUALITY/ARCH]` `cargo fmt --all -- --check`、Local/Store all-target/all-feature package Clippy、
+  `git diff --check`、ArcMut final guard、architecture dependency baseline 与 AGENTS routing 均通过；未修改 manifest、
+  feature、runtime ownership、ArcMut baseline、持久格式或 relocation approval。error architecture guard 仍只复现
+  未触及的 Broker source-stringification 1 项、MCP anyhow 8 项与治理文档缺失 2 项，未将非零基线误记为通过。
+- [x] `[INVENTORY/SCOPE]` M06-03aj 关闭 CommitLog load 外层策略内部工作，但不关闭顶层 PR-M06-03：
+  CommitLog 根结构、外层 append/recovery composition 与 Store facade 仍需最终收口。顶层统计保持 82 个工作包中
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
+
+## M06-03ak CommitLog recovery route extraction evidence
+
+- [x] `[DEV/API]` Local 新增 runtime-neutral `commit_log::recovery_orchestration`，由
+  `CommitLogRecoveryStep`、`optimized_recovery_requested` 与 `drive_commit_log_recovery` 唯一拥有
+  optimized/standard route 决策。同步泛型 driver 只调用一次 `FnOnce` 并原样返回 adapter output，不引入
+  Store、MappedFile、config、Future、async runtime、`dyn`、`ArcMut` 或 `unsafe` 边界。
+- [x] `[COMPAT]` `ROCKETMQ_USE_OPTIMIZED_RECOVERY` 保留原 Rust `bool` parse 语义：缺失、malformed、大小写不符
+  或带空格时默认 optimized，只有精确 `false` 选择 standard。normal/abnormal 缺失 self-reference 时继续使用原
+  `skip ... recovery: {error}` 日志并提前返回，公开 async 方法签名不变。
+- [x] `[DEV/ADAPTER]` Store `recover_normally` 与 `recover_abnormally` 各且仅各调用一次 Local driver；每条路径
+  只保留 optimized/standard 两个 async CommitLog adapter，不再直接解析 bool 或自行执行 `if use_optimized`。
+  四个 adapter 继续接收相同 consume-queue physical offset 与同一个 message-store reference。
+- [x] `[TEST/CONTRACT]` Local 新增 3 项 truth-table、exact-once route 与 output identity 测试；Local all-feature
+  全量、LocalFileMessageStore filtered lib 83/83、Store recovery integration 19/19 均通过。M06 contract 新增
+  owner/signature/truth-table/import/四 adapter/test mutation 约束；最终完整 contract 132/132 通过（598.898s），
+  import 位置调整后 3 项定向契约再次通过。
+- [x] `[QUALITY/ARCH]` `cargo fmt --all -- --check`、Local/Store all-target/all-feature package Clippy、
+  ArcMut final guard、architecture dependency baseline 与 AGENTS routing 均通过。新增 imports 曾改变既有 ArcMut
+  context fingerprint，恢复原邻接后 guard 重新通过，未修改 baseline/approval。error architecture guard 仍只复现
+  未触及的 Broker source-stringification 1 项、MCP anyhow 8 项与治理文档缺失 2 项。
+- [x] `[INVENTORY/SCOPE]` M06-03ak 关闭 optimized/standard recovery route 内部工作，但顶层 PR-M06-03 仍未关闭：
+  CommitLog 根结构、append/recovery 方法 owner 与 Store facade 仍需最终收口。顶层统计保持 82 个工作包中
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
+
+## M06-03al CommitLog runtime state owner extraction evidence
+
+- [x] `[DEV/API]` Local 新增 `commit_log::runtime_state`，由
+  `CommitLogPutMessageLockRuntimeInfo`、hidden `CommitLogPutMessageLockStats` 与 hidden
+  `CommitLogActiveMemoryLock` 唯一拥有 put-message lock 计数/快照和 active memory-lock 当前 handle、文件、范围及
+  manager 状态。模块只依赖原子类型、Local memory-lock manager/handle/target，不含 Store、MappedFile、config、
+  runtime、`dyn`、`ArcMut`、tracing 或 `unsafe`。
+- [x] `[COMPAT/STATE]` put lock 继续用 Relaxed 原子累计 acquire/wait/hold total，并以
+  `compare_exchange_weak` 保持 wait/hold max；Store 旧 `CommitLogPutMessageLockRuntimeInfo` 路径是 canonical Local
+  类型的精确 re-export。active-window 继续复用同文件内 `[offset, offset + len)`，active-file 继续要求类别、文件、
+  offset、len 全部精确匹配；handle 仍先 take、经 canonical manager unlock、再 clear。
+- [x] `[DEV/ADAPTER]` Store 删除两组状态 struct/impl，只持有 Local stats 与 active-lock state。Store 保留
+  MessageStoreConfig→target、MappedFile address/range、平台 lock/unlock、fast-path presence AtomicBool 与错误传播；
+  manager/handle 通过 Local accessor/take seam 使用，不复制状态算法。
+- [x] `[TEST/CONTRACT]` Local 新增 3 项 totals/maxima、active-window 半开范围、active-file exact identity 与
+  take/unlock/clear 回归测试；Local all-feature 全量和 Store CommitLog filtered lib 35/35 通过。M06 contract 新增
+  canonical fields/atomics/order/import/re-export/Store adapter/test mutation，并同步 hidden memory-lock seam caller ledger；
+  首次全量仅暴露 2 项 ledger 缺口，修正后定向 4/4，最终完整 contract 134/134 通过（595.846s）。
+- [x] `[ARC/QUALITY]` Local/Store all-target/all-feature package Clippy、workspace fmt、dependency baseline 与
+  AGENTS routing 均通过。删除 Store stats owner 改变同一 `CommitLog.mapped_file_queue` ArcMut 字段的前置 fingerprint；
+  按 ADR-013 完成 `ad39677711ebd03cb15aa7bc`→`982715d2703b3ca7eb658106` 一对一 relocation、promotion、
+  baseline compare 与 final guard，ledger 保持 1,171 identities/3,233 occurrences，无新增 ArcMut 债务。
+  error architecture guard 仍只复现未触及的 Broker source-stringification 1 项、MCP anyhow 8 项与治理文档缺失 2 项。
+- [x] `[INVENTORY/SCOPE]` M06-03al 关闭两组 CommitLog runtime-neutral 状态 owner，但顶层 PR-M06-03 仍未关闭：
+  CommitLog 根 composition、MappedFileQueue、append/recovery 方法 owner 与 Store facade 仍需按后续依赖收口。
+  顶层统计保持 82 个工作包中 30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12
+  状态不变。
+
+## M06-03am CommitLog composite runtime state owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local `commit_log::runtime_state::CommitLogRuntimeState` 成为 CommitLog 实现运行态的唯一组合
+  owner，持有 confirm offset、put-message lock statistics、begin-time-in-lock、active memory-lock/presence 与
+  last-load statistics；初始化值、原子 ordering、锁预算和 warn-only 配置均保持既有语义。
+- [x] `[DEV/ADAPTER]` Store `CommitLog` 删除六个分散状态字段，只保留一个 `runtime_state` 字段；load、append、
+  recovery、controller confirm 与 memory-lock 生命周期通过 Local accessor 委托，Store 继续持有 MappedFile、
+  平台 lock/unlock、日志、dispatch、flush/HA/CQ/Index adapter。
+- [x] `[TEST]` `cargo test -p rocketmq-store-local --all-features` 全量通过；新增 composite runtime-state 更新测试后
+  focused 文件为 4/4。`cargo test -p rocketmq-store --lib log_file::commit_log` 35/35、
+  `cargo test -p rocketmq-store --test commitlog_recovery_tests` 19/19 通过。
+- [x] `[CONTRACT]` runtime-state/append/memory-lock 定向 baseline+mutation 契约通过；完整 M06 contract 134/134
+  通过（614.167s），冻结四个 Local 状态 owner、组合字段/方法、Store direct import/re-export、单 owner、精确
+  adapter dataflow 与四个 Local focused test，旧 Store 状态 owner、别名/brace/glob import、clone/cfg/重复定义均
+  fail closed。
+- [x] `[REV/ARCMUT]` 组合字段替换仅使同一 `struct CommitLog` 内三个既有 occurrence 发生一对一 fingerprint
+  变化：identity `250761360f210e16dd1bc14b` 的 `9ed2e1e104c45cd80f56de96`→
+  `ff32c4ce45d7a75051d09d81`，identity `b2ef1bf0618590f61e43b12d` 的
+  `f562f845a1643d76c37d2cae`→`7e991426dfa471f3448fdf1f` 与
+  `abb1aa80c74cf115fedf9d18`→`c374ebb529470db81585545f`。ADR-013 精确 approval、promotion、compare 与更新
+  ledger 后裸守卫均通过，债务保持 1,171 identities / 3,233 occurrences。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt check、architecture dependency guard、AGENTS
+  routing check 均通过。error architecture guard 仍只报告既有 Broker source-stringification 1 项、MCP anyhow 8 项
+  与两份缺失 governance 文档，本切片未新增命中。
+- [x] `[INVENTORY/SCOPE]` M06-03am 关闭 CommitLog 组合运行态 owner 内部工作，但不关闭顶层 PR-M06-03：
+  CommitLog 根结构、MappedFileQueue、append/recovery 方法 owner 与 Store facade 仍需收口；顶层统计保持 82 个
+  工作包中 30 已完成、1 进行中、51 未开始，即 52 个尚未完成；M06-04..12 与 M07..M12 状态不变。
+
+## M06-03an MappedFileQueue runtime progress state owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local `mapped_file::queue_state::MappedFileQueueRuntimeState` 成为 mapped-file queue 的
+  flushed/committed physical offsets、full-flush store timestamp 与 commit serialization lock 唯一 owner；继续使用
+  `Arc<AtomicU64>`/`Arc<Mutex<()>>`，保留 Acquire、Release、SeqCst ordering 和 signed offset 按位往返语义。
+- [x] `[DEV/ADAPTER]` Store `MappedFileQueue` 删除四个分散状态字段，只持一个 `runtime_state`；default/new、
+  commit、get/set committed/flushed/store-timestamp 均精确委托 Local。Store 继续拥有 store path、mapped-file size/
+  collection、AllocateMappedFileService 与 load/create/delete/find/flush/CQ timestamp I/O 编排。
+- [x] `[TEST]` Local 新增 initial/signed-offset 与 commit-lock serialization 2/2；
+  `cargo test -p rocketmq-store-local --all-features` 全量通过，`cargo test -p rocketmq-store --lib` 535/535 通过，
+  覆盖 mapped-file queue、CommitLog、flush、CQ、HA、Timer 等共享消费者。
+- [x] `[CONTRACT]` 新增 baseline+8 类 mutation 两项契约，冻结 Local 四字段顺序/默认值/ordering/lock、唯一 module/
+  definition、Store direct import、单 owner、两次构造和七条精确 adapter，并拒绝旧 Store 字段、alias、bypass 与测试
+  删除。首次完整运行只暴露 canonical 文件集合漏列 `queue_state.rs`，补齐后定向 3/3、最终 M06 contract 136/136
+  通过（610.280s）。
+- [x] `[REV/ARCMUT]` `python scripts/arc_mut_guard.py` 直接通过，无 identity/occurrence/fingerprint 变化，ledger
+  保持 1,171 identities / 3,233 occurrences，无需 ADR-013 relocation approval 或 baseline 更新。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt check、architecture dependency guard 与 AGENTS
+  routing check 通过。error architecture guard 仍只复现既有 Broker source-stringification 1 项、MCP anyhow 8 项
+  与两份缺失 governance 文档，本切片未新增命中。
+- [x] `[INVENTORY/SCOPE]` M06-03an 关闭 MappedFileQueue runtime-neutral progress/commit-lock owner，但不迁移
+  `try_flush`/`FlushProgress` 决策，不跨越 M06-04 flush/group-commit 边界。顶层 PR-M06-03 仍需收口 CommitLog 根结构、
+  MappedFileQueue I/O/collection、append/recovery 方法 owner 与 Store facade；82 个顶层工作包仍为 30 已完成、
+  1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03ao MappedFileQueue storage identity owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增无依赖泛型 `mapped_file::queue_storage::MappedFileQueueStorage<T>`，唯一持有
+  store path、segment size 与 mapped-file collection；Local 不依赖 ArcSwap、DefaultMappedFile、Store/Common、runtime
+  或 tracing，Store 继续选择 `ArcSwap<Vec<Arc<DefaultMappedFile>>>` 作为后端类型参数。
+- [x] `[DEV/ADAPTER]` Store `MappedFileQueue` 删除三个直接字段，只持 Local `storage`、Store
+  `AllocateMappedFileService` 与 Local `runtime_state` 三个根 owner。default/new 注入 path/size/ArcSwap；load/create/
+  delete/find/flush/CQ timestamp 等算法通过 37 次 collection、29 次 size、6 次 path accessor 委托，不复制状态。
+- [x] `[COMPAT]` Store 公开 `get_store_path`、`get_mapped_file_size_config`、`get_mapped_files` 返回语义保持不变；
+  `SingleConsumeQueue` 唯一直接读取旧 size 字段的 caller 改走既有 getter。ArcSwap copy-on-write 更新、segment 排序、
+  offset 计算、AllocateMappedFileService fallback 与错误/日志行为未更改。
+- [x] `[TEST]` Local 新增 path/size/collection identity 与 backend interior-mutability 2/2；
+  `cargo test -p rocketmq-store-local --all-features` 全量通过，`cargo test -p rocketmq-store --lib` 535/535 通过。
+- [x] `[CONTRACT]` 新增 baseline+8 类 mutation 两项契约，冻结 Local 三字段/构造/accessor、dependency-free、唯一
+  module/definition、Store direct import/单 owner/两个构造器/72 次 accessor，并拒绝旧字段、direct bypass、alias 与
+  regression 删除；canonical 文件全集同步加入 `queue_storage.rs`。定向 3/3、完整 M06 contract 138/138 通过
+  （610.352s）。
+- [x] `[REV/ARCMUT]` `python scripts/arc_mut_guard.py` 直接通过，无 identity/occurrence/fingerprint 变化，ledger
+  保持 1,171 identities / 3,233 occurrences，无需 ADR-013 relocation approval 或 baseline 更新。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing
+  与 ArcMut guard 通过；error architecture 与既有基线一致，仍为 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03ao 只迁移 MappedFileQueue storage identity/collection owner，不迁移或修改 queue
+  algorithms、AllocateMappedFileService、`try_flush`/`FlushProgress`、CQ timestamp 或 M06-04 flush/group-commit。
+  顶层 PR-M06-03 仍需收口 CommitLog 根结构、MappedFileQueue algorithms/allocate adapter、append/recovery 方法 owner
+  与 Store facade；82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03ap MappedFileQueue index algorithm owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增 runtime-neutral `mapped_file::queue_index`，成为相邻 segment 连续性检查、offset
+  range overlap、last-modified timestamp lookup 与 direct-index/linear-fallback offset lookup 四类算法的唯一 owner；
+  模块不依赖 ArcSwap、DefaultMappedFile、Store/Common、runtime、tracing 或 allocate service。
+- [x] `[DEV/ADAPTER]` Store `MappedFileQueue` 的 `check_self`、`range`、`get_mapped_file_by_time` 与
+  `find_mapped_file_by_offset` 只负责读取 ArcSwap 快照、投影 DefaultMappedFile 字段、记录错误和克隆返回对象。
+  offset lookup 使用 Local `MappedFileQueueIndex::{First, Indexed}`，保留原实现分别捕获 first/last、再读取当前集合
+  的并发观察时序及 return-first fallback 对象身份。
+- [x] `[COMPAT]` 相邻损坏日志可继续报告全部 pair；range 仍为 `[from,to)`；timestamp lookup 仍选择首个
+  `last_modified >= timestamp`，否则返回最后文件；offset lookup 仍先 O(1) 直索引、再线性回退，并保持边界外/
+  gap/return-first 语义。storage accessor 当前冻结为 collection/size/path = 37/25/6。
+- [x] `[TEST]` Local 新增连续性、range、timestamp、direct/fallback/gap/first policy 4/4；Local all-features
+  全量与 Store lib 535/535 通过。
+- [x] `[CONTRACT]` 新增 baseline+6 类 mutation 两项契约，冻结四个 Local function、选择 enum、无依赖 owner、
+  direct exact imports、四个 Store adapter 与四组回归测试，并同步 canonical file/item 集合；定向 5/5，完整 M06
+  contract 140/140 通过（604.207s）。旧 M06-03ao storage contract 同步收紧为迁移后的 37/25/6 accessor。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing
+  与 ArcMut guard 通过；error architecture 与既有基线一致，仍为 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03ap 未迁移 load/create/delete/truncate/warmup/swap、AllocateMappedFileService、
+  `try_flush`/`FlushProgress`、CQ timestamp、CommitLog 或持久格式。顶层 PR-M06-03 仍需收口 CommitLog 根结构、
+  MappedFileQueue I/O/allocate adapter 及剩余算法、append/recovery 方法 owner 与 Store facade；82 个顶层工作包仍为
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03aq MappedFileQueue allocation decision owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增无依赖 `mapped_file::queue_allocation`，用 `MappedFileQueueLastFile` 与
+  `MappedFileQueueRollFile` 分别承载预分配前和预分配后快照；`plan_mapped_file_queue_preallocation` 唯一拥有 80%
+  threshold/非满段 next-offset 决策，`plan_mapped_file_queue_creation` 唯一拥有空队列 start alignment、满段 roll 与
+  `need_create` 门控。
+- [x] `[DEV/ADAPTER]` Store `get_last_mapped_file_mut_start_offset` 只投影 DefaultMappedFile 状态并执行副作用：
+  先读取 wrote/full 调 Local preallocation decision、调用 AllocateMappedFileService adapter，再重新读取 full/offset
+  调 Local creation decision，最后按结果调用 `try_create_mapped_file`。
+- [x] `[COMPAT]` 保留 usage ratio `wrote as f64 / segment_size as f64 >= 0.8`、full 时不预分配、空队列
+  `start - start % segment_size`、满段 `file_from + segment_size`、零 segment 空队列 panic 与 `need_create=false`
+  仍执行预分配的旧语义。两阶段拆分保留预分配副作用前后两次独立 `is_full()` 观察；storage accessor 当前冻结为
+  collection/size/path = 37/24/6。
+- [x] `[TEST]` Local 新增空队列对齐、80% boundary、满段 roll、禁创建仍预分配、零 segment 失败 5/5；Local
+  all-features 全量与 Store lib 535/535 通过。
+- [x] `[CONTRACT]` 新增 baseline+7 类 mutation 两项契约，冻结两个 snapshot 字段/API、两条纯决策、无依赖 owner、
+  direct exact imports、Store 两阶段 adapter 顺序与五组回归测试；定向 4/4，完整 M06 contract 142/142 通过
+  （619.663s）。旧 storage contract 同步收紧为 37/24/6 accessor。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing
+  与 ArcMut guard 通过；error architecture 与既有基线一致，仍为 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03aq 未迁移 AllocateMappedFileService worker/request table、路径格式、实际 mmap/create、
+  load/delete/truncate/warmup/swap、flush/CQ timestamp、CommitLog 或持久格式。顶层 PR-M06-03 仍需收口 CommitLog
+  根结构、MappedFileQueue I/O/allocate adapter 及剩余算法、append/recovery 方法 owner 与 Store facade；82 个顶层工作包
+  仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03ar mapped-file allocation request identity owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增无依赖 `mapped_file::allocation_request::MappedFileAllocationRequestKey`，唯一持有
+  allocation request 的 full path 与 i32 file size，并成为 accessor、平台分隔符 file-offset 解析、legacy Display、
+  path+size Eq 及 offset-only reverse Ord 的 canonical owner。
+- [x] `[DEV/ADAPTER]` Store `AllocateRequest` 删除直接 `file_path`/`file_size` 字段和 offset 解析算法，只保留一个
+  Local key、async Notify、blocking Condvar、completed flag 与 mapped-file result；constructor/getter/Display/Eq/Ord
+  均窄委托 Local key，request table、BinaryHeap 和 worker lifecycle 继续由 Store 持有。
+- [x] `[COMPAT]` 保留 `MAIN_SEPARATOR` 之后 i64 解析、裸文件名/无效文件名回退 0、精确
+  `AllocateRequest[file_path=...,file_size=...]` 文本、path+size 完整相等与相同 offset 即排序相等的旧语义；BinaryHeap
+  仍使较小 offset 先出队，未顺带修正既有 Eq/Ord 差异。
+- [x] `[TEST]` Local 新增 identity/display、平台 path parsing、BinaryHeap 100/200/300 顺序与同 offset Eq/Ord 差异
+  4/4；Store adapter 1/1、allocation/CommitLog 相关 4/4、Local all-features 全量及 Store lib 536/536 通过。
+- [x] `[CONTRACT]` 新增 baseline+8 类 mutation 两项契约，冻结 Local fields/API/parser/Display/Eq/Ord、无依赖 owner、
+  direct exact import、Store 五字段 runtime shell、全部窄委托与五组回归测试；定向 3/3，完整 M06 contract 144/144
+  通过（625.228s）。canonical file/item 集合同步加入 `allocation_request.rs` 与 key owner。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing
+  与 ArcMut guard 通过；error architecture 与既有基线一致，仍为 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03ar 未迁移 AllocateMappedFileService request table/queue、Notify/Condvar、timeout/retry、
+  worker lifecycle、TransientStorePool、实际 mmap/create、MappedFileQueue load/delete/flush/CQ timestamp、CommitLog 或
+  持久格式。顶层 PR-M06-03 仍需收口 CommitLog 根结构、MappedFileQueue I/O/allocate adapter 及剩余算法、append/
+  recovery 方法 owner 与 Store facade；82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03as mapped-file allocation and warm-up policy owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增 runtime-neutral `mapped_file::allocation_policy`，`MappedFileWarmupConfig` 唯一持有
+  warm enable、CommitLog file-size threshold、`FlushDiskType` 与 least-pages 值；`MappedFileAllocationPoolSnapshot`
+  与 `mapped_file_allocation_capacity` 唯一拥有 transient-pool/fast-fail 门控和 available-minus-queued 饱和容量决策。
+- [x] `[DEV/ADAPTER]` Store 删除私有 `WarmMappedFileConfig` 和两处 capacity 算法；构造时只把
+  `MessageStoreConfig` 值投影到 Local config，worker 创建文件时只读取 Local accessors。async 双文件提交与 background
+  单文件提交统一调用 `allocation_capacity`，该 adapter 只按原顺序读取 queue length、pool available buffers 并构造 Local
+  snapshot，不接管 Local 策略。
+- [x] `[COMPAT]` disabled 仍使用 AsyncFlush/`usize::MAX`/0 且永不预热；enabled 仍以
+  `file_size as usize >= mapped_file_size_commit_log` 为阈值。未启用 transient pool、未启用 fast-fail 或 pool 缺失时继续
+  返回入口默认容量；受约束时仍用 `available_buffers.saturating_sub(queued_requests)`，双提交容量为 2、background 容量为 1，
+  保留原 queue-before-pool 观察顺序和耗尽时的 warning/cleanup 行为。
+- [x] `[TEST]` Local 新增 disabled defaults、threshold/flush values、非约束 default 与饱和容量 4/4；Store 新增 runtime
+  snapshot adapter 1/1，AllocateMappedFileService/CommitLog 相关 5/5、Local all-features 全量及 Store lib 537/537 通过。
+- [x] `[CONTRACT]` 新增 baseline+7 类 mutation 两项契约，冻结 Local config/snapshot fields、accessors、容量语义、唯一
+  owner 与依赖、Store direct exact imports/field/constructor/两个入口 adapter 及五组回归；定向 2/2，完整 M06 contract
+  146/146 通过（613.440s）。canonical file/item 集合同步加入 `allocation_policy.rs`、两个 value owner 与 capacity function。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing、
+  ArcMut guard 与 enforcing runtime audit 通过；error architecture 与既有基线一致，仍为 1 处 Broker source
+  stringification、8 处 MCP `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03as 未迁移 AllocateMappedFileService request table/queue、Notify/Condvar、timeout/retry、
+  worker lifecycle、TransientStorePool 实体、实际 mmap/create、MappedFileQueue load/delete/flush/CQ timestamp、CommitLog 或
+  持久格式。顶层 PR-M06-03 仍需收口 CommitLog 根结构、MappedFileQueue I/O/allocate adapter 及剩余算法、append/
+  recovery 方法 owner 与 Store facade；82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03at mapped-file queue dirty-tail and reset planning evidence
+
+- [x] `[DEV/OWNER]` Local 新增无 Store/runtime 依赖的 `mapped_file::queue_maintenance`；
+  `mapped_file_queue_truncate_action` 唯一拥有 completed/target/later-segment dirty-tail 分类与 target modulo position，
+  `plan_mapped_file_queue_reset` 唯一拥有 two-segment 回退窗口、reverse target scan、reset position 和 removal-index 规划。
+- [x] `[DEV/ADAPTER]` Store `truncate_dirty_files` 逐文件投影 offset 后按 Local enum 执行 position 更新或
+  destroy/collection removal；`reset_offset` 先独立捕获 last-file offset/wrote snapshot，再加载当前 ArcSwap collection，
+  将 Local plan 的 target position 和 newest-to-oldest removal indices 按原顺序应用。Local 不持有或返回
+  `DefaultMappedFile`、Arc/ArcSwap、mmap、destroy 或 tracing 类型。
+- [x] `[COMPAT]` truncate 仍以 `file_from + segment_size <= offset` 保留完整段、用
+  `offset % segment_size` 同步 wrote/committed/flushed position，并 destroy 后续段。reset 仍只拒绝
+  `last_offset - offset > segment_size * 2`，保留 last/current 两次独立集合观察、目标文件自身 size 的 modulo、
+  reverse scan 与 legacy removal index 的 newest-to-oldest 生成/Store reverse 应用顺序；未顺带修复或改变既有边界行为。
+- [x] `[TEST]` Local 新增 truncate 三分类、two-segment 拒绝、target/removal order 与 offset-before-queue 4/4；
+  Store 新增真实 mapped-file truncate/reset adapter 2/2，验证 position、destroy availability、Arc identity 和集合结果；
+  Local all-features 全量及 Store lib 539/539 通过。
+- [x] `[CONTRACT]` 新增 baseline+8 类 mutation 两项契约，冻结 Local enum、last snapshot、plan fields/API、truncate/reset
+  算法、无依赖 owner、四条 Store direct imports、两条副作用 adapter 与六组回归；定向 2/2，完整 M06 contract
+  148/148 通过（630.047s）。canonical file/item 集合同步加入 `queue_maintenance.rs` 的三个 value owner 与两个 function；
+  MappedFileQueue storage accessor 更新为 collection/size/path = 37/21/6。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、architecture dependency guard、AGENTS routing、
+  ArcMut guard 与 enforcing runtime audit 通过；error architecture 与既有基线一致，仍为 1 处 Broker source
+  stringification、8 处 MCP `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03at 未迁移 MappedFileQueue load/create/time/offset delete/swap/shutdown/destroy、
+  flush/commit/CQ timestamp，未迁移 AllocateMappedFileService worker/request lifecycle、CommitLog 根 owner 或持久格式。
+  顶层 PR-M06-03 仍需收口上述 MappedFileQueue I/O/剩余算法、CommitLog 根结构、append/recovery 方法 owner 与 Store facade；
+  82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03au AllocateMappedFileService canonical owner extraction evidence
+
+- [x] `[DEV/OWNER]` `rocketmq-store-local::base::allocate_mapped_file_service` 成为
+  `AllocateMappedFileService`、request table/BinaryHeap、async Notify、blocking Condvar、timeout、fast-fail、
+  `TransientStorePool`、mapped-file create/warm-up 及 worker thread 的唯一 owner；Store 中原有同名实现与
+  `services` 下的零字段占位 owner 已删除。
+- [x] `[DEV/FACADE]` Store 旧路径只精确 re-export Local canonical type，并为 `MessageStoreConfig` 实现隐藏的
+  Local config 投影 trait；既有 `new_with_message_store_config` 调用形态保持不变，Local 不依赖 Store config、
+  Store runtime、Broker/Common/Remoting/Tiered 类型或业务编排。
+- [x] `[LIFECYCLE]` Local worker 由 completion guard 在所有退出路径记录完成并唤醒 shutdown；shutdown 先等待完成通知，
+  再 yield 至线程可 join 并回收 handle。实现不引入 `tokio::spawn`、`spawn_blocking`、嵌套 runtime 或 detached task；
+  enforcing runtime audit 已将该专用 I/O thread 的合法边界从 Store 路径迁到 Local 路径。
+- [x] `[COMPAT]` request priority、path/size identity、timeout、fast-fail capacity、双文件预分配、warm-up 阈值与 mmap/create
+  语义保持不变；Store 精确类型身份 integration test 验证旧路径即 Local 类型。MappedFileQueue 预分配测试改为等待真实
+  allocation result，不再依赖 service 私有 request-table 观察。
+- [x] `[TEST]` Local allocation service focused 5/5、Store config facade 1/1、真实 MappedFileQueue consumer 1/1、
+  Store/Local type identity 1/1 通过；Local all-feature crate unit 104/104 及全部 integration/doctest、Store lib 536/536 通过。
+- [x] `[CONTRACT]` 原 allocation request/policy 契约已切换到 Local service owner；新增 service baseline 与 8 类 mutation
+  契约，冻结唯一 owner、字段、worker-completion、依赖、线程/lifecycle、Store exact facade/config projection、manifest Tokio
+  dependency 和回归测试。三组定向契约 6/6、完整 M06 contract 150/150 通过（698.545s）。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、diff check、architecture dependency guard、AGENTS routing、
+  ArcMut guard 与 enforcing runtime audit 通过；error architecture 仍仅复现历史 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03au 已关闭 mapped-file allocation service owner，但未迁移 MappedFileQueue
+  load/create/delete/swap/shutdown/destroy 与剩余 I/O/算法；flush/commit/CQ timestamp 属于后续 M06-04 边界。顶层
+  PR-M06-03 仍需收口 CommitLog 根结构、append/recovery composition owner 与 Store facade；82 个顶层工作包仍为
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03av mapped-file queue load/create I/O owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增 `mapped_file::queue_io`，唯一拥有 MappedFileQueue 目录 `read_dir`、候选文件名升序排序、
+  metadata/目录/segment-size 校验、尾部零长度文件删除、`DefaultMappedFile` 加载及 wrote/flushed/committed position 初始化；
+  service blocking allocation、N+2 background preallocation、同步创建 fallback 与首文件标记也由 Local 执行。
+- [x] `[DEV/ADAPTER]` Store `load`/`do_load` 仅提供 path、segment-size 或显式候选列表，并把 Local outcome 中已加载文件
+  一次性 extend 到 ArcSwap collection；`do_create_mapped_file` 仅捕获 first-file 快照、传入两个路径并追加 Local 返回对象。
+  Store production 已移除 `read_dir`、metadata、size validation、`CheetahString`、`DefaultMappedFile::try_new` 与旧
+  `create_mapped_file_internal` I/O owner。
+- [x] `[COMPAT]` 不存在/不可读目录仍返回成功空集合；目录项读取错误仍被过滤，目录仍跳过，最后一个零长度文件删除失败仍
+  non-fatal。加载按文件名排序，三类失败均返回 failure 且保留此前成功加载的文件，Store 继续应用 partial result；allocation
+  service 仅在 started 时使用，失败后仍同步 fallback，成功后仍提交 N+2，首文件仍仅在 Arc 唯一时设置标记。
+- [x] `[TEST]` Local queue I/O integration 4/4、Store MappedFileQueue focused 11/11 通过；Local all-feature crate 单测
+  104/104 及全部 integration/doctest 通过，Store lib 537/537 通过。新增回归覆盖 missing-dir、排序/position/空尾删除、
+  partial-load failure 与 sync-create/first-file，并在 Store 验证 partial outcome 实际写入 collection。
+- [x] `[CONTRACT]` 新增 queue I/O baseline 与 9 类 mutation 契约，冻结 outcome fields/API、三条 failure partial-result、
+  discovery/load/create 顺序、Local 依赖边界、Store exact imports/apply adapter 和回归测试；canonical file/item 集合加入
+  `queue_io.rs`、一个 value owner 与三个 public function。完整 M06 contract 152/152 通过（739.115s），storage accessor
+  更新为 collection/size/path = 37/16/6。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、diff check、architecture dependency guard、AGENTS routing、
+  ArcMut guard 与 enforcing runtime audit 通过；error architecture 仍仅复现历史 1 处 Broker source stringification、8 处 MCP
+  `anyhow` 和 2 份缺失治理文档，本切片无新增。
+- [x] `[INVENTORY/SCOPE]` M06-03av 已关闭 MappedFileQueue load/create I/O owner，但 time/offset delete、retry-delete、
+  swap/clean、shutdown/destroy 与剩余 lifecycle/统计算法仍需迁移；flush/commit/CQ timestamp 保留给 M06-04。顶层 PR-M06-03
+  仍需收口 CommitLog 根结构、append/recovery composition owner 与 Store facade；82 个顶层工作包仍为 30 已完成、
+  1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03aw mapped-file queue lifecycle owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增 `mapped_file::queue_lifecycle`，唯一拥有 recovery last-file destroy、collection removal
+  filtering、按时间/物理 offset 过期删除、first-file retry-delete、swap/clean reserve-window、全文件 shutdown/destroy 与目录删除。
+  `MappedFileQueueDeletion` 统一返回成功 destroy 数量和需由 collection owner 移除的对象。
+- [x] `[DEV/ADAPTER]` Store 删除路径只捕获 ArcSwap snapshot，time-delete 额外保留 `check_self` 与 `current_millis` 注入，
+  然后按 Local deletion result 更新 collection；swap/clean 只注入时间源，shutdown/destroy 只传 snapshot/path。Store production
+  不再读取 CQ tail bytes、执行 destroy/sleep/swap/shutdown 或删除目录；destroy adapter 在 Local 完成副作用后清空 collection 并归零
+  flushed watermark。
+- [x] `[COMPAT]` time-delete 继续永不删除最新文件、oldest-first、按 batch/interval 限制并在首个 live/destroy-failed 文件停止；
+  offset-delete 继续读取最后一个 CQ unit 的 big-endian physical offset、在首个 retained/失败对象停止。当前 select 后 destroy 失败即
+  返回 0 的既有行为由回归冻结，未在迁移中修复。retry-delete 仍只处理 unavailable first file；swap 仍至少保留 3 个最新文件并按
+  newest-to-oldest 反向候选顺序执行 force/normal interval。
+- [x] `[TEST]` Local lifecycle integration 6/6、Store MappedFileQueue focused 11/11 通过；Local all-feature crate 单测
+  104/104 及全部 integration/doctest、Store lib 537/537 通过。覆盖 current-snapshot removal、last destroy、time batch/newest
+  retention、offset destroy-failure stop、swap reserve/shutdown 与 directory destroy。
+- [x] `[CONTRACT]` 新增 lifecycle baseline 与 10 类 mutation 契约，冻结 deletion result、九个 Local function、时间/offset
+  删除顺序、retry gate、swap reserve、Store exact imports/adapters 与回归测试；canonical file/item 集合加入
+  `queue_lifecycle.rs`、一个 value owner 与九个 function。完整 M06 contract 154/154 通过（744.490s），storage accessor
+  更新为 collection/size/path = 36/16/6。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、diff check、architecture dependency guard、AGENTS routing、
+  ArcMut guard 与 enforcing runtime audit 通过；本切片未修改 typed error mapping 或敏感字段，最近 error architecture 结果仍仅为
+  历史 1 处 Broker source stringification、8 处 MCP `anyhow` 和 2 份缺失治理文档。
+- [x] `[INVENTORY/SCOPE]` M06-03aw 已关闭 MappedFileQueue deletion/swap/shutdown/destroy lifecycle owner；剩余
+  max/min/size/fall-behind/warmup/lazy-mmap 等统计/纯计算，以及 flush/commit/CQ timestamp 边界。后者保留给 M06-04/05。
+  顶层 PR-M06-03 仍需收口 CommitLog 根结构、append/recovery composition owner 与 Store facade；82 个顶层工作包仍为
+  30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03ax mapped-file queue metrics and query owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增 `mapped_file::queue_metrics`，成为 `MappedFileWarmupStats`、warmup/lazy-mmap 聚合、
+  readable/wrote max offset、roll decision、empty min-offset sentinel、available mapped-memory、fall-behind 与 total configured bytes
+  的唯一 owner。Store 删除 copied stats 类型，并从 Local 精确 public re-export 保持旧 API 路径。
+- [x] `[DEV/ADAPTER]` Store `warmup_stats`/`lazy_mmap_stats`、max/min/roll/memory/fall-behind/total 与内部 max-wrote 方法
+  只捕获 first/last/collection/watermark snapshot 并调用一条 Local function；不再读取 metrics fields、mapped-file position/file-size、
+  availability 或复制聚合/算术算法。
+- [x] `[COMPAT]` 空队列 max/max-wrote/fall-behind 仍为 0、min 仍为 -1、roll 仍为 true；写入恰好填满剩余空间时不提前 roll，
+  只有 `>` 才 roll。available memory 继续排除 destroyed files，total size 继续按全部 collection count；flushed watermark 为 0 时
+  fall-behind 仍为 0。warmup totals 继续饱和累加并保留最后一个有操作文件的 latency，lazy-mmap stats 继续逐文件饱和聚合。
+- [x] `[TEST]` Local metrics integration 5/5、Store MappedFileQueue focused 11/11 通过；Local all-feature crate 单测
+  104/104 及全部 integration/doctest、Store lib 537/537 通过。覆盖 empty sentinels、exact roll boundary、read/wrote offsets、
+  available/total 区分、warmup aggregate 与 lazy mapped/unmapped aggregate。
+- [x] `[CONTRACT]` 新增 metrics baseline 与 10 类 mutation 契约，冻结 stats fields/traits、九个 Local function、边界/聚合语义、
+  Store exact imports/re-export/adapters 与回归测试；canonical file/item 集合加入 `queue_metrics.rs`、一个 value owner 与九个 function。
+  完整 M06 contract 156/156 通过（748.103s），storage accessor 更新为 collection/size/path = 34/16/6。
+- [x] `[REV]` Local/Store all-target/all-feature Clippy、workspace fmt、diff check、architecture dependency guard、AGENTS routing、
+  ArcMut guard 与 enforcing runtime audit 通过；本切片未修改 typed error mapping 或敏感字段，最近 error architecture 结果仍仅为
+  历史 1 处 Broker source stringification、8 处 MCP `anyhow` 和 2 份缺失治理文档。
+- [x] `[INVENTORY/SCOPE]` MappedFileQueue 在 PR-M06-03 范围内的 storage/index/allocation/load-create/lifecycle/metrics owner
+  已完成；flush/commit/group-commit 与 CQ timestamp 分别保留给 M06-04/M06-05。顶层 PR-M06-03 当前剩余 CommitLog 根结构、
+  append/recovery composition owner 与 Store facade 收口；82 个顶层工作包仍为 30 已完成、1 进行中、51 未开始，即
+  52 个尚未完成。
+
+## M06-03ay CommitLog root owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增泛型 `commit_log::root::CommitLogRoot<A>`，唯一拥有完整 CommitLog composition adapter，
+  并只公开 immutable/mutable/consuming 三种窄借用方式；Local 根不感知 Store config、MappedFile、Broker、HA、CQ/Index 或 facade 类型。
+- [x] `[DEV/FACADE]` Store 旧 public `CommitLog` 类型和路径保持不变，但结构收敛为唯一字段
+  `CommitLogRoot<CommitLogAdapter>`；原 15 个 Store-specific dependency/state 字段机械集中到 `CommitLogAdapter`，
+  `Deref`/`DerefMut` 只承担遗留方法的过渡适配。构造顺序、默认值、MappedFileQueue/flush-manager 共享身份均未改变。
+- [x] `[COMPAT]` 两条 put-message 路径继续按 topic-queue lock → put-message lock → append-attempt 顺序执行；为保持根 facade
+  下的安全拆分借用，仅克隆既有 `Arc` lock handle 后获取同一锁，不增加 task/thread/channel，也不改变 offset assignment、timestamp、
+  active memory lock、EOF roll/retry、CRC 或 result mapping。`append_data` 同样仍获取原 put-message mutex。
+- [x] `[TEST]` Local root integration 2/2、Store root compile 与 put-message lock focused 1/1 通过；Local all-feature crate
+  104/104 及全部 integration/doctest、Store lib 537/537 通过。覆盖 adapter identity、唯一可变 owner、既有 lock statistics，
+  并由 Store 全量回归覆盖 append/load/recovery/lifecycle 路径。
+- [x] `[CONTRACT]` 新增 root owner/facade baseline 与 5 类 mutation，冻结 Local 单字段 generic owner、四个借用/消费方法、module export、
+  Store 单字段 facade、15 字段 composition adapter、构造与 Deref flow、两个回归测试；原 runtime-state contract 改为验证 Local root 所拥有
+  adapter 内仍只有一个 canonical `CommitLogRuntimeState`。定向 5/5 与完整 M06 contract 158/158 通过（759.554s）。
+- [x] `[GOVERNANCE/REV]` `ArcMut` owner relocation 经 6 条逐项 approval 和生成式 baseline promotion 审核，迁移前后均为
+  1,171 个 identity、3,233 个 occurrence，债务零增长；ArcMut guard 复跑通过。Local/Store all-target/all-feature Clippy、
+  workspace fmt、diff check、architecture dependency guard、AGENTS routing 与 enforcing runtime audit 通过。本切片未修改 typed error
+  mapping 或敏感字段，最近 error architecture 结果仍仅为历史 1 处 Broker source stringification、8 处 MCP `anyhow` 和 2 份缺失治理文档。
+- [x] `[INVENTORY/SCOPE]` 本切片关闭 CommitLog 根结构 owner；MappedFileQueue 本阶段范围也已完成。PR-M06-03 仅剩 append/recovery
+  composition method owner 与 Store facade 最终收口，flush/group-commit、CQ/Index、HA、Timer/POP 仍分别保留给 M06-04..07。
+  顶层统计不变：30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03az CommitLog append outcome resolution owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local `append_attempt` 新增四值 `CommitLogAppendStatus`、六值 `CommitLogAppendFailure` 与
+  `CommitLogAppendResolution<S,E>`，并由 `CommitLogAppendOutcome::resolve` 穷尽拥有 2 个 completed 与 6 个 aborted outcome
+  到 continue/return、append result、unlock/abandoned segment 及 error detail 的唯一映射。
+- [x] `[DEV/ADAPTER]` Store batch/single 两条路径删除 8-arm outcome/status/resource mapping，统一在 Local attempt 后调用一次
+  `resolve()`；Store 只把四个中立 status 投影到 legacy `PutMessageStatus`，按 failure detail 保留原日志，按 Local 决策释放 request lock、
+  topic lock 和 abandoned segment，并继续既有 offset/stats/flush/HA 后处理。
+- [x] `[COMPAT]` PutOk、retry rejected、initial unavailable/lock/message-illegal/unknown、rolled unavailable/lock 的 legacy status、
+  append-result presence、EOF old-segment lifetime和日志顺序均不变；Local resolution 不 clone segment/result/error，不增加第三次 append，
+  Store 仍在 failure 日志之后 drop abandoned segment，并在任何 return 前释放两把 request lock。
+- [x] `[TEST]` Local append-attempt integration 10/10、Local all-feature crate 单元 104/104 及全部 integration/doctest、Store
+  single/batch EOF encoded-buffer ownership focused 2/2 与 Store lib 537/537 通过；新增 completed/aborted 穷尽 resolution 回归。
+- [x] `[CONTRACT]` append-attempt contract 扩展为冻结三个 resolution 类型、8-arm mapping、status/result/segment/error 所有权、
+  Store exact imports、一次 resolve、四值 legacy status adapter、failure logging/cleanup 顺序和两个新增回归；定向 baseline + mutation
+  2/2 与完整 M06 contract 158/158 通过（758.101s）。Local/Store all-target/all-feature strict Clippy、workspace fmt、
+  architecture dependency guard、ArcMut guard、AGENTS routing、enforcing runtime audit 与 diff check 均通过。
+- [x] `[INVENTORY/SCOPE]` append attempt/roll/retry/terminal resolution composition 已由 Local 拥有；Store 留存 message admission/encode、
+  lock acquisition、legacy result facade 与 M06-04/M06-06 的 flush/HA port。PR-M06-03 继续收口 recovery completion owner 与最终 facade；
+  顶层统计保持 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03ba CommitLog recovery completion owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local 新增 `recovery::CommitLogRecoveryCompletion`，唯一拥有 empty/recovered completion 词汇、normal/abnormal
+  summary 到 signed confirm/controller/process offset 的映射，以及 ConsumeQueue truncation 决策。normal standard/optimized 的 controller
+  上界差异由各自 state policy 保留；abnormal controller 上界继续来自 confirm-valid watermark。
+- [x] `[DEV/ADAPTER]` Store 四条 recovery 路径删除重复的 summary conversion、controller/legacy confirm 选择、CQ truncation 判断与
+  queue progress 写回，统一各调用一次 Local `completion(...)`；单一 `apply_recovery_completion!` adapter 只应用 controller clamp、legacy confirm、
+  CQ truncate、flushed/committed 与 dirty-file truncate 外部副作用，并处理 empty reset/destroy/reload。
+- [x] `[COMPAT]` normal standard 仍以 process offset 作为 controller recovery 上界、normal optimized 仍以 last-valid offset 为上界；
+  abnormal 两条路径仍以 confirm-valid offset 为 controller 上界、last-valid offset 为非 controller confirm。负 CQ max offset、`>=`
+  截断边界、warning 与 truncate 顺序、空 CommitLog 的路径专属日志和 reset/destroy/reload 顺序均保持不变。
+- [x] `[TEST]` Local completion integration 2/2、Local all-feature crate 单元 104/104 及全部 integration/doctest、Store lib 537/537
+  通过；覆盖 normal policy-specific controller boundary、abnormal confirm/truncate watermark、负值与精确 CQ 边界。
+- [x] `[CONTRACT]` 新增 completion owner baseline + 6 类 mutation，冻结 enum shape、signed-offset state invariant、normal/abnormal mapping、
+  module export、两项回归以及 Store 单一 side-effect adapter；同步将旧 direct-summary/CQ 契约改为禁止 Store 回流决策。最终形态关键定向
+  baseline/mutation 5/5 与完整 M06 contract 159/159 通过（745.397s）。Local/Store all-target/all-feature strict Clippy、workspace fmt、
+  architecture dependency guard、ArcMut guard、AGENTS routing、enforcing runtime audit 与 diff check 均通过；本切片未修改 typed-error
+  mapping 或敏感字段。
+- [x] `[INVENTORY/SCOPE]` CommitLog recovery completion composition 已由 Local 拥有；Store 只保留 MappedFile/CQ/runtime state 外部副作用
+  adapter。PR-M06-03 仅剩最终 Store facade/legacy ledger 收口；flush/group-commit、CQ/Index、HA、Timer/POP 仍留给 M06-04..07。
+  顶层统计保持 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03bb PR-M06-03 facade and ledger closeout evidence
+
+- [x] `[ENTRY/SCOPE]` M02 `try_flush`、dirty-tail/recovery golden 与 crash-before-flush 基线保持冻结；本父 PR 未迁移或修改
+  flush/group-commit、CQ/Index、HA、Timer/POP 或 `LocalFileMessageStore` composition，这些范围继续由 M06-04～08 独立承接。
+- [x] `[DEV/OWNER]` `rocketmq-store-local` 保持 `default = []` 并 canonical 拥有 fast-load/safe-load/io_uring、MappedFile/Queue、
+  AllocateMappedFileService、CommitLog append/load/recovery/runtime/root；Store `CommitLog` 为单字段 Local root facade，旧深路径继续通过
+  精确 re-export、type alias、config 投影和外部副作用 adapter 保持。
+- [x] `[LEDGER/COMPAT]` 新增 [`06-storage-local-compatibility-ledger.md`](06-storage-local-compatibility-ledger.md)，冻结七组 owner/facade、
+  feature forwarding、M06-04～08 保留 port、下一 major 删除条件和整体回滚规则；新增 source contract 将 ledger 与两个 manifest、
+  单字段 CommitLog facade、MappedFile/recovery/allocation-service re-export 绑定，并拒绝 5 类漂移。
+- [x] `[ISSUE]` GitHub [#8200](https://github.com/mxsm/rocketmq-rust/issues/8200) 记录父项目标、已完成范围、兼容边界、验收证据与回滚规则；
+  后续 PR 将以 `Closes #8200` 关联。
+- [x] `[TEST/REV]` ledger 定向 baseline/mutation 1/1 与完整 M06 owner/adapter/mutation contract 160/160 通过（741.912s）。
+  最终 Rust 快照的 Local all-feature 单元 104/104 及全部 integration/doctest、Store lib 537/537、Local/Store all-target/all-feature
+  strict Clippy、workspace fmt、architecture dependency、ArcMut zero-growth、AGENTS routing、enforcing runtime audit 与 diff check 均通过。
+- [x] `[MAIN/ROLLBACK]` `git fetch origin main` 后分支相对 `origin/main` 为 0 behind；旧 public path、feature 入口和磁盘格式未改变，
+  因此可整体 revert 父 PR。回滚不得恢复已由 contract 禁止的 Local/Store 双 owner。
+- [x] `[INVENTORY]` PR-M06-03 父项关闭，M06 整体仍进行中且 Exit Checklist 保持未完成。82 个顶层工作包更新为
+  31 已完成、0 进行中、51 未开始，即 51 个尚未完成；下一工作包为 PR-M06-04。

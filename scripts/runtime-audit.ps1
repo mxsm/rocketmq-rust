@@ -940,11 +940,11 @@ function Get-BoundaryDisposition {
                     -MigrationPhase "legacy-compatibility"
             }
 
-            if ($path -eq "rocketmq-store/src/base/allocate_mapped_file_service.rs") {
+            if ($path -eq "rocketmq-store-local/src/base/allocate_mapped_file_service.rs") {
                 return New-BoundaryDisposition `
                     -Disposition "documented-dedicated-thread" `
                     -ActionRequired $false `
-                    -Reason "Store mapped-file allocation runs on a documented dedicated OS thread." `
+                    -Reason "Local mapped-file allocation runs on a documented dedicated OS thread." `
                     -MigrationPhase "PR-7-store-controller-auth-blocking"
             }
 
@@ -1286,7 +1286,7 @@ function Get-RuntimeSpawnDisposition {
         }
     }
 
-    if ($path -eq "rocketmq-store/src/base/allocate_mapped_file_service.rs") {
+    if ($path -eq "rocketmq-store-local/src/base/allocate_mapped_file_service.rs") {
         return [pscustomobject]@{
             Disposition = "dedicated-store-allocation-thread"
             ActionRequired = $false

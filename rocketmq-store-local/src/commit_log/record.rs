@@ -17,17 +17,43 @@
 use bytes::Buf;
 use bytes::Bytes;
 
-/// CommitLog V1 message magic code (`daa320a7`).
-pub const MESSAGE_MAGIC_CODE: i32 = -626843481;
-
-/// CommitLog V2 message magic code (`daa320ab`).
-pub const MESSAGE_MAGIC_CODE_V2: i32 = -626843477;
+pub use super::header::MESSAGE_MAGIC_CODE;
+pub use super::header::MESSAGE_MAGIC_CODE_V2;
 
 /// CommitLog end-of-segment blank magic code (`cbd43194`).
 pub const BLANK_MAGIC_CODE: i32 = -875286124;
 
 const PARSE_BATCH_SIZE: usize = 64 * 1024;
 const MIN_MESSAGE_SIZE: usize = 4 + 4;
+
+/// Reads one CommitLog frame using its big-endian signed size prefix.
+///
+/// The callback must return exactly the requested number of bytes for a successful read. Both the
+/// four-byte prefix read and the optional full-frame read begin at `position`. A missing full-frame
+/// read preserves the positive declared size in the returned tuple.
+///
+/// # Panics
+///
+/// Panics when a successful four-byte prefix read returns fewer than four bytes.
+pub fn read_declared_frame<F>(position: usize, mut read: F) -> (Option<Bytes>, usize)
+where
+    F: FnMut(usize, usize) -> Option<Bytes>,
+{
+    let mut bytes = read(position, 4);
+    match bytes {
+        None => (None, 0),
+        Some(ref mut inner) => {
+            let size = inner.get_i32();
+            if size <= 0 {
+                return (None, 0);
+            }
+            let Ok(size) = usize::try_from(size) else {
+                return (None, 0);
+            };
+            (read(position, size), size)
+        }
+    }
+}
 
 fn frame_fits(absolute_offset: usize, frame_size: usize, source_len: usize) -> bool {
     absolute_offset

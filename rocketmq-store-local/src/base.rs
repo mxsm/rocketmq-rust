@@ -12,5 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod allocate_mapped_file_service;
 pub mod memory_lock_manager;
 pub mod transient_store_pool;

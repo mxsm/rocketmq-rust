@@ -14,6 +14,8 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -43,7 +45,6 @@ use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::time_utils;
 use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::CRC32Utils::crc32_bytes;
-use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::cheetah_from_utf8_lossy;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::TimeUtils::current_millis;
@@ -64,7 +65,6 @@ use crate::base::memory_lock_manager::MemoryLockManager;
 use crate::base::message_encoder_pool;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
-use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::message_store::MessageStore;
 use crate::base::message_store::StoreHealthRecorder;
@@ -92,6 +92,7 @@ use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
+use crate::log_file::mapped_file::MappedFileAppend;
 use crate::message_store::local_file_message_store::CommitLogDispatcherDefault;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
@@ -104,10 +105,24 @@ use crate::utils::ffi::madvise;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::ffi::MADV_RANDOM;
 
-use rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory;
+use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObservation;
+use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
+use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentOutcome;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendFailure;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendResolution;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus;
+use rocketmq_store_local::commit_log::load_orchestration::drive_commit_log_load;
+use rocketmq_store_local::commit_log::load_orchestration::safe_load_requested;
+use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadObservation;
+use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadStep;
 use rocketmq_store_local::commit_log::memory_lock::plan_commit_log_memory_lock_target;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockMode;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;
+use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation;
+use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryRecord;
+use rocketmq_store_local::commit_log::normal_recovery::NormalRecoverySegmentOutcome;
+use rocketmq_store_local::commit_log::record::read_declared_frame;
 use rocketmq_store_local::commit_log::record_parser::decode_commit_log_record;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
@@ -115,23 +130,40 @@ use rocketmq_store_local::commit_log::record_parser::CommitLogRecordErrorKind;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
 use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;
 use rocketmq_store_local::commit_log::recovery::plan_normal_recovery_file_window;
-use rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue;
-use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryAction;
+use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryConfirmCandidateError;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
-use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryEvent;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
-use rocketmq_store_local::commit_log::recovery::NormalRecoveryAction;
-use rocketmq_store_local::commit_log::recovery::NormalRecoveryEvent;
+use rocketmq_store_local::commit_log::recovery::CommitLogRecoveryCompletion;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
+use rocketmq_store_local::commit_log::root::CommitLogRoot;
+use rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock;
+use rocketmq_store_local::commit_log::runtime_state::CommitLogRuntimeState;
 
 pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
+pub use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLockRuntimeInfo;
 
 //CRC32 Format: [PROPERTY_CRC32 + NAME_VALUE_SEPARATOR + 10-digit fixed-length string +
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
+
+#[derive(Debug)]
+enum NormalRecoveryAdapterError {
+    FramePositionOverflow { position: usize, size: usize },
+    RelativeOffsetConversion(std::num::TryFromIntError),
+    MessageSizeConversion(std::num::TryFromIntError),
+}
+
+#[derive(Debug)]
+enum AbnormalRecoveryAdapterError {
+    ConfirmCandidate(AbnormalRecoveryConfirmCandidateError),
+    ConfirmLimitConversion(std::num::TryFromIntError),
+    FramePositionOverflow { position: usize, size: usize },
+    RelativeOffsetConversion(std::num::TryFromIntError),
+    ValidatedSizeConversion(std::num::TryFromIntError),
+}
 
 fn log_abnormal_recovery_window(
     window: &crate::log_file::commit_log_recovery::AbnormalRecoveryWindow,
@@ -155,55 +187,44 @@ fn log_abnormal_recovery_window(
     );
 }
 
-#[derive(Debug)]
-struct CommitLogActiveMemoryLock {
-    manager: MemoryLockManager,
-    handle: Option<MemoryLockHandle>,
-    file_from_offset: Option<u64>,
-    region_offset: u64,
-    region_len: usize,
-}
+macro_rules! apply_recovery_completion {
+    ($commit_log:ident, $completion:expr, $max_consume_queue_offset:expr, $message_store:ident $(,)?) => {{
+        match $completion {
+            CommitLogRecoveryCompletion::Empty => {
+                $commit_log.mapped_file_queue.set_flushed_where(0);
+                $commit_log.mapped_file_queue.set_committed_where(0);
+                $message_store.consume_queue_store_mut().destroy();
+                $message_store.consume_queue_store_mut().load_after_destroy();
+            }
+            CommitLogRecoveryCompletion::Recovered {
+                confirm_offset,
+                controller_confirm_offset,
+                process_offset,
+                truncate_consume_queue,
+            } => {
+                if $commit_log.broker_config.enable_controller_mode {
+                    $commit_log.clamp_controller_recover_confirm_offset(
+                        $message_store.get_min_phy_offset(),
+                        controller_confirm_offset,
+                    );
+                } else {
+                    $commit_log.set_confirm_offset(confirm_offset);
+                }
 
-impl CommitLogActiveMemoryLock {
-    fn new(warn_only: bool, budget_bytes: u64) -> Self {
-        Self {
-            manager: MemoryLockManager::new(warn_only, budget_bytes),
-            handle: None,
-            file_from_offset: None,
-            region_offset: 0,
-            region_len: 0,
+                if truncate_consume_queue {
+                    warn!(
+                        "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
+                        $max_consume_queue_offset, process_offset
+                    );
+                    $message_store.truncate_dirty_logic_files(process_offset);
+                }
+
+                $commit_log.mapped_file_queue.set_flushed_where(process_offset);
+                $commit_log.mapped_file_queue.set_committed_where(process_offset);
+                $commit_log.mapped_file_queue.truncate_dirty_files(process_offset);
+            }
         }
-    }
-
-    fn is_current(&self, file_from_offset: u64, target: CommitLogMemoryLockTarget) -> bool {
-        let Some(handle) = self.handle else {
-            return false;
-        };
-        if self.file_from_offset != Some(file_from_offset) || handle.category() != target.category {
-            return false;
-        }
-
-        if target.category == MemoryLockCategory::CommitLogActiveWindow {
-            let region_end = self.region_offset.saturating_add(self.region_len as u64);
-            target.offset >= self.region_offset && target.offset < region_end
-        } else {
-            self.region_offset == target.offset && self.region_len == target.len
-        }
-    }
-
-    fn set_current(&mut self, file_from_offset: u64, target: CommitLogMemoryLockTarget, handle: MemoryLockHandle) {
-        self.handle = Some(handle);
-        self.file_from_offset = Some(file_from_offset);
-        self.region_offset = target.offset;
-        self.region_len = target.len;
-    }
-
-    fn clear(&mut self) {
-        self.handle = None;
-        self.file_from_offset = None;
-        self.region_offset = 0;
-        self.region_len = 0;
-    }
+    }};
 }
 
 // This reduces heap allocations by ~50% by reusing encoder instances
@@ -273,75 +294,72 @@ pub fn get_message_num(
     message_num
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct CommitLogPutMessageLockRuntimeInfo {
-    pub acquire_total: u64,
-    pub wait_total_millis: u64,
-    pub wait_max_millis: u64,
-    pub hold_total_millis: u64,
-    pub hold_max_millis: u64,
-}
-
-#[derive(Debug, Default)]
-struct CommitLogPutMessageLockStats {
-    acquire_total: AtomicU64,
-    wait_total_millis: AtomicU64,
-    wait_max_millis: AtomicU64,
-    hold_total_millis: AtomicU64,
-    hold_max_millis: AtomicU64,
-}
-
-impl CommitLogPutMessageLockStats {
-    fn record(&self, wait_millis: u64, hold_millis: u64) {
-        self.acquire_total.fetch_add(1, Ordering::Relaxed);
-        self.wait_total_millis.fetch_add(wait_millis, Ordering::Relaxed);
-        self.hold_total_millis.fetch_add(hold_millis, Ordering::Relaxed);
-        Self::update_max(&self.wait_max_millis, wait_millis);
-        Self::update_max(&self.hold_max_millis, hold_millis);
-    }
-
-    fn snapshot(&self) -> CommitLogPutMessageLockRuntimeInfo {
-        CommitLogPutMessageLockRuntimeInfo {
-            acquire_total: self.acquire_total.load(Ordering::Relaxed),
-            wait_total_millis: self.wait_total_millis.load(Ordering::Relaxed),
-            wait_max_millis: self.wait_max_millis.load(Ordering::Relaxed),
-            hold_total_millis: self.hold_total_millis.load(Ordering::Relaxed),
-            hold_max_millis: self.hold_max_millis.load(Ordering::Relaxed),
-        }
-    }
-
-    fn update_max(target: &AtomicU64, value: u64) {
-        let mut current = target.load(Ordering::Relaxed);
-        while value > current {
-            match target.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
-                Ok(_) => break,
-                Err(actual) => current = actual,
-            }
-        }
-    }
+macro_rules! lock_active_mapped_file_parts {
+    (
+        $active_memory_lock:expr,
+        $active_memory_lock_present:expr,
+        $mapped_file:expr,
+        $target:expr,
+        $locker:expr,
+        $unlocker:expr $(,)?
+    ) => {{
+        let mapped_file = $mapped_file;
+        let file_from_offset = mapped_file.get_file_from_offset();
+        CommitLog::ensure_active_mapped_file_locked_parts(
+            $active_memory_lock,
+            $active_memory_lock_present,
+            $target,
+            file_from_offset,
+            |manager, target| {
+                mapped_file.lock_region_with(manager, target.category, target.offset, target.len, $locker)
+            },
+            $unlocker,
+        )
+    }};
 }
 
 pub struct CommitLog {
-    mapped_file_queue: ArcMut<MappedFileQueue>,
-    message_store_config: Arc<MessageStoreConfig>,
-    broker_config: Arc<BrokerConfig>,
-    enabled_append_prop_crc: bool,
-    local_file_message_store: Option<ArcMut<LocalFileMessageStore>>,
-    dispatcher: ArcMut<CommitLogDispatcherDefault>,
-    confirm_offset: i64,
-    store_checkpoint: Arc<StoreCheckpoint>,
-    append_message_callback: Arc<DefaultAppendMessageCallback>,
-    put_message_lock: Arc<tokio::sync::Mutex<()>>,
-    put_message_lock_stats: Arc<CommitLogPutMessageLockStats>,
-    topic_queue_lock: Arc<TopicQueueLock>,
-    topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
-    consume_queue_store: ConsumeQueueStore,
-    flush_manager: ArcMut<DefaultFlushManager>,
-    begin_time_in_lock: Arc<AtomicU64>,
-    cold_data_check_service: Arc<ColdDataCheckService>,
-    active_memory_lock: ParkingMutex<CommitLogActiveMemoryLock>,
-    active_memory_lock_present: AtomicBool,
-    last_load_statistics: ParkingMutex<LoadStatistics>,
+    root: CommitLogRoot<CommitLogAdapter>,
+}
+
+mod adapter {
+    /// Store-owned composition dependencies used by the legacy CommitLog facade.
+    #[doc(hidden)]
+    pub struct CommitLog {
+        pub(super) mapped_file_queue: super::ArcMut<super::MappedFileQueue>,
+        pub(super) message_store_config: super::Arc<super::MessageStoreConfig>,
+        pub(super) broker_config: super::Arc<super::BrokerConfig>,
+        pub(super) enabled_append_prop_crc: bool,
+        pub(super) local_file_message_store: Option<super::ArcMut<super::LocalFileMessageStore>>,
+        pub(super) dispatcher: super::ArcMut<super::CommitLogDispatcherDefault>,
+        pub(super) runtime_state: super::CommitLogRuntimeState,
+        pub(super) store_checkpoint: super::Arc<super::StoreCheckpoint>,
+        pub(super) append_message_callback: super::Arc<super::DefaultAppendMessageCallback>,
+        pub(super) put_message_lock: super::Arc<tokio::sync::Mutex<()>>,
+        pub(super) topic_queue_lock: super::Arc<super::TopicQueueLock>,
+        pub(super) topic_config_table:
+            super::Arc<super::DashMap<super::CheetahString, super::ArcMut<super::TopicConfig>>>,
+        pub(super) consume_queue_store: super::ConsumeQueueStore,
+        pub(super) flush_manager: super::ArcMut<super::DefaultFlushManager>,
+        pub(super) cold_data_check_service: super::Arc<super::ColdDataCheckService>,
+    }
+}
+
+#[doc(hidden)]
+pub use adapter::CommitLog as CommitLogAdapter;
+
+impl Deref for CommitLog {
+    type Target = CommitLogAdapter;
+
+    fn deref(&self) -> &Self::Target {
+        self.root.adapter()
+    }
+}
+
+impl DerefMut for CommitLog {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.root.adapter_mut()
+    }
 }
 
 impl CommitLog {
@@ -366,36 +384,33 @@ impl CommitLog {
             Some(allocate_mapped_file_service),
         ));
         Self {
-            mapped_file_queue: mapped_file_queue.clone(),
-            message_store_config: message_store_config.clone(),
-            broker_config,
-            enabled_append_prop_crc,
-            local_file_message_store: None,
-            dispatcher,
-            confirm_offset: -1,
-            store_checkpoint: store_checkpoint.clone(),
-            append_message_callback: Arc::new(DefaultAppendMessageCallback::new(
-                message_store_config.clone(),
-                topic_config_table.clone(),
-            )),
-            put_message_lock: Arc::new(Default::default()),
-            put_message_lock_stats: Arc::new(Default::default()),
-            topic_queue_lock: Arc::new(TopicQueueLock::with_size(message_store_config.topic_queue_lock_num)),
-            topic_config_table,
-            consume_queue_store,
-            flush_manager: ArcMut::new(DefaultFlushManager::new(
-                message_store_config.clone(),
-                mapped_file_queue,
-                store_checkpoint,
-            )),
-            begin_time_in_lock: Arc::new(AtomicU64::new(0)),
-            cold_data_check_service: Arc::new(Default::default()),
-            active_memory_lock: ParkingMutex::new(CommitLogActiveMemoryLock::new(
-                message_store_config.linux_memory_lock_warn_only,
-                memory_lock_budget_bytes,
-            )),
-            active_memory_lock_present: AtomicBool::new(false),
-            last_load_statistics: ParkingMutex::new(LoadStatistics::default()),
+            root: CommitLogRoot::new(CommitLogAdapter {
+                mapped_file_queue: mapped_file_queue.clone(),
+                message_store_config: message_store_config.clone(),
+                broker_config,
+                enabled_append_prop_crc,
+                local_file_message_store: None,
+                dispatcher,
+                runtime_state: CommitLogRuntimeState::new(
+                    message_store_config.linux_memory_lock_warn_only,
+                    memory_lock_budget_bytes,
+                ),
+                store_checkpoint: store_checkpoint.clone(),
+                append_message_callback: Arc::new(DefaultAppendMessageCallback::new(
+                    message_store_config.clone(),
+                    topic_config_table.clone(),
+                )),
+                put_message_lock: Arc::new(Default::default()),
+                topic_queue_lock: Arc::new(TopicQueueLock::with_size(message_store_config.topic_queue_lock_num)),
+                topic_config_table,
+                consume_queue_store,
+                flush_manager: ArcMut::new(DefaultFlushManager::new(
+                    message_store_config.clone(),
+                    mapped_file_queue,
+                    store_checkpoint,
+                )),
+                cold_data_check_service: Arc::new(Default::default()),
+            }),
         }
     }
 
@@ -448,29 +463,50 @@ impl CommitLog {
         F: FnMut(*const u8, usize) -> RocketMQResult<()>,
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
-        let Some(target) = self.active_memory_lock_target(mapped_file) else {
-            return self.release_active_memory_lock_if_present(&mut unlocker);
+        let target = self.active_memory_lock_target(mapped_file);
+        let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
+        lock_active_mapped_file_parts!(
+            active_memory_lock,
+            active_memory_lock_present,
+            mapped_file,
+            target,
+            &mut locker,
+            &mut unlocker,
+        )
+    }
+
+    fn ensure_active_mapped_file_locked_parts<L, G>(
+        active_memory_lock: &ParkingMutex<CommitLogActiveMemoryLock>,
+        active_memory_lock_present: &AtomicBool,
+        target: Option<CommitLogMemoryLockTarget>,
+        file_from_offset: u64,
+        mut lock_region: L,
+        mut unlocker: G,
+    ) -> RocketMQResult<()>
+    where
+        L: FnMut(&MemoryLockManager, CommitLogMemoryLockTarget) -> RocketMQResult<Option<MemoryLockHandle>>,
+        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        let Some(target) = target else {
+            return Self::release_active_memory_lock_if_present_parts(
+                active_memory_lock,
+                active_memory_lock_present,
+                &mut unlocker,
+            );
         };
-        let file_from_offset = mapped_file.get_file_from_offset();
-        let mut active_memory_lock = self.active_memory_lock.lock();
-        if active_memory_lock.is_current(file_from_offset, target) {
-            self.active_memory_lock_present.store(true, Ordering::Release);
+        let mut active_memory_lock_guard = active_memory_lock.lock();
+        if active_memory_lock_guard.is_current(file_from_offset, target) {
+            active_memory_lock_present.store(true, Ordering::Release);
             return Ok(());
         }
 
-        Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlocker)?;
-        self.active_memory_lock_present.store(false, Ordering::Release);
-        if let Some(handle) = mapped_file.lock_region_with(
-            &active_memory_lock.manager,
-            target.category,
-            target.offset,
-            target.len,
-            &mut locker,
-        )? {
-            active_memory_lock.set_current(file_from_offset, target, handle);
-            self.active_memory_lock_present.store(true, Ordering::Release);
+        Self::release_active_memory_lock_locked(&mut active_memory_lock_guard, &mut unlocker)?;
+        active_memory_lock_present.store(false, Ordering::Release);
+        if let Some(handle) = lock_region(active_memory_lock_guard.manager(), target)? {
+            active_memory_lock_guard.set_current(file_from_offset, target, handle);
+            active_memory_lock_present.store(true, Ordering::Release);
         } else {
-            self.active_memory_lock_present.store(false, Ordering::Release);
+            active_memory_lock_present.store(false, Ordering::Release);
         }
         Ok(())
     }
@@ -479,20 +515,36 @@ impl CommitLog {
     where
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
-        if !self.active_memory_lock_present.load(Ordering::Acquire) {
-            return Ok(());
-        }
-
-        self.release_active_memory_lock_with(unlocker)
+        let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
+        Self::release_active_memory_lock_if_present_parts(active_memory_lock, active_memory_lock_present, unlocker)
     }
 
-    fn release_active_memory_lock_with<G>(&self, mut unlocker: G) -> RocketMQResult<()>
+    fn release_active_memory_lock_if_present_parts<G>(
+        active_memory_lock: &ParkingMutex<CommitLogActiveMemoryLock>,
+        active_memory_lock_present: &AtomicBool,
+        unlocker: G,
+    ) -> RocketMQResult<()>
     where
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
-        let mut active_memory_lock = self.active_memory_lock.lock();
+        if !active_memory_lock_present.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
+        Self::release_active_memory_lock_parts(active_memory_lock, active_memory_lock_present, unlocker)
+    }
+
+    fn release_active_memory_lock_parts<G>(
+        active_memory_lock: &ParkingMutex<CommitLogActiveMemoryLock>,
+        active_memory_lock_present: &AtomicBool,
+        mut unlocker: G,
+    ) -> RocketMQResult<()>
+    where
+        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        let mut active_memory_lock = active_memory_lock.lock();
         Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlocker)?;
-        self.active_memory_lock_present.store(false, Ordering::Release);
+        active_memory_lock_present.store(false, Ordering::Release);
         Ok(())
     }
 
@@ -503,12 +555,12 @@ impl CommitLog {
     where
         G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
-        let Some(handle) = active_memory_lock.handle.take() else {
+        let Some(handle) = active_memory_lock.take_handle() else {
             active_memory_lock.clear();
             return Ok(());
         };
 
-        active_memory_lock.manager.unlock_region_with(handle, &mut unlocker)?;
+        active_memory_lock.manager().unlock_region_with(handle, &mut unlocker)?;
         active_memory_lock.clear();
         Ok(())
     }
@@ -538,32 +590,32 @@ impl CommitLog {
     /// # Returns
     /// `true` if load succeeded, `false` otherwise
     pub fn load(&mut self) -> bool {
-        // Use environment variable to force fallback to safe sequential load
-        let force_sequential = std::env::var("ROCKETMQ_SAFE_LOAD")
-            .map(|v| v == "1" || v.to_lowercase() == "true")
-            .unwrap_or(false);
-
-        if force_sequential {
-            info!("Using safe sequential CommitLog load (ROCKETMQ_SAFE_LOAD=true)");
-            return self.load_sequential();
-        }
-
-        // Optimized parallel load path
-        match self.load_optimized() {
-            Ok(true) => {
-                self.mapped_file_queue.check_self();
-                info!("load commit log Ok (optimized)");
-                true
-            }
-            Ok(false) => {
-                error!("load commit log failed (optimized)");
-                false
-            }
-            Err(e) => {
-                error!("Optimized load failed: {}, falling back to sequential load", e);
-                self.load_sequential()
-            }
-        }
+        let safe_load_value = std::env::var("ROCKETMQ_SAFE_LOAD").ok();
+        let force_sequential = safe_load_requested(safe_load_value.as_deref());
+        drive_commit_log_load(
+            force_sequential,
+            |step| match step {
+                CommitLogLoadStep::Optimized => self.load_optimized(),
+                CommitLogLoadStep::Sequential => Ok(self.load_sequential()),
+            },
+            |observation| match observation {
+                CommitLogLoadObservation::ForcedSequential => {
+                    info!("Using safe sequential CommitLog load (ROCKETMQ_SAFE_LOAD=true)");
+                }
+                CommitLogLoadObservation::OptimizedLoaded => {
+                    info!("load commit log Ok (optimized)");
+                }
+                CommitLogLoadObservation::OptimizedRejected => {
+                    error!("load commit log failed (optimized)");
+                }
+                CommitLogLoadObservation::OptimizedFailed(error) => {
+                    error!("Optimized load failed: {}, falling back to sequential load", error);
+                }
+                CommitLogLoadObservation::SequentialFailed(error) => {
+                    error!("Sequential CommitLog load adapter failed: {}", error);
+                }
+            },
+        )
     }
 
     /// Optimized load implementation with parallel I/O and batching.
@@ -599,7 +651,7 @@ impl CommitLog {
 
         match loader.load_optimized() {
             Ok((mapped_files, stats)) => {
-                *self.last_load_statistics.lock() = stats.clone();
+                self.runtime_state.set_load_statistics(stats.clone());
                 // Replace the mapped_files vec in mapped_file_queue
                 // This is safe because we're in &mut self
                 {
@@ -617,6 +669,7 @@ impl CommitLog {
                     stats.parallel_load_time_ms,
                     stats.total_load_time_ms
                 );
+                self.mapped_file_queue.check_self();
 
                 Ok(true)
             }
@@ -658,7 +711,7 @@ impl CommitLog {
     }
 
     pub fn put_message_lock_runtime_info(&self) -> CommitLogPutMessageLockRuntimeInfo {
-        self.put_message_lock_stats.snapshot()
+        self.runtime_state.put_message_lock_runtime_info()
     }
 
     fn release_put_message_lock(
@@ -668,10 +721,10 @@ impl CommitLog {
         lock_hold_start: Instant,
     ) -> u64 {
         let elapsed_time_in_lock = lock_hold_start.elapsed().as_millis() as u64;
-        self.put_message_lock_stats
-            .record(lock_wait_millis, elapsed_time_in_lock);
+        self.runtime_state
+            .record_put_message_lock(lock_wait_millis, elapsed_time_in_lock);
         drop(put_message_lock);
-        self.begin_time_in_lock.store(0, Ordering::Release);
+        self.runtime_state.clear_begin_time_in_lock();
         elapsed_time_in_lock
     }
 
@@ -705,22 +758,22 @@ impl CommitLog {
     }
 
     pub fn set_confirm_offset(&mut self, phy_offset: i64) {
-        self.confirm_offset = phy_offset;
+        self.runtime_state.set_confirm_offset(phy_offset);
         self.store_checkpoint.set_confirm_phy_offset(phy_offset as u64);
     }
 
     fn compute_controller_confirm_offset(&self) -> i64 {
         let Some(message_store) = self.local_file_message_store.as_ref() else {
-            return self.confirm_offset;
+            return self.runtime_state.confirm_offset();
         };
 
         if self.message_store_config.broker_role == BrokerRole::Slave || message_store.get_running_flags().is_fenced() {
-            return self.confirm_offset;
+            return self.runtime_state.confirm_offset();
         }
 
         let max_phy_offset = message_store.get_max_phy_offset();
         let Some(ha_service) = message_store.get_ha_service() else {
-            return self.confirm_offset;
+            return self.runtime_state.confirm_offset();
         };
 
         if ha_service.local_sync_state_set_size(max_phy_offset) <= 1
@@ -729,11 +782,11 @@ impl CommitLog {
             return max_phy_offset;
         }
 
-        if self.confirm_offset >= 0 {
-            return self.confirm_offset;
+        if self.runtime_state.confirm_offset() >= 0 {
+            return self.runtime_state.confirm_offset();
         }
 
-        ha_service.compute_confirm_offset(self.confirm_offset, max_phy_offset)
+        ha_service.compute_confirm_offset(self.runtime_state.confirm_offset(), max_phy_offset)
     }
 
     fn clamp_controller_recover_confirm_offset(&mut self, min_phy_offset: i64, upper_bound: i64) {
@@ -802,6 +855,15 @@ impl CommitLog {
         Ok(need_ack_nums)
     }
 
+    fn put_message_status(status: CommitLogAppendStatus) -> PutMessageStatus {
+        match status {
+            CommitLogAppendStatus::PutOk => PutMessageStatus::PutOk,
+            CommitLogAppendStatus::UnknownError => PutMessageStatus::UnknownError,
+            CommitLogAppendStatus::CreateSegmentFailed => PutMessageStatus::CreateMappedFileFailed,
+            CommitLogAppendStatus::MessageIllegal => PutMessageStatus::MessageIllegal,
+        }
+    }
+
     #[tracing::instrument(
         level = "debug",
         name = "RocketMQ STORE APPEND",
@@ -844,8 +906,7 @@ impl CommitLog {
             msg_batch.message_ext_broker_inner.with_store_host_v6_flag();
         }
 
-        let mut unlock_mapped_file = None;
-        let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
+        let mapped_file = self.mapped_file_queue.get_last_mapped_file();
         let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
             mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
         } else {
@@ -868,102 +929,101 @@ impl CommitLog {
         put_message_context.set_topic_queue_table_key(topic_queue_key.clone());
         msg_batch.encoded_buff = encoded_buff;
 
-        let _topic_queue_guard = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
+        let topic_queue_lock = self.topic_queue_lock.clone();
+        let _topic_queue_guard = topic_queue_lock.lock(topic_queue_key.as_str()).await;
         self.assign_offset(&mut msg_batch.message_ext_broker_inner);
 
         let lock_wait_start = Instant::now();
-        let _put_message_lock = self.put_message_lock.lock().await;
+        let put_message_lock = self.put_message_lock.clone();
+        let _put_message_lock = put_message_lock.lock().await;
         let lock_wait_millis = lock_wait_start.elapsed().as_millis() as u64;
-        self.begin_time_in_lock
-            .store(time_utils::current_millis(), std::sync::atomic::Ordering::Release);
+        self.runtime_state.set_begin_time_in_lock(time_utils::current_millis());
         let start_time = Instant::now();
         // Here settings are stored timestamp, in order to ensure an orderly global
         msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = time_utils::current_millis() as i64;
 
-        if mapped_file.is_none() || mapped_file.as_ref().unwrap().is_full() {
-            mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
-        }
-
-        if mapped_file.is_none() {
-            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-            drop(_topic_queue_guard); // Explicitly release topic_queue_lock on error
-            error!(
-                "create mapped file error, topic: {}  clientAddr: {}",
-                msg_batch.message_ext_broker_inner.topic(),
-                msg_batch.message_ext_broker_inner.born_host()
-            );
-            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-        }
-
-        if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-            drop(_topic_queue_guard);
-            error!(
-                "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                msg_batch.message_ext_broker_inner.topic(),
-                msg_batch.message_ext_broker_inner.born_host(),
-                error
-            );
-            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-        }
-
-        let result = mapped_file.as_ref().unwrap().append_messages(
-            &mut msg_batch,
-            self.append_message_callback.as_ref(),
-            &mut put_message_context,
-            self.enabled_append_prop_crc,
-        );
-        let put_message_result = match result.status {
-            AppendMessageStatus::PutOk => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
-            }
-            AppendMessageStatus::EndOfFile => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                unlock_mapped_file = mapped_file;
-                mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
-                if mapped_file.is_none() {
-                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                    drop(_topic_queue_guard);
-                    error!(
-                        "create mapped file error, topic: {}  clientAddr: {}",
-                        msg_batch.message_ext_broker_inner.topic(),
-                        msg_batch.message_ext_broker_inner.born_host()
+        let append_attempt = {
+            let adapter = self.root.adapter_mut();
+            let mapped_file_queue = &mut adapter.mapped_file_queue;
+            let message_store_config = adapter.message_store_config.as_ref();
+            let (active_memory_lock, active_memory_lock_present) = adapter.runtime_state.active_memory_lock_parts();
+            let append_message_callback = adapter.append_message_callback.as_ref();
+            let enabled_append_prop_crc = adapter.enabled_append_prop_crc;
+            CommitLogAppendAttempt::run(
+                mapped_file,
+                |mapped_file| mapped_file.is_full(),
+                || mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true),
+                |mapped_file| {
+                    let target = Self::active_memory_lock_target_for_config(
+                        message_store_config,
+                        mapped_file.get_wrote_position().max(0) as u64,
+                        mapped_file.get_file_size(),
                     );
-                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
-                }
-                if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                    drop(_topic_queue_guard);
-                    error!(
-                        "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                        msg_batch.message_ext_broker_inner.topic(),
-                        msg_batch.message_ext_broker_inner.born_host(),
-                        error
-                    );
-                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
-                }
-                let result = mapped_file.as_ref().unwrap().append_messages(
-                    &mut msg_batch,
-                    self.append_message_callback.as_ref(),
-                    &mut put_message_context,
-                    self.enabled_append_prop_crc,
-                );
-                if AppendMessageStatus::PutOk == result.status {
-                    PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
-                } else {
-                    PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
-                }
-            }
-            AppendMessageStatus::MessageSizeExceeded | AppendMessageStatus::PropertiesSizeExceeded => {
+                    lock_active_mapped_file_parts!(
+                        active_memory_lock,
+                        active_memory_lock_present,
+                        mapped_file,
+                        target,
+                        crate::utils::ffi::mlock,
+                        crate::utils::ffi::munlock,
+                    )
+                },
+                |mapped_file| {
+                    mapped_file.append_messages(
+                        &mut msg_batch,
+                        append_message_callback,
+                        &mut put_message_context,
+                        enabled_append_prop_crc,
+                    )
+                },
+            )
+        };
+        let (put_message_result, unlock_mapped_file) = match append_attempt.resolve() {
+            CommitLogAppendResolution::Continue {
+                status,
+                result,
+                unlock_segment,
+            } => (
+                PutMessageResult::new_append_result(Self::put_message_status(status), Some(result)),
+                unlock_segment,
+            ),
+            CommitLogAppendResolution::Return {
+                status,
+                append_result,
+                abandoned_segment,
+                failure,
+            } => {
                 self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
-                return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
-            }
-            AppendMessageStatus::UnknownError => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
+                match failure {
+                    CommitLogAppendFailure::InitialSegmentUnavailable
+                    | CommitLogAppendFailure::RolledSegmentUnavailable => {
+                        error!(
+                            "create mapped file error, topic: {}  clientAddr: {}",
+                            msg_batch.message_ext_broker_inner.topic(),
+                            msg_batch.message_ext_broker_inner.born_host()
+                        );
+                    }
+                    CommitLogAppendFailure::InitialActiveLockFailed { error } => {
+                        error!(
+                            "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                            msg_batch.message_ext_broker_inner.topic(),
+                            msg_batch.message_ext_broker_inner.born_host(),
+                            error
+                        );
+                    }
+                    CommitLogAppendFailure::RolledActiveLockFailed { error } => {
+                        error!(
+                            "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                            msg_batch.message_ext_broker_inner.topic(),
+                            msg_batch.message_ext_broker_inner.born_host(),
+                            error
+                        );
+                    }
+                    CommitLogAppendFailure::InitialMessageIllegal | CommitLogAppendFailure::InitialUnknown => {}
+                }
+                drop(abandoned_segment);
+                return PutMessageResult::new_append_result(Self::put_message_status(status), append_result);
             }
         };
         let elapsed_time_in_lock = self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
@@ -1056,10 +1116,8 @@ impl CommitLog {
 
         let topic_queue_key = generate_key(&msg);
 
-        let mut unlock_mapped_file = None;
-
         //get last mapped file from mapped file queue
-        let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
+        let mapped_file = self.mapped_file_queue.get_last_mapped_file();
         // current offset is physical offset
         let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
             mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
@@ -1083,8 +1141,9 @@ impl CommitLog {
         msg.encoded_buff = Some(encoded_buff);
         let put_message_context = PutMessageContext::new(topic_queue_key.clone());
 
-        let _topic_queue_guard = if need_assign_offset {
-            let guard = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
+        let topic_queue_lock = need_assign_offset.then(|| self.topic_queue_lock.clone());
+        let _topic_queue_guard = if let Some(topic_queue_lock) = topic_queue_lock.as_ref() {
+            let guard = topic_queue_lock.lock(topic_queue_key.as_str()).await;
             self.assign_offset(&mut msg);
             Some(guard)
         } else {
@@ -1092,99 +1151,91 @@ impl CommitLog {
         };
 
         let lock_wait_start = Instant::now();
-        let _put_message_lock = self.put_message_lock.lock().await;
+        let put_message_lock = self.put_message_lock.clone();
+        let _put_message_lock = put_message_lock.lock().await;
         let lock_wait_millis = lock_wait_start.elapsed().as_millis() as u64;
         let begin_lock_timestamp = time_utils::current_millis();
-        self.begin_time_in_lock
-            .store(begin_lock_timestamp, std::sync::atomic::Ordering::Release);
+        self.runtime_state.set_begin_time_in_lock(begin_lock_timestamp);
         let start_time = Instant::now();
         // Here settings are stored timestamp, in order to ensure an orderly global
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = begin_lock_timestamp as i64;
         }
 
-        if mapped_file.is_none() || mapped_file.as_ref().unwrap().is_full() {
-            mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
-        }
-
-        if mapped_file.is_none() {
-            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-            drop(_topic_queue_guard); // Explicitly release topic_queue_lock on error
-            error!(
-                "create mapped file error, topic: {}  clientAddr: {}",
-                msg.topic(),
-                msg.born_host()
-            );
-            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-        }
-
-        if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-            self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-            drop(_topic_queue_guard);
-            error!(
-                "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                msg.topic(),
-                msg.born_host(),
-                error
-            );
-            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-        }
-
-        let result = mapped_file.as_ref().unwrap().append_message(
-            &mut msg,
-            self.append_message_callback.as_ref(),
-            &put_message_context,
-        );
-        let put_message_result = match result.status {
-            AppendMessageStatus::PutOk => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
-            }
-            AppendMessageStatus::EndOfFile => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                unlock_mapped_file = mapped_file;
-                mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
-                if mapped_file.is_none() {
-                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                    drop(_topic_queue_guard); // CRITICAL FIX: Release topic_queue_lock on error
-                    error!(
-                        "create mapped file error, topic: {}  clientAddr: {}",
-                        msg.topic(),
-                        msg.born_host()
+        let append_attempt = {
+            let adapter = self.root.adapter_mut();
+            let mapped_file_queue = &mut adapter.mapped_file_queue;
+            let message_store_config = adapter.message_store_config.as_ref();
+            let (active_memory_lock, active_memory_lock_present) = adapter.runtime_state.active_memory_lock_parts();
+            let append_message_callback = adapter.append_message_callback.as_ref();
+            CommitLogAppendAttempt::run(
+                mapped_file,
+                |mapped_file| mapped_file.is_full(),
+                || mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true),
+                |mapped_file| {
+                    let target = Self::active_memory_lock_target_for_config(
+                        message_store_config,
+                        mapped_file.get_wrote_position().max(0) as u64,
+                        mapped_file.get_file_size(),
                     );
-                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
-                }
-                if let Err(error) = self.ensure_active_mapped_file_locked(mapped_file.as_ref().unwrap()) {
-                    self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                    drop(_topic_queue_guard);
-                    error!(
-                        "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                        msg.topic(),
-                        msg.born_host(),
-                        error
-                    );
-                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
-                }
-                let result = mapped_file.as_ref().unwrap().append_message(
-                    &mut msg,
-                    self.append_message_callback.as_ref(),
-                    &put_message_context,
-                );
-                if AppendMessageStatus::PutOk == result.status {
-                    PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
-                } else {
-                    PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
-                }
-            }
-            AppendMessageStatus::MessageSizeExceeded | AppendMessageStatus::PropertiesSizeExceeded => {
+                    lock_active_mapped_file_parts!(
+                        active_memory_lock,
+                        active_memory_lock_present,
+                        mapped_file,
+                        target,
+                        crate::utils::ffi::mlock,
+                        crate::utils::ffi::munlock,
+                    )
+                },
+                |mapped_file| mapped_file.append_message(&mut msg, append_message_callback, &put_message_context),
+            )
+        };
+        let (put_message_result, unlock_mapped_file) = match append_attempt.resolve() {
+            CommitLogAppendResolution::Continue {
+                status,
+                result,
+                unlock_segment,
+            } => (
+                PutMessageResult::new_append_result(Self::put_message_status(status), Some(result)),
+                unlock_segment,
+            ),
+            CommitLogAppendResolution::Return {
+                status,
+                append_result,
+                abandoned_segment,
+                failure,
+            } => {
                 self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
-                return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
-            }
-            AppendMessageStatus::UnknownError => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
+                match failure {
+                    CommitLogAppendFailure::InitialSegmentUnavailable
+                    | CommitLogAppendFailure::RolledSegmentUnavailable => {
+                        error!(
+                            "create mapped file error, topic: {}  clientAddr: {}",
+                            msg.topic(),
+                            msg.born_host()
+                        );
+                    }
+                    CommitLogAppendFailure::InitialActiveLockFailed { error } => {
+                        error!(
+                            "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                            msg.topic(),
+                            msg.born_host(),
+                            error
+                        );
+                    }
+                    CommitLogAppendFailure::RolledActiveLockFailed { error } => {
+                        error!(
+                            "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                            msg.topic(),
+                            msg.born_host(),
+                            error
+                        );
+                    }
+                    CommitLogAppendFailure::InitialMessageIllegal | CommitLogAppendFailure::InitialUnknown => {}
+                }
+                drop(abandoned_segment);
+                return PutMessageResult::new_append_result(Self::put_message_status(status), append_result);
             }
         };
         let elapsed_time_in_lock = self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
@@ -1452,17 +1503,17 @@ impl CommitLog {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
         let message_store_config = self.message_store_config.clone();
-        let broker_config = self.broker_config.clone();
-
         let mapped_files = self.mapped_file_queue.get_mapped_files();
         let mapped_files_inner = mapped_files.load();
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
-            self.mapped_file_queue.set_flushed_where(0);
-            self.mapped_file_queue.set_committed_where(0);
-            message_store.consume_queue_store_mut().destroy();
-            message_store.consume_queue_store_mut().load_after_destroy();
+            apply_recovery_completion!(
+                self,
+                CommitLogRecoveryCompletion::Empty,
+                max_phy_offset_of_consume_queue,
+                message_store,
+            );
             return;
         }
 
@@ -1505,156 +1556,105 @@ impl CommitLog {
             local_message_store.max_delay_level(),
             local_message_store.delay_level_table_ref().clone(),
         );
-
         'segments: while index < mapped_files_inner.len() {
             let Some(mapped_file) = mapped_files_inner.get(index) else {
                 break;
             };
             let process_offset = mapped_file.get_file_from_offset();
-
-            if let Err(error) = normal_recovery.apply(NormalRecoveryEvent::SegmentStarted {
-                base_offset: process_offset,
-            }) {
-                warn!("normal optimized recovery offset state failed: {error}");
-                break;
-            }
-
-            info!(
-                "Recovering physics file: {} (optimized batch mode)",
-                mapped_file.get_file_name()
-            );
-
             let mut iterator = BatchMessageIterator::new(mapped_file);
             let mut file_processed = false;
-            let mut record_closed_segment = false;
-
-            while let Some((mut msg_bytes, absolute_offset, _msg_size)) = iterator.next_message() {
-                let mut dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
-
-                if dispatch_request.success && dispatch_request.msg_size > 0 {
-                    let relative_start = match u64::try_from(absolute_offset) {
-                        Ok(offset) => offset,
-                        Err(error) => {
-                            warn!("normal optimized recovery relative offset conversion failed: {error}");
-                            break 'segments;
-                        }
+            let outcome = normal_recovery.drive_segment(
+                process_offset,
+                || {
+                    let Some((mut msg_bytes, absolute_offset, _msg_size)) = iterator.next_message() else {
+                        return Ok(NormalRecoveryRecord::SourceEnded);
                     };
-                    let frame_size = match u64::try_from(dispatch_request.msg_size) {
-                        Ok(size) => size,
-                        Err(error) => {
-                            warn!("normal optimized recovery message size conversion failed: {error}");
-                            break 'segments;
-                        }
-                    };
-                    match normal_recovery.apply(NormalRecoveryEvent::MessageAccepted {
-                        segment_base: process_offset,
-                        relative_start,
-                        size: frame_size,
-                    }) {
-                        Ok(NormalRecoveryAction::ContinueRecord) => {}
-                        Ok(NormalRecoveryAction::ContinueNextSegment) => {
-                            record_closed_segment = true;
-                            break;
-                        }
-                        Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                        Err(error) => {
-                            warn!("normal optimized recovery offset state failed: {error}");
-                            break 'segments;
-                        }
+                    let dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
+                    if dispatch_request.success && dispatch_request.msg_size > 0 {
+                        let relative_start = u64::try_from(absolute_offset)
+                            .map_err(NormalRecoveryAdapterError::RelativeOffsetConversion)?;
+                        let frame_size = u64::try_from(dispatch_request.msg_size)
+                            .map_err(NormalRecoveryAdapterError::MessageSizeConversion)?;
+                        Ok(NormalRecoveryRecord::Message {
+                            relative_start,
+                            size: frame_size,
+                            record: dispatch_request,
+                        })
+                    } else if dispatch_request.success && dispatch_request.msg_size == 0 {
+                        Ok(NormalRecoveryRecord::Blank {
+                            record: dispatch_request,
+                        })
+                    } else {
+                        Ok(NormalRecoveryRecord::Invalid {
+                            relative_start: u64::try_from(absolute_offset).ok(),
+                            record: dispatch_request,
+                        })
                     }
-                    self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
-                    file_processed = true;
-                } else if dispatch_request.success && dispatch_request.msg_size == 0 {
-                    // End of file marker
-                    self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
-                    record_closed_segment = true;
-                    match normal_recovery.apply(NormalRecoveryEvent::Blank) {
-                        Ok(NormalRecoveryAction::ContinueRecord) => continue,
-                        Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                        Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                        Err(error) => {
-                            warn!("normal optimized recovery offset state failed: {error}");
-                            break 'segments;
+                },
+                || {
+                    info!(
+                        "Recovering physics file: {} (optimized batch mode)",
+                        mapped_file.get_file_name()
+                    );
+                },
+                |observation, dispatch_request| match observation {
+                    NormalRecoveryObservation::MessageAccepted => {
+                        self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, false);
+                        file_processed = true;
+                    }
+                    NormalRecoveryObservation::Blank => {
+                        self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, true);
+                    }
+                    NormalRecoveryObservation::Invalid { relative_start } => {
+                        if dispatch_request.msg_size > 0 {
+                            let warning_offset =
+                                relative_start.and_then(|relative| process_offset.checked_add(relative));
+                            if let Some(warning_offset) = warning_offset {
+                                warn!("found a half message at {warning_offset}, it will be truncated.");
+                            } else {
+                                warn!("found a half message with an invalid offset; it will be truncated.");
+                            }
                         }
+                        info!("recover physics file end: {}", mapped_file.get_file_name());
                     }
-                } else {
-                    // Invalid message
-                    if dispatch_request.msg_size > 0 {
-                        let warning_offset = u64::try_from(absolute_offset)
-                            .ok()
-                            .and_then(|relative| process_offset.checked_add(relative));
-                        if let Some(warning_offset) = warning_offset {
-                            warn!("found a half message at {warning_offset}, it will be truncated.");
-                        } else {
-                            warn!("found a half message with an invalid offset; it will be truncated.");
-                        }
-                    }
-                    info!("recover physics file end: {}", mapped_file.get_file_name());
-                    record_closed_segment = true;
-                    match normal_recovery.apply(NormalRecoveryEvent::InvalidRecord) {
-                        Ok(NormalRecoveryAction::ContinueRecord) => continue,
-                        Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                        Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                        Err(error) => {
-                            warn!("normal optimized recovery offset state failed: {error}");
-                            break 'segments;
-                        }
-                    }
-                }
-            }
-
-            if !record_closed_segment {
-                match normal_recovery.apply(NormalRecoveryEvent::SourceEnded) {
-                    Ok(NormalRecoveryAction::ContinueRecord | NormalRecoveryAction::ContinueNextSegment) => {}
-                    Ok(NormalRecoveryAction::StopRecovery) => break,
-                    Err(error) => {
-                        warn!("normal optimized recovery offset state failed: {error}");
-                        break;
-                    }
-                }
-            }
-
-            if file_processed {
-                recovery_ctx.stats.files_processed += 1;
-            }
-
-            index += 1;
-        }
-
-        let summary = normal_recovery.summary();
-        let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
-            Ok(offset) => offset,
-            Err(error) => {
-                warn!("normal optimized recovery last-valid conversion failed: {error}");
-                return;
-            }
-        };
-        let process_offset = match i64::try_from(summary.truncate_offset) {
-            Ok(offset) => offset,
-            Err(error) => {
-                warn!("normal optimized recovery truncate conversion failed: {error}");
-                return;
-            }
-        };
-
-        if broker_config.enable_controller_mode {
-            self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), last_valid_offset);
-        } else {
-            self.set_confirm_offset(last_valid_offset);
-        }
-
-        // Clear ConsumeQueue redundant data
-        if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
-            warn!(
-                "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
-                max_phy_offset_of_consume_queue, process_offset
+                },
             );
-            message_store.truncate_dirty_logic_files(process_offset);
+            match outcome {
+                NormalRecoverySegmentOutcome::ContinueNextSegment => {
+                    if file_processed {
+                        recovery_ctx.stats.files_processed += 1;
+                    }
+                    index += 1;
+                }
+                NormalRecoverySegmentOutcome::StopRecovery => break 'segments,
+                NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::RelativeOffsetConversion(
+                    error,
+                )) => {
+                    warn!("normal optimized recovery relative offset conversion failed: {error}");
+                    break 'segments;
+                }
+                NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::MessageSizeConversion(
+                    error,
+                )) => {
+                    warn!("normal optimized recovery message size conversion failed: {error}");
+                    break 'segments;
+                }
+                NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::FramePositionOverflow {
+                    position,
+                    size,
+                }) => {
+                    warn!("normal optimized recovery frame position overflow at {position} with size {size}");
+                    break 'segments;
+                }
+                NormalRecoverySegmentOutcome::StateFailed(error) => {
+                    warn!("normal optimized recovery offset state failed: {error}");
+                    break 'segments;
+                }
+            }
         }
 
-        self.mapped_file_queue.set_flushed_where(process_offset);
-        self.mapped_file_queue.set_committed_where(process_offset);
-        self.mapped_file_queue.truncate_dirty_files(process_offset);
+        let completion = normal_recovery.completion(max_phy_offset_of_consume_queue);
+        apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue, message_store);
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Normal");
@@ -1668,7 +1668,6 @@ impl CommitLog {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
         let message_store_config = self.message_store_config.clone();
-        let broker_config = self.broker_config.clone();
         // let mut mapped_file_queue = mapped_files.write().await;
         let mapped_files = self.mapped_file_queue.get_mapped_files();
         let mapped_files_inner = mapped_files.load();
@@ -1710,178 +1709,130 @@ impl CommitLog {
                     break;
                 };
                 let process_offset = mapped_file.get_file_from_offset();
-                if let Err(error) = normal_recovery.apply(NormalRecoveryEvent::SegmentStarted {
-                    base_offset: process_offset,
-                }) {
-                    warn!("normal recovery offset state failed: {error}");
-                    break;
-                }
-
                 let mut current_pos = 0usize;
-                loop {
-                    let frame_position = current_pos;
-                    let (msg, size) = self.get_simple_message_bytes(current_pos, mapped_file.as_ref());
-                    let Some(mut msg_bytes) = msg else {
-                        match normal_recovery.apply(NormalRecoveryEvent::SourceEnded) {
-                            Ok(NormalRecoveryAction::ContinueRecord) => continue,
-                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                            Err(error) => {
-                                warn!("normal recovery offset state failed: {error}");
-                                break 'segments;
-                            }
-                        }
-                    };
-                    let Some(next_position) = current_pos.checked_add(size) else {
-                        warn!("normal recovery frame position overflow at {current_pos} with size {size}");
-                        break 'segments;
-                    };
-                    current_pos = next_position;
-                    let mut dispatch_request = check_message_and_return_size(
-                        &mut msg_bytes,
-                        check_crc_on_recover,
-                        check_dup_info,
-                        true,
-                        &message_store_config,
-                        max_delay_level,
-                        &delay_level_table,
-                    );
-                    if dispatch_request.success && dispatch_request.msg_size > 0 {
-                        let relative_start = match u64::try_from(frame_position) {
-                            Ok(offset) => offset,
-                            Err(error) => {
-                                warn!("normal recovery relative offset conversion failed: {error}");
-                                break 'segments;
-                            }
+                let outcome = normal_recovery.drive_segment(
+                    process_offset,
+                    || {
+                        let frame_position = current_pos;
+                        let (msg, size) =
+                            read_declared_frame(current_pos, |position, size| mapped_file.get_bytes(position, size));
+                        let Some(mut msg_bytes) = msg else {
+                            return Ok(NormalRecoveryRecord::SourceEnded);
                         };
-                        let frame_size = match u64::try_from(dispatch_request.msg_size) {
-                            Ok(frame_size) => frame_size,
-                            Err(error) => {
-                                warn!("normal recovery message size conversion failed: {error}");
-                                break 'segments;
-                            }
-                        };
-                        match normal_recovery.apply(NormalRecoveryEvent::MessageAccepted {
-                            segment_base: process_offset,
-                            relative_start,
-                            size: frame_size,
-                        }) {
-                            Ok(NormalRecoveryAction::ContinueRecord) => {}
-                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                            Err(error) => {
-                                warn!("normal recovery offset state failed: {error}");
-                                break 'segments;
-                            }
+                        let next_position =
+                            current_pos
+                                .checked_add(size)
+                                .ok_or(NormalRecoveryAdapterError::FramePositionOverflow {
+                                    position: current_pos,
+                                    size,
+                                })?;
+                        current_pos = next_position;
+                        let dispatch_request = check_message_and_return_size(
+                            &mut msg_bytes,
+                            check_crc_on_recover,
+                            check_dup_info,
+                            true,
+                            &message_store_config,
+                            max_delay_level,
+                            &delay_level_table,
+                        );
+                        if dispatch_request.success && dispatch_request.msg_size > 0 {
+                            let relative_start = u64::try_from(frame_position)
+                                .map_err(NormalRecoveryAdapterError::RelativeOffsetConversion)?;
+                            let frame_size = u64::try_from(dispatch_request.msg_size)
+                                .map_err(NormalRecoveryAdapterError::MessageSizeConversion)?;
+                            Ok(NormalRecoveryRecord::Message {
+                                relative_start,
+                                size: frame_size,
+                                record: dispatch_request,
+                            })
+                        } else if dispatch_request.success && dispatch_request.msg_size == 0 {
+                            Ok(NormalRecoveryRecord::Blank {
+                                record: dispatch_request,
+                            })
+                        } else {
+                            Ok(NormalRecoveryRecord::Invalid {
+                                relative_start: u64::try_from(frame_position).ok(),
+                                record: dispatch_request,
+                            })
                         }
-                        self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
-                    } else if dispatch_request.success && dispatch_request.msg_size == 0 {
-                        self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
-                        match normal_recovery.apply(NormalRecoveryEvent::Blank) {
-                            Ok(NormalRecoveryAction::ContinueRecord) => continue,
-                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                            Err(error) => {
-                                warn!("normal recovery offset state failed: {error}");
-                                break 'segments;
-                            }
+                    },
+                    || {},
+                    |observation, dispatch_request| match observation {
+                        NormalRecoveryObservation::MessageAccepted => {
+                            self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, false);
                         }
-                    } else {
-                        if dispatch_request.msg_size > 0 {
-                            let warning_offset = u64::try_from(frame_position)
-                                .ok()
-                                .and_then(|relative| process_offset.checked_add(relative));
-                            if let Some(warning_offset) = warning_offset {
-                                warn!("found a half message at {warning_offset}, it will be truncated.");
-                            } else {
-                                warn!("found a half message with an invalid offset; it will be truncated.");
-                            }
+                        NormalRecoveryObservation::Blank => {
+                            self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, true);
                         }
-                        info!("recover physics file end,{} ", mapped_file.get_file_name());
-                        match normal_recovery.apply(NormalRecoveryEvent::InvalidRecord) {
-                            Ok(NormalRecoveryAction::ContinueRecord) => continue,
-                            Ok(NormalRecoveryAction::ContinueNextSegment) => break,
-                            Ok(NormalRecoveryAction::StopRecovery) => break 'segments,
-                            Err(error) => {
-                                warn!("normal recovery offset state failed: {error}");
-                                break 'segments;
+                        NormalRecoveryObservation::Invalid { relative_start } => {
+                            if dispatch_request.msg_size > 0 {
+                                let warning_offset =
+                                    relative_start.and_then(|relative| process_offset.checked_add(relative));
+                                if let Some(warning_offset) = warning_offset {
+                                    warn!("found a half message at {warning_offset}, it will be truncated.");
+                                } else {
+                                    warn!("found a half message with an invalid offset; it will be truncated.");
+                                }
                             }
+                            info!("recover physics file end,{} ", mapped_file.get_file_name());
                         }
-                    }
-                }
-
-                index += 1;
-                if index < mapped_files_inner.len() {
-                    if let Some(next_file) = mapped_files_inner.get(index) {
-                        info!("recover next physics file:{}", next_file.get_file_name());
-                    }
-                } else {
-                    info!(
-                        "recover last {} physics file over, last mapped file:{} ",
-                        recovery_file_limit,
-                        mapped_file.get_file_name(),
-                    );
-                }
-            }
-
-            let summary = normal_recovery.summary();
-            let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
-                Ok(offset) => offset,
-                Err(error) => {
-                    warn!("normal recovery last-valid conversion failed: {error}");
-                    return;
-                }
-            };
-            let process_offset = match i64::try_from(summary.truncate_offset) {
-                Ok(offset) => offset,
-                Err(error) => {
-                    warn!("normal recovery truncate conversion failed: {error}");
-                    return;
-                }
-            };
-            if broker_config.enable_controller_mode {
-                self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), process_offset);
-            } else {
-                self.set_confirm_offset(last_valid_offset);
-            }
-
-            // Clear ConsumeQueue redundant data
-            if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
-                warn!(
-                    "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
-                    max_phy_offset_of_consume_queue, process_offset
+                    },
                 );
-                message_store.truncate_dirty_logic_files(process_offset)
+                match outcome {
+                    NormalRecoverySegmentOutcome::ContinueNextSegment => {
+                        index += 1;
+                        if index < mapped_files_inner.len() {
+                            if let Some(next_file) = mapped_files_inner.get(index) {
+                                info!("recover next physics file:{}", next_file.get_file_name());
+                            }
+                        } else {
+                            info!(
+                                "recover last {} physics file over, last mapped file:{} ",
+                                recovery_file_limit,
+                                mapped_file.get_file_name(),
+                            );
+                        }
+                    }
+                    NormalRecoverySegmentOutcome::StopRecovery => break 'segments,
+                    NormalRecoverySegmentOutcome::AdapterFailed(
+                        NormalRecoveryAdapterError::FramePositionOverflow { position, size },
+                    ) => {
+                        warn!("normal recovery frame position overflow at {position} with size {size}");
+                        break 'segments;
+                    }
+                    NormalRecoverySegmentOutcome::AdapterFailed(
+                        NormalRecoveryAdapterError::RelativeOffsetConversion(error),
+                    ) => {
+                        warn!("normal recovery relative offset conversion failed: {error}");
+                        break 'segments;
+                    }
+                    NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::MessageSizeConversion(
+                        error,
+                    )) => {
+                        warn!("normal recovery message size conversion failed: {error}");
+                        break 'segments;
+                    }
+                    NormalRecoverySegmentOutcome::StateFailed(error) => {
+                        warn!("normal recovery offset state failed: {error}");
+                        break 'segments;
+                    }
+                }
             }
-            self.mapped_file_queue.set_flushed_where(process_offset);
-            self.mapped_file_queue.set_committed_where(process_offset);
-            self.mapped_file_queue.truncate_dirty_files(process_offset);
+
+            let completion = normal_recovery.completion(max_phy_offset_of_consume_queue);
+            apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue, message_store);
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
                                         files"
             );
-            self.mapped_file_queue.set_flushed_where(0);
-            self.mapped_file_queue.set_committed_where(0);
-            message_store.consume_queue_store_mut().destroy();
-            message_store.consume_queue_store_mut().load_after_destroy();
-        }
-    }
-
-    fn get_simple_message_bytes<MF: MappedFile>(&self, position: usize, mapped_file: &MF) -> (Option<Bytes>, usize) {
-        let mut bytes = mapped_file.get_bytes(position, 4);
-        match bytes {
-            None => (None, 0),
-            Some(ref mut inner) => {
-                let size = inner.get_i32();
-                if size <= 0 {
-                    return (None, 0);
-                }
-                let Ok(size) = usize::try_from(size) else {
-                    return (None, 0);
-                };
-                (mapped_file.get_bytes(position, size), size)
-            }
+            apply_recovery_completion!(
+                self,
+                CommitLogRecoveryCompletion::Empty,
+                max_phy_offset_of_consume_queue,
+                message_store,
+            );
         }
     }
 
@@ -1890,7 +1841,7 @@ impl CommitLog {
         if self.broker_config.enable_controller_mode {
             return self.compute_controller_confirm_offset();
         } else if self.broker_config.duplication_enable {
-            return self.confirm_offset;
+            return self.runtime_state.confirm_offset();
         }
         let ms = self.local_file_message_store.as_ref().unwrap();
         if ms.is_sync_disk_flush() {
@@ -1903,7 +1854,7 @@ impl CommitLog {
     pub fn get_confirm_offset_directly(&self) -> i64 {
         if self.broker_config.enable_controller_mode {
             let Some(message_store) = self.local_file_message_store.as_ref() else {
-                return self.confirm_offset;
+                return self.runtime_state.confirm_offset();
             };
 
             if self.message_store_config.broker_role != BrokerRole::Slave
@@ -1917,9 +1868,9 @@ impl CommitLog {
                 }
             }
 
-            self.confirm_offset
+            self.runtime_state.confirm_offset()
         } else if self.broker_config.duplication_enable {
-            self.confirm_offset
+            self.runtime_state.confirm_offset()
         } else {
             self.get_max_offset()
         }
@@ -1951,10 +1902,12 @@ impl CommitLog {
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
-            self.mapped_file_queue.set_flushed_where(0);
-            self.mapped_file_queue.set_committed_where(0);
-            message_store.consume_queue_store_mut().destroy();
-            message_store.consume_queue_store_mut().load_after_destroy();
+            apply_recovery_completion!(
+                self,
+                CommitLogRecoveryCompletion::Empty,
+                max_phy_offset_of_consume_queue,
+                message_store,
+            );
             return;
         }
 
@@ -2001,198 +1954,144 @@ impl CommitLog {
             local_message_store.max_delay_level(),
             local_message_store.delay_level_table_ref().clone(),
         );
+        let confirm_offset = self.get_confirm_offset();
+        let confirm_bounded = self.message_store_config.duplication_enable || broker_config.enable_controller_mode;
 
         'segments: while index < mapped_files_inner.len() {
             let Some(mapped_file) = mapped_files_inner.get(index) else {
                 break;
             };
             let process_offset = mapped_file.get_file_from_offset();
-
-            if let Err(error) = abnormal_recovery.apply(AbnormalRecoveryEvent::SegmentStarted {
-                base_offset: process_offset,
-            }) {
-                warn!("optimized abnormal recovery offset state failed: {error}");
-                break;
-            }
-
-            info!(
-                "Recovering physics file: {} (optimized batch mode)",
-                mapped_file.get_file_name()
-            );
-
             let mut iterator = BatchMessageIterator::new(mapped_file);
             let mut file_processed = false;
-            let mut record_closed_segment = false;
-
-            while let Some((mut msg_bytes, absolute_offset, msg_size)) = iterator.next_message() {
-                let mut dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
-
-                if dispatch_request.success && dispatch_request.msg_size > 0 {
-                    let confirm_candidate_end =
-                        match abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, msg_size) {
-                            Ok(candidate) => candidate,
-                            Err(error) => {
-                                warn!("optimized abnormal recovery confirm candidate failed: {error}");
-                                break 'segments;
-                            }
-                        };
-                    let validated_size = match u64::try_from(dispatch_request.msg_size) {
-                        Ok(size) => size,
-                        Err(error) => {
-                            warn!("optimized abnormal recovery validated size conversion failed: {error}");
-                            break 'segments;
-                        }
+            let outcome = abnormal_recovery.drive_abnormal_segment(
+                process_offset,
+                || {
+                    let Some((mut msg_bytes, absolute_offset, msg_size)) = iterator.next_message() else {
+                        return Ok(AbnormalRecoveryRecord::SourceEnded);
                     };
-                    let relative_start = match u64::try_from(absolute_offset) {
-                        Ok(offset) => offset,
-                        Err(error) => {
-                            warn!("optimized abnormal recovery relative offset conversion failed: {error}");
-                            break 'segments;
-                        }
-                    };
-                    let dispatch_gate =
-                        if self.message_store_config.duplication_enable || broker_config.enable_controller_mode {
-                            let confirm_offset = match u64::try_from(self.get_confirm_offset().max(0)) {
-                                Ok(offset) => offset,
-                                Err(error) => {
-                                    warn!("optimized abnormal recovery confirm limit conversion failed: {error}");
-                                    break 'segments;
-                                }
-                            };
+                    let dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
+                    if dispatch_request.success && dispatch_request.msg_size > 0 {
+                        let confirm_candidate_end =
+                            abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, msg_size)
+                                .map_err(AbnormalRecoveryAdapterError::ConfirmCandidate)?;
+                        let validated_size = u64::try_from(dispatch_request.msg_size)
+                            .map_err(AbnormalRecoveryAdapterError::ValidatedSizeConversion)?;
+                        let relative_start = u64::try_from(absolute_offset)
+                            .map_err(AbnormalRecoveryAdapterError::RelativeOffsetConversion)?;
+                        let dispatch_gate = if confirm_bounded {
+                            let confirm_offset = u64::try_from(confirm_offset.max(0))
+                                .map_err(AbnormalRecoveryAdapterError::ConfirmLimitConversion)?;
                             AbnormalRecoveryDispatchGate::ConfirmBounded { confirm_offset }
                         } else {
                             AbnormalRecoveryDispatchGate::Ungated
                         };
-                    match abnormal_recovery.apply(AbnormalRecoveryEvent::MessageAccepted {
-                        segment_base: process_offset,
-                        relative_start,
-                        validated_size,
-                        confirm_candidate_end,
-                        dispatch_gate,
-                    }) {
-                        Ok(AbnormalRecoveryAction::DispatchMessage) => {
-                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
+                        Ok(AbnormalRecoveryRecord::Message {
+                            relative_start,
+                            validated_size,
+                            confirm_candidate_end,
+                            dispatch_gate,
+                            record: dispatch_request,
+                        })
+                    } else if dispatch_request.success && dispatch_request.msg_size == 0 {
+                        Ok(AbnormalRecoveryRecord::Blank {
+                            record: dispatch_request,
+                        })
+                    } else {
+                        Ok(AbnormalRecoveryRecord::Invalid {
+                            relative_start: u64::try_from(absolute_offset).ok(),
+                            record: dispatch_request,
+                        })
+                    }
+                },
+                || {
+                    info!(
+                        "Recovering physics file: {} (optimized batch mode)",
+                        mapped_file.get_file_name()
+                    );
+                },
+                |observation, dispatch_request| {
+                    let message_accepted = matches!(
+                        observation,
+                        AbnormalRecoveryObservation::DispatchMessage | AbnormalRecoveryObservation::SkipMessageDispatch
+                    );
+                    match observation {
+                        AbnormalRecoveryObservation::DispatchMessage => {
+                            self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, false);
                         }
-                        Ok(AbnormalRecoveryAction::SkipMessageDispatch) => {}
-                        Ok(action) => {
-                            warn!("optimized abnormal recovery unexpected message action: {action:?}");
-                            break 'segments;
+                        AbnormalRecoveryObservation::SkipMessageDispatch => {}
+                        AbnormalRecoveryObservation::Blank => {
+                            self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, true);
                         }
-                        Err(error) => {
-                            warn!("optimized abnormal recovery offset state failed: {error}");
-                            break 'segments;
+                        AbnormalRecoveryObservation::Invalid { relative_start } => {
+                            if dispatch_request.msg_size > 0 {
+                                let warning_offset =
+                                    relative_start.and_then(|relative| process_offset.checked_add(relative));
+                                if let Some(warning_offset) = warning_offset {
+                                    warn!("found a half message at {warning_offset}, it will be truncated.");
+                                } else {
+                                    warn!("found a half message with an invalid offset; it will be truncated.");
+                                }
+                            }
+                            info!("recover physics file end: {}", mapped_file.get_file_name());
                         }
                     }
-                    file_processed = true;
-                } else if dispatch_request.success && dispatch_request.msg_size == 0 {
-                    // End of file marker
-                    record_closed_segment = true;
-                    match abnormal_recovery.apply(AbnormalRecoveryEvent::Blank) {
-                        Ok(AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment) => {
-                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
-                            break;
-                        }
-                        Ok(action) => {
-                            warn!("optimized abnormal recovery unexpected blank action: {action:?}");
-                            break 'segments;
-                        }
-                        Err(error) => {
-                            warn!("optimized abnormal recovery offset state failed: {error}");
-                            break 'segments;
-                        }
+                    if message_accepted {
+                        file_processed = true;
                     }
-                } else {
-                    // Invalid message
-                    if dispatch_request.msg_size > 0 {
-                        let warning_offset = u64::try_from(absolute_offset)
-                            .ok()
-                            .and_then(|relative| process_offset.checked_add(relative));
-                        if let Some(warning_offset) = warning_offset {
-                            warn!("found a half message at {warning_offset}, it will be truncated.");
-                        } else {
-                            warn!("found a half message with an invalid offset; it will be truncated.");
-                        }
-                    }
-                    info!("recover physics file end: {}", mapped_file.get_file_name());
-                    record_closed_segment = true;
-                    match abnormal_recovery.apply(AbnormalRecoveryEvent::InvalidRecord) {
-                        Ok(AbnormalRecoveryAction::ContinueNextSegment) => break,
-                        Ok(AbnormalRecoveryAction::StopRecovery) => break 'segments,
-                        Ok(action) => {
-                            warn!("optimized abnormal recovery unexpected invalid action: {action:?}");
-                            break 'segments;
-                        }
-                        Err(error) => {
-                            warn!("optimized abnormal recovery offset state failed: {error}");
-                            break 'segments;
-                        }
-                    }
-                }
-            }
-
-            if !record_closed_segment {
-                match abnormal_recovery.apply(AbnormalRecoveryEvent::SourceEnded) {
-                    Ok(AbnormalRecoveryAction::ContinueNextSegment) => {}
-                    Ok(AbnormalRecoveryAction::StopRecovery) => break,
-                    Ok(action) => {
-                        warn!("optimized abnormal recovery unexpected source-end action: {action:?}");
-                        break;
-                    }
-                    Err(error) => {
-                        warn!("optimized abnormal recovery offset state failed: {error}");
-                        break;
-                    }
-                }
-            }
-
-            if file_processed {
-                recovery_ctx.stats.files_processed += 1;
-            }
-
-            index += 1;
-        }
-
-        let summary = abnormal_recovery.summary();
-        let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
-            Ok(offset) => offset,
-            Err(error) => {
-                warn!("optimized abnormal recovery last-valid conversion failed: {error}");
-                return;
-            }
-        };
-        let confirm_valid_offset = match i64::try_from(summary.confirm_valid_offset) {
-            Ok(offset) => offset,
-            Err(error) => {
-                warn!("optimized abnormal recovery confirm-valid conversion failed: {error}");
-                return;
-            }
-        };
-        let process_offset = match i64::try_from(summary.truncate_offset) {
-            Ok(offset) => offset,
-            Err(error) => {
-                warn!("optimized abnormal recovery truncate conversion failed: {error}");
-                return;
-            }
-        };
-
-        if broker_config.enable_controller_mode {
-            self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), confirm_valid_offset);
-        } else {
-            self.set_confirm_offset(last_valid_offset);
-        }
-
-        // Clear ConsumeQueue redundant data
-        if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
-            warn!(
-                "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
-                max_phy_offset_of_consume_queue, process_offset
+                },
             );
-            message_store.truncate_dirty_logic_files(process_offset);
+            match outcome {
+                AbnormalRecoverySegmentOutcome::ContinueNextSegment => {
+                    if file_processed {
+                        recovery_ctx.stats.files_processed += 1;
+                    }
+                    index += 1;
+                }
+                AbnormalRecoverySegmentOutcome::StopRecovery => break 'segments,
+                AbnormalRecoverySegmentOutcome::AdapterFailed(AbnormalRecoveryAdapterError::ConfirmCandidate(
+                    error,
+                )) => {
+                    warn!("optimized abnormal recovery confirm candidate failed: {error}");
+                    break 'segments;
+                }
+                AbnormalRecoverySegmentOutcome::AdapterFailed(
+                    AbnormalRecoveryAdapterError::ConfirmLimitConversion(error),
+                ) => {
+                    warn!("optimized abnormal recovery confirm limit conversion failed: {error}");
+                    break 'segments;
+                }
+                AbnormalRecoverySegmentOutcome::AdapterFailed(
+                    AbnormalRecoveryAdapterError::RelativeOffsetConversion(error),
+                ) => {
+                    warn!("optimized abnormal recovery relative offset conversion failed: {error}");
+                    break 'segments;
+                }
+                AbnormalRecoverySegmentOutcome::AdapterFailed(
+                    AbnormalRecoveryAdapterError::ValidatedSizeConversion(error),
+                ) => {
+                    warn!("optimized abnormal recovery validated size conversion failed: {error}");
+                    break 'segments;
+                }
+                AbnormalRecoverySegmentOutcome::AdapterFailed(
+                    AbnormalRecoveryAdapterError::FramePositionOverflow { position, size },
+                ) => {
+                    warn!("optimized abnormal recovery frame position overflow at {position} with size {size}");
+                    break 'segments;
+                }
+                AbnormalRecoverySegmentOutcome::StateFailed(error) => {
+                    warn!("optimized abnormal recovery offset state failed: {error}");
+                    break 'segments;
+                }
+                AbnormalRecoverySegmentOutcome::UnexpectedAction(action) => {
+                    warn!("optimized abnormal recovery unexpected action: {action:?}");
+                    break 'segments;
+                }
+            }
         }
 
-        self.mapped_file_queue.set_flushed_where(process_offset);
-        self.mapped_file_queue.set_committed_where(process_offset);
-        self.mapped_file_queue.truncate_dirty_files(process_offset);
+        let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);
+        apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue, message_store);
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Abnormal");
@@ -2244,212 +2143,165 @@ impl CommitLog {
             };
             let max_delay_level = local_message_store.max_delay_level();
             let delay_level_table = local_message_store.delay_level_table_ref().clone();
+            let message_store_config = self.message_store_config.clone();
+            let confirm_offset = self.get_confirm_offset();
+            let confirm_bounded = self.message_store_config.duplication_enable || broker_config.enable_controller_mode;
 
             'segments: while index < mapped_files_inner.len() {
                 let Some(mapped_file) = mapped_files_inner.get(index) else {
                     break;
                 };
                 let process_offset = mapped_file.get_file_from_offset();
-                if let Err(error) = abnormal_recovery.apply(AbnormalRecoveryEvent::SegmentStarted {
-                    base_offset: process_offset,
-                }) {
-                    warn!("standard abnormal recovery offset state failed: {error}");
-                    break;
-                }
-
                 let mut current_pos = 0usize;
-                loop {
-                    let frame_position = current_pos;
-                    let (msg, input_size) = self.get_simple_message_bytes(current_pos, mapped_file.as_ref());
-                    let Some(mut msg_bytes) = msg else {
-                        match abnormal_recovery.apply(AbnormalRecoveryEvent::SourceEnded) {
-                            Ok(AbnormalRecoveryAction::StopRecovery) => break 'segments,
-                            Ok(AbnormalRecoveryAction::ContinueNextSegment) => break,
-                            Ok(action) => {
-                                warn!("standard abnormal recovery unexpected source-end action: {action:?}");
-                                break 'segments;
-                            }
-                            Err(error) => {
-                                warn!("standard abnormal recovery offset state failed: {error}");
-                                break 'segments;
-                            }
-                        }
-                    };
-                    let Some(next_position) = current_pos.checked_add(input_size) else {
-                        warn!(
-                            "standard abnormal recovery frame position overflow at {current_pos} with size \
-                             {input_size}"
+                let outcome = abnormal_recovery.drive_abnormal_segment(
+                    process_offset,
+                    || {
+                        let frame_position = current_pos;
+                        let (msg, input_size) =
+                            read_declared_frame(current_pos, |position, size| mapped_file.get_bytes(position, size));
+                        let Some(mut msg_bytes) = msg else {
+                            return Ok(AbnormalRecoveryRecord::SourceEnded);
+                        };
+                        current_pos = current_pos.checked_add(input_size).ok_or(
+                            AbnormalRecoveryAdapterError::FramePositionOverflow {
+                                position: current_pos,
+                                size: input_size,
+                            },
+                        )?;
+                        let dispatch_request = check_message_and_return_size(
+                            &mut msg_bytes,
+                            check_crc_on_recover,
+                            check_dup_info,
+                            true,
+                            &message_store_config,
+                            max_delay_level,
+                            &delay_level_table,
                         );
-                        break 'segments;
-                    };
-                    current_pos = next_position;
-                    let mut dispatch_request = check_message_and_return_size(
-                        &mut msg_bytes,
-                        check_crc_on_recover,
-                        check_dup_info,
-                        true,
-                        &self.message_store_config,
-                        max_delay_level,
-                        &delay_level_table,
-                    );
-                    if dispatch_request.success && dispatch_request.msg_size > 0 {
-                        let confirm_candidate_end =
-                            match abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, input_size) {
-                                Ok(candidate) => candidate,
-                                Err(error) => {
-                                    warn!("standard abnormal recovery confirm candidate failed: {error}");
-                                    break 'segments;
-                                }
-                            };
-                        let validated_size = match u64::try_from(dispatch_request.msg_size) {
-                            Ok(size) => size,
-                            Err(error) => {
-                                warn!("standard abnormal recovery validated size conversion failed: {error}");
-                                break 'segments;
-                            }
-                        };
-                        let relative_start = match u64::try_from(frame_position) {
-                            Ok(offset) => offset,
-                            Err(error) => {
-                                warn!("standard abnormal recovery relative offset conversion failed: {error}");
-                                break 'segments;
-                            }
-                        };
-                        let dispatch_gate =
-                            if self.message_store_config.duplication_enable || broker_config.enable_controller_mode {
-                                let confirm_offset = match u64::try_from(self.get_confirm_offset().max(0)) {
-                                    Ok(offset) => offset,
-                                    Err(error) => {
-                                        warn!("standard abnormal recovery confirm limit conversion failed: {error}");
-                                        break 'segments;
-                                    }
-                                };
+                        if dispatch_request.success && dispatch_request.msg_size > 0 {
+                            let confirm_candidate_end =
+                                abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, input_size)
+                                    .map_err(AbnormalRecoveryAdapterError::ConfirmCandidate)?;
+                            let validated_size = u64::try_from(dispatch_request.msg_size)
+                                .map_err(AbnormalRecoveryAdapterError::ValidatedSizeConversion)?;
+                            let relative_start = u64::try_from(frame_position)
+                                .map_err(AbnormalRecoveryAdapterError::RelativeOffsetConversion)?;
+                            let dispatch_gate = if confirm_bounded {
+                                let confirm_offset = u64::try_from(confirm_offset.max(0))
+                                    .map_err(AbnormalRecoveryAdapterError::ConfirmLimitConversion)?;
                                 AbnormalRecoveryDispatchGate::ConfirmBounded { confirm_offset }
                             } else {
                                 AbnormalRecoveryDispatchGate::Ungated
                             };
-                        match abnormal_recovery.apply(AbnormalRecoveryEvent::MessageAccepted {
-                            segment_base: process_offset,
-                            relative_start,
-                            validated_size,
-                            confirm_candidate_end,
-                            dispatch_gate,
-                        }) {
-                            Ok(AbnormalRecoveryAction::DispatchMessage) => {
-                                self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
-                            }
-                            Ok(AbnormalRecoveryAction::SkipMessageDispatch) => {}
-                            Ok(action) => {
-                                warn!("standard abnormal recovery unexpected message action: {action:?}");
-                                break 'segments;
-                            }
-                            Err(error) => {
-                                warn!("standard abnormal recovery offset state failed: {error}");
-                                break 'segments;
-                            }
+                            Ok(AbnormalRecoveryRecord::Message {
+                                relative_start,
+                                validated_size,
+                                confirm_candidate_end,
+                                dispatch_gate,
+                                record: dispatch_request,
+                            })
+                        } else if dispatch_request.success && dispatch_request.msg_size == 0 {
+                            Ok(AbnormalRecoveryRecord::Blank {
+                                record: dispatch_request,
+                            })
+                        } else {
+                            Ok(AbnormalRecoveryRecord::Invalid {
+                                relative_start: u64::try_from(frame_position).ok(),
+                                record: dispatch_request,
+                            })
                         }
-                    } else if dispatch_request.success && dispatch_request.msg_size == 0 {
-                        match abnormal_recovery.apply(AbnormalRecoveryEvent::Blank) {
-                            Ok(AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment) => {
-                                self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
-                                break;
-                            }
-                            Ok(action) => {
-                                warn!("standard abnormal recovery unexpected blank action: {action:?}");
-                                break 'segments;
-                            }
-                            Err(error) => {
-                                warn!("standard abnormal recovery offset state failed: {error}");
-                                break 'segments;
-                            }
+                    },
+                    || {},
+                    |observation, dispatch_request| match observation {
+                        AbnormalRecoveryObservation::DispatchMessage => {
+                            self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, false);
                         }
-                    } else {
-                        if dispatch_request.msg_size > 0 {
-                            let warning_offset = u64::try_from(frame_position)
-                                .ok()
-                                .and_then(|relative| process_offset.checked_add(relative));
-                            if let Some(warning_offset) = warning_offset {
-                                warn!("found a half message at {warning_offset}, it will be truncated.");
-                            } else {
-                                warn!("found a half message with an invalid offset; it will be truncated.");
-                            }
+                        AbnormalRecoveryObservation::SkipMessageDispatch => {}
+                        AbnormalRecoveryObservation::Blank => {
+                            self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, true);
                         }
-                        info!("recover physics file end,{} ", mapped_file.get_file_name());
-                        match abnormal_recovery.apply(AbnormalRecoveryEvent::InvalidRecord) {
-                            Ok(AbnormalRecoveryAction::StopRecovery) => break 'segments,
-                            Ok(AbnormalRecoveryAction::ContinueNextSegment) => break,
-                            Ok(action) => {
-                                warn!("standard abnormal recovery unexpected invalid action: {action:?}");
-                                break 'segments;
+                        AbnormalRecoveryObservation::Invalid { relative_start } => {
+                            if dispatch_request.msg_size > 0 {
+                                let warning_offset =
+                                    relative_start.and_then(|relative| process_offset.checked_add(relative));
+                                if let Some(warning_offset) = warning_offset {
+                                    warn!("found a half message at {warning_offset}, it will be truncated.");
+                                } else {
+                                    warn!("found a half message with an invalid offset; it will be truncated.");
+                                }
                             }
-                            Err(error) => {
-                                warn!("standard abnormal recovery offset state failed: {error}");
-                                break 'segments;
-                            }
+                            info!("recover physics file end,{} ", mapped_file.get_file_name());
                         }
-                    }
-                }
-
-                index += 1;
-                if index < mapped_files_inner.len() {
-                    if let Some(next_file) = mapped_files_inner.get(index) {
-                        info!("recover next physics file:{}", next_file.get_file_name());
-                    }
-                } else {
-                    info!(
-                        "recover last physics file over, last mapped file:{} ",
-                        mapped_file.get_file_name()
-                    );
-                }
-            }
-
-            let summary = abnormal_recovery.summary();
-            let last_valid_offset = match i64::try_from(summary.last_valid_offset) {
-                Ok(offset) => offset,
-                Err(error) => {
-                    warn!("standard abnormal recovery last-valid conversion failed: {error}");
-                    return;
-                }
-            };
-            let confirm_valid_offset = match i64::try_from(summary.confirm_valid_offset) {
-                Ok(offset) => offset,
-                Err(error) => {
-                    warn!("standard abnormal recovery confirm-valid conversion failed: {error}");
-                    return;
-                }
-            };
-            let process_offset = match i64::try_from(summary.truncate_offset) {
-                Ok(offset) => offset,
-                Err(error) => {
-                    warn!("standard abnormal recovery truncate conversion failed: {error}");
-                    return;
-                }
-            };
-            if broker_config.enable_controller_mode {
-                self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), confirm_valid_offset);
-            } else {
-                self.set_confirm_offset(last_valid_offset);
-            }
-
-            if should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue, summary.truncate_offset) {
-                warn!(
-                    "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
-                    max_phy_offset_of_consume_queue, process_offset
+                    },
                 );
-                message_store.truncate_dirty_logic_files(process_offset)
+                match outcome {
+                    AbnormalRecoverySegmentOutcome::ContinueNextSegment => {
+                        index += 1;
+                        if index < mapped_files_inner.len() {
+                            if let Some(next_file) = mapped_files_inner.get(index) {
+                                info!("recover next physics file:{}", next_file.get_file_name());
+                            }
+                        } else {
+                            info!(
+                                "recover last physics file over, last mapped file:{} ",
+                                mapped_file.get_file_name()
+                            );
+                        }
+                    }
+                    AbnormalRecoverySegmentOutcome::StopRecovery => break 'segments,
+                    AbnormalRecoverySegmentOutcome::AdapterFailed(AbnormalRecoveryAdapterError::ConfirmCandidate(
+                        error,
+                    )) => {
+                        warn!("standard abnormal recovery confirm candidate failed: {error}");
+                        break 'segments;
+                    }
+                    AbnormalRecoverySegmentOutcome::AdapterFailed(
+                        AbnormalRecoveryAdapterError::ConfirmLimitConversion(error),
+                    ) => {
+                        warn!("standard abnormal recovery confirm limit conversion failed: {error}");
+                        break 'segments;
+                    }
+                    AbnormalRecoverySegmentOutcome::AdapterFailed(
+                        AbnormalRecoveryAdapterError::FramePositionOverflow { position, size },
+                    ) => {
+                        warn!("standard abnormal recovery frame position overflow at {position} with size {size}");
+                        break 'segments;
+                    }
+                    AbnormalRecoverySegmentOutcome::AdapterFailed(
+                        AbnormalRecoveryAdapterError::RelativeOffsetConversion(error),
+                    ) => {
+                        warn!("standard abnormal recovery relative offset conversion failed: {error}");
+                        break 'segments;
+                    }
+                    AbnormalRecoverySegmentOutcome::AdapterFailed(
+                        AbnormalRecoveryAdapterError::ValidatedSizeConversion(error),
+                    ) => {
+                        warn!("standard abnormal recovery validated size conversion failed: {error}");
+                        break 'segments;
+                    }
+                    AbnormalRecoverySegmentOutcome::StateFailed(error) => {
+                        warn!("standard abnormal recovery offset state failed: {error}");
+                        break 'segments;
+                    }
+                    AbnormalRecoverySegmentOutcome::UnexpectedAction(action) => {
+                        warn!("standard abnormal recovery unexpected action: {action:?}");
+                        break 'segments;
+                    }
+                }
             }
-            self.mapped_file_queue.set_flushed_where(process_offset);
-            self.mapped_file_queue.set_committed_where(process_offset);
-            self.mapped_file_queue.truncate_dirty_files(process_offset);
+
+            let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);
+            apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue, message_store);
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
                                         files"
             );
-            self.mapped_file_queue.set_flushed_where(0);
-            self.mapped_file_queue.set_committed_where(0);
-            message_store.consume_queue_store_mut().destroy();
-            message_store.consume_queue_store_mut().load_after_destroy();
+            apply_recovery_completion!(
+                self,
+                CommitLogRecoveryCompletion::Empty,
+                max_phy_offset_of_consume_queue,
+                message_store,
+            );
         }
     }
 
@@ -2475,7 +2327,7 @@ impl CommitLog {
 
     #[inline]
     pub fn load_statistics(&self) -> LoadStatistics {
-        self.last_load_statistics.lock().clone()
+        self.runtime_state.load_statistics()
     }
 
     fn recovery_mmap_advice(&self) -> RecoveryMmapAdvice {
@@ -2699,7 +2551,10 @@ impl CommitLog {
     }
 
     pub fn lock_time_mills(&self) -> i64 {
-        let begin = self.begin_time_in_lock.load(std::sync::atomic::Ordering::Acquire);
+        let begin = self
+            .runtime_state
+            .begin_time_in_lock()
+            .load(std::sync::atomic::Ordering::Acquire);
         if begin > 0 {
             (SystemClock::now() - (begin as u128)) as i64
         } else {
@@ -2708,7 +2563,7 @@ impl CommitLog {
     }
 
     pub fn begin_time_in_lock(&self) -> &Arc<AtomicU64> {
-        &self.begin_time_in_lock
+        self.runtime_state.begin_time_in_lock()
     }
 
     pub fn remain_how_many_data_to_commit(&self) -> i64 {
@@ -2724,14 +2579,7 @@ impl CommitLog {
             let result = self.get_message(offset, size);
             if let Some(result) = result {
                 let buffer = result.get_buffer();
-                let sys_flag = (&buffer[MessageDecoder::SYSFLAG_POSITION..]).get_i32();
-                let born_host_length = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
-                    8
-                } else {
-                    20
-                };
-                let msg_store_time_pos = born_host_length + 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
-                (&buffer[msg_store_time_pos..]).get_i64()
+                rocketmq_store_local::commit_log::header::store_timestamp_from_frame(buffer)
             } else {
                 -1
             }
@@ -2753,7 +2601,8 @@ impl CommitLog {
         data_start: i32,
         data_length: i32,
     ) -> Result<bool, StoreError> {
-        let lock = self.put_message_lock.lock().await;
+        let put_message_lock = self.put_message_lock.clone();
+        let lock = put_message_lock.lock().await;
         let mapped_file = self
             .mapped_file_queue
             .get_last_mapped_file_mut_start_offset(start_offset as u64, true);
@@ -3130,12 +2979,12 @@ mod tests {
 
     #[test]
     fn put_message_lock_stats_records_totals_and_maxes() {
-        let stats = CommitLogPutMessageLockStats::default();
+        let state = CommitLogRuntimeState::new(true, 0);
 
-        stats.record(3, 7);
-        stats.record(5, 2);
+        state.record_put_message_lock(3, 7);
+        state.record_put_message_lock(5, 2);
 
-        let snapshot = stats.snapshot();
+        let snapshot = state.put_message_lock_runtime_info();
         assert_eq!(snapshot.acquire_total, 2);
         assert_eq!(snapshot.wait_total_millis, 8);
         assert_eq!(snapshot.wait_max_millis, 5);
@@ -3280,7 +3129,7 @@ mod tests {
             .append_data(0, &[1, 2, 3, 4], 0, 4)
             .await
             .expect("append data");
-        store.get_commit_log_mut().confirm_offset = -1;
+        store.get_commit_log_mut().runtime_state.set_confirm_offset(-1);
 
         assert_eq!(store.get_confirm_offset(), -1);
 
@@ -3305,7 +3154,7 @@ mod tests {
 
         store.get_commit_log_mut().clamp_controller_recover_confirm_offset(0, 6);
 
-        assert_eq!(store.get_commit_log().confirm_offset, 6);
+        assert_eq!(store.get_commit_log().runtime_state.confirm_offset(), 6);
         assert_eq!(store.get_confirm_offset(), 6);
 
         let _ = std::fs::remove_dir_all(temp_root);
@@ -3468,7 +3317,9 @@ mod tests {
             .expect("active file lock should succeed");
         assert!(store
             .get_commit_log()
-            .active_memory_lock_present
+            .runtime_state
+            .active_memory_lock_parts()
+            .1
             .load(Ordering::Acquire));
 
         store
@@ -3480,7 +3331,9 @@ mod tests {
             .expect("active file lock release should succeed");
         assert!(!store
             .get_commit_log()
-            .active_memory_lock_present
+            .runtime_state
+            .active_memory_lock_parts()
+            .1
             .load(Ordering::Acquire));
 
         store

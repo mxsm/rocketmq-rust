@@ -18,7 +18,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use memmap2::MmapMut;
 use rayon::prelude::*;
 use thiserror::Error;
 use tracing::info;
@@ -470,18 +469,17 @@ impl RecoveryFilePrefetch {
 ///
 /// Unsupported platforms and disabled advice return a not-attempted outcome.
 /// Platform failures are logged and returned as non-fatal failure outcomes.
-pub fn apply_recovery_mmap_advice(advice: RecoveryMmapAdvice, mmap: &MmapMut, file_name: &str) -> HintOutcome {
+pub fn apply_recovery_mmap_advice(advice: RecoveryMmapAdvice, mmap: &[u8], file_name: &str) -> HintOutcome {
     match advice {
         RecoveryMmapAdvice::Disabled => HintOutcome::not_attempted(),
         RecoveryMmapAdvice::Sequential => {
             #[cfg(unix)]
             {
-                use memmap2::Advice;
-
                 let start = std::time::Instant::now();
-                let result = mmap.advise(Advice::Sequential);
+                let result = crate::utils::ffi::madvise(mmap.as_ptr(), mmap.len(), crate::utils::ffi::MADV_SEQUENTIAL);
                 let elapsed = start.elapsed();
-                if let Err(error) = result {
+                if result != 0 {
+                    let error = std::io::Error::last_os_error();
                     tracing::warn!(
                         target: "rocketmq_store::log_file::commit_log_loader",
                         "Failed to apply sequential memory hint for {}: {}",
@@ -511,7 +509,7 @@ pub fn apply_recovery_mmap_advice(advice: RecoveryMmapAdvice, mmap: &MmapMut, fi
 }
 
 #[cfg(any(windows, test))]
-fn prefetch_outcome_from_result(result: Result<bool, String>, elapsed: Duration) -> HintOutcome {
+fn prefetch_outcome_from_result(result: io::Result<bool>, elapsed: Duration) -> HintOutcome {
     match result {
         Ok(true) => HintOutcome::success(elapsed),
         Ok(false) => HintOutcome::not_attempted(),
@@ -520,34 +518,19 @@ fn prefetch_outcome_from_result(result: Result<bool, String>, elapsed: Duration)
 }
 
 #[cfg(windows)]
-fn prefetch_virtual_memory(mmap: &MmapMut) -> Result<bool, String> {
+fn prefetch_virtual_memory(mmap: &[u8]) -> io::Result<bool> {
     if mmap.is_empty() {
         return Ok(false);
     }
 
-    use std::ffi::c_void;
-
-    use windows::Win32::System::Memory::PrefetchVirtualMemory;
-    use windows::Win32::System::Memory::WIN32_MEMORY_RANGE_ENTRY;
-    use windows::Win32::System::Threading::GetCurrentProcess;
-
-    let range = WIN32_MEMORY_RANGE_ENTRY {
-        VirtualAddress: mmap.as_ptr() as *mut c_void,
-        NumberOfBytes: mmap.len(),
-    };
-    // SAFETY: `range` covers the live bytes owned by `mmap`, the current-process
-    // pseudo-handle is valid for this call, and PrefetchVirtualMemory does not
-    // retain the range after returning.
-    unsafe { PrefetchVirtualMemory(GetCurrentProcess(), &[range], 0) }
-        .map_err(|error| format!("Storage read failed for 'PrefetchVirtualMemory': {error}"))?;
-    Ok(true)
+    crate::utils::ffi::prefetch_virtual_memory(mmap.as_ptr(), mmap.len()).map_err(io::Error::other)
 }
 
 /// Applies the configured recovery file-prefetch hint to an initialized mapping.
 ///
 /// Unsupported platforms, disabled prefetch, and an unavailable Windows operation return a
 /// not-attempted outcome. Platform failures are logged and returned as non-fatal failure outcomes.
-pub fn apply_recovery_file_prefetch(prefetch: RecoveryFilePrefetch, mmap: &MmapMut, file_name: &str) -> HintOutcome {
+pub fn apply_recovery_file_prefetch(prefetch: RecoveryFilePrefetch, mmap: &[u8], file_name: &str) -> HintOutcome {
     match prefetch {
         RecoveryFilePrefetch::Disabled => HintOutcome::not_attempted(),
         RecoveryFilePrefetch::Sequential => {
@@ -609,7 +592,7 @@ mod tests {
         assert!(!skipped.succeeded);
         assert_eq!(skipped.elapsed, Duration::ZERO);
 
-        let failure = prefetch_outcome_from_result(Err("platform failure".to_string()), Duration::from_millis(7));
+        let failure = prefetch_outcome_from_result(Err(io::Error::other("platform failure")), Duration::from_millis(7));
         assert!(failure.attempted);
         assert!(!failure.succeeded);
         assert_eq!(failure.elapsed, Duration::from_millis(7));

@@ -102,6 +102,10 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use rocketmq_store_local::commit_log::recovery_orchestration::drive_commit_log_recovery;
+use rocketmq_store_local::commit_log::recovery_orchestration::optimized_recovery_requested;
+use rocketmq_store_local::commit_log::recovery_orchestration::CommitLogRecoveryStep;
+
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
@@ -1345,11 +1349,8 @@ impl LocalFileMessageStore {
     }
 
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
-        // Check if optimized recovery is enabled (default: true)
-        let use_optimized = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse::<bool>()
-            .unwrap_or(true);
+        let optimized_recovery_value = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY").ok();
+        let use_optimized = optimized_recovery_requested(optimized_recovery_value.as_deref());
         let message_store = match self.message_store_arc_or_error("normal recovery") {
             Ok(message_store) => message_store,
             Err(error) => {
@@ -1358,23 +1359,26 @@ impl LocalFileMessageStore {
             }
         };
 
-        if use_optimized {
-            self.commit_log
-                .recover_normally_optimized(max_phy_offset_of_consume_queue, message_store)
-                .await;
-        } else {
-            self.commit_log
-                .recover_normally(max_phy_offset_of_consume_queue, message_store)
-                .await;
-        }
+        drive_commit_log_recovery(use_optimized, |step| async move {
+            match step {
+                CommitLogRecoveryStep::Optimized => {
+                    self.commit_log
+                        .recover_normally_optimized(max_phy_offset_of_consume_queue, message_store)
+                        .await;
+                }
+                CommitLogRecoveryStep::Standard => {
+                    self.commit_log
+                        .recover_normally(max_phy_offset_of_consume_queue, message_store)
+                        .await;
+                }
+            }
+        })
+        .await;
     }
 
     pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {
-        // Check if optimized recovery is enabled (default: true)
-        let use_optimized = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse::<bool>()
-            .unwrap_or(true);
+        let optimized_recovery_value = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY").ok();
+        let use_optimized = optimized_recovery_requested(optimized_recovery_value.as_deref());
         let message_store = match self.message_store_arc_or_error("abnormal recovery") {
             Ok(message_store) => message_store,
             Err(error) => {
@@ -1383,15 +1387,21 @@ impl LocalFileMessageStore {
             }
         };
 
-        if use_optimized {
-            self.commit_log
-                .recover_abnormally_optimized(max_phy_offset_of_consume_queue, message_store)
-                .await;
-        } else {
-            self.commit_log
-                .recover_abnormally(max_phy_offset_of_consume_queue, message_store)
-                .await;
-        }
+        drive_commit_log_recovery(use_optimized, |step| async move {
+            match step {
+                CommitLogRecoveryStep::Optimized => {
+                    self.commit_log
+                        .recover_abnormally_optimized(max_phy_offset_of_consume_queue, message_store)
+                        .await;
+                }
+                CommitLogRecoveryStep::Standard => {
+                    self.commit_log
+                        .recover_abnormally(max_phy_offset_of_consume_queue, message_store)
+                        .await;
+                }
+            }
+        })
+        .await;
     }
 
     fn is_recover_concurrently(&self) -> bool {
@@ -7988,6 +7998,67 @@ mod tests {
         assert_eq!(append_result.msg_num, 3);
         assert_eq!(stats.get_put_message_times_total(), 3);
         assert_eq!(stats.get_put_message_size_total(), append_result.wrote_bytes as u64);
+    }
+
+    #[tokio::test]
+    async fn single_put_retries_encoded_buffer_after_commitlog_eof_roll() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 512,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let topic = CheetahString::from_static_str("af0s");
+
+        let seed = store
+            .put_message(build_test_message(&topic, Bytes::from(vec![1_u8; 245])))
+            .await;
+        assert_eq!(seed.put_message_status(), PutMessageStatus::PutOk);
+        assert_eq!(seed.append_message_result().expect("seed append").wrote_bytes, 340);
+
+        let retried = store
+            .put_message(build_test_message(&topic, Bytes::from(vec![2_u8; 75])))
+            .await;
+
+        assert_eq!(retried.put_message_status(), PutMessageStatus::PutOk);
+        let append = retried.append_message_result().expect("retried append");
+        assert_eq!(append.wrote_offset, 512);
+        assert_eq!(append.wrote_bytes, 170);
+        assert_eq!(append.msg_num, 1);
+        assert_eq!(store.get_runtime_info()["putMessageLockAcquireTotal"], "2");
+    }
+
+    #[tokio::test]
+    async fn batch_put_retries_full_encoded_buffer_after_partial_frame_eof_roll() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 512,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let topic = CheetahString::from_static_str("af0b");
+
+        let seed = store
+            .put_message(build_test_message(&topic, Bytes::from(vec![3_u8; 75])))
+            .await;
+        assert_eq!(seed.put_message_status(), PutMessageStatus::PutOk);
+        assert_eq!(seed.append_message_result().expect("seed append").wrote_bytes, 170);
+
+        let batch = build_test_batch(&topic, &[Bytes::from(vec![4_u8; 75]), Bytes::from(vec![5_u8; 75])]);
+        let retried = store.put_messages(batch).await;
+
+        assert_eq!(retried.put_message_status(), PutMessageStatus::PutOk);
+        let append = retried.append_message_result().expect("retried batch append");
+        assert_eq!(append.wrote_offset, 512);
+        assert_eq!(append.wrote_bytes, 340);
+        assert_eq!(append.msg_num, 2);
+        assert_eq!(store.get_runtime_info()["putMessageLockAcquireTotal"], "2");
     }
 
     #[tokio::test]

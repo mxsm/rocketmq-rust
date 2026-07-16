@@ -1,0 +1,967 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::collections::BinaryHeap;
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex as StdMutex;
+use std::thread;
+use std::time::Duration;
+
+use cheetah_string::CheetahString;
+use parking_lot::RwLock;
+use rocketmq_error::RocketMQError;
+use tokio::sync::Notify;
+use tracing::error;
+use tracing::info;
+use tracing::warn;
+
+use crate::base::transient_store_pool::TransientStorePool;
+use crate::mapped_file::allocation_policy::mapped_file_allocation_capacity;
+use crate::mapped_file::allocation_policy::MappedFileAllocationPoolSnapshot;
+use crate::mapped_file::allocation_policy::MappedFileWarmupConfig;
+use crate::mapped_file::allocation_request::MappedFileAllocationRequestKey;
+use crate::mapped_file::DefaultMappedFile;
+use crate::mapped_file::MappedFile;
+
+/// Timeout for waiting on file allocation (matches Java: 5 seconds)
+const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct WorkerCompletion {
+    completed: Arc<AtomicBool>,
+    notification: Arc<Notify>,
+}
+
+impl Drop for WorkerCompletion {
+    fn drop(&mut self) {
+        self.completed.store(true, Ordering::Release);
+        self.notification.notify_one();
+    }
+}
+
+/// Projects facade-owned configuration into the Local allocation service.
+#[doc(hidden)]
+pub trait AllocateMappedFileServiceConfig {
+    fn mapped_file_warmup_config(&self) -> MappedFileWarmupConfig;
+}
+
+/// Background service for asynchronous MappedFile pre-allocation
+///
+/// Corresponds to Java's `AllocateMappedFileService`:
+/// - Uses priority queue for ordered file allocation
+/// - Supports TransientStorePool integration
+/// - Pre-allocates next and next-next files
+/// - Implements CountDownLatch-like synchronization
+pub struct AllocateMappedFileService {
+    /// Request table: file_path -> AllocateRequest
+    request_table: Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>,
+
+    /// Priority queue for ordered processing
+    request_queue: Arc<RwLock<BinaryHeap<Arc<AllocateRequest>>>>,
+
+    /// Exception flag (set when allocation fails)
+    has_exception: Arc<AtomicBool>,
+
+    /// Shutdown flag
+    stopped: Arc<AtomicBool>,
+
+    /// Notification for new requests
+    notify: Arc<Notify>,
+
+    /// Blocking worker wakeup, used instead of creating an internal Tokio runtime.
+    worker_wakeup: Arc<(StdMutex<()>, Condvar)>,
+
+    /// Background worker handle
+    worker_handle: Arc<parking_lot::Mutex<Option<thread::JoinHandle<()>>>>,
+
+    /// Completion state used to await the dedicated worker without a blocking join task.
+    worker_completed: Arc<AtomicBool>,
+
+    /// Notification emitted when the dedicated worker exits or unwinds.
+    worker_completion: Arc<Notify>,
+
+    /// TransientStorePool reference (optional)
+    transient_store_pool: Option<Arc<TransientStorePool>>,
+
+    /// Whether to enable TransientStorePool
+    transient_store_pool_enable: bool,
+
+    /// Whether to fast fail when no buffer available in pool
+    fast_fail_if_no_buffer: bool,
+
+    /// CommitLog warm-up behavior copied from MessageStoreConfig.
+    warm_mapped_file_config: MappedFileWarmupConfig,
+}
+
+impl Clone for AllocateMappedFileService {
+    fn clone(&self) -> Self {
+        Self {
+            request_table: self.request_table.clone(),
+            request_queue: self.request_queue.clone(),
+            has_exception: self.has_exception.clone(),
+            stopped: self.stopped.clone(),
+            notify: self.notify.clone(),
+            worker_wakeup: self.worker_wakeup.clone(),
+            worker_handle: self.worker_handle.clone(),
+            worker_completed: self.worker_completed.clone(),
+            worker_completion: self.worker_completion.clone(),
+            transient_store_pool: self.transient_store_pool.clone(),
+            transient_store_pool_enable: self.transient_store_pool_enable,
+            fast_fail_if_no_buffer: self.fast_fail_if_no_buffer,
+            warm_mapped_file_config: self.warm_mapped_file_config,
+        }
+    }
+}
+
+impl Default for AllocateMappedFileService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AllocateMappedFileService {
+    /// Create a new AllocateMappedFileService with full configuration
+    ///
+    /// # Arguments
+    /// * `transient_store_pool` - Optional TransientStorePool for zero-copy
+    /// * `transient_store_pool_enable` - Whether TransientStorePool is enabled
+    /// * `fast_fail_if_no_buffer` - Whether to fast fail when pool is exhausted
+    pub fn new_with_config(
+        transient_store_pool: Option<Arc<TransientStorePool>>,
+        transient_store_pool_enable: bool,
+        fast_fail_if_no_buffer: bool,
+    ) -> Self {
+        let request_table = Arc::new(RwLock::new(HashMap::new()));
+        let request_queue = Arc::new(RwLock::new(BinaryHeap::new()));
+        let has_exception = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let notify = Arc::new(Notify::new());
+        let worker_wakeup = Arc::new((StdMutex::new(()), Condvar::new()));
+
+        Self {
+            request_table,
+            request_queue,
+            has_exception,
+            stopped,
+            notify,
+            worker_wakeup,
+            worker_handle: Arc::new(parking_lot::Mutex::new(None)),
+            worker_completed: Arc::new(AtomicBool::new(true)),
+            worker_completion: Arc::new(Notify::new()),
+            transient_store_pool,
+            transient_store_pool_enable,
+            fast_fail_if_no_buffer,
+            warm_mapped_file_config: MappedFileWarmupConfig::disabled(),
+        }
+    }
+
+    pub fn new_with_message_store_config<C>(
+        transient_store_pool: Option<Arc<TransientStorePool>>,
+        transient_store_pool_enable: bool,
+        fast_fail_if_no_buffer: bool,
+        message_store_config: &C,
+    ) -> Self
+    where
+        C: AllocateMappedFileServiceConfig,
+    {
+        let mut service = Self::new_with_config(
+            transient_store_pool,
+            transient_store_pool_enable,
+            fast_fail_if_no_buffer,
+        );
+        service.warm_mapped_file_config = message_store_config.mapped_file_warmup_config();
+        service
+    }
+
+    /// Create a new AllocateMappedFileService with default configuration
+    /// (no TransientStorePool)
+    pub fn new() -> Self {
+        Self::new_with_config(None, false, false)
+    }
+
+    pub fn is_started(&self) -> bool {
+        self.worker_handle.lock().is_some() && !self.stopped.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn should_warm_mapped_file(&self, file_size: u64) -> bool {
+        self.warm_mapped_file_config.should_warm(file_size)
+    }
+
+    /// Start the background worker thread
+    /// Corresponds to Java's ServiceThread.start()
+    pub fn start(&self) {
+        {
+            let worker_handle = self.worker_handle.lock();
+            if worker_handle.is_some() {
+                return;
+            }
+        }
+
+        self.stopped.store(false, Ordering::Relaxed);
+        self.worker_completed.store(false, Ordering::Release);
+
+        let request_table = self.request_table.clone();
+        let request_queue = self.request_queue.clone();
+        let has_exception = self.has_exception.clone();
+        let stopped = self.stopped.clone();
+        let transient_store_pool = self.transient_store_pool.clone();
+        let worker_wakeup = self.worker_wakeup.clone();
+        let warm_mapped_file_config = self.warm_mapped_file_config;
+        let worker_completed = self.worker_completed.clone();
+        let worker_completion = self.worker_completion.clone();
+
+        match thread::Builder::new()
+            .name("allocate-mapped-file-service".to_string())
+            .spawn(move || {
+                let _completion = WorkerCompletion {
+                    completed: worker_completed,
+                    notification: worker_completion,
+                };
+                Self::run_worker(
+                    request_table,
+                    request_queue,
+                    has_exception,
+                    stopped,
+                    transient_store_pool,
+                    worker_wakeup,
+                    warm_mapped_file_config,
+                );
+            }) {
+            Ok(handle) => {
+                *self.worker_handle.lock() = Some(handle);
+                info!("AllocateMappedFileService started");
+            }
+            Err(error) => {
+                self.worker_completed.store(true, Ordering::Release);
+                self.has_exception.store(true, Ordering::Relaxed);
+                error!("AllocateMappedFileService failed to start worker thread: {}", error);
+            }
+        }
+    }
+
+    /// Main worker loop - corresponds to Java's run() method
+    fn run_worker(
+        request_table: Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>,
+        request_queue: Arc<RwLock<BinaryHeap<Arc<AllocateRequest>>>>,
+        has_exception: Arc<AtomicBool>,
+        stopped: Arc<AtomicBool>,
+        transient_store_pool: Option<Arc<TransientStorePool>>,
+        worker_wakeup: Arc<(StdMutex<()>, Condvar)>,
+        warm_mapped_file_config: MappedFileWarmupConfig,
+    ) {
+        info!("AllocateMappedFileService: service started");
+
+        while !stopped.load(Ordering::Relaxed) {
+            while !stopped.load(Ordering::Relaxed)
+                && Self::mmap_operation(
+                    &request_table,
+                    &request_queue,
+                    &has_exception,
+                    &transient_store_pool,
+                    warm_mapped_file_config,
+                )
+            {}
+
+            if stopped.load(Ordering::Relaxed) {
+                break;
+            }
+
+            if request_queue.read().is_empty() {
+                let (lock, condvar) = &*worker_wakeup;
+                let guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                match condvar.wait_timeout(guard, Duration::from_millis(100)) {
+                    Ok((_guard, _timeout)) => {}
+                    Err(poisoned) => {
+                        let (_guard, _timeout) = poisoned.into_inner();
+                    }
+                }
+            }
+        }
+
+        info!("AllocateMappedFileService: service end");
+    }
+
+    /// Core file allocation operation - corresponds to Java's mmapOperation()
+    ///
+    /// Returns false if interrupted or no requests available
+    fn mmap_operation(
+        request_table: &Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>,
+        request_queue: &Arc<RwLock<BinaryHeap<Arc<AllocateRequest>>>>,
+        has_exception: &Arc<AtomicBool>,
+        transient_store_pool: &Option<Arc<TransientStorePool>>,
+        warm_mapped_file_config: MappedFileWarmupConfig,
+    ) -> bool {
+        // Pop request from priority queue
+        let req = {
+            let mut queue = request_queue.write();
+            queue.pop()
+        };
+
+        let req = match req {
+            Some(r) => r,
+            None => return false, // No requests available
+        };
+
+        // Check if request still valid in table
+        let expected_request = {
+            let table = request_table.read();
+            table.get(req.file_path()).cloned()
+        };
+
+        let expected_request = match expected_request {
+            Some(r) => r,
+            None => {
+                warn!(
+                    "this mmap request expired, maybe cause timeout {} {}",
+                    req.file_path(),
+                    req.file_size()
+                );
+                return true;
+            }
+        };
+
+        // Verify it's the same request object
+        if !Arc::ptr_eq(&expected_request, &req) {
+            warn!(
+                "never expected here, maybe cause timeout {} {}",
+                req.file_path(),
+                req.file_size()
+            );
+            return true;
+        }
+
+        // Check if already allocated
+        if req.mapped_file.read().is_some() {
+            return true;
+        }
+
+        // Perform actual file allocation
+        let result = Self::create_mapped_file(&req, transient_store_pool, warm_mapped_file_config);
+
+        match result {
+            Ok(mapped_file) => {
+                *req.mapped_file.write() = Some(mapped_file);
+                has_exception.store(false, Ordering::Relaxed);
+
+                // Signal completion (like CountDownLatch.countDown())
+                req.complete();
+
+                true
+            }
+            Err(e) => {
+                error!(
+                    "AllocateMappedFileService: failed to create mapped file {}: {}",
+                    req.file_path(),
+                    e
+                );
+                has_exception.store(true, Ordering::Relaxed);
+
+                // Re-queue the request for retry
+                request_queue.write().push(req);
+
+                // Small delay before retry
+                thread::sleep(Duration::from_millis(1));
+
+                false
+            }
+        }
+    }
+
+    /// Create a MappedFile with optional TransientStorePool
+    ///
+    /// Corresponds to Java's MappedFile creation logic in mmapOperation()
+    fn create_mapped_file(
+        req: &AllocateRequest,
+        transient_store_pool: &Option<Arc<TransientStorePool>>,
+        warm_mapped_file_config: MappedFileWarmupConfig,
+    ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
+        let start = std::time::Instant::now();
+        let file_path = req.file_path().to_owned();
+        let file_size = req.file_size() as u64;
+        let transient_pool = transient_store_pool.clone();
+
+        let mapped_file = if let Some(pool) = transient_pool {
+            // With TransientStorePool (zero-copy)
+            DefaultMappedFile::try_new_with_transient_store_pool(
+                CheetahString::from_string(file_path.clone()),
+                file_size,
+                (*pool).clone(),
+            )
+        } else {
+            // Standard mmap
+            DefaultMappedFile::try_new(CheetahString::from_string(file_path.clone()), file_size)
+        }
+        .map_err(|error| RocketMQError::StorageWriteFailed {
+            path: req.file_path().to_owned(),
+            reason: error.to_string(),
+        })?;
+
+        if warm_mapped_file_config.should_warm(file_size) {
+            mapped_file.warm_mapped_file(
+                warm_mapped_file_config.flush_disk_type(),
+                warm_mapped_file_config.flush_least_pages(),
+            );
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 10 {
+            let queue_size = 0; // TODO: pass queue size if needed
+            warn!(
+                "create mappedFile spent time(ms) {} queue size {} {} {}",
+                elapsed.as_millis(),
+                queue_size,
+                req.file_path(),
+                req.file_size()
+            );
+        }
+
+        Ok(Arc::new(mapped_file))
+    }
+
+    fn notify_worker(&self) {
+        self.notify.notify_one();
+        let (_, condvar) = &*self.worker_wakeup;
+        condvar.notify_one();
+    }
+
+    /// Submit pre-allocation request and wait for result
+    ///
+    /// **This is the primary API - corresponds to Java's `putRequestAndReturnMappedFile()`**
+    ///
+    /// # Arguments
+    /// * `next_file_path` - Path for the next file to allocate
+    /// * `next_next_file_path` - Path for the file after next (pre-allocation)
+    /// * `file_size` - Size of each file
+    ///
+    /// # Returns
+    /// * `Ok(Some(MappedFile))` - Successfully allocated file
+    /// * `Ok(None)` - Cannot allocate (pool exhausted, exception, etc.)
+    /// * `Err(...)` - Error occurred
+    pub async fn put_request_and_return_mapped_file(
+        &self,
+        next_file_path: String,
+        next_next_file_path: String,
+        file_size: i32,
+    ) -> Result<Option<Arc<DefaultMappedFile>>, RocketMQError> {
+        // Check available buffer capacity if using TransientStorePool
+        let mut can_submit_requests = self.allocation_capacity(2);
+
+        // Submit request for next file
+        let next_req = Arc::new(AllocateRequest::new(next_file_path.clone(), file_size));
+        let next_put_ok = {
+            let mut table = self.request_table.write();
+            if table.contains_key(&next_file_path) {
+                false
+            } else {
+                table.insert(next_file_path.clone(), next_req.clone());
+                true
+            }
+        };
+
+        if next_put_ok {
+            if can_submit_requests == 0 {
+                warn!(
+                    "[NOTIFYME]TransientStorePool is not enough, so create mapped file error, RequestQueueSize: {}, \
+                     StorePoolSize: {}",
+                    self.request_queue.read().len(),
+                    self.transient_store_pool
+                        .as_ref()
+                        .map_or(0, |p| p.available_buffer_nums())
+                );
+                self.request_table.write().remove(&next_file_path);
+                return Ok(None);
+            }
+
+            self.request_queue.write().push(next_req.clone());
+            self.notify_worker();
+            can_submit_requests -= 1;
+        }
+
+        // Submit request for next-next file (pre-allocation)
+        if !next_next_file_path.is_empty() {
+            let next_next_req = Arc::new(AllocateRequest::new(next_next_file_path.clone(), file_size));
+            let next_next_put_ok = {
+                let mut table = self.request_table.write();
+                if table.contains_key(&next_next_file_path) {
+                    false
+                } else {
+                    table.insert(next_next_file_path.clone(), next_next_req.clone());
+                    true
+                }
+            };
+
+            if next_next_put_ok {
+                if can_submit_requests == 0 {
+                    warn!(
+                        "[NOTIFYME]TransientStorePool is not enough, so skip preallocate mapped file, \
+                         RequestQueueSize: {}, StorePoolSize: {}",
+                        self.request_queue.read().len(),
+                        self.transient_store_pool
+                            .as_ref()
+                            .map_or(0, |p| p.available_buffer_nums())
+                    );
+                    self.request_table.write().remove(&next_next_file_path);
+                } else {
+                    self.request_queue.write().push(next_next_req);
+                    self.notify_worker();
+                }
+            }
+        }
+
+        // Check for exceptions
+        if self.has_exception.load(Ordering::Relaxed) {
+            warn!("AllocateMappedFileService has exception, so return null");
+            return Ok(None);
+        }
+
+        // Wait for the next file to be allocated
+        let result = {
+            let table = self.request_table.read();
+            table.get(&next_file_path).cloned()
+        };
+
+        if let Some(req) = result {
+            // Wait for allocation to complete (with timeout)
+            let wait_result = tokio::time::timeout(WAIT_TIMEOUT, req.wait()).await;
+
+            match wait_result {
+                Ok(()) => {
+                    // Remove from table and return result
+                    self.request_table.write().remove(&next_file_path);
+                    let mapped_file = req.mapped_file.read().clone();
+                    Ok(mapped_file)
+                }
+                Err(_) => {
+                    warn!("create mmap timeout {} {}", req.file_path(), req.file_size());
+                    Ok(None)
+                }
+            }
+        } else {
+            error!("find preallocate mmap failed, this never happen");
+            Ok(None)
+        }
+    }
+
+    /// Simple allocation without pre-allocation (for single files)
+    ///
+    /// This is a compatibility method for tests and simple scenarios
+    pub async fn submit_request(
+        &self,
+        file_path: String,
+        file_size: u64,
+    ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
+        // Use empty string for next-next file (won't be allocated)
+        let result = self
+            .put_request_and_return_mapped_file(
+                file_path.clone(),
+                String::new(), // No pre-allocation
+                file_size as i32,
+            )
+            .await?;
+
+        result.ok_or_else(|| RocketMQError::StorageWriteFailed {
+            path: file_path.clone(),
+            reason: "Allocation failed or timed out".to_string(),
+        })
+    }
+
+    /// Synchronous allocation method (compatibility wrapper)
+    pub async fn allocate_mapped_file(
+        &self,
+        file_path: String,
+        file_size: u64,
+    ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
+        self.submit_request(file_path, file_size).await
+    }
+
+    pub fn allocate_mapped_file_blocking(
+        &self,
+        file_path: String,
+        file_size: u64,
+    ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
+        let result =
+            self.put_request_and_return_mapped_file_blocking(file_path.clone(), String::new(), file_size as i32)?;
+
+        result.ok_or_else(|| RocketMQError::StorageWriteFailed {
+            path: file_path,
+            reason: "Allocation failed or timed out".to_string(),
+        })
+    }
+
+    fn put_request_and_return_mapped_file_blocking(
+        &self,
+        next_file_path: String,
+        next_next_file_path: String,
+        file_size: i32,
+    ) -> Result<Option<Arc<DefaultMappedFile>>, RocketMQError> {
+        let next_req = Arc::new(AllocateRequest::new(next_file_path.clone(), file_size));
+        let next_put_ok = {
+            let mut table = self.request_table.write();
+            if table.contains_key(&next_file_path) {
+                false
+            } else {
+                table.insert(next_file_path.clone(), next_req.clone());
+                true
+            }
+        };
+
+        if next_put_ok {
+            self.request_queue.write().push(next_req.clone());
+            self.notify_worker();
+        }
+
+        if !next_next_file_path.is_empty() {
+            let next_next_req = Arc::new(AllocateRequest::new(next_next_file_path.clone(), file_size));
+            let next_next_put_ok = {
+                let mut table = self.request_table.write();
+                if table.contains_key(&next_next_file_path) {
+                    false
+                } else {
+                    table.insert(next_next_file_path.clone(), next_next_req.clone());
+                    true
+                }
+            };
+
+            if next_next_put_ok {
+                self.request_queue.write().push(next_next_req);
+                self.notify_worker();
+            }
+        }
+
+        if self.has_exception.load(Ordering::Relaxed) {
+            warn!("AllocateMappedFileService has exception, so return null");
+            return Ok(None);
+        }
+
+        let result = {
+            let table = self.request_table.read();
+            table.get(&next_file_path).cloned()
+        };
+
+        if let Some(req) = result {
+            if req.wait_blocking(WAIT_TIMEOUT) {
+                self.request_table.write().remove(&next_file_path);
+                Ok(req.mapped_file.read().clone())
+            } else {
+                warn!("create mmap timeout {} {}", req.file_path(), req.file_size());
+                Ok(None)
+            }
+        } else {
+            error!("find preallocate mmap failed, this never happen");
+            Ok(None)
+        }
+    }
+
+    pub fn submit_request_in_background(&self, file_path: String, file_size: u64) {
+        let can_submit_request = self.allocation_capacity(1) > 0;
+
+        if !can_submit_request {
+            warn!(
+                "[NOTIFYME]TransientStorePool is not enough, so skip background preallocate mapped file, \
+                 RequestQueueSize: {}, StorePoolSize: {}",
+                self.request_queue.read().len(),
+                self.transient_store_pool
+                    .as_ref()
+                    .map_or(0, |pool| pool.available_buffer_nums())
+            );
+            return;
+        }
+
+        let req = Arc::new(AllocateRequest::new(file_path.clone(), file_size as i32));
+        let put_ok = {
+            let mut table = self.request_table.write();
+            if let std::collections::hash_map::Entry::Vacant(entry) = table.entry(file_path) {
+                entry.insert(req.clone());
+                true
+            } else {
+                false
+            }
+        };
+
+        if put_ok {
+            self.request_queue.write().push(req);
+            self.notify_worker();
+        }
+    }
+
+    fn allocation_capacity(&self, default_capacity: usize) -> usize {
+        let pool_snapshot = if self.transient_store_pool_enable && self.fast_fail_if_no_buffer {
+            self.transient_store_pool.as_ref().map(|pool| {
+                let queued_requests = self.request_queue.read().len();
+                let available_buffers = pool.available_buffer_nums();
+                MappedFileAllocationPoolSnapshot::new(available_buffers, queued_requests)
+            })
+        } else {
+            None
+        };
+
+        mapped_file_allocation_capacity(
+            default_capacity,
+            self.transient_store_pool_enable,
+            self.fast_fail_if_no_buffer,
+            pool_snapshot,
+        )
+    }
+
+    /// Shutdown the service - corresponds to Java's shutdown()
+    pub async fn shutdown(&self) {
+        info!("AllocateMappedFileService: shutting down");
+
+        self.stopped.store(true, Ordering::Relaxed);
+        self.notify_worker();
+        let (_, condvar) = &*self.worker_wakeup;
+        condvar.notify_all();
+
+        // Wait for worker to complete
+        let handle = self.worker_handle.lock().take();
+        if let Some(handle) = handle {
+            let completion = self.worker_completion.notified();
+            if !self.worker_completed.load(Ordering::Acquire) {
+                completion.await;
+            }
+            while !handle.is_finished() {
+                tokio::task::yield_now().await;
+            }
+            if handle.join().is_err() {
+                error!("AllocateMappedFileService worker panicked during shutdown");
+            }
+        }
+
+        // Clean up pre-allocated files
+        let table = self.request_table.read();
+        for req in table.values() {
+            if let Some(ref mapped_file) = *req.mapped_file.read() {
+                info!("delete pre allocated mapped file, {}", req.file_path());
+                mapped_file.destroy(1000);
+            }
+        }
+
+        info!("AllocateMappedFileService: shutdown complete");
+    }
+
+    /// Get service name
+    pub fn get_service_name(&self) -> &'static str {
+        "AllocateMappedFileService"
+    }
+
+    /// Check if service has exception
+    pub fn has_exception(&self) -> bool {
+        self.has_exception.load(Ordering::Relaxed)
+    }
+}
+
+/// Request to allocate a new MappedFile
+///
+/// Corresponds to Java's AllocateRequest inner class:
+/// - Uses Notify + AtomicBool instead of CountDownLatch for async support
+/// - Delegates request identity and priority ordering to the Local boundary
+struct AllocateRequest {
+    /// Runtime-neutral path, size, and ordering identity.
+    key: MappedFileAllocationRequestKey,
+
+    /// Completion notification (equivalent to Java's CountDownLatch)
+    completion: Arc<Notify>,
+
+    /// Blocking completion notification for synchronous callers.
+    blocking_completion: Arc<(StdMutex<()>, Condvar)>,
+
+    /// Completion flag
+    completed: Arc<AtomicBool>,
+
+    /// The allocated MappedFile (set when complete)
+    mapped_file: Arc<RwLock<Option<Arc<DefaultMappedFile>>>>,
+}
+
+impl AllocateRequest {
+    fn new(file_path: String, file_size: i32) -> Self {
+        Self {
+            key: MappedFileAllocationRequestKey::new(file_path, file_size),
+            completion: Arc::new(Notify::new()),
+            blocking_completion: Arc::new((StdMutex::new(()), Condvar::new())),
+            completed: Arc::new(AtomicBool::new(false)),
+            mapped_file: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    fn file_path(&self) -> &str {
+        self.key.file_path()
+    }
+
+    fn file_size(&self) -> i32 {
+        self.key.file_size()
+    }
+
+    /// Wait for allocation to complete (like CountDownLatch.await())
+    async fn wait(&self) {
+        if !self.completed.load(Ordering::Acquire) {
+            self.completion.notified().await;
+        }
+    }
+
+    fn wait_blocking(&self, timeout: Duration) -> bool {
+        if self.completed.load(Ordering::Acquire) {
+            return true;
+        }
+
+        let (lock, condvar) = &*self.blocking_completion;
+        let guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match condvar.wait_timeout_while(guard, timeout, |_| !self.completed.load(Ordering::Acquire)) {
+            Ok((_guard, _timeout)) => {}
+            Err(poisoned) => {
+                let (_guard, _timeout) = poisoned.into_inner();
+            }
+        }
+        self.completed.load(Ordering::Acquire)
+    }
+
+    /// Signal completion (like CountDownLatch.countDown())
+    fn complete(&self) {
+        self.completed.store(true, Ordering::Release);
+        self.completion.notify_waiters();
+        let (_, condvar) = &*self.blocking_completion;
+        condvar.notify_all();
+    }
+}
+
+impl Display for AllocateRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.key.fmt(f)
+    }
+}
+
+// Implement Ord for priority queue (lower offsets have higher priority)
+impl PartialEq for AllocateRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for AllocateRequest {}
+
+impl PartialOrd for AllocateRequest {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for AllocateRequest {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    struct TestAllocationServiceConfig;
+
+    impl AllocateMappedFileServiceConfig for TestAllocationServiceConfig {
+        fn mapped_file_warmup_config(&self) -> MappedFileWarmupConfig {
+            MappedFileWarmupConfig::new(true, crate::config::FlushDiskType::SyncFlush, 1024, 1)
+        }
+    }
+
+    #[test]
+    fn allocate_request_delegates_identity_display_and_priority_to_local_key() {
+        let lower_path = std::path::Path::new("root").join("00000000000000000100");
+        let higher_path = std::path::Path::new("root").join("00000000000000000200");
+        let lower = Arc::new(AllocateRequest::new(lower_path.to_string_lossy().into_owned(), 1024));
+        let higher = Arc::new(AllocateRequest::new(higher_path.to_string_lossy().into_owned(), 2048));
+        let mut requests = BinaryHeap::from([higher, lower.clone()]);
+
+        let first = requests.pop().expect("lower offset request");
+        assert!(Arc::ptr_eq(&first, &lower));
+        assert_eq!(lower.file_path(), lower_path.to_string_lossy().as_ref());
+        assert_eq!(lower.file_size(), 1024);
+        assert_eq!(
+            lower.to_string(),
+            format!(
+                "AllocateRequest[file_path={},file_size=1024]",
+                lower_path.to_string_lossy()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn allocate_mapped_file_blocking_works_inside_runtime() {
+        let temp_dir = tempdir().expect("temp dir");
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let service = AllocateMappedFileService::new();
+        assert!(!service.is_started());
+        service.start();
+        assert!(service.is_started());
+
+        let mapped_file = service
+            .allocate_mapped_file_blocking(file_path.to_string_lossy().to_string(), 1024)
+            .expect("allocate mapped file");
+
+        assert_eq!(mapped_file.get_file_size(), 1024);
+        assert!(file_path.exists(), "mapped file should be created on disk");
+
+        service.shutdown().await;
+        assert!(!service.is_started());
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn worker_completion_guard_records_exit_and_notifies_waiter() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let notification = Arc::new(Notify::new());
+        let waiter = notification.notified();
+
+        drop(WorkerCompletion {
+            completed: completed.clone(),
+            notification: notification.clone(),
+        });
+
+        waiter.await;
+        assert!(completed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn warm_mapped_file_config_follows_commitlog_file_size_threshold() {
+        let config = TestAllocationServiceConfig;
+        let service = AllocateMappedFileService::new_with_message_store_config(None, false, false, &config);
+
+        assert!(!service.should_warm_mapped_file(1023));
+        assert!(service.should_warm_mapped_file(1024));
+    }
+
+    #[test]
+    fn allocation_capacity_delegates_runtime_snapshot_to_local_policy() {
+        let pool = Arc::new(TransientStorePool::new(2, 16));
+        pool.return_buffer(vec![0; 16]);
+        pool.return_buffer(vec![0; 16]);
+        let service = AllocateMappedFileService::new_with_config(Some(pool), true, true);
+
+        assert_eq!(service.allocation_capacity(2), 2);
+        service.request_queue.write().push(Arc::new(AllocateRequest::new(
+            std::path::Path::new("root")
+                .join("00000000000000000100")
+                .to_string_lossy()
+                .into_owned(),
+            16,
+        )));
+        assert_eq!(service.allocation_capacity(2), 1);
+    }
+}

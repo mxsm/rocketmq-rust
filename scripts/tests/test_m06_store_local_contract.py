@@ -37,24 +37,84 @@ LEAF_FILES = {
     "metrics.rs",
 }
 KERNEL_ITEMS = {
+    "MappedFileCacheResidencyPlan": "struct",
     "MappedFileWarmupOperation": "enum",
     "MappedFileProgress": "struct",
     "ReferenceResource": "trait",
     "ReferenceResourceBase": "struct",
     "ReferenceResourceCounter": "struct",
     "OS_PAGE_SIZE": "const",
+    "plan_mapped_file_cache_residency": "fn",
     "visit_mapped_file_warmup_schedule": "fn",
 }
 MAPPED_FILE_KERNEL_PATH = Path("rocketmq-store-local/src/mapped_file/kernel.rs")
+MAPPED_FILE_RAW_PATH = Path("rocketmq-store-local/src/mapped_file/raw.rs")
+MAPPED_FILE_CONTRACT_PATH = Path("rocketmq-store-local/src/mapped_file/contract.rs")
+MAPPED_FILE_MEMORY_PATH = Path("rocketmq-store-local/src/mapped_file/memory.rs")
+MAPPED_FILE_ALLOCATION_POLICY_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/allocation_policy.rs"
+)
+MAPPED_FILE_ALLOCATION_REQUEST_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/allocation_request.rs"
+)
+MAPPED_FILE_QUEUE_ALLOCATION_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_allocation.rs"
+)
+MAPPED_FILE_QUEUE_INDEX_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_index.rs"
+)
+MAPPED_FILE_QUEUE_IO_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_io.rs"
+)
+MAPPED_FILE_QUEUE_LIFECYCLE_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_lifecycle.rs"
+)
+MAPPED_FILE_QUEUE_MAINTENANCE_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_maintenance.rs"
+)
+MAPPED_FILE_QUEUE_METRICS_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_metrics.rs"
+)
+MAPPED_FILE_QUEUE_STATE_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_state.rs"
+)
+MAPPED_FILE_QUEUE_STORAGE_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/queue_storage.rs"
+)
+MAPPED_FILE_SELECT_RESULT_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/select_result.rs"
+)
 DEFAULT_MAPPED_FILE_PATH = Path(
+    "rocketmq-store-local/src/mapped_file/default_mapped_file.rs"
+)
+STORE_MAPPED_FILE_PATH = Path("rocketmq-store/src/log_file/mapped_file.rs")
+STORE_MAPPED_FILE_MEMORY_PATH = Path(
+    "rocketmq-store/src/log_file/mapped_file/memory.rs"
+)
+STORE_DEFAULT_MAPPED_FILE_FACADE_PATH = Path(
     "rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"
 )
 STORE_CHECKPOINT_PATH = Path("rocketmq-store/src/base/store_checkpoint.rs")
+STORE_MAPPED_FILE_QUEUE_PATH = Path(
+    "rocketmq-store/src/consume_queue/mapped_file_queue.rs"
+)
+LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH = Path(
+    "rocketmq-store-local/src/base/allocate_mapped_file_service.rs"
+)
+STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH = Path(
+    "rocketmq-store/src/base/allocate_mapped_file_service.rs"
+)
 NORMAL_RECOVERY_WINDOW_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/normal_window.rs"
 )
 RECOVERY_CONSUME_QUEUE_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/consume_queue.rs"
+)
+RECOVERY_COMPLETION_PATH = Path(
+    "rocketmq-store-local/src/commit_log/recovery/completion.rs"
+)
+STORAGE_LOCAL_LEDGER_PATH = Path(
+    "docs/plans/architecture-refactor-migration/phase-2-core-boundaries/06-storage-local-compatibility-ledger.md"
 )
 ABNORMAL_CONFIRM_CANDIDATE_PATH = Path(
     "rocketmq-store-local/src/commit_log/recovery/confirm_candidate.rs"
@@ -62,13 +122,58 @@ ABNORMAL_CONFIRM_CANDIDATE_PATH = Path(
 COMMIT_LOG_MEMORY_LOCK_PATH = Path(
     "rocketmq-store-local/src/commit_log/memory_lock.rs"
 )
+COMMIT_LOG_LOADER_PATH = Path("rocketmq-store-local/src/commit_log/loader.rs")
+COMMIT_LOG_APPEND_FRAME_PATH = Path(
+    "rocketmq-store-local/src/commit_log/append_frame.rs"
+)
+COMMIT_LOG_APPEND_ATTEMPT_PATH = Path(
+    "rocketmq-store-local/src/commit_log/append_attempt.rs"
+)
+COMMIT_LOG_HEADER_PATH = Path(
+    "rocketmq-store-local/src/commit_log/header.rs"
+)
+COMMIT_LOG_RECORD_PATH = Path(
+    "rocketmq-store-local/src/commit_log/record.rs"
+)
+COMMIT_LOG_NORMAL_RECOVERY_PATH = Path(
+    "rocketmq-store-local/src/commit_log/normal_recovery.rs"
+)
+COMMIT_LOG_ABNORMAL_RECOVERY_PATH = Path(
+    "rocketmq-store-local/src/commit_log/abnormal_recovery.rs"
+)
+COMMIT_LOG_LOAD_ORCHESTRATION_PATH = Path(
+    "rocketmq-store-local/src/commit_log/load_orchestration.rs"
+)
+COMMIT_LOG_RECOVERY_ORCHESTRATION_PATH = Path(
+    "rocketmq-store-local/src/commit_log/recovery_orchestration.rs"
+)
+COMMIT_LOG_RUNTIME_STATE_PATH = Path(
+    "rocketmq-store-local/src/commit_log/runtime_state.rs"
+)
+COMMIT_LOG_ROOT_PATH = Path("rocketmq-store-local/src/commit_log/root.rs")
+STORE_APPEND_CALLBACK_PATH = Path(
+    "rocketmq-store/src/base/append_message_callback.rs"
+)
 STORE_COMMIT_LOG_PATH = Path("rocketmq-store/src/log_file/commit_log.rs")
+STORE_LOCAL_FILE_MESSAGE_STORE_PATH = Path(
+    "rocketmq-store/src/message_store/local_file_message_store.rs"
+)
+STORE_COMMIT_LOG_RECOVERY_PATH = Path(
+    "rocketmq-store/src/log_file/commit_log_recovery.rs"
+)
 MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush", "is_able_to_commit")
+DEFAULT_MAPPED_FILE_POLICY_METHODS = ("is_able_to_flush",)
 MAPPED_FILE_POLICY_REFERENCE = re.compile(
     r"(?:\.|::)\s*(is_able_to_flush|is_able_to_commit)\b"
 )
 MAPPED_FILE_LOCK_RANGE_METHODS = ("lock_region_range",)
 MAPPED_FILE_LOCK_RANGE_REFERENCE = re.compile(r"(?:\.|::)\s*lock_region_range\b")
+MAPPED_FILE_CACHE_RANGE_METHODS = ("is_valid_cache_range",)
+MAPPED_FILE_CACHE_RANGE_REFERENCE = re.compile(
+    r"(?:\.|::)\s*is_valid_cache_range\b"
+)
+MAPPED_FILE_CACHE_RESIDENCY_PLAN = "MappedFileCacheResidencyPlan"
+MAPPED_FILE_CACHE_RESIDENCY_PLANNER = "plan_mapped_file_cache_residency"
 MAPPED_FILE_WARMUP_OPERATION = "MappedFileWarmupOperation"
 MAPPED_FILE_WARMUP_VISITOR = "visit_mapped_file_warmup_schedule"
 STORE_LOCK_RANGE_HELPER_METHODS = ("lock_region_address_and_len",)
@@ -139,7 +244,7 @@ MEMORY_LOCK_PRODUCTION_SEAM_COUNTS = {
         "lock_region_with": 1,
         "unlock_region_with": 1,
     },
-    Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"): {
+    Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"): {
         "lock_region_with": 2,
         "unlock_region_with": 2,
     },
@@ -154,7 +259,11 @@ MEMORY_LOCK_TEST_SEAM_COUNTS = {
         "lock_region_with": 4,
         "unlock_region_with": 1,
     },
-    Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"): {
+    Path("rocketmq-store-local/tests/commit_log_runtime_state.rs"): {
+        "lock_region_with": 1,
+        "unlock_region_with": 1,
+    },
+    Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"): {
         "lock_region_with": 3,
         "unlock_region_with": 1,
     },
@@ -168,7 +277,9 @@ DEFAULT_MAPPED_FILE_ALIAS_BRACE_USE_ALLOWLIST = {
     "use crate::utils::ffi::munlock as unlock_memory",
     "use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT}",
 }
-DEFAULT_MAPPED_FILE_TYPE_ALIAS_ALLOWLIST = {"type Target = [u8]"}
+DEFAULT_MAPPED_FILE_TYPE_ALIAS_ALLOWLIST = {
+    "type SelectResult = SelectMappedBufferResult<M>",
+}
 PROGRESS_FIELDS = {
     "file_size",
     "wrote_position",
@@ -193,6 +304,50 @@ CANONICAL_ITEMS = {
     "MappedFileError": ("enum", "mapped_file_error.rs"),
     "MappedFileMetrics": ("struct", "metrics.rs"),
     "MappedFileResult": ("type", "mapped_file_error.rs"),
+    "MappedFileWarmupConfig": ("struct", "allocation_policy.rs"),
+    "MappedFileAllocationPoolSnapshot": ("struct", "allocation_policy.rs"),
+    "mapped_file_allocation_capacity": ("fn", "allocation_policy.rs"),
+    "MappedFileAllocationRequestKey": ("struct", "allocation_request.rs"),
+    "file_index_by_offset": ("fn", "queue_index.rs"),
+    "file_index_by_timestamp": ("fn", "queue_index.rs"),
+    "for_each_discontinuous_pair": ("fn", "queue_index.rs"),
+    "load_mapped_file_queue_path": ("fn", "queue_io.rs"),
+    "load_mapped_file_queue_files": ("fn", "queue_io.rs"),
+    "create_mapped_file_for_queue": ("fn", "queue_io.rs"),
+    "destroy_last_mapped_file": ("fn", "queue_lifecycle.rs"),
+    "mapped_files_after_removal": ("fn", "queue_lifecycle.rs"),
+    "delete_expired_mapped_files_by_time": ("fn", "queue_lifecycle.rs"),
+    "delete_expired_mapped_files_by_offset": ("fn", "queue_lifecycle.rs"),
+    "retry_delete_first_mapped_file": ("fn", "queue_lifecycle.rs"),
+    "swap_mapped_file_queue": ("fn", "queue_lifecycle.rs"),
+    "clean_swapped_mapped_file_queue": ("fn", "queue_lifecycle.rs"),
+    "shutdown_mapped_file_queue": ("fn", "queue_lifecycle.rs"),
+    "destroy_mapped_file_queue": ("fn", "queue_lifecycle.rs"),
+    "mapped_file_queue_warmup_stats": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_lazy_mmap_stats": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_max_offset": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_max_wrote_position": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_should_roll": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_min_offset": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_available_memory_size": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_fall_behind": ("fn", "queue_metrics.rs"),
+    "mapped_file_queue_total_size": ("fn", "queue_metrics.rs"),
+    "MappedFileQueueIndex": ("enum", "queue_index.rs"),
+    "MappedFileQueueLoadOutcome": ("struct", "queue_io.rs"),
+    "MappedFileQueueDeletion": ("struct", "queue_lifecycle.rs"),
+    "MappedFileWarmupStats": ("struct", "queue_metrics.rs"),
+    "MappedFileQueueLastFile": ("struct", "queue_allocation.rs"),
+    "MappedFileQueueRollFile": ("struct", "queue_allocation.rs"),
+    "MappedFileQueueTruncateAction": ("enum", "queue_maintenance.rs"),
+    "MappedFileQueueResetLastFile": ("struct", "queue_maintenance.rs"),
+    "MappedFileQueueResetPlan": ("struct", "queue_maintenance.rs"),
+    "MappedFileQueueRuntimeState": ("struct", "queue_state.rs"),
+    "MappedFileQueueStorage": ("struct", "queue_storage.rs"),
+    "overlapping_file_range": ("fn", "queue_index.rs"),
+    "plan_mapped_file_queue_creation": ("fn", "queue_allocation.rs"),
+    "plan_mapped_file_queue_preallocation": ("fn", "queue_allocation.rs"),
+    "mapped_file_queue_truncate_action": ("fn", "queue_maintenance.rs"),
+    "plan_mapped_file_queue_reset": ("fn", "queue_maintenance.rs"),
     "io_uring_backend_status": ("fn", "io_uring_impl.rs"),
 }
 COMMIT_LOG_CANONICAL_ITEMS = {
@@ -203,12 +358,32 @@ COMMIT_LOG_CANONICAL_ITEMS = {
     "AbnormalRecoveryFileRange": ("struct", "recovery.rs"),
     "AbnormalRecoveryWindow": ("struct", "recovery.rs"),
     "plan_abnormal_recovery_window_from_ranges": ("fn", "recovery.rs"),
-    "MESSAGE_MAGIC_CODE": ("const", "record.rs"),
-    "MESSAGE_MAGIC_CODE_V2": ("const", "record.rs"),
+    "MESSAGE_MAGIC_CODE": ("const", "header.rs"),
+    "MESSAGE_MAGIC_CODE_V2": ("const", "header.rs"),
     "BLANK_MAGIC_CODE": ("const", "record.rs"),
     "is_blank_message": ("fn", "record.rs"),
+    "read_declared_frame": ("fn", "record.rs"),
     "CommitLogFrameSource": ("trait", "record.rs"),
     "CommitLogFrameCursor": ("struct", "record.rs"),
+    "NormalRecoveryRecord": ("enum", "normal_recovery.rs"),
+    "NormalRecoveryObservation": ("enum", "normal_recovery.rs"),
+    "NormalRecoverySegmentOutcome": ("enum", "normal_recovery.rs"),
+    "drive_segment": ("fn", "normal_recovery.rs"),
+    "AbnormalRecoveryRecord": ("enum", "abnormal_recovery.rs"),
+    "AbnormalRecoveryObservation": ("enum", "abnormal_recovery.rs"),
+    "AbnormalRecoverySegmentOutcome": ("enum", "abnormal_recovery.rs"),
+    "drive_abnormal_segment": ("fn", "abnormal_recovery.rs"),
+    "CommitLogLoadStep": ("enum", "load_orchestration.rs"),
+    "CommitLogLoadObservation": ("enum", "load_orchestration.rs"),
+    "safe_load_requested": ("fn", "load_orchestration.rs"),
+    "drive_commit_log_load": ("fn", "load_orchestration.rs"),
+    "CommitLogRecoveryStep": ("enum", "recovery_orchestration.rs"),
+    "optimized_recovery_requested": ("fn", "recovery_orchestration.rs"),
+    "drive_commit_log_recovery": ("fn", "recovery_orchestration.rs"),
+    "CommitLogPutMessageLockRuntimeInfo": ("struct", "runtime_state.rs"),
+    "CommitLogPutMessageLockStats": ("struct", "runtime_state.rs"),
+    "CommitLogActiveMemoryLock": ("struct", "runtime_state.rs"),
+    "CommitLogRuntimeState": ("struct", "runtime_state.rs"),
 }
 COMMIT_LOG_LOAD_OWNER_ITEMS = {
     "CommitLogFileDiscovery": "enum",
@@ -515,7 +690,8 @@ def inherent_method_records(
     active = active_rust_source(source)
     records = {method_name: [] for method_name in method_names}
     impl_declaration = re.compile(
-        rf"(?m)^[ \t]*impl[ \t]+{re.escape(type_name)}\b"
+        rf"(?m)^[ \t]*impl(?:[ \t]*<[^{{}};]*>)?[ \t]+{re.escape(type_name)}"
+        rf"(?:[ \t]*<[^{{}};]*>)?(?=[ \t\r\n]|where\b|\{{)"
         rf"(?:[ \t\r\n]+where\b[^{{}}]*)?[ \t\r\n]*\{{"
     )
     method_declaration = re.compile(
@@ -949,7 +1125,10 @@ def store_production_mapped_file_policy_violations(
         )
         if path == STORE_CHECKPOINT_PATH:
             source_violations.extend(store_checkpoint_page_compatibility_violations(source))
-        elif path != DEFAULT_MAPPED_FILE_PATH and "OS_PAGE_SIZE" in active_rust_source(source):
+        elif (
+            path != STORE_DEFAULT_MAPPED_FILE_FACADE_PATH
+            and "OS_PAGE_SIZE" in active_rust_source(source)
+        ):
             source_violations.append("unexpected Store OS_PAGE_SIZE compatibility reference")
         violations.extend(f"{path.as_posix()}: {violation}" for violation in source_violations)
     return violations
@@ -1486,153 +1665,19 @@ def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
         if named_function_signature(commit_log, name) != expected:
             violations.append(f"{name} public signature changed")
 
-    recovery_prefix = "rocketmq_store_local::commit_log::recovery::"
-    recovery_imports = {
-        body.removeprefix(recovery_prefix)
-        for kind, _, body, _ in active_import_records(commit_log)
-        if kind == "use"
-        and body.startswith(recovery_prefix)
-        and body.removeprefix(recovery_prefix).startswith("Normal")
-    }
-    expected_recovery_imports = {
-        "NormalRecoveryAction",
-        "NormalRecoveryEvent",
-        "NormalRecoveryPolicy",
-        "NormalRecoveryState",
-    }
-    if recovery_imports != expected_recovery_imports:
-        violations.append("Store normal recovery imports must be exact Local imports")
-    if any(
-        kind == "use"
-        and body.startswith(recovery_prefix)
-        and (" as " in body or "{" in body or "*" in body)
-        for kind, _, body, _ in active_import_records(commit_log)
-    ):
-        violations.append("Store normal recovery imports forbid alias/brace/glob")
-
-    truncate_policy = "should_truncate_recovery_consume_queue"
-    truncate_imports = [
-        body
-        for kind, _, body, _ in active_import_records(commit_log)
-        if kind == "use" and truncate_policy in body
-    ]
-    if truncate_imports != [recovery_prefix + truncate_policy]:
-        violations.append("Store normal recovery ConsumeQueue policy import changed")
-
-    expected_events = ["SegmentStarted", "MessageAccepted", "Blank", "InvalidRecord", "SourceEnded"]
-    for name, policy in [
-        ("recover_normally", "Standard"),
-        ("recover_normally_optimized", "Optimized"),
-    ]:
-        body = named_function_body(commit_log, name)
-        if body is None:
-            violations.append(f"{name} body missing")
-            continue
-        if body.count(f"NormalRecoveryPolicy::{policy}") != 1:
-            violations.append(f"{name} Local policy construction changed")
-        if len(re.findall(r"\bmatch\s+NormalRecoveryState::try_new\s*\(", body)) != 1:
-            violations.append(f"{name} must explicitly handle fallible Local state construction")
-        constructor_match = re.search(
-            rf"let\s+mut\s+normal_recovery\s*=\s*match\s+NormalRecoveryState::try_new\s*\(\s*"
-            rf"initial_offset\s*,\s*NormalRecoveryPolicy::{policy}\s*\)\s*\{{\s*"
-            r"Ok\s*\(\s*state\s*\)\s*=>\s*state\s*,\s*"
-            r"Err\s*\(\s*error\s*\)\s*=>\s*\{(?P<error>.*?)\}\s*\}\s*;",
-            body,
-            re.DOTALL,
+    local = (ROOT / COMMIT_LOG_NORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
+    module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+    local_tests = (LOCAL_CRATE / "tests" / "normal_recovery_orchestration.rs").read_text(
+        encoding="utf-8"
+    )
+    violations.extend(
+        normal_recovery_segment_orchestration_contract_violations(
+            local,
+            module,
+            commit_log,
+            local_tests,
         )
-        if constructor_match is None or re.search(
-            r"\bwarn\s*!\s*\(.*?\)\s*;\s*return\s*;",
-            constructor_match.group("error"),
-            re.DOTALL,
-        ) is None:
-            violations.append(f"{name} must log and return on Local state construction error")
-        if "NormalRecoveryState::new" in body or re.search(r"\b(?:unwrap|expect|panic)\b", body):
-            violations.append(f"{name} uses forbidden Local construction or panic")
-        if re.search(r"\bmatch\s+NormalRecoveryPolicy\b", body):
-            violations.append(f"{name} copied Local recovery policy match")
-        for event in expected_events:
-            if body.count(f"NormalRecoveryEvent::{event}") != 1:
-                violations.append(f"{name} must route {event} through Local reducer")
-        if len(re.findall(r"\bnormal_recovery\.apply\s*\(", body)) != 5:
-            violations.append(f"{name} must apply exactly five Local recovery events")
-        if len(re.findall(r"\bmatch\s+normal_recovery\.apply\s*\(", body)) != 4:
-            violations.append(f"{name} must act on every record outcome from Local reducer")
-
-        message_match = normal_recovery_event_match_body(body, "MessageAccepted")
-        if message_match is None:
-            violations.append(f"{name} MessageAccepted action match missing")
-        else:
-            for action in ["ContinueRecord", "ContinueNextSegment", "StopRecovery"]:
-                if message_match.count(f"NormalRecoveryAction::{action}") != 1:
-                    violations.append(f"{name} MessageAccepted {action} action changed")
-            if re.search(
-                r"Ok\s*\(\s*NormalRecoveryAction::ContinueRecord\s*\)\s*=>\s*\{\s*\}",
-                message_match,
-            ) is None:
-                violations.append(f"{name} MessageAccepted ContinueRecord action changed")
-            if policy == "Standard":
-                continue_next = r"=>\s*break\s*,"
-            else:
-                continue_next = r"=>\s*\{\s*record_closed_segment\s*=\s*true\s*;\s*break\s*;\s*\}"
-            if re.search(
-                rf"Ok\s*\(\s*NormalRecoveryAction::ContinueNextSegment\s*\)\s*{continue_next}",
-                message_match,
-            ) is None:
-                violations.append(f"{name} MessageAccepted ContinueNextSegment action changed")
-            if re.search(
-                r"Ok\s*\(\s*NormalRecoveryAction::StopRecovery\s*\)\s*=>\s*break\s+'segments\s*,",
-                message_match,
-            ) is None:
-                violations.append(f"{name} MessageAccepted StopRecovery action changed")
-
-        if name == "recover_normally":
-            checked_position = re.search(
-                r"let\s+Some\s*\(\s*next_position\s*\)\s*=\s*"
-                r"current_pos\.checked_add\s*\(\s*size\s*\)\s*else\s*\{(?P<failure>.*?)\}\s*;",
-                body,
-                re.DOTALL,
-            )
-            if checked_position is None or re.search(r"\bbreak\s+'segments\s*;", checked_position.group("failure")) is None:
-                violations.append(f"{name} current_pos must checked_add and stop globally on error")
-            if re.search(r"\bcurrent_pos\s*\+\s*size\b", body):
-                violations.append(f"{name} current_pos uses unchecked addition")
-        elif "current_pos" in body:
-            violations.append(f"{name} copied standard current_pos state")
-
-        if body.count("normal_recovery.summary()") != 1:
-            violations.append(f"{name} must bind exactly one Local recovery summary")
-        normalized_body = re.sub(r"\s+", "", body)
-        required_summary_flow = [
-            "letsummary=normal_recovery.summary();",
-            "letlast_valid_offset=matchi64::try_from(summary.last_valid_offset)",
-            "letprocess_offset=matchi64::try_from(summary.truncate_offset)",
-            "should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
-            "self.set_confirm_offset(last_valid_offset)",
-            "message_store.truncate_dirty_logic_files(process_offset)",
-            "self.mapped_file_queue.set_flushed_where(process_offset)",
-            "self.mapped_file_queue.set_committed_where(process_offset)",
-            "self.mapped_file_queue.truncate_dirty_files(process_offset)",
-        ]
-        controller_confirm_offset = "process_offset" if policy == "Standard" else "last_valid_offset"
-        required_summary_flow.append(
-            "self.clamp_controller_recover_confirm_offset("
-            f"message_store.get_min_phy_offset(),{controller_confirm_offset})"
-        )
-        if any(fragment not in normalized_body for fragment in required_summary_flow):
-            violations.append(f"{name} final recovery writes must flow from Local summary")
-        if "NormalRecoverySummary{" in normalized_body:
-            violations.append(f"{name} must not construct a Store-owned recovery summary")
-        if body.count("should_truncate_recovery_consume_queue(") != 1:
-            violations.append(f"{name} must use the shared ConsumeQueue predicate exactly once")
-        if re.search(r"\b(?:last_valid_msg_phy_offset|mapped_file_offset)\b", body):
-            violations.append(f"{name} copied Local recovery watermark state")
-        mutable_names = re.findall(r"\blet\s+mut\s+([A-Za-z_][A-Za-z0-9_]*)\b", body)
-        if any("last_valid" in mutable_name or "truncate" in mutable_name for mutable_name in mutable_names):
-            violations.append(f"{name} copied Local recovery policy state")
-        empty_branch = body.find("mapped_files_inner.is_empty()")
-        state_creation = body.find("NormalRecoveryState::try_new")
-        if state_creation == -1 or (empty_branch != -1 and state_creation < empty_branch):
-            violations.append(f"{name} empty-file path must bypass Local reducer")
+    )
     return violations
 
 
@@ -2070,26 +2115,26 @@ def store_abnormal_confirm_candidate_adapter_violations(
         if body is None or normalized.count(expected_call) != 1:
             violations.append(f"{function_name} must call Local candidate once with raw input size")
             continue
-        expected_warning_statement = compact_rust(
-            'warn!("' + expected_warning + '");'
+        expected_adapter = (
+            f"letconfirm_candidate_end={expected_call}.map_err("
+            "AbnormalRecoveryAdapterError::ConfirmCandidate)?;"
         )
-        expected_error_match = (
-            f"letconfirm_candidate_end=match{expected_call}{{"
-            "Ok(candidate)=>candidate,Err(error)=>{"
-            f"{expected_warning_statement}"
-            "break'segments;}};"
+        if normalized.count(expected_adapter) != 1:
+            violations.append(f"{function_name} candidate adapter mapping changed")
+        expected_failure_arm = (
+            "AbnormalRecoverySegmentOutcome::AdapterFailed("
+            "AbnormalRecoveryAdapterError::ConfirmCandidate(error,))=>{"
+            + compact_rust('warn!("' + expected_warning + '");')
+            + "break'segments;}"
         )
-        if normalized.count(expected_error_match) != 1:
-            violations.append(
-                f"{function_name} candidate error warning or fail-closed action changed"
-            )
-            continue
+        if normalized.count(expected_failure_arm) != 1:
+            violations.append(f"{function_name} candidate failure arm changed")
         ordered_flow = [
-            expected_error_match,
-            "letvalidated_size=matchu64::try_from(dispatch_request.msg_size){",
-            "letrelative_start=matchu64::try_from(",
+            expected_adapter,
+            "letvalidated_size=u64::try_from(dispatch_request.msg_size).map_err(",
+            "letrelative_start=u64::try_from(",
             "letdispatch_gate=",
-            "matchabnormal_recovery.apply(AbnormalRecoveryEvent::MessageAccepted{",
+            "AbnormalRecoveryRecord::Message{",
         ]
         positions = [normalized.find(fragment) for fragment in ordered_flow]
         if any(position == -1 for position in positions) or positions != sorted(positions):
@@ -2104,7 +2149,7 @@ def store_abnormal_confirm_candidate_adapter_violations(
         violations.append("Store retained abnormal confirm candidate helper")
     if re.search(r"\bAbnormalRecoveryAdapterOffsetError\b", active):
         violations.append("Store retained legacy abnormal candidate error")
-    if compact.count("matchabnormal_confirm_candidate_end(") != 2:
+    if compact.count("abnormal_confirm_candidate_end(") != 2:
         violations.append("Store abnormal candidate failure control flow changed")
     if not violations:
         for finding in confirm_candidate_semantic_copies(store_sources):
@@ -2114,185 +2159,179 @@ def store_abnormal_confirm_candidate_adapter_violations(
 
 def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
     violations: list[str] = []
+    production = source_without_cfg_test_items(commit_log)
+    import_records = active_import_records(production)
+    orchestration_prefix = "rocketmq_store_local::commit_log::abnormal_recovery::"
     recovery_prefix = "rocketmq_store_local::commit_log::recovery::"
-    expected_imports = {
-        "AbnormalRecoveryAction",
+    expected_orchestration = {
+        "AbnormalRecoveryObservation",
+        "AbnormalRecoveryRecord",
+        "AbnormalRecoverySegmentOutcome",
+    }
+    actual_orchestration = {
+        body.removeprefix(orchestration_prefix)
+        for kind, _, body, _ in import_records
+        if kind == "use" and body.startswith(orchestration_prefix)
+    }
+    if actual_orchestration != expected_orchestration:
+        violations.append("Store abnormal orchestration imports must be direct and exact")
+    expected_recovery = {
+        "AbnormalRecoveryConfirmCandidateError",
         "AbnormalRecoveryDispatchGate",
-        "AbnormalRecoveryEvent",
         "AbnormalRecoveryPolicy",
         "AbnormalRecoveryState",
     }
-    imports = {
+    actual_recovery = {
         body.removeprefix(recovery_prefix)
-        for kind, _, body, _ in active_import_records(commit_log)
-        if kind == "use" and body.startswith(recovery_prefix) and body.removeprefix(recovery_prefix).startswith("Abnormal")
-    }
-    if imports != expected_imports:
-        violations.append("Store abnormal recovery imports must be exact Local imports")
-    if any(
-        kind == "use"
+        for kind, _, body, _ in import_records
+        if kind == "use"
         and body.startswith(recovery_prefix)
         and body.removeprefix(recovery_prefix).startswith("Abnormal")
+    }
+    if actual_recovery != expected_recovery:
+        violations.append("Store abnormal state imports must exclude event/action policy")
+    if any(
+        kind == "use"
+        and body.startswith((orchestration_prefix, recovery_prefix))
         and (" as " in body or "{" in body or "*" in body)
-        for kind, _, body, _ in active_import_records(commit_log)
+        for kind, _, body, _ in import_records
     ):
         violations.append("Store abnormal recovery imports forbid alias/brace/glob")
 
-    candidate_imports = [
-        body
-        for kind, _, body, _ in active_import_records(commit_log)
-        if kind == "use" and "abnormal_confirm_candidate_end" in body
-    ]
-    if candidate_imports != [recovery_prefix + "abnormal_confirm_candidate_end"]:
-        violations.append("Store abnormal confirm candidate import must be direct and exact")
-    if named_function_body(commit_log, "abnormal_confirm_candidate_end") is not None:
+    for item in ("abnormal_confirm_candidate_end",):
+        imports = [
+            body
+            for kind, _, body, _ in import_records
+            if kind == "use" and item in body
+        ]
+        if imports != [recovery_prefix + item]:
+            violations.append(f"Store abnormal recovery import changed: {item}")
+    if named_function_body(production, "abnormal_confirm_candidate_end") is not None:
         violations.append("Store retained abnormal confirm candidate helper")
-    truncate_policy = "should_truncate_recovery_consume_queue"
-    truncate_imports = [
-        body
-        for kind, _, body, _ in active_import_records(commit_log)
-        if kind == "use" and truncate_policy in body
-    ]
-    if truncate_imports != [recovery_prefix + truncate_policy]:
-        violations.append("Store abnormal recovery ConsumeQueue policy import changed")
 
-    for name, policy in [
+    for name, policy in (
         ("recover_abnormally", "Standard"),
         ("recover_abnormally_optimized", "Optimized"),
-    ]:
-        body = named_function_body(commit_log, name)
+    ):
+        body = named_function_body(production, name)
         if body is None:
             violations.append(f"{name} body missing")
             continue
-        if body.count(f"AbnormalRecoveryPolicy::{policy}") != 1:
-            violations.append(f"{name} Local abnormal policy construction changed")
-        if body.count("AbnormalRecoveryState::try_new") != 1:
-            violations.append(f"{name} must construct one Local abnormal state")
-        normalized = re.sub(r"\s+", "", body)
-        if policy == "Optimized":
-            seed = "letinitial_offset=ifindex==0{first_recovery_file.get_file_from_offset()}else{0};"
-            input_size = "msg_size"
-        else:
-            seed = "letinitial_offset=first_recovery_file.get_file_from_offset();"
-            input_size = "input_size"
+        active_body = active_rust_source(body)
+        normalized = compact_rust(body)
+        if body.count(f"AbnormalRecoveryPolicy::{policy}") != 1 or body.count(
+            "AbnormalRecoveryState::try_new"
+        ) != 1:
+            violations.append(f"{name} Local abnormal state construction changed")
+        seed = (
+            "letinitial_offset=ifindex==0{first_recovery_file.get_file_from_offset()}else{0};"
+            if policy == "Optimized"
+            else "letinitial_offset=first_recovery_file.get_file_from_offset();"
+        )
+        input_size = "msg_size" if policy == "Optimized" else "input_size"
         if seed not in normalized:
             violations.append(f"{name} abnormal recovery seed changed")
-        if normalized.count(
-            f"abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,{input_size})"
-        ) != 1:
-            violations.append(f"{name} confirm candidate must use raw input size")
-        if body.count("self.get_confirm_offset().max(0)") != 1:
-            violations.append(f"{name} must read a fresh confirm limit per message")
-        if body.count("AbnormalRecoveryDispatchGate::ConfirmBounded") != 1:
-            violations.append(f"{name} must build one Local confirm-bounded gate")
-        for event in ["SegmentStarted", "MessageAccepted", "Blank", "InvalidRecord", "SourceEnded"]:
-            if body.count(f"AbnormalRecoveryEvent::{event}") != 1:
-                violations.append(f"{name} must route {event} through Local abnormal reducer")
-        if body.count("abnormal_recovery.summary()") != 1:
-            violations.append(f"{name} must bind exactly one Local abnormal summary")
-        if "AbnormalRecoverySummary{" in normalized:
-            violations.append(f"{name} must not construct an abnormal summary")
-        if "letdo_dispatch=true;" not in normalized or "do_dispatch=false" in normalized:
-            violations.append(f"{name} abnormal recovery dispatch mode changed")
-        dispatch_arm = (
-            "Ok(AbnormalRecoveryAction::DispatchMessage)=>{"
-            "self.on_commit_log_dispatch(&mutdispatch_request,do_dispatch,true,false);}"
-        )
-        message_match = abnormal_recovery_event_match(body, "MessageAccepted")
-        if message_match is None:
-            violations.append(f"{name} MessageAccepted action match is missing")
-            message_action_body = ""
-            message_match_end = -1
-        else:
-            _, message_action_body, message_match_end = message_match
-        normalized_message_actions = re.sub(r"\s+", "", message_action_body)
+        if len(re.findall(r"\babnormal_recovery\.drive_abnormal_segment\s*\(", active_body)) != 1:
+            violations.append(f"{name} must delegate one segment driver")
         if (
-            dispatch_arm not in normalized_message_actions
-            or "Ok(AbnormalRecoveryAction::SkipMessageDispatch)=>{}" not in normalized_message_actions
+            "abnormal_recovery.apply" in active_body
+            or "AbnormalRecoveryEvent" in active_body
+            or "AbnormalRecoveryAction" in active_body
         ):
-            violations.append(f"{name} must obey Local message dispatch actions")
-        if any(
-            fragment not in normalized_message_actions
-            for fragment in [
-                "Ok(action)=>{warn!();break'segments;}",
-                "Err(error)=>{warn!();break'segments;}",
-            ]
-        ):
-            violations.append(f"{name} must stop after non-message actions or reducer errors")
-        blank_hook = (
-            "Ok(AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment)=>{"
-            "self.on_commit_log_dispatch(&mutdispatch_request,do_dispatch,true,true);"
+            violations.append(f"{name} retained direct abnormal state policy")
+
+        candidate = f"abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,{input_size})"
+        candidate_adapter = candidate + ".map_err(AbnormalRecoveryAdapterError::ConfirmCandidate)?;"
+        if normalized.count(candidate_adapter) != 1:
+            violations.append(f"{name} confirm candidate adapter changed")
+        if normalized.count("letconfirm_offset=self.get_confirm_offset();") != 1:
+            violations.append(f"{name} confirm snapshot changed")
+        if normalized.count(
+            "u64::try_from(confirm_offset.max(0)).map_err("
+            "AbnormalRecoveryAdapterError::ConfirmLimitConversion)?;"
+        ) != 1:
+            violations.append(f"{name} confirm gate conversion changed")
+        required_records = (
+            "AbnormalRecoveryRecord::Message{relative_start,validated_size,"
+            "confirm_candidate_end,dispatch_gate,record:dispatch_request,}",
+            "AbnormalRecoveryRecord::Blank{record:dispatch_request,}",
+            "AbnormalRecoveryRecord::Invalid{relative_start:u64::try_from(",
+            "AbnormalRecoveryRecord::SourceEnded",
         )
-        if blank_hook not in normalized or "self.dispatcher.dispatch" in normalized:
-            violations.append(f"{name} blank must use only the compatibility file-end hook")
+        if any(fragment not in normalized for fragment in required_records):
+            violations.append(f"{name} abnormal record adapter changed")
+        required_observations = (
+            "AbnormalRecoveryObservation::DispatchMessage=>{self.on_commit_log_dispatch("
+            "dispatch_request,do_dispatch,true,false);}",
+            "AbnormalRecoveryObservation::SkipMessageDispatch=>{}",
+            "AbnormalRecoveryObservation::Blank=>{self.on_commit_log_dispatch("
+            "dispatch_request,do_dispatch,true,true);}",
+            "AbnormalRecoveryObservation::Invalid{relative_start}=>{",
+        )
+        if any(fragment not in normalized for fragment in required_observations):
+            violations.append(f"{name} abnormal observation adapter changed")
+        if "self.dispatcher.dispatch" in normalized or "letdo_dispatch=true;" not in normalized:
+            violations.append(f"{name} bypassed compatibility dispatch hook")
         if policy == "Standard":
-            checked_cursor = "current_pos.checked_add(input_size)"
-            if normalized.count(checked_cursor) != 1 or "current_pos+input_size" in normalized:
+            if normalized.count("current_pos.checked_add(input_size)") != 1 or "current_pos+input_size" in normalized:
                 violations.append(f"{name} raw input cursor advancement changed")
+            if "files_processed+=1" in normalized:
+                violations.append(f"{name} absorbed optimized file statistics")
         else:
-            process_message = (
-                "letmutdispatch_request="
-                "recovery_ctx.process_message(&mutmsg_bytes,absolute_offset);"
-            )
-            ordered_message_flow = [
-                process_message,
-                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset,msg_size)",
+            ordered = (
+                "recovery_ctx.process_message(&mutmsg_bytes,absolute_offset)",
+                candidate,
                 "letdispatch_gate=",
-                "matchabnormal_recovery.apply(AbnormalRecoveryEvent::MessageAccepted{",
-            ]
-            positions = [normalized.find(fragment) for fragment in ordered_message_flow]
-            if (
-                normalized.count(process_message) != 1
-                or any(position == -1 for position in positions)
-                or positions != sorted(positions)
-            ):
-                violations.append(
-                    f"{name} must parse each message before candidate, gate, and reducer application"
-                )
-
-            active_body = active_rust_source(body)
-            if "file_processed" in message_action_body:
-                violations.append(f"{name} file-processed marker must be outside dispatch action arms")
-            match_tail = "" if message_match_end == -1 else active_body[message_match_end:]
-            if re.match(r"\s*file_processed\s*=\s*true\s*;", match_tail) is None:
-                violations.append(
-                    f"{name} must mark the file immediately after a successful message action match"
-                )
+                "AbnormalRecoveryRecord::Message{",
+            )
+            positions = [normalized.find(fragment) for fragment in ordered]
+            if any(position == -1 for position in positions) or positions != sorted(positions):
+                violations.append(f"{name} parse/candidate/gate/record order changed")
             if len(re.findall(r"\bfile_processed\s*=\s*true\s*;", active_body)) != 1:
-                violations.append(f"{name} must mark each file from one accepted-message site")
+                violations.append(f"{name} accepted-message marker changed")
+            accepted = (
+                "letmessage_accepted=matches!(observation,"
+                "AbnormalRecoveryObservation::DispatchMessage|"
+                "AbnormalRecoveryObservation::SkipMessageDispatch);"
+            )
+            if accepted not in normalized or "ifmessage_accepted{file_processed=true;}" not in normalized:
+                violations.append(f"{name} dispatch and skip must both mark the file")
+            if normalized.count("iffile_processed{recovery_ctx.stats.files_processed+=1;}") != 1:
+                violations.append(f"{name} file statistics guard changed")
 
-            stats_increment = "recovery_ctx.stats.files_processed+=1;"
-            if normalized.count(stats_increment) != 1:
-                violations.append(f"{name} must increment file statistics exactly once")
-            stats_guard = re.search(r"\bif\s+file_processed\s*\{", active_body)
-            if stats_guard is None:
-                violations.append(f"{name} file statistics must be guarded by file_processed")
-            else:
-                stats_open = active_body.find("{", stats_guard.start())
-                stats_body = braced_body(active_body, stats_open)
-                if stats_body is None or re.sub(r"\s+", "", stats_body[0]) != stats_increment:
-                    violations.append(f"{name} file statistics guard changed")
-            if len(re.findall(r"\bfile_processed\b", active_body)) != 3:
-                violations.append(f"{name} file-processed marker escaped its structural contract")
-        required_final = [
-            "letsummary=abnormal_recovery.summary();",
-            "i64::try_from(summary.last_valid_offset)",
-            "i64::try_from(summary.confirm_valid_offset)",
-            "i64::try_from(summary.truncate_offset)",
-            "self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(),confirm_valid_offset)",
-            "self.set_confirm_offset(last_valid_offset)",
-            "should_truncate_recovery_consume_queue(max_phy_offset_of_consume_queue,summary.truncate_offset)",
-            "message_store.truncate_dirty_logic_files(process_offset)",
-            "self.mapped_file_queue.set_flushed_where(process_offset)",
-            "self.mapped_file_queue.set_committed_where(process_offset)",
-            "self.mapped_file_queue.truncate_dirty_files(process_offset)",
-        ]
+        for error_variant in (
+            "ConfirmCandidate",
+            "ConfirmLimitConversion",
+            "FramePositionOverflow",
+            "RelativeOffsetConversion",
+            "ValidatedSizeConversion",
+        ):
+            if normalized.count(
+                "AbnormalRecoverySegmentOutcome::AdapterFailed("
+                f"AbnormalRecoveryAdapterError::{error_variant}"
+            ) != 1:
+                violations.append(f"{name} adapter error arm changed: {error_variant}")
+        if normalized.count("AbnormalRecoverySegmentOutcome::StateFailed(error)") != 1 or normalized.count(
+            "AbnormalRecoverySegmentOutcome::UnexpectedAction(action)"
+        ) != 1:
+            violations.append(f"{name} driver failure handling changed")
+        required_final = (
+            "letcompletion=abnormal_recovery.completion(max_phy_offset_of_consume_queue);",
+            "apply_recovery_completion!(self,completion,max_phy_offset_of_consume_queue,message_store);",
+        )
         if any(fragment not in normalized for fragment in required_final):
             violations.append(f"{name} final abnormal watermarks changed")
-        if re.search(r"\b(?:last_valid_msg_phy_offset|last_confirm_valid_msg_phy_offset|mapped_file_offset)\b", body):
+        if (
+            "abnormal_recovery.summary()" in normalized
+            or "should_truncate_recovery_consume_queue" in normalized
+            or "i64::try_from(summary." in normalized
+            or "AbnormalRecoverySummary{" in normalized
+            or re.search(
+            r"\b(?:last_valid_msg_phy_offset|last_confirm_valid_msg_phy_offset|mapped_file_offset)\b",
+            body,
+            )
+        ):
             violations.append(f"{name} copied Local abnormal watermark state")
-        if re.search(r"\bmatch\s+AbnormalRecoveryPolicy\b", body):
-            violations.append(f"{name} copied Local abnormal policy match")
         if re.search(r"\b(?:as|unwrap|expect|panic)\b", body):
             violations.append(f"{name} uses unchecked conversion or panic")
     return violations
@@ -2836,8 +2875,16 @@ def kernel_facade_boundary_uses(
     for path in sorted(records_by_path, key=str):
         for kind, visibility, body, statement in records_by_path[path]:
             rooted_at_local = body.removeprefix("::").startswith("rocketmq_store_local")
-            canonical_alias_or_tree = rooted_at_local and (
-                "{" in body or re.search(r"\bas\b", body)
+            exact_native_memory_facade = (
+                kind == "use"
+                and visibility == "pub"
+                and body
+                == "rocketmq_store_local::mapped_file::NativeMappedMemory as StoreMappedMemory"
+            )
+            canonical_alias_or_tree = (
+                rooted_at_local
+                and ("{" in body or re.search(r"\bas\b", body))
+                and not exact_native_memory_facade
             )
             public_use = kind == "use" and visibility.startswith("pub")
             public_glob = public_use and "*" in body
@@ -3928,15 +3975,18 @@ def mapped_file_warmup_store_adapter_violations(
     imports = [
         body
         for visibility, body, _ in active_use_records(default_production)
-        if visibility == "" and "mapped_file::kernel" in body
+        if visibility == ""
+        and (
+            MAPPED_FILE_WARMUP_VISITOR in body
+            or MAPPED_FILE_WARMUP_OPERATION in body
+        )
     ]
     expected_imports = [
-        "rocketmq_store_local::mapped_file::kernel::visit_mapped_file_warmup_schedule",
-        "rocketmq_store_local::mapped_file::kernel::MappedFileProgress",
-        "rocketmq_store_local::mapped_file::kernel::MappedFileWarmupOperation",
+        "crate::mapped_file::kernel::visit_mapped_file_warmup_schedule",
+        "crate::mapped_file::kernel::MappedFileWarmupOperation",
     ]
     if imports != expected_imports:
-        violations.append(f"Store warmup Local imports changed: {imports}")
+        violations.append(f"Local DefaultMappedFile warmup imports changed: {imports}")
 
     warmup_body = compact_rust(
         named_raw_function_body(default_production, "warm_mapped_file_with_ops") or ""
@@ -3952,7 +4002,7 @@ def mapped_file_warmup_store_adapter_violations(
         "MappedFileWarmupOperation::Flush{offset,len,final_flush,}=>",
         "flush_range(mapped_file,offset,len)",
         "iffinal_flush{",
-        "self.progress.record_flush_time();",
+        "self.raw_core.record_flush_time();",
     )
     if any(fragment not in warmup_body for fragment in required_fragments):
         violations.append("Store warmup adapter execution contract changed")
@@ -3984,7 +4034,7 @@ def mapped_file_warmup_store_adapter_violations(
         "errno_from_io_error(&error),));"
         "iffinal_flush{warn!(,offset,end,self.file_name,error);}"
         "else{warn!(,offset,end,self.file_name,error);}}"
-        "else{self.progress.record_flush_time();}"
+        "else{self.raw_core.record_flush_time();}"
     )
     if flush_arm != expected_flush_arm:
         violations.append("Store warmup Flush error/event/warning contract changed")
@@ -4095,28 +4145,36 @@ def mapped_file_progress_adapter_violations(
     violations.extend(
         direct_exact_reexport_violations(
             default_production,
-            "rocketmq_store_local::mapped_file::kernel",
+            "crate::mapped_file::kernel",
+            "OS_PAGE_SIZE",
+        )
+    )
+    store_facade = source_without_cfg_test_items(
+        production_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH]
+    )
+    violations.extend(
+        direct_exact_reexport_violations(
+            store_facade,
+            "rocketmq_store_local::mapped_file",
             "OS_PAGE_SIZE",
         )
     )
 
     expected_wrapper_signatures = {
         "is_able_to_flush": "fnis_able_to_flush(&self,flush_least_pages:i32)->bool",
-        "is_able_to_commit": "fnis_able_to_commit(&self,commit_least_pages:i32)->bool",
     }
     expected_wrapper_bodies = {
         "is_able_to_flush": (
-            "self.progress.is_able_to_flush(self.get_read_position(),flush_least_pages)"
+            "self.raw_core.is_able_to_flush(self.get_read_position(),flush_least_pages)"
         ),
-        "is_able_to_commit": "self.progress.is_able_to_commit(commit_least_pages)",
     }
     wrapper_records = inherent_method_records(
         default_production,
         "DefaultMappedFile",
-        MAPPED_FILE_POLICY_METHODS,
+        DEFAULT_MAPPED_FILE_POLICY_METHODS,
     )
     default_active = active_rust_source(default_production)
-    for function_name in MAPPED_FILE_POLICY_METHODS:
+    for function_name in DEFAULT_MAPPED_FILE_POLICY_METHODS:
         global_definition_count = len(
             re.findall(rf"\bfn\s+{re.escape(function_name)}\b", default_active)
         )
@@ -4143,6 +4201,17 @@ def mapped_file_progress_adapter_violations(
     violations.extend(
         store_production_mapped_file_policy_violations(store_policy_sources)
     )
+    local_fixed_page_aliases = store_fixed_page_aliases(
+        {DEFAULT_MAPPED_FILE_PATH: default_production}
+    )
+    violations.extend(
+        f"{DEFAULT_MAPPED_FILE_PATH.as_posix()}: {violation}"
+        for violation in store_threshold_arithmetic_violations(
+            default_production,
+            local_fixed_page_aliases,
+            check_threshold_comparisons=True,
+        )
+    )
 
     references_by_path: dict[Path, list[str]] = {}
     for path, source in production_sources.items():
@@ -4155,12 +4224,12 @@ def mapped_file_progress_adapter_violations(
         if references:
             references_by_path[path] = references
     expected_references = {
-        DEFAULT_MAPPED_FILE_PATH: [
+        MAPPED_FILE_RAW_PATH: [
             "is_able_to_flush",
             "is_able_to_commit",
-            "is_able_to_flush",
             "is_able_to_commit",
-        ]
+        ],
+        DEFAULT_MAPPED_FILE_PATH: ["is_able_to_flush", "is_able_to_flush"],
     }
     if references_by_path != expected_references:
         violations.append(f"mapped-file policy production references changed: {references_by_path}")
@@ -4250,6 +4319,18 @@ def flattened_or_clauses(condition: str) -> list[str]:
         clause
         for part in parts
         for clause in flattened_or_clauses(part)
+    ]
+
+
+def flattened_and_clauses(condition: str) -> list[str]:
+    condition = strip_outer_parentheses(condition)
+    parts = split_top_level_expression(condition, "&&")
+    if len(parts) == 1:
+        return [condition]
+    return [
+        clause
+        for part in parts
+        for clause in flattened_and_clauses(part)
     ]
 
 
@@ -4641,7 +4722,7 @@ def mapped_file_lock_range_adapter_violations(
         "->Option<(*constu8,usize)>"
     )
     expected_body = (
-        "let(offset,len)=self.progress.lock_region_range(offset,requested_len)?;"
+        "let(offset,len)=self.raw_core.lock_region_range(offset,requested_len)?;"
         "Some((self.get_mapped_file().as_ptr().wrapping_add(offset),len))"
     )
     if len(re.findall(r"\bfn\s+lock_region_address_and_len\b", default_active)) != 1:
@@ -4687,16 +4768,1016 @@ def mapped_file_lock_range_adapter_violations(
         mapped_file_lock_range_duplicate_policy_violations(production_sources)
     )
 
-    if range_definitions != [MAPPED_FILE_KERNEL_PATH]:
+    if range_definitions != [MAPPED_FILE_KERNEL_PATH, MAPPED_FILE_RAW_PATH]:
         violations.append(f"lock_region_range production definitions changed: {range_definitions}")
     if helper_definitions != [DEFAULT_MAPPED_FILE_PATH]:
         violations.append(f"lock_region_address_and_len production definitions changed: {helper_definitions}")
-    if range_references != {DEFAULT_MAPPED_FILE_PATH: 1}:
+    if range_references != {
+        MAPPED_FILE_RAW_PATH: 1,
+        DEFAULT_MAPPED_FILE_PATH: 1,
+    }:
         violations.append(f"lock_region_range production references changed: {range_references}")
     if helper_references != {DEFAULT_MAPPED_FILE_PATH: 1}:
         violations.append(
             f"lock_region_address_and_len production references changed: {helper_references}"
         )
+    return violations
+
+
+def mapped_file_cache_range_policy_violations(source: str) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    violations: list[str] = []
+    records = inherent_method_records(
+        production,
+        "MappedFileProgress",
+        MAPPED_FILE_CACHE_RANGE_METHODS,
+    )["is_valid_cache_range"]
+    expected_signature = (
+        "pubfnis_valid_cache_range(&self,position:i64,size:usize)->bool"
+    )
+    expected_body = (
+        "ifposition<0||size==0{returnfalse;}"
+        "letfile_size=self.file_size()asusize;"
+        "letposition=positionasusize;"
+        "position<file_size&&position.checked_add(size)"
+        ".is_some_and(|end|end<=file_size)"
+    )
+    if len(re.findall(r"\bfn\s+is_valid_cache_range\b", active)) != 1:
+        violations.append(
+            "MappedFileProgress::is_valid_cache_range production definition count changed"
+        )
+    if len(records) != 1:
+        violations.append(
+            "MappedFileProgress::is_valid_cache_range must have exactly one inherent definition"
+        )
+        return violations
+    record = records[0]
+    if record.cfg_gated:
+        violations.append("MappedFileProgress::is_valid_cache_range must not be cfg gated")
+    if record.signature != expected_signature:
+        violations.append("MappedFileProgress::is_valid_cache_range signature changed")
+    if record.body != expected_body:
+        violations.append("MappedFileProgress::is_valid_cache_range behavior changed")
+    return violations
+
+
+CACHE_RANGE_IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
+
+
+def cache_range_comparison(
+    expression: str,
+) -> tuple[str, str, str] | None:
+    expression = strip_outer_parentheses(expression)
+    parenthesis_depth = 0
+    for index, character in enumerate(expression):
+        if character == "(":
+            parenthesis_depth += 1
+            continue
+        if character == ")":
+            parenthesis_depth -= 1
+            continue
+        if parenthesis_depth != 0:
+            continue
+        for operator in ("<=", ">=", "==", "<", ">"):
+            if expression.startswith(operator, index):
+                return (
+                    strip_outer_parentheses(expression[:index]),
+                    operator,
+                    strip_outer_parentheses(expression[index + len(operator):]),
+                )
+    return None
+
+
+def cache_range_false_conditions(compact_body: str, before: int) -> list[str]:
+    conditions: list[str] = []
+    for if_match in re.finditer(r"(?<![A-Za-z0-9_])if", compact_body[:before]):
+        condition_start = if_match.end()
+        parenthesis_depth = 0
+        opening_brace: int | None = None
+        for index in range(condition_start, before):
+            character = compact_body[index]
+            if character == "(":
+                parenthesis_depth += 1
+            elif character == ")":
+                parenthesis_depth -= 1
+            elif character == "{" and parenthesis_depth == 0:
+                opening_brace = index
+                break
+        if opening_brace is None:
+            continue
+        extracted = braced_body(compact_body, opening_brace)
+        if extracted is None or extracted[1] > before:
+            continue
+        if extracted[0] == "returnfalse;":
+            conditions.append(compact_body[condition_start:opening_brace])
+    return conditions
+
+
+def cache_range_guard_roles(
+    compact_body: str,
+    before: int,
+    position: str,
+    size: str,
+    aliases: IdentifierAliases,
+) -> tuple[bool, bool]:
+    negative = False
+    empty = False
+    for condition in cache_range_false_conditions(compact_body, before):
+        for clause in flattened_or_clauses(condition):
+            comparison = cache_range_comparison(clause)
+            if comparison is None:
+                continue
+            left, operator, right = comparison
+            left_identifier = warmup_identifier_expression(left)
+            right_identifier = warmup_identifier_expression(right)
+            if operator == "==" and (
+                (
+                    left_identifier is not None
+                    and aliases.equivalent(left_identifier, size)
+                    and right == "0"
+                )
+                or (
+                    right_identifier is not None
+                    and aliases.equivalent(right_identifier, size)
+                    and left == "0"
+                )
+            ):
+                empty = True
+            if operator == "<" and (
+                left_identifier is not None
+                and aliases.equivalent(left_identifier, position)
+                and right == "0"
+            ):
+                negative = True
+            if (
+                operator == ">"
+                and left == "0"
+                and right_identifier is not None
+                and aliases.equivalent(right_identifier, position)
+            ):
+                negative = True
+    return negative, empty
+
+
+def cache_range_suffix_roles(
+    compact_body: str,
+) -> tuple[str, str, str, int] | None:
+    aliases = IdentifierAliases(compact_body)
+    checked = re.compile(
+        rf"(?P<position>{CACHE_RANGE_IDENTIFIER})\.checked_add\("
+        rf"(?P<size>{CACHE_RANGE_IDENTIFIER})\)\.is_some_and\(\|"
+        rf"(?P<end>{CACHE_RANGE_IDENTIFIER})\|(?P<condition>[^()]*)\)"
+    )
+    for match in checked.finditer(compact_body):
+        condition = cache_range_comparison(match.group("condition"))
+        if condition is None:
+            continue
+        left, operator, right = condition
+        end = match.group("end")
+        if operator == "<=" and left == end:
+            file_size = warmup_identifier_expression(right)
+        elif operator == ">=" and right == end:
+            file_size = warmup_identifier_expression(left)
+        else:
+            continue
+        if file_size is None:
+            continue
+        position = match.group("position")
+        expression_start = max(
+            compact_body.rfind(delimiter, 0, match.start())
+            for delimiter in (";", "{", "}")
+        )
+        expression_end_candidates = [
+            end
+            for delimiter in (";", "{", "}")
+            if (end := compact_body.find(delimiter, match.end())) != -1
+        ]
+        expression_end = min(expression_end_candidates, default=len(compact_body))
+        logical_expression = compact_body[expression_start + 1:expression_end]
+        logical_expression = logical_expression.removeprefix("return")
+        assignment = re.match(
+            rf"let(?:mut)?{CACHE_RANGE_IDENTIFIER}(?:\:[^=;]+)?=",
+            logical_expression,
+        )
+        if assignment is not None:
+            logical_expression = logical_expression[assignment.end():]
+        has_start_boundary = any(
+            (
+                operator == "<"
+                and left_identifier is not None
+                and right_identifier is not None
+                and aliases.equivalent(left_identifier, position)
+                and aliases.equivalent(right_identifier, file_size)
+            )
+            or (
+                operator == ">"
+                and left_identifier is not None
+                and right_identifier is not None
+                and aliases.equivalent(left_identifier, file_size)
+                and aliases.equivalent(right_identifier, position)
+            )
+            for comparison_text in flattened_and_clauses(logical_expression)
+            if (comparison := cache_range_comparison(comparison_text)) is not None
+            for left, operator, right in (comparison,)
+            for left_identifier, right_identifier in (
+                (warmup_identifier_expression(left), warmup_identifier_expression(right)),
+            )
+        )
+        if has_start_boundary:
+            return position, match.group("size"), file_size, match.start()
+    return None
+
+
+def cache_range_cast_source(
+    compact_body: str,
+    target: str,
+    aliases: IdentifierAliases,
+) -> str | None:
+    for match in re.finditer(
+        rf"let(?P<target>{CACHE_RANGE_IDENTIFIER})(?:\:[^=;]+)?="
+        rf"(?P<source>{CACHE_RANGE_IDENTIFIER})asusize;",
+        compact_body,
+    ):
+        if aliases.equivalent(match.group("target"), target):
+            return match.group("source")
+    return None
+
+
+def has_inline_mapped_file_cache_range_policy(body: str) -> bool:
+    compact = compact_rust(body)
+    roles = cache_range_suffix_roles(compact)
+    if roles is None:
+        return False
+    native_position, size, _, suffix_start = roles
+    aliases = IdentifierAliases(compact)
+    signed_position = cache_range_cast_source(compact, native_position, aliases)
+    if signed_position is None:
+        return False
+    return cache_range_guard_roles(
+        compact,
+        suffix_start,
+        signed_position,
+        size,
+        aliases,
+    ) == (True, True)
+
+
+def mapped_file_cache_range_duplicate_policy_violations(
+    production_sources: dict[Path, str],
+) -> list[str]:
+    records = [
+        record
+        for path, source in production_sources.items()
+        for record in warmup_function_records(path, source)
+    ]
+    violations: list[str] = []
+    canonical_seen = False
+    for record in records:
+        if not has_inline_mapped_file_cache_range_policy(record.raw_body):
+            continue
+        if (
+            record.path == MAPPED_FILE_KERNEL_PATH
+            and record.name == "is_valid_cache_range"
+            and not canonical_seen
+        ):
+            canonical_seen = True
+            continue
+        violations.append(
+            f"{record.path.as_posix()}: {record.name} duplicates mapped-file cache-range validation policy"
+        )
+
+    helper_roles: dict[str, tuple[Path, tuple[int, int, int]]] = {}
+    for record in records:
+        suffix = cache_range_suffix_roles(record.body)
+        if suffix is None:
+            continue
+        aliases = IdentifierAliases(record.body)
+        role_indices: list[int] = []
+        for role in suffix[:3]:
+            matches = [
+                index
+                for index, parameter in enumerate(record.parameters)
+                if aliases.equivalent(parameter, role)
+            ]
+            if len(matches) != 1:
+                break
+            role_indices.append(matches[0])
+        if len(role_indices) == 3:
+            helper_roles[record.name] = (
+                record.path,
+                (role_indices[0], role_indices[1], role_indices[2]),
+            )
+
+    for record in records:
+        aliases = IdentifierAliases(record.body)
+        imported = dict(record.imports)
+        for call in re.finditer(
+            rf"(?<![.:A-Za-z0-9_])(?P<name>{CACHE_RANGE_IDENTIFIER})\("
+            rf"(?P<arguments>[^()]*)\)",
+            record.body,
+        ):
+            called_name = imported.get(call.group("name"), call.group("name")).split("::")[-1]
+            helper = helper_roles.get(called_name)
+            if helper is None:
+                continue
+            arguments = [
+                warmup_identifier_expression(argument)
+                for argument in split_top_level_expression(call.group("arguments"), ",")
+                if argument
+            ]
+            if any(argument is None for argument in arguments):
+                continue
+            position_index, size_index, file_index = helper[1]
+            if max(position_index, size_index, file_index) >= len(arguments):
+                continue
+            native_position = arguments[position_index]
+            size = arguments[size_index]
+            file_size = arguments[file_index]
+            assert native_position is not None and size is not None and file_size is not None
+            signed_position = cache_range_cast_source(record.body, native_position, aliases)
+            if signed_position is None:
+                continue
+            if cache_range_guard_roles(
+                record.body,
+                call.start(),
+                signed_position,
+                size,
+                aliases,
+            ) != (True, True):
+                continue
+            violations.append(
+                f"{record.path.as_posix()}: {record.name} reconstructs mapped-file cache-range validation "
+                f"through {called_name} from {helper[0].as_posix()}"
+            )
+    return violations
+
+
+def mapped_file_cache_range_adapter_violations(
+    canonical_source: str,
+    default_mapped_file_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    violations = mapped_file_cache_range_policy_violations(canonical_source)
+    default_production = source_without_cfg_test_items(default_mapped_file_source)
+    default_active = active_rust_source(default_production)
+    wrapper = inherent_method_records(
+        default_production,
+        "DefaultMappedFile",
+        MAPPED_FILE_CACHE_RANGE_METHODS,
+    )["is_valid_cache_range"]
+    if len(wrapper) != 1:
+        violations.append("Store is_valid_cache_range must have exactly one inherent definition")
+    else:
+        record = wrapper[0]
+        if record.cfg_gated:
+            violations.append("Store is_valid_cache_range wrapper must not be cfg gated")
+        if record.visibility:
+            violations.append("Store is_valid_cache_range wrapper must remain private")
+        if record.signature != "fnis_valid_cache_range(&self,position:i64,size:usize)->bool":
+            violations.append("Store is_valid_cache_range wrapper signature changed")
+        if record.body != "self.raw_core.is_valid_cache_range(position,size)":
+            violations.append("Store is_valid_cache_range must be an exact Local delegation")
+
+    definitions: list[Path] = []
+    references: dict[Path, int] = {}
+    normalized_sources = dict(production_sources)
+    normalized_sources[DEFAULT_MAPPED_FILE_PATH] = default_production
+    for path, source in normalized_sources.items():
+        production = source_without_cfg_test_items(source)
+        active = active_rust_source(production)
+        definitions.extend(
+            [path] * len(re.findall(r"\bfn\s+is_valid_cache_range\b", active))
+        )
+        count = len(MAPPED_FILE_CACHE_RANGE_REFERENCE.findall(active))
+        if count:
+            references[path] = count
+    expected_definitions = [
+        MAPPED_FILE_KERNEL_PATH,
+        MAPPED_FILE_RAW_PATH,
+        DEFAULT_MAPPED_FILE_PATH,
+    ]
+    if sorted(definitions, key=str) != sorted(expected_definitions, key=str):
+        violations.append(f"is_valid_cache_range production definitions changed: {definitions}")
+    if references != {
+        MAPPED_FILE_RAW_PATH: 1,
+        DEFAULT_MAPPED_FILE_PATH: 4,
+    }:
+        violations.append(f"is_valid_cache_range production references changed: {references}")
+
+    loaded_bodies = [
+        compact_rust(body)
+        for name, body in rust_function_bodies(default_production)
+        if name == "is_loaded"
+    ]
+    exact_delegations = sum(
+        body == "self.is_valid_cache_range(position,size)" for body in loaded_bodies
+    )
+    guarded_linux = sum(
+        "if!self.is_valid_cache_range(position,size){returnfalse;}" in body
+        and "mincore(" in body
+        for body in loaded_bodies
+    )
+    if len(loaded_bodies) != 3 or exact_delegations != 2 or guarded_linux != 1:
+        violations.append("Store platform is_loaded cache-range caller flow changed")
+    compact_default = compact_rust(default_mapped_file_source)
+    for target in ("linux", "windows", "macos"):
+        marker = f'#[cfg(target_os="{target}")]fnis_loaded'
+        if compact_default.count(marker) != 1:
+            violations.append(f"Store {target} is_loaded cfg boundary changed")
+
+    violations.extend(
+        mapped_file_cache_range_duplicate_policy_violations(normalized_sources)
+    )
+    return violations
+
+
+def mapped_file_cache_residency_plan_violations(source: str) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    violations: list[str] = []
+
+    if len(re.findall(r"\bstruct\s+MappedFileCacheResidencyPlan\b", active)) != 1:
+        violations.append("MappedFileCacheResidencyPlan production definition count changed")
+    if (
+        "#[derive(Debug,Clone,Copy,PartialEq,Eq)]"
+        "pubstructMappedFileCacheResidencyPlan{"
+        "pubaligned_start:usize,pubchecked_len:usize,pubpage_count:usize,}"
+    ) not in compact:
+        violations.append("MappedFileCacheResidencyPlan derive, visibility, or fields changed")
+    if active_struct_fields(production, MAPPED_FILE_CACHE_RESIDENCY_PLAN) != [
+        ("aligned_start", "usize"),
+        ("checked_len", "usize"),
+        ("page_count", "usize"),
+    ]:
+        violations.append("MappedFileCacheResidencyPlan field order or types changed")
+
+    struct_match = re.search(r"\bpub\s+struct\s+MappedFileCacheResidencyPlan\b", active)
+    if struct_match is None or attributes_have_cfg_gate(
+        contiguous_outer_attributes_before(active, struct_match.start())
+    ):
+        violations.append("MappedFileCacheResidencyPlan must be an unconditional public owner")
+
+    function_matches = list(
+        re.finditer(r"\bpub\s+fn\s+plan_mapped_file_cache_residency\b", active)
+    )
+    if len(function_matches) != 1:
+        violations.append("cache-residency planner production definition count changed")
+    else:
+        function_match = function_matches[0]
+        if attributes_have_cfg_gate(
+            contiguous_outer_attributes_before(active, function_match.start())
+        ):
+            violations.append("cache-residency planner must not be cfg gated")
+
+    expected_signature = (
+        "pubfnplan_mapped_file_cache_residency(base_addr:usize,position:i64,"
+        "size:usize,page_size:usize,)->Option<MappedFileCacheResidencyPlan>"
+    )
+    function_body = compact_rust(
+        named_raw_function_body(production, MAPPED_FILE_CACHE_RESIDENCY_PLANNER) or ""
+    )
+    expected_body = (
+        "letposition=positionasusize;"
+        "letpage_size=page_size.max(1);"
+        "letstart_addr=base_addr.saturating_add(position);"
+        "letaligned_start=start_addr/page_size*page_size;"
+        "letpage_offset=start_addr-aligned_start;"
+        "letchecked_len=page_offset.saturating_add(size);"
+        "letpage_count=checked_len.div_ceil(page_size);"
+        "ifpage_count==0{returnNone;}"
+        "Some(MappedFileCacheResidencyPlan{aligned_start,checked_len,page_count,})"
+    )
+    if compact.count(expected_signature) != 1:
+        violations.append("cache-residency planner signature changed")
+    if function_body != expected_body:
+        violations.append("cache-residency planner behavior or operation order changed")
+    return violations
+
+
+class CacheResidencyTupleCall(NamedTuple):
+    bindings: tuple[str, str]
+    callee: str
+    arguments: tuple[str, ...]
+
+
+class CacheResidencyAlignmentHelperRoles(NamedTuple):
+    start_parameter_index: int
+    page_parameter_index: int
+    aligned_return_index: int
+    offset_return_index: int
+
+
+class CacheResidencyStructShape(NamedTuple):
+    path: Path
+    name: str
+    fields: tuple[str, str, str]
+
+
+def cache_residency_assignment_records(
+    body: str,
+) -> tuple[
+    list[tuple[str, str]],
+    list[tuple[str, str]],
+    list[tuple[str, str, str]],
+    list[tuple[str, str, str]],
+    list[tuple[str, str, str]],
+    list[tuple[str, str, str]],
+    list[CacheResidencyTupleCall],
+]:
+    identifier = WARMUP_IDENTIFIER
+    casts = [
+        (match.group("target"), match.group("source"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<source>{identifier})asusize;",
+            body,
+        )
+    ]
+    normalizations = [
+        (match.group("target"), match.group("source"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<source>{identifier})\.max\(1\);",
+            body,
+        )
+    ]
+    additions = [
+        (match.group("target"), match.group("left"), match.group("right"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<left>{identifier})\.saturating_add\((?P<right>{identifier})\);",
+            body,
+        )
+    ]
+    alignments = [
+        (match.group("target"), match.group("start"), match.group("page"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<start>{identifier})/(?P<page>{identifier})\*(?P=page);",
+            body,
+        )
+    ]
+    subtractions = [
+        (match.group("target"), match.group("start"), match.group("aligned"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<start>{identifier})-(?P<aligned>{identifier});",
+            body,
+        )
+    ]
+    ceilings = [
+        (match.group("target"), match.group("len"), match.group("page"))
+        for match in re.finditer(
+            rf"let(?P<target>{identifier})(?:\:[^=;]+)?="
+            rf"(?P<len>{identifier})\.div_ceil\((?P<page>{identifier})\);",
+            body,
+        )
+    ]
+    tuple_calls: list[CacheResidencyTupleCall] = []
+    for match in re.finditer(
+        rf"let\((?P<first>{identifier}),(?P<second>{identifier})\)="
+        rf"(?P<callee>{identifier})\((?P<arguments>[^()]*)\);",
+        body,
+    ):
+        argument_parts = split_top_level_expression(match.group("arguments"), ",")
+        arguments = tuple(argument_parts) if all(
+            warmup_identifier_expression(argument) is not None
+            for argument in argument_parts
+        ) else ()
+        tuple_calls.append(
+            CacheResidencyTupleCall(
+                bindings=(match.group("first"), match.group("second")),
+                callee=match.group("callee"),
+                arguments=arguments,
+            )
+        )
+    return casts, normalizations, additions, alignments, subtractions, ceilings, tuple_calls
+
+
+def cache_residency_zero_none_guard(body: str, page_count: str, aliases: IdentifierAliases) -> bool:
+    for match in re.finditer(
+        rf"if(?P<value>{WARMUP_IDENTIFIER})==0\{{returnNone;\}}",
+        body,
+    ):
+        if aliases.equivalent(match.group("value"), page_count):
+            return True
+    for match in re.finditer(
+        rf"if0==(?P<value>{WARMUP_IDENTIFIER})\{{returnNone;\}}",
+        body,
+    ):
+        if aliases.equivalent(match.group("value"), page_count):
+            return True
+    return False
+
+
+def cache_residency_struct_shapes(
+    production_sources: dict[Path, str],
+) -> tuple[CacheResidencyStructShape, ...]:
+    shapes: list[CacheResidencyStructShape] = []
+    for path, source in production_sources.items():
+        production = source_without_cfg_test_items(source)
+        active = active_rust_source(production)
+        for declaration in re.finditer(
+            rf"\bstruct\s+(?P<name>{WARMUP_IDENTIFIER})\b[^;{{]*\{{",
+            active,
+        ):
+            name = declaration.group("name")
+            fields = active_struct_fields(production, name)
+            if len(fields) != 3 or any(field_type != "usize" for _, field_type in fields):
+                continue
+            shapes.append(
+                CacheResidencyStructShape(
+                    path=path,
+                    name=name,
+                    fields=(fields[0][0], fields[1][0], fields[2][0]),
+                )
+            )
+    return tuple(shapes)
+
+
+def cache_residency_result_struct_fields(
+    record: WarmupFunctionRecord,
+    type_name: str,
+    struct_shapes: tuple[CacheResidencyStructShape, ...],
+) -> tuple[str, str, str] | None:
+    local_matches = [
+        shape.fields
+        for shape in struct_shapes
+        if shape.path == record.path and shape.name == type_name
+    ]
+    if len(local_matches) == 1:
+        return local_matches[0]
+    global_matches = [shape.fields for shape in struct_shapes if shape.name == type_name]
+    return global_matches[0] if len(global_matches) == 1 else None
+
+
+def cache_residency_constructor_fields(fields: str) -> dict[str, str] | None:
+    assignments: dict[str, str] = {}
+    for field in split_top_level_expression(fields, ","):
+        if not field:
+            continue
+        parts = split_top_level_expression(field, ":")
+        if len(parts) == 1:
+            field_name = warmup_identifier_expression(parts[0])
+            value = field_name
+        elif len(parts) == 2:
+            field_name = warmup_identifier_expression(parts[0])
+            value = warmup_identifier_expression(parts[1])
+        else:
+            return None
+        if field_name is None or value is None or field_name in assignments:
+            return None
+        assignments[field_name] = value
+    return assignments
+
+
+def cache_residency_has_plan_result(
+    record: WarmupFunctionRecord,
+    aligned: str,
+    checked_len: str,
+    page_count: str,
+    aliases: IdentifierAliases,
+    struct_shapes: tuple[CacheResidencyStructShape, ...],
+) -> bool:
+    body = record.body
+    constructor = re.compile(
+        rf"Some\((?P<type>(?:{WARMUP_IDENTIFIER}::)*{WARMUP_IDENTIFIER})\{{"
+    )
+    for match in constructor.finditer(body):
+        opening_brace = body.find("{", match.start(), match.end())
+        extracted = braced_body(body, opening_brace) if opening_brace != -1 else None
+        if extracted is None:
+            continue
+        fields_body, constructor_end = extracted
+        if body[constructor_end:constructor_end + 1] != ")":
+            continue
+        type_name = match.group("type").split("::")[-1]
+        semantic_fields = cache_residency_result_struct_fields(
+            record,
+            type_name,
+            struct_shapes,
+        )
+        assignments = cache_residency_constructor_fields(fields_body)
+        if semantic_fields is None or assignments is None:
+            continue
+        if set(assignments) != set(semantic_fields):
+            continue
+        if all(
+            aliases.equivalent(assignments[field_name], role)
+            for field_name, role in zip(
+                semantic_fields,
+                (aligned, checked_len, page_count),
+                strict=True,
+            )
+        ):
+            return True
+    return False
+
+
+def cache_residency_direct_copy(
+    record: WarmupFunctionRecord,
+    struct_shapes: tuple[CacheResidencyStructShape, ...],
+) -> bool:
+    body = record.body
+    aliases = IdentifierAliases(body)
+    casts, normalizations, additions, alignments, subtractions, ceilings, _ = (
+        cache_residency_assignment_records(body)
+    )
+    parameters = set(record.parameters)
+    is_parameter = lambda role: any(aliases.equivalent(role, parameter) for parameter in parameters)
+    for native_position, signed_position in casts:
+        if not is_parameter(signed_position):
+            continue
+        for normalized_page, page_source in normalizations:
+            if not is_parameter(page_source):
+                continue
+            for start, base, added_position in additions:
+                if not is_parameter(base) or not aliases.equivalent(added_position, native_position):
+                    continue
+                for aligned, aligned_start, aligned_page in alignments:
+                    if not aliases.equivalent(aligned_start, start) or not aliases.equivalent(
+                        aligned_page, normalized_page
+                    ):
+                        continue
+                    for offset, offset_start, offset_aligned in subtractions:
+                        if not aliases.equivalent(offset_start, start) or not aliases.equivalent(
+                            offset_aligned, aligned
+                        ):
+                            continue
+                        for checked_len, add_left, size in additions:
+                            if not aliases.equivalent(add_left, offset) or not is_parameter(size):
+                                continue
+                            for page_count, ceil_len, ceil_page in ceilings:
+                                if not aliases.equivalent(ceil_len, checked_len) or not aliases.equivalent(
+                                    ceil_page, normalized_page
+                                ):
+                                    continue
+                                if cache_residency_zero_none_guard(body, page_count, aliases) and (
+                                    cache_residency_has_plan_result(
+                                        record,
+                                        aligned,
+                                        checked_len,
+                                        page_count,
+                                        aliases,
+                                        struct_shapes,
+                                    )
+                                ):
+                                    return True
+    return False
+
+
+def cache_residency_alignment_helper_roles(
+    record: WarmupFunctionRecord,
+) -> CacheResidencyAlignmentHelperRoles | None:
+    aliases = IdentifierAliases(record.body)
+    _, _, _, alignments, subtractions, _, _ = cache_residency_assignment_records(record.body)
+    for aligned, start, page in alignments:
+        for offset, offset_start, offset_aligned in subtractions:
+            if not aliases.equivalent(offset_start, start) or not aliases.equivalent(
+                offset_aligned, aligned
+            ):
+                continue
+            returned = re.search(
+                rf"\((?P<first>{WARMUP_IDENTIFIER}),(?P<second>{WARMUP_IDENTIFIER})\)$",
+                record.body,
+            )
+            if returned is None:
+                continue
+            start_parameters = [
+                index
+                for index, parameter in enumerate(record.parameters)
+                if aliases.equivalent(parameter, start)
+            ]
+            page_parameters = [
+                index
+                for index, parameter in enumerate(record.parameters)
+                if aliases.equivalent(parameter, page)
+            ]
+            returned_values = (returned.group("first"), returned.group("second"))
+            aligned_returns = [
+                index
+                for index, value in enumerate(returned_values)
+                if aliases.equivalent(value, aligned)
+            ]
+            offset_returns = [
+                index
+                for index, value in enumerate(returned_values)
+                if aliases.equivalent(value, offset)
+            ]
+            if not all(
+                len(indices) == 1
+                for indices in (
+                    start_parameters,
+                    page_parameters,
+                    aligned_returns,
+                    offset_returns,
+                )
+            ):
+                continue
+            roles = CacheResidencyAlignmentHelperRoles(
+                start_parameter_index=start_parameters[0],
+                page_parameter_index=page_parameters[0],
+                aligned_return_index=aligned_returns[0],
+                offset_return_index=offset_returns[0],
+            )
+            if (
+                roles.start_parameter_index == roles.page_parameter_index
+                or roles.aligned_return_index == roles.offset_return_index
+            ):
+                continue
+            return roles
+    return None
+
+
+def cache_residency_split_copy_violations(
+    records: list[WarmupFunctionRecord],
+    struct_shapes: tuple[CacheResidencyStructShape, ...],
+) -> list[str]:
+    helpers = {
+        record.name: (record, roles)
+        for record in records
+        if (roles := cache_residency_alignment_helper_roles(record)) is not None
+    }
+    violations: list[str] = []
+    for caller in records:
+        body = caller.body
+        aliases = IdentifierAliases(body)
+        casts, normalizations, additions, _, _, ceilings, tuple_calls = (
+            cache_residency_assignment_records(body)
+        )
+        import_aliases = dict(caller.imports)
+        for tuple_call in tuple_calls:
+            callee_alias = tuple_call.callee
+            helper_name = import_aliases.get(callee_alias, callee_alias).split("::")[-1]
+            helper_entry = helpers.get(helper_name)
+            if helper_entry is None:
+                continue
+            helper, helper_roles = helper_entry
+            if len(tuple_call.arguments) != len(helper.parameters) or max(
+                helper_roles.start_parameter_index,
+                helper_roles.page_parameter_index,
+            ) >= len(tuple_call.arguments):
+                continue
+            call_start = tuple_call.arguments[helper_roles.start_parameter_index]
+            call_page = tuple_call.arguments[helper_roles.page_parameter_index]
+            aligned = tuple_call.bindings[helper_roles.aligned_return_index]
+            offset = tuple_call.bindings[helper_roles.offset_return_index]
+            parameters = set(caller.parameters)
+            is_parameter = lambda role: any(
+                aliases.equivalent(role, parameter) for parameter in parameters
+            )
+            for native_position, signed_position in casts:
+                if not is_parameter(signed_position):
+                    continue
+                for normalized_page, page_source in normalizations:
+                    if not is_parameter(page_source) or not aliases.equivalent(call_page, normalized_page):
+                        continue
+                    for start, base, added_position in additions:
+                        if (
+                            not is_parameter(base)
+                            or not aliases.equivalent(added_position, native_position)
+                            or not aliases.equivalent(call_start, start)
+                        ):
+                            continue
+                        for checked_len, add_left, size in additions:
+                            if not aliases.equivalent(add_left, offset) or not is_parameter(size):
+                                continue
+                            for page_count, ceil_len, ceil_page in ceilings:
+                                if not aliases.equivalent(ceil_len, checked_len) or not aliases.equivalent(
+                                    ceil_page, normalized_page
+                                ):
+                                    continue
+                                if cache_residency_zero_none_guard(body, page_count, aliases) and (
+                                    cache_residency_has_plan_result(
+                                        caller,
+                                        aligned,
+                                        checked_len,
+                                        page_count,
+                                        aliases,
+                                        struct_shapes,
+                                    )
+                                ):
+                                    violations.append(
+                                        "mapped-file cache-residency planning copied across "
+                                        f"{helper.path.as_posix()} and {caller.path.as_posix()}"
+                                    )
+    return violations
+
+
+def mapped_file_cache_residency_duplicate_policy_violations(
+    production_sources: dict[Path, str],
+) -> list[str]:
+    struct_shapes = cache_residency_struct_shapes(production_sources)
+    records = [
+        record
+        for path, source in production_sources.items()
+        for record in warmup_function_records(path, source)
+    ]
+    violations = [
+        f"{record.path.as_posix()}: {record.name} duplicates mapped-file cache-residency planning"
+        for record in records
+        if cache_residency_direct_copy(record, struct_shapes)
+        and not (
+            record.path == MAPPED_FILE_KERNEL_PATH
+            and record.name == MAPPED_FILE_CACHE_RESIDENCY_PLANNER
+        )
+    ]
+    violations.extend(cache_residency_split_copy_violations(records, struct_shapes))
+    return violations
+
+
+def cfg_target_function_body(source: str, target: str, function_name: str) -> str | None:
+    active = rust_source_without_comments(source)
+    declaration = re.search(
+        rf'#\[cfg\(target_os\s*=\s*"{re.escape(target)}"\)\]\s*'
+        rf'(?:#\[[^\]]+\]\s*)*fn\s+{re.escape(function_name)}\b',
+        active,
+    )
+    if declaration is None:
+        return None
+    opening_brace = active.find("{", declaration.end())
+    extracted = braced_body(active, opening_brace) if opening_brace != -1 else None
+    return None if extracted is None else extracted[0]
+
+
+def mapped_file_cache_residency_adapter_violations(
+    canonical_source: str,
+    default_mapped_file_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    violations = mapped_file_cache_residency_plan_violations(canonical_source)
+    default_production = source_without_cfg_test_items(default_mapped_file_source)
+
+    planner_imports = [
+        body
+        for _, body, _ in active_use_records(default_production)
+        if MAPPED_FILE_CACHE_RESIDENCY_PLANNER in body
+    ]
+    if planner_imports:
+        violations.append("Store cache-residency planner must remain a direct fully-qualified call")
+
+    linux_body = compact_rust(
+        cfg_target_function_body(default_mapped_file_source, "linux", "is_loaded") or ""
+    )
+    expected_linux_body = (
+        "if!self.is_valid_cache_range(position,size){returnfalse;}"
+        "letpage_size=get_page_size();"
+        "letbase_addr=self.get_mapped_file().as_ptr()asusize;"
+        "letSome(plan)=crate::mapped_file::kernel::"
+        "plan_mapped_file_cache_residency(base_addr,position,size,page_size)else{"
+        "returnfalse;};"
+        "letmutresidency=vec![0u8;plan.page_count];"
+        "letresult=mincore(plan.aligned_startas*constu8,plan.checked_len,"
+        "residency.as_mut_ptr(),);"
+        "result==0&&residency.iter().all(|page|page&1==1)"
+    )
+    if linux_body != expected_linux_body:
+        violations.append("Store Linux cache-residency adapter dataflow changed")
+    if linux_body.count("plan_mapped_file_cache_residency(") != 1:
+        violations.append("Store Linux cache-residency adapter must plan exactly once")
+
+    for target in ("windows", "macos"):
+        target_body = compact_rust(
+            cfg_target_function_body(default_mapped_file_source, target, "is_loaded") or ""
+        )
+        if MAPPED_FILE_CACHE_RESIDENCY_PLANNER in target_body:
+            violations.append(f"Store {target} is_loaded must not use the Linux residency planner")
+
+    normalized_sources = {
+        path: source_without_cfg_test_items(source)
+        for path, source in production_sources.items()
+    }
+    normalized_sources[DEFAULT_MAPPED_FILE_PATH] = default_production
+    for item, kind in (
+        (MAPPED_FILE_CACHE_RESIDENCY_PLAN, "struct"),
+        (MAPPED_FILE_CACHE_RESIDENCY_PLANNER, "fn"),
+    ):
+        occurrences = file_item_owner_occurrences(normalized_sources, item)
+        if occurrences != [(MAPPED_FILE_KERNEL_PATH, kind)]:
+            violations.append(f"{item} owner occurrences changed: {occurrences}")
+
+    reference_paths: dict[Path, int] = {}
+    for path, source in normalized_sources.items():
+        count = len(
+            re.findall(
+                rf"\b{re.escape(MAPPED_FILE_CACHE_RESIDENCY_PLANNER)}\b",
+                active_rust_source(source),
+            )
+        )
+        if count:
+            reference_paths[path] = count
+    expected_references = {
+        MAPPED_FILE_KERNEL_PATH: 1,
+        DEFAULT_MAPPED_FILE_PATH: 1,
+    }
+    if reference_paths != expected_references:
+        violations.append(f"cache-residency planner production references changed: {reference_paths}")
+
+    violations.extend(
+        mapped_file_cache_residency_duplicate_policy_violations(normalized_sources)
+    )
     return violations
 
 
@@ -4769,13 +5850,20 @@ def default_mapped_file_progress_violations(source: str) -> list[str]:
         for name, field_type in fields
         if re.search(r"\bMappedFileProgress\b", field_type)
     ]
-    if [name for name, _ in progress_fields] != ["progress"]:
-        violations.append("MappedFileProgress fields must be exactly: progress")
+    if progress_fields:
+        violations.append("DefaultMappedFile must not directly own MappedFileProgress")
+    raw_core_fields = [
+        (name, field_type)
+        for name, field_type in fields
+        if re.search(r"\bMappedFileRawCore\b", field_type)
+    ]
+    if [name for name, _ in raw_core_fields] != ["raw_core"]:
+        violations.append("MappedFileRawCore fields must be exactly: raw_core")
     elif not re.fullmatch(
-        r"(?:[A-Za-z_][A-Za-z0-9_]*::)*MappedFileProgress",
-        progress_fields[0][1],
+        r"(?:[A-Za-z_][A-Za-z0-9_]*::)*MappedFileRawCore",
+        raw_core_fields[0][1],
     ):
-        violations.append("progress field must have exact MappedFileProgress type")
+        violations.append("raw_core field must have exact MappedFileRawCore type")
     return violations
 
 
@@ -4844,6 +5932,7 @@ def active_type_alias_statements(source: str) -> list[str]:
 
 
 def default_mapped_file_syntax_violations(source: str) -> list[str]:
+    source = source_without_cfg_test_items(source)
     violations: list[str] = []
     for kind, _, body, statement in active_import_records(source):
         if kind != "use" or (" as " not in body and "{" not in body):
@@ -4916,9 +6005,9 @@ def default_mapped_file_mapping_violations(source: str) -> list[str]:
         for name, field_type in fields
         if re.search(r"\bMappedFileMapping\b", field_type)
     ]
-    if mapping_fields != [("mapping", "MappedFileMapping<ArcMut<MmapMut>>")]:
+    if mapping_fields != [("mapping", "MappedFileMapping<M>")]:
         violations.append(
-            "MappedFileMapping fields must be exactly: mapping: MappedFileMapping<ArcMut<MmapMut>>"
+            "MappedFileMapping fields must be exactly: mapping: MappedFileMapping<M>"
         )
 
     legacy_names = {
@@ -4954,12 +6043,12 @@ def legacy_mapping_getter_signature_violations(source: str) -> list[str]:
         "is_lazy_mmap_enabled": r"pub\s+fn\s+is_lazy_mmap_enabled\s*\(\s*&self\s*\)\s*->\s*bool",
         "is_mapped": r"pub\s+fn\s+is_mapped\s*\(\s*&self\s*\)\s*->\s*bool",
         "lazy_mmap_stats": r"pub\s+fn\s+lazy_mmap_stats\s*\(\s*&self\s*\)\s*->\s*LazyMmapStats",
-        "get_mapped_file_mut": r"pub\s+fn\s+get_mapped_file_mut\s*\(\s*&self\s*\)\s*->\s*&mut\s+MmapMut",
-        "get_mapped_file": r"pub\s+fn\s+get_mapped_file\s*\(\s*&self\s*\)\s*->\s*&MmapMut",
-        "get_mapped_file_arcmut": (
-            r"pub\s+fn\s+get_mapped_file_arcmut\s*\(\s*&self\s*\)\s*"
-            r"->\s*ArcMut\s*<\s*MmapMut\s*>"
+        "mapped_file_mut_parts": (
+            r"pub\s+unsafe\s+fn\s+mapped_file_mut_parts\s*\(\s*&self\s*\)\s*"
+            r"->\s*\(\s*\*mut\s+u8\s*,\s*usize\s*\)"
         ),
+        "get_mapped_file": r"pub\s+fn\s+get_mapped_file\s*\(\s*&self\s*\)\s*->\s*&\[u8\]",
+        "get_mapped_memory": r"pub\s+fn\s+get_mapped_memory\s*\(\s*&self\s*\)\s*->\s*M",
     }
     return [name for name, pattern in signatures.items() if re.search(pattern, active) is None]
 
@@ -5343,89 +6432,322 @@ def commit_log_mapping_plan_owner_violations(source: str) -> list[str]:
     return violations
 
 
-def store_commit_log_mapping_plan_violations(source: str) -> list[str]:
+def commit_log_loader_owner_violations(source: str) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    normalized = re.sub(r"\s+", "", active)
+    violations: list[str] = []
+
+    if re.search(r"#\s*\[\s*(?:cfg|cfg_attr)\b", production):
+        violations.append("Local CommitLog loader owner must not be cfg-gated")
+
+    adapter_body = active_item_body(production, "struct", "CommitLogLoadAdapter")
+    expected_adapter = (
+        "pubopen:fn(path:&Path,file_size:u64,mode:CommitLogMappingMode)->io::Result<T>,"
+        "pubrecovery_mapping:RecoveryMapping<T>,"
+        "pubmark_fully_loaded:fn(&T,position:i32),"
+    )
+    if adapter_body is None or re.sub(r"\s+", "", adapter_body) != expected_adapter:
+        violations.append("Local CommitLog load adapter function table changed")
+    if "pubstructCommitLogLoadAdapter<T>" not in normalized:
+        violations.append("Local CommitLog load adapter owner changed")
+    if "pubtypeRecoveryMapping<T>=for<'a>fn(&'aT)->Option<(&'a[u8],&'astr)>;" not in normalized:
+        violations.append("Local CommitLog recovery mapping boundary changed")
+
+    loader_body = active_item_body(production, "struct", "CommitLogLoader")
+    expected_fields = (
+        "store_path:String,mapped_file_size:u64,enable_parallel:bool,"
+        "recovery_mmap_advice:RecoveryMmapAdvice,"
+        "recovery_file_prefetch:RecoveryFilePrefetch,lazy_mmap_enable:bool,"
+    )
+    if loader_body is None or re.sub(r"\s+", "", loader_body) != expected_fields:
+        violations.append("Local CommitLog loader fields or visibility changed")
+    if "pubstructCommitLogLoader{" not in normalized:
+        violations.append("Local CommitLog loader state owner changed")
+    if "implCommitLogLoader{" not in normalized:
+        violations.append("Local CommitLog loader implementation changed")
+
+    required_signatures = [
+        "pubfnnew(store_path:String,mapped_file_size:u64,enable_parallel:bool)->Self",
+        "pubfnnew_with_recovery_mmap_advice(store_path:String,mapped_file_size:u64,enable_parallel:bool,recovery_mmap_advice:RecoveryMmapAdvice,)->Self",
+        "pubfnnew_with_recovery_hints(store_path:String,mapped_file_size:u64,enable_parallel:bool,recovery_mmap_advice:RecoveryMmapAdvice,recovery_file_prefetch:RecoveryFilePrefetch,)->Self",
+        "pubfnwith_lazy_mmap(mutself,lazy_mmap_enable:bool)->Self",
+        "pubfnload_optimized(&self)->io::Result<(Vec<Arc<DefaultMappedFile>>,LoadStatistics)>",
+        "pubfnload_with_adapter<T:Send+Sync>(&self,adapter:CommitLogLoadAdapter<T>,)->io::Result<(Vec<Arc<T>>,LoadStatistics)>",
+        "fncreate_native_mapped_file(path:&Path,file_size:u64,mode:CommitLogMappingMode,)->io::Result<DefaultMappedFile>",
+        "fncreate_mapped_files_parallel<T:Send+Sync>(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,adapter:&CommitLogLoadAdapter<T>,)->io::Result<Vec<Arc<T>>>",
+        "fncreate_mapped_files_sequential<T:Send+Sync>(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,adapter:&CommitLogLoadAdapter<T>,)->io::Result<Vec<Arc<T>>>",
+        "fncreate_mapped_file<T>(&self,entry:&CommitLogMappingEntry,adapter:&CommitLogLoadAdapter<T>)->io::Result<T>",
+        "fnapply_memory_hints<T>(&self,mapped_file:&T,adapter:&CommitLogLoadAdapter<T>)->(HintOutcome,HintOutcome)",
+    ]
+    if any(signature not in normalized for signature in required_signatures):
+        violations.append("Local CommitLog loader signatures changed")
+
+    load = dict(rust_function_bodies(production)).get("load_with_adapter")
+    if load is None:
+        violations.append("Local CommitLog loader entrypoint missing")
+    else:
+        compact_load = re.sub(r"\s+", "", load)
+        required_flow = [
+            "letstart=std::time::Instant::now();",
+            "letmutstats=LoadStatistics{recovery_mmap_advice:self.recovery_mmap_advice,recovery_file_prefetch:self.recovery_file_prefetch,..LoadStatistics::default()};",
+            "letfile_paths=matchdiscover_commit_log_files(Path::new(&self.store_path))?{",
+            "CommitLogFileDiscovery::DirectoryMissing=>{tracing::warn!(target:,,self.store_path);returnOk((Vec::new(),stats));}",
+            "CommitLogFileDiscovery::NoFiles=>{tracing::info!(target:,,self.store_path);stats.total_load_time_ms=start.elapsed().as_millis();returnOk((Vec::new(),stats));}",
+            "letparallel_start=std::time::Instant::now();",
+            "letfile_metadata=collect_commit_log_metadata(&file_paths,CommitLogMetadataCollectionOptions{expected_file_size:self.mapped_file_size,parallel_enabled:self.enable_parallel,},)?;",
+            "stats.parallel_load_time_ms=parallel_start.elapsed().as_millis();",
+            "stats.total_files=file_metadata.len();",
+            "stats.total_size_bytes=file_metadata.iter().map(|metadata|metadata.size).sum();",
+            "letmapping_plan=CommitLogMappingPlan::new(file_metadata,CommitLogMappingOptions{parallel_enabled:self.enable_parallel,lazy_mmap_enabled:self.lazy_mmap_enable,},);",
+            "CommitLogMappingExecution::Parallel=>{self.create_mapped_files_parallel(mapping_plan.entries(),&mutstats,&adapter)?}",
+            "CommitLogMappingExecution::Sequential=>{self.create_mapped_files_sequential(mapping_plan.entries(),&mutstats,&adapter)?}",
+            "stats.log_summary();",
+            "Ok((mapped_files,stats))",
+        ]
+        positions = [compact_load.find(fragment) for fragment in required_flow]
+        if any(position == -1 for position in positions) or positions != sorted(positions):
+            violations.append("Local CommitLog discovery/validation/mapping/statistics flow changed")
+        final_elapsed = compact_load.rfind("stats.total_load_time_ms=start.elapsed().as_millis();")
+        if final_elapsed == -1 or final_elapsed >= compact_load.find("stats.log_summary();"):
+            violations.append("Local CommitLog final elapsed-time recording changed")
+        raw_load = named_raw_function_body(source, "load_with_adapter") or ""
+        expected_logs = [
+            'target: "rocketmq_store::log_file::commit_log_loader",\n                    "CommitLog directory does not exist: {}"',
+            'target: "rocketmq_store::log_file::commit_log_loader",\n                    "No commit log files found in {}"',
+        ]
+        if any(fragment not in raw_load for fragment in expected_logs):
+            violations.append("Local CommitLog loader log target/text changed")
+        if compact_load.count("CommitLogMappingPlan::new(") != 1:
+            violations.append("Local CommitLog loader mapping plan count changed")
+
+    bodies = dict(rust_function_bodies(production))
+    constructor_bodies = {
+        "new": (
+            "Self::new_with_recovery_mmap_advice(store_path,mapped_file_size,"
+            "enable_parallel,RecoveryMmapAdvice::Sequential,)"
+        ),
+        "new_with_recovery_mmap_advice": (
+            "Self::new_with_recovery_hints(store_path,mapped_file_size,enable_parallel,"
+            "recovery_mmap_advice,RecoveryFilePrefetch::Disabled,)"
+        ),
+        "new_with_recovery_hints": (
+            "Self{store_path,mapped_file_size,enable_parallel,recovery_mmap_advice,"
+            "recovery_file_prefetch,lazy_mmap_enable:false,}"
+        ),
+        "with_lazy_mmap": "self.lazy_mmap_enable=lazy_mmap_enable;self",
+    }
+    if any(
+        re.sub(r"\s+", "", bodies.get(name, "")) != expected
+        for name, expected in constructor_bodies.items()
+    ):
+        violations.append("Local CommitLog loader constructor defaults changed")
+    native_load = re.sub(r"\s+", "", bodies.get("load_optimized", ""))
+    expected_native_load = (
+        "self.load_with_adapter(CommitLogLoadAdapter{"
+        "open:Self::create_native_mapped_file,recovery_mapping:|mapped_file|{"
+        "ifmapped_file.is_lazy_mmap_enabled()&&!mapped_file.is_mapped(){returnNone;}"
+        "Some((mapped_file.get_mapped_file(),mapped_file.get_file_name().as_str()))},"
+        "mark_fully_loaded:|mapped_file,position|{mapped_file.set_wrote_position(position);"
+        "mapped_file.set_flushed_position(position);mapped_file.set_committed_position(position);},})"
+    )
+    if native_load != expected_native_load:
+        violations.append("Local native CommitLog load adapter changed")
+    native_open = re.sub(r"\s+", "", bodies.get("create_native_mapped_file", ""))
+    expected_native_open = (
+        "letfile_name=CheetahString::from_string(path.to_string_lossy().to_string());"
+        "matchmode{CommitLogMappingMode::LazyReadOnly=>DefaultMappedFile::"
+        "try_new_lazy_read_only(file_name,file_size),CommitLogMappingMode::Eager=>"
+        "DefaultMappedFile::try_new(file_name,file_size),}"
+    )
+    if native_open != expected_native_open:
+        violations.append("Local native CommitLog mapping target changed")
+    parallel = re.sub(r"\s+", "", bodies.get("create_mapped_files_parallel", ""))
+    sequential = re.sub(r"\s+", "", bodies.get("create_mapped_files_sequential", ""))
+    create_one = re.sub(r"\s+", "", bodies.get("create_mapped_file", ""))
+    hints = re.sub(r"\s+", "", bodies.get("apply_memory_hints", ""))
+    parallel_required = [
+        ".par_iter().map(|entry|",
+        "letmapped_file=self.create_mapped_file(entry,adapter)?;",
+        "let(mmap_advice_outcome,file_prefetch_outcome)=self.apply_memory_hints(&mapped_file,adapter);",
+        "(adapter.mark_fully_loaded)(&mapped_file,self.mapped_file_sizeasi32);",
+        "letresults=results?;",
+        "for(mapped_file,mmap_advice_outcome,file_prefetch_outcome)inresults{",
+        "record_mmap_advice(statistics,mmap_advice_outcome);",
+        "record_file_prefetch(statistics,file_prefetch_outcome);",
+    ]
+    if any(fragment not in parallel for fragment in parallel_required):
+        violations.append("Local CommitLog parallel ordered mapping/reduction changed")
+    sequential_required = [
+        "forentryinentries{",
+        "letmapped_file=self.create_mapped_file(entry,adapter)?;",
+        "let(mmap_advice_outcome,file_prefetch_outcome)=self.apply_memory_hints(&mapped_file,adapter);",
+        "record_mmap_advice(statistics,mmap_advice_outcome);",
+        "record_file_prefetch(statistics,file_prefetch_outcome);",
+        "(adapter.mark_fully_loaded)(&mapped_file,self.mapped_file_sizeasi32);",
+        "mapped_files.push(Arc::new(mapped_file));",
+    ]
+    if any(fragment not in sequential for fragment in sequential_required):
+        violations.append("Local CommitLog sequential mapping/reduction changed")
+    expected_create = (
+        "(adapter.open)(entry.metadata().path.as_path(),self.mapped_file_size,entry.mode())"
+    )
+    if create_one != expected_create:
+        violations.append("Local CommitLog target opening boundary changed")
+    hint_required = [
+        "letSome((mmap,file_name))=(adapter.recovery_mapping)(mapped_file)else{return(HintOutcome::not_attempted(),HintOutcome::not_attempted());};",
+        "letmmap_advice_outcome=apply_recovery_mmap_advice(self.recovery_mmap_advice,mmap,file_name);",
+        "letfile_prefetch_outcome=apply_recovery_file_prefetch(self.recovery_file_prefetch,mmap,file_name);",
+        "(mmap_advice_outcome,file_prefetch_outcome)",
+    ]
+    if any(fragment not in hints for fragment in hint_required):
+        violations.append("Local CommitLog recovery mapping/hint boundary changed")
+    if any(token in active for token in ("StoreMappedMemory", "ArcMut", "rocketmq_store::")):
+        violations.append("Local CommitLog loader absorbed a Store representation")
+    return violations
+
+
+def commit_log_loader_copy_violations(
+    production_sources: dict[Path, str],
+) -> list[str]:
+    """Reject a complete loader flow outside the canonical Local owner."""
+    masked_sources = {
+        path: source_without_cfg_test_items(source)
+        for path, source in production_sources.items()
+    }
+    canonical_paths = [
+        path
+        for path in masked_sources
+        if path.as_posix().endswith(COMMIT_LOG_LOADER_PATH.as_posix())
+    ]
+    violations: list[str] = []
+    if len(canonical_paths) != 1:
+        return ["CommitLog loader canonical source path count changed"]
+    canonical_path = canonical_paths[0]
+
+    adapter_owners = file_item_owner_occurrences(masked_sources, "CommitLogLoadAdapter")
+    if adapter_owners != [(canonical_path, "struct")]:
+        violations.append("CommitLogLoadAdapter must have one Local production owner")
+    loader_owners = file_item_owner_occurrences(masked_sources, "CommitLogLoader")
+    if loader_owners != [(canonical_path, "struct")]:
+        violations.append("CommitLogLoader must have one Local production owner")
+
+    role_names = (
+        "discover_commit_log_files",
+        "CommitLogFileDiscovery",
+        "collect_commit_log_metadata",
+        "CommitLogMetadataCollectionOptions",
+        "CommitLogMappingPlan",
+        "CommitLogMappingExecution",
+        "apply_recovery_mmap_advice",
+        "apply_recovery_file_prefetch",
+        "record_mmap_advice",
+        "record_file_prefetch",
+    )
+    complete_flow_paths: list[Path] = []
+    for path, candidate in masked_sources.items():
+        active = active_rust_source(candidate)
+        aliases: dict[str, set[str]] = {name: {name} for name in role_names}
+        for name in role_names:
+            for alias in re.findall(
+                rf"\b{re.escape(name)}\s+as\s+([A-Za-z_][A-Za-z0-9_]*)",
+                active,
+            ):
+                aliases[name].add(alias)
+        function_corpus = "".join(
+            re.sub(r"\s+", "", body)
+            for _, body in rust_function_bodies(candidate)
+        )
+
+        def has_call(name: str) -> bool:
+            return any(f"{alias}(" in function_corpus for alias in aliases[name])
+
+        def has_variant(name: str, variant: str) -> bool:
+            return any(
+                f"{alias}::{variant}" in function_corpus
+                for alias in aliases[name]
+            )
+
+        complete_roles = (
+            has_call("discover_commit_log_files")
+            and has_variant("CommitLogFileDiscovery", "DirectoryMissing")
+            and has_variant("CommitLogFileDiscovery", "NoFiles"),
+            has_call("collect_commit_log_metadata")
+            and any(
+                f"{alias}{{" in function_corpus
+                for alias in aliases["CommitLogMetadataCollectionOptions"]
+            ),
+            any(
+                f"{alias}::new(" in function_corpus
+                for alias in aliases["CommitLogMappingPlan"]
+            )
+            and has_variant("CommitLogMappingExecution", "Parallel")
+            and has_variant("CommitLogMappingExecution", "Sequential"),
+            ".par_iter()" in function_corpus
+            and re.search(r"mark_fully_loaded\)?\(", function_corpus) is not None
+            and has_call("record_mmap_advice")
+            and has_call("record_file_prefetch"),
+            re.search(r"recovery_mapping\)?\(", function_corpus) is not None
+            and has_call("apply_recovery_mmap_advice")
+            and has_call("apply_recovery_file_prefetch"),
+            "stats.log_summary()" in function_corpus,
+        )
+        if all(complete_roles):
+            complete_flow_paths.append(path)
+
+    if complete_flow_paths != [canonical_path]:
+        rendered = ", ".join(path.as_posix() for path in complete_flow_paths)
+        violations.append(
+            "Complete CommitLog loader orchestration exists outside canonical owner: "
+            f"{rendered}"
+        )
+    return violations
+
+
+def store_commit_log_loader_adapter_violations(source: str) -> list[str]:
     production = source.split("#[cfg(test)]", maxsplit=1)[0]
     active = active_rust_source(production)
     normalized = re.sub(r"\s+", "", active)
     violations: list[str] = []
 
-    planning_items = set(COMMIT_LOG_MAPPING_PLAN_ITEMS)
-    private_imports: set[str] = set()
-    prefix = "rocketmq_store_local::commit_log::load::"
-    for visibility, body, _ in active_use_records(production):
-        if not body.startswith(prefix):
-            continue
-        item = body.removeprefix(prefix)
-        if item in planning_items:
-            if visibility:
-                violations.append("Store must not publicly re-export CommitLog mapping plan types")
-            if " as " in body or "{" in body or "*" in body:
-                violations.append("Store CommitLog mapping imports forbid alias/brace/glob")
-            private_imports.add(item)
-    if private_imports != planning_items:
-        violations.append("Store CommitLog mapping plan imports changed")
-
-    load_body = named_function_body(production, "load_optimized")
-    if load_body is None:
-        return violations + ["CommitLogLoader load entrypoint missing"]
-    load = re.sub(r"\s+", "", load_body)
-    required_flow = [
-        "letparallel_start=std::time::Instant::now();",
-        "letfile_metadata=collect_commit_log_metadata(&file_paths,CommitLogMetadataCollectionOptions{"
-        "expected_file_size:self.mapped_file_size,parallel_enabled:self.enable_parallel,},)?;",
-        "stats.parallel_load_time_ms=parallel_start.elapsed().as_millis();",
-        "stats.total_files=file_metadata.len();",
-        "stats.total_size_bytes=file_metadata.iter().map(|metadata|metadata.size).sum();",
-        "letmapping_plan=CommitLogMappingPlan::new(file_metadata,CommitLogMappingOptions{"
-        "parallel_enabled:self.enable_parallel,lazy_mmap_enabled:self.lazy_mmap_enable,},);",
-        "letmapped_files=matchmapping_plan.execution(){",
-        "CommitLogMappingExecution::Parallel=>{self.create_mapped_files_parallel(mapping_plan.entries(),&mutstats)?}",
-        "CommitLogMappingExecution::Sequential=>{self.create_mapped_files_sequential(mapping_plan.entries(),&mutstats)?}",
-    ]
-    positions = [load.find(fragment) for fragment in required_flow]
-    if any(position == -1 for position in positions) or positions != sorted(positions):
-        violations.append("Store metadata timing/totals/mapping plan flow changed")
-    if load.count("CommitLogMappingPlan::new(") != 1:
-        violations.append("Store must create exactly one mapping plan")
-    if "file_metadata.len()>4" in load or re.search(r"self\.enable_parallel&&mapping_plan", load):
-        violations.append("Store re-evaluated filtered mapping threshold")
-
-    parallel = named_function_body(production, "create_mapped_files_parallel")
-    sequential = named_function_body(production, "create_mapped_files_sequential")
-    create_one = named_function_body(production, "create_mapped_file")
-    expected_signatures = [
-        "fncreate_mapped_files_parallel(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,)->io::Result<Vec<Arc<DefaultMappedFile>>>",
-        "fncreate_mapped_files_sequential(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,)->io::Result<Vec<Arc<DefaultMappedFile>>>",
-        "fncreate_mapped_file(&self,entry:&CommitLogMappingEntry)->io::Result<DefaultMappedFile>",
-    ]
-    if any(signature not in normalized for signature in expected_signatures):
-        violations.append("Store mapping adapter signatures changed")
-    if parallel is None or sequential is None or create_one is None:
-        return violations + ["Store mapping adapters missing"]
-
-    parallel_normalized = re.sub(r"\s+", "", parallel)
-    sequential_normalized = re.sub(r"\s+", "", sequential)
-    create_normalized = re.sub(r"\s+", "", create_one)
-    if ".par_iter().map(|entry|" not in parallel_normalized or ".collect();" not in parallel_normalized:
-        violations.append("Store parallel mapping no longer uses ordered entry collection")
-    if "forentryinentries" not in sequential_normalized:
-        violations.append("Store sequential mapping no longer traverses plan entries")
-    for name, body in (("parallel", parallel_normalized), ("sequential", sequential_normalized)):
-        if any(token in body for token in (".enumerate()", "file_count", "lazy_mmap_enable", "idx+1", ".len()>4")):
-            violations.append(f"Store {name} mapping recomputes plan decisions")
-        if body.count("self.create_mapped_file(entry)") != 1:
-            violations.append(f"Store {name} mapping stopped delegating each entry")
-
-    expected_create = (
-        "letmetadata=entry.metadata();"
-        "letfile_name=CheetahString::from_string(metadata.path.to_string_lossy().to_string());"
-        "matchentry.mode(){"
-        "CommitLogMappingMode::LazyReadOnly=>{DefaultMappedFile::try_new_lazy_read_only(file_name,self.mapped_file_size)}"
-        "CommitLogMappingMode::Eager=>DefaultMappedFile::try_new(file_name,self.mapped_file_size),}"
+    expected_reexports = (
+        "pubuserocketmq_store_local::commit_log::load::LoadStatistics;"
+        "pubuserocketmq_store_local::commit_log::load::RecoveryFilePrefetch;"
+        "pubuserocketmq_store_local::commit_log::load::RecoveryMmapAdvice;"
+        "pubuserocketmq_store_local::commit_log::loader::CommitLogLoader;"
     )
-    if create_normalized != expected_create:
-        violations.append("Store create_mapped_file stopped following entry metadata/mode only")
+    if normalized != expected_reexports:
+        violations.append("Store CommitLog loader facade must remain exact Local re-exports")
+    if re.search(r"\b(?:struct|enum|trait)\s+CommitLogLoader\b", active):
+        violations.append("Store CommitLog loader facade regained type ownership")
+    if re.search(r"\bimpl\s+CommitLogLoader\b", active) or re.search(
+        r"\bfn\s+(?:load_optimized|load_with_adapter|create_native_mapped_file)\b",
+        active,
+    ):
+        violations.append("Store CommitLog loader facade regained implementation ownership")
+
+    forbidden = [
+        "discover_commit_log_files(",
+        "collect_commit_log_metadata(",
+        "CommitLogMappingPlan::new(",
+        "create_mapped_files_parallel",
+        "create_mapped_files_sequential",
+        "apply_memory_hints",
+        "record_mmap_advice(",
+        "record_file_prefetch(",
+        "rayon::",
+        "tracing::",
+        "CommitLogLoadAdapter",
+        "DefaultMappedFile",
+        "CheetahString",
+    ]
+    if any(token in normalized for token in forbidden):
+        violations.append("Store retained CommitLog load orchestration")
     return violations
+
+
+def store_commit_log_mapping_plan_violations(source: str) -> list[str]:
+    return store_commit_log_loader_adapter_violations(source)
 
 
 def _impl_body(source: str, item: str) -> str | None:
@@ -5534,9 +6856,9 @@ def commit_log_hint_owner_violations(source: str) -> list[str]:
 
     expected_adapter_signatures = [
         r"pub\s+fn\s+apply_recovery_mmap_advice\s*\(\s*advice\s*:\s*RecoveryMmapAdvice\s*,"
-        r"\s*mmap\s*:\s*&MmapMut\s*,\s*file_name\s*:\s*&str\s*,?\s*\)\s*->\s*HintOutcome",
+        r"\s*mmap\s*:\s*&\[u8\]\s*,\s*file_name\s*:\s*&str\s*,?\s*\)\s*->\s*HintOutcome",
         r"pub\s+fn\s+apply_recovery_file_prefetch\s*\(\s*prefetch\s*:\s*RecoveryFilePrefetch\s*,"
-        r"\s*mmap\s*:\s*&MmapMut\s*,\s*file_name\s*:\s*&str\s*,?\s*\)\s*->\s*HintOutcome",
+        r"\s*mmap\s*:\s*&\[u8\]\s*,\s*file_name\s*:\s*&str\s*,?\s*\)\s*->\s*HintOutcome",
     ]
     if any(re.search(signature, active) is None for signature in expected_adapter_signatures):
         violations.append("Local recovery hint adapter signatures changed")
@@ -5565,7 +6887,8 @@ def commit_log_hint_owner_violations(source: str) -> list[str]:
     mmap_required = [
         "RecoveryMmapAdvice::Disabled=>HintOutcome::not_attempted(),",
         "#[cfg(unix)]",
-        "mmap.advise(Advice::Sequential)",
+        "crate::utils::ffi::madvise(mmap.as_ptr(),mmap.len(),crate::utils::ffi::MADV_SEQUENTIAL)",
+        "ifresult!=0",
         "HintOutcome::failure(elapsed)",
         "HintOutcome::success(elapsed)",
         "#[cfg(not(unix))]",
@@ -5596,19 +6919,17 @@ def commit_log_hint_owner_violations(source: str) -> list[str]:
         violations.append("Local prefetch result mapper changed")
     platform_required = [
         "ifmmap.is_empty(){returnOk(false);}",
-        "PrefetchVirtualMemory(GetCurrentProcess(),&[range],0)",
+        "crate::utils::ffi::prefetch_virtual_memory(mmap.as_ptr(),mmap.len())",
+        ".map_err(io::Error::other)",
     ]
-    platform_raw = named_raw_function_body(production, "prefetch_virtual_memory") or ""
     if (
-        "fnprefetch_virtual_memory(mmap:&MmapMut)->Result<bool,String>" not in normalized
+        "fnprefetch_virtual_memory(mmap:&[u8])->io::Result<bool>" not in normalized
+        or "fnprefetch_outcome_from_result(result:io::Result<bool>,elapsed:Duration)->HintOutcome" not in normalized
         or re.search(r"#\s*\[\s*cfg\s*\(\s*windows\s*\)\s*\]\s*fn\s+prefetch_virtual_memory", active)
         is None
         or any(fragment not in platform_normalized for fragment in platform_required)
-        or "Storage read failed for 'PrefetchVirtualMemory': {error}" not in platform_raw
     ):
         violations.append("Local Windows prefetch helper changed")
-    if "// SAFETY:" not in platform_raw:
-        violations.append("Local Windows prefetch unsafe call lacks its exact safety rationale")
 
     mmap_raw = named_raw_function_body(production, "apply_recovery_mmap_advice") or ""
     prefetch_raw = named_raw_function_body(production, "apply_recovery_file_prefetch") or ""
@@ -5630,127 +6951,7 @@ def commit_log_hint_owner_violations(source: str) -> list[str]:
 
 
 def store_commit_log_hint_adapter_violations(source: str) -> list[str]:
-    production = source.split("#[cfg(test)]", maxsplit=1)[0]
-    active = active_rust_source(production)
-    normalized = re.sub(r"\s+", "", active)
-    violations: list[str] = []
-
-    hint_items = set(COMMIT_LOG_HINT_ITEMS)
-    private_imports: set[str] = set()
-    prefix = "rocketmq_store_local::commit_log::load::"
-    for visibility, body, _ in active_use_records(production):
-        if not body.startswith(prefix):
-            continue
-        item = body.removeprefix(prefix)
-        if item in hint_items:
-            if visibility:
-                violations.append("Store must not publicly re-export CommitLog hint kernel")
-            if " as " in body or "{" in body or "*" in body:
-                violations.append("Store CommitLog hint imports forbid alias/brace/glob")
-            private_imports.add(item)
-    if private_imports != hint_items:
-        violations.append("Store CommitLog hint imports changed")
-
-    if re.search(r"\bstruct\s+(?:HintResult|HintOutcome)\b", active):
-        violations.append("Store retained a private hint outcome copy")
-    if "fnduration_to_millis(" in normalized:
-        violations.append("Store retained hint duration conversion")
-    direct_counter = re.search(
-        r"\b(?:stats|statistics|mmap_advice_stats)\."
-        r"(?:mmap_advice|file_prefetch)_(?:attempts|successes|failures|elapsed_ms)\s*(?:\+=|=)",
-        active,
-    )
-    if direct_counter is not None:
-        violations.append("Store directly mutates canonical hint counters")
-
-    load = named_function_body(production, "load_optimized")
-    if load is None:
-        violations.append("CommitLogLoader load entrypoint missing")
-    else:
-        load_normalized = re.sub(r"\s+", "", load)
-        required = [
-            "CommitLogMappingExecution::Parallel=>{self.create_mapped_files_parallel(mapping_plan.entries(),&mutstats)?}",
-            "CommitLogMappingExecution::Sequential=>{self.create_mapped_files_sequential(mapping_plan.entries(),&mutstats)?}",
-        ]
-        if any(fragment not in load_normalized for fragment in required):
-            violations.append("Store load stopped passing canonical statistics to mapping adapters")
-
-    expected_signatures = [
-        "fncreate_mapped_files_parallel(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,)->io::Result<Vec<Arc<DefaultMappedFile>>>",
-        "fncreate_mapped_files_sequential(&self,entries:&[CommitLogMappingEntry],statistics:&mutLoadStatistics,)->io::Result<Vec<Arc<DefaultMappedFile>>>",
-        "fnapply_memory_hints(&self,mapped_file:&DefaultMappedFile)->(HintOutcome,HintOutcome)",
-    ]
-    if any(signature not in normalized for signature in expected_signatures):
-        violations.append("Store hint adapter signatures changed")
-
-    parallel = named_function_body(production, "create_mapped_files_parallel")
-    sequential = named_function_body(production, "create_mapped_files_sequential")
-    memory_hints = named_function_body(production, "apply_memory_hints")
-    if any(body is None for body in (parallel, sequential, memory_hints)):
-        return violations + ["Store hint adapter body missing"]
-
-    parallel_normalized = re.sub(r"\s+", "", parallel)
-    sequential_normalized = re.sub(r"\s+", "", sequential)
-    if not all(
-        fragment in parallel_normalized
-        for fragment in [
-            ".par_iter().map(|entry|",
-            ".collect();",
-            "letresults=results?;",
-            "for(mapped_file,mmap_advice_outcome,file_prefetch_outcome)inresults{",
-            "record_mmap_advice(statistics,mmap_advice_outcome);",
-            "record_file_prefetch(statistics,file_prefetch_outcome);",
-        ]
-    ):
-        violations.append("Store parallel hint outcomes are not ordered then reduced sequentially")
-    if (
-        parallel_normalized.count("record_mmap_advice(") != 1
-        or parallel_normalized.count("record_file_prefetch(") != 1
-    ):
-        violations.append("Store parallel hint reducer count changed")
-    if not all(
-        fragment in sequential_normalized
-        for fragment in [
-            "forentryinentries{",
-            "record_mmap_advice(statistics,mmap_advice_outcome);",
-            "record_file_prefetch(statistics,file_prefetch_outcome);",
-        ]
-    ):
-        violations.append("Store sequential hint outcomes stopped using Local reducers")
-    if (
-        sequential_normalized.count("record_mmap_advice(") != 1
-        or sequential_normalized.count("record_file_prefetch(") != 1
-    ):
-        violations.append("Store sequential hint reducer count changed")
-
-    memory_normalized = re.sub(r"\s+", "", memory_hints)
-    memory_required = [
-        "ifmapped_file.is_lazy_mmap_enabled()&&!mapped_file.is_mapped(){return(HintOutcome::not_attempted(),HintOutcome::not_attempted());}",
-        "letmmap=mapped_file.get_mapped_file();",
-        "letfile_name=mapped_file.get_file_name().as_str();",
-        "letmmap_advice_outcome=apply_recovery_mmap_advice(self.recovery_mmap_advice,mmap,file_name);",
-        "letfile_prefetch_outcome=apply_recovery_file_prefetch(self.recovery_file_prefetch,mmap,file_name);",
-        "(mmap_advice_outcome,file_prefetch_outcome)",
-    ]
-    if any(fragment not in memory_normalized for fragment in memory_required):
-        violations.append("Store lazy-unmapped hint skip changed")
-    skip = memory_normalized.find("ifmapped_file.is_lazy_mmap_enabled()")
-    mapped = memory_normalized.find("mapped_file.get_mapped_file()")
-    if skip == -1 or mapped == -1 or skip > mapped:
-        violations.append("Store lazy-unmapped skip must precede mmap access")
-    forbidden_platform = [
-        "memmap2",
-        "cfg(unix)",
-        "cfg(windows)",
-        "prefetch_virtual_memory",
-        ".advise(",
-        "PrefetchVirtualMemory",
-    ]
-    if any(token in active for token in forbidden_platform):
-        violations.append("Store loader retained direct platform hint execution")
-    if re.search(r"\bfn\s+(?:apply_mmap_advice|apply_file_prefetch|apply_recovery_mmap_advice|apply_recovery_file_prefetch)\b", active):
-        violations.append("Store loader retained a duplicate hint owner")
-    return violations
+    return store_commit_log_loader_adapter_violations(source)
 
 
 def store_prefetch_ffi_compatibility_violations(source: str) -> list[str]:
@@ -5764,18 +6965,18 @@ def store_prefetch_ffi_compatibility_violations(source: str) -> list[str]:
     if body is None:
         return violations + ["Store prefetch_virtual_memory body missing"]
     body_normalized = re.sub(r"\s+", "", body)
-    expected = (
-        "iflen==0{returnOk(false);}"
-        "#[cfg(windows)]{usestd::ffi::c_void;usewindows::Win32::System::Memory::PrefetchVirtualMemory;"
-        "usewindows::Win32::System::Memory::WIN32_MEMORY_RANGE_ENTRY;"
-        "usewindows::Win32::System::Threading::GetCurrentProcess;"
-        "letrange=WIN32_MEMORY_RANGE_ENTRY{VirtualAddress:addras*mutc_void,NumberOfBytes:len,};"
-        "unsafe{PrefetchVirtualMemory(GetCurrentProcess(),&[range],0)}.map_err(|error|{"
-        "RocketMQError::StorageReadFailed{path:\"PrefetchVirtualMemory\".to_string(),reason:error.to_string(),}})?;"
-        "Ok(true)}#[cfg(not(windows))]{let_=addr;let_=len;Ok(false)}"
+    required = (
+        "iflen==0{returnOk(false);}",
+        "#[cfg(windows)]",
+        "PrefetchVirtualMemory(GetCurrentProcess(),&[range],0)",
+        "RocketMQError::StorageReadFailed{path:\"PrefetchVirtualMemory\".to_string(),reason:error.to_string(),}",
+        "#[cfg(not(windows))]",
+        "Ok(false)",
     )
-    if body_normalized != expected:
+    if any(fragment not in body_normalized for fragment in required):
         violations.append("Store prefetch_virtual_memory behavior changed")
+    if "// SAFETY:" not in body:
+        violations.append("prefetch_virtual_memory unsafe call lacks a safety rationale")
     return violations
 
 
@@ -5829,157 +7030,11 @@ def _remove_file_if_let_parts(arm_body: str) -> tuple[str, str, str] | None:
 
 
 def store_commit_log_file_validation_violations(source: str) -> list[str]:
-    production = source.split("#[cfg(test)]", maxsplit=1)[0]
-    active = active_rust_source(production)
-    normalized = re.sub(r"\s+", "", active)
-    violations: list[str] = []
-
-    local_prefix = "rocketmq_store_local::commit_log::load::"
-    private_imports = []
-    for visibility, body, _ in active_use_records(production):
-        if not body.startswith(local_prefix):
-            continue
-        if " as " in body or "{" in body or "*" in body:
-            violations.append("Store CommitLog validation imports forbid alias/brace/glob")
-        item = body.removeprefix(local_prefix)
-        if not visibility and item in COMMIT_LOG_LOAD_OWNER_ITEMS:
-            private_imports.append(item)
-    if sorted(private_imports) != sorted(
-        [
-            "collect_commit_log_metadata",
-            "discover_commit_log_files",
-            "CommitLogFileDiscovery",
-            "CommitLogMetadataCollectionOptions",
-        ]
-    ):
-        violations.append("Store CommitLog validation imports changed")
-
-    if re.search(r"\bstruct\s+FileMetadata\b|\bfile_name\s*:", active):
-        violations.append("Store retained private CommitLog metadata copy")
-    if re.search(r"\bsize\s*==\s*0\b|\bsize\s*!=\s*expected(?:_size)?\b", active):
-        violations.append("Store copied CommitLog size validation")
-    if "not matched expected size" in production:
-        violations.append("Store copied CommitLog validation message")
-    if re.search(r"\b(?:stats\.)?files_removed\s*(?:\+=|=)", active):
-        violations.append("Store changed legacy files_removed accounting")
-
-    load_body = named_function_body(production, "load_optimized")
-    if load_body is None:
-        violations.append("CommitLogLoader load entrypoint missing")
-    else:
-        normalized_load = re.sub(r"\s+", "", load_body)
-        collect_call = (
-            "letfile_metadata=collect_commit_log_metadata(&file_paths,"
-            "CommitLogMetadataCollectionOptions{expected_file_size:self.mapped_file_size,"
-            "parallel_enabled:self.enable_parallel,},)?;"
-        )
-        collect_position = normalized_load.find(collect_call)
-        create_position = normalized_load.find("letmapping_plan=CommitLogMappingPlan::new(file_metadata")
-        if (
-            collect_position == -1
-            or create_position == -1
-            or collect_position >= create_position
-            or "self.create_mapped_files_parallel(mapping_plan.entries(),&mutstats)?" not in normalized_load
-            or "self.create_mapped_files_sequential(mapping_plan.entries(),&mutstats)?" not in normalized_load
-        ):
-            violations.append("Store mmap creation no longer follows complete metadata validation")
-
-    expected_public_signatures = [
-        "pubfnnew(store_path:String,mapped_file_size:u64,enable_parallel:bool)->Self",
-        "pubfnnew_with_recovery_mmap_advice(store_path:String,mapped_file_size:u64,enable_parallel:bool,recovery_mmap_advice:RecoveryMmapAdvice,)->Self",
-        "pubfnnew_with_recovery_hints(store_path:String,mapped_file_size:u64,enable_parallel:bool,recovery_mmap_advice:RecoveryMmapAdvice,recovery_file_prefetch:RecoveryFilePrefetch,)->Self",
-        "pubfnwith_lazy_mmap(mutself,lazy_mmap_enable:bool)->Self",
-        "pubfnload_optimized(&self)->io::Result<(Vec<Arc<DefaultMappedFile>>,LoadStatistics)>",
-    ]
-    if any(signature not in normalized for signature in expected_public_signatures):
-        violations.append("CommitLogLoader public signatures changed")
-
-    forbidden_store_owners = [
-        "fncollect_metadata_parallel(",
-        "fncollect_metadata_sequential(",
-        "fncollect_file_metadata(",
-        "fnremove_empty_last_file(",
-        "validate_commit_log_file(",
-        "CommitLogFileLoadDecision::",
-        "fs::metadata(",
-        "fs::remove_file(",
-        "Failedtogetmetadatafor",
-        "Failedtodeleteemptyfile",
-        "sizeis0,autodeleted",
-    ]
-    if any(token in normalized for token in forbidden_store_owners):
-        violations.append("Store retained CommitLog metadata collection ownership")
-    if normalized.count("collect_commit_log_metadata(") != 1:
-        violations.append("Store CommitLog metadata adapter call count changed")
-    if normalized.count("CommitLogMetadataCollectionOptions{") != 1:
-        violations.append("Store CommitLog metadata options construction changed")
-    return violations
+    return store_commit_log_loader_adapter_violations(source)
 
 
 def store_commit_log_file_discovery_violations(source: str) -> list[str]:
-    production = source.split("#[cfg(test)]", maxsplit=1)[0]
-    active = active_rust_source(production)
-    normalized = re.sub(r"\s+", "", active)
-    violations: list[str] = []
-
-    local_prefix = "rocketmq_store_local::commit_log::load::"
-    private_imports: list[str] = []
-    for visibility, body, _ in active_use_records(production):
-        if not body.startswith(local_prefix):
-            continue
-        item = body.removeprefix(local_prefix)
-        if item not in {"discover_commit_log_files", "CommitLogFileDiscovery"}:
-            continue
-        if visibility:
-            violations.append("Store must not publicly re-export CommitLog file discovery")
-        if " as " in body or "{" in body or "*" in body:
-            violations.append("Store CommitLog file discovery imports forbid alias/brace/glob")
-        private_imports.append(item)
-    if sorted(private_imports) != ["CommitLogFileDiscovery", "discover_commit_log_files"]:
-        violations.append("Store CommitLog file discovery imports changed")
-
-    load_body = named_function_body(production, "load_optimized")
-    if load_body is None:
-        return violations + ["CommitLogLoader load entrypoint missing"]
-    load = re.sub(r"\s+", "", load_body)
-    expected_match = (
-        "letfile_paths=matchdiscover_commit_log_files(Path::new(&self.store_path))?{"
-        "CommitLogFileDiscovery::DirectoryMissing=>{warn!(,self.store_path);"
-        "returnOk((Vec::new(),stats));}"
-        "CommitLogFileDiscovery::NoFiles=>{info!(,self.store_path);"
-        "stats.total_load_time_ms=start.elapsed().as_millis();"
-        "returnOk((Vec::new(),stats));}"
-        "CommitLogFileDiscovery::Files(file_paths)=>file_paths,};"
-    )
-    discovery_position = load.find(expected_match)
-    metadata_position = load.find("letparallel_start=std::time::Instant::now();")
-    if discovery_position == -1 or metadata_position == -1 or discovery_position >= metadata_position:
-        violations.append("Store CommitLog file discovery adapter flow changed")
-
-    raw_load = re.sub(
-        r"\s+", "", named_raw_function_body(production, "load_optimized") or ""
-    )
-    if 'warn!("CommitLogdirectorydoesnotexist:{}",self.store_path);' not in raw_load:
-        violations.append("Store missing CommitLog directory warning changed")
-    if 'info!("Nocommitlogfilesfoundin{}",self.store_path);' not in raw_load:
-        violations.append("Store empty CommitLog directory info changed")
-
-    forbidden = [
-        "usestd::fs;",
-        "usestd::path::PathBuf;",
-        "fs::read_dir(",
-        ".filter_map(Result::ok)",
-        ".is_file()",
-        ".sort_by(",
-        ".sort_unstable",
-        ".try_exists(",
-        "if!dir.exists()",
-    ]
-    if any(token in normalized for token in forbidden):
-        violations.append("Store retained CommitLog file discovery ownership")
-    if normalized.count("discover_commit_log_files(") != 1:
-        violations.append("Store CommitLog file discovery adapter call count changed")
-    return violations
+    return store_commit_log_loader_adapter_violations(source)
 
 
 def compact_rust(source: str) -> str:
@@ -6211,6 +7266,1775 @@ def commit_log_memory_lock_owner_violations(
     return violations
 
 
+def mapped_file_queue_storage_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+
+    expected_fields = [
+        ("store_path", "String"),
+        ("mapped_file_size", "u64"),
+        ("mapped_files", "T"),
+    ]
+    if active_struct_fields(production, "MappedFileQueueStorage") != expected_fields:
+        violations.append("Local mapped-file queue storage fields changed")
+    expected_methods = {
+        "new": "Self{store_path,mapped_file_size,mapped_files,}",
+        "store_path": "&self.store_path",
+        "mapped_file_size": "self.mapped_file_size",
+        "mapped_files": "&self.mapped_files",
+    }
+    for function_name, expected_body in expected_methods.items():
+        if compact_rust(named_function_body(production, function_name) or "") != expected_body:
+            violations.append(f"Local mapped-file queue storage behavior changed: {function_name}")
+    if active_import_records(production):
+        violations.append("Local mapped-file queue storage must remain dependency-free")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(
+            r"\b(?:rocketmq_|ArcSwap|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b",
+            active,
+        )
+    ):
+        violations.append("Local mapped-file queue storage absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod queue_storage;") != 1:
+        violations.append("Local mapped_file module must expose queue_storage exactly once")
+
+    store_active = active_rust_source(source_without_cfg_test_items(store_source))
+    expected_store_import = (
+        "use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage"
+    )
+    actual_store_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_storage" in body
+    }
+    if actual_store_imports != {expected_store_import}:
+        violations.append("Store mapped-file queue storage import must be direct and exact")
+    if re.search(r"\bstruct\s+MappedFileQueueStorage\b", store_active):
+        violations.append("Store copied mapped-file queue storage owner")
+
+    store_fields = dict(active_struct_fields(store_source, "MappedFileQueue"))
+    if store_fields.get("storage") != "MappedFileQueueStorage<ArcSwap<Vec<Arc<DefaultMappedFile>>>>":
+        violations.append("Store MappedFileQueue must hold one canonical Local storage owner")
+    for legacy_field in ("store_path", "mapped_file_size", "mapped_files"):
+        if legacy_field in store_fields:
+            violations.append(f"Store retained legacy MappedFileQueue storage field: {legacy_field}")
+    store_compact = compact_rust(store_active)
+    expected_constructors = (
+        "storage:MappedFileQueueStorage::new(String::new(),0,ArcSwap::from_pointee(Vec::new()))",
+        "storage:MappedFileQueueStorage::new(store_path,mapped_file_size,ArcSwap::from_pointee(Vec::new()))",
+    )
+    for constructor in expected_constructors:
+        if store_compact.count(constructor) != 1:
+            violations.append(f"Store mapped-file queue storage constructor changed: {constructor}")
+    expected_accessor_counts = {
+        "self.storage.mapped_files()": 34,
+        "self.storage.mapped_file_size()": 16,
+        "self.storage.store_path()": 6,
+    }
+    for accessor, expected_count in expected_accessor_counts.items():
+        if store_compact.count(accessor) != expected_count:
+            violations.append(f"Store mapped-file queue storage adapter count changed: {accessor}")
+    for legacy_access in ("self.mapped_files", "self.mapped_file_size", "self.store_path"):
+        if legacy_access in store_compact:
+            violations.append(f"Store bypassed Local mapped-file queue storage: {legacy_access}")
+
+    for test_name in (
+        "queue_storage_preserves_path_size_and_collection_identity",
+        "queue_storage_supports_backend_owned_interior_mutability",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue storage regression changed: {test_name}")
+    return violations
+
+
+def mapped_file_allocation_request_contract_violations(
+    local_source: str,
+    module_source: str,
+    service_source: str,
+    facade_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+    if active_struct_fields(production, "MappedFileAllocationRequestKey") != [
+        ("file_path", "String"),
+        ("file_size", "i32"),
+    ]:
+        violations.append("Local mapped-file allocation request key fields changed")
+    expected_methods = {
+        "new": "Self{file_path,file_size}",
+        "file_path": "&self.file_path",
+        "file_size": "self.file_size",
+    }
+    for function_name, expected_body in expected_methods.items():
+        if compact_rust(named_function_body(production, function_name) or "") != expected_body:
+            violations.append(f"Local mapped-file allocation request API changed: {function_name}")
+    file_offset_body = compact_rust(named_function_body(production, "file_offset") or "")
+    for fragment in (
+        "self.file_path.rfind(std::path::MAIN_SEPARATOR)",
+        "self.file_path[(separator_index+1)..].parse::<i64>()",
+        "return offset",
+    ):
+        if compact_rust(fragment) not in file_offset_body:
+            violations.append(f"Local mapped-file allocation offset parsing changed: {fragment}")
+    if not file_offset_body.endswith("0"):
+        violations.append("Local mapped-file allocation invalid-offset fallback changed")
+    compact_active = compact_rust(active)
+    required_impl_fragments = (
+        "#[derive(Debug,Clone,PartialEq,Eq)]pub struct MappedFileAllocationRequestKey",
+        "impl PartialOrd for MappedFileAllocationRequestKey{fn partial_cmp(&self,other:&Self)->Option<std::cmp::Ordering>{Some(self.cmp(other))}}",
+        "impl Ord for MappedFileAllocationRequestKey{fn cmp(&self,other:&Self)->std::cmp::Ordering{other.file_offset().cmp(&self.file_offset())}}",
+    )
+    for fragment in required_impl_fragments:
+        if compact_rust(fragment) not in compact_active:
+            violations.append(f"Local mapped-file allocation identity/ordering changed: {fragment}")
+    display_fragment = '"AllocateRequest[file_path={},file_size={}]",self.file_path,self.file_size'
+    if compact_rust(display_fragment) not in compact_rust(local_source):
+        violations.append("Local mapped-file allocation request display changed")
+    if active_import_records(production):
+        violations.append("Local mapped-file allocation request key must remain dependency-free")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(
+            r"\b(?:rocketmq_|ArcSwap|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b",
+            active,
+        )
+    ):
+        violations.append("Local mapped-file allocation request key absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod allocation_request;") != 1:
+        violations.append("Local mapped_file module must expose allocation_request exactly once")
+
+    expected_import = "use crate::mapped_file::allocation_request::MappedFileAllocationRequestKey"
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(service_source)
+        if kind == "use" and not visibility and "mapped_file::allocation_request" in body
+    }
+    if actual_imports != {expected_import}:
+        violations.append("Local allocation service request key import must be direct and exact")
+    expected_service_fields = [
+        ("key", "MappedFileAllocationRequestKey"),
+        ("completion", "Arc<Notify>"),
+        ("blocking_completion", "Arc<(StdMutex<()>, Condvar)>"),
+        ("completed", "Arc<AtomicBool>"),
+        ("mapped_file", "Arc<RwLock<Option<Arc<DefaultMappedFile>>>>"),
+    ]
+    if active_struct_fields(service_source, "AllocateRequest") != expected_service_fields:
+        violations.append("Local AllocateRequest must retain only key and completion/result state")
+    service_production = source_without_cfg_test_items(service_source)
+    service_compact = compact_rust(active_rust_source(service_production))
+    for fragment in (
+        "key:MappedFileAllocationRequestKey::new(file_path,file_size)",
+        "fn file_path(&self)->&str{self.key.file_path()}",
+        "fn file_size(&self)->i32{self.key.file_size()}",
+        "impl Display for AllocateRequest{fn fmt(&self,f:&mut Formatter<'_>)->std::fmt::Result{self.key.fmt(f)}}",
+        "impl PartialEq for AllocateRequest{fn eq(&self,other:&Self)->bool{self.key==other.key}}",
+        "impl Ord for AllocateRequest{fn cmp(&self,other:&Self)->std::cmp::Ordering{self.key.cmp(&other.key)}}",
+    ):
+        if compact_rust(fragment) not in service_compact:
+            violations.append(f"Local allocation request runtime shell changed: {fragment}")
+    allocate_fields = dict(active_struct_fields(service_source, "AllocateRequest"))
+    for legacy_field in ("file_path", "file_size"):
+        if legacy_field in allocate_fields:
+            violations.append(f"Local service retained allocation request identity field: {legacy_field}")
+    if "rfind(std::path::MAIN_SEPARATOR)" in service_compact:
+        violations.append("Local allocation service retained request offset parsing")
+
+    facade_active = active_rust_source(source_without_cfg_test_items(facade_source))
+    facade_reexports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(facade_source)
+        if kind == "use" and visibility == "pub" and "AllocateMappedFileService" in body
+    }
+    if facade_reexports != {
+        "pub use rocketmq_store_local::base::allocate_mapped_file_service::AllocateMappedFileService"
+    }:
+        violations.append("Store allocation service facade must exact re-export the Local owner")
+    if re.search(r"\bstruct\s+(?:AllocateMappedFileService|AllocateRequest)\b", facade_active):
+        violations.append("Store allocation service facade copied a Local runtime owner")
+
+    for test_name in (
+        "allocation_request_key_preserves_identity_accessors_and_display",
+        "allocation_request_key_preserves_platform_separator_offset_parsing",
+        "allocation_request_key_orders_lower_offsets_first_in_binary_heap",
+        "allocation_request_key_keeps_offset_only_ordering_and_full_identity_equality",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file allocation request regression changed: {test_name}")
+    if named_function_body(
+        service_source,
+        "allocate_request_delegates_identity_display_and_priority_to_local_key",
+    ) is None:
+        violations.append("Local mapped-file allocation request runtime regression changed")
+    return violations
+
+
+def mapped_file_allocation_policy_contract_violations(
+    local_source: str,
+    module_source: str,
+    service_source: str,
+    facade_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+    compact = compact_rust(active)
+
+    if active_struct_fields(production, "MappedFileWarmupConfig") != [
+        ("enabled", "bool"),
+        ("flush_disk_type", "FlushDiskType"),
+        ("minimum_file_size", "usize"),
+        ("flush_least_pages", "usize"),
+    ]:
+        violations.append("Local mapped-file warm-up configuration fields changed")
+    if active_struct_fields(production, "MappedFileAllocationPoolSnapshot") != [
+        ("available_buffers", "usize"),
+        ("queued_requests", "usize"),
+    ]:
+        violations.append("Local mapped-file allocation pool snapshot fields changed")
+    expected_method_bodies = {
+        "disabled": (
+            "Self{enabled:false,flush_disk_type:FlushDiskType::AsyncFlush,"
+            "minimum_file_size:usize::MAX,flush_least_pages:0,}"
+        ),
+        "should_warm": "self.enabled&&file_sizeasusize>=self.minimum_file_size",
+        "flush_disk_type": "self.flush_disk_type",
+        "flush_least_pages": "self.flush_least_pages",
+        "remaining_capacity": "self.available_buffers.saturating_sub(self.queued_requests)",
+    }
+    for function_name, expected_body in expected_method_bodies.items():
+        if compact_rust(named_function_body(production, function_name) or "") != expected_body:
+            violations.append(f"Local mapped-file allocation policy changed: {function_name}")
+    expected_capacity = (
+        "pubfnmapped_file_allocation_capacity(default_capacity:usize,"
+        "transient_store_pool_enabled:bool,fast_fail_if_no_buffer:bool,"
+        "pool_snapshot:Option<MappedFileAllocationPoolSnapshot>,)->usize{"
+        "iftransient_store_pool_enabled&&fast_fail_if_no_buffer{"
+        "pool_snapshot.map_or(default_capacity,MappedFileAllocationPoolSnapshot::remaining_capacity)"
+        "}else{default_capacity}}"
+    )
+    if expected_capacity not in compact:
+        violations.append("Local mapped-file allocation capacity semantics changed")
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use"
+    ]
+    if imports != ["crate::config::FlushDiskType"]:
+        violations.append("Local mapped-file allocation policy dependencies changed")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(
+            r"\b(?:MessageStoreConfig|ArcSwap|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b",
+            active,
+        )
+    ):
+        violations.append("Local mapped-file allocation policy absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod allocation_policy;") != 1:
+        violations.append("Local mapped_file module must expose allocation_policy exactly once")
+
+    expected_imports = {
+        "use crate::mapped_file::allocation_policy::mapped_file_allocation_capacity",
+        "use crate::mapped_file::allocation_policy::MappedFileAllocationPoolSnapshot",
+        "use crate::mapped_file::allocation_policy::MappedFileWarmupConfig",
+    }
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(service_source)
+        if kind == "use" and not visibility and "mapped_file::allocation_policy" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Local allocation service policy imports must be direct and exact")
+    service_production = source_without_cfg_test_items(service_source)
+    service_active = active_rust_source(service_production)
+    service_compact = compact_rust(service_active)
+    if re.search(r"\bstruct\s+(?:WarmMappedFileConfig|MappedFileWarmupConfig)\b", service_active):
+        violations.append("Local allocation service copied mapped-file warm-up configuration owner")
+    if dict(active_struct_fields(service_source, "AllocateMappedFileService")).get(
+        "warm_mapped_file_config"
+    ) != "MappedFileWarmupConfig":
+        violations.append("Local allocation service must hold the canonical warm-up configuration")
+    for fragment in (
+        "warm_mapped_file_config:MappedFileWarmupConfig::disabled()",
+        "service.warm_mapped_file_config=message_store_config.mapped_file_warmup_config()",
+        "letmutcan_submit_requests=self.allocation_capacity(2)",
+        "letcan_submit_request=self.allocation_capacity(1)>0",
+        "MappedFileAllocationPoolSnapshot::new(available_buffers,queued_requests)",
+        "mapped_file_allocation_capacity(default_capacity,self.transient_store_pool_enable,"
+        "self.fast_fail_if_no_buffer,pool_snapshot,)",
+    ):
+        if fragment not in service_compact:
+            violations.append(f"Local allocation service policy adapter changed: {fragment}")
+    if ".saturating_sub(queue_size)" in service_compact:
+        violations.append("Local allocation service retained duplicated capacity calculation")
+
+    facade_compact = compact_rust(active_rust_source(source_without_cfg_test_items(facade_source)))
+    for fragment in (
+        "implAllocateMappedFileServiceConfigforMessageStoreConfig",
+        "fnmapped_file_warmup_config(&self)->MappedFileWarmupConfig",
+        "MappedFileWarmupConfig::new(self.warm_mapped_file_enable,self.flush_disk_type,self.mapped_file_size_commit_log,self.flush_least_pages_when_warm_mapped_file,)",
+    ):
+        if fragment not in facade_compact:
+            violations.append(f"Store message config projection changed: {fragment}")
+    if re.search(r"\bstruct\s+(?:WarmMappedFileConfig|MappedFileWarmupConfig)\b", facade_compact):
+        violations.append("Store facade copied mapped-file warm-up configuration owner")
+
+    for test_name in (
+        "warmup_config_preserves_disabled_defaults",
+        "warmup_config_applies_commitlog_size_threshold_and_flush_values",
+        "allocation_capacity_uses_default_without_an_active_fast_fail_pool",
+        "allocation_capacity_saturates_available_buffers_by_queued_requests",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file allocation policy regression changed: {test_name}")
+    if named_function_body(
+        service_source,
+        "allocation_capacity_delegates_runtime_snapshot_to_local_policy",
+    ) is None:
+        violations.append("Local mapped-file allocation policy runtime regression changed")
+    if named_function_body(
+        facade_source,
+        "message_store_config_projects_the_local_warmup_policy",
+    ) is None:
+        violations.append("Store mapped-file allocation config projection regression changed")
+    return violations
+
+
+def allocate_mapped_file_service_contract_violations(
+    service_source: str,
+    base_module_source: str,
+    facade_source: str,
+    local_manifest_source: str,
+    mapped_file_queue_source: str,
+    production_sources: dict[Path, str],
+    check_global_owner: bool = True,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(service_source)
+    active = active_rust_source(production)
+    compact = compact_rust(active)
+    if check_global_owner:
+        masked_sources = {
+            path: source_without_cfg_test_items(source)
+            for path, source in production_sources.items()
+        }
+        if file_item_owner_occurrences(masked_sources, "AllocateMappedFileService") != [
+            (LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH, "struct")
+        ]:
+            violations.append("AllocateMappedFileService must have one Local production owner")
+        if file_item_owner_occurrences(masked_sources, "AllocateMappedFileServiceConfig") != [
+            (LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH, "trait")
+        ]:
+            violations.append("AllocateMappedFileServiceConfig must have one Local production owner")
+
+    expected_fields = [
+        ("request_table", "Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>"),
+        ("request_queue", "Arc<RwLock<BinaryHeap<Arc<AllocateRequest>>>>"),
+        ("has_exception", "Arc<AtomicBool>"),
+        ("stopped", "Arc<AtomicBool>"),
+        ("notify", "Arc<Notify>"),
+        ("worker_wakeup", "Arc<(StdMutex<()>, Condvar)>"),
+        ("worker_handle", "Arc<parking_lot::Mutex<Option<thread::JoinHandle<()>>>>"),
+        ("worker_completed", "Arc<AtomicBool>"),
+        ("worker_completion", "Arc<Notify>"),
+        ("transient_store_pool", "Option<Arc<TransientStorePool>>"),
+        ("transient_store_pool_enable", "bool"),
+        ("fast_fail_if_no_buffer", "bool"),
+        ("warm_mapped_file_config", "MappedFileWarmupConfig"),
+    ]
+    if active_struct_fields(production, "AllocateMappedFileService") != expected_fields:
+        violations.append("Local allocation service ownership fields changed")
+    if active_struct_fields(production, "WorkerCompletion") != [
+        ("completed", "Arc<AtomicBool>"),
+        ("notification", "Arc<Notify>"),
+    ]:
+        violations.append("Local allocation worker completion fields changed")
+    if compact_rust(named_function_body(production, "drop") or "") != (
+        "self.completed.store(true,Ordering::Release);self.notification.notify_one();"
+    ):
+        violations.append("Local allocation worker completion signal changed")
+
+    if active_rust_source(base_module_source).count("pub mod allocate_mapped_file_service;") != 1:
+        violations.append("Local base module must expose allocate_mapped_file_service exactly once")
+    forbidden_imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use"
+        and re.search(
+            r"^(?:rocketmq_store|rocketmq_common|rocketmq_remoting|rocketmq_broker|rocketmq_tieredstore)\b|"
+            r"^crate::(?:message_store|log_file|consume_queue|config::message_store_config)\b",
+            body,
+        )
+    ]
+    if forbidden_imports:
+        violations.append(f"Local allocation service imported facade/backend owners: {forbidden_imports}")
+    if any(token in compact for token in ("crate::runtime::", "spawn_blocking(", "block_on(")):
+        violations.append("Local allocation service bypassed worker completion ownership")
+    if compact.count("thread::Builder::new()") != 1:
+        violations.append("Local allocation service dedicated worker boundary changed")
+    for fragment in (
+        "self.worker_completed.store(false,Ordering::Release)",
+        "let_completion=WorkerCompletion{completed:worker_completed,notification:worker_completion,}",
+        "self.stopped.store(true,Ordering::Relaxed)",
+        "letcompletion=self.worker_completion.notified()",
+        "if!self.worker_completed.load(Ordering::Acquire){completion.await;}",
+        "while!handle.is_finished(){tokio::task::yield_now().await;}",
+        "ifhandle.join().is_err()",
+    ):
+        if fragment not in compact:
+            violations.append(f"Local allocation service lifecycle changed: {fragment}")
+
+    facade_active = active_rust_source(source_without_cfg_test_items(facade_source))
+    facade_imports = active_import_records(facade_source)
+    exact_reexports = {
+        statement
+        for kind, visibility, body, statement in facade_imports
+        if kind == "use" and visibility == "pub" and "AllocateMappedFileService" in body
+    }
+    if exact_reexports != {
+        "pub use rocketmq_store_local::base::allocate_mapped_file_service::AllocateMappedFileService"
+    }:
+        violations.append("Store allocation facade must exact re-export the Local service")
+    if re.search(r"\bstruct\s+AllocateMappedFileService\b", facade_active):
+        violations.append("Store allocation facade copied the Local service")
+    if compact_rust(facade_active).count("implAllocateMappedFileServiceConfigforMessageStoreConfig") != 1:
+        violations.append("Store allocation facade config projection changed")
+
+    try:
+        manifest = tomllib.loads(local_manifest_source)
+    except tomllib.TOMLDecodeError:
+        violations.append("Local manifest is not valid TOML")
+    else:
+        if manifest.get("dependencies", {}).get("tokio") != {"workspace": True}:
+            violations.append("Local allocation service must use the workspace Tokio dependency")
+
+    for test_name in (
+        "allocate_request_delegates_identity_display_and_priority_to_local_key",
+        "allocate_mapped_file_blocking_works_inside_runtime",
+        "worker_completion_guard_records_exit_and_notifies_waiter",
+        "warm_mapped_file_config_follows_commitlog_file_size_threshold",
+        "allocation_capacity_delegates_runtime_snapshot_to_local_policy",
+    ):
+        if named_function_body(service_source, test_name) is None:
+            violations.append(f"Local allocation service regression changed: {test_name}")
+    if named_function_body(
+        facade_source,
+        "message_store_config_projects_the_local_warmup_policy",
+    ) is None:
+        violations.append("Store allocation service config regression changed")
+    preallocation_test = named_function_body(
+        mapped_file_queue_source,
+        "trigger_pre_allocation_submits_background_request",
+    )
+    if preallocation_test is None:
+        violations.append("Store allocation service consumer regression changed")
+    else:
+        preallocation_compact = compact_rust(preallocation_test)
+        if (
+            "allocate_mapped_file_blocking(next_file_path.to_string_lossy().into_owned(),mapped_file_size)"
+            not in preallocation_compact
+            or "next_file_path.exists()" not in preallocation_compact
+        ):
+            violations.append("Store preallocation consumer no longer awaits the Local service result")
+        if "has_request(" in preallocation_compact:
+            violations.append("Store preallocation consumer retained the old private request-table hook")
+    return violations
+
+
+def mapped_file_queue_allocation_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+    if active_struct_fields(production, "MappedFileQueueLastFile") != [
+        ("file_from_offset", "u64"),
+        ("wrote_position", "i32"),
+        ("full", "bool"),
+    ]:
+        violations.append("Local mapped-file queue last-file snapshot fields changed")
+    if active_struct_fields(production, "MappedFileQueueRollFile") != [
+        ("file_from_offset", "u64"),
+        ("full", "bool"),
+    ]:
+        violations.append("Local mapped-file queue roll snapshot fields changed")
+    compact_active = compact_rust(active)
+    expected_constructor_fragments = (
+        "impl MappedFileQueueLastFile{#[doc(hidden)]pub fn new(file_from_offset:u64,wrote_position:i32,full:bool)->Self{Self{file_from_offset,wrote_position,full,}}}",
+        "impl MappedFileQueueRollFile{#[doc(hidden)]pub fn new(file_from_offset:u64,full:bool)->Self{Self{file_from_offset,full}}}",
+    )
+    for fragment in expected_constructor_fragments:
+        if compact_rust(fragment) not in compact_active:
+            violations.append(f"Local mapped-file queue allocation snapshot API changed: {fragment}")
+    preallocation_body = compact_rust(
+        named_function_body(production, "plan_mapped_file_queue_preallocation") or ""
+    )
+    for fragment in (
+        "last_file.wrote_position as f64/segment_size as f64",
+        "usage_ratio>=0.8&&!last_file.full",
+        "then_some(last_file.file_from_offset+segment_size)",
+    ):
+        if compact_rust(fragment) not in preallocation_body:
+            violations.append(f"Local mapped-file queue preallocation decision changed: {fragment}")
+    creation_body = compact_rust(
+        named_function_body(production, "plan_mapped_file_queue_creation") or ""
+    )
+    for fragment in (
+        "start_offset-start_offset%segment_size",
+        "Some(last)if last.full=>Some((last.file_from_offset as i64+segment_size as i64)as u64)",
+        ".filter(|_|need_create)",
+    ):
+        if compact_rust(fragment) not in creation_body:
+            violations.append(f"Local mapped-file queue creation decision changed: {fragment}")
+    if active_import_records(production):
+        violations.append("Local mapped-file queue allocation owner must remain dependency-free")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(
+            r"\b(?:rocketmq_|ArcSwap|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b",
+            active,
+        )
+    ):
+        violations.append("Local mapped-file queue allocation owner absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod queue_allocation;") != 1:
+        violations.append("Local mapped_file module must expose queue_allocation exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::mapped_file::queue_allocation::plan_mapped_file_queue_creation",
+        "use rocketmq_store_local::mapped_file::queue_allocation::plan_mapped_file_queue_preallocation",
+        "use rocketmq_store_local::mapped_file::queue_allocation::MappedFileQueueLastFile",
+        "use rocketmq_store_local::mapped_file::queue_allocation::MappedFileQueueRollFile",
+    }
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_allocation" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store mapped-file queue allocation imports must be direct and exact")
+    adapter_body = active_rust_source(
+        named_function_body(
+            source_without_cfg_test_items(store_source),
+            "get_last_mapped_file_mut_start_offset",
+        )
+        or ""
+    )
+    for required in (
+        "MappedFileQueueLastFile::new(",
+        "plan_mapped_file_queue_preallocation(",
+        "self.trigger_pre_allocation(next_offset)",
+        "MappedFileQueueRollFile::new(",
+        "plan_mapped_file_queue_creation(",
+        "self.try_create_mapped_file(create_offset)",
+    ):
+        if adapter_body.count(required) != 1:
+            violations.append(f"Store mapped-file queue allocation adapter changed: {required}")
+    ordering = tuple(
+        adapter_body.find(fragment)
+        for fragment in (
+            "plan_mapped_file_queue_preallocation(",
+            "self.trigger_pre_allocation(next_offset)",
+            "MappedFileQueueRollFile::new(",
+            "plan_mapped_file_queue_creation(",
+            "self.try_create_mapped_file(create_offset)",
+        )
+    )
+    if -1 in ordering or ordering != tuple(sorted(ordering)):
+        violations.append("Store mapped-file queue preallocation/create ordering changed")
+    for forbidden in ("usage_ratio", "create_offset =", "% file_size"):
+        if forbidden in adapter_body:
+            violations.append(f"Store retained mapped-file queue allocation decision: {forbidden}")
+
+    for test_name in (
+        "allocation_plan_aligns_an_empty_queue_to_the_segment_start",
+        "allocation_plan_preallocates_at_eighty_percent_without_rolling",
+        "allocation_plan_rolls_a_full_segment_without_preallocation",
+        "allocation_plan_keeps_preallocation_when_creation_is_disabled",
+        "allocation_plan_preserves_zero_segment_size_failure_for_an_empty_queue",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue allocation regression changed: {test_name}")
+    return violations
+
+
+def mapped_file_queue_io_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+
+    if active_struct_fields(production, "MappedFileQueueLoadOutcome") != [
+        ("success", "bool"),
+        ("mapped_files", "Vec<Arc<DefaultMappedFile>>"),
+    ]:
+        violations.append("Local mapped-file queue load outcome fields changed")
+    for function_name in (
+        "load_mapped_file_queue_path",
+        "load_mapped_file_queue_files",
+        "create_mapped_file_for_queue",
+        "create_mapped_file_synchronously",
+    ):
+        if named_function_body(production, function_name) is None:
+            violations.append(f"Local mapped-file queue I/O owner changed: {function_name}")
+    for method_name, expected_body in (
+        ("is_success", "self.success"),
+        ("into_mapped_files", "self.mapped_files"),
+    ):
+        if compact_rust(named_function_body(production, method_name) or "") != expected_body:
+            violations.append(f"Local mapped-file queue load outcome API changed: {method_name}")
+
+    path_body = compact_rust(named_function_body(production, "load_mapped_file_queue_path") or "")
+    for fragment in (
+        "letOk(entries)=fs::read_dir(Path::new(store_path))else{returnMappedFileQueueLoadOutcome::new(true,Vec::new());}",
+        "entries.filter_map(Result::ok).map(|entry|entry.path()).collect()",
+        "load_mapped_file_queue_files(files,mapped_file_size)",
+    ):
+        if fragment not in path_body:
+            violations.append(f"Local mapped-file queue directory loading changed: {fragment}")
+
+    files_body = compact_rust(named_function_body(production, "load_mapped_file_queue_files") or "")
+    for fragment in (
+        "files.sort_by(|left,right|left.file_name().cmp(&right.file_name()))",
+        "for(index,file)infiles.iter().enumerate()",
+        "ifmetadata.is_dir(){continue;}",
+        "ifmetadata.len()==0&&index==files.len()-1",
+        "fs::remove_file(file)",
+        "ifmetadata.len()!=mapped_file_size",
+        "DefaultMappedFile::try_new(CheetahString::from_string(file.to_string_lossy().into_owned()),mapped_file_size,)",
+        "mapped_file.set_wrote_position(mapped_file_sizeasi32)",
+        "mapped_file.set_flushed_position(mapped_file_sizeasi32)",
+        "mapped_file.set_committed_position(mapped_file_sizeasi32)",
+        "mapped_files.push(Arc::new(mapped_file))",
+        "MappedFileQueueLoadOutcome::new(true,mapped_files)",
+    ):
+        if fragment not in files_body:
+            violations.append(f"Local mapped-file queue file loading changed: {fragment}")
+    if files_body.count("MappedFileQueueLoadOutcome::new(false,mapped_files)") != 3:
+        violations.append("Local mapped-file queue load must preserve partial files on all three failure paths")
+
+    create_body = compact_rust(named_function_body(production, "create_mapped_file_for_queue") or "")
+    for fragment in (
+        "allocate_service.filter(|service|service.is_started())",
+        "service.allocate_mapped_file_blocking(file_path_text.clone(),mapped_file_size)",
+        "service.submit_request_in_background(next_file_path.to_string_lossy().into_owned(),mapped_file_size)",
+        "create_mapped_file_synchronously(file_path_text,mapped_file_size)?",
+        "iffirst_in_queue",
+        "Arc::get_mut(&mutmapped_file)",
+        "mapped_file.set_first_create_in_queue(true)",
+        "Some(mapped_file)",
+    ):
+        if fragment not in create_body:
+            violations.append(f"Local mapped-file queue creation changed: {fragment}")
+
+    for forbidden in (
+        "rocketmq_store::",
+        "rocketmq_common",
+        "rocketmq_remoting",
+        "rocketmq_broker",
+        "rocketmq_tiered_store",
+        "ArcSwap",
+        "CommitLog",
+        "BoundaryType",
+        "crate::runtime",
+        "spawn_blocking",
+        "block_on",
+        "tokio::spawn",
+    ):
+        if forbidden in active:
+            violations.append(f"Local mapped-file queue I/O absorbed forbidden edge: {forbidden}")
+    if active_rust_source(module_source).count("pub mod queue_io;") != 1:
+        violations.append("Local mapped_file module must expose queue_io exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::mapped_file::queue_io::create_mapped_file_for_queue",
+        "use rocketmq_store_local::mapped_file::queue_io::load_mapped_file_queue_files",
+        "use rocketmq_store_local::mapped_file::queue_io::load_mapped_file_queue_path",
+        "use rocketmq_store_local::mapped_file::queue_io::MappedFileQueueLoadOutcome",
+    }
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_io" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store mapped-file queue I/O imports must be direct and exact")
+
+    store_production = source_without_cfg_test_items(store_source)
+    store_active = active_rust_source(store_production)
+    store_bodies = {
+        function_name: compact_rust(named_function_body(store_production, function_name) or "")
+        for function_name in ("load", "do_load", "apply_load_outcome", "do_create_mapped_file")
+    }
+    for function_name, fragments in {
+        "load": (
+            "load_mapped_file_queue_path(self.storage.store_path(),self.storage.mapped_file_size())",
+            "self.apply_load_outcome(outcome)",
+        ),
+        "do_load": (
+            "load_mapped_file_queue_files(files,self.storage.mapped_file_size())",
+            "self.apply_load_outcome(outcome)",
+        ),
+        "apply_load_outcome": (
+            "letsuccess=outcome.is_success()",
+            "letloaded_files=outcome.into_mapped_files()",
+            "files.extend(loaded_files)",
+            "self.storage.mapped_files().store(Arc::new(files))",
+            "success",
+        ),
+        "do_create_mapped_file": (
+            "letis_first=self.storage.mapped_files().load().is_empty()",
+            "create_mapped_file_for_queue(",
+            "self.allocate_mapped_file_service.as_ref()",
+            "files.push(arc_file.clone())",
+            "self.storage.mapped_files().store(Arc::new(files))",
+            "Some(arc_file)",
+        ),
+    }.items():
+        for fragment in fragments:
+            if fragment not in store_bodies[function_name]:
+                violations.append(f"Store mapped-file queue I/O adapter changed: {function_name}: {fragment}")
+    for forbidden in (
+        "fs::read_dir",
+        ".metadata()",
+        "metadata.len()",
+        "DefaultMappedFile::try_new",
+        "CheetahString::from_string",
+        "create_mapped_file_internal",
+    ):
+        if forbidden in store_active:
+            violations.append(f"Store retained mapped-file queue I/O owner: {forbidden}")
+
+    for test_name in (
+        "missing_queue_directory_preserves_legacy_success",
+        "queue_load_sorts_files_initializes_positions_and_removes_empty_tail",
+        "queue_load_returns_files_loaded_before_a_size_failure",
+        "queue_creation_uses_local_sync_fallback_and_marks_the_first_file",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue I/O regression changed: {test_name}")
+    for test_name in (
+        "test_load_empty_dir",
+        "test_load_with_empty_file",
+        "test_load_with_invalid_file_size",
+        "do_load_applies_files_loaded_before_failure",
+        "test_load_with_correct_file",
+        "trigger_pre_allocation_submits_background_request",
+    ):
+        if named_function_body(store_source, test_name) is None:
+            violations.append(f"Store mapped-file queue I/O adapter regression changed: {test_name}")
+    return violations
+
+
+def mapped_file_queue_lifecycle_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+
+    if active_struct_fields(production, "MappedFileQueueDeletion") != [
+        ("deleted_count", "i32"),
+        ("mapped_files", "Vec<Arc<DefaultMappedFile>>"),
+    ]:
+        violations.append("Local mapped-file queue deletion result fields changed")
+    for method_name, expected_body in (
+        ("deleted_count", "self.deleted_count"),
+        ("into_mapped_files", "self.mapped_files"),
+    ):
+        if compact_rust(named_function_body(production, method_name) or "") != expected_body:
+            violations.append(f"Local mapped-file queue deletion API changed: {method_name}")
+
+    function_names = (
+        "destroy_last_mapped_file",
+        "mapped_files_after_removal",
+        "delete_expired_mapped_files_by_time",
+        "delete_expired_mapped_files_by_offset",
+        "retry_delete_first_mapped_file",
+        "swap_mapped_file_queue",
+        "clean_swapped_mapped_file_queue",
+        "shutdown_mapped_file_queue",
+        "destroy_mapped_file_queue",
+    )
+    bodies = {
+        function_name: compact_rust(named_function_body(production, function_name) or "")
+        for function_name in function_names
+    }
+    for function_name, body in bodies.items():
+        if not body:
+            violations.append(f"Local mapped-file queue lifecycle owner changed: {function_name}")
+
+    expected_fragments = {
+        "destroy_last_mapped_file": (
+            "letlast_mapped_file=files.last()?.clone()",
+            "last_mapped_file.destroy(1000)",
+            "Some(last_mapped_file)",
+        ),
+        "mapped_files_after_removal": (
+            "filter(|candidate|current_files.contains(candidate))",
+            "filter(|mapped_file|!existing_candidates.contains(mapped_file))",
+            ".cloned().collect()",
+        ),
+        "delete_expired_mapped_files_by_time": (
+            "letcandidate_count=files.len().saturating_sub(1)",
+            "files.iter().enumerate().take(candidate_count)",
+            "now_millis()>=live_max_timestamp||clean_immediately",
+            "mapped_file.destroy(interval_forciblyasu64)",
+            "deleted_files.len()>=delete_file_batch_maxasusize",
+            "thread::sleep(Duration::from_millis(delete_files_intervalasu64))",
+            "MappedFileQueueDeletion::new(deleted_files.len()asi32,deleted_files)",
+        ),
+        "delete_expired_mapped_files_by_offset": (
+            "letcandidate_count=files.len().saturating_sub(1)",
+            "mapped_file.select_mapped_buffer((mapped_file_size-unit_sizeasu64)asi32,unit_size)",
+            "i64::from_be_bytes(buffer[0..8].try_into().unwrap_or([0;8]))",
+            "destroy=max_offset_in_logic_queue<offset",
+            "elseif!mapped_file.is_available()",
+            "ifdestroy&&mapped_file.destroy(1000*60)",
+        ),
+        "retry_delete_first_mapped_file": (
+            "first.filter(|mapped_file|!mapped_file.is_available())",
+            "first.destroy(interval_forciblyasu64)",
+            "MappedFileQueueDeletion::new(1,vec![first.clone()])",
+            "MappedFileQueueDeletion::new(0,Vec::new())",
+        ),
+        "swap_mapped_file_queue": (
+            "letreserve_num=reserve_num.max(3)",
+            "forindexin(0..=(files_len-reserve_num-1)).rev()",
+            "ifelapsed>force_swap_interval_ms",
+            "ifelapsed>normal_swap_interval_ms&&mapped_file.get_mapped_byte_buffer_access_count_since_last_swap()>0",
+        ),
+        "clean_swapped_mapped_file_queue": (
+            "letreserve_num=3",
+            "forindexin(0..=(files_len-reserve_num-1)).rev()",
+            "now_millis()-mapped_file.get_recent_swap_map_time()>force_clean_swap_interval_ms",
+        ),
+        "shutdown_mapped_file_queue": ("mapped_file.shutdown(interval_forcibly)",),
+        "destroy_mapped_file_queue": (
+            "mapped_file.destroy(1000*3)",
+            "letpath=Path::new(store_path)",
+            "ifpath.is_dir()",
+            "fs::remove_dir_all(path)",
+        ),
+    }
+    for function_name, fragments in expected_fragments.items():
+        for fragment in fragments:
+            if fragment not in bodies[function_name]:
+                violations.append(f"Local mapped-file queue lifecycle changed: {function_name}: {fragment}")
+
+    for forbidden in (
+        "rocketmq_store::",
+        "rocketmq_common",
+        "rocketmq_remoting",
+        "rocketmq_broker",
+        "rocketmq_tiered_store",
+        "ArcSwap",
+        "CommitLog",
+        "BoundaryType",
+        "crate::runtime",
+        "tokio::",
+        "async ",
+        ".await",
+        "ArcMut",
+    ):
+        if forbidden in active:
+            violations.append(f"Local mapped-file queue lifecycle absorbed forbidden edge: {forbidden}")
+    if active_rust_source(module_source).count("pub mod queue_lifecycle;") != 1:
+        violations.append("Local mapped_file module must expose queue_lifecycle exactly once")
+
+    expected_imports = {
+        f"use rocketmq_store_local::mapped_file::queue_lifecycle::{function_name}"
+        for function_name in function_names
+    }
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_lifecycle" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store mapped-file queue lifecycle imports must be direct and exact")
+
+    store_production = source_without_cfg_test_items(store_source)
+    store_bodies = {
+        function_name: compact_rust(named_function_body(store_production, function_name) or "")
+        for function_name in (
+            "delete_last_mapped_file",
+            "delete_expired_file",
+            "delete_expired_file_by_time",
+            "delete_expired_file_by_offset",
+            "retry_delete_first_file",
+            "swap_map",
+            "clean_swapped_map",
+            "shutdown",
+            "destroy",
+        )
+    }
+    store_expected = {
+        "delete_last_mapped_file": ("destroy_last_mapped_file(files.as_slice())", "self.delete_expired_file"),
+        "delete_expired_file": ("mapped_files_after_removal(current_files.as_slice(),&files)", ".store(Arc::new(new_files))"),
+        "delete_expired_file_by_time": (
+            "self.check_self()",
+            "delete_expired_mapped_files_by_time(",
+            "||current_millis()asi64",
+            "self.delete_expired_file(deletion.into_mapped_files())",
+        ),
+        "delete_expired_file_by_offset": (
+            "delete_expired_mapped_files_by_offset(&mfs,self.storage.mapped_file_size(),offset,unit_size)",
+            "self.delete_expired_file(deletion.into_mapped_files())",
+        ),
+        "retry_delete_first_file": (
+            "retry_delete_first_mapped_file(first.as_ref(),interval_forcibly)",
+            "self.delete_expired_file(deletion.into_mapped_files())",
+        ),
+        "swap_map": ("swap_mapped_file_queue(", "||current_millis()asi64"),
+        "clean_swapped_map": ("clean_swapped_mapped_file_queue(", "current_millis()asi64"),
+        "shutdown": ("shutdown_mapped_file_queue(files.as_slice(),interval_forcibly)",),
+        "destroy": (
+            "destroy_mapped_file_queue(files.as_slice(),self.storage.store_path())",
+            "self.storage.mapped_files().store(Arc::new(Vec::new()))",
+            "self.set_flushed_where(0)",
+        ),
+    }
+    for function_name, fragments in store_expected.items():
+        for fragment in fragments:
+            if fragment not in store_bodies[function_name]:
+                violations.append(f"Store mapped-file queue lifecycle adapter changed: {function_name}: {fragment}")
+    for function_name, forbidden_fragments in {
+        "delete_expired_file_by_time": (".destroy(", "thread::sleep", "live_max_timestamp"),
+        "delete_expired_file_by_offset": ("select_mapped_buffer", "max_offset_in_logic_queue", ".destroy("),
+        "retry_delete_first_file": (".destroy(", "is_available()"),
+        "swap_map": ("get_recent_swap_map_time", ".swap_map()"),
+        "clean_swapped_map": ("get_recent_swap_map_time", ".swap_map()"),
+        "shutdown": ("mapped_file.shutdown",),
+        "destroy": ("mapped_file.destroy", "fs::remove_dir_all"),
+    }.items():
+        for fragment in forbidden_fragments:
+            if fragment in store_bodies[function_name]:
+                violations.append(f"Store retained mapped-file queue lifecycle owner: {function_name}: {fragment}")
+
+    for test_name in (
+        "removal_filters_only_candidates_present_in_the_current_snapshot",
+        "destroy_last_returns_the_destroyed_newest_file",
+        "time_deletion_keeps_the_newest_file_and_honors_the_batch_limit",
+        "offset_deletion_stops_when_the_selected_file_cannot_finish_destroy",
+        "swap_reserves_three_newest_files_and_shutdown_releases_every_file",
+        "destroy_removes_every_file_and_the_queue_directory",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue lifecycle regression changed: {test_name}")
+    return violations
+
+
+def mapped_file_queue_metrics_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+
+    if active_struct_fields(production, "MappedFileWarmupStats") != [
+        ("operations", "u64"),
+        ("bytes", "u64"),
+        ("total_millis", "u64"),
+        ("last_millis", "u64"),
+    ]:
+        violations.append("Local mapped-file queue warmup stats fields changed")
+    compact_active = compact_rust(active)
+    if "#[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]pubstructMappedFileWarmupStats" not in compact_active:
+        violations.append("Local mapped-file queue warmup stats traits changed")
+
+    function_names = (
+        "mapped_file_queue_warmup_stats",
+        "mapped_file_queue_lazy_mmap_stats",
+        "mapped_file_queue_max_offset",
+        "mapped_file_queue_max_wrote_position",
+        "mapped_file_queue_should_roll",
+        "mapped_file_queue_min_offset",
+        "mapped_file_queue_available_memory_size",
+        "mapped_file_queue_fall_behind",
+        "mapped_file_queue_total_size",
+    )
+    bodies = {
+        function_name: compact_rust(named_function_body(production, function_name) or "")
+        for function_name in function_names
+    }
+    for function_name, body in bodies.items():
+        if not body:
+            violations.append(f"Local mapped-file queue metrics owner changed: {function_name}")
+    expected_fragments = {
+        "mapped_file_queue_warmup_stats": (
+            "letSome(metrics)=mapped_file.get_metrics()else{continue;};",
+            "ifoperations==0{continue;}",
+            "stats.operations=stats.operations.saturating_add(operations)",
+            "stats.bytes=stats.bytes.saturating_add(metrics.warm_bytes())",
+            "stats.total_millis=stats.total_millis.saturating_add(metrics.total_warm_millis())",
+            "stats.last_millis=metrics.last_warm_millis()",
+        ),
+        "mapped_file_queue_lazy_mmap_stats": (
+            "stats.saturating_add_assign(mapped_file.lazy_mmap_stats())",
+        ),
+        "mapped_file_queue_max_offset": (
+            "file.get_file_from_offset()asi64+file.get_read_position()asi64",
+        ),
+        "mapped_file_queue_max_wrote_position": (
+            "file.get_file_from_offset()asi64+file.get_wrote_position()asi64",
+        ),
+        "mapped_file_queue_should_roll": (
+            "letSome(last)=lastelse{returntrue;}",
+            "last.is_full()||last.get_wrote_position()+message_size>last.get_file_size()asi32",
+        ),
+        "mapped_file_queue_min_offset": ("first.map_or(-1,|file|file.get_file_from_offset()asi64)",),
+        "mapped_file_queue_available_memory_size": (
+            "files.iter().filter(|file|file.is_available()).count()asi64*mapped_file_sizeasi64",
+        ),
+        "mapped_file_queue_fall_behind": (
+            "ifflushed_where==0{return0;}",
+            "file.get_file_from_offset()asi64+file.get_wrote_position()asi64-flushed_where",
+        ),
+        "mapped_file_queue_total_size": ("mapped_file_countasi64*mapped_file_sizeasi64",),
+    }
+    for function_name, fragments in expected_fragments.items():
+        for fragment in fragments:
+            if fragment not in bodies[function_name]:
+                violations.append(f"Local mapped-file queue metrics changed: {function_name}: {fragment}")
+
+    for forbidden in (
+        "rocketmq_store::",
+        "rocketmq_common",
+        "rocketmq_remoting",
+        "rocketmq_broker",
+        "rocketmq_tiered_store",
+        "ArcSwap",
+        "CommitLog",
+        "BoundaryType",
+        "crate::runtime",
+        "tokio::",
+        "async ",
+        ".await",
+        "ArcMut",
+    ):
+        if forbidden in active:
+            violations.append(f"Local mapped-file queue metrics absorbed forbidden edge: {forbidden}")
+    if active_rust_source(module_source).count("pub mod queue_metrics;") != 1:
+        violations.append("Local mapped_file module must expose queue_metrics exactly once")
+
+    expected_private_imports = {
+        f"use rocketmq_store_local::mapped_file::queue_metrics::{function_name}"
+        for function_name in function_names
+    }
+    actual_private_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_metrics" in body
+    }
+    if actual_private_imports != expected_private_imports:
+        violations.append("Store mapped-file queue metrics imports must be direct and exact")
+    exact_reexport = "pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileWarmupStats;"
+    if active_rust_source(store_source).count(exact_reexport) != 1:
+        violations.append("Store must exactly re-export Local MappedFileWarmupStats")
+    store_production = source_without_cfg_test_items(store_source)
+    if re.search(r"\bstruct\s+MappedFileWarmupStats\b", active_rust_source(store_production)):
+        violations.append("Store retained a copied mapped-file warmup stats owner")
+
+    store_expected_calls = {
+        "warmup_stats": "mapped_file_queue_warmup_stats(mapped_files.as_slice())",
+        "lazy_mmap_stats": "mapped_file_queue_lazy_mmap_stats(mapped_files.as_slice())",
+        "get_max_offset": "mapped_file_queue_max_offset(last.as_ref())",
+        "get_max_wrote_position": "mapped_file_queue_max_wrote_position(last.as_ref())",
+        "is_empty_or_current_file_full": "mapped_file_queue_should_roll(last.as_ref(),0)",
+        "should_roll": "mapped_file_queue_should_roll(last.as_ref(),msg_size)",
+        "get_min_offset": "mapped_file_queue_min_offset(first.as_ref())",
+        "get_mapped_memory_size": "mapped_file_queue_available_memory_size(files.as_slice(),self.storage.mapped_file_size())",
+        "how_much_fall_behind": "mapped_file_queue_fall_behind(last.as_ref(),self.get_flushed_where())",
+        "get_total_file_size": "mapped_file_queue_total_size(files.len(),self.storage.mapped_file_size())",
+    }
+    for method_name, expected_call in store_expected_calls.items():
+        body = compact_rust(named_function_body(store_production, method_name) or "")
+        if body.count(expected_call) != 1:
+            violations.append(f"Store mapped-file queue metrics adapter changed: {method_name}")
+    for method_name, forbidden_fragments in {
+        "warmup_stats": ("warm_operations", "saturating_add"),
+        "lazy_mmap_stats": ("saturating_add_assign",),
+        "get_max_offset": ("get_read_position",),
+        "get_max_wrote_position": ("get_wrote_position",),
+        "should_roll": ("get_wrote_position", "get_file_size"),
+        "get_mapped_memory_size": ("is_available",),
+        "how_much_fall_behind": ("get_wrote_position",),
+    }.items():
+        body = compact_rust(named_function_body(store_production, method_name) or "")
+        for fragment in forbidden_fragments:
+            if fragment in body:
+                violations.append(f"Store retained mapped-file queue metrics owner: {method_name}: {fragment}")
+
+    for test_name in (
+        "empty_queue_queries_preserve_legacy_sentinels",
+        "queue_position_and_roll_queries_use_the_last_file_snapshot",
+        "available_memory_and_total_size_keep_distinct_accounting",
+        "warmup_metrics_aggregate_with_saturating_totals_and_last_file_latency",
+        "lazy_mmap_metrics_aggregate_mapped_and_unmapped_files",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue metrics regression changed: {test_name}")
+    if named_function_body(store_source, "warmup_stats_aggregates_mapped_file_metrics") is None:
+        violations.append("Store mapped-file queue warmup facade regression changed")
+    return violations
+
+
+def mapped_file_queue_maintenance_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+    compact = compact_rust(active)
+
+    if "pubenumMappedFileQueueTruncateAction{Retain,Truncate(i32),Remove,}" not in compact:
+        violations.append("Local mapped-file queue truncate action variants changed")
+    if active_struct_fields(production, "MappedFileQueueResetLastFile") != [
+        ("file_from_offset", "u64"),
+        ("wrote_position", "i32"),
+    ]:
+        violations.append("Local mapped-file queue reset last-file fields changed")
+    if active_struct_fields(production, "MappedFileQueueResetPlan") != [
+        ("target", "Option<(usize, i32)>"),
+        ("remove_indices", "Vec<usize>"),
+    ]:
+        violations.append("Local mapped-file queue reset plan fields changed")
+    expected_methods = {
+        "new": "Self{file_from_offset,wrote_position,}",
+        "target": "self.target",
+        "remove_indices": "&self.remove_indices",
+    }
+    for function_name, expected_body in expected_methods.items():
+        if compact_rust(named_function_body(production, function_name) or "") != expected_body:
+            violations.append(f"Local mapped-file queue maintenance API changed: {function_name}")
+
+    truncate_body = compact_rust(
+        named_function_body(production, "mapped_file_queue_truncate_action") or ""
+    )
+    for fragment in (
+        "letfile_tail_offset=file_from_offset+mapped_file_size",
+        "iffile_tail_offsetasi64<=offset{MappedFileQueueTruncateAction::Retain}",
+        "elseifoffset>=file_from_offsetasi64{MappedFileQueueTruncateAction::Truncate((offset%mapped_file_sizeasi64)asi32)}",
+        "else{MappedFileQueueTruncateAction::Remove}",
+    ):
+        if fragment not in truncate_body:
+            violations.append(f"Local mapped-file queue truncate semantics changed: {fragment}")
+
+    reset_body = compact_rust(named_function_body(production, "plan_mapped_file_queue_reset") or "")
+    for fragment in (
+        "letlast_offset=last_file.file_from_offsetasi64+last_file.wrote_positionasi64",
+        "letdiff=last_offset-offset",
+        "letmax_diff=(mapped_file_size*2)asi64",
+        "ifdiff>max_diff{returnNone;}",
+        "forindexin(0..files.len()).rev()",
+        "ifoffset>=file_from_offset(file)asi64",
+        "lettarget_position=(offset%file_size(file)asi64)asi32",
+        "target:Some((index,target_position)),remove_indices",
+        "remove_indices.push(index)",
+        "target:None,remove_indices",
+    ):
+        if fragment not in reset_body:
+            violations.append(f"Local mapped-file queue reset semantics changed: {fragment}")
+    if active_import_records(production):
+        violations.append("Local mapped-file queue maintenance planner must remain dependency-free")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(
+            r"\b(?:rocketmq_|ArcSwap|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b",
+            active,
+        )
+    ):
+        violations.append("Local mapped-file queue maintenance planner absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod queue_maintenance;") != 1:
+        violations.append("Local mapped_file module must expose queue_maintenance exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::mapped_file::queue_maintenance::mapped_file_queue_truncate_action",
+        "use rocketmq_store_local::mapped_file::queue_maintenance::plan_mapped_file_queue_reset",
+        "use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueResetLastFile",
+        "use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueTruncateAction",
+    }
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_maintenance" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store mapped-file queue maintenance imports must be direct and exact")
+    store_production = source_without_cfg_test_items(store_source)
+    store_compact = compact_rust(active_rust_source(store_production))
+    for fragment in (
+        "matchmapped_file_queue_truncate_action(offset,self.storage.mapped_file_size(),mapped_file.get_file_from_offset(),)",
+        "MappedFileQueueTruncateAction::Truncate(position)=>{mapped_file.set_wrote_position(position);mapped_file.set_committed_position(position);mapped_file.set_flushed_position(position);}",
+        "MappedFileQueueTruncateAction::Remove=>{mapped_file.destroy(1000);will_remove_files.push(mapped_file.clone());}",
+        "letlast_file=self.get_last_mapped_file().map(|mapped_file|{MappedFileQueueResetLastFile::new(mapped_file.get_file_from_offset(),mapped_file.get_wrote_position())})",
+        "letcurrent_files=self.storage.mapped_files().load()",
+        "letSome(plan)=plan_mapped_file_queue_reset(",
+        "ifletSome((index,position))=plan.target()",
+        "for&idxinplan.remove_indices().iter().rev(){new_files.remove(idx);}",
+    ):
+        if fragment not in store_compact:
+            violations.append(f"Store mapped-file queue maintenance adapter changed: {fragment}")
+    for legacy_fragment in (
+        "letfile_tail_offset=",
+        "letdiff=last_offset-offset",
+        "letmax_diff=(self.storage.mapped_file_size()*2)asi64",
+        "letmutto_removes=Vec::new()",
+    ):
+        if legacy_fragment in store_compact:
+            violations.append(f"Store retained mapped-file queue maintenance algorithm: {legacy_fragment}")
+
+    for test_name in (
+        "truncate_plan_retains_completed_segments_and_truncates_the_target",
+        "reset_plan_rejects_offsets_more_than_two_segments_behind",
+        "reset_plan_preserves_target_position_and_newest_to_oldest_removals",
+        "reset_plan_removes_every_file_when_offset_precedes_the_queue",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue maintenance regression changed: {test_name}")
+    for test_name in (
+        "truncate_dirty_files_delegates_positions_and_removals_to_local_plan",
+        "reset_offset_delegates_target_and_removal_order_to_local_plan",
+    ):
+        if named_function_body(store_source, test_name) is None:
+            violations.append(f"Store mapped-file queue maintenance adapter regression changed: {test_name}")
+    return violations
+
+
+def mapped_file_queue_index_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+    function_names = (
+        "for_each_discontinuous_pair",
+        "overlapping_file_range",
+        "file_index_by_timestamp",
+        "file_index_by_offset",
+    )
+    for function_name in function_names:
+        if named_function_body(production, function_name) is None:
+            violations.append(f"Local mapped-file queue index owner changed: {function_name}")
+    if active_import_records(production):
+        violations.append("Local mapped-file queue index owner must remain dependency-free")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(
+            r"\b(?:rocketmq_|ArcSwap|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b",
+            active,
+        )
+    ):
+        violations.append("Local mapped-file queue index owner absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod queue_index;") != 1:
+        violations.append("Local mapped_file module must expose queue_index exactly once")
+
+    expected_imports = {
+        f"use rocketmq_store_local::mapped_file::queue_index::{function_name}"
+        for function_name in function_names
+    }
+    expected_imports.add(
+        "use rocketmq_store_local::mapped_file::queue_index::MappedFileQueueIndex"
+    )
+    actual_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_index" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store mapped-file queue index imports must be direct and exact")
+
+    store_production = source_without_cfg_test_items(store_source)
+    expected_method_calls = {
+        "check_self": "for_each_discontinuous_pair",
+        "range": "overlapping_file_range",
+        "get_mapped_file_by_time": "file_index_by_timestamp",
+        "find_mapped_file_by_offset": "file_index_by_offset",
+    }
+    for method_name, function_name in expected_method_calls.items():
+        body = active_rust_source(named_function_body(store_production, method_name) or "")
+        if len(re.findall(rf"\b{re.escape(function_name)}\s*\(", body)) != 1:
+            violations.append(f"Store mapped-file queue index adapter changed: {method_name}")
+    forbidden_store_algorithm_fragments = {
+        "check_self": "cur.get_file_from_offset()-pre_file.get_file_from_offset()",
+        "range": "for mapped_file in files.iter()",
+        "get_mapped_file_by_time": "for mapped_file in files.iter()",
+        "find_mapped_file_by_offset": "offset as usize / self.storage.mapped_file_size() as usize",
+    }
+    for method_name, fragment in forbidden_store_algorithm_fragments.items():
+        body = compact_rust(named_function_body(store_production, method_name) or "")
+        if compact_rust(fragment) in body:
+            violations.append(f"Store retained mapped-file queue index algorithm: {method_name}")
+
+    for test_name in (
+        "queue_index_reports_every_discontinuous_pair",
+        "queue_index_selects_overlapping_window",
+        "queue_index_selects_timestamp_or_last_file",
+        "queue_index_finds_offset_with_fallback_and_first_policy",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue index regression changed: {test_name}")
+    return violations
+
+
+def mapped_file_queue_runtime_state_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local_source)
+    active = active_rust_source(production)
+
+    expected_fields = [
+        ("flushed_where", "Arc<AtomicU64>"),
+        ("committed_where", "Arc<AtomicU64>"),
+        ("store_timestamp", "Arc<AtomicU64>"),
+        ("commit_lock", "Arc<Mutex<()>>"),
+    ]
+    if active_struct_fields(production, "MappedFileQueueRuntimeState") != expected_fields:
+        violations.append("Local mapped-file queue runtime-state fields changed")
+
+    expected_default = (
+        "fndefault()->Self{Self{flushed_where:Arc::new(AtomicU64::new(0)),committed_where:Arc::new("
+        "AtomicU64::new(0)),store_timestamp:Arc::new(AtomicU64::new(0)),commit_lock:"
+        "Arc::new(Mutex::new(())),}}"
+    )
+    default_body = active_trait_impl_body(
+        production,
+        r"\bimpl\s+Default\s+for\s+MappedFileQueueRuntimeState\b",
+    )
+    if compact_rust(default_body or "") != expected_default:
+        violations.append("Local mapped-file queue runtime-state defaults changed")
+
+    expected_impl = (
+        "#[doc(hidden)]pubfncommitted_where(&self)->i64{self.committed_where.load("
+        "Ordering::Acquire)asi64}#[doc(hidden)]pubfnset_committed_where(&self,"
+        "committed_where:i64){self.committed_where.store(committed_whereasu64,Ordering::SeqCst);}"
+        "#[doc(hidden)]pubfnflushed_where(&self)->i64{self.flushed_where.load(Ordering::Acquire)"
+        "asi64}#[doc(hidden)]pubfnset_flushed_where(&self,flushed_where:i64){self.flushed_where."
+        "store(flushed_whereasu64,Ordering::SeqCst);}#[doc(hidden)]pubfnstore_timestamp(&self)"
+        "->u64{self.store_timestamp.load(Ordering::Acquire)}#[doc(hidden)]pubfn"
+        "set_store_timestamp(&self,store_timestamp:u64){self.store_timestamp.store(store_timestamp,"
+        "Ordering::Release);}#[doc(hidden)]pubfncommit_lock(&self)->&Mutex<()>{self.commit_lock."
+        "as_ref()}"
+    )
+    if compact_rust(active_impl_body(production, "MappedFileQueueRuntimeState") or "") != expected_impl:
+        violations.append("Local mapped-file queue runtime-state behavior changed")
+
+    expected_imports = {
+        "std::sync::atomic::AtomicU64",
+        "std::sync::atomic::Ordering",
+        "std::sync::Arc",
+        "parking_lot::Mutex",
+    }
+    actual_imports = {
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use"
+    }
+    if actual_imports != expected_imports:
+        violations.append("Local mapped-file queue runtime-state imports changed")
+    if any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local mapped-file queue runtime state forbids alias/brace/glob imports")
+    if (
+        any(token in active for token in FORBIDDEN_SOURCE_TOKENS)
+        or re.search(r"\b(?:rocketmq_|DefaultMappedFile|AllocateMappedFileService|CommitLog|tokio|tracing|async|await|ArcMut)\b", active)
+    ):
+        violations.append("Local mapped-file queue runtime state absorbed Store/runtime edges")
+    if active_rust_source(module_source).count("pub mod queue_state;") != 1:
+        violations.append("Local mapped_file module must expose queue_state exactly once")
+
+    store_active = active_rust_source(source_without_cfg_test_items(store_source))
+    expected_store_import = (
+        "use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState"
+    )
+    actual_store_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store_source)
+        if kind == "use" and not visibility and "mapped_file::queue_state" in body
+    }
+    if actual_store_imports != {expected_store_import}:
+        violations.append("Store mapped-file queue runtime-state import must be direct and exact")
+    if re.search(r"\bstruct\s+MappedFileQueueRuntimeState\b", store_active):
+        violations.append("Store copied mapped-file queue runtime-state owner")
+
+    store_fields = dict(active_struct_fields(store_source, "MappedFileQueue"))
+    if store_fields.get("runtime_state") != "MappedFileQueueRuntimeState":
+        violations.append("Store MappedFileQueue must hold one canonical Local runtime-state owner")
+    for legacy_field in (
+        "flushed_where",
+        "committed_where",
+        "store_timestamp",
+        "commit_lock",
+    ):
+        if legacy_field in store_fields:
+            violations.append(f"Store retained legacy MappedFileQueue state field: {legacy_field}")
+
+    if compact_rust(store_active).count("runtime_state:MappedFileQueueRuntimeState::default()") != 2:
+        violations.append("Store MappedFileQueue constructors must initialize the Local state exactly twice")
+    expected_adapters = {
+        "get_committed_where": "self.runtime_state.committed_where()",
+        "set_committed_where": "self.runtime_state.set_committed_where(committed_where);",
+        "get_flushed_where": "self.runtime_state.flushed_where()",
+        "set_flushed_where": "self.runtime_state.set_flushed_where(flushed_where);",
+        "get_store_timestamp": "self.runtime_state.store_timestamp()",
+        "set_store_timestamp": "self.runtime_state.set_store_timestamp(store_timestamp);",
+    }
+    for function_name, expected_body in expected_adapters.items():
+        if compact_rust(named_function_body(store_source, function_name) or "") != expected_body:
+            violations.append(f"Store mapped-file queue state adapter changed: {function_name}")
+    commit_body = compact_rust(named_function_body(store_source, "commit") or "")
+    if commit_body.count("let_lock=self.runtime_state.commit_lock().lock();") != 1:
+        violations.append("Store mapped-file queue commit lock adapter changed")
+
+    for test_name in (
+        "queue_runtime_state_preserves_initial_values_and_signed_offset_round_trips",
+        "queue_runtime_state_commit_lock_serializes_access",
+    ):
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local mapped-file queue runtime-state regression changed: {test_name}")
+    return violations
+
+
+def commit_log_runtime_state_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+
+    expected_structs = {
+        "CommitLogPutMessageLockRuntimeInfo": (
+            "pubacquire_total:u64,pubwait_total_millis:u64,pubwait_max_millis:u64,"
+            "pubhold_total_millis:u64,pubhold_max_millis:u64,"
+        ),
+        "CommitLogPutMessageLockStats": (
+            "acquire_total:AtomicU64,wait_total_millis:AtomicU64,wait_max_millis:AtomicU64,"
+            "hold_total_millis:AtomicU64,hold_max_millis:AtomicU64,"
+        ),
+        "CommitLogActiveMemoryLock": (
+            "manager:MemoryLockManager,handle:Option<MemoryLockHandle>,file_from_offset:Option<u64>,"
+            "region_offset:u64,region_len:usize,"
+        ),
+        "CommitLogRuntimeState": (
+            "confirm_offset:i64,put_message_lock_stats:CommitLogPutMessageLockStats,"
+            "begin_time_in_lock:Arc<AtomicU64>,active_memory_lock:Mutex<CommitLogActiveMemoryLock>,"
+            "active_memory_lock_present:AtomicBool,last_load_statistics:Mutex<LoadStatistics>,"
+        ),
+    }
+    for item, expected_body in expected_structs.items():
+        if len(re.findall(rf"\bpub\s+struct\s+{item}\b", active)) != 1 or compact_rust(
+            active_item_body(production, "struct", item) or ""
+        ) != expected_body:
+            violations.append(f"Local CommitLog runtime-state owner changed: {item}")
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+struct\s+{item}\b",
+            production,
+        ):
+            violations.append(f"Local CommitLog runtime-state owner is cfg-gated: {item}")
+
+    expected_bodies = {
+        "record": (
+            "self.acquire_total.fetch_add(1,Ordering::Relaxed);self.wait_total_millis.fetch_add("
+            "wait_millis,Ordering::Relaxed);self.hold_total_millis.fetch_add(hold_millis,"
+            "Ordering::Relaxed);Self::update_max(&self.wait_max_millis,wait_millis);"
+            "Self::update_max(&self.hold_max_millis,hold_millis);"
+        ),
+        "snapshot": (
+            "CommitLogPutMessageLockRuntimeInfo{acquire_total:self.acquire_total.load("
+            "Ordering::Relaxed),wait_total_millis:self.wait_total_millis.load(Ordering::Relaxed),"
+            "wait_max_millis:self.wait_max_millis.load(Ordering::Relaxed),hold_total_millis:"
+            "self.hold_total_millis.load(Ordering::Relaxed),hold_max_millis:self.hold_max_millis."
+            "load(Ordering::Relaxed),}"
+        ),
+        "update_max": (
+            "letmutcurrent=target.load(Ordering::Relaxed);whilevalue>current{matchtarget."
+            "compare_exchange_weak(current,value,Ordering::Relaxed,Ordering::Relaxed){"
+            "Ok(_)=>break,Err(actual)=>current=actual,}}"
+        ),
+        "new": (
+            "Self{manager:MemoryLockManager::new(warn_only,budget_bytes),handle:None,"
+            "file_from_offset:None,region_offset:0,region_len:0,}"
+        ),
+        "is_current": (
+            "letSome(handle)=self.handleelse{returnfalse;};ifself.file_from_offset!=Some("
+            "file_from_offset)||handle.category()!=target.category{returnfalse;}iftarget.category"
+            "==MemoryLockCategory::CommitLogActiveWindow{letregion_end=self.region_offset."
+            "saturating_add(self.region_lenasu64);target.offset>=self.region_offset&&target.offset"
+            "<region_end}else{self.region_offset==target.offset&&self.region_len==target.len}"
+        ),
+        "manager": "&self.manager",
+        "set_current": (
+            "self.handle=Some(handle);self.file_from_offset=Some(file_from_offset);"
+            "self.region_offset=target.offset;self.region_len=target.len;"
+        ),
+        "take_handle": "self.handle.take()",
+        "clear": "self.handle=None;self.file_from_offset=None;self.region_offset=0;self.region_len=0;",
+    }
+    for function_name, expected_body in expected_bodies.items():
+        if compact_rust(named_function_body(production, function_name) or "") != expected_body:
+            violations.append(f"Local CommitLog runtime-state behavior changed: {function_name}")
+
+    expected_runtime_state_impl = (
+        "#[doc(hidden)]pubfnnew(memory_lock_warn_only:bool,memory_lock_budget_bytes:u64)->Self{"
+        "Self{confirm_offset:-1,put_message_lock_stats:CommitLogPutMessageLockStats::default(),"
+        "begin_time_in_lock:Arc::new(AtomicU64::new(0)),active_memory_lock:Mutex::new("
+        "CommitLogActiveMemoryLock::new(memory_lock_warn_only,memory_lock_budget_bytes,)),"
+        "active_memory_lock_present:AtomicBool::new(false),last_load_statistics:Mutex::new("
+        "LoadStatistics::default()),}}#[doc(hidden)]pubfnconfirm_offset(&self)->i64{"
+        "self.confirm_offset}#[doc(hidden)]pubfnset_confirm_offset(&mutself,confirm_offset:i64){"
+        "self.confirm_offset=confirm_offset;}#[doc(hidden)]pubfnput_message_lock_runtime_info(&self)"
+        "->CommitLogPutMessageLockRuntimeInfo{self.put_message_lock_stats.snapshot()}#[doc(hidden)]"
+        "pubfnrecord_put_message_lock(&self,wait_millis:u64,hold_millis:u64){self."
+        "put_message_lock_stats.record(wait_millis,hold_millis);}#[doc(hidden)]pubfn"
+        "set_begin_time_in_lock(&self,begin_time:u64){self.begin_time_in_lock.store(begin_time,"
+        "Ordering::Release);}#[doc(hidden)]pubfnclear_begin_time_in_lock(&self){self."
+        "begin_time_in_lock.store(0,Ordering::Release);}#[doc(hidden)]pubfnbegin_time_in_lock(&self)"
+        "->&Arc<AtomicU64>{&self.begin_time_in_lock}#[doc(hidden)]pubfnactive_memory_lock_parts("
+        "&self)->(&Mutex<CommitLogActiveMemoryLock>,&AtomicBool){(&self.active_memory_lock,&self."
+        "active_memory_lock_present)}#[doc(hidden)]pubfnset_load_statistics(&self,statistics:"
+        "LoadStatistics){*self.last_load_statistics.lock()=statistics;}#[doc(hidden)]pubfn"
+        "load_statistics(&self)->LoadStatistics{self.last_load_statistics.lock().clone()}"
+    )
+    if compact_rust(active_impl_body(production, "CommitLogRuntimeState") or "") != expected_runtime_state_impl:
+        violations.append("Local CommitLog composite runtime-state behavior changed")
+
+    expected_imports = {
+        "std::sync::atomic::AtomicBool",
+        "std::sync::atomic::AtomicU64",
+        "std::sync::atomic::Ordering",
+        "std::sync::Arc",
+        "parking_lot::Mutex",
+        "crate::base::memory_lock_manager::MemoryLockCategory",
+        "crate::base::memory_lock_manager::MemoryLockHandle",
+        "crate::base::memory_lock_manager::MemoryLockManager",
+        "crate::commit_log::load::LoadStatistics",
+        "crate::commit_log::memory_lock::CommitLogMemoryLockTarget",
+    }
+    actual_imports = {
+        body for kind, _, body, _ in active_import_records(production) if kind == "use"
+    }
+    if actual_imports != expected_imports:
+        violations.append("Local CommitLog runtime-state dependencies changed")
+    forbidden = (
+        "MappedFile",
+        "MessageStoreConfig",
+        "LocalFileMessageStore",
+        "ArcMut",
+        "tokio",
+        "tracing",
+        "rocketmq_store",
+        "dyn",
+        "async",
+        "unsafe",
+    )
+    if any(re.search(rf"\b{re.escape(token)}\b", active) for token in forbidden):
+        violations.append("Local CommitLog runtime state absorbed Store/runtime edges")
+    if any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local CommitLog runtime state forbids alias/brace/glob imports")
+    if active_rust_source(module).count("pub mod runtime_state;") != 1:
+        violations.append("Local commit_log module must expose runtime_state exactly once")
+
+    store_active = active_rust_source(source_without_cfg_test_items(store))
+    expected_store_imports = {
+        "use rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock",
+        "use rocketmq_store_local::commit_log::runtime_state::CommitLogRuntimeState",
+    }
+    actual_store_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store)
+        if kind == "use" and not visibility and "commit_log::runtime_state" in body
+    }
+    if actual_store_imports != expected_store_imports:
+        violations.append("Store CommitLog runtime-state imports must be direct and exact")
+    if direct_exact_reexport_violations(
+        store,
+        "rocketmq_store_local::commit_log::runtime_state",
+        "CommitLogPutMessageLockRuntimeInfo",
+    ):
+        violations.append("Store CommitLog lock runtime-info facade changed")
+    store_commit_log_fields = dict(active_struct_fields(store, "CommitLog"))
+    store_adapter_fields = dict(store_commit_log_adapter_fields(store))
+    if store_commit_log_fields != {"root": "CommitLogRoot<CommitLogAdapter>"}:
+        violations.append("Store CommitLog must remain a single-field Local root facade")
+    if store_adapter_fields.get("runtime_state") != "super::CommitLogRuntimeState":
+        violations.append("Store CommitLog adapter must hold one canonical Local runtime-state owner")
+    for legacy_field in (
+        "confirm_offset",
+        "put_message_lock_stats",
+        "begin_time_in_lock",
+        "active_memory_lock",
+        "active_memory_lock_present",
+        "last_load_statistics",
+    ):
+        if legacy_field in store_adapter_fields:
+            violations.append(f"Store retained legacy CommitLog state field: {legacy_field}")
+    for item in expected_structs:
+        if re.search(rf"\bstruct\s+{item}\b", store_active):
+            violations.append(f"Store retained CommitLog runtime-state owner: {item}")
+    expected_store_flows = (
+        "runtime_state:CommitLogRuntimeState",
+        "runtime_state:CommitLogRuntimeState::new(",
+        "pubfnput_message_lock_runtime_info(&self)->CommitLogPutMessageLockRuntimeInfo{"
+        "self.runtime_state.put_message_lock_runtime_info()}",
+        "self.runtime_state.record_put_message_lock(lock_wait_millis,elapsed_time_in_lock)",
+        "self.runtime_state.clear_begin_time_in_lock()",
+        "self.runtime_state.set_confirm_offset(phy_offset)",
+        "self.runtime_state.set_load_statistics(stats.clone())",
+        "self.runtime_state.load_statistics()",
+        "self.runtime_state.active_memory_lock_parts()",
+        "active_memory_lock_guard.manager()",
+        "active_memory_lock.take_handle()",
+        "active_memory_lock.manager().unlock_region_with(handle,&mutunlocker)",
+    )
+    store_compact = compact_rust(store_active)
+    for flow in expected_store_flows:
+        if flow not in store_compact:
+            violations.append(f"Store CommitLog runtime-state adapter changed: {flow}")
+
+    required_tests = (
+        "put_message_lock_stats_accumulate_totals_and_maxima",
+        "active_window_reuses_only_offsets_inside_the_current_region",
+        "active_file_requires_exact_region_and_take_clear_removes_identity",
+        "composite_runtime_state_preserves_initial_values_and_updates",
+    )
+    for test_name in required_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local CommitLog runtime-state regression changed: {test_name}")
+    return violations
+
+
+def store_commit_log_adapter_fields(source: str) -> list[tuple[str, str]]:
+    marker = "mod adapter {"
+    if marker not in source:
+        return []
+    adapter_source = source.split(marker, maxsplit=1)[1].split(
+        "pub use adapter::CommitLog as CommitLogAdapter;", maxsplit=1
+    )[0]
+    return active_struct_fields(adapter_source, "CommitLog")
+
+
+def commit_log_root_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+
+    if len(re.findall(r"\bpub\s+struct\s+CommitLogRoot\s*<\s*A\s*>", active)) != 1:
+        violations.append("Local CommitLog root owner definition changed")
+    if active_struct_fields(production, "CommitLogRoot") != [("adapter", "A")]:
+        violations.append("Local CommitLog root must exclusively own one generic adapter")
+    expected_methods = {
+        "new": "Self{adapter}",
+        "adapter": "&self.adapter",
+        "adapter_mut": "&mutself.adapter",
+        "into_adapter": "self.adapter",
+    }
+    for method, expected_body in expected_methods.items():
+        if compact_rust(named_function_body(production, method) or "") != expected_body:
+            violations.append(f"Local CommitLog root behavior changed: {method}")
+    if active_rust_source(module).count("pub mod root;") != 1:
+        violations.append("Local commit_log module must expose root exactly once")
+    if any(re.search(rf"\b{token}\b", active) for token in ("ArcMut", "MappedFile", "MessageStoreConfig", "unsafe")):
+        violations.append("Local CommitLog root absorbed Store implementation dependencies")
+
+    expected_import = "use rocketmq_store_local::commit_log::root::CommitLogRoot"
+    root_imports = {
+        statement
+        for kind, visibility, body, statement in active_import_records(store)
+        if kind == "use" and not visibility and "commit_log::root" in body
+    }
+    if root_imports != {expected_import}:
+        violations.append("Store CommitLog root import must be direct and exact")
+    if active_struct_fields(store, "CommitLog") != [
+        ("root", "CommitLogRoot<CommitLogAdapter>")
+    ]:
+        violations.append("Store CommitLog facade must own only the Local root")
+    expected_adapter_fields = [
+        ("mapped_file_queue", "super::ArcMut<super::MappedFileQueue>"),
+        ("message_store_config", "super::Arc<super::MessageStoreConfig>"),
+        ("broker_config", "super::Arc<super::BrokerConfig>"),
+        ("enabled_append_prop_crc", "bool"),
+        ("local_file_message_store", "Option<super::ArcMut<super::LocalFileMessageStore>>"),
+        ("dispatcher", "super::ArcMut<super::CommitLogDispatcherDefault>"),
+        ("runtime_state", "super::CommitLogRuntimeState"),
+        ("store_checkpoint", "super::Arc<super::StoreCheckpoint>"),
+        ("append_message_callback", "super::Arc<super::DefaultAppendMessageCallback>"),
+        ("put_message_lock", "super::Arc<tokio::sync::Mutex<()>>"),
+        ("topic_queue_lock", "super::Arc<super::TopicQueueLock>"),
+        (
+            "topic_config_table",
+            "super::Arc<super::DashMap<super::CheetahString, super::ArcMut<super::TopicConfig>>>",
+        ),
+        ("consume_queue_store", "super::ConsumeQueueStore"),
+        ("flush_manager", "super::ArcMut<super::DefaultFlushManager>"),
+        ("cold_data_check_service", "super::Arc<super::ColdDataCheckService>"),
+    ]
+    if store_commit_log_adapter_fields(store) != expected_adapter_fields:
+        violations.append("Store CommitLog composition adapter field set changed")
+    store_compact = compact_rust(source_without_cfg_test_items(store))
+    for flow in (
+        "pubuseadapter::CommitLogasCommitLogAdapter;",
+        "root:CommitLogRoot::new(CommitLogAdapter{",
+        "typeTarget=CommitLogAdapter;",
+        "self.root.adapter()",
+        "self.root.adapter_mut()",
+    ):
+        if flow not in store_compact:
+            violations.append(f"Store CommitLog root facade flow changed: {flow}")
+
+    for test_name in (
+        "commit_log_root_preserves_exclusive_adapter_identity",
+        "commit_log_root_exposes_one_mutable_adapter_owner",
+    ):
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local CommitLog root regression changed: {test_name}")
+    return violations
+
+
 def store_commit_log_memory_lock_adapter_violations(
     commit_log: str,
     store_production_sources: dict[Path, str],
@@ -6220,10 +9044,10 @@ def store_commit_log_memory_lock_adapter_violations(
     compact = compact_rust(production)
     violations: list[str] = []
     expected_imports = {
-        "rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory",
         "rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockMode",
         "rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget",
         "rocketmq_store_local::commit_log::memory_lock::plan_commit_log_memory_lock_target",
+        "rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock",
     }
     actual_imports = {
         body
@@ -6232,6 +9056,7 @@ def store_commit_log_memory_lock_adapter_violations(
             item in body
             for item in (
                 "MemoryLockCategory",
+                "CommitLogActiveMemoryLock",
                 "CommitLogMemoryLockMode",
                 "CommitLogMemoryLockTarget",
                 "plan_commit_log_memory_lock_target",
@@ -6302,12 +9127,23 @@ def store_commit_log_memory_lock_adapter_violations(
     if len(re.findall(r"\bCommitLogMemoryLockTarget\b", active)) != 5:
         violations.append("Store CommitLog memory-lock target lifecycle flow changed")
     for signature in (
-        "fnis_current(&self,file_from_offset:u64,target:CommitLogMemoryLockTarget)->bool",
-        "fnset_current(&mutself,file_from_offset:u64,target:CommitLogMemoryLockTarget,handle:MemoryLockHandle)",
         "fnactive_memory_lock_target(&self,mapped_file:&DefaultMappedFile)->Option<CommitLogMemoryLockTarget>",
+        "fnensure_active_mapped_file_locked_parts<L,G>(active_memory_lock:&ParkingMutex<CommitLogActiveMemoryLock>,active_memory_lock_present:&AtomicBool,target:Option<CommitLogMemoryLockTarget>,file_from_offset:u64,mutlock_region:L,mutunlocker:G,)->RocketMQResult<()>",
+        "L:FnMut(&MemoryLockManager,CommitLogMemoryLockTarget)->RocketMQResult<Option<MemoryLockHandle>>",
     ):
         if signature not in compact:
             violations.append(f"Store CommitLog target lifecycle signature changed: {signature}")
+    for flow in (
+        "active_memory_lock_guard.is_current(file_from_offset,target)",
+        "lock_region(active_memory_lock_guard.manager(),target)",
+        "active_memory_lock_guard.set_current(file_from_offset,target,handle)",
+        "active_memory_lock.take_handle()",
+        "active_memory_lock.manager().unlock_region_with(handle,&mutunlocker)",
+    ):
+        if flow not in compact:
+            violations.append(f"Store CommitLog Local runtime-state adapter changed: {flow}")
+    if re.search(r"\bstruct\s+CommitLogActiveMemoryLock\b", active):
+        violations.append("Store retained CommitLog active-memory-lock state owner")
     if not violations:
         violations.extend(
             f"Store CommitLog memory-lock policy copied: {finding}"
@@ -7620,6 +10456,204 @@ def recovery_consume_queue_owner_violations(
     return violations
 
 
+def recovery_completion_owner_violations(
+    completion: str,
+    recovery_root: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(completion)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    masked_sources = {
+        path: source_without_cfg_test_items(source)
+        for path, source in production_sources.items()
+    }
+    violations: list[str] = []
+
+    if file_item_owner_occurrences(masked_sources, "CommitLogRecoveryCompletion") != [
+        (RECOVERY_COMPLETION_PATH, "enum")
+    ]:
+        violations.append("CommitLog recovery completion must have one Local enum owner")
+    expected_shape = (
+        "Empty,Recovered{confirm_offset:i64,controller_confirm_offset:i64,"
+        "process_offset:i64,truncate_consume_queue:bool,},"
+    )
+    if compact_rust(active_item_body(production, "enum", "CommitLogRecoveryCompletion") or "") != expected_shape:
+        violations.append("CommitLog recovery completion shape changed")
+
+    expected_signature = (
+        "pubfncompletion(&self,max_phy_offset_of_consume_queue:i64)"
+        "->CommitLogRecoveryCompletion"
+    )
+    normal_records = inherent_method_records(
+        production,
+        "NormalRecoveryState",
+        ("completion",),
+    )["completion"]
+    abnormal_records = inherent_method_records(
+        production,
+        "AbnormalRecoveryState",
+        ("completion",),
+    )["completion"]
+    for owner, records in (
+        ("normal", normal_records),
+        ("abnormal", abnormal_records),
+    ):
+        if (
+            len(records) != 1
+            or records[0].visibility != "pub"
+            or records[0].cfg_gated
+            or records[0].signature != expected_signature
+        ):
+            violations.append(f"Local {owner} recovery completion signature changed")
+
+    normal_body = normal_records[0].body if len(normal_records) == 1 else ""
+    normal_contract = (
+        "letsummary=self.summary();",
+        "letconfirm_offset=signed_offset(summary.last_valid_offset);",
+        "letprocess_offset=signed_offset(summary.truncate_offset);",
+        "NormalRecoveryPolicy::Standard=>process_offset",
+        "NormalRecoveryPolicy::Optimized=>confirm_offset",
+        "CommitLogRecoveryCompletion::Recovered{confirm_offset,controller_confirm_offset,"
+        "process_offset,truncate_consume_queue:should_truncate_recovery_consume_queue("
+        "max_phy_offset_of_consume_queue,summary.truncate_offset,),}",
+    )
+    if any(fragment not in normal_body for fragment in normal_contract):
+        violations.append("Local normal recovery completion mapping changed")
+
+    abnormal_body = abnormal_records[0].body if len(abnormal_records) == 1 else ""
+    abnormal_contract = (
+        "letsummary=self.summary();",
+        "confirm_offset:signed_offset(summary.last_valid_offset)",
+        "controller_confirm_offset:signed_offset(summary.confirm_valid_offset)",
+        "process_offset:signed_offset(summary.truncate_offset)",
+        "truncate_consume_queue:should_truncate_recovery_consume_queue("
+        "max_phy_offset_of_consume_queue,summary.truncate_offset,)",
+    )
+    if any(fragment not in abnormal_body for fragment in abnormal_contract):
+        violations.append("Local abnormal recovery completion mapping changed")
+
+    if compact.count("offsetasi64") != 1 or "constfnsigned_offset(offset:u64)->i64" not in compact:
+        violations.append("Local recovery completion signed-offset invariant changed")
+    if any(
+        token in active
+        for token in (
+            "ArcMut",
+            "LocalFileMessageStore",
+            "MappedFileQueue",
+            "BrokerConfig",
+            "tokio",
+            "tracing",
+            "unsafe",
+        )
+    ):
+        violations.append("Local recovery completion absorbed Store/runtime side effects")
+
+    root_active = active_rust_source(source_without_cfg_test_items(recovery_root))
+    if root_active.count("mod completion;") != 1:
+        violations.append("Local recovery root must declare completion exactly once")
+    if root_active.count("pub use completion::CommitLogRecoveryCompletion;") != 1:
+        violations.append("Local recovery root must re-export completion exactly once")
+    return violations
+
+
+def storage_local_compatibility_ledger_violations(
+    ledger: str,
+    local_manifest: str,
+    store_manifest: str,
+    store_commit_log: str,
+    store_mapped_file: str,
+    store_recovery: str,
+    store_allocate_service: str,
+) -> list[str]:
+    violations: list[str] = []
+    required_ledger_fragments = (
+        "# M06-03 Local 存储兼容与所有权 Ledger",
+        "## Canonical ownership",
+        "`rocketmq-store-local::mapped_file`",
+        "`rocketmq-store-local::base::allocate_mapped_file_service`",
+        "`rocketmq-store-local::commit_log::{load,loader,load_orchestration}`",
+        "`rocketmq-store-local::commit_log::{normal_recovery,abnormal_recovery,recovery,recovery_orchestration}`",
+        "`rocketmq-store-local::commit_log::{runtime_state,root}`",
+        "## Feature compatibility",
+        "`default = []`",
+        "## Retained Store-only ports",
+        "- M06-04：",
+        "- M06-05：",
+        "- M06-06：",
+        "- M06-07：",
+        "- M06-08：",
+        "## Compatibility and removal rules",
+        "下一 major",
+        "## Closeout evidence",
+    )
+    if any(fragment not in ledger for fragment in required_ledger_fragments):
+        violations.append("M06-03 storage Local compatibility ledger is incomplete")
+
+    local = tomllib.loads(local_manifest)
+    local_features = local.get("features", {})
+    expected_local_features = {
+        "default": [],
+        "fast-load": [],
+        "safe-load": [],
+        "io_uring": ["dep:tokio-uring"],
+    }
+    for feature, expected in expected_local_features.items():
+        if local_features.get(feature) != expected:
+            violations.append(f"Local storage feature changed: {feature}")
+    forbidden_dependencies = {
+        "rocketmq-store",
+        "rocketmq-broker",
+        "rocketmq-remoting",
+        "rocksdb",
+        "rocketmq-store-rocksdb",
+        "rocketmq-tieredstore",
+    }
+    if forbidden_dependencies.intersection(local.get("dependencies", {})):
+        violations.append("Local storage manifest gained a forbidden facade/backend dependency")
+
+    store = tomllib.loads(store_manifest)
+    store_features = store.get("features", {})
+    expected_forwarding = {
+        "default": ["local_file_store", "fast-load"],
+        "io_uring": ["rocketmq-store-local/io_uring"],
+        "fast-load": ["rocketmq-store-local/fast-load"],
+        "safe-load": ["rocketmq-store-local/safe-load"],
+    }
+    for feature, expected in expected_forwarding.items():
+        if store_features.get(feature) != expected:
+            violations.append(f"Store compatibility feature changed: {feature}")
+
+    compact_commit_log = compact_rust(source_without_cfg_test_items(store_commit_log))
+    if "pubstructCommitLog{root:CommitLogRoot<CommitLogAdapter>,}" not in compact_commit_log:
+        violations.append("Store CommitLog is no longer a single-field Local-root facade")
+    if compact_commit_log.count("pubuseadapter::CommitLogasCommitLogAdapter;") != 1:
+        violations.append("Store CommitLog composition adapter identity changed")
+
+    mapped_reexports = (
+        "pub use rocketmq_store_local::mapped_file::MappedFile;",
+        "pub use rocketmq_store_local::mapped_file::MappedFileError;",
+        "pub use rocketmq_store_local::mapped_file::MappedFileMetrics;",
+        "pub use rocketmq_store_local::mapped_file::MappedFileResult;",
+    )
+    if any(reexport not in store_mapped_file for reexport in mapped_reexports):
+        violations.append("Store mapped-file compatibility re-exports changed")
+    recovery_reexports = (
+        "pub use rocketmq_store_local::commit_log::record::is_blank_message;",
+        "pub use rocketmq_store_local::commit_log::recovery::RecoveryStatistics;",
+    )
+    if any(reexport not in store_recovery for reexport in recovery_reexports):
+        violations.append("Store recovery compatibility re-exports changed")
+    if (
+        store_allocate_service.count(
+            "pub use rocketmq_store_local::base::allocate_mapped_file_service::AllocateMappedFileService;"
+        )
+        != 1
+    ):
+        violations.append("Store allocation-service compatibility re-export changed")
+    return violations
+
+
 def store_recovery_consume_queue_adapter_violations(
     commit_log: str,
     production_sources: dict[Path, str],
@@ -7633,8 +10667,8 @@ def store_recovery_consume_queue_adapter_violations(
         for kind, _, body, _ in active_import_records(production)
         if kind == "use" and owner in body
     ]
-    if imports != [f"rocketmq_store_local::commit_log::recovery::{owner}"]:
-        violations.append("Store recovery ConsumeQueue truncation import must be direct and exact")
+    if imports:
+        violations.append("Store must not import the Local ConsumeQueue truncation policy")
     for legacy in (
         "should_truncate_normal_recovery_consume_queue",
         "should_truncate_abnormal_recovery_consume_queue",
@@ -7647,13 +10681,8 @@ def store_recovery_consume_queue_adapter_violations(
         for path, source in production_sources.items()
         if re.search(rf"\b{owner}\b", source)
     }
-    expected_path = Path("rocketmq-store/src/log_file/commit_log.rs")
-    if references != {expected_path: 5}:
+    if references:
         violations.append(f"Store recovery ConsumeQueue truncation references changed: {references}")
-    expected_call = (
-        "should_truncate_recovery_consume_queue("
-        "max_phy_offset_of_consume_queue,summary.truncate_offset)"
-    )
     for function_name in (
         "recover_normally_optimized",
         "recover_normally",
@@ -7662,10 +10691,10 @@ def store_recovery_consume_queue_adapter_violations(
     ):
         body = named_function_body(production, function_name)
         normalized = compact_rust(body or "")
-        if body is None or normalized.count(expected_call) != 1:
-            violations.append(f"{function_name} must directly call the Local truncation policy once")
-        if normalized.count(f"if{expected_call}{{") != 1:
-            violations.append(f"{function_name} truncation decision control flow changed")
+        if body is None or normalized.count(".completion(max_phy_offset_of_consume_queue)") != 1:
+            violations.append(f"{function_name} must obtain one Local recovery completion")
+        if owner in normalized or "summary.truncate_offset" in normalized:
+            violations.append(f"{function_name} retained ConsumeQueue truncation policy")
     for function_name in (
         "should_truncate_normal_recovery_consume_queue",
         "should_truncate_abnormal_recovery_consume_queue",
@@ -7733,8 +10762,12 @@ def memory_lock_ffi_owner_violations(source: str) -> list[str]:
     for fragment in sorted(required):
         if fragment not in compact:
             violations.append(f"memory-lock syscall contract changed: {fragment}")
-    unsafe_count = len(re.findall(r"\bunsafe\s*\{", production))
-    safety_count = production.count("// SAFETY:")
+    memory_lock_bodies = "\n".join(
+        named_raw_function_body(production, function_name) or ""
+        for function_name in ("mlock", "munlock")
+    )
+    unsafe_count = len(re.findall(r"\bunsafe\s*\{", memory_lock_bodies))
+    safety_count = memory_lock_bodies.count("// SAFETY:")
     if unsafe_count != 4 or safety_count < unsafe_count:
         violations.append("every platform memory-lock unsafe block needs an adjacent SAFETY rationale")
     return violations
@@ -7810,30 +10843,32 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
         (
             Path("rocketmq-store/src/log_file/commit_log.rs"),
             "ensure_active_mapped_file_locked_with",
-            "mapped_file.lock_region_with(&active_memory_lock.manager,target.category,target.offset,target.len,&mutlocker,)?",
+            "let(active_memory_lock,active_memory_lock_present)=self.runtime_state."
+            "active_memory_lock_parts();lock_active_mapped_file_parts!(active_memory_lock,"
+            "active_memory_lock_present,mapped_file,target,&mutlocker,&mutunlocker,)",
         ),
         (
             Path("rocketmq-store/src/log_file/commit_log.rs"),
             "release_active_memory_lock_locked",
-            "active_memory_lock.manager.unlock_region_with(handle,&mutunlocker)?",
+            "active_memory_lock.manager().unlock_region_with(handle,&mutunlocker)?",
         ),
         (
-            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"),
             "lock_region",
             "self.lock_region_with(memory_lock_manager,category,offset,len,crate::utils::ffi::mlock)",
         ),
         (
-            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"),
             "lock_region_with",
             "memory_lock_manager.lock_region_with(category,addr,len,locker)",
         ),
         (
-            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"),
             "unlock_region",
             "self.unlock_region_with(memory_lock_manager,handle,crate::utils::ffi::munlock)",
         ),
         (
-            Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs"),
+            Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs"),
             "unlock_region_with",
             "memory_lock_manager.unlock_region_with(handle,unlocker)",
         ),
@@ -7852,12 +10887,5084 @@ def memory_lock_seam_call_violations(sources: dict[Path, str]) -> list[str]:
             active_rust_source(body or ""),
         ):
             violations.append(f"{path}: {function_name} bypasses the canonical memory-lock manager")
+
+    commit_log_source = sources.get(Path("rocketmq-store/src/log_file/commit_log.rs"), "")
+    commit_log_production = active_rust_source(source_without_cfg_test_items(commit_log_source))
+    macro_matches = list(re.finditer(r"\bmacro_rules!\s+lock_active_mapped_file_parts\b", commit_log_production))
+    expected_macro_body = (
+        "($active_memory_lock:expr,$active_memory_lock_present:expr,$mapped_file:expr,"
+        "$target:expr,$locker:expr,$unlocker:expr$(,)?)=>{{"
+        "letmapped_file=$mapped_file;"
+        "letfile_from_offset=mapped_file.get_file_from_offset();"
+        "CommitLog::ensure_active_mapped_file_locked_parts($active_memory_lock,"
+        "$active_memory_lock_present,$target,file_from_offset,|manager,target|{"
+        "mapped_file.lock_region_with(manager,target.category,target.offset,target.len,$locker)},"
+        "$unlocker,)}};"
+    )
+    macro_body = ""
+    if len(macro_matches) == 1:
+        opening = commit_log_production.find("{", macro_matches[0].end())
+        extracted = braced_body(commit_log_production, opening)
+        if extracted is not None:
+            macro_body = compact_rust(extracted[0])
+    if macro_body != expected_macro_body:
+        violations.append("CommitLog active mapped-file lock macro owner changed")
+    return violations
+
+
+APPEND_FRAME_KERNEL_METHODS = (
+    "declared_frame_length",
+    "segment_append_decision",
+    "blank_marker",
+    "finalize_frame",
+    "finalize_batch_frame",
+    "patch_runtime_fields",
+)
+
+
+def append_frame_kernel_owner_violations(
+    source: str,
+    module_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    violations: list[str] = []
+
+    expected_owners = {
+        "BLANK_MARKER_LENGTH": "const",
+        "AppendFrameCrcPlan": "enum",
+        "BlankMarker": "struct",
+        "SegmentAppendDecision": "enum",
+        "AppendBatchFrame": "struct",
+        "AppendBatchFrameCursor": "struct",
+        "AppendFrameKernel": "struct",
+    }
+    for item, item_kind in expected_owners.items():
+        occurrences = file_item_owner_occurrences(production_sources, item)
+        if occurrences != [(COMMIT_LOG_APPEND_FRAME_PATH, item_kind)]:
+            violations.append(f"{item} owner occurrences changed: {occurrences}")
+        item_match = re.search(
+            rf"\bpub\s+{item_kind}\s+{re.escape(item)}\b",
+            active,
+        )
+        if item_match is None or attributes_have_cfg_gate(
+            contiguous_outer_attributes_before(active, item_match.start())
+        ):
+            violations.append(f"{item} must remain a public non-cfg owner")
+
+    if len(re.findall(r"\bpub\s+mod\s+append_frame\s*;", active_rust_source(module_source))) != 1:
+        violations.append("commit_log root must expose exactly one append_frame module")
+    imports = [
+        (visibility, body)
+        for kind, visibility, body, _ in active_import_records(production)
+        if kind == "use"
+    ]
+    if imports != [
+        ("pub", "super::header::HostWidth"),
+        ("", "super::record::BLANK_MAGIC_CODE"),
+    ]:
+        violations.append(f"append-frame imports changed: {imports}")
+
+    expected_items = {
+        ("enum", "AppendFrameCrcPlan"): (
+            "Disabled,Trailer{covered_end:usize,trailer_start:usize,trailer_end:usize,},"
+        ),
+        ("struct", "BlankMarker"): (
+            "bytes:[u8;BLANK_MARKER_LENGTH],declared_wrote_bytes:i32,"
+        ),
+        ("enum", "SegmentAppendDecision"): "Append,Roll,",
+        ("struct", "AppendBatchFrame"): (
+            "declared_len:i32,start:usize,index:usize,cumulative_len:i32,"
+        ),
+        ("struct", "AppendBatchFrameCursor"): (
+            "total_msg_len:i32,msg_pos:usize,index:usize,msg_num:i32,"
+        ),
+    }
+    for (item_kind, item), expected_body in expected_items.items():
+        body = compact_rust(active_item_body(production, item_kind, item) or "")
+        if body != expected_body:
+            violations.append(f"{item} shape changed")
+    if re.search(r"\bpub\s+struct\s+AppendFrameKernel\s*;", active) is None:
+        violations.append("AppendFrameKernel must remain a public unit struct")
+
+    records = inherent_method_records(
+        production,
+        "AppendFrameKernel",
+        APPEND_FRAME_KERNEL_METHODS,
+    )
+    expected_signatures = {
+        "declared_frame_length": "pubfndeclared_frame_length(frame:&[u8])->i32",
+        "segment_append_decision": (
+            "pubfnsegment_append_decision(encoded_len:i32,max_blank:i32)"
+            "->SegmentAppendDecision"
+        ),
+        "blank_marker": "pubfnblank_marker(max_blank:i32)->BlankMarker",
+        "finalize_frame": (
+            "pubfnfinalize_frame(frame:&mut[u8],queue_offset:i64,physical_offset:i64,"
+            "store_timestamp:i64,born_host_width:HostWidth,crc_reserved_length:i32,)"
+            "->AppendFrameCrcPlan"
+        ),
+        "finalize_batch_frame": (
+            "pubfnfinalize_batch_frame(frame:&mut[u8],queue_offset:i64,physical_offset:i64,"
+            "store_timestamp:i64,born_host_width:HostWidth,)->AppendFrameCrcPlan"
+        ),
+        "patch_runtime_fields": (
+            "fnpatch_runtime_fields(frame:&mut[u8],queue_offset:i64,physical_offset:i64,"
+            "store_timestamp:i64,born_host_width:HostWidth,)"
+        ),
+    }
+    expected_bodies = {
+        "declared_frame_length": "i32::from_be_bytes(frame[0..4].try_into().unwrap())",
+        "segment_append_decision": (
+            "ifencoded_len+END_FILE_MIN_BLANK_LENGTH>max_blank{"
+            "SegmentAppendDecision::Roll}else{"
+            "SegmentAppendDecision::Append}"
+        ),
+        "blank_marker": (
+            "letmutbytes=[0;BLANK_MARKER_LENGTH];"
+            "bytes[0..4].copy_from_slice(&max_blank.to_be_bytes());"
+            "bytes[4..8].copy_from_slice(&BLANK_MAGIC_CODE.to_be_bytes());"
+            "BlankMarker{bytes,declared_wrote_bytes:max_blank,}"
+        ),
+        "finalize_frame": (
+            "Self::patch_runtime_fields(frame,queue_offset,physical_offset,store_timestamp,"
+            "born_host_width);ifcrc_reserved_length==0{AppendFrameCrcPlan::Disabled}else{"
+            "letcovered_end=(frame.len()asi32-crc_reserved_length)asusize;"
+            "AppendFrameCrcPlan::Trailer{covered_end,trailer_start:covered_end,"
+            "trailer_end:frame.len(),}}"
+        ),
+        "finalize_batch_frame": (
+            "Self::patch_runtime_fields(frame,queue_offset,physical_offset,store_timestamp,"
+            "born_host_width);AppendFrameCrcPlan::Disabled"
+        ),
+        "patch_runtime_fields": (
+            "frame[QUEUE_OFFSET_POSITION..QUEUE_OFFSET_POSITION+8]"
+            ".copy_from_slice(&queue_offset.to_be_bytes());"
+            "frame[PHYSICAL_OFFSET_POSITION..PHYSICAL_OFFSET_POSITION+8]"
+            ".copy_from_slice(&physical_offset.to_be_bytes());"
+            "lettimestamp_position=born_host_width.store_timestamp_position();"
+            "frame[timestamp_position..timestamp_position+8]"
+            ".copy_from_slice(&store_timestamp.to_be_bytes());"
+        ),
+    }
+    for method_name in APPEND_FRAME_KERNEL_METHODS:
+        method_records = records[method_name]
+        if len(method_records) != 1:
+            violations.append(f"AppendFrameKernel::{method_name} definition count changed")
+            continue
+        record = method_records[0]
+        if record.signature != expected_signatures[method_name]:
+            violations.append(f"AppendFrameKernel::{method_name} signature changed")
+        expected_visibility = "" if method_name == "patch_runtime_fields" else "pub"
+        if record.visibility != expected_visibility or record.cfg_gated:
+            violations.append(f"AppendFrameKernel::{method_name} visibility changed")
+        if record.body != expected_bodies[method_name]:
+            violations.append(f"AppendFrameKernel::{method_name} behavior changed")
+
+    declared_position = source.find("pub fn declared_frame_length")
+    declared_panics = source.rfind("/// # Panics", 0, declared_position)
+    kernel_impl = source.rfind("impl AppendFrameKernel", 0, declared_position)
+    if not kernel_impl < declared_panics < declared_position:
+        violations.append("AppendFrameKernel::declared_frame_length must document its panic seam")
+
+    descriptor_methods = (
+        "declared_len",
+        "start",
+        "end",
+        "index",
+        "cumulative_len",
+        "physical_offset",
+    )
+    descriptor_records = inherent_method_records(
+        production,
+        "AppendBatchFrame",
+        descriptor_methods,
+    )
+    descriptor_signatures = {
+        "declared_len": "pubfndeclared_len(&self)->i32",
+        "start": "pubfnstart(&self)->usize",
+        "end": "pubfnend(&self)->usize",
+        "index": "pubfnindex(&self)->usize",
+        "cumulative_len": "pubfncumulative_len(&self)->i32",
+        "physical_offset": "pubfnphysical_offset(&self,wrote_offset:i64)->i64",
+    }
+    descriptor_bodies = {
+        "declared_len": "self.declared_len",
+        "start": "self.start",
+        "end": "self.start+self.declared_lenasusize",
+        "index": "self.index",
+        "cumulative_len": "self.cumulative_len",
+        "physical_offset": (
+            "wrote_offset+self.cumulative_lenas i64-self.declared_lenas i64".replace(" ", "")
+        ),
+    }
+    for method_name in descriptor_methods:
+        method_records = descriptor_records[method_name]
+        if len(method_records) != 1:
+            violations.append(f"AppendBatchFrame::{method_name} definition count changed")
+            continue
+        record = method_records[0]
+        if record.signature != descriptor_signatures[method_name]:
+            violations.append(f"AppendBatchFrame::{method_name} signature changed")
+        if record.visibility != "pub" or record.cfg_gated:
+            violations.append(f"AppendBatchFrame::{method_name} visibility changed")
+        if record.body != descriptor_bodies[method_name]:
+            violations.append(f"AppendBatchFrame::{method_name} behavior changed")
+
+    physical_position = source.find("pub fn physical_offset")
+    physical_panics = source.rfind("/// # Panics", 0, physical_position)
+    descriptor_impl = source.rfind("impl AppendBatchFrame", 0, physical_position)
+    if not descriptor_impl < physical_panics < physical_position:
+        violations.append("AppendBatchFrame::physical_offset must document its panic seam")
+
+    cursor_methods = ("new", "next", "finish_frame", "total_msg_len", "msg_num")
+    cursor_records = inherent_method_records(
+        production,
+        "AppendBatchFrameCursor",
+        cursor_methods,
+    )
+    cursor_signatures = {
+        "new": "pubfnnew()->Self",
+        "next": "pubfnnext(&mutself,frames:&[u8])->Option<AppendBatchFrame>",
+        "finish_frame": "pubfnfinish_frame(&mutself,declared_len:i32)",
+        "total_msg_len": "pubfntotal_msg_len(&self)->i32",
+        "msg_num": "pubfnmsg_num(&self)->i32",
+    }
+    cursor_bodies = {
+        "new": (
+            "Self{total_msg_len:0,msg_pos:0,index:0,msg_num:0,}"
+        ),
+        "next": (
+            "ifself.total_msg_len<frames.len()asi32{"
+            "letdeclared_len=AppendFrameKernel::declared_frame_length("
+            "&frames[self.total_msg_lenasusize..(self.total_msg_len+4)asusize],);"
+            "self.total_msg_len+=declared_len;letframe=AppendBatchFrame{declared_len,"
+            "start:self.msg_pos,index:self.index,cumulative_len:self.total_msg_len,};"
+            "Some(frame)}else{None}"
+        ),
+        "finish_frame": (
+            "self.msg_num+=1;self.msg_pos+=declared_lenasusize;self.index+=1;"
+        ),
+        "total_msg_len": "self.total_msg_len",
+        "msg_num": "self.msg_num",
+    }
+    for method_name in cursor_methods:
+        method_records = cursor_records[method_name]
+        if len(method_records) != 1:
+            violations.append(f"AppendBatchFrameCursor::{method_name} definition count changed")
+            continue
+        record = method_records[0]
+        if record.signature != cursor_signatures[method_name]:
+            violations.append(f"AppendBatchFrameCursor::{method_name} signature changed")
+        if record.visibility != "pub" or record.cfg_gated:
+            violations.append(f"AppendBatchFrameCursor::{method_name} visibility changed")
+        if record.body != cursor_bodies[method_name]:
+            violations.append(f"AppendBatchFrameCursor::{method_name} behavior changed")
+    cursor_default = compact_rust(
+        active_trait_impl_body(
+            production,
+            r"\bimpl\s+Default\s+for\s+AppendBatchFrameCursor\b",
+        )
+        or ""
+    )
+    if cursor_default != "fndefault()->Self{Self::new()}":
+        violations.append("AppendBatchFrameCursor default initialization changed")
+
+    cursor_position = source.find("pub struct AppendBatchFrameCursor")
+    cursor_doc_start = source.rfind("/// Stateful traversal", 0, cursor_position)
+    cursor_docs = source[cursor_doc_start:cursor_position]
+    next_position = source.find("pub fn next", cursor_position)
+    next_doc_start = source.rfind("/// Decodes", cursor_position, next_position)
+    next_docs = source[next_doc_start:next_position]
+    finish_position = source.find("pub fn finish_frame", next_position)
+    finish_doc_start = source.rfind("/// Advances", next_position, finish_position)
+    finish_docs = source[finish_doc_start:finish_position]
+    total_position = source.find("pub fn total_msg_len", finish_position)
+    total_doc_start = source.rfind("/// Returns", finish_position, total_position)
+    total_docs = source[total_doc_start:total_position]
+    msg_num_position = source.find("pub fn msg_num", total_position)
+    msg_num_doc_start = source.rfind("/// Returns", total_position, msg_num_position)
+    msg_num_docs = source[msg_num_doc_start:msg_num_position]
+    required_cursor_docs = (
+        (cursor_docs, "decoded cumulative state advanced by [`Self::next`]"),
+        (cursor_docs, "finished consumed state advanced only by [`Self::finish_frame`]"),
+        (next_docs, "advances only the decoded cumulative state"),
+        (next_docs, "does not advance the finished `msg_pos`, `index`, or `msg_num` state"),
+        (finish_docs, "most recently decoded non-roll frame"),
+        (finish_docs, "exactly once with that descriptor's declared length"),
+        (finish_docs, "only after the frame is fully consumed and its context is updated"),
+        (finish_docs, "A roll path must not call this method"),
+        (total_docs, "decoded cumulative signed length"),
+        (msg_num_docs, "frames whose consumption has been finished"),
+    )
+    for docs, fragment in required_cursor_docs:
+        if fragment not in docs:
+            violations.append(f"AppendBatchFrameCursor documentation changed: {fragment}")
+
+    if compact_rust(named_function_body(production, "bytes") or "") != "&self.bytes":
+        violations.append("BlankMarker bytes accessor changed")
+    if compact_rust(named_function_body(production, "declared_wrote_bytes") or "") != (
+        "self.declared_wrote_bytes"
+    ):
+        violations.append("BlankMarker declared byte count changed")
+
+    required_constants = {
+        "END_FILE_MIN_BLANK_LENGTH": "8",
+        "QUEUE_OFFSET_POSITION": "20",
+        "PHYSICAL_OFFSET_POSITION": "28",
+    }
+    for constant, value in required_constants.items():
+        if re.search(rf"\bconst\s+{constant}\s*:\s*(?:i32|usize)\s*=\s*{value}\s*;", active) is None:
+            violations.append(f"append-frame constant changed: {constant}")
+    if re.search(
+        r"\bpub\s+const\s+BLANK_MARKER_LENGTH\s*:\s*usize\s*=\s*"
+        r"END_FILE_MIN_BLANK_LENGTH\s+as\s+usize\s*;",
+        active,
+    ) is None:
+        violations.append("public blank-marker length changed")
+
+    if re.search(r"\([^)]*:\s*bool\b", active, re.DOTALL):
+        violations.append("append-frame API must use named enums instead of positional bool")
+    if re.search(
+        r"\b(?:MessageExt|MessageStoreConfig|DashMap|ArcMut|MappedFile|Mmap|crc32|create_crc32)\b",
+        active,
+    ):
+        violations.append("append-frame kernel absorbed Store, mapping, or CRC execution ownership")
+    if any(token in active for token in FORBIDDEN_SOURCE_TOKENS):
+        violations.append("append-frame kernel has a forbidden crate edge")
+
+    for path, candidate in production_sources.items():
+        if STORE_CRATE.name not in path.parts:
+            continue
+        candidate_active = compact_rust(source_without_cfg_test_items(candidate))
+        if (
+            "[20..28]" in candidate_active
+            and "[28..36]" in candidate_active
+            and ("[56..64]" in candidate_active or "[68..76]" in candidate_active)
+        ):
+            violations.append(f"{path}: Store copied append-frame fixed offsets")
+        if (
+            "max_blank.to_be_bytes()" in candidate_active
+            and "BLANK_MAGIC_CODE.to_be_bytes()" in candidate_active
+        ):
+            violations.append(f"{path}: Store copied append-frame blank marker")
+        if re.search(r"(?:encoded_len|msg_len)\+8>max_blank", candidate_active):
+            violations.append(f"{path}: Store copied append-frame segment-roll policy")
+    return violations
+
+
+HEADER_LAYOUT_CONSTANTS = {
+    "MAGIC_CODE_POSITION": ("usize", "4", ""),
+    "SYS_FLAG_POSITION": ("usize", "36", ""),
+    "BORN_HOST_V6_FLAG": ("i32", "0x10", "pub(crate)"),
+    "STORE_HOST_V6_FLAG": ("i32", "0x20", "pub(crate)"),
+    "IPV4_HOST_LENGTH": ("usize", "8", ""),
+    "IPV6_HOST_LENGTH": ("usize", "20", ""),
+    "IPV4_STORE_TIMESTAMP_POSITION": ("usize", "56", ""),
+    "IPV6_STORE_TIMESTAMP_POSITION": ("usize", "68", ""),
+    "MESSAGE_MAGIC_CODE": ("i32", "-626843481", "pub"),
+    "MESSAGE_MAGIC_CODE_V2": ("i32", "-626843477", "pub"),
+}
+
+
+def commit_log_header_contract_violations(
+    header_source: str,
+    module_source: str,
+    record_source: str,
+    append_source: str,
+    parser_source: str,
+    recovery_source: str,
+    commit_log_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    header_production = source_without_cfg_test_items(header_source)
+    header_active = active_rust_source(header_production)
+    header_compact = compact_rust(header_production)
+    violations: list[str] = []
+
+    if len(re.findall(r"\bpub\s+mod\s+header\s*;", active_rust_source(module_source))) != 1:
+        violations.append("commit_log root must expose exactly one header module")
+
+    for item, item_kind in {
+        "HostWidth": "enum",
+        "MESSAGE_MAGIC_CODE": "const",
+        "MESSAGE_MAGIC_CODE_V2": "const",
+    }.items():
+        occurrences = file_item_owner_occurrences(production_sources, item)
+        if occurrences != [(COMMIT_LOG_HEADER_PATH, item_kind)]:
+            violations.append(f"{item} header owner occurrences changed: {occurrences}")
+
+    for constant, (constant_type, value, visibility) in HEADER_LAYOUT_CONSTANTS.items():
+        visibility_pattern = re.escape(visibility) + r"\s+" if visibility else ""
+        if re.search(
+            rf"\b{visibility_pattern}const\s+{constant}\s*:\s*{constant_type}\s*=\s*"
+            rf"{re.escape(value)}\s*;",
+            header_active,
+        ) is None:
+            violations.append(f"CommitLog header constant changed: {constant}")
+        occurrences = file_item_owner_occurrences(production_sources, constant)
+        if occurrences != [(COMMIT_LOG_HEADER_PATH, "const")]:
+            violations.append(f"{constant} owner occurrences changed: {occurrences}")
+
+    host_width_match = re.search(r"\bpub\s+enum\s+HostWidth\b", header_active)
+    if host_width_match is None or attributes_have_cfg_gate(
+        contiguous_outer_attributes_before(header_active, host_width_match.start())
+    ):
+        violations.append("HostWidth must remain a public non-cfg owner")
+    if compact_rust(active_item_body(header_production, "enum", "HostWidth") or "") != (
+        "Ipv4,Ipv6,"
+    ):
+        violations.append("HostWidth variants changed")
+
+    host_width_methods = ("born", "store", "encoded_len", "store_timestamp_position")
+    method_records = inherent_method_records(header_production, "HostWidth", host_width_methods)
+    expected_method_signatures = {
+        "born": "pub(crate)fnborn(sys_flag:i32)->Self",
+        "store": "pub(crate)fnstore(sys_flag:i32)->Self",
+        "encoded_len": "pub(crate)fnencoded_len(self)->usize",
+        "store_timestamp_position": (
+            "pub(crate)fnstore_timestamp_position(self)->usize"
+        ),
+    }
+    expected_method_bodies = {
+        "born": (
+            "ifsys_flag&BORN_HOST_V6_FLAG==0{Self::Ipv4}else{Self::Ipv6}"
+        ),
+        "store": (
+            "ifsys_flag&STORE_HOST_V6_FLAG==0{Self::Ipv4}else{Self::Ipv6}"
+        ),
+        "encoded_len": (
+            "matchself{Self::Ipv4=>IPV4_HOST_LENGTH,Self::Ipv6=>IPV6_HOST_LENGTH,}"
+        ),
+        "store_timestamp_position": (
+            "matchself{Self::Ipv4=>IPV4_STORE_TIMESTAMP_POSITION,"
+            "Self::Ipv6=>IPV6_STORE_TIMESTAMP_POSITION,}"
+        ),
+    }
+    for method_name in host_width_methods:
+        records = method_records[method_name]
+        if len(records) != 1:
+            violations.append(f"HostWidth::{method_name} definition count changed")
+            continue
+        record = records[0]
+        if record.signature != expected_method_signatures[method_name]:
+            violations.append(f"HostWidth::{method_name} signature changed")
+        if record.visibility != "pub(crate)" or record.cfg_gated:
+            violations.append(f"HostWidth::{method_name} visibility changed")
+        if record.body != expected_method_bodies[method_name]:
+            violations.append(f"HostWidth::{method_name} behavior changed")
+
+    expected_function_signatures = (
+        (
+            "probe_store_timestamp",
+            "pubfnprobe_store_timestamp<F>(mutread:F)->Option<i64>where"
+            "F:FnMut(usize,usize)->Option<Bytes>,",
+        ),
+        (
+            "store_timestamp_from_frame",
+            "pubfnstore_timestamp_from_frame(frame:&[u8])->i64",
+        ),
+        (
+            "read_i32_or_zero",
+            "fnread_i32_or_zero<F>(read:&mutF,offset:usize)->i32where"
+            "F:FnMut(usize,usize)->Option<Bytes>,",
+        ),
+        (
+            "read_i64_or_zero",
+            "fnread_i64_or_zero<F>(read:&mutF,offset:usize)->i64where"
+            "F:FnMut(usize,usize)->Option<Bytes>,",
+        ),
+    )
+    for function_name, signature in expected_function_signatures:
+        if header_compact.count(signature) != 1:
+            violations.append(f"{function_name} signature changed")
+
+    expected_function_bodies = {
+        "probe_store_timestamp": (
+            "letmagic_code=read_i32_or_zero(&mutread,MAGIC_CODE_POSITION);"
+            "ifmagic_code!=MESSAGE_MAGIC_CODE&&magic_code!=MESSAGE_MAGIC_CODE_V2{returnNone;}"
+            "letsys_flag=read_i32_or_zero(&mutread,SYS_FLAG_POSITION);"
+            "lettimestamp_position=HostWidth::born(sys_flag).store_timestamp_position();"
+            "letstore_timestamp=read_i64_or_zero(&mutread,timestamp_position);"
+            "(store_timestamp!=0).then_some(store_timestamp)"
+        ),
+        "store_timestamp_from_frame": (
+            "letsys_flag=i32::from_be_bytes(frame[SYS_FLAG_POSITION..SYS_FLAG_POSITION+4]"
+            ".try_into().unwrap());"
+            "lettimestamp_position=HostWidth::born(sys_flag).store_timestamp_position();"
+            "i64::from_be_bytes(frame[timestamp_position..timestamp_position+8]"
+            ".try_into().unwrap())"
+        ),
+        "read_i32_or_zero": (
+            "read(offset,4).map(|bytes|i32::from_be_bytes(bytes[0..4]"
+            ".try_into().unwrap())).unwrap_or(0)"
+        ),
+        "read_i64_or_zero": (
+            "read(offset,8).map(|bytes|i64::from_be_bytes(bytes[0..8]"
+            ".try_into().unwrap())).unwrap_or(0)"
+        ),
+    }
+    for function_name, expected_body in expected_function_bodies.items():
+        body = compact_rust(named_function_body(header_production, function_name) or "")
+        if body != expected_body:
+            violations.append(f"{function_name} behavior changed")
+
+    for function_name in ("probe_store_timestamp", "store_timestamp_from_frame"):
+        function_position = header_source.find(f"pub fn {function_name}")
+        panic_position = header_source.rfind("/// # Panics", 0, function_position)
+        previous_public_function = header_source.rfind("pub fn ", 0, function_position)
+        if not previous_public_function < panic_position < function_position:
+            violations.append(f"{function_name} must document its panic seam")
+
+    imports = [
+        (visibility, body)
+        for kind, visibility, body, _ in active_import_records(header_production)
+        if kind == "use"
+    ]
+    if imports != [("", "bytes::Bytes")]:
+        violations.append(f"CommitLog header imports changed: {imports}")
+    if re.search(
+        r"\b(?:ArcMut|MappedFile|MessageStoreConfig|StoreCheckpoint|MessageExt|tracing|tokio)\b",
+        header_active,
+    ) or any(token in header_active for token in FORBIDDEN_SOURCE_TOKENS):
+        violations.append("CommitLog header absorbed Store or runtime ownership")
+
+    record_magic_reexports = [
+        (visibility, body)
+        for kind, visibility, body, _ in active_import_records(record_source)
+        if kind == "use" and body.startswith("super::header::MESSAGE_MAGIC_CODE")
+    ]
+    if record_magic_reexports != [
+        ("pub", "super::header::MESSAGE_MAGIC_CODE"),
+        ("pub", "super::header::MESSAGE_MAGIC_CODE_V2"),
+    ]:
+        violations.append("record magic-code compatibility re-exports changed")
+    violations.extend(direct_exact_reexport_violations(append_source, "super::header", "HostWidth"))
+
+    parser_production = source_without_cfg_test_items(parser_source)
+    parser_compact = compact_rust(parser_production)
+    if parser_compact.count("HostWidth::born(sys_flag).encoded_len()") != 1:
+        violations.append("record parser born-host width delegation changed")
+    if parser_compact.count("HostWidth::store(sys_flag).encoded_len()") != 1:
+        violations.append("record parser store-host width delegation changed")
+    for legacy in (
+        "BORN_HOST_V6_FLAG",
+        "STORE_HOST_V6_FLAG",
+        "ifsys_flag&0x10",
+        "ifsys_flag&0x20",
+    ):
+        if legacy in parser_compact:
+            violations.append(f"record parser retained fixed-header layout: {legacy}")
+
+    append_production = source_without_cfg_test_items(append_source)
+    append_compact = compact_rust(append_production)
+    if append_compact.count("born_host_width.store_timestamp_position()") != 1:
+        violations.append("append-frame timestamp-position delegation changed")
+    for legacy in (
+        "IPV4_STORE_TIMESTAMP_POSITION",
+        "IPV6_STORE_TIMESTAMP_POSITION",
+        "[56..64]",
+        "[68..76]",
+    ):
+        if legacy in append_compact:
+            violations.append(f"append-frame retained fixed-header layout: {legacy}")
+
+    recovery_body = compact_rust(
+        named_function_body(
+            source_without_cfg_test_items(recovery_source),
+            "is_mapped_file_matched_recover",
+        )
+        or ""
+    )
+    exact_probe_adapter = (
+        "letSome(store_timestamp)=rocketmq_store_local::commit_log::header::"
+        "probe_store_timestamp(|offset,len|{mapped_file.get_bytes(offset,len)})"
+        "else{returnfalse;};"
+    )
+    if recovery_body.count(exact_probe_adapter) != 1:
+        violations.append("Store recovery timestamp probe adapter changed")
+    if recovery_body.count(
+        "store_timestamp<=store_checkpoint.get_min_timestamp_index()asi64"
+    ) != 1 or recovery_body.count(
+        "store_timestamp<=store_checkpoint.get_min_timestamp()asi64"
+    ) != 1:
+        violations.append("Store recovery checkpoint comparison changed")
+    if recovery_body.count("time_millis_to_human_string(store_timestamp)") != 2:
+        violations.append("Store recovery timestamp logging changed")
+    for legacy in (
+        "MESSAGE_MAGIC_CODE_POSITION",
+        "SYSFLAG_POSITION",
+        "MessageSysFlag::BORNHOST_V6_FLAG",
+        ".get_i32()",
+        ".get_i64()",
+        "born_host_length",
+        "msg_store_time_pos",
+    ):
+        if legacy in recovery_body:
+            violations.append(f"Store recovery retained fixed-header probe: {legacy}")
+
+    pickup_body = compact_rust(
+        named_function_body(
+            source_without_cfg_test_items(commit_log_source),
+            "pickup_store_timestamp",
+        )
+        or ""
+    )
+    expected_pickup_body = (
+        "ifoffset>=self.get_min_offset()&&(offset+sizeasi64)<=self.get_max_offset(){"
+        "letresult=self.get_message(offset,size);ifletSome(result)=result{"
+        "letbuffer=result.get_buffer();rocketmq_store_local::commit_log::header::"
+        "store_timestamp_from_frame(buffer)}else{-1}}else{-1}"
+    )
+    if pickup_body != expected_pickup_body:
+        violations.append("pickup_store_timestamp adapter behavior changed")
+    if "ArcMut" in pickup_body:
+        violations.append("pickup_store_timestamp added an ArcMut fingerprint")
+
+    return violations
+
+
+def append_frame_store_adapter_violations(source: str) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    violations: list[str] = []
+
+    trait_position = source.find("pub trait AppendMessageCallback")
+    trait_docs_start = source.rfind("/// Write messages callback interface", 0, trait_position)
+    trait_docs = source[trait_docs_start:trait_position]
+    for fragment in (
+        "restore that exact",
+        "AppendMessageStatus::EndOfFile",
+        "retries the same",
+        "must not clone or re-encode",
+    ):
+        if fragment not in trait_docs:
+            violations.append(f"AppendMessageCallback EOF ownership documentation changed: {fragment}")
+
+    required_imports = {
+        "rocketmq_store_local::commit_log::append_frame::AppendBatchFrameCursor",
+        "rocketmq_store_local::commit_log::append_frame::AppendFrameCrcPlan",
+        "rocketmq_store_local::commit_log::append_frame::AppendFrameKernel",
+        "rocketmq_store_local::commit_log::append_frame::BLANK_MARKER_LENGTH",
+        "rocketmq_store_local::commit_log::append_frame::HostWidth",
+        "rocketmq_store_local::commit_log::append_frame::SegmentAppendDecision",
+    }
+    imports = {
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use" and "commit_log::append_frame" in body
+    }
+    if imports != required_imports:
+        violations.append(f"Store append-frame imports changed: {sorted(imports)}")
+
+    required_counts = {
+        "AppendFrameKernel::declared_frame_length(pre_encode_buffer.as_ref())": 2,
+        "AppendFrameKernel::segment_append_decision(": 3,
+        "AppendFrameKernel::finalize_frame(": 2,
+        "AppendFrameKernel::finalize_batch_frame(": 1,
+        "AppendFrameKernel::blank_marker(max_blank)": 3,
+        "self.msg_store_item_memory.lock()": 3,
+        "bytes.put_slice(marker.bytes())": 3,
+        "crc32(&pre_encode_buffer[..covered_end])": 1,
+        "create_crc32(&mutpre_encode_buffer[trailer_start..trailer_end],crc32)": 1,
+        "crc32(&buffer[..covered_end])": 1,
+        "create_crc32(&mutbuffer[trailer_start..trailer_end],crc32)": 1,
+    }
+    for fragment, count in required_counts.items():
+        if compact.count(fragment) != count:
+            violations.append(f"Store append-frame adapter count changed: {fragment}")
+    exact_decision_calls = {
+        "AppendFrameKernel::segment_append_decision(msg_len,max_blank)": 2,
+        "AppendFrameKernel::segment_append_decision(frame.cumulative_len(),max_blank)": 1,
+    }
+    for fragment, count in exact_decision_calls.items():
+        if compact.count(fragment) != count:
+            violations.append(f"Store segment-roll input changed: {fragment}")
+
+    forbidden_store_fragments = (
+        "[20..28]",
+        "[28..36]",
+        "[56..64]",
+        "[68..76]",
+        "BLANK_MAGIC_CODE",
+        "END_FILE_MIN_BLANK_LENGTH",
+        ".put_i32(max_blank)",
+        "msg_len+8>max_blank",
+        "total_msg_len+8>max_blank",
+        "i32::from_be_bytes",
+        "[0..4]",
+    )
+    for fragment in forbidden_store_fragments:
+        if fragment in compact:
+            violations.append(f"Store retained append-frame kernel: {fragment}")
+
+    if compact.count(
+        "MessageSysFlag::TRANSACTION_PREPARED_TYPE|MessageSysFlag::TRANSACTION_ROLLBACK_TYPE"
+    ) != 2 or compact.count("queue_offset=0;") != 2:
+        violations.append("Store transaction consume-queue gate changed")
+    if compact.count(
+        "msg_store_item_memory:Mutex<bytes::BytesMut>"
+    ) != 1 or compact.count(
+        "msg_store_item_memory:Mutex::new(bytes::BytesMut::with_capacity("
+        "BLANK_MARKER_LENGTH))"
+    ) != 1:
+        violations.append("Store append scratch-buffer ownership changed")
+    if compact.count(
+        "ifenabled_append_prop_crc{let_check_size=msg_len-self.crc32_reserved_length;}"
+    ) != 1:
+        violations.append("Store batch CRC no-op arithmetic changed")
+
+    function_bodies: dict[str, list[str]] = {}
+    for function_name, body in rust_function_bodies(production):
+        function_bodies.setdefault(function_name, []).append(compact_rust(body))
+    standard_bodies = function_bodies.get("do_append", [])
+    batch_bodies = function_bodies.get("do_append_batch", [])
+    zero_copy_bodies = [
+        body
+        for body in function_bodies.get("do_append_zerocopy", [])
+        if "AppendFrameKernel::finalize_frame(" in body
+    ]
+    if len(standard_bodies) != 1 or len(batch_bodies) != 1 or len(zero_copy_bodies) != 1:
+        violations.append("Store append callback body ownership changed")
+        return violations
+
+    def require_order(label: str, body: str, fragments: tuple[str, ...]) -> None:
+        cursor = -1
+        for fragment in fragments:
+            next_position = body.find(fragment, cursor + 1)
+            if next_position == -1:
+                violations.append(f"{label} lost ordered adapter fragment: {fragment}")
+                return
+            cursor = next_position
+
+    def require_eof_buffer_restore(
+        label: str,
+        body: str,
+        decision: str,
+        expected_assignment: str,
+    ) -> None:
+        decision_position = body.find(decision)
+        opening_brace = body.find("{", decision_position + len(decision)) if decision_position != -1 else -1
+        extracted = braced_body(body, opening_brace) if opening_brace != -1 else None
+        if extracted is None:
+            violations.append(f"{label} EOF roll branch changed")
+            return
+        branch, _ = extracted
+        assignments = re.findall(
+            r"(?:msg_inner|msg_batch)\.encoded_buff=Some\([^;]+\);",
+            branch,
+        )
+        write_position = branch.find("mapped_file.write_bytes_segment(")
+        restore_position = branch.find(expected_assignment)
+        return_position = branch.find("returnAppendMessageResult{")
+        if assignments != [expected_assignment]:
+            violations.append(f"{label} EOF encoded-buffer assignment changed: {assignments}")
+        if not 0 <= write_position < restore_position < return_position:
+            violations.append(f"{label} must restore the encoded buffer after marker write and before EOF return")
+        restore_region = branch[write_position:return_position] if 0 <= write_position < return_position else branch
+        if ".clone(" in restore_region or "encode(" in restore_region:
+            violations.append(f"{label} EOF buffer must not be cloned or re-encoded")
+
+    standard = standard_bodies[0]
+    require_eof_buffer_restore(
+        "standard append",
+        standard,
+        "ifletSegmentAppendDecision::Roll=AppendFrameKernel::segment_append_decision(msg_len,max_blank)",
+        "msg_inner.encoded_buff=Some(pre_encode_buffer);",
+    )
+    exact_standard_finalizer = (
+        "letcrc_plan=AppendFrameKernel::finalize_frame("
+        "&mutpre_encode_buffer[..msg_lenasusize],queue_offset,wrote_offset,"
+        "msg_inner.store_timestamp(),born_host_width,self.crc32_reserved_length,);"
+    )
+    if standard.count(exact_standard_finalizer) != 1:
+        violations.append("standard append finalizer arguments changed")
+    if standard.count("mapped_file.write_bytes_segment(") != 1:
+        violations.append("standard append EOF scratch write changed")
+    require_order(
+        "standard append",
+        standard,
+        (
+            "AppendFrameKernel::declared_frame_length(pre_encode_buffer.as_ref())",
+            "MessageSysFlag::get_transaction_value",
+            "AppendFrameKernel::segment_append_decision(",
+            "self.msg_store_item_memory.lock()",
+            "bytes.clear();",
+            "AppendFrameKernel::blank_marker(max_blank)",
+            "bytes.put_slice(marker.bytes());",
+            "mapped_file.write_bytes_segment(",
+            "AppendFrameKernel::finalize_frame(",
+            "crc32(&pre_encode_buffer[..covered_end])",
+            "letinstant=Instant::now();mapped_file.append_message_bytes_no_position_update_ref(",
+        ),
+    )
+    batch = batch_bodies[0]
+    require_eof_buffer_restore(
+        "batch append",
+        batch,
+        "ifletSegmentAppendDecision::Roll=AppendFrameKernel::segment_append_decision("
+        "frame.cumulative_len(),max_blank)",
+        "msg_batch.encoded_buff=Some(messages_byte_buffer);",
+    )
+    exact_batch_finalizer = (
+        "let_crc_plan=AppendFrameKernel::finalize_batch_frame("
+        "&mutmessages_byte_buffer[frame.start()..frame.end()],queue_offset,phy_pos,"
+        "msg_batch.message_ext_broker_inner.store_timestamp(),born_host_width,);"
+    )
+    if batch.count(exact_batch_finalizer) != 1:
+        violations.append("batch append finalizer arguments changed")
+    if batch.count("mapped_file.write_bytes_segment(") != 1:
+        violations.append("batch append EOF scratch write changed")
+    exact_batch_fragments = {
+        "letmutcursor=AppendBatchFrameCursor::new();": 1,
+        "whileletSome(frame)=cursor.next(messages_byte_buffer.as_ref())": 1,
+        "letmsg_len=frame.declared_len();": 1,
+        "letphy_pos=frame.physical_offset(wrote_offset);": 1,
+        "frame.end()": 1,
+        "put_message_context.get_phy_pos_mut()[frame.index()]=phy_pos;": 1,
+        "cursor.finish_frame(msg_len);": 1,
+        "wrote_bytes:cursor.total_msg_len(),": 1,
+        "msg_num:cursor.msg_num(),": 1,
+    }
+    for fragment, count in exact_batch_fragments.items():
+        if batch.count(fragment) != count:
+            violations.append(f"Store batch cursor adapter changed: {fragment}")
+    if re.search(r"letmut(?:total_msg_len|msg_pos|index|msg_num)=", batch):
+        violations.append("Store retained manual batch cursor state")
+    require_order(
+        "batch append",
+        batch,
+        (
+            "letbegin_time_mills=Instant::now();",
+            "letmutcursor=AppendBatchFrameCursor::new();",
+            "whileletSome(frame)=cursor.next(messages_byte_buffer.as_ref())",
+            "letmsg_len=frame.declared_len();",
+            "AppendFrameKernel::segment_append_decision(frame.cumulative_len(),max_blank)",
+            "self.msg_store_item_memory.lock()",
+            "bytes.clear();",
+            "AppendFrameKernel::blank_marker(max_blank)",
+            "bytes.put_slice(marker.bytes());",
+            "mapped_file.write_bytes_segment(",
+            "letphy_pos=frame.physical_offset(wrote_offset);",
+            "AppendFrameKernel::finalize_batch_frame(",
+            "ifenabled_append_prop_crc{let_check_size=msg_len-self.crc32_reserved_length;}",
+            "put_message_context.get_phy_pos_mut()[frame.index()]=phy_pos;",
+            "cursor.finish_frame(msg_len);",
+            "mapped_file.append_message_bytes_no_position_update(&bytes);",
+        ),
+    )
+    if "crc32(" in batch or "create_crc32(" in batch:
+        violations.append("batch append CRC must remain a no-op")
+    zero_copy = zero_copy_bodies[0]
+    require_eof_buffer_restore(
+        "zero-copy append",
+        zero_copy,
+        "ifletSegmentAppendDecision::Roll=AppendFrameKernel::segment_append_decision(msg_len,max_blank)",
+        "msg_inner.encoded_buff=Some(pre_encode_buffer);",
+    )
+    exact_zero_copy_finalizer = (
+        "letcrc_plan=AppendFrameKernel::finalize_frame("
+        "&mutbuffer[..msg_lenasusize],queue_offset,wrote_offset,"
+        "msg_inner.store_timestamp(),born_host_width,self.crc32_reserved_length,);"
+    )
+    if zero_copy.count(exact_zero_copy_finalizer) != 1:
+        violations.append("zero-copy append finalizer arguments changed")
+    if zero_copy.count("mapped_file.write_bytes_segment(") != 1:
+        violations.append("zero-copy append EOF scratch write changed")
+    zero_copy_timers = [
+        match.start()
+        for match in re.finditer(
+            re.escape("letinstant=Instant::now();"),
+            zero_copy,
+        )
+    ]
+    zero_copy_write = zero_copy.find("mapped_file.write_bytes_segment(")
+    zero_copy_eof_return = zero_copy.find(
+        "returnAppendMessageResult",
+        zero_copy_write,
+    )
+    direct_buffer = zero_copy.find("mapped_file.get_direct_write_buffer(")
+    if (
+        len(zero_copy_timers) != 2
+        or zero_copy_write == -1
+        or zero_copy_eof_return == -1
+        or direct_buffer == -1
+        or not (
+            zero_copy_timers[0]
+            < zero_copy_write
+            < zero_copy_eof_return
+            < zero_copy_timers[1]
+            < direct_buffer
+        )
+    ):
+        violations.append("zero-copy EOF/normal timer positions changed")
+    require_order(
+        "zero-copy append",
+        zero_copy,
+        (
+            "AppendFrameKernel::declared_frame_length(pre_encode_buffer.as_ref())",
+            "MessageSysFlag::get_transaction_value",
+            "AppendFrameKernel::segment_append_decision(",
+            "self.msg_store_item_memory.lock()",
+            "bytes.clear();",
+            "AppendFrameKernel::blank_marker(max_blank)",
+            "bytes.put_slice(marker.bytes());",
+            "letinstant=Instant::now();",
+            "mapped_file.write_bytes_segment(",
+            "returnAppendMessageResult",
+            "letinstant=Instant::now();",
+            "mapped_file.get_direct_write_buffer(",
+            "copy_from_slice(&pre_encode_buffer",
+            "AppendFrameKernel::finalize_frame(",
+            "crc32(&buffer[..covered_end])",
+            "mapped_file.commit_direct_write(",
+        ),
+    )
+    return violations
+
+
+MAPPED_FILE_RAW_CORE_METHODS = (
+    "new",
+    "file_size",
+    "is_full",
+    "wrote_position",
+    "wrote_position_relaxed",
+    "set_wrote_position",
+    "advance_wrote_position",
+    "committed_position",
+    "set_committed_position",
+    "set_committed_position_release",
+    "flushed_position",
+    "set_flushed_position",
+    "normal_read_position",
+    "transient_read_position",
+    "copied_read_slice",
+    "copied_readable_slice",
+    "append_bytes_with_position_update",
+    "append_bytes_without_position_update",
+    "direct_write_range",
+    "commit_direct_write",
+    "write_bytes_segment",
+    "put_slice",
+    "raw_slice",
+    "readable_slice",
+    "is_readable_byte_range",
+    "is_readable_range",
+    "readable_tail_size",
+    "is_file_range",
+    "record_append",
+    "store_timestamp",
+    "set_store_timestamp",
+    "is_able_to_flush",
+    "record_flush_success",
+    "record_flush_time",
+    "last_flush_time",
+    "commit",
+    "is_able_to_commit",
+    "start_timestamp",
+    "set_start_timestamp",
+    "stop_timestamp",
+    "set_stop_timestamp",
+    "lock_region_range",
+    "is_valid_cache_range",
+    "prepare_flush_range",
+    "record_transient_flush_range",
+)
+
+
+def mapped_file_raw_core_owner_violations(
+    source: str,
+    module_source: str,
+    production_sources: dict[Path, str],
+) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    violations: list[str] = []
+
+    occurrences = file_item_owner_occurrences(production_sources, "MappedFileRawCore")
+    if occurrences != [(MAPPED_FILE_RAW_PATH, "struct")]:
+        violations.append(f"MappedFileRawCore owner occurrences changed: {occurrences}")
+    struct_match = re.search(r"\bpub\s+struct\s+MappedFileRawCore\b", active)
+    if struct_match is None or attributes_have_cfg_gate(
+        contiguous_outer_attributes_before(active, struct_match.start())
+    ):
+        violations.append("MappedFileRawCore must be one public non-cfg owner")
+    if active_struct_fields(production, "MappedFileRawCore") != [
+        ("progress", "MappedFileProgress")
+    ]:
+        violations.append("MappedFileRawCore must own exactly one MappedFileProgress field")
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use"
+    ]
+    if imports != ["super::kernel::MappedFileProgress"]:
+        violations.append(f"MappedFileRawCore imports changed: {imports}")
+    if direct_exact_reexport_violations(
+        module_source,
+        "raw",
+        "MappedFileRawCore",
+    ):
+        violations.append("mapped_file root must exactly re-export MappedFileRawCore")
+    if len(re.findall(r"\bpub\s+mod\s+raw\s*;", active_rust_source(module_source))) != 1:
+        violations.append("mapped_file root must expose exactly one raw module")
+
+    method_names = tuple(re.findall(r"\bpub\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)\b", active))
+    if method_names != MAPPED_FILE_RAW_CORE_METHODS:
+        violations.append(f"MappedFileRawCore public method surface changed: {method_names}")
+    records = inherent_method_records(
+        production,
+        "MappedFileRawCore",
+        MAPPED_FILE_RAW_CORE_METHODS,
+    )
+    for method_name, method_records in records.items():
+        if len(method_records) != 1:
+            violations.append(f"MappedFileRawCore::{method_name} definition count changed")
+            continue
+        record = method_records[0]
+        if record.visibility != "pub":
+            violations.append(f"MappedFileRawCore::{method_name} visibility changed")
+        if record.cfg_gated:
+            violations.append(f"MappedFileRawCore::{method_name} must not be cfg-gated")
+
+    expected_bodies = {
+        "normal_read_position": "self.progress.wrote_position()",
+        "transient_read_position": "self.progress.committed_position()",
+        "copied_read_slice": (
+            "ifpos+size>self.file_size()asusize{returnNone;}"
+            "mapped().get(pos..pos+size)"
+        ),
+        "copied_readable_slice": (
+            "letend_position=pos+size;if(readable_positionasusize)<end_position||"
+            "end_position>self.file_size()asusize{returnNone;}"
+            "mapped().get(pos..end_position)"
+        ),
+        "append_bytes_with_position_update": (
+            "letcurrent_pos=self.wrote_position()asusize;"
+            "ifcurrent_pos+length<=self.file_size()asusize{"
+            "ifletSome(target)=mapped().get_mut(current_pos..current_pos+length){"
+            "ifletSome(data_slice)=data.get(offset..offset+length){"
+            "target.copy_from_slice(data_slice);self.advance_wrote_position(lengthasi32);"
+            "returntrue;}}}false"
+        ),
+        "append_bytes_without_position_update": (
+            "letcurrent_pos=self.wrote_position_relaxed()asusize;"
+            "ifcurrent_pos+length<=self.file_size()asusize{"
+            "ifletSome(target)=mapped().get_mut(current_pos..current_pos+length){"
+            "ifletSome(data_slice)=data.get(offset..offset+length){"
+            "target.copy_from_slice(data_slice);returntrue;}}}false"
+        ),
+        "direct_write_range": (
+            "letcurrent_pos=self.wrote_position()asusize;"
+            "ifcurrent_pos+required_space>self.file_size()asusize{returnNone;}"
+            "mapped().get_mut(current_pos..current_pos+required_space)"
+            ".map(|buffer|(buffer,current_pos))"
+        ),
+        "commit_direct_write": (
+            "ifbytes_written==0{returnfalse;}letcurrent_pos=self.wrote_position()asusize;"
+            "ifcurrent_pos+bytes_written>self.file_size()asusize{returnfalse;}"
+            "self.advance_wrote_position(bytes_writtenasi32);true"
+        ),
+        "write_bytes_segment": (
+            "ifstart+length<=self.file_size()asusize{"
+            "ifletSome(target)=mapped().get_mut(start..start+length){ifdata.len()==length{"
+            "target.copy_from_slice(data);returntrue;}"
+            "ifletSome(data_slice)=data.get(offset..offset+length){"
+            "target.copy_from_slice(data_slice);returntrue;}}}false"
+        ),
+        "put_slice": (
+            "letlength=data.len();letend_index=index+length;"
+            "iflength>0&&end_index<=self.file_size()asusize{"
+            "ifletSome(target)=mapped().get_mut(index..end_index){"
+            "target.copy_from_slice(data);returntrue;}}false"
+        ),
+        "raw_slice": (
+            "ifpos>=self.file_size()asusize||pos+size>=self.file_size()asusize{"
+            "returnNone;}mapped().get(pos..pos+size)"
+        ),
+        "readable_slice": (
+            "letend_position=pos+size;ifend_position>readable_positionasusize{"
+            "returnNone;}mapped().get(pos..end_position)"
+        ),
+        "commit": (
+            "ifself.progress.is_able_to_commit(commit_least_pages){"
+            "self.progress.commit_wrote_position();}self.progress.committed_position()"
+        ),
+        "prepare_flush_range": (
+            "ifstart>=end||end>self.file_size()asusize{returnNone;}"
+            "Some((start,end-start))"
+        ),
+        "record_transient_flush_range": "self.set_committed_position_release(endasi32);",
+    }
+    for method_name, expected_body in expected_bodies.items():
+        method_records = records[method_name]
+        if len(method_records) == 1 and method_records[0].body != expected_body:
+            violations.append(f"MappedFileRawCore::{method_name} behavior changed")
+
+    if re.search(r"\([^)]*:\s*bool\b", active, re.DOTALL):
+        violations.append("MappedFileRawCore must use named operations instead of positional bool")
+    if re.search(
+        r"\b(?:Mmap|MmapMut|ArcMut|MappedFileStorage|File|Bytes|BytesMut|unsafe|tracing)\b",
+        active,
+    ):
+        violations.append("MappedFileRawCore absorbed mapping, storage, allocation, or platform ownership")
+    return violations
+
+
+def mapped_file_raw_core_store_adapter_violations(source: str) -> list[str]:
+    production = source_without_cfg_test_items(source)
+    active = active_rust_source(production)
+    violations = default_mapped_file_progress_violations(production)
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(production)
+        if kind == "use" and "MappedFileRawCore" in body
+    ]
+    if imports != ["super::MappedFileRawCore"]:
+        violations.append(f"Local DefaultMappedFile raw-core import changed: {imports}")
+    if "MappedFileProgress" in active:
+        violations.append("Store must not directly reference MappedFileProgress")
+    if compact_rust(production).count("raw_core:MappedFileRawCore::new(file_size)") != 1:
+        violations.append("Store raw_core initialization changed")
+
+    expected_delegates = {
+        "get_bytes": (
+            "self.raw_core.copied_read_slice(||self.get_mapped_file(),pos,size)"
+            ".map(Bytes::copy_from_slice)"
+        ),
+        "get_bytes_readable_checked": (
+            "self.raw_core.copied_readable_slice(||self.get_mapped_file(),pos,size,"
+            "self.get_read_position()).map(Bytes::copy_from_slice)"
+        ),
+        "append_message_offset_length": (
+            "self.raw_core.append_bytes_with_position_update("
+            "||{let(ptr,len)=unsafe{self.mapped_file_mut_parts()};"
+            "unsafe{Self::mutable_slice_from_parts(ptr,len)}},data,offset,length,)"
+        ),
+        "append_message_no_position_update": (
+            "self.raw_core.append_bytes_without_position_update("
+            "||{let(ptr,len)=unsafe{self.mapped_file_mut_parts()};"
+            "unsafe{Self::mutable_slice_from_parts(ptr,len)}},data,offset,length,)"
+        ),
+        "get_direct_write_buffer": (
+            "self.raw_core.direct_write_range(||{let(ptr,len)=unsafe{self.mapped_file_mut_parts()};"
+            "unsafe{Self::mutable_slice_from_parts(ptr,len)}},required_space,)"
+        ),
+        "write_bytes_segment": (
+            "self.raw_core.write_bytes_segment("
+            "||{let(ptr,len)=unsafe{self.mapped_file_mut_parts()};"
+            "unsafe{Self::mutable_slice_from_parts(ptr,len)}},data,start,offset,length,)"
+        ),
+        "put_slice": (
+            "self.raw_core.put_slice(||{let(ptr,len)=unsafe{self.mapped_file_mut_parts()};"
+            "unsafe{Self::mutable_slice_from_parts(ptr,len)}},data,index,)"
+        ),
+    }
+    for method_name, expected_body in expected_delegates.items():
+        body = named_function_body(production, method_name)
+        if compact_rust(body or "") != expected_body:
+            violations.append(f"Store {method_name} must remain one raw_core delegation")
+
+    required_adapter_calls = {
+        "commit_direct_write": ".raw_core.commit_direct_write(",
+        "get_data": ".raw_core.readable_slice(||self.get_mapped_file(),",
+        "get_slice": ".raw_core.raw_slice(||self.get_mapped_file(),",
+        "get_bytes_zero_copy": ".raw_core.is_file_range(",
+        "flush_range": ".raw_core.prepare_flush_range(",
+    }
+    for method_name, call in required_adapter_calls.items():
+        body = re.sub(r"\s+", "", named_function_body(production, method_name) or "")
+        if body.count(call) != 1:
+            violations.append(f"Store {method_name} raw_core call changed")
+    flush_range_body = re.sub(
+        r"\s+", "", named_function_body(production, "flush_range") or ""
+    )
+    if flush_range_body.count(".raw_core.record_transient_flush_range(") != 1:
+        violations.append("Store transient flush-range progress call changed")
+
+    for copied_policy in (
+        "current_pos+length<=",
+        "data.len()==length",
+        "end_index<=",
+        "pos+size>=self.",
+        "mapped_file.write_all(",
+    ):
+        if copied_policy in compact_rust(production):
+            violations.append(f"Store retained raw byte policy: {copied_policy}")
+    return violations
+
+
+def mapped_file_owner_violations(production_sources: dict[Path, str]) -> list[str]:
+    active_sources = {
+        path: active_rust_source(source_without_cfg_test_items(source))
+        for path, source in production_sources.items()
+    }
+    violations: list[str] = []
+
+    expected_owners = {
+        r"\bpub\s+trait\s+MappedFile\b": MAPPED_FILE_CONTRACT_PATH,
+        r"\bpub\s+struct\s+DefaultMappedFile\b": DEFAULT_MAPPED_FILE_PATH,
+        r"\bpub\s+unsafe\s+trait\s+MappedMemory\b": MAPPED_FILE_MEMORY_PATH,
+        r"\bpub\s+struct\s+SelectMappedBufferResult\b": MAPPED_FILE_SELECT_RESULT_PATH,
+    }
+    for pattern, expected_path in expected_owners.items():
+        owners = [
+            path
+            for path, source in active_sources.items()
+            if re.search(pattern, source)
+        ]
+        if owners != [expected_path]:
+            violations.append(f"mapped-file canonical owner changed: {pattern} -> {owners}")
+
+    local_owner_paths = (
+        MAPPED_FILE_CONTRACT_PATH,
+        DEFAULT_MAPPED_FILE_PATH,
+        MAPPED_FILE_MEMORY_PATH,
+        MAPPED_FILE_SELECT_RESULT_PATH,
+    )
+    forbidden_local_owner_pattern = re.compile(
+        r"\b(?:ArcMut|rocketmq_common|rocketmq_rust|rocketmq_store)\b"
+    )
+    for path in local_owner_paths:
+        if forbidden_local_owner_pattern.search(active_sources[path]):
+            violations.append(f"{path.as_posix()}: Local mapped-file owner leaked facade/backend types")
+
+    store_root = compact_rust(active_sources[STORE_MAPPED_FILE_PATH])
+    if store_root.count("pubuserocketmq_store_local::mapped_file::MappedFile;") != 1:
+        violations.append("Store MappedFile compatibility re-export changed")
+    if store_root.count("pubtraitMappedFileAppend:MappedFile") != 1:
+        violations.append("Store message append adapter owner changed")
+    if re.search(r"\bpub\s+trait\s+MappedFile\b", active_sources[STORE_MAPPED_FILE_PATH]):
+        violations.append("Store recreated the canonical MappedFile trait")
+
+    store_default = compact_rust(active_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH])
+    expected_alias = (
+        "pubtypeDefaultMappedFile=rocketmq_store_local::mapped_file::"
+        "DefaultMappedFile<rocketmq_store_local::mapped_file::NativeMappedMemory>;"
+    )
+    if store_default.count(expected_alias) != 1:
+        violations.append("Store DefaultMappedFile compatibility specialization changed")
+    if re.search(r"\b(?:struct|enum|trait)\s+DefaultMappedFile\b", active_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH]):
+        violations.append("Store DefaultMappedFile facade regained implementation ownership")
+
+    local_memory = compact_rust(active_sources[MAPPED_FILE_MEMORY_PATH])
+    required_native_owner = (
+        "pubstructNativeMappedMemory{mmap:Arc<MmapMut>,}"
+    )
+    if local_memory.count(required_native_owner) != 1:
+        violations.append("Local native mapped-memory owner changed")
+    store_memory = compact_rust(active_sources[STORE_MAPPED_FILE_MEMORY_PATH])
+    expected_store_memory = (
+        "pubuserocketmq_store_local::mapped_file::MmapRegionSlice;"
+        "pubuserocketmq_store_local::mapped_file::NativeMappedMemoryasStoreMappedMemory;"
+    )
+    if store_memory != expected_store_memory:
+        violations.append("Store mapped-memory facade must remain exact Local re-exports")
+
+    mapped_file_module_sources = {
+        path: source
+        for path, source in active_sources.items()
+        if path == STORE_MAPPED_FILE_PATH
+        or path.parts[:5] == ("rocketmq-store", "src", "log_file", "mapped_file", path.name)
+    }
+    arc_mut_paths = [
+        path for path, source in mapped_file_module_sources.items() if re.search(r"\bArcMut\b", source)
+    ]
+    if arc_mut_paths:
+        violations.append(f"Store mapped-file retained ArcMut debt: {arc_mut_paths}")
+
+    return violations
+
+
+def commit_log_append_attempt_contract_violations(
+    local_source: str,
+    module_source: str,
+    store_source: str,
+    local_test_source: str,
+    store_test_source: str,
+) -> list[str]:
+    local = active_rust_source(source_without_cfg_test_items(local_source))
+    module = active_rust_source(source_without_cfg_test_items(module_source))
+    store = active_rust_source(source_without_cfg_test_items(store_source))
+    violations: list[str] = []
+
+    if len(re.findall(r"\bpub\s+mod\s+append_attempt\s*;", module)) != 1:
+        violations.append("commit_log root must expose one append_attempt module")
+    for item in (
+        "CommitLogAppendAttempt",
+        "CommitLogAppendOutcome",
+        "CommitLogAppendCompleted",
+        "CommitLogAppendAborted",
+        "CommitLogAppendStatus",
+        "CommitLogAppendFailure",
+        "CommitLogAppendResolution",
+    ):
+        if len(re.findall(rf"\bpub\s+(?:struct|enum)\s+{item}\b", local)) != 1:
+            violations.append(f"Local append-attempt owner changed: {item}")
+    expected_shapes = {
+        "CommitLogAppendCompleted": (
+            "PutOk{result:AppendMessageResult,rolled_segment:Option<S>,},"
+            "RetryRejected{result:AppendMessageResult,rolled_segment:S,},"
+        ),
+        "CommitLogAppendAborted": (
+            "InitialSegmentUnavailable,InitialActiveLockFailed{error:E},"
+            "InitialMessageIllegal{result:AppendMessageResult},"
+            "InitialUnknown{result:AppendMessageResult},"
+            "RolledSegmentUnavailable{first_eof:AppendMessageResult,old:S},"
+            "RolledActiveLockFailed{first_eof:AppendMessageResult,old:S,error:E,},"
+        ),
+        "CommitLogAppendOutcome": (
+            "Completed(CommitLogAppendCompleted<S>),"
+            "Aborted(CommitLogAppendAborted<S,E>),"
+        ),
+        "CommitLogAppendStatus": (
+            "PutOk,UnknownError,CreateSegmentFailed,MessageIllegal,"
+        ),
+        "CommitLogAppendFailure": (
+            "InitialSegmentUnavailable,InitialActiveLockFailed{error:E},"
+            "InitialMessageIllegal,InitialUnknown,RolledSegmentUnavailable,"
+            "RolledActiveLockFailed{error:E},"
+        ),
+        "CommitLogAppendResolution": (
+            "Continue{status:CommitLogAppendStatus,result:AppendMessageResult,"
+            "unlock_segment:Option<S>,},Return{status:CommitLogAppendStatus,"
+            "append_result:Option<AppendMessageResult>,abandoned_segment:Option<S>,"
+            "failure:CommitLogAppendFailure<E>,},"
+        ),
+    }
+    for item, expected in expected_shapes.items():
+        if compact_rust(active_item_body(local, "enum", item) or "") != expected:
+            violations.append(f"Local append-attempt outcome shape changed: {item}")
+    if re.search(r"\bpub\s+struct\s+CommitLogAppendAttempt\s*;", local) is None:
+        violations.append("CommitLogAppendAttempt must remain a public unit struct")
+
+    local_imports = [
+        (visibility, body)
+        for kind, visibility, body, _ in active_import_records(local)
+        if kind == "use"
+    ]
+    if local_imports != [
+        ("", "crate::commit_log::append::AppendMessageResult"),
+        ("", "crate::commit_log::append::AppendMessageStatus"),
+    ]:
+        violations.append("Local append-attempt imports changed")
+    if re.search(
+        r"\b(?:MessageExt\w*|MappedFile\w*|PutMessageStatus|tokio|Instant|ArcMut|async|await)\b",
+        local,
+    ) or any(token in local for token in FORBIDDEN_SOURCE_TOKENS) or ".clone(" in local:
+        violations.append("Local append-attempt owner absorbed Store or runtime dependencies")
+    aborted_position = local_source.find("pub enum CommitLogAppendAborted")
+    aborted_docs = local_source[local_source.rfind("///", 0, aborted_position):aborted_position]
+    if "did not complete successfully, including terminal append rejections" not in aborted_docs:
+        violations.append("CommitLogAppendAborted completion documentation changed")
+    run_position = local_source.find("pub fn run")
+    run_docs = local_source[local_source.rfind("///", 0, run_position):run_position]
+    if "retries at most once on EOF" not in run_docs or "retries exactly once" in run_docs:
+        violations.append("CommitLogAppendAttempt::run retry documentation changed")
+
+    run_records = inherent_method_records(local, "CommitLogAppendAttempt", ("run",))["run"]
+    expected_run_signature = (
+        "pubfnrun<S,E,IsFull,Acquire,LockActive,Append>(initial_segment:Option<S>,"
+        "mutis_full:IsFull,mutacquire:Acquire,mutlock_active:LockActive,mutappend:Append,)"
+        "->CommitLogAppendOutcome<S,E>whereIsFull:FnMut(&S)->bool,"
+        "Acquire:FnMut()->Option<S>,LockActive:FnMut(&S)->Result<(),E>,"
+        "Append:FnMut(&S)->AppendMessageResult,"
+    )
+    if len(run_records) != 1 or run_records[0].signature != expected_run_signature or run_records[0].cfg_gated:
+        violations.append("CommitLogAppendAttempt::run signature or visibility changed")
+    run_body = run_records[0].body if len(run_records) == 1 else ""
+    for fragment, count in {
+        "is_full(&segment)": 1,
+        "letSome(rolled)=acquire()else": 1,
+        "lock_active(&segment)": 1,
+        "lock_active(&rolled)": 1,
+        "letfirst=append(&segment);": 1,
+        "letretry=append(&rolled);": 1,
+        "rolled_segment:Some(old)": 1,
+        "RetryRejected{result:retry,rolled_segment:old,}": 1,
+        (
+            "AppendMessageStatus::EndOfFile|AppendMessageStatus::MessageSizeExceeded|"
+            "AppendMessageStatus::PropertiesSizeExceeded|AppendMessageStatus::UnknownError=>{"
+            "CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::RetryRejected"
+        ): 1,
+        "InitialSegmentUnavailable": 2,
+        "drop(segment);": 2,
+    }.items():
+        if run_body.count(fragment) != count:
+            violations.append(f"Local append-attempt control flow changed: {fragment}")
+    if (
+        run_body.count("acquire()") != 3
+        or run_body.count("append(") != 2
+        or run_body.count("lock_active(") != 2
+    ):
+        violations.append("Local append-attempt bounded acquire/append count changed")
+    resolve_body = compact_rust(named_function_body(local, "resolve") or "")
+    expected_resolution_fragments = {
+        "CommitLogAppendResolution::Continue{": 2,
+        "CommitLogAppendResolution::Return{": 6,
+        "status:CommitLogAppendStatus::PutOk": 1,
+        "status:CommitLogAppendStatus::UnknownError": 2,
+        "status:CommitLogAppendStatus::CreateSegmentFailed": 4,
+        "status:CommitLogAppendStatus::MessageIllegal": 1,
+        "unlock_segment:rolled_segment": 1,
+        "unlock_segment:Some(rolled_segment)": 1,
+        "append_result:Some(first_eof)": 2,
+        "abandoned_segment:Some(old)": 2,
+        "failure:CommitLogAppendFailure::": 6,
+    }
+    for fragment, count in expected_resolution_fragments.items():
+        if resolve_body.count(fragment) != count:
+            violations.append(f"Local append resolution mapping changed: {fragment}")
+    if ".clone(" in resolve_body or "panic!(" in resolve_body or "unwrap(" in resolve_body:
+        violations.append("Local append resolution copied ownership or introduced panic")
+    full_acquire = run_body.find("matchacquire(){Some(acquired)=>{drop(segment);")
+    first_drop = run_body.find("drop(segment);")
+    first_append = run_body.find("letfirst=append(&segment);")
+    first_status = run_body.find("matchfirst.status{")
+    old_binding = run_body.find("letold=segment;")
+    rolled_acquire = run_body.find("letSome(rolled)=acquire()else")
+    rolled_lock = run_body.find("lock_active(&rolled)")
+    retry_append = run_body.find("letretry=append(&rolled);")
+    retry_status = run_body.find("matchretry.status{")
+    if not (
+        -1 < full_acquire <= first_drop < first_append < first_status < old_binding
+        < rolled_acquire < rolled_lock < retry_append < retry_status
+    ):
+        violations.append("Local append-attempt event/drop ordering changed")
+
+    imports = [
+        body
+        for kind, _, body, _ in active_import_records(store)
+        if kind == "use" and "commit_log::append_attempt" in body
+    ]
+    expected_imports = {
+        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt",
+        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendFailure",
+        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendResolution",
+        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus",
+    }
+    if set(imports) != expected_imports or len(imports) != len(expected_imports):
+        violations.append("Store append-attempt imports changed")
+    exact_lock_adapter = (
+        "|mapped_file|{lettarget=Self::active_memory_lock_target_for_config("
+        "message_store_config,mapped_file.get_wrote_position().max(0)asu64,"
+        "mapped_file.get_file_size(),);lock_active_mapped_file_parts!(active_memory_lock,"
+        "active_memory_lock_present,mapped_file,target,crate::utils::ffi::mlock,"
+        "crate::utils::ffi::munlock,)}"
+    )
+    expected_adapters = {
+        "put_messages": (
+            "CommitLogAppendAttempt::run(mapped_file,|mapped_file|mapped_file.is_full(),"
+            "||mapped_file_queue.get_last_mapped_file_mut_start_offset(0,true),"
+            + exact_lock_adapter
+            + ","
+            "|mapped_file|{mapped_file.append_messages(&mutmsg_batch,append_message_callback,"
+            "&mutput_message_context,enabled_append_prop_crc,)},)"
+        ),
+        "put_message": (
+            "CommitLogAppendAttempt::run(mapped_file,|mapped_file|mapped_file.is_full(),"
+            "||mapped_file_queue.get_last_mapped_file_mut_start_offset(0,true),"
+            + exact_lock_adapter
+            + ","
+            "|mapped_file|mapped_file.append_message(&mutmsg,append_message_callback,"
+            "&put_message_context),)"
+        ),
+    }
+
+    def append_attempt_call(body: str) -> str:
+        start = body.find("CommitLogAppendAttempt::run(")
+        if start == -1:
+            return ""
+        opening = body.find("(", start)
+        depth = 0
+        for index in range(opening, len(body)):
+            if body[index] == "(":
+                depth += 1
+            elif body[index] == ")":
+                depth -= 1
+                if depth == 0:
+                    return body[start:index + 1]
+        return ""
+
+    for function_name in ("put_messages", "put_message"):
+        body = compact_rust(named_function_body(store, function_name) or "")
+        if body.count("CommitLogAppendAttempt::run(") != 1:
+            violations.append(f"Store {function_name} must use one Local append-attempt adapter")
+        if body.count("|mapped_file|mapped_file.is_full()") != 1:
+            violations.append(f"Store {function_name} is_full closure changed")
+        if body.count("get_last_mapped_file_mut_start_offset(0,true)") != 1:
+            violations.append(f"Store {function_name} acquire closure changed")
+        expected_append = "append_messages(" if function_name == "put_messages" else "append_message("
+        if body.count(expected_append) != 1:
+            violations.append(f"Store {function_name} append closure changed")
+        if append_attempt_call(body) != expected_adapters[function_name]:
+            violations.append(f"Store {function_name} exact closure adapter changed")
+        if body.count("append_attempt.resolve()") != 1:
+            violations.append(f"Store {function_name} must delegate outcome resolution to Local")
+        if body.count("CommitLogAppendResolution::Continue") != 1 or body.count(
+            "CommitLogAppendResolution::Return"
+        ) != 1:
+            violations.append(f"Store {function_name} resolution adapter shape changed")
+        for failure in (
+            "InitialSegmentUnavailable",
+            "InitialActiveLockFailed",
+            "InitialMessageIllegal",
+            "InitialUnknown",
+            "RolledSegmentUnavailable",
+            "RolledActiveLockFailed",
+        ):
+            if body.count(f"CommitLogAppendFailure::{failure}") != 1:
+                violations.append(f"Store {function_name} failure observation changed: {failure}")
+        if (
+            body.count("Self::put_message_status(status)") != 2
+            or body.count("drop(abandoned_segment);") != 1
+            or "CommitLogAppendCompleted::" in body
+            or "CommitLogAppendAborted::" in body
+            or "CommitLogAppendOutcome::" in body
+        ):
+            violations.append(f"Store {function_name} retained append outcome ownership")
+        return_start = body.find("CommitLogAppendResolution::Return")
+        return_end = body.find("};letelapsed_time_in_lock", return_start)
+        return_arm = body[return_start:return_end]
+        release = return_arm.find("self.release_put_message_lock(")
+        topic_drop = return_arm.find("drop(_topic_queue_guard);")
+        failure_match = return_arm.find("matchfailure{")
+        segment_drop = return_arm.find("drop(abandoned_segment);")
+        result_return = return_arm.find("returnPutMessageResult::new_append_result(")
+        if not (-1 < release < topic_drop < failure_match < segment_drop < result_return):
+            violations.append(f"Store {function_name} terminal cleanup order changed")
+        raw_body = named_raw_function_body(store_source, function_name) or ""
+        for message in (
+            "create mapped file error, topic: {}  clientAddr: {}",
+            "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+            "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+        ):
+            if raw_body.count(message) != 1:
+                violations.append(f"Store {function_name} append failure logging changed: {message}")
+
+    put_status_body = compact_rust(named_function_body(store, "put_message_status") or "")
+    if put_status_body != (
+        "matchstatus{CommitLogAppendStatus::PutOk=>PutMessageStatus::PutOk,"
+        "CommitLogAppendStatus::UnknownError=>PutMessageStatus::UnknownError,"
+        "CommitLogAppendStatus::CreateSegmentFailed=>PutMessageStatus::CreateMappedFileFailed,"
+        "CommitLogAppendStatus::MessageIllegal=>PutMessageStatus::MessageIllegal,}"
+    ):
+        violations.append("Store append status adapter changed")
+
+    default_wrapper_records = inherent_method_records(
+        store,
+        "CommitLog",
+        ("ensure_active_mapped_file_locked",),
+    )["ensure_active_mapped_file_locked"]
+    if (
+        len(default_wrapper_records) != 1
+        or default_wrapper_records[0].body != (
+            "self.ensure_active_mapped_file_locked_with(mapped_file,"
+            "crate::utils::ffi::mlock,crate::utils::ffi::munlock)"
+        )
+    ):
+        violations.append("Store default active-lock wrapper must remain one exact delegation")
+    ensure_wrapper = compact_rust(named_function_body(store, "ensure_active_mapped_file_locked_with") or "")
+    if ensure_wrapper != (
+        "lettarget=self.active_memory_lock_target(mapped_file);"
+        "let(active_memory_lock,active_memory_lock_present)=self.runtime_state."
+        "active_memory_lock_parts();lock_active_mapped_file_parts!(active_memory_lock,"
+        "active_memory_lock_present,mapped_file,target,&mutlocker,&mutunlocker,)"
+    ):
+        violations.append("Store active-lock test wrapper must remain one parts delegation")
+    release_wrapper = compact_rust(named_function_body(store, "release_active_memory_lock_if_present") or "")
+    if release_wrapper != (
+        "let(active_memory_lock,active_memory_lock_present)=self.runtime_state."
+        "active_memory_lock_parts();Self::release_active_memory_lock_if_present_parts("
+        "active_memory_lock,active_memory_lock_present,unlocker)"
+    ):
+        violations.append("Store active-lock release wrapper must remain one parts delegation")
+    if compact_rust(store).count("lock_active_mapped_file_parts!(") != 3:
+        violations.append("Store active-lock macro adapter call count changed")
+    for helper in (
+        "ensure_active_mapped_file_locked_parts",
+        "release_active_memory_lock_if_present_parts",
+        "release_active_memory_lock_parts",
+    ):
+        helper_body = compact_rust(named_function_body(store, helper) or "")
+        if not helper_body or ".clone(" in helper_body or "Arc::clone" in helper_body:
+            violations.append(f"Store {helper} split helper changed or cloned ownership")
+    required_local_tests = (
+        "initial_present_put_ok_observes_strict_order_without_acquiring",
+        "missing_or_full_initial_segment_acquires_exactly_once",
+        "full_initial_acquire_failure_drops_old_only_after_acquire",
+        "initial_lock_failure_drops_segment_after_the_failed_lock",
+        "initial_abort_outcomes_are_explicit_and_do_not_retry",
+        "first_eof_rolls_once_and_retry_put_ok_returns_old_segment",
+        "rolled_abort_outcomes_retain_first_eof_and_old_segment",
+        "every_non_put_ok_retry_is_rejected_without_a_third_attempt",
+        "completed_outcomes_resolve_to_continue_status_and_unlock_identity",
+        "aborted_outcomes_resolve_every_return_status_and_owned_detail",
+    )
+    for test_name in required_local_tests:
+        if named_function_body(local_test_source, test_name) is None:
+            violations.append(f"Local append-attempt event/drop test changed: {test_name}")
+    if re.search(r"#\[derive\([^]]*\bClone\b[^]]*\)\]\s*struct\s+Segment\b", local_test_source):
+        violations.append("Local append-attempt Segment must prove that run has no Clone bound")
+    for test_name in (
+        "single_put_retries_encoded_buffer_after_commitlog_eof_roll",
+        "batch_put_retries_full_encoded_buffer_after_partial_frame_eof_roll",
+    ):
+        body = compact_rust(named_function_body(store_test_source, test_name) or "")
+        if not body or "mapped_file_size_commit_log:512" not in body or "wrote_offset,512" not in body:
+            violations.append(f"Store af0 EOF-roll regression changed: {test_name}")
+    return violations
+
+
+def commit_log_load_orchestration_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+
+    expected_items = {
+        "CommitLogLoadStep": ("enum", "Optimized,Sequential,"),
+        "CommitLogLoadObservation": (
+            "enum",
+            "ForcedSequential,OptimizedLoaded,OptimizedRejected,"
+            "OptimizedFailed(E),SequentialFailed(E),",
+        ),
+    }
+    for item, (kind, expected_body) in expected_items.items():
+        if len(re.findall(rf"\bpub\s+{kind}\s+{item}\b", active)) != 1 or compact_rust(
+            active_item_body(production, kind, item) or ""
+        ) != expected_body:
+            violations.append(f"Local CommitLog load item changed: {item}")
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+{kind}\s+{item}\b",
+            production,
+        ):
+            violations.append(f"Local CommitLog load item is cfg-gated: {item}")
+
+    for function_name in ("safe_load_requested", "drive_commit_log_load"):
+        if len(re.findall(rf"\bpub\s+fn\s+{function_name}\b", active)) != 1:
+            violations.append(f"Local CommitLog load function ownership changed: {function_name}")
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+fn\s+{function_name}\b",
+            production,
+        ):
+            violations.append(f"Local CommitLog load function is cfg-gated: {function_name}")
+
+    safe_load_body = re.sub(
+        r"\s+",
+        "",
+        named_raw_function_body(local, "safe_load_requested") or "",
+    )
+    if safe_load_body != (
+        'value.is_some_and(|value|value=="1"||value.to_lowercase()=="true")'
+    ):
+        violations.append("Local safe-load legacy truth table changed")
+
+    expected_driver_signature = (
+        "pubfndrive_commit_log_load<E,Execute,Observe>(force_sequential:bool,"
+        "mutexecute:Execute,mutobserve:Observe,)->boolwhereExecute:FnMut("
+        "CommitLogLoadStep)->Result<bool,E>,Observe:FnMut(CommitLogLoadObservation<E>),"
+    )
+    driver_start = active.find("pub fn drive_commit_log_load")
+    driver_open = active.find("{", driver_start) if driver_start >= 0 else -1
+    actual_driver_signature = (
+        compact_rust(active[driver_start:driver_open])
+        if driver_start >= 0 and driver_open >= 0
+        else ""
+    )
+    if actual_driver_signature != expected_driver_signature:
+        violations.append("Local CommitLog load driver signature changed")
+
+    expected_driver_body = (
+        "ifforce_sequential{observe(CommitLogLoadObservation::ForcedSequential);"
+        "returnmatchexecute(CommitLogLoadStep::Sequential){Ok(loaded)=>loaded,"
+        "Err(error)=>{observe(CommitLogLoadObservation::SequentialFailed(error));false}};}"
+        "matchexecute(CommitLogLoadStep::Optimized){Ok(true)=>{observe("
+        "CommitLogLoadObservation::OptimizedLoaded);true}Ok(false)=>{observe("
+        "CommitLogLoadObservation::OptimizedRejected);false}Err(error)=>{observe("
+        "CommitLogLoadObservation::OptimizedFailed(error));matchexecute("
+        "CommitLogLoadStep::Sequential){Ok(loaded)=>loaded,Err(error)=>{observe("
+        "CommitLogLoadObservation::SequentialFailed(error));false}}}}"
+    )
+    actual_driver_body = compact_rust(
+        named_function_body(production, "drive_commit_log_load") or ""
+    )
+    if actual_driver_body != expected_driver_body:
+        violations.append("Local CommitLog load decision or observation order changed")
+    if re.search(
+        r"#\[derive\([^]]*\bClone\b[^]]*\)\]\s*pub\s+enum\s+CommitLogLoadObservation\b",
+        production,
+    ):
+        violations.append("Local CommitLog load error observation gained Clone ownership")
+
+    forbidden = (
+        "MappedFile",
+        "MessageStoreConfig",
+        "ArcMut",
+        "tokio",
+        "rocketmq_store",
+        "dyn",
+        "unsafe",
+    )
+    if any(re.search(rf"\b{re.escape(token)}\b", active) for token in forbidden):
+        violations.append("Local CommitLog load driver absorbed Store/runtime edges")
+    if re.search(r"\b(?:panic|unreachable|unwrap|expect)\s*!?\s*\(", active):
+        violations.append("Local CommitLog load driver must fail closed without panic")
+    if any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local CommitLog load driver forbids alias/brace/glob imports")
+    if active_rust_source(module).count("pub mod load_orchestration;") != 1:
+        violations.append("Local commit_log module must expose load_orchestration exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::commit_log::load_orchestration::drive_commit_log_load",
+        "use rocketmq_store_local::commit_log::load_orchestration::safe_load_requested",
+        "use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadObservation",
+        "use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadStep",
+    }
+    actual_imports = {
+        statement
+        for kind, _, body, statement in active_import_records(store)
+        if kind == "use" and "commit_log::load_orchestration" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store CommitLog load imports must be direct and exact")
+
+    expected_store_load_body = (
+        "letsafe_load_value=std::env::var().ok();letforce_sequential=safe_load_requested("
+        "safe_load_value.as_deref());drive_commit_log_load(force_sequential,|step|matchstep{"
+        "CommitLogLoadStep::Optimized=>self.load_optimized(),CommitLogLoadStep::Sequential=>"
+        "Ok(self.load_sequential()),},|observation|matchobservation{CommitLogLoadObservation::"
+        "ForcedSequential=>{info!();}CommitLogLoadObservation::OptimizedLoaded=>{info!();}"
+        "CommitLogLoadObservation::OptimizedRejected=>{error!();}CommitLogLoadObservation::"
+        "OptimizedFailed(error)=>{error!(,error);}CommitLogLoadObservation::SequentialFailed("
+        "error)=>{error!(,error);}},)"
+    )
+    actual_store_load_body = compact_rust(named_function_body(store, "load") or "")
+    if actual_store_load_body != expected_store_load_body:
+        violations.append("Store CommitLog load adapter or direct policy changed")
+
+    store_load_raw = named_raw_function_body(store, "load") or ""
+    expected_logs = (
+        "Using safe sequential CommitLog load (ROCKETMQ_SAFE_LOAD=true)",
+        "load commit log Ok (optimized)",
+        "load commit log failed (optimized)",
+        "Optimized load failed: {}, falling back to sequential load",
+        "Sequential CommitLog load adapter failed: {}",
+    )
+    if any(store_load_raw.count(message) != 1 for message in expected_logs):
+        violations.append("Store CommitLog load observation logging changed")
+
+    optimized_body = compact_rust(named_function_body(store, "load_optimized") or "")
+    check_self = "self.mapped_file_queue.check_self();"
+    stats_log = "info!(,stats.total_files"
+    optimized_success = "Ok(true)"
+    if (
+        optimized_body.count(check_self) != 1
+        or optimized_body.find(stats_log) < 0
+        or optimized_body.find(stats_log) > optimized_body.find(check_self)
+        or optimized_body.find(check_self) > optimized_body.find(optimized_success)
+    ):
+        violations.append("Store optimized load success validation order changed")
+
+    sequential_body = compact_rust(named_function_body(store, "load_sequential") or "")
+    if sequential_body != (
+        "letresult=self.mapped_file_queue.load();self.mapped_file_queue.check_self();"
+        "ifresult{info!();}else{error!();}result"
+    ):
+        violations.append("Store sequential load adapter changed")
+    sequential_raw = named_raw_function_body(store, "load_sequential") or ""
+    for message in (
+        "load commit log Ok (sequential fallback)",
+        "load commit log failed (sequential fallback)",
+    ):
+        if sequential_raw.count(message) != 1:
+            violations.append("Store sequential load legacy logging changed")
+            break
+
+    required_tests = (
+        "safe_load_value_preserves_legacy_truth_table",
+        "forced_sequential_never_attempts_optimized",
+        "optimized_success_is_terminal",
+        "optimized_rejection_does_not_fallback",
+        "optimized_error_observes_before_sequential_fallback",
+        "sequential_adapter_error_is_observed_and_fails_closed",
+    )
+    for test_name in required_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local CommitLog load regression changed: {test_name}")
+    return violations
+
+
+def commit_log_recovery_route_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+
+    if len(re.findall(r"\bpub\s+enum\s+CommitLogRecoveryStep\b", active)) != 1 or compact_rust(
+        active_item_body(production, "enum", "CommitLogRecoveryStep") or ""
+    ) != "Optimized,Standard,":
+        violations.append("Local CommitLog recovery route item changed")
+    if re.search(
+        r"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+enum\s+CommitLogRecoveryStep\b",
+        production,
+    ):
+        violations.append("Local CommitLog recovery route item is cfg-gated")
+
+    expected_signatures = {
+        "optimized_recovery_requested": (
+            "pubfnoptimized_recovery_requested(value:Option<&str>)->bool"
+        ),
+        "drive_commit_log_recovery": (
+            "pubfndrive_commit_log_recovery<Execute,Output>(use_optimized:bool,"
+            "execute:Execute)->OutputwhereExecute:FnOnce(CommitLogRecoveryStep)->Output,"
+        ),
+    }
+    for function_name, expected_signature in expected_signatures.items():
+        if len(re.findall(rf"\bpub\s+fn\s+{function_name}\b", active)) != 1:
+            violations.append(f"Local CommitLog recovery function ownership changed: {function_name}")
+            continue
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+fn\s+{function_name}\b",
+            production,
+        ):
+            violations.append(f"Local CommitLog recovery function is cfg-gated: {function_name}")
+        function_start = active.find(f"pub fn {function_name}")
+        function_open = active.find("{", function_start)
+        if compact_rust(active[function_start:function_open]) != expected_signature:
+            violations.append(f"Local CommitLog recovery function signature changed: {function_name}")
+
+    if compact_rust(named_function_body(production, "optimized_recovery_requested") or "") != (
+        "value.and_then(|value|value.parse::<bool>().ok()).unwrap_or(true)"
+    ):
+        violations.append("Local optimized recovery legacy truth table changed")
+    if compact_rust(named_function_body(production, "drive_commit_log_recovery") or "") != (
+        "execute(ifuse_optimized{CommitLogRecoveryStep::Optimized}else{"
+        "CommitLogRecoveryStep::Standard})"
+    ):
+        violations.append("Local CommitLog recovery route decision changed")
+
+    forbidden = (
+        "MappedFile",
+        "LocalFileMessageStore",
+        "MessageStoreConfig",
+        "ArcMut",
+        "tokio",
+        "Future",
+        "rocketmq_store",
+        "dyn",
+        "async",
+        "unsafe",
+    )
+    if any(re.search(rf"\b{re.escape(token)}\b", active) for token in forbidden):
+        violations.append("Local CommitLog recovery route absorbed Store/runtime edges")
+    if re.search(r"\b(?:panic|unreachable|unwrap|expect)\s*!?\s*\(", active):
+        violations.append("Local CommitLog recovery route must not panic")
+    if any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local CommitLog recovery route forbids alias/brace/glob imports")
+    if active_rust_source(module).count("pub mod recovery_orchestration;") != 1:
+        violations.append("Local commit_log module must expose recovery_orchestration exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::commit_log::recovery_orchestration::drive_commit_log_recovery",
+        "use rocketmq_store_local::commit_log::recovery_orchestration::optimized_recovery_requested",
+        "use rocketmq_store_local::commit_log::recovery_orchestration::CommitLogRecoveryStep",
+    }
+    actual_imports = {
+        statement
+        for kind, _, body, statement in active_import_records(store)
+        if kind == "use" and "commit_log::recovery_orchestration" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store CommitLog recovery route imports must be direct and exact")
+
+    expected_store_bodies = {
+        "recover_normally": (
+            "letoptimized_recovery_value=std::env::var().ok();letuse_optimized="
+            "optimized_recovery_requested(optimized_recovery_value.as_deref());letmessage_store="
+            "matchself.message_store_arc_or_error(){Ok(message_store)=>message_store,Err(error)=>{"
+            "error!();return;}};drive_commit_log_recovery(use_optimized,|step|asyncmove{matchstep{"
+            "CommitLogRecoveryStep::Optimized=>{self.commit_log.recover_normally_optimized("
+            "max_phy_offset_of_consume_queue,message_store).await;}CommitLogRecoveryStep::Standard=>{"
+            "self.commit_log.recover_normally(max_phy_offset_of_consume_queue,message_store).await;}}}"
+            ").await;"
+        ),
+        "recover_abnormally": (
+            "letoptimized_recovery_value=std::env::var().ok();letuse_optimized="
+            "optimized_recovery_requested(optimized_recovery_value.as_deref());letmessage_store="
+            "matchself.message_store_arc_or_error(){Ok(message_store)=>message_store,Err(error)=>{"
+            "error!();return;}};drive_commit_log_recovery(use_optimized,|step|asyncmove{matchstep{"
+            "CommitLogRecoveryStep::Optimized=>{self.commit_log.recover_abnormally_optimized("
+            "max_phy_offset_of_consume_queue,message_store).await;}CommitLogRecoveryStep::Standard=>{"
+            "self.commit_log.recover_abnormally(max_phy_offset_of_consume_queue,message_store).await;}}}"
+            ").await;"
+        ),
+    }
+    expected_signatures = {
+        name: (
+            f"pubasyncfn{name}(&mutself,max_phy_offset_of_consume_queue:i64)"
+        )
+        for name in expected_store_bodies
+    }
+    for function_name, expected_body in expected_store_bodies.items():
+        if named_function_signature(store, function_name) != expected_signatures[function_name]:
+            violations.append(f"Store {function_name} public signature changed")
+        if compact_rust(named_function_body(store, function_name) or "") != expected_body:
+            violations.append(f"Store {function_name} recovery route adapter changed")
+        raw_body = named_raw_function_body(store, function_name) or ""
+        expected_error = (
+            "skip normal recovery: {error}"
+            if function_name == "recover_normally"
+            else "skip abnormal recovery: {error}"
+        )
+        if raw_body.count(expected_error) != 1:
+            violations.append(f"Store {function_name} missing-store logging changed")
+
+    required_tests = (
+        "optimized_recovery_value_preserves_legacy_truth_table",
+        "optimized_route_executes_exactly_once_and_returns_adapter_output",
+        "standard_route_executes_exactly_once_and_returns_adapter_output",
+    )
+    for test_name in required_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local CommitLog recovery route regression changed: {test_name}")
+    return violations
+
+
+def abnormal_recovery_segment_orchestration_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+    compact = compact_rust(production)
+    expected_items = {
+        "AbnormalRecoveryRecord": (
+            "enum",
+            "Message{relative_start:u64,validated_size:u64,confirm_candidate_end:i64,"
+            "dispatch_gate:AbnormalRecoveryDispatchGate,record:R,},Blank{record:R,},"
+            "Invalid{relative_start:Option<u64>,record:R,},SourceEnded,",
+        ),
+        "AbnormalRecoveryObservation": (
+            "enum",
+            "DispatchMessage,SkipMessageDispatch,Blank,"
+            "Invalid{relative_start:Option<u64>,},",
+        ),
+        "AbnormalRecoverySegmentOutcome": (
+            "enum",
+            "ContinueNextSegment,StopRecovery,AdapterFailed(E),"
+            "StateFailed(AbnormalRecoveryOffsetError),"
+            "UnexpectedAction(AbnormalRecoveryAction),",
+        ),
+    }
+    for item, (kind, expected_body) in expected_items.items():
+        if len(re.findall(rf"\bpub\s+{kind}\s+{item}\b", active)) != 1 or compact_rust(
+            active_item_body(production, kind, item) or ""
+        ) != expected_body:
+            violations.append(f"Local abnormal orchestration item changed: {item}")
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+{kind}\s+{item}\b",
+            production,
+        ):
+            violations.append(f"Local abnormal orchestration item is cfg-gated: {item}")
+
+    methods = inherent_method_records(
+        production,
+        "AbnormalRecoveryState",
+        ("drive_abnormal_segment",),
+    )["drive_abnormal_segment"]
+    if len(methods) != 1 or methods[0].visibility != "pub" or methods[0].cfg_gated:
+        violations.append("Local abnormal segment driver ownership changed")
+    signature = "" if not methods else methods[0].signature
+    signature_parts = (
+        "pubfndrive_abnormal_segment<R,E,Next,Started,Observe>",
+        "&mutself,segment_base:u64,mutnext_record:Next,"
+        "on_segment_started:Started,mutobserve:Observe,",
+        "->AbnormalRecoverySegmentOutcome<E>",
+        "Next:FnMut()->Result<AbnormalRecoveryRecord<R>,E>",
+        "Started:FnOnce()",
+        "Observe:FnMut(AbnormalRecoveryObservation,&mutR)",
+    )
+    if any(part not in signature for part in signature_parts):
+        violations.append("Local abnormal segment driver signature changed")
+    required_flow = (
+        "self.apply(AbnormalRecoveryEvent::SegmentStarted{base_offset:segment_base,})",
+        "on_segment_started();",
+        "letrecord=matchnext_record()",
+        "self.apply(AbnormalRecoveryEvent::MessageAccepted{segment_base,relative_start,"
+        "validated_size,confirm_candidate_end,dispatch_gate,})",
+        "observe(AbnormalRecoveryObservation::DispatchMessage,&mutrecord)",
+        "observe(AbnormalRecoveryObservation::SkipMessageDispatch,&mutrecord)",
+        "self.apply(AbnormalRecoveryEvent::Blank)",
+        "observe(AbnormalRecoveryObservation::Blank,&mutrecord)",
+        "observe(AbnormalRecoveryObservation::Invalid{relative_start},&mutrecord)",
+        "self.apply(AbnormalRecoveryEvent::InvalidRecord)",
+        "AbnormalRecoveryRecord::SourceEnded=>matchself.apply(AbnormalRecoveryEvent::SourceEnded)",
+    )
+    if any(fragment not in compact for fragment in required_flow):
+        violations.append("Local abnormal segment driver flow changed")
+    ordered_pairs = (
+        (
+            "self.apply(AbnormalRecoveryEvent::SegmentStarted",
+            "on_segment_started();",
+        ),
+        (
+            "self.apply(AbnormalRecoveryEvent::MessageAccepted",
+            "observe(AbnormalRecoveryObservation::DispatchMessage",
+        ),
+        (
+            "self.apply(AbnormalRecoveryEvent::Blank)",
+            "observe(AbnormalRecoveryObservation::Blank",
+        ),
+        (
+            "observe(AbnormalRecoveryObservation::Invalid",
+            "self.apply(AbnormalRecoveryEvent::InvalidRecord)",
+        ),
+    )
+    if any(
+        compact.find(first) == -1
+        or compact.find(second) == -1
+        or compact.find(first) > compact.find(second)
+        for first, second in ordered_pairs
+    ):
+        violations.append("Local abnormal observation/state order changed")
+    if re.search(r"\b(?:panic|unreachable)\s*!", active):
+        violations.append("Local abnormal segment driver must return typed outcomes instead of panic")
+    forbidden = ("MappedFile", "MessageExt", "DispatchRequest", "ArcMut", "tokio", "rocketmq_store", "unsafe")
+    if any(re.search(rf"\b{re.escape(token)}\b", active) for token in forbidden):
+        violations.append("Local abnormal segment driver absorbed Store/runtime edges")
+    if re.search(r"\bdyn\b", active) or any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local abnormal segment driver uses dynamic or indirect imports")
+    if active_rust_source(module).count("pub mod abnormal_recovery;") != 1:
+        violations.append("Local commit_log module must expose abnormal_recovery exactly once")
+    required_tests = (
+        "segment_state_error_skips_started_and_preserves_adapter_error_identity",
+        "dispatch_and_skip_observe_after_state_and_before_payload_drop",
+        "blank_observes_once_and_stops_reading",
+        "invalid_is_observed_before_policy_action",
+        "message_state_failure_drops_unobserved_payload_and_stops_reading",
+        "source_ended_never_observes_and_returns_policy_action",
+    )
+    for test_name in required_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local abnormal orchestration regression changed: {test_name}")
+    violations.extend(store_abnormal_recovery_adapter_violations(store))
+    return violations
+
+
+def normal_recovery_segment_orchestration_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    production = source_without_cfg_test_items(local)
+    active = active_rust_source(production)
+
+    expected_items = {
+        "NormalRecoveryRecord": (
+            "enum",
+            "Message{relative_start:u64,size:u64,record:R,},Blank{record:R,},"
+            "Invalid{relative_start:Option<u64>,record:R,},SourceEnded,",
+        ),
+        "NormalRecoveryObservation": (
+            "enum",
+            "MessageAccepted,Blank,Invalid{relative_start:Option<u64>,},",
+        ),
+        "NormalRecoverySegmentOutcome": (
+            "enum",
+            "ContinueNextSegment,StopRecovery,AdapterFailed(E),"
+            "StateFailed(NormalRecoveryOffsetError),",
+        ),
+    }
+    for item, (kind, expected_body) in expected_items.items():
+        declarations = re.findall(rf"\bpub\s+{kind}\s+{item}\b", active)
+        body = compact_rust(active_item_body(production, kind, item) or "")
+        if len(declarations) != 1 or body != expected_body:
+            violations.append(f"Local normal recovery item changed: {item}")
+        if re.search(
+            rf"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+{kind}\s+{item}\b",
+            production,
+        ):
+            violations.append(f"Local normal recovery item is cfg-gated: {item}")
+
+    method_records = inherent_method_records(
+        production,
+        "NormalRecoveryState",
+        ("drive_segment",),
+    )["drive_segment"]
+    expected_signature = (
+        "pubfndrive_segment<R,E,Next,Started,Observe>(&mutself,segment_base:u64,"
+        "mutnext_record:Next,on_segment_started:Started,mutobserve:Observe,)"
+        "->NormalRecoverySegmentOutcome<E>whereNext:FnMut()->Result<NormalRecoveryRecord<R>,E>,"
+        "Started:FnOnce(),Observe:FnMut(NormalRecoveryObservation,&mutR),"
+    )
+    expected_body = (
+        "letstarted_action=matchself.apply(NormalRecoveryEvent::SegmentStarted{"
+        "base_offset:segment_base,}){Ok(action)=>action,Err(error)=>return"
+        "NormalRecoverySegmentOutcome::StateFailed(error),};on_segment_started();"
+        "matchstarted_action{NormalRecoveryAction::ContinueRecord=>{}"
+        "NormalRecoveryAction::ContinueNextSegment=>{return"
+        "NormalRecoverySegmentOutcome::ContinueNextSegment;}"
+        "NormalRecoveryAction::StopRecovery=>returnNormalRecoverySegmentOutcome::StopRecovery,}"
+        "loop{letrecord=matchnext_record(){Ok(record)=>record,Err(error)=>return"
+        "NormalRecoverySegmentOutcome::AdapterFailed(error),};matchrecord{"
+        "NormalRecoveryRecord::Message{relative_start,size,mutrecord,}=>{letaction=match"
+        "self.apply(NormalRecoveryEvent::MessageAccepted{segment_base,relative_start,size,})"
+        "{Ok(action)=>action,Err(error)=>returnNormalRecoverySegmentOutcome::StateFailed(error),};"
+        "matchaction{NormalRecoveryAction::ContinueRecord=>{observe("
+        "NormalRecoveryObservation::MessageAccepted,&mutrecord);}"
+        "NormalRecoveryAction::ContinueNextSegment=>{return"
+        "NormalRecoverySegmentOutcome::ContinueNextSegment;}"
+        "NormalRecoveryAction::StopRecovery=>{returnNormalRecoverySegmentOutcome::StopRecovery;}}}"
+        "NormalRecoveryRecord::Blank{mutrecord}=>{observe(NormalRecoveryObservation::Blank,"
+        "&mutrecord);matchself.apply(NormalRecoveryEvent::Blank){"
+        "Ok(NormalRecoveryAction::ContinueRecord)=>{}"
+        "Ok(NormalRecoveryAction::ContinueNextSegment)=>{return"
+        "NormalRecoverySegmentOutcome::ContinueNextSegment;}"
+        "Ok(NormalRecoveryAction::StopRecovery)=>{return"
+        "NormalRecoverySegmentOutcome::StopRecovery;}"
+        "Err(error)=>returnNormalRecoverySegmentOutcome::StateFailed(error),}}"
+        "NormalRecoveryRecord::Invalid{relative_start,mutrecord,}=>{observe("
+        "NormalRecoveryObservation::Invalid{relative_start},&mutrecord);match"
+        "self.apply(NormalRecoveryEvent::InvalidRecord){"
+        "Ok(NormalRecoveryAction::ContinueRecord)=>{}"
+        "Ok(NormalRecoveryAction::ContinueNextSegment)=>{return"
+        "NormalRecoverySegmentOutcome::ContinueNextSegment;}"
+        "Ok(NormalRecoveryAction::StopRecovery)=>{return"
+        "NormalRecoverySegmentOutcome::StopRecovery;}"
+        "Err(error)=>returnNormalRecoverySegmentOutcome::StateFailed(error),}}"
+        "NormalRecoveryRecord::SourceEnded=>matchself.apply(NormalRecoveryEvent::SourceEnded){"
+        "Ok(NormalRecoveryAction::ContinueRecord)=>{}"
+        "Ok(NormalRecoveryAction::ContinueNextSegment)=>{return"
+        "NormalRecoverySegmentOutcome::ContinueNextSegment;}"
+        "Ok(NormalRecoveryAction::StopRecovery)=>{return"
+        "NormalRecoverySegmentOutcome::StopRecovery;}"
+        "Err(error)=>returnNormalRecoverySegmentOutcome::StateFailed(error),},}}"
+    )
+    if (
+        len(method_records) != 1
+        or method_records[0].visibility != "pub"
+        or method_records[0].cfg_gated
+        or method_records[0].signature != expected_signature
+        or method_records[0].body != expected_body
+    ):
+        violations.append("Local drive_segment signature, ownership, or event order changed")
+
+    forbidden_local_tokens = (
+        "MappedFile",
+        "MessageExt",
+        "DispatchRequest",
+        "ArcMut",
+        "tokio",
+        "rocketmq_store",
+        "unsafe",
+    )
+    present_forbidden = [
+        token
+        for token in forbidden_local_tokens
+        if re.search(rf"\b{re.escape(token)}\b", active)
+    ]
+    if present_forbidden:
+        violations.append(f"Local normal recovery absorbed Store/runtime edges: {present_forbidden}")
+    if re.search(r"\bdyn\b", active) or any(
+        kind == "use" and (" as " in body or "{" in body or "*" in body)
+        for kind, _, body, _ in active_import_records(production)
+    ):
+        violations.append("Local normal recovery uses dynamic ports or non-direct imports")
+    if re.search(
+        r"#\[derive\([^]]*\bClone\b[^]]*\)\]\s*pub\s+enum\s+"
+        r"(?:NormalRecoveryRecord|NormalRecoverySegmentOutcome)\b",
+        production,
+    ):
+        violations.append("Local record/outcome payload ownership gained Clone")
+
+    if active_rust_source(module).count("pub mod normal_recovery;") != 1:
+        violations.append("Local commit_log module must expose normal_recovery exactly once")
+
+    expected_imports = {
+        "use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation",
+        "use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryRecord",
+        "use rocketmq_store_local::commit_log::normal_recovery::NormalRecoverySegmentOutcome",
+    }
+    actual_imports = {
+        statement
+        for kind, _, body, statement in active_import_records(store)
+        if kind == "use" and "commit_log::normal_recovery" in body
+    }
+    if actual_imports != expected_imports:
+        violations.append("Store normal recovery imports must be direct and exact")
+    expected_state_imports = {
+        "use rocketmq_store_local::commit_log::recovery::CommitLogRecoveryCompletion",
+        "use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy",
+        "use rocketmq_store_local::commit_log::recovery::NormalRecoveryState",
+    }
+    actual_state_imports = {
+        statement
+        for kind, _, body, statement in active_import_records(store)
+        if kind == "use"
+        and body
+        in {
+            "rocketmq_store_local::commit_log::recovery::CommitLogRecoveryCompletion",
+            "rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy",
+            "rocketmq_store_local::commit_log::recovery::NormalRecoveryState",
+        }
+    }
+    if actual_state_imports != expected_state_imports:
+        violations.append("Store normal recovery state imports must be direct and exact")
+
+    store_production = source_without_cfg_test_items(store)
+    optimized = named_function_body(store_production, "recover_normally_optimized") or ""
+    standard = named_function_body(store_production, "recover_normally") or ""
+    abnormal_optimized = named_function_body(store_production, "recover_abnormally_optimized") or ""
+    abnormal_standard = named_function_body(store_production, "recover_abnormally") or ""
+    empty_cleanup = (
+        "warn!();apply_recovery_completion!(self,CommitLogRecoveryCompletion::Empty,"
+        "max_phy_offset_of_consume_queue,message_store,);"
+    )
+    for name, policy, body in (
+        ("recover_normally_optimized", "Optimized", optimized),
+        ("recover_normally", "Standard", standard),
+    ):
+        active_body = active_rust_source(body)
+        compact_body = compact_rust(body)
+        constructor = (
+            "NormalRecoveryState::try_new(initial_offset,"
+            f"NormalRecoveryPolicy::{policy})"
+        )
+        if compact_body.count(constructor) != 1:
+            violations.append(f"Store {name} normal recovery policy construction changed")
+        if len(re.findall(r"\bnormal_recovery\.drive_segment\s*\(", active_body)) != 1:
+            violations.append(f"Store {name} must call drive_segment exactly once")
+        if (
+            "normal_recovery.apply" in active_body
+            or "NormalRecoveryAction" in active_body
+            or "NormalRecoveryEvent" in active_body
+        ):
+            violations.append(f"Store {name} retained direct normal state policy")
+        for error_variant in (
+            "RelativeOffsetConversion",
+            "MessageSizeConversion",
+            "FramePositionOverflow",
+        ):
+            outcome = re.search(
+                r"NormalRecoverySegmentOutcome::AdapterFailed\s*\(\s*"
+                rf"NormalRecoveryAdapterError::{error_variant}\b",
+                active_body,
+            )
+            arrow = -1 if outcome is None else active_body.find("=>", outcome.end())
+            opening_brace = -1 if arrow == -1 else active_body.find("{", arrow)
+            arm = None if opening_brace == -1 else braced_body(active_body, opening_brace)
+            if (
+                outcome is None
+                or len(
+                    re.findall(
+                        r"NormalRecoverySegmentOutcome::AdapterFailed\s*\(\s*"
+                        rf"NormalRecoveryAdapterError::{error_variant}\b",
+                        active_body,
+                    )
+                )
+                != 1
+                or arm is None
+                or compact_rust(arm[0]) != "warn!();break'segments;"
+            ):
+                violations.append(f"Store {name} {error_variant} adapter failure handling changed")
+
+        empty_header = re.search(
+            r"\bif\s+" + (r"" if policy == "Optimized" else r"!\s*")
+            + r"mapped_files_inner\.is_empty\s*\(\s*\)\s*\{",
+            active_body,
+        )
+        empty_body = None
+        empty_branch = -1
+        non_empty_end = -1
+        if empty_header is not None:
+            empty_branch = empty_header.start()
+            opening_brace = active_body.find("{", empty_header.start(), empty_header.end())
+            extracted = braced_body(active_body, opening_brace)
+            if policy == "Optimized":
+                empty_body = extracted
+            elif extracted is not None:
+                non_empty_end = extracted[1]
+                else_header = re.match(r"\s*else\s*\{", active_body[non_empty_end:])
+                if else_header is not None:
+                    else_open = active_body.find(
+                        "{",
+                        non_empty_end + else_header.start(),
+                        non_empty_end + else_header.end(),
+                    )
+                    empty_body = braced_body(active_body, else_open)
+        expected_empty = empty_cleanup + ("return;" if policy == "Optimized" else "")
+        if empty_body is None or compact_rust(empty_body[0]) != expected_empty:
+            violations.append(f"Store {name} empty-file cleanup and exit changed")
+        if policy == "Standard" and empty_body is not None:
+            trailing = active_rust_source(active_body[empty_body[1]:]).strip()
+            if trailing:
+                violations.append("Store recover_normally empty-file branch must terminate the function")
+        state_creation = active_body.find("NormalRecoveryState::try_new")
+        if state_creation == -1 or empty_branch == -1 or state_creation < empty_branch:
+            violations.append(f"Store {name} empty-file path must bypass Local state construction")
+
+        completion_flow = (
+            "letcompletion=normal_recovery.completion(max_phy_offset_of_consume_queue);",
+            "apply_recovery_completion!(self,completion,max_phy_offset_of_consume_queue,message_store);",
+        )
+        if any(fragment not in compact_body for fragment in completion_flow):
+            violations.append(f"Store {name} final recovery writes must flow from Local completion")
+        if compact_body.count("normal_recovery.completion(max_phy_offset_of_consume_queue)") != 1:
+            violations.append(f"Store {name} must obtain exactly one Local recovery completion")
+        if any(
+            fragment in compact_body
+            for fragment in (
+                "normal_recovery.summary()",
+                "NormalRecoverySummary{",
+                "should_truncate_recovery_consume_queue",
+                "i64::try_from(summary.",
+                "self.set_confirm_offset(",
+                "self.clamp_controller_recover_confirm_offset(",
+                "message_store.truncate_dirty_logic_files(",
+                "self.mapped_file_queue.set_flushed_where(",
+                "self.mapped_file_queue.set_committed_where(",
+                "self.mapped_file_queue.truncate_dirty_files(",
+            )
+        ):
+            violations.append(f"Store {name} retained final recovery decision policy")
+
+    completion_macro_matches = list(
+        re.finditer(r"\bmacro_rules!\s+apply_recovery_completion\b", store_production)
+    )
+    compact_completion_adapter = ""
+    if len(completion_macro_matches) == 1:
+        opening = store_production.find("{", completion_macro_matches[0].end())
+        extracted = braced_body(store_production, opening)
+        if extracted is not None:
+            compact_completion_adapter = compact_rust(extracted[0])
+    completion_contract = (
+        "($commit_log:ident,$completion:expr,$max_consume_queue_offset:expr,$message_store:ident$(,)?)=>{{",
+        "match$completion{CommitLogRecoveryCompletion::Empty=>{",
+        "$commit_log.mapped_file_queue.set_flushed_where(0);",
+        "$commit_log.mapped_file_queue.set_committed_where(0);",
+        "$message_store.consume_queue_store_mut().destroy();",
+        "$message_store.consume_queue_store_mut().load_after_destroy();",
+        "CommitLogRecoveryCompletion::Recovered{confirm_offset,controller_confirm_offset,"
+        "process_offset,truncate_consume_queue,}=>{",
+        "if$commit_log.broker_config.enable_controller_mode{$commit_log.clamp_controller_recover_confirm_offset("
+        "$message_store.get_min_phy_offset(),controller_confirm_offset,);}else{"
+        "$commit_log.set_confirm_offset(confirm_offset);}",
+        "iftruncate_consume_queue{warn!(",
+        "$message_store.truncate_dirty_logic_files(process_offset);}",
+        "$commit_log.mapped_file_queue.set_flushed_where(process_offset);",
+        "$commit_log.mapped_file_queue.set_committed_where(process_offset);",
+        "$commit_log.mapped_file_queue.truncate_dirty_files(process_offset);",
+    )
+    if len(completion_macro_matches) != 1 or any(
+        fragment not in compact_completion_adapter for fragment in completion_contract
+    ):
+        violations.append("Store recovery completion side-effect adapter changed")
+    if "should_truncate_recovery_consume_queue" in compact_completion_adapter or "summary." in compact_completion_adapter:
+        violations.append("Store recovery completion adapter absorbed Local decision policy")
+    for name, body in (
+        ("recover_abnormally_optimized", abnormal_optimized),
+        ("recover_abnormally", abnormal_standard),
+    ):
+        if re.search(r"\bdrive_segment\s*\(", active_rust_source(body)):
+            violations.append(f"Store {name} must not use normal drive_segment")
+
+    compact_optimized = compact_rust(optimized)
+    optimized_contract = (
+        "letmutiterator=BatchMessageIterator::new(mapped_file);letmutfile_processed=false;"
+        "letoutcome=normal_recovery.drive_segment(process_offset,||{",
+        "letSome((mutmsg_bytes,absolute_offset,_msg_size))=iterator.next_message()else{"
+        "returnOk(NormalRecoveryRecord::SourceEnded);};",
+        "letdispatch_request=recovery_ctx.process_message(&mutmsg_bytes,absolute_offset);",
+        "letrelative_start=u64::try_from(absolute_offset).map_err("
+        "NormalRecoveryAdapterError::RelativeOffsetConversion)?;",
+        "letframe_size=u64::try_from(dispatch_request.msg_size).map_err("
+        "NormalRecoveryAdapterError::MessageSizeConversion)?;",
+        "NormalRecoveryRecord::Message{relative_start,size:frame_size,record:dispatch_request,}",
+        "NormalRecoveryRecord::Blank{record:dispatch_request,}",
+        "NormalRecoveryRecord::Invalid{relative_start:u64::try_from(absolute_offset).ok(),"
+        "record:dispatch_request,}",
+        "NormalRecoveryObservation::MessageAccepted=>{self.on_commit_log_dispatch("
+        "dispatch_request,do_dispatch,true,false);file_processed=true;}",
+        "NormalRecoveryObservation::Blank=>{self.on_commit_log_dispatch("
+        "dispatch_request,do_dispatch,true,true);}",
+        "NormalRecoveryObservation::Invalid{relative_start}=>{",
+        "relative_start.and_then(|relative|process_offset.checked_add(relative))",
+        "NormalRecoverySegmentOutcome::ContinueNextSegment=>{iffile_processed{"
+        "recovery_ctx.stats.files_processed+=1;}index+=1;}",
+        "NormalRecoverySegmentOutcome::StopRecovery=>break'segments",
+        "NormalRecoverySegmentOutcome::StateFailed(error)=>{warn!();break'segments;}",
+    )
+    for snippet in optimized_contract:
+        if snippet not in compact_optimized:
+            violations.append(f"Store optimized normal adapter changed: {snippet[:72]}")
+    if compact_optimized.count("recovery_ctx.stats.files_processed+=1") != 1:
+        violations.append("Store optimized files_processed must advance once on ContinueNext")
+    if compact_optimized.count("index+=1") != 1:
+        violations.append("Store optimized index must advance once on ContinueNext")
+
+    compact_standard = compact_rust(standard)
+    standard_contract = (
+        "letmutcurrent_pos=0usize;letoutcome=normal_recovery.drive_segment(process_offset,||{",
+        "letframe_position=current_pos;",
+        "read_declared_frame(current_pos,|position,size|mapped_file.get_bytes(position,size))",
+        "letSome(mutmsg_bytes)=msgelse{returnOk(NormalRecoveryRecord::SourceEnded);};",
+        "current_pos.checked_add(size).ok_or(NormalRecoveryAdapterError::FramePositionOverflow",
+        "current_pos=next_position;letdispatch_request=check_message_and_return_size(",
+        "letrelative_start=u64::try_from(frame_position).map_err("
+        "NormalRecoveryAdapterError::RelativeOffsetConversion)?;",
+        "letframe_size=u64::try_from(dispatch_request.msg_size).map_err("
+        "NormalRecoveryAdapterError::MessageSizeConversion)?;",
+        "NormalRecoveryRecord::Invalid{relative_start:u64::try_from(frame_position).ok(),"
+        "record:dispatch_request,}",
+        "NormalRecoveryObservation::MessageAccepted=>{self.on_commit_log_dispatch("
+        "dispatch_request,do_dispatch,true,false);}",
+        "NormalRecoveryObservation::Blank=>{self.on_commit_log_dispatch("
+        "dispatch_request,do_dispatch,true,true);}",
+        "NormalRecoveryObservation::Invalid{relative_start}=>{",
+        "relative_start.and_then(|relative|process_offset.checked_add(relative))",
+        "NormalRecoverySegmentOutcome::ContinueNextSegment=>{index+=1;ifindex<"
+        "mapped_files_inner.len()",
+        "NormalRecoverySegmentOutcome::StopRecovery=>break'segments",
+        "NormalRecoverySegmentOutcome::StateFailed(error)=>{warn!();break'segments;}",
+    )
+    for snippet in standard_contract:
+        if snippet not in compact_standard:
+            violations.append(f"Store standard normal adapter changed: {snippet[:72]}")
+    if compact_standard.count("index+=1") != 1:
+        violations.append("Store standard index must advance once on ContinueNext")
+    if "files_processed+=1" in compact_standard:
+        violations.append("Store standard adapter must not own optimized file statistics")
+
+    raw_optimized = named_raw_function_body(store, "recover_normally_optimized") or ""
+    raw_standard = named_raw_function_body(store, "recover_normally") or ""
+    for name, body, raw_body in (
+        ("optimized", compact_optimized, raw_optimized),
+        ("standard", compact_standard, raw_standard),
+    ):
+        for message in (
+            "found a half message at {warning_offset}, it will be truncated.",
+            "found a half message with an invalid offset; it will be truncated.",
+        ):
+            if message not in raw_body:
+                violations.append(f"Store {name} invalid-record warning changed")
+        driver_position = body.find("normal_recovery.drive_segment")
+        completion_position = body.find("letcompletion=normal_recovery.completion(")
+        if driver_position == -1 or completion_position <= driver_position:
+            violations.append(f"Store {name} final completion moved before segment driver")
+
+    required_tests = (
+        "segment_started_state_error_skips_started_and_next",
+        "segment_started_runs_before_next_and_preserves_adapter_error_identity",
+        "standard_and_optimized_valid_then_source_ended_preserve_policy_outcomes",
+        "valid_then_blank_observes_each_payload_before_drop_and_stops_reading",
+        "invalid_some_and_none_are_observed_before_policy_action",
+        "message_state_overflow_skips_observe_drops_payload_and_stops_reading",
+        "source_ended_never_observes_and_stop_or_next_is_bounded",
+    )
+    for test_name in required_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local normal recovery orchestration regression changed: {test_name}")
+    return violations
+
+
+def commit_log_declared_frame_contract_violations(
+    local: str,
+    module: str,
+    store: str,
+    local_tests: str,
+) -> list[str]:
+    violations: list[str] = []
+    local_production = source_without_cfg_test_items(local)
+    active_local = active_rust_source(local_production)
+    declaration_pattern = re.compile(r"\bpub\s+fn\s+read_declared_frame\b")
+    if len(declaration_pattern.findall(active_local)) != 1:
+        violations.append("read_declared_frame must have one active Local owner")
+    if re.search(
+        r"#\s*\[\s*cfg(?:_attr)?\b[^]]*\]\s*pub\s+fn\s+read_declared_frame\b",
+        local_production,
+    ):
+        violations.append("read_declared_frame owner must not be cfg-gated")
+
+    signature = re.search(
+        r"\bpub\s+fn\s+read_declared_frame\s*<\s*F\s*>\s*"
+        r"\(\s*position\s*:\s*usize\s*,\s*mut\s+read\s*:\s*F\s*\)\s*"
+        r"->\s*\(\s*Option\s*<\s*Bytes\s*>\s*,\s*usize\s*\)\s*"
+        r"where\s+F\s*:\s*FnMut\s*\(\s*usize\s*,\s*usize\s*\)\s*"
+        r"->\s*Option\s*<\s*Bytes\s*>\s*,",
+        active_local,
+    )
+    if signature is None:
+        violations.append("read_declared_frame signature changed")
+
+    body = compact_rust(named_function_body(local_production, "read_declared_frame") or "")
+    expected_body = (
+        "letmutbytes=read(position,4);matchbytes{None=>(None,0),"
+        "Some(refmutinner)=>{letsize=inner.get_i32();ifsize<=0{return(None,0);}"
+        "letOk(size)=usize::try_from(size)else{return(None,0);};"
+        "(read(position,size),size)}}"
+    )
+    if body != expected_body:
+        violations.append("read_declared_frame declared-frame semantics changed")
+
+    declaration = local.find("pub fn read_declared_frame")
+    docs = "" if declaration == -1 else local[max(0, declaration - 1_200):declaration]
+    if (
+        "# Panics" not in docs
+        or "exactly the requested number of bytes" not in docs
+        or "fewer than four bytes" not in docs
+    ):
+        violations.append("read_declared_frame exact-read panic contract changed")
+
+    forbidden_local_tokens = (
+        "MappedFile",
+        "MessageExt",
+        "ArcMut",
+        "tokio",
+        "rocketmq_store",
+    )
+    present_forbidden = [
+        token
+        for token in forbidden_local_tokens
+        if re.search(rf"\b{re.escape(token)}\b", active_local)
+    ]
+    if present_forbidden:
+        violations.append(
+            f"Local declared-frame owner absorbed Store/runtime edges: {present_forbidden}"
+        )
+    if commit_log_record_boundary_violations(local_production):
+        violations.append("Local declared-frame owner uses forbidden imports or ports")
+
+    active_module = active_rust_source(module)
+    if len(re.findall(r"\bpub\s+mod\s+record\s*;", active_module)) != 1:
+        violations.append("Local commit_log module must expose record exactly once")
+
+    expected_import = "use rocketmq_store_local::commit_log::record::read_declared_frame"
+    relevant_imports = [
+        statement
+        for kind, _, body, statement in active_import_records(store)
+        if kind == "use" and "read_declared_frame" in body
+    ]
+    if relevant_imports != [expected_import]:
+        violations.append("Store declared-frame adapter import must be direct and exact")
+
+    store_production = source_without_cfg_test_items(store)
+    active_store = active_rust_source(store_production)
+    if named_function_body(store_production, "get_simple_message_bytes") is not None:
+        violations.append("Store legacy declared-frame reader remains")
+    if re.search(r"\.get_i32\s*\(", active_store) or re.search(
+        r"\.get_bytes\s*\([^,]+,\s*4\s*\)", active_store
+    ):
+        violations.append("Store copied declared-frame header policy")
+
+    adapter = (
+        "read_declared_frame(current_pos,|position,size|"
+        "mapped_file.get_bytes(position,size))"
+    )
+    for function_name in ("recover_normally", "recover_abnormally"):
+        function_body = named_function_body(store_production, function_name) or ""
+        compact_body = compact_rust(function_body)
+        if compact_body.count(adapter) != 1 or len(
+            re.findall(r"\bread_declared_frame\s*\(", active_rust_source(function_body))
+        ) != 1:
+            violations.append(f"Store {function_name} declared-frame adapter changed")
+    for function_name in ("recover_normally_optimized", "recover_abnormally_optimized"):
+        function_body = named_function_body(store_production, function_name) or ""
+        if re.search(r"\bread_declared_frame\s*\(", active_rust_source(function_body)):
+            violations.append(f"Store {function_name} must keep its optimized cursor path")
+
+    required_local_tests = (
+        "read_declared_frame_missing_header_stops_after_exact_header_read",
+        "read_declared_frame_short_successful_header_panics",
+        "read_declared_frame_non_positive_big_endian_size_stops_without_body_read",
+        "read_declared_frame_missing_body_preserves_big_endian_declared_size",
+        "read_declared_frame_success_returns_body_and_uses_same_position_twice",
+    )
+    for test_name in required_local_tests:
+        if named_function_body(local_tests, test_name) is None:
+            violations.append(f"Local declared-frame regression changed: {test_name}")
     return violations
 
 
 class StoreLocalContractTests(unittest.TestCase):
     def assert_local_crate_exists(self) -> None:
         self.assertTrue(LOCAL_CRATE.is_dir(), "canonical rocketmq-store-local crate is missing")
+
+    def test_mapped_file_allocation_request_has_one_local_owner_and_exact_store_adapter(self) -> None:
+        local = (ROOT / MAPPED_FILE_ALLOCATION_REQUEST_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_allocation_request.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_allocation_request_contract_violations(
+                local,
+                module,
+                service,
+                facade,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_allocation_request_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_ALLOCATION_REQUEST_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_allocation_request.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "Local size field changed",
+                local.replace("    file_size: i32,", "    file_size: u32,", 1),
+                module,
+                service,
+                facade,
+                local_tests,
+            ),
+            (
+                "platform separator parsing changed",
+                local.replace("std::path::MAIN_SEPARATOR", "'/'", 1),
+                module,
+                service,
+                facade,
+                local_tests,
+            ),
+            (
+                "priority direction changed",
+                local.replace(
+                    "other.file_offset().cmp(&self.file_offset())",
+                    "self.file_offset().cmp(&other.file_offset())",
+                    1,
+                ),
+                module,
+                service,
+                facade,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod allocation_request;", "", 1),
+                service,
+                facade,
+                local_tests,
+            ),
+            (
+                "Local service retained path field",
+                local,
+                module,
+                service.replace(
+                    "    key: MappedFileAllocationRequestKey,",
+                    "    file_path: String,\n    key: MappedFileAllocationRequestKey,",
+                    1,
+                ),
+                facade,
+                local_tests,
+            ),
+            (
+                "Local service import aliased",
+                local,
+                module,
+                service.replace(
+                    "use crate::mapped_file::allocation_request::MappedFileAllocationRequestKey;",
+                    "use crate::mapped_file::allocation_request::MappedFileAllocationRequestKey as RequestKey;",
+                    1,
+                ),
+                facade,
+                local_tests,
+            ),
+            (
+                "Local service ordering bypassed",
+                local,
+                module,
+                service.replace("self.key.cmp(&other.key)", "other.key.cmp(&self.key)", 1),
+                facade,
+                local_tests,
+            ),
+            (
+                "facade re-export hidden",
+                local,
+                module,
+                service,
+                facade.replace("pub use rocketmq_store_local", "use rocketmq_store_local", 1),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                service,
+                facade,
+                local_tests.replace(
+                    "fn allocation_request_key_orders_lower_offsets_first_in_binary_heap()",
+                    "fn allocation_request_priority_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, service_source, facade_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, service, facade, local_tests),
+                    (local_source, module_source, service_source, facade_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_allocation_request_contract_violations(
+                        local_source,
+                        module_source,
+                        service_source,
+                        facade_source,
+                        test_source,
+                    ),
+                )
+
+    def test_mapped_file_allocation_policy_has_one_local_owner_and_exact_store_adapter(self) -> None:
+        local = (ROOT / MAPPED_FILE_ALLOCATION_POLICY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_allocation_policy.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_allocation_policy_contract_violations(
+                local,
+                module,
+                service,
+                facade,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_allocation_policy_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_ALLOCATION_POLICY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_allocation_policy.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "warm-up threshold type changed",
+                local.replace("    minimum_file_size: usize,", "    minimum_file_size: u64,", 1),
+                module,
+                service,
+                facade,
+                local_tests,
+            ),
+            (
+                "capacity stopped saturating",
+                local.replace(
+                    "self.available_buffers.saturating_sub(self.queued_requests)",
+                    "self.available_buffers - self.queued_requests",
+                    1,
+                ),
+                module,
+                service,
+                facade,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod allocation_policy;", "", 1),
+                service,
+                facade,
+                local_tests,
+            ),
+            (
+                "Local service warm-up owner copied",
+                local,
+                module,
+                service.replace(
+                    "pub struct AllocateMappedFileService {",
+                    "struct WarmMappedFileConfig;\n\npub struct AllocateMappedFileService {",
+                    1,
+                ),
+                facade,
+                local_tests,
+            ),
+            (
+                "Local service capacity bypassed",
+                local,
+                module,
+                service.replace("self.allocation_capacity(2)", "2", 1),
+                facade,
+                local_tests,
+            ),
+            (
+                "Store config projection changed",
+                local,
+                module,
+                service,
+                facade.replace("self.mapped_file_size_commit_log", "usize::MAX", 1),
+                local_tests,
+            ),
+            (
+                "Local regression renamed",
+                local,
+                module,
+                service,
+                facade,
+                local_tests.replace(
+                    "fn allocation_capacity_saturates_available_buffers_by_queued_requests()",
+                    "fn allocation_capacity_regression_removed()",
+                    1,
+                ),
+            ),
+            (
+                "Local runtime regression renamed",
+                local,
+                module,
+                service.replace(
+                    "fn allocation_capacity_delegates_runtime_snapshot_to_local_policy()",
+                    "fn allocation_capacity_adapter_regression_removed()",
+                    1,
+                ),
+                facade,
+                local_tests,
+            ),
+            (
+                "Store projection regression renamed",
+                local,
+                module,
+                service,
+                facade.replace(
+                    "fn message_store_config_projects_the_local_warmup_policy()",
+                    "fn message_store_config_projection_regression_removed()",
+                    1,
+                ),
+                local_tests,
+            ),
+        )
+        for label, local_source, module_source, service_source, facade_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, service, facade, local_tests),
+                    (local_source, module_source, service_source, facade_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_allocation_policy_contract_violations(
+                        local_source,
+                        module_source,
+                        service_source,
+                        facade_source,
+                        test_source,
+                    ),
+                )
+
+    def test_allocate_mapped_file_service_has_one_local_owner_and_exact_store_facade(self) -> None:
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        base_module = (LOCAL_CRATE / "src" / "base.rs").read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        manifest = (LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8")
+        mapped_file_queue = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for path in ROOT.glob("rocketmq-*/src/**/*.rs")
+        }
+
+        self.assertEqual(
+            [],
+            allocate_mapped_file_service_contract_violations(
+                service,
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue,
+                production_sources,
+            ),
+        )
+
+    def test_allocate_mapped_file_service_rejects_owner_lifecycle_facade_and_test_mutations(self) -> None:
+        service = (ROOT / LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        base_module = (LOCAL_CRATE / "src" / "base.rs").read_text(encoding="utf-8")
+        facade = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+        manifest = (LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8")
+        mapped_file_queue = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for path in ROOT.glob("rocketmq-*/src/**/*.rs")
+        }
+
+        mutations = (
+            (
+                "worker completion field removed",
+                service.replace("    worker_completion: Arc<Notify>,", "", 1),
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue,
+            ),
+            (
+                "completion notification broadened",
+                service.replace("self.notification.notify_one();", "self.notification.notify_waiters();", 1),
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue,
+            ),
+            (
+                "raw blocking task added",
+                service.replace(
+                    "pub async fn shutdown(&self) {",
+                    "pub async fn shutdown(&self) {\n        let _ = tokio::task::spawn_blocking(|| ());",
+                    1,
+                ),
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue,
+            ),
+            (
+                "Local base module removed",
+                service,
+                base_module.replace("pub mod allocate_mapped_file_service;", "", 1),
+                facade,
+                manifest,
+                mapped_file_queue,
+            ),
+            (
+                "facade re-export hidden",
+                service,
+                base_module,
+                facade.replace("pub use rocketmq_store_local", "use rocketmq_store_local", 1),
+                manifest,
+                mapped_file_queue,
+            ),
+            (
+                "Tokio dependency removed",
+                service,
+                base_module,
+                facade,
+                manifest.replace("tokio.workspace = true\n", "", 1),
+                mapped_file_queue,
+            ),
+            (
+                "consumer result wait removed",
+                service,
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue.replace(
+                    ".allocate_mapped_file_blocking(next_file_path.to_string_lossy().into_owned(), mapped_file_size)",
+                    ".allocate_mapped_file_blocking(String::new(), mapped_file_size)",
+                    1,
+                ),
+            ),
+            (
+                "completion regression renamed",
+                service.replace(
+                    "fn worker_completion_guard_records_exit_and_notifies_waiter()",
+                    "fn worker_completion_regression_removed()",
+                    1,
+                ),
+                base_module,
+                facade,
+                manifest,
+                mapped_file_queue,
+            ),
+        )
+        for label, service_source, base_source, facade_source, manifest_source, queue_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (service, base_module, facade, manifest, mapped_file_queue),
+                    (service_source, base_source, facade_source, manifest_source, queue_source),
+                )
+                mutated_sources = dict(production_sources)
+                mutated_sources[LOCAL_ALLOCATE_MAPPED_FILE_SERVICE_PATH] = service_source
+                mutated_sources[STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH] = facade_source
+                self.assertNotEqual(
+                    [],
+                    allocate_mapped_file_service_contract_violations(
+                        service_source,
+                        base_source,
+                        facade_source,
+                        manifest_source,
+                        queue_source,
+                        mutated_sources,
+                        check_global_owner=False,
+                    ),
+                )
+
+    def test_mapped_file_queue_allocation_has_one_local_owner_and_exact_store_adapter(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_ALLOCATION_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_allocation.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_allocation_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_allocation_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_ALLOCATION_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_allocation.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "Local field type changed",
+                local.replace("    wrote_position: i32,", "    wrote_position: u32,", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "preallocation threshold changed",
+                local.replace("usage_ratio >= 0.8", "usage_ratio >= 0.9", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "full guard removed",
+                local.replace("usage_ratio >= 0.8 && !last_file.full", "usage_ratio >= 0.8", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_allocation;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::queue_allocation::MappedFileQueueLastFile;",
+                    "use rocketmq_store_local::mapped_file::queue_allocation::MappedFileQueueLastFile as LastFile;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store plan adapter bypassed",
+                local,
+                module,
+                store.replace(
+                    "plan_mapped_file_queue_preallocation(self.storage",
+                    "store_owned_mapped_file_queue_preallocation(self.storage",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn allocation_plan_keeps_preallocation_when_creation_is_disabled()",
+                    "fn allocation_plan_creation_gate_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_allocation_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_mapped_file_queue_io_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_IO_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_io.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_io_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_io_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_IO_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_io.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "outcome field changed",
+                local.replace("    success: bool,", "    success: u8,", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "load sorting reversed",
+                local.replace(
+                    "left.file_name().cmp(&right.file_name())",
+                    "right.file_name().cmp(&left.file_name())",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "empty tail gate changed",
+                local.replace("index == files.len() - 1", "index == 0", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "partial failure changed to success",
+                local.replace(
+                    "MappedFileQueueLoadOutcome::new(false, mapped_files)",
+                    "MappedFileQueueLoadOutcome::new(true, mapped_files)",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "allocation service route disabled",
+                local.replace(
+                    "allocate_service.filter(|service| service.is_started())",
+                    "allocate_service.filter(|_| false)",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_io;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::queue_io::create_mapped_file_for_queue;",
+                    "use rocketmq_store_local::mapped_file::queue_io::create_mapped_file_for_queue as create_file;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store load adapter bypassed",
+                local,
+                module,
+                store.replace(
+                    "load_mapped_file_queue_path(self.storage.store_path()",
+                    "store_owned_queue_load(self.storage.store_path()",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn queue_load_returns_files_loaded_before_a_size_failure()",
+                    "fn queue_partial_load_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_io_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_mapped_file_queue_lifecycle_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_LIFECYCLE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_lifecycle.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_lifecycle_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_lifecycle_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_LIFECYCLE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_lifecycle.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "deletion count type changed",
+                local.replace("    deleted_count: i32,", "    deleted_count: u32,", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "newest file exclusion removed",
+                local.replace("files.len().saturating_sub(1)", "files.len()", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "batch boundary changed",
+                local.replace(
+                    "deleted_files.len() >= delete_file_batch_max as usize",
+                    "deleted_files.len() > delete_file_batch_max as usize",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "offset boundary changed",
+                local.replace(
+                    "destroy = max_offset_in_logic_queue < offset;",
+                    "destroy = max_offset_in_logic_queue <= offset;",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "retry availability gate inverted",
+                local.replace(
+                    "first.filter(|mapped_file| !mapped_file.is_available())",
+                    "first.filter(|mapped_file| mapped_file.is_available())",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "swap reserve floor changed",
+                local.replace("reserve_num.max(3)", "reserve_num.max(2)", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_lifecycle;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_file_queue;",
+                    "use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_file_queue as destroy_queue;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store time deletion bypassed",
+                local,
+                module,
+                store.replace(
+                    "let deletion = delete_expired_mapped_files_by_time(",
+                    "let deletion = store_owned_time_deletion(",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local lifecycle regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn time_deletion_keeps_the_newest_file_and_honors_the_batch_limit()",
+                    "fn time_deletion_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_lifecycle_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_mapped_file_queue_metrics_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_METRICS_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_metrics.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_metrics_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_metrics_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_METRICS_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_metrics.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "warmup field type changed",
+                local.replace("    pub operations: u64,", "    pub operations: usize,", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "warmup saturation removed",
+                local.replace(
+                    "stats.operations.saturating_add(operations)",
+                    "stats.operations + operations",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "warmup last latency removed",
+                local.replace("stats.last_millis = metrics.last_warm_millis();", "", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "max offset uses wrote position",
+                local.replace("file.get_read_position()", "file.get_wrote_position()", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "roll exact boundary changed",
+                local.replace(
+                    "last.get_wrote_position() + message_size > last.get_file_size() as i32",
+                    "last.get_wrote_position() + message_size >= last.get_file_size() as i32",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "available filter removed",
+                local.replace(
+                    ".filter(|file| file.is_available())",
+                    ".filter(|_| true)",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_metrics;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store stats re-export hidden",
+                local,
+                module,
+                store.replace(
+                    "pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileWarmupStats;",
+                    "use rocketmq_store_local::mapped_file::queue_metrics::MappedFileWarmupStats;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store max offset adapter bypassed",
+                local,
+                module,
+                store.replace(
+                    "mapped_file_queue_max_offset(last.as_ref())",
+                    "store_owned_max_offset(last.as_ref())",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local metrics regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn queue_position_and_roll_queries_use_the_last_file_snapshot()",
+                    "fn queue_position_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_metrics_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_mapped_file_queue_maintenance_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_MAINTENANCE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_maintenance.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_maintenance_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_maintenance_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_MAINTENANCE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_maintenance.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "truncate action changed",
+                local.replace("    Retain,", "    Keep,", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "tail boundary changed",
+                local.replace("if file_tail_offset as i64 <= offset {", "if file_tail_offset as i64 < offset {", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "reset window changed",
+                local.replace("let max_diff = (mapped_file_size * 2) as i64;", "let max_diff = (mapped_file_size * 3) as i64;", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "removal order changed",
+                local.replace("for index in (0..files.len()).rev() {", "for index in 0..files.len() {", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_maintenance;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store truncate bypassed",
+                local,
+                module,
+                store.replace(
+                    "match mapped_file_queue_truncate_action(",
+                    "match MappedFileQueueTruncateAction::Retain /* mapped_file_queue_truncate_action( */ {",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn reset_plan_preserves_target_position_and_newest_to_oldest_removals()",
+                    "fn reset_plan_regression_removed()",
+                    1,
+                ),
+            ),
+            (
+                "Store adapter regression renamed",
+                local,
+                module,
+                store.replace(
+                    "fn truncate_dirty_files_delegates_positions_and_removals_to_local_plan()",
+                    "fn truncate_dirty_files_adapter_regression_removed()",
+                    1,
+                ),
+                local_tests,
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_maintenance_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_mapped_file_queue_index_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_INDEX_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_index.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_index_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_index_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_INDEX_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_index.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "Local offset owner removed",
+                local.replace("pub fn file_index_by_offset<T>(", "fn removed_file_index_by_offset<T>(", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "Local owner absorbed Store type",
+                local.replace("//! Runtime-neutral index algorithms", "use ArcSwap;\n//! Runtime-neutral index algorithms", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_index;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::queue_index::file_index_by_offset;",
+                    "use rocketmq_store_local::mapped_file::queue_index::file_index_by_offset as find_index;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store range adapter bypassed",
+                local,
+                module,
+                store.replace("let range = overlapping_file_range(", "let range = store_owned_overlapping_file_range(", 1),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn queue_index_finds_offset_with_fallback_and_first_policy()",
+                    "fn queue_index_offset_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_index_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_mapped_file_queue_storage_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_STORAGE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_storage.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_storage_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_storage_rejects_owner_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_STORAGE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_storage.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "Local field ordering changed",
+                local.replace(
+                    "    store_path: String,\n    mapped_file_size: u64,",
+                    "    mapped_file_size: u64,\n    store_path: String,",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "Local constructor drops path",
+                local.replace("            store_path,", "            store_path: String::new(),", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "Local size getter changed",
+                local.replace("        self.mapped_file_size", "        0", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_storage;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store retained legacy collection field",
+                local,
+                module,
+                store.replace(
+                    "    storage: MappedFileQueueStorage<ArcSwap<Vec<Arc<DefaultMappedFile>>>>,",
+                    "    mapped_files: ArcSwap<Vec<Arc<DefaultMappedFile>>>,\n"
+                    "    storage: MappedFileQueueStorage<ArcSwap<Vec<Arc<DefaultMappedFile>>>>,",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store bypassed collection accessor",
+                local,
+                module,
+                store.replace("self.storage.mapped_files()", "self.mapped_files", 1),
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage;",
+                    "use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage as QueueStorage;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn queue_storage_supports_backend_owned_interior_mutability()",
+                    "fn queue_storage_interior_mutability_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_storage_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_mapped_file_queue_runtime_state_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_STATE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_runtime_state.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            mapped_file_queue_runtime_state_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_mapped_file_queue_runtime_state_rejects_owner_order_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / MAPPED_FILE_QUEUE_STATE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_MAPPED_FILE_QUEUE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "mapped_file_queue_runtime_state.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "Local field ordering changed",
+                local.replace(
+                    "    flushed_where: Arc<AtomicU64>,\n    committed_where: Arc<AtomicU64>,",
+                    "    committed_where: Arc<AtomicU64>,\n    flushed_where: Arc<AtomicU64>,",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "Local read ordering changed",
+                local.replace("load(Ordering::Acquire)", "load(Ordering::Relaxed)", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "Local write ordering changed",
+                local.replace("Ordering::SeqCst", "Ordering::Release", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod queue_state;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store retained legacy flushed field",
+                local,
+                module,
+                store.replace(
+                    "    runtime_state: MappedFileQueueRuntimeState,",
+                    "    flushed_where: Arc<AtomicU64>,\n    runtime_state: MappedFileQueueRuntimeState,",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store bypassed committed adapter",
+                local,
+                module,
+                store.replace(
+                    "self.runtime_state.committed_where()",
+                    "self.runtime_state.flushed_where()",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store import aliased",
+                local,
+                module,
+                store.replace(
+                    "use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;",
+                    "use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState as QueueState;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn queue_runtime_state_commit_lock_serializes_access()",
+                    "fn queue_runtime_state_commit_lock_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    mapped_file_queue_runtime_state_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_commit_log_runtime_state_has_one_local_owner_and_exact_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_RUNTIME_STATE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_runtime_state.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            [],
+            commit_log_runtime_state_contract_violations(local, module, store, local_tests),
+        )
+
+    def test_commit_log_runtime_state_rejects_owner_order_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / COMMIT_LOG_RUNTIME_STATE_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_runtime_state.rs").read_text(
+            encoding="utf-8"
+        )
+
+        mutations = (
+            (
+                "stats ordering changed",
+                local.replace("fetch_add(1, Ordering::Relaxed)", "fetch_add(1, Ordering::Acquire)", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "max update operation changed",
+                local.replace("compare_exchange_weak", "compare_exchange", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "window upper boundary widened",
+                local.replace("target.offset < region_end", "target.offset <= region_end", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "current region length discarded",
+                local.replace("self.region_len = target.len;", "self.region_len = 0;", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod runtime_state;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store facade aliased",
+                local,
+                module,
+                store.replace(
+                    "pub use rocketmq_store_local::commit_log::runtime_state::"
+                    "CommitLogPutMessageLockRuntimeInfo;",
+                    "pub use rocketmq_store_local::commit_log::runtime_state::"
+                    "CommitLogPutMessageLockRuntimeInfo as LegacyLockInfo;",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store copied runtime-info owner",
+                local,
+                module,
+                store.replace(
+                    "#[cfg(test)]\nmod tests",
+                    "pub struct CommitLogPutMessageLockRuntimeInfo;\n\n#[cfg(test)]\nmod tests",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store retained legacy confirm field",
+                local,
+                module,
+                store.replace(
+                    "        pub(super) runtime_state: super::CommitLogRuntimeState,",
+                    "        pub(super) confirm_offset: i64,\n"
+                    "        pub(super) runtime_state: super::CommitLogRuntimeState,",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store bypassed manager accessor",
+                local,
+                module,
+                store.replace("active_memory_lock_guard.manager()", "active_memory_lock_guard.manager", 1),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn active_window_reuses_only_offsets_inside_the_current_region()",
+                    "fn active_window_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    commit_log_runtime_state_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_commit_log_root_has_one_local_owner_and_exact_store_facade(self) -> None:
+        local = (ROOT / COMMIT_LOG_ROOT_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_root.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            [],
+            commit_log_root_contract_violations(local, module, store, local_tests),
+        )
+
+    def test_commit_log_root_rejects_owner_facade_and_test_mutations(self) -> None:
+        local = (ROOT / COMMIT_LOG_ROOT_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_root.rs").read_text(
+            encoding="utf-8"
+        )
+        mutations = (
+            ("root copied state", local.replace("    adapter: A,", "    adapter: A,\n    copied_offset: i64,", 1), module, store, local_tests),
+            ("module removed", local, module.replace("pub mod root;", "", 1), store, local_tests),
+            ("Store retained field", local, module, store.replace("    root: CommitLogRoot<CommitLogAdapter>,", "    root: CommitLogRoot<CommitLogAdapter>,\n    copied_offset: i64,", 1), local_tests),
+            ("Store adapter field removed", local, module, store.replace("        pub(super) broker_config: super::Arc<super::BrokerConfig>,", "", 1), local_tests),
+            ("regression renamed", local, module, store, local_tests.replace("fn commit_log_root_exposes_one_mutable_adapter_owner()", "fn commit_log_root_mutation_regression_removed()", 1)),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    commit_log_root_contract_violations(
+                        local_source, module_source, store_source, test_source
+                    ),
+                )
+
+    def test_commit_log_load_orchestration_has_one_local_owner_and_two_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_LOAD_ORCHESTRATION_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "commit_log_load_orchestration.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            commit_log_load_orchestration_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_commit_log_load_orchestration_rejects_owner_order_adapter_and_test_mutations(
+        self,
+    ) -> None:
+        local = (ROOT / COMMIT_LOG_LOAD_ORCHESTRATION_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "commit_log_load_orchestration.rs"
+        ).read_text(encoding="utf-8")
+
+        local_mutations = {
+            "cfg-gated driver": local.replace(
+                "pub fn drive_commit_log_load",
+                "#[cfg(any())]\npub fn drive_commit_log_load",
+                1,
+            ),
+            "error observation Clone": local.replace(
+                "#[derive(Debug, PartialEq, Eq)]\npub enum CommitLogLoadObservation",
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum CommitLogLoadObservation",
+                1,
+            ),
+            "forced path attempts optimized": local.replace(
+                "return match execute(CommitLogLoadStep::Sequential)",
+                "return match execute(CommitLogLoadStep::Optimized)",
+                1,
+            ),
+            "optimized rejection falls back": local.replace(
+                "            false\n        }\n        Err(error) => {",
+                "            execute(CommitLogLoadStep::Sequential).unwrap_or(false)\n"
+                "        }\n        Err(error) => {",
+                1,
+            ),
+            "fallback observation after execution": local.replace(
+                "        Err(error) => {\n"
+                "            observe(CommitLogLoadObservation::OptimizedFailed(error));\n"
+                "            match execute(CommitLogLoadStep::Sequential) {",
+                "        Err(error) => {\n"
+                "            let fallback = execute(CommitLogLoadStep::Sequential);\n"
+                "            observe(CommitLogLoadObservation::OptimizedFailed(error));\n"
+                "            match fallback {",
+                1,
+            ),
+            "safe-load truth table widened": local.replace('value == "1"', 'value == "yes"', 1),
+        }
+        for label, local_source in local_mutations.items():
+            with self.subTest(mutation=label):
+                self.assertNotEqual(local, local_source)
+                self.assertNotEqual(
+                    [],
+                    commit_log_load_orchestration_contract_violations(
+                        local_source,
+                        module,
+                        store,
+                        local_tests,
+                    ),
+                )
+
+        mutations = (
+            (
+                "module removed",
+                local,
+                module.replace("pub mod load_orchestration;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store driver renamed",
+                local,
+                module,
+                store.replace("drive_commit_log_load(", "drive_load_policy(", 1),
+                local_tests,
+            ),
+            (
+                "Store copied direct policy",
+                local,
+                module,
+                store.replace(
+                    "        drive_commit_log_load(\n",
+                    "        if force_sequential { let _ = self.load_sequential(); }\n"
+                    "        drive_commit_log_load(\n",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store optimized adapter swapped",
+                local,
+                module,
+                store.replace(
+                    "CommitLogLoadStep::Optimized => self.load_optimized()",
+                    "CommitLogLoadStep::Optimized => Ok(self.load_sequential())",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "optimized success validation removed",
+                local,
+                module,
+                store.replace("                self.mapped_file_queue.check_self();\n", "", 1),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn optimized_rejection_does_not_fallback()",
+                    "fn optimized_rejection_regression_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    commit_log_load_orchestration_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_commit_log_recovery_route_has_one_local_owner_and_four_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_RECOVERY_ORCHESTRATION_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_LOCAL_FILE_MESSAGE_STORE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "commit_log_recovery_orchestration.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [],
+            commit_log_recovery_route_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_commit_log_recovery_route_rejects_owner_policy_adapter_and_test_mutations(
+        self,
+    ) -> None:
+        local = (ROOT / COMMIT_LOG_RECOVERY_ORCHESTRATION_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_LOCAL_FILE_MESSAGE_STORE_PATH).read_text(encoding="utf-8")
+        local_tests = (
+            LOCAL_CRATE / "tests" / "commit_log_recovery_orchestration.rs"
+        ).read_text(encoding="utf-8")
+
+        mutations = (
+            (
+                "cfg-gated driver",
+                local.replace(
+                    "pub fn drive_commit_log_recovery",
+                    "#[cfg(any())]\npub fn drive_commit_log_recovery",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "malformed values disable optimized",
+                local.replace("unwrap_or(true)", "unwrap_or(false)", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "optimized route swapped",
+                local.replace(
+                    "CommitLogRecoveryStep::Optimized\n    } else",
+                    "CommitLogRecoveryStep::Standard\n    } else",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "module removed",
+                local,
+                module.replace("pub mod recovery_orchestration;", "", 1),
+                store,
+                local_tests,
+            ),
+            (
+                "Store driver renamed",
+                local,
+                module,
+                store.replace("drive_commit_log_recovery(", "drive_recovery_route(", 1),
+                local_tests,
+            ),
+            (
+                "Store copied direct policy",
+                local,
+                module,
+                store.replace(
+                    "        drive_commit_log_recovery(use_optimized, |step| async move {",
+                    "        if use_optimized { return; }\n"
+                    "        drive_commit_log_recovery(use_optimized, |step| async move {",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "normal optimized adapter swapped",
+                local,
+                module,
+                store.replace(".recover_normally_optimized(", ".recover_normally(", 1),
+                local_tests,
+            ),
+            (
+                "regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn optimized_recovery_value_preserves_legacy_truth_table()",
+                    "fn optimized_recovery_truth_table_removed()",
+                    1,
+                ),
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual(
+                    (local, module, store, local_tests),
+                    (local_source, module_source, store_source, test_source),
+                )
+                self.assertNotEqual(
+                    [],
+                    commit_log_recovery_route_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_abnormal_recovery_segment_orchestration_has_one_local_owner_and_two_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_ABNORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "abnormal_recovery_orchestration.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            [],
+            abnormal_recovery_segment_orchestration_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_abnormal_recovery_segment_orchestration_rejects_owner_order_adapter_and_test_mutations(self) -> None:
+        local = (ROOT / COMMIT_LOG_ABNORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "abnormal_recovery_orchestration.rs").read_text(
+            encoding="utf-8"
+        )
+
+        mutations = (
+            ("driver renamed", local.replace("drive_abnormal_segment", "drive_records", 1), module, store, local_tests),
+            (
+                "started callback moved before state",
+                local.replace(
+                    "        match self.apply(AbnormalRecoveryEvent::SegmentStarted {",
+                    "        on_segment_started();\n        match self.apply(AbnormalRecoveryEvent::SegmentStarted {",
+                    1,
+                ).replace("        on_segment_started();\n\n        loop", "\n        loop", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "blank routed through source-end state",
+                local.replace(
+                    "AbnormalRecoveryRecord::Blank { mut record } => match self.apply(AbnormalRecoveryEvent::Blank) {",
+                    "AbnormalRecoveryRecord::Blank { mut record } => match self.apply(AbnormalRecoveryEvent::SourceEnded) {",
+                    1,
+                ),
+                module,
+                store,
+                local_tests,
+            ),
+            (
+                "production panic",
+                local.replace("        loop {", '        panic!("forbidden");\n        loop {', 1),
+                module,
+                store,
+                local_tests,
+            ),
+            ("module removed", local, module.replace("pub mod abnormal_recovery;", "", 1), store, local_tests),
+            (
+                "regression removed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn blank_observes_once_and_stops_reading()",
+                    "fn blank_observation_removed()",
+                    1,
+                ),
+            ),
+            (
+                "Store driver removed",
+                local,
+                module,
+                store.replace("abnormal_recovery.drive_abnormal_segment", "abnormal_recovery.drive_records", 1),
+                local_tests,
+            ),
+            (
+                "Store copied state policy",
+                local,
+                module,
+                store.replace(
+                    "let outcome = abnormal_recovery.drive_abnormal_segment(",
+                    "let _ = abnormal_recovery.apply(event);\n            "
+                    "let outcome = abnormal_recovery.drive_abnormal_segment(",
+                    1,
+                ),
+                local_tests,
+            ),
+        )
+        for label, local_source, module_source, store_source, test_source in mutations:
+            with self.subTest(mutation=label):
+                self.assertNotEqual((local, module, store, local_tests), (local_source, module_source, store_source, test_source))
+                self.assertNotEqual(
+                    [],
+                    abnormal_recovery_segment_orchestration_contract_violations(
+                        local_source,
+                        module_source,
+                        store_source,
+                        test_source,
+                    ),
+                )
+
+    def test_normal_recovery_segment_orchestration_has_one_local_owner_and_two_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_NORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "normal_recovery_orchestration.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            [],
+            normal_recovery_segment_orchestration_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_normal_recovery_segment_orchestration_contract_rejects_owner_order_adapter_and_test_mutations(
+        self,
+    ) -> None:
+        local = (ROOT / COMMIT_LOG_NORMAL_RECOVERY_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "normal_recovery_orchestration.rs").read_text(
+            encoding="utf-8"
+        )
+
+        def assert_rejected(
+            label: str,
+            *,
+            local_source: str = local,
+            module_source: str = module,
+            store_source: str = store,
+            test_source: str = local_tests,
+        ) -> None:
+            self.assertNotEqual(
+                [],
+                normal_recovery_segment_orchestration_contract_violations(
+                    local_source,
+                    module_source,
+                    store_source,
+                    test_source,
+                ),
+                label,
+            )
+
+        local_mutations = {
+            "cfg-gated owner": local.replace(
+                "    pub fn drive_segment",
+                "    #[cfg(any())]\n    pub fn drive_segment",
+                1,
+            ),
+            "payload Clone bound": local.replace(
+                "#[derive(Debug, PartialEq, Eq)]\npub enum NormalRecoveryRecord",
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum NormalRecoveryRecord",
+                1,
+            ),
+            "started callback before state": local.replace(
+                "        let started_action = match self.apply(",
+                "        on_segment_started();\n        let started_action = match self.apply(",
+                1,
+            ).replace("        on_segment_started();\n        match started_action", "        match started_action", 1),
+            "message observed before state": local.replace(
+                "                } => {\n                    let action = match self.apply(",
+                "                } => {\n                    observe(NormalRecoveryObservation::MessageAccepted, &mut record);\n                    let action = match self.apply(",
+                1,
+            ),
+            "blank observation after state": local.replace(
+                "                    observe(NormalRecoveryObservation::Blank, &mut record);\n                    match self.apply(NormalRecoveryEvent::Blank)",
+                "                    match self.apply(NormalRecoveryEvent::Blank)",
+                1,
+            ),
+            "source-ended observation": local.replace(
+                "                NormalRecoveryRecord::SourceEnded => match self.apply(",
+                "                NormalRecoveryRecord::SourceEnded => { observe(NormalRecoveryObservation::Blank, panic!()); match self.apply(",
+                1,
+            ),
+            "aliased recovery import": local.replace(
+                "use super::recovery::NormalRecoveryAction;",
+                "use super::recovery::NormalRecoveryAction as RecoveryAction;",
+                1,
+            ),
+            "dynamic adapter edge": local + "\nfn forbidden(_: &dyn Send) {}\n",
+            "Store type edge": local + "\nfn forbidden(_: &MappedFile) {}\n",
+        }
+        for label, mutation in local_mutations.items():
+            with self.subTest(mutation=label):
+                self.assertNotEqual(local, mutation, label)
+                assert_rejected(label, local_source=mutation)
+
+        normal_import = (
+            "use rocketmq_store_local::commit_log::normal_recovery::"
+            "NormalRecoveryObservation;"
+        )
+        optimized_marker = "pub async fn recover_normally_optimized("
+        optimized_start = store.index(optimized_marker)
+        optimized_open = store.index("{", optimized_start)
+        abnormal_marker = "pub async fn recover_abnormally_optimized("
+        abnormal_start = store.index(abnormal_marker)
+        abnormal_open = store.index("{", abnormal_start)
+        summary_before_driver = (
+            store[:optimized_open + 1]
+            + "\n        let summary = normal_recovery.summary();"
+            + store[optimized_open + 1:]
+        )
+        abnormal_delegate = (
+            store[:abnormal_open + 1]
+            + "\n        drive_segment();"
+            + store[abnormal_open + 1:]
+        )
+        store_mutations = {
+            "aliased normal import": store.replace(
+                normal_import,
+                normal_import.replace(";", " as Observation;"),
+                1,
+            ),
+            "optimized driver removed": store.replace(
+                "normal_recovery.drive_segment(",
+                "normal_recovery.drive_records(",
+                1,
+            ),
+            "normal state policy copied": store.replace(
+                "let outcome = normal_recovery.drive_segment(",
+                "let _ = normal_recovery.apply(event);\n            let outcome = normal_recovery.drive_segment(",
+                1,
+            ),
+            "optimized relative offset shifted": store.replace(
+                "u64::try_from(absolute_offset)\n",
+                "u64::try_from(absolute_offset + 1)\n",
+                1,
+            ),
+            "optimized accepted dispatch flag": store.replace(
+                "self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, false);",
+                "self.on_commit_log_dispatch(dispatch_request, do_dispatch, false, false);",
+                1,
+            ),
+            "standard frame cursor advance": store.replace(
+                "current_pos = next_position;",
+                "current_pos = size;",
+                1,
+            ),
+            "optimized empty-file short circuit": store.replace(
+                "if mapped_files_inner.is_empty() {",
+                "if mapped_files_inner.len() == usize::MAX {",
+                1,
+            ),
+            "optimized empty-file return removed": store.replace(
+                "                message_store,\n            );\n            return;",
+                "                message_store,\n            );",
+                1,
+            ),
+            "optimized adapter failure continues": store.replace(
+                "warn!(\"normal optimized recovery relative offset conversion failed: {error}\");\n"
+                "                    break 'segments;",
+                "warn!(\"normal optimized recovery relative offset conversion failed: {error}\");\n"
+                "                    continue 'segments;",
+                1,
+            ),
+            "optimized completion input changed": store.replace(
+                "normal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "normal_recovery.completion(-1)",
+                1,
+            ),
+            "controller completion field bypassed": store.replace(
+                "                        controller_confirm_offset,",
+                "                        confirm_offset,",
+                1,
+            ),
+            "completion process offset bypassed": store.replace(
+                "$commit_log.mapped_file_queue.set_flushed_where(process_offset);",
+                "$commit_log.mapped_file_queue.set_flushed_where(confirm_offset);",
+                1,
+            ),
+            "optimized summary before driver": summary_before_driver,
+            "abnormal path delegates": abnormal_delegate,
+            "invalid warning removed": store.replace(
+                "found a half message with an invalid offset; it will be truncated.",
+                "invalid recovery record",
+                1,
+            ),
+        }
+        for label, mutation in store_mutations.items():
+            with self.subTest(mutation=label):
+                self.assertNotEqual(store, mutation, label)
+                assert_rejected(label, store_source=mutation)
+
+        assert_rejected(
+            "normal recovery module hidden",
+            module_source=module.replace("pub mod normal_recovery;", "mod normal_recovery;", 1),
+        )
+        assert_rejected(
+            "drop-order regression removed",
+            test_source=local_tests.replace(
+                "fn message_state_overflow_skips_observe_drops_payload_and_stops_reading()",
+                "fn message_state_overflow_regression_removed()",
+                1,
+            ),
+        )
+
+    def test_commit_log_declared_frame_has_one_local_owner_and_two_standard_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_RECORD_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_record_tests.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            [],
+            commit_log_declared_frame_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+            ),
+        )
+
+    def test_commit_log_declared_frame_contract_rejects_reader_and_adapter_mutations(self) -> None:
+        local = (ROOT / COMMIT_LOG_RECORD_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_record_tests.rs").read_text(
+            encoding="utf-8"
+        )
+
+        def assert_rejected(
+            label: str,
+            *,
+            local_source: str = local,
+            module_source: str = module,
+            store_source: str = store,
+            test_source: str = local_tests,
+        ) -> None:
+            self.assertNotEqual(
+                [],
+                commit_log_declared_frame_contract_violations(
+                    local_source,
+                    module_source,
+                    store_source,
+                    test_source,
+                ),
+                label,
+            )
+
+        local_mutations = {
+            "header read length": local.replace(
+                "let mut bytes = read(position, 4);",
+                "let mut bytes = read(position, 8);",
+                1,
+            ),
+            "missing header size": local.replace(
+                "None => (None, 0),",
+                "None => (None, 1),",
+                1,
+            ),
+            "little-endian header": local.replace("inner.get_i32()", "inner.get_i32_le()", 1),
+            "zero size accepted": local.replace("if size <= 0", "if size < 0", 1),
+            "second read offset": local.replace(
+                "(read(position, size), size)",
+                "(read(position + 4, size), size)",
+                1,
+            ),
+            "second read length": local.replace(
+                "(read(position, size), size)",
+                "(read(position, 4), size)",
+                1,
+            ),
+            "missing body size reset": local.replace(
+                "(read(position, size), size)",
+                "(read(position, size), 0)",
+                1,
+            ),
+            "fallible short header": local.replace(
+                "let size = inner.get_i32();",
+                "if inner.len() < 4 { return (None, 0); }\n            let size = inner.get_i32();",
+                1,
+            ),
+            "cfg-gated owner": local.replace(
+                "pub fn read_declared_frame",
+                "#[cfg(any())]\npub fn read_declared_frame",
+                1,
+            ),
+            "duplicate owner": local
+            + "\npub fn read_declared_frame<F>(_: usize, _: F) -> (Option<Bytes>, usize) "
+            + "where F: FnMut(usize, usize) -> Option<Bytes> { (None, 0) }\n",
+            "aliased bytes import": local.replace(
+                "use bytes::Buf;",
+                "use bytes::Buf as ByteBuf;",
+                1,
+            ),
+            "Store type edge": local + "\nfn forbidden(_: &MappedFile) {}\n",
+        }
+        for label, mutation in local_mutations.items():
+            with self.subTest(mutation=label):
+                self.assertNotEqual(local, mutation, label)
+                assert_rejected(label, local_source=mutation)
+
+        import_line = "use rocketmq_store_local::commit_log::record::read_declared_frame;"
+        adapter = (
+            "read_declared_frame(current_pos, |position, size| "
+            "mapped_file.get_bytes(position, size))"
+        )
+        first_adapter_position = store.find(adapter)
+        last_adapter_position = store.rfind(adapter)
+        self.assertNotEqual(-1, first_adapter_position)
+        self.assertNotEqual(first_adapter_position, last_adapter_position)
+
+        abnormal_offset_mutation = (
+            store[:last_adapter_position]
+            + adapter.replace("get_bytes(position, size)", "get_bytes(position + 1, size)")
+            + store[last_adapter_position + len(adapter):]
+        )
+        optimized_marker = "pub async fn recover_normally_optimized("
+        optimized_start = store.index(optimized_marker)
+        optimized_open = store.index("{", optimized_start)
+        optimized_mutation = (
+            store[:optimized_open + 1]
+            + "\n        let _ = read_declared_frame(0, |_, _| None);"
+            + store[optimized_open + 1:]
+        )
+        store_mutations = {
+            "aliased adapter import": store.replace(
+                import_line,
+                "use rocketmq_store_local::commit_log::record::read_declared_frame as read_frame;",
+                1,
+            ),
+            "normal adapter position": store.replace(
+                adapter,
+                adapter.replace(
+                    "read_declared_frame(current_pos",
+                    "read_declared_frame(current_pos + 1",
+                ),
+                1,
+            ),
+            "abnormal adapter read position": abnormal_offset_mutation,
+            "adapter read size": store.replace(
+                adapter,
+                adapter.replace("get_bytes(position, size)", "get_bytes(position, 4)"),
+                1,
+            ),
+            "optimized path delegates": optimized_mutation,
+            "legacy helper retained": store
+            + "\nfn get_simple_message_bytes() -> (Option<Bytes>, usize) { (None, 0) }\n",
+            "Store policy copy": store
+            + "\nfn copied_policy(mut bytes: Bytes) { let _ = bytes.get_i32(); }\n",
+        }
+        for label, mutation in store_mutations.items():
+            with self.subTest(mutation=label):
+                self.assertNotEqual(store, mutation, label)
+                assert_rejected(label, store_source=mutation)
+
+        assert_rejected(
+            "record module hidden",
+            module_source=module.replace("pub mod record;", "mod record;", 1),
+        )
+        assert_rejected(
+            "missing body regression removed",
+            test_source=local_tests.replace(
+                "fn read_declared_frame_missing_body_preserves_big_endian_declared_size()",
+                "fn missing_body_regression_removed()",
+                1,
+            ),
+        )
+
+    def test_commit_log_append_attempt_has_one_local_owner_and_two_store_adapters(self) -> None:
+        local = (ROOT / COMMIT_LOG_APPEND_ATTEMPT_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_append_attempt.rs").read_text(encoding="utf-8")
+        store_tests = (STORE_CRATE / "src" / "message_store" / "local_file_message_store.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            [],
+            commit_log_append_attempt_contract_violations(
+                local,
+                module,
+                store,
+                local_tests,
+                store_tests,
+            ),
+        )
+
+    def test_commit_log_append_attempt_contract_rejects_control_flow_adapter_and_drop_mutations(self) -> None:
+        local = (ROOT / COMMIT_LOG_APPEND_ATTEMPT_PATH).read_text(encoding="utf-8")
+        module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        store = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        local_tests = (LOCAL_CRATE / "tests" / "commit_log_append_attempt.rs").read_text(encoding="utf-8")
+        store_tests = (STORE_CRATE / "src" / "message_store" / "local_file_message_store.rs").read_text(
+            encoding="utf-8"
+        )
+
+        def violations(
+            candidate_local: str = local,
+            candidate_module: str = module,
+            candidate_store: str = store,
+            candidate_local_tests: str = local_tests,
+            candidate_store_tests: str = store_tests,
+        ) -> list[str]:
+            return commit_log_append_attempt_contract_violations(
+                candidate_local,
+                candidate_module,
+                candidate_store,
+                candidate_local_tests,
+                candidate_store_tests,
+            )
+
+        local_mutations = [
+            local.replace("if is_full(&segment)", "if false", 1),
+            local.replace(
+                "match acquire() {\n                        Some(acquired)",
+                "drop(segment);\n                    match acquire() {\n                        Some(acquired)",
+                1,
+            ),
+            local.replace("lock_active(&segment)", "Ok::<(), E>(())", 1),
+            local.replace("let Some(rolled) = acquire()", "let Some(rolled) = None", 1),
+            local.replace("lock_active(&rolled)", "lock_active(&old)", 1),
+            local.replace("append(&rolled)", "append(&old)", 1),
+            local.replace(
+                "AppendMessageStatus::EndOfFile\n                    | AppendMessageStatus::MessageSizeExceeded",
+                "AppendMessageStatus::MessageSizeExceeded",
+                1,
+            ),
+            local.replace("let retry = append(&rolled);", "let _third = append(&rolled);\n                let retry = append(&rolled);", 1),
+            local.replace("rolled_segment: Some(old)", "rolled_segment: Some(old.clone())", 1),
+            local.replace("pub fn run", "#[cfg(any())]\n    pub fn run", 1),
+            local.replace("RetryRejected", "RetryAccepted", 1),
+            local.replace(
+                "status: CommitLogAppendStatus::PutOk,",
+                "status: CommitLogAppendStatus::UnknownError,",
+                1,
+            ),
+            local.replace("abandoned_segment: Some(old),", "abandoned_segment: None,", 1),
+            local.replace(
+                "did not complete successfully, including terminal append rejections",
+                "aborted before it could produce a final append result",
+                1,
+            ),
+            local.replace("retries at most once on EOF", "retries exactly once on EOF", 1),
+            local + "\npub struct CommitLogAppendAttempt;\n",
+        ]
+        for mutation_index, mutation in enumerate(local_mutations):
+            with self.subTest(local_mutation=mutation_index):
+                self.assertNotEqual(local, mutation)
+                self.assertNotEqual([], violations(candidate_local=mutation))
+
+        module_mutation = module.replace("pub mod append_attempt;", "mod append_attempt;", 1)
+        self.assertNotEqual(module, module_mutation)
+        self.assertNotEqual([], violations(candidate_module=module_mutation))
+
+        return_start = store.find("CommitLogAppendResolution::Return")
+        failure_match = store.find("match failure", return_start)
+        segment_drop = store.find("drop(abandoned_segment);", failure_match)
+        segment_drop_end = segment_drop + len("drop(abandoned_segment);")
+        moved_drop_store = (
+            store[:failure_match]
+            + "drop(abandoned_segment);\n                "
+            + store[failure_match:segment_drop]
+            + store[segment_drop_end:]
+        )
+        store_mutations = [
+            store.replace(
+                "use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt;",
+                "use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt as AppendAttempt;",
+                1,
+            ),
+            store.replace("CommitLogAppendAttempt::run(", "CommitLogAppendAttempt::run_disabled(", 1),
+            store.replace("|mapped_file| mapped_file.is_full()", "|_| false", 1),
+            store.replace(
+                "get_last_mapped_file_mut_start_offset(0, true)",
+                "get_last_mapped_file_mut_start_offset(1, true)",
+                1,
+            ),
+            store.replace(
+                "target,\n                        crate::utils::ffi::mlock,",
+                "target,\n                        crate::utils::ffi::munlock,",
+                1,
+            ),
+            store.replace("mapped_file.append_messages(", "mapped_file.append_message(", 1),
+            store.replace("append_attempt.resolve()", "append_attempt", 1),
+            store.replace(
+                "CommitLogAppendStatus::UnknownError => PutMessageStatus::UnknownError",
+                "CommitLogAppendStatus::UnknownError => PutMessageStatus::PutOk",
+                1,
+            ),
+            store.replace("drop(abandoned_segment);", "", 1),
+            moved_drop_store,
+            store.replace(
+                "CommitLogAppendFailure::RolledSegmentUnavailable",
+                "CommitLogAppendFailure::InitialSegmentUnavailable",
+                1,
+            ),
+            store.replace(
+                "self.runtime_state.active_memory_lock_parts();",
+                "self.runtime_state.active_memory_lock_parts_disabled();",
+                1,
+            ),
+            store.replace(
+                "let target = self.active_memory_lock_target(mapped_file);",
+                "let _ = self.active_memory_lock_present.load(Ordering::Acquire);\n        let target = self.active_memory_lock_target(mapped_file);",
+                1,
+            ),
+            store.replace(
+                "fn ensure_active_mapped_file_locked_with<F, G>(",
+                "fn ensure_active_mapped_file_locked(&self, _: &DefaultMappedFile) -> RocketMQResult<()> { Ok(()) }\n\n    fn ensure_active_mapped_file_locked_with<F, G>(",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(store_mutations):
+            with self.subTest(store_mutation=mutation_index):
+                self.assertNotEqual(store, mutation)
+                self.assertNotEqual([], violations(candidate_store=mutation))
+
+        test_mutations = [
+            (
+                "local",
+                local_tests.replace(
+                    "fn full_initial_acquire_failure_drops_old_only_after_acquire",
+                    "fn full_initial_acquire_failure_drops_old_before_acquire",
+                    1,
+                ),
+            ),
+            (
+                "local",
+                local_tests.replace("struct Segment {", "#[derive(Clone)]\nstruct Segment {", 1),
+            ),
+            (
+                "local",
+                local_tests.replace(
+                    "fn aborted_outcomes_resolve_every_return_status_and_owned_detail",
+                    "fn aborted_outcome_resolution_regression_removed",
+                    1,
+                ),
+            ),
+            (
+                "store",
+                store_tests.replace(
+                    "fn batch_put_retries_full_encoded_buffer_after_partial_frame_eof_roll",
+                    "fn batch_put_does_not_retry_after_partial_frame_eof_roll",
+                    1,
+                ),
+            ),
+        ]
+        for test_kind, mutation in test_mutations:
+            with self.subTest(test_mutation=test_kind):
+                if test_kind == "local":
+                    self.assertNotEqual([], violations(candidate_local_tests=mutation))
+                else:
+                    self.assertNotEqual([], violations(candidate_store_tests=mutation))
 
     def test_commit_log_memory_lock_target_has_one_local_owner_and_rejects_policy_mutations(self) -> None:
         canonical_path = ROOT / COMMIT_LOG_MEMORY_LOCK_PATH
@@ -8046,8 +16153,13 @@ mod tests""",
                 1,
             ),
             commit_log.replace(
-                "target: CommitLogMemoryLockTarget",
-                "target: crate::base::memory_lock_manager::MemoryLockHandle",
+                "target: Option<CommitLogMemoryLockTarget>",
+                "target: Option<crate::base::memory_lock_manager::MemoryLockHandle>",
+                1,
+            ),
+            commit_log.replace(
+                "L: FnMut(&MemoryLockManager, CommitLogMemoryLockTarget)",
+                "L: FnMut(&MemoryLockManager, crate::base::memory_lock_manager::MemoryLockHandle)",
                 1,
             ),
             commit_log.replace(
@@ -8324,14 +16436,14 @@ pub(crate) fn same_named_inner(_: i64, _: usize) -> Option<i64> { None }
                 1,
             ),
             commit_log.replace(
-                "match abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, msg_size)",
-                "match Ok(dispatch_request.commit_log_offset)",
+                ".map_err(AbnormalRecoveryAdapterError::ConfirmCandidate)?;",
+                ".unwrap();",
                 1,
             ),
             commit_log.replace(
-                "match abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, input_size)",
-                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, input_size).unwrap();\n                            match Ok(dispatch_request.commit_log_offset)",
-                1,
+                ".map_err(AbnormalRecoveryAdapterError::ConfirmCandidate)?;",
+                ".map_err(AbnormalRecoveryAdapterError::ValidatedSizeConversion)?;",
+                2,
             ),
             commit_log.replace(
                 "use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;",
@@ -8371,33 +16483,6 @@ pub(crate) fn same_named_inner(_: i64, _: usize) -> Option<i64> { None }
             commit_log.replace(
                 'warn!("standard abnormal recovery confirm candidate failed: {error}");',
                 'warn!("standard abnormal recovery confirm candidate failed");',
-                1,
-            ),
-            commit_log.replace(
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
-                "                                break 'segments;",
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
-                "                                continue;",
-                1,
-            ),
-            commit_log.replace(
-                'warn!("standard abnormal recovery confirm candidate failed: {error}");\n'
-                "                                    break 'segments;",
-                'warn!("standard abnormal recovery confirm candidate failed: {error}");\n'
-                "                                    return;",
-                1,
-            ),
-            commit_log.replace(
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
-                "                                break 'segments;",
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
-                "                                break 'files;",
-                1,
-            ),
-            commit_log.replace(
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");\n'
-                "                                break 'segments;",
-                'warn!("optimized abnormal recovery confirm candidate failed: {error}");',
                 1,
             ),
         ]
@@ -8692,6 +16777,138 @@ mod tests {
             recovery_consume_queue_owner_violations(test_decoy, test_sources),
         )
 
+    def test_recovery_completion_has_one_local_owner_and_rejects_mapping_mutations(self) -> None:
+        completion_path = ROOT / RECOVERY_COMPLETION_PATH
+        completion = completion_path.read_text(encoding="utf-8")
+        recovery_root = (LOCAL_CRATE / "src" / "commit_log" / "recovery.rs").read_text(
+            encoding="utf-8"
+        )
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            recovery_completion_owner_violations(
+                completion,
+                recovery_root,
+                production_sources,
+            ),
+        )
+
+        mutations = [
+            completion.replace("controller_confirm_offset: i64,", "controller_confirm_offset: u64,", 1),
+            completion.replace(
+                "NormalRecoveryPolicy::Standard => process_offset,",
+                "NormalRecoveryPolicy::Standard => confirm_offset,",
+                1,
+            ),
+            completion.replace(
+                "controller_confirm_offset: signed_offset(summary.confirm_valid_offset),",
+                "controller_confirm_offset: signed_offset(summary.last_valid_offset),",
+                1,
+            ),
+            completion.replace(
+                "max_phy_offset_of_consume_queue,\n                summary.truncate_offset,",
+                "max_phy_offset_of_consume_queue,\n                summary.last_valid_offset,",
+                1,
+            ),
+            completion.replace("offset as i64", "offset as i32 as i64", 1),
+            completion + "\nfn forbidden_store_edge(_: LocalFileMessageStore) {}\n",
+        ]
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(completion_mutation=mutation_index):
+                self.assertNotEqual(completion, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[RECOVERY_COMPLETION_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    recovery_completion_owner_violations(
+                        mutation,
+                        recovery_root,
+                        mutated_sources,
+                    ),
+                )
+
+        root_mutation = recovery_root.replace(
+            "pub use completion::CommitLogRecoveryCompletion;",
+            "pub(crate) use completion::CommitLogRecoveryCompletion;",
+            1,
+        )
+        self.assertNotEqual(recovery_root, root_mutation)
+        self.assertNotEqual(
+            [],
+            recovery_completion_owner_violations(
+                completion,
+                root_mutation,
+                production_sources,
+            ),
+        )
+
+        tests = (LOCAL_CRATE / "tests" / "commit_log_recovery_completion.rs").read_text(encoding="utf-8")
+        for test_name in (
+            "normal_completion_preserves_policy_specific_controller_boundaries",
+            "abnormal_completion_preserves_confirm_and_truncation_watermarks",
+        ):
+            self.assertIn(f"fn {test_name}()", tests)
+
+    def test_storage_local_compatibility_ledger_matches_owner_and_feature_snapshot(self) -> None:
+        ledger = (ROOT / STORAGE_LOCAL_LEDGER_PATH).read_text(encoding="utf-8")
+        local_manifest = (LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8")
+        store_manifest = (STORE_CRATE / "Cargo.toml").read_text(encoding="utf-8")
+        store_commit_log = (ROOT / STORE_COMMIT_LOG_PATH).read_text(encoding="utf-8")
+        store_mapped_file = (STORE_CRATE / "src" / "log_file" / "mapped_file.rs").read_text(encoding="utf-8")
+        store_recovery = (ROOT / STORE_COMMIT_LOG_RECOVERY_PATH).read_text(encoding="utf-8")
+        store_allocate_service = (ROOT / STORE_ALLOCATE_MAPPED_FILE_SERVICE_PATH).read_text(encoding="utf-8")
+
+        def violations(
+            *,
+            candidate_ledger: str = ledger,
+            candidate_local_manifest: str = local_manifest,
+            candidate_store_manifest: str = store_manifest,
+            candidate_commit_log: str = store_commit_log,
+        ) -> list[str]:
+            return storage_local_compatibility_ledger_violations(
+                candidate_ledger,
+                candidate_local_manifest,
+                candidate_store_manifest,
+                candidate_commit_log,
+                store_mapped_file,
+                store_recovery,
+                store_allocate_service,
+            )
+
+        self.assertEqual([], violations())
+        mutations = (
+            {"candidate_ledger": ledger.replace("`default = []`", "`default = [fast-load]`", 1)},
+            {"candidate_ledger": ledger.replace("- M06-06：", "- M06-09：", 1)},
+            {
+                "candidate_local_manifest": local_manifest.replace(
+                    "default = []",
+                    'default = ["fast-load"]',
+                    1,
+                )
+            },
+            {
+                "candidate_store_manifest": store_manifest.replace(
+                    'safe-load = ["rocketmq-store-local/safe-load"]',
+                    "safe-load = []",
+                    1,
+                )
+            },
+            {
+                "candidate_commit_log": store_commit_log.replace(
+                    "root: CommitLogRoot<CommitLogAdapter>,",
+                    "root: CommitLogRoot<CommitLogAdapter>,\n    duplicate_owner: bool,",
+                    1,
+                )
+            },
+        )
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(ledger_mutation=mutation_index):
+                self.assertNotEqual([], violations(**mutation))
+
     def test_store_recovery_consume_queue_paths_delegate_once_and_reject_adapter_mutations(self) -> None:
         commit_log_path = Path("rocketmq-store/src/log_file/commit_log.rs")
         commit_log = (ROOT / commit_log_path).read_text(encoding="utf-8")
@@ -8705,25 +16922,34 @@ mod tests {
         )
         mutations = [
             commit_log.replace(
+                "use rocketmq_store_local::commit_log::recovery::CommitLogRecoveryCompletion;",
+                "use rocketmq_store_local::commit_log::recovery::CommitLogRecoveryCompletion;\n"
                 "use rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue;",
-                "use rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue as should_truncate;",
                 1,
             ),
             commit_log.replace(
-                "max_phy_offset_of_consume_queue, summary.truncate_offset",
-                "summary.truncate_offset as i64, max_phy_offset_of_consume_queue as u64",
+                "normal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "normal_recovery.summary()",
                 1,
             ),
             commit_log.replace(
-                "max_phy_offset_of_consume_queue, summary.truncate_offset",
-                "max_phy_offset_of_consume_queue, process_offset as u64",
+                "abnormal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "abnormal_recovery.summary()",
                 1,
             ),
-            commit_log.replace("should_truncate_recovery_consume_queue(", "false && should_truncate_recovery_consume_queue(", 1),
-            commit_log.replace("should_truncate_recovery_consume_queue(", "should_truncate_recovery_consume_queue_old(", 1),
+            commit_log.replace(
+                "normal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "normal_recovery.completion(-1)",
+                1,
+            ),
+            commit_log.replace(
+                "abnormal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "abnormal_recovery.completion(-1)",
+                1,
+            ),
             commit_log
             + "\nfn extra_recovery_adapter(maximum: i64, truncate: u64) -> bool {\n"
-            + "    should_truncate_recovery_consume_queue(maximum, truncate)\n}\n",
+            + "    rocketmq_store_local::commit_log::recovery::should_truncate_recovery_consume_queue(maximum, truncate)\n}\n",
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(adapter_mutation=mutation_index):
@@ -9378,6 +17604,631 @@ pub use {module}::{item};
                     violations,
                 )
 
+        append_frame_source = (
+            LOCAL_CRATE / "src" / "commit_log" / "append_frame.rs"
+        ).read_text(encoding="utf-8")
+        commit_log_module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(
+            encoding="utf-8"
+        )
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            append_frame_kernel_owner_violations(
+                append_frame_source,
+                commit_log_module,
+                production_sources,
+            ),
+        )
+        owner_mutations = [
+            append_frame_source.replace(
+                "i32::from_be_bytes(frame[0..4].try_into().unwrap())",
+                "i32::from_le_bytes(frame[0..4].try_into().unwrap())",
+                1,
+            ),
+            append_frame_source.replace(
+                "i32::from_be_bytes(frame[0..4].try_into().unwrap())",
+                "i32::from_be_bytes(frame[1..5].try_into().unwrap())",
+                1,
+            ),
+            append_frame_source.replace(
+                "if self.total_msg_len < frames.len() as i32",
+                "if self.total_msg_len <= frames.len() as i32",
+                1,
+            ),
+            append_frame_source.replace(
+                "self.total_msg_len += declared_len;",
+                "self.total_msg_len = self.total_msg_len.saturating_add(declared_len);",
+                1,
+            ),
+            append_frame_source.replace(
+                "wrote_offset + self.cumulative_len as i64 - self.declared_len as i64",
+                "wrote_offset + (self.cumulative_len as i64 - self.declared_len as i64)",
+                1,
+            ),
+            append_frame_source.replace(
+                "wrote_offset + self.cumulative_len as i64 - self.declared_len as i64",
+                "wrote_offset.checked_add(self.cumulative_len as i64).unwrap() - self.declared_len as i64",
+                1,
+            ),
+            append_frame_source.replace(
+                "wrote_offset + self.cumulative_len as i64 - self.declared_len as i64",
+                "wrote_offset.saturating_add(self.cumulative_len as i64).saturating_sub(self.declared_len as i64)",
+                1,
+            ),
+            append_frame_source.replace(
+                "A roll path must not call this method.",
+                "A roll path may call this method.",
+                1,
+            ),
+            append_frame_source.replace(
+                "self.msg_num += 1;\n"
+                "        self.msg_pos += declared_len as usize;\n"
+                "        self.index += 1;",
+                "self.msg_pos += declared_len as usize;\n"
+                "        self.msg_num += 1;\n"
+                "        self.index += 1;",
+                1,
+            ),
+            append_frame_source.replace(
+                "encoded_len + END_FILE_MIN_BLANK_LENGTH > max_blank",
+                "encoded_len + END_FILE_MIN_BLANK_LENGTH >= max_blank",
+                1,
+            ),
+            append_frame_source.replace(
+                "const QUEUE_OFFSET_POSITION: usize = 20;",
+                "const QUEUE_OFFSET_POSITION: usize = 21;",
+                1,
+            ),
+            append_frame_source.replace(
+                "pub use super::header::HostWidth;",
+                "use super::header::HostWidth;",
+                1,
+            ),
+            append_frame_source.replace(
+                "bytes[0..4].copy_from_slice(&max_blank.to_be_bytes());",
+                "bytes[0..4].copy_from_slice(&BLANK_MAGIC_CODE.to_be_bytes());",
+                1,
+            ),
+            append_frame_source.replace(
+                "if crc_reserved_length == 0",
+                "if crc_reserved_length <= 0",
+                1,
+            ),
+            append_frame_source.replace(
+                "born_host_width: HostWidth,",
+                "born_host_is_ipv6: bool,",
+                1,
+            ),
+            append_frame_source.replace(
+                "pub struct AppendFrameKernel;",
+                "#[cfg(any())]\npub struct AppendFrameKernel;",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(owner_mutations):
+            with self.subTest(append_frame_owner_mutation=mutation_index):
+                self.assertNotEqual(append_frame_source, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[COMMIT_LOG_APPEND_FRAME_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    append_frame_kernel_owner_violations(
+                        mutation,
+                        commit_log_module,
+                        mutated_sources,
+                    ),
+                )
+
+        copied_kernel_sources = dict(production_sources)
+        copied_kernel_sources[
+            Path("rocketmq-store/src/copied_append_frame_kernel.rs")
+        ] = """
+fn copied_finalize(frame: &mut [u8], queue: i64, physical: i64, timestamp: i64) {
+    frame[20..28].copy_from_slice(&queue.to_be_bytes());
+    frame[28..36].copy_from_slice(&physical.to_be_bytes());
+    frame[56..64].copy_from_slice(&timestamp.to_be_bytes());
+}
+fn copied_blank(max_blank: i32) {
+    let _ = max_blank.to_be_bytes();
+    let _ = BLANK_MAGIC_CODE.to_be_bytes();
+}
+fn copied_roll(encoded_len: i32, max_blank: i32) -> bool {
+    encoded_len + 8 > max_blank
+}
+"""
+        self.assertNotEqual(
+            [],
+            append_frame_kernel_owner_violations(
+                append_frame_source,
+                commit_log_module,
+                copied_kernel_sources,
+            ),
+        )
+
+        callback_source = (ROOT / STORE_APPEND_CALLBACK_PATH).read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual([], append_frame_store_adapter_violations(callback_source))
+
+        def replace_nth_occurrence(
+            source: str,
+            old: str,
+            new: str,
+            occurrence: int,
+        ) -> str:
+            position = -1
+            for _ in range(occurrence):
+                position = source.find(old, position + 1)
+            self.assertNotEqual(-1, position)
+            return source[:position] + new + source[position + len(old):]
+
+        def move_zero_copy_normal_timer_into_eof(source: str) -> str:
+            without_normal_timer = source.replace(
+                "        let instant = Instant::now();\n"
+                "        if let Some((buffer, _pos)) = "
+                "mapped_file.get_direct_write_buffer(msg_len as usize) {",
+                "        if let Some((buffer, _pos)) = "
+                "mapped_file.get_direct_write_buffer(msg_len as usize) {",
+                1,
+            )
+            self.assertNotEqual(source, without_normal_timer)
+            return replace_nth_occurrence(
+                without_normal_timer,
+                "            );\n"
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n"
+                "            return AppendMessageResult {",
+                "            );\n"
+                "            let instant = Instant::now();\n"
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n"
+                "            return AppendMessageResult {",
+                2,
+            )
+
+        def move_restore_after_eof_return(
+            source: str,
+            assignment: str,
+            occurrence: int,
+            branch_end: str,
+        ) -> str:
+            assignment_position = -1
+            for _ in range(occurrence):
+                assignment_position = source.find(assignment, assignment_position + 1)
+            self.assertNotEqual(-1, assignment_position)
+            without_assignment = (
+                source[:assignment_position]
+                + source[assignment_position + len(assignment):]
+            )
+            branch_end_position = without_assignment.find(branch_end, assignment_position)
+            self.assertNotEqual(-1, branch_end_position)
+            return_position = branch_end_position + branch_end.find("\n")
+            return (
+                without_assignment[:return_position]
+                + "\n"
+                + assignment.rstrip("\n")
+                + without_assignment[return_position:]
+            )
+
+        adapter_mutations = [
+            callback_source.replace(
+                "restore that exact",
+                "restore the original",
+                1,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n",
+                "",
+                1,
+            ),
+            callback_source.replace(
+                "                msg_batch.encoded_buff = Some(messages_byte_buffer);\n",
+                "",
+                1,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n",
+                "",
+                2,
+            ),
+            move_restore_after_eof_return(
+                callback_source,
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n",
+                1,
+                "            };\n        }",
+            ),
+            move_restore_after_eof_return(
+                callback_source,
+                "                msg_batch.encoded_buff = Some(messages_byte_buffer);\n",
+                1,
+                "                };\n            }",
+            ),
+            move_restore_after_eof_return(
+                callback_source,
+                "            msg_inner.encoded_buff = Some(pre_encode_buffer);\n",
+                2,
+                "            };\n        }",
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "msg_inner.encoded_buff = Some(pre_encode_buffer);",
+                "msg_batch.encoded_buff = Some(pre_encode_buffer);",
+                1,
+            ),
+            callback_source.replace(
+                "msg_batch.encoded_buff = Some(messages_byte_buffer);",
+                "msg_inner.encoded_buff = Some(messages_byte_buffer);",
+                1,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "msg_inner.encoded_buff = Some(pre_encode_buffer);",
+                "msg_batch.encoded_buff = Some(pre_encode_buffer);",
+                2,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "Some(pre_encode_buffer);",
+                "Some(pre_encode_buffer.clone());",
+                1,
+            ),
+            callback_source.replace(
+                "Some(messages_byte_buffer);",
+                "Some(messages_byte_buffer.clone());",
+                1,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "Some(pre_encode_buffer);",
+                "Some(pre_encode_buffer.clone());",
+                2,
+            ),
+            callback_source.replace(
+                "let phy_pos = frame.physical_offset(wrote_offset);",
+                "let phy_pos = wrote_offset + frame.cumulative_len() as i64 - frame.declared_len() as i64;",
+                1,
+            ),
+            callback_source.replace(
+                "AppendFrameKernel::declared_frame_length(pre_encode_buffer.as_ref())",
+                "i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap())",
+                1,
+            ),
+            callback_source.replace(
+                "        let mut cursor = AppendBatchFrameCursor::new();",
+                "        let _prefix = &messages_byte_buffer[0..4];\n"
+                "        let mut cursor = AppendBatchFrameCursor::new();",
+                1,
+            ),
+            callback_source.replace(
+                "        let mut cursor = AppendBatchFrameCursor::new();",
+                "        let mut total_msg_len = 0;\n"
+                "        let mut cursor = AppendBatchFrameCursor::new();",
+                1,
+            ),
+            callback_source.replace(
+                "            put_message_context.get_phy_pos_mut()[frame.index()] = phy_pos;\n"
+                "            cursor.finish_frame(msg_len);",
+                "            cursor.finish_frame(msg_len);\n"
+                "            put_message_context.get_phy_pos_mut()[frame.index()] = phy_pos;",
+                1,
+            ),
+            callback_source.replace(
+                "            cursor.finish_frame(msg_len);\n",
+                "",
+                1,
+            ),
+            callback_source.replace(
+                "            let msg_len = frame.declared_len();\n",
+                "            let msg_len = frame.declared_len();\n"
+                "            let _premature_end = frame.end();\n",
+                1,
+            ),
+            callback_source.replace(
+                "AppendFrameKernel::segment_append_decision(msg_len, max_blank)",
+                "AppendFrameKernel::segment_append_decision(msg_len - 1, max_blank)",
+                1,
+            ),
+            callback_source.replace(
+                "AppendFrameKernel::finalize_frame(",
+                "AppendFrameKernel::finalize_frame_changed(",
+                1,
+            ),
+            callback_source.replace("queue_offset = 0;", "queue_offset = 1;", 1),
+            callback_source.replace(
+                "let _check_size = msg_len - self.crc32_reserved_length;",
+                "let _check_size = msg_len.checked_sub(self.crc32_reserved_length);",
+                1,
+            ),
+            callback_source.replace(
+                "#[cfg(test)]\nmod tests",
+                "fn copied_runtime_patch(frame: &mut [u8], value: i64) {\n"
+                "    frame[20..28].copy_from_slice(&value.to_be_bytes());\n"
+                "}\n\n#[cfg(test)]\nmod tests",
+                1,
+            ),
+            callback_source.replace(
+                "use rocketmq_store_local::commit_log::append_frame::SegmentAppendDecision;",
+                "use rocketmq_store_local::commit_log::append_frame::SegmentAppendDecision;\n"
+                "use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;",
+                1,
+            ),
+            replace_nth_occurrence(
+                callback_source,
+                "mapped_file.write_bytes_segment(",
+                "mapped_file.write_bytes_segment_removed(",
+                3,
+            ),
+            callback_source.replace(
+                "        let instant = Instant::now();\n"
+                "        if let Some((buffer, _pos)) = "
+                "mapped_file.get_direct_write_buffer(msg_len as usize) {",
+                "        if let Some((buffer, _pos)) = "
+                "mapped_file.get_direct_write_buffer(msg_len as usize) {\n"
+                "            let instant = Instant::now();",
+                1,
+            ),
+            callback_source.replace(
+                "            queue_offset,\n"
+                "            wrote_offset,\n"
+                "            msg_inner.store_timestamp(),\n"
+                "            born_host_width,\n"
+                "            self.crc32_reserved_length,",
+                "            wrote_offset,\n"
+                "            queue_offset,\n"
+                "            msg_inner.store_timestamp(),\n"
+                "            born_host_width,\n"
+                "            self.crc32_reserved_length,",
+                1,
+            ),
+            callback_source.replace(
+                "            born_host_width,\n"
+                "            self.crc32_reserved_length,\n"
+                "        );",
+                "            born_host_width,\n"
+                "            0,\n"
+                "        );",
+                1,
+            ),
+            move_zero_copy_normal_timer_into_eof(callback_source),
+        ]
+        for mutation_index, mutation in enumerate(adapter_mutations):
+            with self.subTest(append_frame_adapter_mutation=mutation_index):
+                self.assertNotEqual(callback_source, mutation)
+                self.assertNotEqual([], append_frame_store_adapter_violations(mutation))
+
+    def test_commit_log_header_contract_rejects_layout_probe_and_adapter_mutations(self) -> None:
+        sources = {
+            "header_source": (ROOT / COMMIT_LOG_HEADER_PATH).read_text(encoding="utf-8"),
+            "module_source": (LOCAL_CRATE / "src" / "commit_log.rs").read_text(
+                encoding="utf-8"
+            ),
+            "record_source": (
+                LOCAL_CRATE / "src" / "commit_log" / "record.rs"
+            ).read_text(encoding="utf-8"),
+            "append_source": (ROOT / COMMIT_LOG_APPEND_FRAME_PATH).read_text(
+                encoding="utf-8"
+            ),
+            "parser_source": (
+                LOCAL_CRATE / "src" / "commit_log" / "record_parser.rs"
+            ).read_text(encoding="utf-8"),
+            "recovery_source": (ROOT / STORE_COMMIT_LOG_RECOVERY_PATH).read_text(
+                encoding="utf-8"
+            ),
+            "commit_log_source": (ROOT / STORE_COMMIT_LOG_PATH).read_text(
+                encoding="utf-8"
+            ),
+        }
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [],
+            commit_log_header_contract_violations(
+                **sources,
+                production_sources=production_sources,
+            ),
+        )
+
+        source_paths = {
+            "header_source": COMMIT_LOG_HEADER_PATH,
+            "module_source": Path("rocketmq-store-local/src/commit_log.rs"),
+            "record_source": Path("rocketmq-store-local/src/commit_log/record.rs"),
+            "append_source": COMMIT_LOG_APPEND_FRAME_PATH,
+            "parser_source": Path(
+                "rocketmq-store-local/src/commit_log/record_parser.rs"
+            ),
+            "recovery_source": STORE_COMMIT_LOG_RECOVERY_PATH,
+            "commit_log_source": STORE_COMMIT_LOG_PATH,
+        }
+
+        def assert_rejected(label: str, **mutations: str) -> None:
+            mutated_sources = dict(sources)
+            mutated_production_sources = dict(production_sources)
+            for source_name, mutation in mutations.items():
+                self.assertNotEqual(sources[source_name], mutation, label)
+                mutated_sources[source_name] = mutation
+                mutated_production_sources[source_paths[source_name]] = mutation
+            self.assertNotEqual(
+                [],
+                commit_log_header_contract_violations(
+                    **mutated_sources,
+                    production_sources=mutated_production_sources,
+                ),
+                label,
+            )
+
+        header = sources["header_source"]
+        constant_mutations = {
+            "magic offset": ("MAGIC_CODE_POSITION: usize = 4", "MAGIC_CODE_POSITION: usize = 5"),
+            "sysflag offset": ("SYS_FLAG_POSITION: usize = 36", "SYS_FLAG_POSITION: usize = 37"),
+            "born flag": ("BORN_HOST_V6_FLAG: i32 = 0x10", "BORN_HOST_V6_FLAG: i32 = 0x11"),
+            "store flag": ("STORE_HOST_V6_FLAG: i32 = 0x20", "STORE_HOST_V6_FLAG: i32 = 0x21"),
+            "IPv4 host length": ("IPV4_HOST_LENGTH: usize = 8", "IPV4_HOST_LENGTH: usize = 9"),
+            "IPv6 host length": ("IPV6_HOST_LENGTH: usize = 20", "IPV6_HOST_LENGTH: usize = 21"),
+            "IPv4 timestamp offset": (
+                "IPV4_STORE_TIMESTAMP_POSITION: usize = 56",
+                "IPV4_STORE_TIMESTAMP_POSITION: usize = 57",
+            ),
+            "IPv6 timestamp offset": (
+                "IPV6_STORE_TIMESTAMP_POSITION: usize = 68",
+                "IPV6_STORE_TIMESTAMP_POSITION: usize = 69",
+            ),
+            "V1 magic": ("-626843481", "-626843480"),
+            "V2 magic": ("-626843477", "-626843476"),
+        }
+        for label, (old, new) in constant_mutations.items():
+            with self.subTest(mutation=label):
+                assert_rejected(label, header_source=header.replace(old, new, 1))
+
+        header_mutations = {
+            "little endian i32": header.replace("i32::from_be_bytes", "i32::from_le_bytes", 1),
+            "little endian i64": header.replace("i64::from_be_bytes", "i64::from_le_bytes", 1),
+            "drop V2 acceptance": header.replace(
+                " && magic_code != MESSAGE_MAGIC_CODE_V2",
+                "",
+                1,
+            ),
+            "missing i32 is one": header.replace(".unwrap_or(0)", ".unwrap_or(1)", 1),
+            "missing i64 is one": header.rsplit(".unwrap_or(0)", 1)[0]
+            + ".unwrap_or(1)"
+            + header.rsplit(".unwrap_or(0)", 1)[1],
+            "zero timestamp accepted": header.replace(
+                "(store_timestamp != 0).then_some(store_timestamp)",
+                "Some(store_timestamp)",
+                1,
+            ),
+            "magic read width": header.replace("read(offset, 4)", "read(offset, 5)", 1),
+            "timestamp read width": header.replace("read(offset, 8)", "read(offset, 7)", 1),
+            "present short becomes fallback": header.replace(
+                ".map(|bytes| i32::from_be_bytes(bytes[0..4].try_into().unwrap()))",
+                ".and_then(|bytes| bytes.get(0..4).map(|value| i32::from_be_bytes(value.try_into().unwrap())))",
+                1,
+            ),
+            "strict becomes fallible": header.replace(
+                "pub fn store_timestamp_from_frame(frame: &[u8]) -> i64",
+                "pub fn store_timestamp_from_frame(frame: &[u8]) -> Option<i64>",
+                1,
+            ),
+            "strict uses checked slice": header.replace(
+                "frame[SYS_FLAG_POSITION..SYS_FLAG_POSITION + 4]",
+                "frame.get(SYS_FLAG_POSITION..SYS_FLAG_POSITION + 4).unwrap()",
+                1,
+            ),
+            "flag visibility widened": header.replace(
+                "pub(crate) const BORN_HOST_V6_FLAG",
+                "pub const BORN_HOST_V6_FLAG",
+                1,
+            ),
+            "method visibility widened": header.replace(
+                "pub(crate) fn born",
+                "pub fn born",
+                1,
+            ),
+        }
+        short_circuit_old = (
+            "let magic_code = read_i32_or_zero(&mut read, MAGIC_CODE_POSITION);\n"
+            "    if magic_code != MESSAGE_MAGIC_CODE && magic_code != MESSAGE_MAGIC_CODE_V2 {\n"
+            "        return None;\n"
+            "    }\n\n"
+            "    let sys_flag = read_i32_or_zero(&mut read, SYS_FLAG_POSITION);"
+        )
+        short_circuit_new = (
+            "let magic_code = read_i32_or_zero(&mut read, MAGIC_CODE_POSITION);\n"
+            "    let sys_flag = read_i32_or_zero(&mut read, SYS_FLAG_POSITION);\n"
+            "    if magic_code != MESSAGE_MAGIC_CODE && magic_code != MESSAGE_MAGIC_CODE_V2 {\n"
+            "        return None;\n"
+            "    }"
+        )
+        header_mutations["invalid magic reads sysflag"] = header.replace(
+            short_circuit_old,
+            short_circuit_new,
+            1,
+        )
+        for label, mutation in header_mutations.items():
+            with self.subTest(mutation=label):
+                assert_rejected(label, header_source=mutation)
+
+        recovery = sources["recovery_source"]
+        recovery_mutations = {
+            "probe closure changes offset": recovery.replace(
+                "mapped_file.get_bytes(offset, len)",
+                "mapped_file.get_bytes(offset + 1, len)",
+                1,
+            ),
+            "safe checkpoint less-than": recovery.replace(
+                "store_timestamp <= store_checkpoint.get_min_timestamp_index() as i64",
+                "store_timestamp < store_checkpoint.get_min_timestamp_index() as i64",
+                1,
+            ),
+            "normal checkpoint less-than": recovery.replace(
+                "store_timestamp <= store_checkpoint.get_min_timestamp() as i64",
+                "store_timestamp < store_checkpoint.get_min_timestamp() as i64",
+                1,
+            ),
+            "timestamp logging removed": recovery.replace(
+                "time_millis_to_human_string(store_timestamp)",
+                '"hidden"',
+                1,
+            ),
+        }
+        for label, mutation in recovery_mutations.items():
+            with self.subTest(mutation=label):
+                assert_rejected(label, recovery_source=mutation)
+
+        commit_log = sources["commit_log_source"]
+        pickup_mutations = {
+            "pickup range less-than": commit_log.replace(
+                "(offset + size as i64) <= self.get_max_offset()",
+                "(offset + size as i64) < self.get_max_offset()",
+                1,
+            ),
+            "pickup loses strict reader": commit_log.replace(
+                "rocketmq_store_local::commit_log::header::store_timestamp_from_frame(buffer)",
+                "rocketmq_store_local::commit_log::header::probe_store_timestamp(|_, _| None).unwrap_or(-1)",
+                1,
+            ),
+            "pickup changes missing sentinel": commit_log.replace(
+                "            } else {\n                -1\n            }",
+                "            } else {\n                0\n            }",
+                1,
+            ),
+        }
+        for label, mutation in pickup_mutations.items():
+            with self.subTest(mutation=label):
+                assert_rejected(label, commit_log_source=mutation)
+
+        parser = sources["parser_source"]
+        assert_rejected(
+            "parser duplicates born-host formula",
+            parser_source=parser.replace(
+                "HostWidth::born(sys_flag).encoded_len()",
+                "if sys_flag & 0x10 == 0 { 8 } else { 20 }",
+                1,
+            ),
+        )
+        append = sources["append_source"]
+        assert_rejected(
+            "append duplicates timestamp offset",
+            append_source=append.replace(
+                "born_host_width.store_timestamp_position()",
+                "match born_host_width { HostWidth::Ipv4 => 56, HostWidth::Ipv6 => 68 }",
+                1,
+            ),
+        )
+        duplicate_constant = "\nconst MAGIC_CODE_POSITION: usize = 4;\n"
+        for source_name in ("parser_source", "append_source", "recovery_source"):
+            with self.subTest(mutation=f"duplicate layout in {source_name}"):
+                assert_rejected(
+                    f"duplicate layout in {source_name}",
+                    **{source_name: sources[source_name] + duplicate_constant},
+                )
+
     def test_commit_log_record_contract_rejects_dynamic_port_and_masks_inactive_text(self) -> None:
         valid = "pub struct CommitLogFrameCursor<S: CommitLogFrameSource> { source: S }"
         dynamic = "pub struct Bad { source: Box<dyn CommitLogFrameSource> }"
@@ -9632,26 +18483,29 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
     def test_store_normal_recovery_adapters_reject_branch_bypass_and_abnormal_mutations(self) -> None:
         source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
         self.assertEqual([], store_normal_recovery_adapter_violations(source))
+        abnormal_marker = "pub async fn recover_abnormally_optimized("
+        abnormal_start = source.index(abnormal_marker)
+        abnormal_open = source.index("{", abnormal_start)
         mutations = [
-            source.replace("NormalRecoveryEvent::Blank", "NormalRecoveryEvent::SourceEnded", 1),
-            source.replace("NormalRecoveryEvent::InvalidRecord", "NormalRecoveryEvent::Blank", 1),
-            source.replace("NormalRecoveryEvent::SourceEnded", "NormalRecoveryEvent::InvalidRecord", 1),
-            source.replace("normal_recovery.apply", "normal_recovery_bypass.apply", 1),
+            source.replace(
+                "use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation;",
+                "use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation as Observation;",
+                1,
+            ),
+            source.replace("normal_recovery.drive_segment", "normal_recovery.drive_records", 1),
             source.replace("NormalRecoveryPolicy::Standard", "NormalRecoveryPolicy::Optimized", 1),
             source.replace(
-                "let do_dispatch = false;",
-                "let mut last_valid_copy = 0;\n            match NormalRecoveryPolicy::Standard {"
-                " NormalRecoveryPolicy::Standard => last_valid_copy = 1, _ => {} }\n"
-                "            let do_dispatch = false;",
+                "NormalRecoveryObservation::Blank => {",
+                "NormalRecoveryObservation::MessageAccepted => {",
                 1,
             ),
             source.replace(
-                "let do_dispatch = false;",
-                "let mut truncate_offset_copy = 0;\n            truncate_offset_copy = 1;\n"
-                "            let do_dispatch = false;",
+                "let outcome = normal_recovery.drive_segment(",
+                "let _ = normal_recovery.apply(event);\n        let outcome = normal_recovery.drive_segment(",
                 1,
             ),
-            source.replace("match normal_recovery.apply", "let _ = normal_recovery.apply", 1),
+            source.replace("normal_recovery.completion(", "normal_recovery.completion_copy(", 1),
+            source[:abnormal_open + 1] + "\n        drive_segment();" + source[abnormal_open + 1:],
             source.replace(
                 "pub async fn recover_abnormally_optimized",
                 "pub async fn recover_abnormally_optimized_changed",
@@ -9660,16 +18514,14 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
+                self.assertNotEqual(source, mutation)
                 self.assertNotEqual([], store_normal_recovery_adapter_violations(mutation))
 
-    def test_store_normal_recovery_contract_rejects_empty_message_action(self) -> None:
+    def test_store_normal_recovery_contract_rejects_continue_next_action_mutation(self) -> None:
         source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
         mutation = source.replace(
-            """Ok(NormalRecoveryAction::ContinueNextSegment) => {
-                            record_closed_segment = true;
-                            break;
-                        }""",
-            "Ok(NormalRecoveryAction::ContinueNextSegment) => {}",
+            "NormalRecoverySegmentOutcome::ContinueNextSegment => {",
+            "NormalRecoverySegmentOutcome::StopRecovery => {",
             1,
         )
         self.assertNotEqual(source, mutation)
@@ -9677,18 +18529,15 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
 
     def test_store_normal_recovery_contract_rejects_plain_current_position_addition(self) -> None:
         source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
-        mutation = source.replace("current_pos.checked_add(size)", "Some(current_pos + size)", 1)
+        mutation = source.replace(".checked_add(size)", "+ size", 1)
         self.assertNotEqual(source, mutation)
         self.assertNotEqual([], store_normal_recovery_adapter_violations(mutation))
 
-    def test_store_normal_recovery_contract_rejects_handmade_final_summary(self) -> None:
+    def test_store_normal_recovery_contract_rejects_handmade_final_completion(self) -> None:
         source = (STORE_CRATE / "src" / "log_file" / "commit_log.rs").read_text(encoding="utf-8")
         mutation = source.replace(
-            "let summary = normal_recovery.summary();",
-            """let summary = rocketmq_store_local::commit_log::recovery::NormalRecoverySummary {
-            last_valid_offset: 0,
-            truncate_offset: 0,
-        };""",
+            "let completion = normal_recovery.completion(max_phy_offset_of_consume_queue);",
+            "let completion = CommitLogRecoveryCompletion::Empty;",
             1,
         )
         self.assertNotEqual(source, mutation)
@@ -9703,15 +18552,11 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
         optimized_start = source.index("pub async fn recover_abnormally_optimized")
         prefix = source[:optimized_start]
         optimized = source[optimized_start:]
-        process_message = (
-            "                let mut dispatch_request = "
-            "recovery_ctx.process_message(&mut msg_bytes, absolute_offset);\n\n"
-        )
+        process_message = "let dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);"
         self.assertIn(process_message, optimized)
         mutation = optimized.replace(process_message, "", 1).replace(
-            "                    let validated_size = match u64::try_from(dispatch_request.msg_size) {",
-            process_message
-            + "                    let validated_size = match u64::try_from(dispatch_request.msg_size) {",
+            "let validated_size = u64::try_from(dispatch_request.msg_size)",
+            process_message + "\n                        let validated_size = u64::try_from(dispatch_request.msg_size)",
             1,
         )
         self.assertNotEqual(source, prefix + mutation)
@@ -9722,22 +18567,11 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
         optimized_start = source.index("pub async fn recover_abnormally_optimized")
         prefix = source[:optimized_start]
         optimized = source[optimized_start:]
-        dispatch = (
-            "                        Ok(AbnormalRecoveryAction::DispatchMessage) => {\n"
-            "                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);\n"
-            "                        }"
-        )
-        dispatch_only = dispatch.replace(
-            "                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);",
-            "                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);\n"
-            "                            file_processed = true;",
-            1,
-        )
         mutation = optimized.replace(
-            "                    file_processed = true;\n",
-            "",
+            "AbnormalRecoveryObservation::DispatchMessage | AbnormalRecoveryObservation::SkipMessageDispatch",
+            "AbnormalRecoveryObservation::DispatchMessage",
             1,
-        ).replace(dispatch, dispatch_only, 1)
+        )
         self.assertNotEqual(source, prefix + mutation)
         self.assertNotEqual([], store_abnormal_recovery_adapter_violations(prefix + mutation))
 
@@ -9750,38 +18584,56 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
             return source[:abnormal_start] + source[abnormal_start:].replace(old, new, 1)
 
         mutations = [
-            mutate_abnormal("self.get_confirm_offset().max(0)", "initial_offset"),
+            mutate_abnormal("let confirm_offset = self.get_confirm_offset();", "let confirm_offset = initial_offset as i64;"),
             source.replace(
                 "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, msg_size)",
-                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, validated_size)",
+                "abnormal_confirm_candidate_end(dispatch_request.commit_log_offset, validated_size as usize)",
                 1,
             ),
             source.replace(
-                "Ok(AbnormalRecoveryAction::SkipMessageDispatch) => {}",
-                "Ok(AbnormalRecoveryAction::SkipMessageDispatch) => {\n                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);\n                        }",
+                "AbnormalRecoveryObservation::SkipMessageDispatch => {}",
+                "AbnormalRecoveryObservation::SkipMessageDispatch => {\n"
+                "                            self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, false);\n"
+                "                        }",
                 1,
             ),
             source.replace("let initial_offset = if index == 0", "let initial_offset = if false", 1),
             source.replace(
-                "let summary = abnormal_recovery.summary();",
-                "let summary = rocketmq_store_local::commit_log::recovery::AbnormalRecoverySummary { last_valid_offset: 0, confirm_valid_offset: 0, truncate_offset: 0 };",
+                "let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);",
+                "let completion = CommitLogRecoveryCompletion::Empty;",
                 1,
             ),
             source.replace(
-                "message_store.get_min_phy_offset(), confirm_valid_offset",
-                "message_store.get_min_phy_offset(), last_valid_offset",
+                "abnormal_recovery.completion(max_phy_offset_of_consume_queue)",
+                "abnormal_recovery.completion(-1)",
                 1,
             ),
-            mutate_abnormal("self.set_confirm_offset(last_valid_offset)", "self.set_confirm_offset(process_offset)"),
-            mutate_abnormal("summary.truncate_offset", "summary.last_valid_offset"),
             mutate_abnormal(
-                "self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);",
-                "self.dispatcher.dispatch(&dispatch_request);",
+                "apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue, message_store);",
+                "apply_recovery_completion!(self, CommitLogRecoveryCompletion::Empty, max_phy_offset_of_consume_queue, message_store);",
+            ),
+            mutate_abnormal(
+                "let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);",
+                "let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);\n"
+                "        let _ = abnormal_recovery.summary();",
+            ),
+            mutate_abnormal(
+                "self.on_commit_log_dispatch(dispatch_request, do_dispatch, true, true);",
+                "self.dispatcher.dispatch(dispatch_request);",
             ),
             mutate_abnormal("file_processed = true;", "file_processed = false;"),
             source.replace("current_pos.checked_add(input_size)", "current_pos + input_size", 1),
             source.replace("abnormal_confirm_candidate_end", "abnormal_confirm_candidate_end_bypass", 1),
             source.replace("AbnormalRecoveryPolicy::Standard", "AbnormalRecoveryPolicy::Optimized", 1),
+            mutate_abnormal(
+                "abnormal_recovery.drive_abnormal_segment(",
+                "abnormal_recovery.drive_records(",
+            ),
+            mutate_abnormal(
+                "let outcome = abnormal_recovery.drive_abnormal_segment(",
+                "let _ = abnormal_recovery.apply(event);\n            "
+                "let outcome = abnormal_recovery.drive_abnormal_segment(",
+            ),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
@@ -9907,7 +18759,7 @@ pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResourceBase;
 '''
         owner = '''
 pub struct DefaultMappedFile {
-    progress: MappedFileProgress,
+    raw_core: MappedFileRawCore,
     // wrote_position: AtomicI32,
     text: &'static str,
 }
@@ -9918,7 +18770,7 @@ const TEXT: &str = "struct DefaultMappedFile { flushed_position: AtomicI32 }";
             ["pub(crate) use ReferenceResourceBase"],
             active_kernel_use_statements(facade),
         )
-        self.assertIn("progress: MappedFileProgress", active_struct_body(owner, "DefaultMappedFile"))
+        self.assertIn("raw_core: MappedFileRawCore", active_struct_body(owner, "DefaultMappedFile"))
         self.assertNotIn("wrote_position", active_struct_body(owner, "DefaultMappedFile"))
         self.assertEqual([], default_mapped_file_progress_violations(owner))
 
@@ -10091,7 +18943,6 @@ use crate::utils::ffi::munlock as unlock_memory;
 use windows::Win32::System::Memory::{
     VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT,
 };
-type Target = [u8];
 struct DefaultMappedFile {
     storage: MappedFileStorage,
     lazy_mmap_operations: AtomicU64,
@@ -10373,7 +19224,7 @@ struct DefaultMappedFile {
 }
 """
         self.assertIn(
-            "MappedFileProgress fields must be exactly: progress",
+            "DefaultMappedFile must not directly own MappedFileProgress",
             default_mapped_file_progress_violations(source),
         )
 
@@ -10451,7 +19302,27 @@ struct DefaultMappedFile {
         canonical_dir = LOCAL_CRATE / "src" / "mapped_file"
         facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
         self.assertEqual(
-            LEAF_FILES | {"file.rs", "kernel.rs", "mapping.rs"},
+            LEAF_FILES
+            | {
+                "allocation_policy.rs",
+                "allocation_request.rs",
+                "contract.rs",
+                "default_mapped_file.rs",
+                "file.rs",
+                "kernel.rs",
+                "mapping.rs",
+                "memory.rs",
+                "queue_allocation.rs",
+                "queue_index.rs",
+                "queue_io.rs",
+                "queue_lifecycle.rs",
+                "queue_maintenance.rs",
+                "queue_metrics.rs",
+                "queue_state.rs",
+                "queue_storage.rs",
+                "raw.rs",
+                "select_result.rs",
+            },
             {path.name for path in canonical_dir.glob("*.rs")},
         )
         self.assertTrue(all(not (facade_dir / name).exists() for name in LEAF_FILES))
@@ -10482,49 +19353,22 @@ struct DefaultMappedFile {
                 item,
             )
 
-        facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
-        reference_facade = (facade_dir / "reference_resource.rs").read_text(encoding="utf-8")
-        counter_facade = (facade_dir / "reference_resource_counter.rs").read_text(encoding="utf-8")
-        self.assertEqual(
-            ["pub(crate) use ReferenceResource"],
-            active_kernel_use_statements(reference_facade),
-        )
-        self.assertEqual(
-            [
-                "pub(crate) use ReferenceResourceBase",
-                "pub(crate) use ReferenceResourceCounter",
-            ],
-            active_kernel_use_statements(counter_facade),
-        )
         store_sources = {
             path: path.read_text(encoding="utf-8")
             for path in STORE_CRATE.glob("src/**/*.rs")
         }
+        facade_dir = STORE_CRATE / "src" / "log_file" / "mapped_file"
         self.assertEqual(
             [
                 (
                     facade_dir / "default_mapped_file_impl.rs",
-                    "pub use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE",
-                ),
-                (
-                    facade_dir / "reference_resource.rs",
-                    "pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResource",
-                ),
-                (
-                    facade_dir / "reference_resource_counter.rs",
-                    "pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResourceBase",
-                ),
-                (
-                    facade_dir / "reference_resource_counter.rs",
-                    "pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResourceCounter",
+                    "pub use rocketmq_store_local::mapped_file::OS_PAGE_SIZE",
                 ),
             ],
             kernel_facade_boundary_uses(store_sources),
         )
 
-        default_mapped_file = (
-            facade_dir / "default_mapped_file_impl.rs"
-        ).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
         self.assertEqual(
             [],
             default_mapped_file_progress_violations(default_mapped_file),
@@ -10547,6 +19391,218 @@ struct DefaultMappedFile {
                 production_sources,
             ),
         )
+
+    def test_mapped_file_raw_core_has_one_local_owner_and_store_adapter_only(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_RAW_PATH).read_text(encoding="utf-8")
+        module_source = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        self.assertEqual(
+            [],
+            mapped_file_raw_core_owner_violations(
+                canonical,
+                module_source,
+                production_sources,
+            ),
+        )
+        self.assertEqual(
+            [],
+            mapped_file_raw_core_store_adapter_violations(default_mapped_file),
+        )
+
+    def test_mapped_file_raw_core_contract_rejects_owner_and_adapter_mutations(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_RAW_PATH).read_text(encoding="utf-8")
+        module_source = (LOCAL_CRATE / "src" / "mapped_file.rs").read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        owner_mutations = [
+            canonical.replace("progress: MappedFileProgress", "shadow: MappedFileProgress", 1),
+            canonical.replace("pos + size >= self.file_size()", "pos + size > self.file_size()", 1),
+            canonical.replace("end_index <= self.file_size()", "end_index < self.file_size()", 1),
+            canonical.replace("data.len() == length", "data.len() != length", 1),
+            canonical.replace("self.advance_wrote_position(length as i32);", "", 1),
+            canonical.replace("if bytes_written == 0", "if bytes_written > 0", 1),
+            canonical.replace(
+                "mapped().get(pos..pos + size)",
+                "Some(&mapped()[pos..pos + size])",
+                1,
+            ),
+            canonical.replace(
+                "mapped().get_mut(current_pos..current_pos + length)",
+                "Some(&mut mapped()[current_pos..current_pos + length])",
+                1,
+            ),
+            canonical.replace(
+                "pub fn prepare_flush_range(&self, start: usize, end: usize)",
+                "pub fn prepare_flush_range(&self, start: usize, end: usize, transient: bool)",
+                1,
+            ),
+            canonical.replace(
+                "pub struct MappedFileRawCore",
+                "#[cfg(any())]\npub struct MappedFileRawCore",
+                1,
+            ),
+            canonical.replace(
+                "use super::kernel::MappedFileProgress;",
+                "use super::kernel::MappedFileProgress;\nuse memmap2::MmapMut;",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(owner_mutations):
+            with self.subTest(owner_mutation=mutation_index):
+                self.assertNotEqual(canonical, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[MAPPED_FILE_RAW_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_raw_core_owner_violations(
+                        mutation,
+                        module_source,
+                        mutated_sources,
+                    ),
+                )
+
+        module_mutation = module_source.replace(
+            "pub use raw::MappedFileRawCore;",
+            "pub(crate) use raw::MappedFileRawCore;",
+            1,
+        )
+        self.assertNotEqual(module_source, module_mutation)
+        self.assertNotEqual(
+            [],
+            mapped_file_raw_core_owner_violations(
+                canonical,
+                module_mutation,
+                production_sources,
+            ),
+        )
+
+        adapter_mutations = [
+            default_mapped_file.replace(
+                "raw_core: MappedFileRawCore",
+                "progress: MappedFileProgress",
+                1,
+            ),
+            default_mapped_file.replace(
+                "use super::MappedFileRawCore;",
+                "use super::MappedFileRawCore as RawCore;",
+                1,
+            ),
+            default_mapped_file.replace(
+                ".append_bytes_with_position_update(",
+                ".append_bytes_without_position_update(",
+                1,
+            ),
+            default_mapped_file.replace(
+                "|| self.get_mapped_file()",
+                "self.get_mapped_file()",
+                1,
+            ),
+            default_mapped_file.replace(
+                "self.mapped_file_mut_parts()",
+                "(std::ptr::null_mut(), 0)",
+                1,
+            ),
+            default_mapped_file.replace(
+                ".raw_slice(|| self.get_mapped_file(), pos, size)",
+                ".raw_slice(self.get_mapped_file(), pos, size)",
+                1,
+            ),
+            default_mapped_file.replace(
+                "fn put_slice(&self, data: &[u8], index: usize) -> bool {",
+                "fn put_slice(&self, data: &[u8], index: usize) -> bool {\n"
+                "        let end_index = index + data.len();",
+                1,
+            ),
+            default_mapped_file.replace(
+                "MappedFileRawCore::new(file_size)",
+                "MappedFileRawCore::new(file_size + 1)",
+                1,
+            ),
+            default_mapped_file.replace(
+                ".prepare_flush_range(start, end)",
+                ".record_transient_flush_range(end)",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(adapter_mutations):
+            with self.subTest(adapter_mutation=mutation_index):
+                self.assertNotEqual(default_mapped_file, mutation)
+                self.assertNotEqual(
+                    [],
+                    mapped_file_raw_core_store_adapter_violations(mutation),
+                )
+
+    def test_mapped_file_owner_is_local_and_store_is_a_narrow_adapter(self) -> None:
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        self.assertEqual([], mapped_file_owner_violations(production_sources))
+        self.assertFalse(
+            (
+                STORE_CRATE
+                / "src"
+                / "log_file"
+                / "mapped_file"
+                / "reference_resource.rs"
+            ).exists()
+        )
+        self.assertFalse(
+            (
+                STORE_CRATE
+                / "src"
+                / "log_file"
+                / "mapped_file"
+                / "reference_resource_counter.rs"
+            ).exists()
+        )
+
+    def test_mapped_file_owner_contract_rejects_facade_and_backend_leaks(self) -> None:
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        mutations = []
+
+        copied_trait = dict(production_sources)
+        copied_trait[STORE_MAPPED_FILE_PATH] += "\npub trait MappedFile {}\n"
+        mutations.append(copied_trait)
+
+        backend_leak = dict(production_sources)
+        backend_leak[DEFAULT_MAPPED_FILE_PATH] += "\nuse rocketmq_store::StoreFacade;\n"
+        mutations.append(backend_leak)
+
+        wrong_alias = dict(production_sources)
+        wrong_alias[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH] = wrong_alias[
+            STORE_DEFAULT_MAPPED_FILE_FACADE_PATH
+        ].replace(
+            "DefaultMappedFile<rocketmq_store_local::mapped_file::NativeMappedMemory>",
+            "DefaultMappedFile<rocketmq_store_local::mapped_file::MmapRegionSlice>",
+            1,
+        )
+        mutations.append(wrong_alias)
+
+        copied_arc_mut = dict(production_sources)
+        copied_arc_mut[STORE_MAPPED_FILE_MEMORY_PATH] += "\nuse rocketmq_rust::ArcMut;\n"
+        mutations.append(copied_arc_mut)
+
+        for mutation_index, mutation in enumerate(mutations):
+            with self.subTest(mutation=mutation_index):
+                self.assertNotEqual([], mapped_file_owner_violations(mutation))
 
     def test_mapped_file_warmup_schedule_has_one_local_owner_and_store_adapter_only(self) -> None:
         canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
@@ -10659,7 +19715,7 @@ pub fn visit_mapped_file_warmup_schedule<F>(
             default_mapped_file.replace("flush_range(mapped_file, offset, len)", "flush_range(mapped_file, 0, len)", 1),
             default_mapped_file.replace("if final_flush", "if !final_flush", 1),
             default_mapped_file.replace("Failed to flush final warmed", "Failed to flush warmed", 1),
-            default_mapped_file.replace("self.progress.record_flush_time();", "", 1),
+            default_mapped_file.replace("self.raw_core.record_flush_time();", "", 1),
             default_mapped_file.replace("let end = offset + len;", "let end = file_size;", 1),
             default_mapped_file.replace(
                 """                                LINUX_STORAGE_OP_PAGE_TOUCH,
@@ -11388,8 +20444,8 @@ mod lock_range_tests {
                 1,
             ),
             default_mapped_file.replace(
-                "self.progress.lock_region_range(offset, requested_len)?",
-                "self.progress.lock_region_range(offset, requested_len).unwrap()",
+                "self.raw_core.lock_region_range(offset, requested_len)?",
+                "self.raw_core.lock_region_range(offset, requested_len).unwrap()",
                 1,
             ),
             cfg_decoy_method_mutation(
@@ -11901,6 +20957,674 @@ fn non_none_request_guard_is_not_the_lock_range_policy(
             ),
         )
 
+    def test_mapped_file_cache_range_policy_has_one_local_owner_and_three_store_callers(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        self.assertEqual(
+            [],
+            mapped_file_cache_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                production_sources,
+            ),
+        )
+
+    def test_mapped_file_cache_range_contract_rejects_semantic_and_boundary_mutations(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        canonical_mutations = [
+            canonical.replace("position < 0", "position <= 0", 1),
+            canonical.replace(
+                "if position < 0 || size == 0",
+                "if position < 0 || size != 0",
+                1,
+            ),
+            canonical.replace("position < file_size", "position <= file_size", 1),
+            canonical.replace("position.checked_add(size)", "position.checked_add(file_size)", 1),
+            canonical.replace("end <= file_size", "end < file_size", 1),
+            canonical.replace(
+                "let file_size = self.file_size() as usize;\n        let position = position as usize;",
+                "let file_size = self.file_size() as usize;\n"
+                "        let position = usize::try_from(position).unwrap_or_default();",
+                1,
+            ),
+            canonical.replace("self.file_size() as usize", "self.file_size() as u32 as usize", 1),
+            canonical.replace("checked_add(size)", "wrapping_add(size)", 1),
+            canonical.replace("checked_add(size)", "saturating_add(size)", 1),
+            canonical.replace(
+                "        let file_size = self.file_size() as usize;\n"
+                "        let position = position as usize;",
+                "        let position = position as usize;\n"
+                "        let file_size = self.file_size() as usize;",
+                1,
+            ),
+            canonical.replace("position.checked_add(size)", "size.checked_add(position)", 1),
+        ]
+        for index, mutation in enumerate(canonical_mutations):
+            with self.subTest(canonical_mutation=index):
+                self.assertNotEqual(canonical, mutation)
+                self.assertNotEqual([], mapped_file_cache_range_policy_violations(mutation))
+
+        raw_body = """        if position < 0 || size == 0 {
+            return false;
+        }
+        let file_size = self.file_size() as usize;
+        let position = position as usize;
+        position < file_size
+            && position.checked_add(size).is_some_and(|end| end <= file_size)"""
+        for kind, mutation in (
+            ("cfg_decoy", cfg_decoy_method_mutation(canonical, "is_valid_cache_range", raw_body)),
+            ("duplicate", duplicate_method_mutation(canonical, "is_valid_cache_range", raw_body)),
+            ("cfg_attr", cfg_attr_method_mutation(canonical, "is_valid_cache_range")),
+            (
+                "impl_cfg_attr",
+                canonical.replace(
+                    "impl MappedFileProgress {",
+                    "#[cfg_attr(any(), cfg(any()))]\nimpl MappedFileProgress {",
+                    1,
+                ),
+            ),
+        ):
+            with self.subTest(owner_mutation=kind):
+                self.assertNotEqual([], mapped_file_cache_range_policy_violations(mutation))
+
+        signature = "pub fn is_valid_cache_range(&self, position: i64, size: usize) -> bool"
+        post_test_base = canonical + """
+
+#[cfg(test)]
+mod cache_range_tests {
+    use super::MappedFileProgress;
+    impl MappedFileProgress {
+        pub fn is_valid_cache_range(&self, _position: i64, _size: usize) -> bool {
+            false
+        }
+    }
+}
+"""
+        test_only_decoy = post_test_method_impl_mutation(
+            post_test_base,
+            "MappedFileProgress",
+            signature,
+            "test_only_impl",
+        )
+        self.assertEqual([], mapped_file_cache_range_policy_violations(test_only_decoy))
+        for kind in (
+            "method_cfg",
+            "method_cfg_attr",
+            "impl_cfg",
+            "impl_cfg_attr",
+            "active_duplicate",
+            "active_where_duplicate",
+        ):
+            with self.subTest(post_test_owner_mutation=kind):
+                mutation = post_test_method_impl_mutation(
+                    post_test_base,
+                    "MappedFileProgress",
+                    signature,
+                    kind,
+                )
+                self.assertNotEqual([], mapped_file_cache_range_policy_violations(mutation))
+
+        wrapper_mutations = [
+            default_mapped_file.replace(
+                "self.raw_core.is_valid_cache_range(position, size)",
+                "self.raw_core.is_valid_cache_range(position, size) || size == 1",
+                1,
+            ),
+            default_mapped_file.replace(
+                "fn is_valid_cache_range(&self, position: i64, size: usize)",
+                "pub(crate) fn is_valid_cache_range(&self, position: i64, size: usize)",
+                1,
+            ),
+            cfg_attr_method_mutation(default_mapped_file, "is_valid_cache_range"),
+            duplicate_method_mutation(default_mapped_file, "is_valid_cache_range", "        false"),
+            default_mapped_file.replace(
+                "if !self.is_valid_cache_range(position, size) {",
+                "if position < 0 {",
+                1,
+            ),
+            default_mapped_file.replace(
+                "self.is_valid_cache_range(position, size)",
+                "size != 0",
+                1,
+            ),
+        ]
+        for index, mutation in enumerate(wrapper_mutations):
+            with self.subTest(wrapper_mutation=index):
+                self.assertNotEqual(default_mapped_file, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_cache_range_adapter_violations(
+                        canonical,
+                        mutation,
+                        mutated_sources,
+                    ),
+                )
+
+        copied_path = Path("rocketmq-store/src/base/swappable.rs")
+        renamed_copy = """
+fn copied_cache_window(mapped_bytes: u64, signed_start: i64, requested_bytes: usize) -> bool {
+    if signed_start < 0 {
+        return false;
+    }
+    if requested_bytes == 0 {
+        return false;
+    }
+    let available_end = mapped_bytes as usize;
+    let native_start = signed_start as usize;
+    native_start < available_end
+        && native_start
+            .checked_add(requested_bytes)
+            .is_some_and(|candidate_end| candidate_end <= available_end)
+}
+"""
+        for kind, copied_policy in (
+            ("renamed", renamed_copy),
+            ("cfg", "#[cfg(any())]\n" + renamed_copy),
+            (
+                "aliases",
+                renamed_copy.replace(
+                    "let native_start = signed_start as usize;",
+                    "let signed_alias = signed_start;\n"
+                    "    let native_start = signed_alias as usize;\n"
+                    "    let final_start = native_start;",
+                    1,
+                ).replace("native_start < available_end", "final_start < available_end", 1)
+                .replace("native_start\n            .checked_add", "final_start\n            .checked_add", 1),
+            ),
+        ):
+            with self.subTest(production_copy=kind):
+                copied_sources = dict(production_sources)
+                copied_sources[copied_path] += copied_policy
+                self.assertNotEqual(
+                    [],
+                    mapped_file_cache_range_adapter_violations(
+                        canonical,
+                        default_mapped_file,
+                        copied_sources,
+                    ),
+                )
+
+        helper_path = Path("rocketmq-store/src/base/swappable.rs")
+        caller_path = Path("rocketmq-store/src/base/allocate_mapped_file_service.rs")
+        split_sources = dict(production_sources)
+        split_sources[helper_path] += """
+pub(crate) fn cache_end_within(
+    native_start: usize,
+    requested_bytes: usize,
+    mapped_bytes: usize,
+) -> bool {
+    native_start < mapped_bytes
+        && native_start
+            .checked_add(requested_bytes)
+            .is_some_and(|candidate_end| candidate_end <= mapped_bytes)
+}
+"""
+        split_sources[caller_path] += """
+use crate::base::swappable::cache_end_within as within_mapped_cache;
+
+fn copied_cache_range_through_alias(
+    mapped_bytes: u64,
+    signed_start: i64,
+    requested_bytes: usize,
+) -> bool {
+    if signed_start < 0 || requested_bytes == 0 {
+        return false;
+    }
+    let mapped_end = mapped_bytes as usize;
+    let native_start = signed_start as usize;
+    within_mapped_cache(native_start, requested_bytes, mapped_end)
+}
+"""
+        split_violations = mapped_file_cache_range_adapter_violations(
+            canonical,
+            default_mapped_file,
+            split_sources,
+        )
+        self.assertTrue(
+            any(
+                helper_path.as_posix() in violation
+                and caller_path.as_posix() in violation
+                for violation in split_violations
+            ),
+            split_violations,
+        )
+
+        test_only_sources = dict(production_sources)
+        test_only_sources[copied_path] += (
+            "\n#[cfg(test)]\nmod copied_cache_tests {\n" + renamed_copy + "}\n"
+        )
+        self.assertEqual(
+            [],
+            mapped_file_cache_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                test_only_sources,
+            ),
+        )
+
+        near_miss_sources = dict(production_sources)
+        near_miss_sources[copied_path] += """
+fn unrelated_checked_add(start: usize, count: usize, limit: usize) -> bool {
+    start.checked_add(count).is_some_and(|end| end <= limit)
+}
+
+fn non_false_empty_guard(file_size: usize, position: i64, size: usize) -> bool {
+    if position < 0 || size == 0 {
+        return true;
+    }
+    let position = position as usize;
+    position < file_size
+        && position.checked_add(size).is_some_and(|end| end <= file_size)
+}
+
+fn observed_start_boundary_only(file_size: u64, position: i64, size: usize) -> bool {
+    if position < 0 || size == 0 {
+        return false;
+    }
+    let file_size = file_size as usize;
+    let position = position as usize;
+    let _observed_only = position < file_size;
+    position.checked_add(size).is_some_and(|end| end <= file_size)
+}
+"""
+        self.assertEqual(
+            [],
+            mapped_file_cache_range_adapter_violations(
+                canonical,
+                default_mapped_file,
+                near_miss_sources,
+            ),
+        )
+
+    def test_mapped_file_cache_residency_plan_has_one_local_owner_and_exact_linux_adapter(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        self.assertEqual([], mapped_file_cache_residency_plan_violations(canonical))
+        self.assertEqual(
+            [],
+            mapped_file_cache_residency_adapter_violations(
+                canonical,
+                default_mapped_file,
+                production_sources,
+            ),
+        )
+
+    def test_mapped_file_cache_residency_contract_rejects_semantic_boundary_and_copy_mutations(self) -> None:
+        canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
+        production_sources = {
+            path.relative_to(ROOT): path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+
+        owner_mutations = [
+            canonical.replace(
+                "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub struct MappedFileCacheResidencyPlan",
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub struct MappedFileCacheResidencyPlan",
+                1,
+            ),
+            canonical.replace("pub aligned_start: usize", "aligned_start: usize", 1),
+            canonical.replace("pub checked_len: usize", "pub checked_len: u64", 1),
+            canonical.replace("pub page_count: usize", "pub page_count: u64", 1),
+            canonical.replace("position: i64", "position: u64", 1),
+            canonical.replace("let position = position as usize", "let position = usize::try_from(position).ok()?", 1),
+            canonical.replace(
+                "let page_size = page_size.max(1);\n    let start_addr",
+                "let page_size = page_size.max(2);\n    let start_addr",
+                1,
+            ),
+            canonical.replace("base_addr.saturating_add(position)", "base_addr.wrapping_add(position)", 1),
+            canonical.replace("start_addr / page_size * page_size", "start_addr / page_size", 1),
+            canonical.replace("start_addr - aligned_start", "start_addr.saturating_sub(aligned_start)", 1),
+            canonical.replace("page_offset.saturating_add(size)", "page_offset.checked_add(size)?", 1),
+            canonical.replace("checked_len.div_ceil(page_size)", "checked_len / page_size", 1),
+            canonical.replace("if page_count == 0", "if page_count <= 1", 1),
+            canonical.replace("aligned_start,\n        checked_len,", "aligned_start: start_addr,\n        checked_len,", 1),
+            canonical.replace("checked_len,\n        page_count,", "checked_len: size,\n        page_count,", 1),
+            canonical.replace("page_count,\n    })", "page_count: checked_len,\n    })", 1),
+            canonical.replace(
+                "pub fn plan_mapped_file_cache_residency(",
+                "#[cfg_attr(any(), cfg(any()))]\npub fn plan_mapped_file_cache_residency(",
+                1,
+            ),
+            canonical.replace(
+                "pub struct MappedFileCacheResidencyPlan",
+                "#[cfg(any())]\npub struct MappedFileCacheResidencyPlan",
+                1,
+            ),
+        ]
+        for index, mutation in enumerate(owner_mutations):
+            with self.subTest(owner_mutation=index):
+                self.assertNotEqual(canonical, mutation)
+                self.assertNotEqual([], mapped_file_cache_residency_plan_violations(mutation))
+
+        active_duplicate = canonical + """
+
+pub fn plan_mapped_file_cache_residency(
+    _base_addr: usize,
+    _position: i64,
+    _size: usize,
+    _page_size: usize,
+) -> Option<MappedFileCacheResidencyPlan> {
+    None
+}
+"""
+        self.assertNotEqual([], mapped_file_cache_residency_plan_violations(active_duplicate))
+        post_test_duplicate = canonical + """
+
+#[cfg(test)]
+mod cache_residency_plan_tests {
+    use super::{MappedFileCacheResidencyPlan, plan_mapped_file_cache_residency};
+
+    fn plan_mapped_file_cache_residency(
+        _base_addr: usize,
+        _position: i64,
+        _size: usize,
+        _page_size: usize,
+    ) -> Option<MappedFileCacheResidencyPlan> {
+        None
+    }
+}
+"""
+        self.assertEqual([], mapped_file_cache_residency_plan_violations(post_test_duplicate))
+
+        adapter_mutations = [
+            default_mapped_file.replace(
+                "crate::mapped_file::kernel::plan_mapped_file_cache_residency(",
+                "plan_mapped_file_cache_residency(",
+                1,
+            ),
+            default_mapped_file.replace(
+                "use crate::mapped_file::file::MappedFileStorage;",
+                "use crate::mapped_file::file::MappedFileStorage;\n"
+                "use crate::mapped_file::kernel::plan_mapped_file_cache_residency;",
+                1,
+            ),
+            default_mapped_file.replace(
+                "base_addr, position, size, page_size)",
+                "base_addr, 0, size, page_size)",
+                1,
+            ),
+            default_mapped_file.replace(
+                "        let Some(plan) =\n"
+                "            crate::mapped_file::kernel::plan_mapped_file_cache_residency(base_addr, position, size, page_size)\n",
+                "        let _ignored = crate::mapped_file::kernel::plan_mapped_file_cache_residency(\n"
+                "            base_addr, position, size, page_size,\n"
+                "        );\n"
+                "        let Some(plan) =\n"
+                "            crate::mapped_file::kernel::plan_mapped_file_cache_residency(base_addr, position, size, page_size)\n",
+                1,
+            ),
+            default_mapped_file.replace("let page_size = get_page_size();", "let page_size = get_page_size().max(1);", 1),
+            default_mapped_file.replace("vec![0u8; plan.page_count]", "vec![0u8; plan.checked_len]", 1),
+            default_mapped_file.replace("plan.aligned_start as *const u8", "base_addr as *const u8", 1),
+            default_mapped_file.replace("plan.checked_len,", "size,", 1),
+            default_mapped_file.replace("residency.as_mut_ptr(),", "std::ptr::null_mut(),", 1),
+        ]
+        for index, mutation in enumerate(adapter_mutations):
+            with self.subTest(adapter_mutation=index):
+                self.assertNotEqual(default_mapped_file, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_cache_residency_adapter_violations(
+                        canonical,
+                        mutation,
+                        mutated_sources,
+                    ),
+                )
+
+        copied_path = Path("rocketmq-store/src/base/swappable.rs")
+        copied_plan = """
+#[derive(Clone, Copy)]
+struct CopiedCachePlan {
+    aligned: usize,
+    len: usize,
+    pages: usize,
+}
+
+fn copied_cache_plan(
+    mapped_base: usize,
+    signed_offset: i64,
+    requested_len: usize,
+    host_page: usize,
+) -> Option<CopiedCachePlan> {
+    let native_offset = signed_offset as usize;
+    let host_page = host_page.max(1);
+    let query_start = mapped_base.saturating_add(native_offset);
+    let aligned = query_start / host_page * host_page;
+    let in_page = query_start - aligned;
+    let len = in_page.saturating_add(requested_len);
+    let pages = len.div_ceil(host_page);
+    if pages == 0 {
+        return None;
+    }
+    Some(CopiedCachePlan { aligned, len, pages })
+}
+"""
+        copied_aliases = copied_plan.replace(
+            "let native_offset = signed_offset as usize;",
+            "let offset_alias = signed_offset;\n    let native_offset = offset_alias as usize;",
+            1,
+        ).replace(
+            "let query_start = mapped_base.saturating_add(native_offset);",
+            "let base_alias = mapped_base;\n    let query_start = base_alias.saturating_add(native_offset);\n    let start_alias = query_start;",
+            1,
+        ).replace("query_start / host_page", "start_alias / host_page", 1).replace(
+            "query_start - aligned", "start_alias - aligned", 1
+        )
+        for kind, copied in (
+            ("direct", copied_plan),
+            ("renamed_aliases", copied_aliases),
+            ("cfg", "#[cfg(any())]\n" + copied_plan),
+        ):
+            with self.subTest(copied_policy=kind):
+                copied_sources = dict(production_sources)
+                copied_sources[copied_path] += copied
+                self.assertNotEqual(
+                    [],
+                    mapped_file_cache_residency_adapter_violations(
+                        canonical,
+                        default_mapped_file,
+                        copied_sources,
+                    ),
+                )
+
+        helper_path = Path("rocketmq-store/src/base/swappable.rs")
+        caller_path = Path("rocketmq-store/src/base/allocate_mapped_file_service.rs")
+        split_helper = """
+pub(crate) fn align_cache_query(query_start: usize, host_page: usize) -> (usize, usize) {
+    let aligned = query_start / host_page * host_page;
+    let in_page = query_start - aligned;
+    (aligned, in_page)
+}
+"""
+        split_caller = """
+use crate::base::swappable::align_cache_query as cache_alignment;
+
+struct SplitCachePlan { aligned: usize, len: usize, pages: usize }
+
+fn copied_cache_plan_through_use_alias(
+    mapped_base: usize,
+    signed_offset: i64,
+    requested_len: usize,
+    host_page: usize,
+) -> Option<SplitCachePlan> {
+    let native_offset = signed_offset as usize;
+    let host_page = host_page.max(1);
+    let query_start = mapped_base.saturating_add(native_offset);
+    let (aligned, in_page) = cache_alignment(query_start, host_page);
+    let len = in_page.saturating_add(requested_len);
+    let pages = len.div_ceil(host_page);
+    if pages == 0 { return None; }
+    Some(SplitCachePlan { aligned, len, pages })
+}
+"""
+        split_sources = dict(production_sources)
+        split_sources[helper_path] += split_helper
+        split_sources[caller_path] += split_caller
+        split_violations = mapped_file_cache_residency_adapter_violations(
+            canonical,
+            default_mapped_file,
+            split_sources,
+        )
+        self.assertTrue(
+            any(
+                helper_path.as_posix() in violation and caller_path.as_posix() in violation
+                for violation in split_violations
+            ),
+            split_violations,
+        )
+
+        split_variants = [
+            (
+                "swapped_helper_parameters",
+                split_helper.replace(
+                    "align_cache_query(query_start: usize, host_page: usize)",
+                    "align_cache_query(host_page: usize, query_start: usize)",
+                    1,
+                ),
+                split_caller.replace(
+                    "cache_alignment(query_start, host_page)",
+                    "cache_alignment(host_page, query_start)",
+                    1,
+                ),
+            ),
+            (
+                "swapped_helper_returns",
+                split_helper.replace("(aligned, in_page)", "(in_page, aligned)", 1),
+                split_caller.replace(
+                    "let (aligned, in_page) = cache_alignment",
+                    "let (in_page, aligned) = cache_alignment",
+                    1,
+                ),
+            ),
+            (
+                "swapped_parameters_and_returns",
+                split_helper.replace(
+                    "align_cache_query(query_start: usize, host_page: usize)",
+                    "align_cache_query(host_page: usize, query_start: usize)",
+                    1,
+                ).replace("(aligned, in_page)", "(in_page, aligned)", 1),
+                split_caller.replace(
+                    "cache_alignment(query_start, host_page)",
+                    "cache_alignment(host_page, query_start)",
+                    1,
+                ).replace(
+                    "let (aligned, in_page) = cache_alignment",
+                    "let (in_page, aligned) = cache_alignment",
+                    1,
+                ),
+            ),
+        ]
+        for kind, helper_variant, caller_variant in split_variants:
+            with self.subTest(split_role_variant=kind):
+                variant_sources = dict(production_sources)
+                variant_sources[helper_path] += helper_variant
+                variant_sources[caller_path] += caller_variant
+                variant_violations = mapped_file_cache_residency_adapter_violations(
+                    canonical,
+                    default_mapped_file,
+                    variant_sources,
+                )
+                self.assertTrue(
+                    any(
+                        helper_path.as_posix() in violation
+                        and caller_path.as_posix() in violation
+                        for violation in variant_violations
+                    ),
+                    variant_violations,
+                )
+
+        explicit_fields_copy = copied_plan.replace(
+            "Some(CopiedCachePlan { aligned, len, pages })",
+            "Some(CopiedCachePlan { aligned: aligned, len: len, pages: pages })",
+            1,
+        )
+        explicit_sources = dict(production_sources)
+        explicit_sources[copied_path] += explicit_fields_copy
+        self.assertNotEqual(
+            [],
+            mapped_file_cache_residency_adapter_violations(
+                canonical,
+                default_mapped_file,
+                explicit_sources,
+            ),
+        )
+
+        scrambled_fields_copy = copied_plan.replace(
+            "Some(CopiedCachePlan { aligned, len, pages })",
+            "Some(CopiedCachePlan { aligned: pages, len: aligned, pages: len })",
+            1,
+        )
+        scrambled_sources = dict(production_sources)
+        scrambled_sources[copied_path] += scrambled_fields_copy
+        self.assertEqual(
+            [],
+            mapped_file_cache_residency_adapter_violations(
+                canonical,
+                default_mapped_file,
+                scrambled_sources,
+            ),
+        )
+
+        test_only_sources = dict(production_sources)
+        test_only_sources[copied_path] += "\n#[cfg(test)]\nmod copied_plan_tests {\n" + copied_plan + "}\n"
+        self.assertEqual(
+            [],
+            mapped_file_cache_residency_adapter_violations(
+                canonical,
+                default_mapped_file,
+                test_only_sources,
+            ),
+        )
+
+        near_miss_sources = dict(production_sources)
+        near_miss_sources[copied_path] += """
+fn unrelated_saturating_add(start: usize, len: usize) -> usize { start.saturating_add(len) }
+fn unrelated_alignment(start: usize, page: usize) -> usize { start / page * page }
+fn unrelated_page_count(len: usize, page: usize) -> usize { len.div_ceil(page) }
+
+fn incomplete_cache_plan(base: usize, position: i64, size: usize, page: usize) -> usize {
+    let position = position as usize;
+    let page = page.max(1);
+    let start = base.saturating_add(position);
+    let aligned = start / page * page;
+    let offset = start - aligned;
+    offset.saturating_add(size)
+}
+"""
+        self.assertEqual(
+            [],
+            mapped_file_cache_residency_adapter_violations(
+                canonical,
+                default_mapped_file,
+                near_miss_sources,
+            ),
+        )
+
     def test_mapped_file_progress_policy_contract_rejects_semantic_and_boundary_mutations(self) -> None:
         canonical = (ROOT / MAPPED_FILE_KERNEL_PATH).read_text(encoding="utf-8")
         default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
@@ -12037,7 +21761,7 @@ mod tests {
                         mapped_file_progress_policy_violations(mutation),
                     )
 
-        for function_name in MAPPED_FILE_POLICY_METHODS:
+        for function_name in DEFAULT_MAPPED_FILE_POLICY_METHODS:
             for visibility in (
                 "pub ",
                 "pub(crate) ",
@@ -12064,7 +21788,7 @@ mod tests {
                         ),
                     )
 
-        store_raw_bodies = {
+        default_raw_bodies = {
             "is_able_to_flush": """        if self.is_full() {
             return true;
         }
@@ -12075,35 +21799,26 @@ mod tests {
             return (read - flush) / page_size >= flush_least_pages;
         }
         read > flush""",
-            "is_able_to_commit": """        if self.is_full() {
-            return true;
         }
-        let committed = self.progress.committed_position();
-        let write = self.progress.wrote_position();
-        if commit_least_pages > 0 {
-            return (write - committed) / 4096 >= commit_least_pages;
-        }
-        write > committed""",
-        }
-        for function_name, raw_body in store_raw_bodies.items():
-            store_mutations = (
+        for function_name, raw_body in default_raw_bodies.items():
+            default_mutations = (
                 cfg_decoy_method_mutation(default_mapped_file, function_name, raw_body),
                 duplicate_method_mutation(default_mapped_file, function_name, raw_body),
                 cfg_attr_method_mutation(default_mapped_file, function_name),
                 default_mapped_file.replace(
-                    "#[allow(unused_variables)]\nimpl DefaultMappedFile {",
+                    "#[allow(unused_variables)]\nimpl<M: MappedMemory> DefaultMappedFile<M> {",
                     "#[allow(unused_variables)]\n"
                     "#[cfg_attr(any(), cfg(any()))]\n"
-                    "impl DefaultMappedFile {",
+                    "impl<M: MappedMemory> DefaultMappedFile<M> {",
                     1,
                 ),
             )
             for mutation_kind, mutation in zip(
                 ("cfg_decoy", "duplicate", "cfg_attr", "impl_cfg_attr"),
-                store_mutations,
+                default_mutations,
                 strict=True,
             ):
-                with self.subTest(store_wrapper=function_name, mutation=mutation_kind):
+                with self.subTest(default_wrapper=function_name, mutation=mutation_kind):
                     self.assertNotEqual(default_mapped_file, mutation)
                     mutated_sources = dict(production_sources)
                     mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
@@ -12116,15 +21831,12 @@ mod tests {
                         ),
                     )
 
-        store_post_test_signatures = {
+        default_post_test_signatures = {
             "is_able_to_flush": (
                 "fn is_able_to_flush(&self, flush_least_pages: i32) -> bool"
             ),
-            "is_able_to_commit": (
-                "fn is_able_to_commit(&self, commit_least_pages: i32) -> bool"
-            ),
         }
-        for function_name, signature in store_post_test_signatures.items():
+        for function_name, signature in default_post_test_signatures.items():
             test_only_decoy = post_test_method_impl_mutation(
                 default_mapped_file,
                 "DefaultMappedFile",
@@ -12133,7 +21845,7 @@ mod tests {
             )
             test_only_sources = dict(production_sources)
             test_only_sources[DEFAULT_MAPPED_FILE_PATH] = test_only_decoy
-            with self.subTest(store_post_test=function_name, mutation="test_only_impl"):
+            with self.subTest(default_post_test=function_name, mutation="test_only_impl"):
                 self.assertEqual(
                     [],
                     mapped_file_progress_adapter_violations(
@@ -12152,7 +21864,7 @@ mod tests {
                 mutated_sources = dict(production_sources)
                 mutated_sources[DEFAULT_MAPPED_FILE_PATH] = mutation
                 with self.subTest(
-                    store_post_test=function_name,
+                    default_post_test=function_name,
                     mutation=mutation_kind,
                 ):
                     self.assertNotEqual(
@@ -12369,13 +22081,13 @@ mod tests""",
 
         flush_wrapper = """    #[inline]
     fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
-        self.progress
+        self.raw_core
             .is_able_to_flush(self.get_read_position(), flush_least_pages)
     }
 """
         commit_wrapper = """    #[inline]
     fn is_able_to_commit(&self, commit_least_pages: i32) -> bool {
-        self.progress.is_able_to_commit(commit_least_pages)
+        self.raw_core.is_able_to_commit(commit_least_pages)
     }
 """
         combined_cfg_bypass = default_mapped_file.replace(flush_wrapper, "", 1).replace(
@@ -12391,12 +22103,12 @@ mod policy_decoy {
 
     impl DefaultMappedFile {
         fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
-            self.progress
+            self.raw_core
                 .is_able_to_flush(self.get_read_position(), flush_least_pages)
         }
 
         fn is_able_to_commit(&self, commit_least_pages: i32) -> bool {
-            self.progress.is_able_to_commit(commit_least_pages)
+            self.raw_core.is_able_to_commit(commit_least_pages)
         }
     }
 }
@@ -12451,7 +22163,7 @@ mod tests""",
 
         adapter_mutations = [
             default_mapped_file.replace(
-                "pub use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE;",
+                "pub use crate::mapped_file::kernel::OS_PAGE_SIZE;",
                 "pub const OS_PAGE_SIZE: u64 = 1024 * 4;",
                 1,
             ),
@@ -12461,18 +22173,13 @@ mod tests""",
                 1,
             ),
             default_mapped_file.replace(
-                "self.progress.is_able_to_commit(commit_least_pages)",
-                "(self.get_wrote_position() - self.get_committed_position()) / 4096 >= commit_least_pages",
-                1,
-            ),
-            default_mapped_file.replace(
-                "self.progress\n            .is_able_to_flush",
+                "self.raw_core\n            .is_able_to_flush",
                 "self\n            .is_able_to_flush",
                 1,
             ),
             default_mapped_file.replace(
-                "pub use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE;",
-                "pub use rocketmq_store_local::mapped_file::kernel::{OS_PAGE_SIZE};",
+                "pub use crate::mapped_file::kernel::OS_PAGE_SIZE;",
+                "pub use crate::mapped_file::kernel::{OS_PAGE_SIZE};",
                 1,
             ),
         ]
@@ -12486,6 +22193,33 @@ mod tests""",
                     mapped_file_progress_adapter_violations(
                         canonical,
                         mutation,
+                        mutated_sources,
+                    ),
+                )
+
+        store_facade = production_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH]
+        store_facade_mutations = [
+            store_facade.replace(
+                "pub use rocketmq_store_local::mapped_file::OS_PAGE_SIZE;",
+                "pub const OS_PAGE_SIZE: u64 = 1024 * 4;",
+                1,
+            ),
+            store_facade.replace(
+                "pub use rocketmq_store_local::mapped_file::OS_PAGE_SIZE;",
+                "pub use rocketmq_store_local::mapped_file::{OS_PAGE_SIZE};",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(store_facade_mutations):
+            with self.subTest(store_facade_mutation=mutation_index):
+                self.assertNotEqual(store_facade, mutation)
+                mutated_sources = dict(production_sources)
+                mutated_sources[STORE_DEFAULT_MAPPED_FILE_FACADE_PATH] = mutation
+                self.assertNotEqual(
+                    [],
+                    mapped_file_progress_adapter_violations(
+                        canonical,
+                        default_mapped_file,
                         mutated_sources,
                     ),
                 )
@@ -12542,20 +22276,28 @@ mod tests""",
             set(active_file_use_statements(platform)),
         )
 
-        default_mapped_file = (
-            STORE_CRATE / "src" / "log_file" / "mapped_file" / "default_mapped_file_impl.rs"
-        ).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
         self.assertEqual([], default_mapped_file_storage_violations(default_mapped_file))
         active_default = active_rust_source(default_mapped_file)
         self.assertRegex(
             active_default,
             r"pub\s+fn\s+parse_file_from_offset\s*\(file_name:\s*&Path\)\s*->\s*u64\s*\{\s*"
-            r"rocketmq_store_local::mapped_file::file::parse_file_from_offset\(file_name\)\s*\}",
+            r"crate::mapped_file::file::parse_file_from_offset\(file_name\)\s*\}",
         )
         self.assertRegex(
             active_default,
             r"pub\s+fn\s+try_parse_file_from_offset\s*\(file_name:\s*&Path\)\s*->\s*io::Result<u64>\s*\{\s*"
-            r"rocketmq_store_local::mapped_file::file::try_parse_file_from_offset\(file_name\)\s*\}",
+            r"crate::mapped_file::file::try_parse_file_from_offset\(file_name\)\s*\}",
+        )
+
+        facade = (
+            STORE_CRATE / "src" / "log_file" / "mapped_file" / "default_mapped_file_impl.rs"
+        ).read_text(encoding="utf-8")
+        self.assertRegex(
+            active_rust_source(facade),
+            r"pub\s+type\s+DefaultMappedFile\s*=\s*"
+            r"rocketmq_store_local::mapped_file::DefaultMappedFile<"
+            r"rocketmq_store_local::mapped_file::NativeMappedMemory>\s*;",
         )
 
     def test_mapped_file_mapping_has_one_local_owner_and_exact_store_composition(self) -> None:
@@ -12575,21 +22317,44 @@ mod tests""",
         self.assertEqual([], mapped_file_mapping_owner_violations(canonical_source))
         self.assertNotRegex(active_rust_source(canonical_source), r"\bArcMut\b")
 
-        default_mapped_file = (
-            STORE_CRATE / "src" / "log_file" / "mapped_file" / "default_mapped_file_impl.rs"
-        ).read_text(encoding="utf-8")
+        default_mapped_file = (ROOT / DEFAULT_MAPPED_FILE_PATH).read_text(encoding="utf-8")
         self.assertEqual([], default_mapped_file_mapping_violations(default_mapped_file))
         self.assertEqual([], legacy_mapping_getter_signature_violations(default_mapped_file))
-        self.assertEqual(
-            ["pub use LazyMmapStats", "use MappedFileMapping"],
-            active_mapping_use_statements(default_mapped_file),
+        self.assertNotRegex(
+            active_rust_source(source_without_cfg_test_items(default_mapped_file)),
+            r"\b(?:ArcMut|MmapMut)\b",
+        )
+
+        facade = (
+            STORE_CRATE / "src" / "log_file" / "mapped_file" / "default_mapped_file_impl.rs"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "pub use rocketmq_store_local::mapped_file::LazyMmapStats;",
+            active_rust_source(facade),
         )
 
     def test_commit_log_planning_items_have_one_canonical_definition_and_exact_facade_reexports(self) -> None:
         self.assert_local_crate_exists()
         canonical_dir = LOCAL_CRATE / "src" / "commit_log"
         self.assertEqual(
-            {"append.rs", "load.rs", "memory_lock.rs", "recovery.rs", "record.rs", "record_parser.rs"},
+            {
+                "append.rs",
+                "abnormal_recovery.rs",
+                "append_attempt.rs",
+                "append_frame.rs",
+                "header.rs",
+                "load.rs",
+                "load_orchestration.rs",
+                "loader.rs",
+                "memory_lock.rs",
+                "normal_recovery.rs",
+                "recovery.rs",
+                "recovery_orchestration.rs",
+                "record.rs",
+                "record_parser.rs",
+                "root.rs",
+                "runtime_state.rs",
+            },
             {path.name for path in canonical_dir.glob("*.rs")},
         )
 
@@ -12607,7 +22372,11 @@ mod tests""",
             if LOCAL_CRATE in path.parents or STORE_CRATE in path.parents
         }
         for item, (item_kind, expected_file) in COMMIT_LOG_CANONICAL_ITEMS.items():
-            sources = storage_boundary_sources if expected_file == "record.rs" else rust_sources
+            sources = (
+                storage_boundary_sources
+                if expected_file in {"header.rs", "record.rs"}
+                else rust_sources
+            )
             definitions = canonical_definition_paths(sources, item, item_kind)
             self.assertEqual([canonical_dir / expected_file], definitions, item)
 
@@ -12670,6 +22439,26 @@ mod tests""",
             ),
         )
 
+        append_frame_file = LOCAL_CRATE / "src" / "commit_log" / "append_frame.rs"
+        commit_log_module = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(
+            encoding="utf-8"
+        )
+        relative_sources = {
+            path.relative_to(ROOT): source for path, source in rust_sources.items()
+        }
+        self.assertEqual(
+            [],
+            append_frame_kernel_owner_violations(
+                append_frame_file.read_text(encoding="utf-8"),
+                commit_log_module,
+                relative_sources,
+            ),
+        )
+        callback_source = (ROOT / STORE_APPEND_CALLBACK_PATH).read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual([], append_frame_store_adapter_violations(callback_source))
+
         commit_log_root = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
         local_root = (LOCAL_CRATE / "src" / "lib.rs").read_text(encoding="utf-8")
         self.assertIn("pub mod append;", active_rust_source(commit_log_root))
@@ -12714,7 +22503,6 @@ mod tests""",
             for path in crate.glob("src/**/*.rs")
         }
         for item in [
-            "MESSAGE_MAGIC_CODE",
             "BLANK_MAGIC_CODE",
             "is_blank_message",
             "CommitLogFrameSource",
@@ -12722,6 +22510,14 @@ mod tests""",
         ]:
             self.assertEqual(
                 [(canonical_file, COMMIT_LOG_CANONICAL_ITEMS[item][0])],
+                commit_log_record_owner_occurrences(rust_sources, item),
+                item,
+            )
+
+        header_file = LOCAL_CRATE / "src" / "commit_log" / "header.rs"
+        for item in ["MESSAGE_MAGIC_CODE", "MESSAGE_MAGIC_CODE_V2"]:
+            self.assertEqual(
+                [(header_file, COMMIT_LOG_CANONICAL_ITEMS[item][0])],
                 commit_log_record_owner_occurrences(rust_sources, item),
                 item,
             )
@@ -12769,6 +22565,212 @@ mod tests""",
             "CommitLogFileValidationError",
             active_commit_log_facade_reexports(loader_source),
         )
+
+    def test_commit_log_loader_has_one_local_owner_and_store_narrow_adapter_only(self) -> None:
+        canonical_file = LOCAL_CRATE / "src" / "commit_log" / "loader.rs"
+        store_adapter = STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
+        rust_sources = {
+            path: path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        self.assertEqual(
+            [(canonical_file, "struct")],
+            file_item_owner_occurrences(rust_sources, "CommitLogLoadAdapter"),
+        )
+        self.assertEqual(
+            [(canonical_file, "struct")],
+            file_item_owner_occurrences(rust_sources, "CommitLogLoader"),
+        )
+        module_source = (LOCAL_CRATE / "src" / "commit_log.rs").read_text(encoding="utf-8")
+        self.assertIn("pub mod loader;", active_rust_source(module_source))
+        canonical_source = canonical_file.read_text(encoding="utf-8")
+        adapter_source = store_adapter.read_text(encoding="utf-8")
+        self.assertEqual([], commit_log_loader_owner_violations(canonical_source))
+        self.assertEqual([], store_commit_log_loader_adapter_violations(adapter_source))
+        self.assertEqual([], commit_log_loader_copy_violations(rust_sources))
+
+    def test_commit_log_loader_contract_rejects_orchestration_and_adapter_mutations(self) -> None:
+        canonical_source = (
+            LOCAL_CRATE / "src" / "commit_log" / "loader.rs"
+        ).read_text(encoding="utf-8")
+        self.assertEqual([], commit_log_loader_owner_violations(canonical_source))
+        canonical_mutations = [
+            canonical_source.replace(
+                "pub type RecoveryMapping<T> = for<'a> fn(&'a T) -> Option<(&'a [u8], &'a str)>;",
+                "pub type RecoveryMapping<T> = for<'a> fn(&'a T) -> Option<(&'a mut [u8], &'a str)>;",
+                1,
+            ),
+            canonical_source.replace(
+                "pub mark_fully_loaded: fn(&T, position: i32)",
+                "pub mark_fully_loaded: fn(&mut T, position: i32)",
+                1,
+            ),
+            canonical_source.replace("mapped_file_size: u64", "mapped_file_size: usize", 1),
+            canonical_source.replace(
+                "return Ok((Vec::new(), stats));",
+                "stats.total_load_time_ms = start.elapsed().as_millis();\n                return Ok((Vec::new(), stats));",
+                1,
+            ),
+            canonical_source.replace(".par_iter()", ".iter()", 1),
+            canonical_source.replace(
+                "(adapter.mark_fully_loaded)(&mapped_file, self.mapped_file_size as i32);",
+                "(adapter.mark_fully_loaded)(&mapped_file, entry.metadata().size as i32);",
+                1,
+            ),
+            canonical_source.replace(
+                "(adapter.open)(entry.metadata().path.as_path(), self.mapped_file_size, entry.mode())",
+                "(adapter.open)(entry.metadata().path.as_path(), entry.metadata().size, entry.mode())",
+                1,
+            ),
+            canonical_source.replace(
+                "record_mmap_advice(statistics, mmap_advice_outcome);",
+                "record_file_prefetch(statistics, mmap_advice_outcome);",
+                1,
+            ),
+            canonical_source.replace(
+                "let Some((mmap, file_name)) = (adapter.recovery_mapping)(mapped_file) else",
+                "let Some((mmap, file_name)) = None else",
+                1,
+            ),
+            canonical_source.replace(
+                'target: "rocketmq_store::log_file::commit_log_loader",',
+                'target: "rocketmq_store_local::commit_log::loader",',
+                1,
+            ),
+            canonical_source.replace(
+                "pub struct CommitLogLoader {",
+                "#[cfg_attr(any(), cfg(any()))]\npub struct CommitLogLoader {",
+                1,
+            ),
+            canonical_source.replace(
+                "CommitLogMappingMode::LazyReadOnly => DefaultMappedFile::try_new_lazy_read_only",
+                "CommitLogMappingMode::LazyReadOnly => DefaultMappedFile::try_new",
+                1,
+            ),
+            canonical_source.replace(
+                "if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped()",
+                "if !mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped()",
+                1,
+            ),
+            canonical_source.replace(
+                "mapped_file.set_wrote_position(position);\n                mapped_file.set_flushed_position(position);",
+                "mapped_file.set_flushed_position(position);\n                mapped_file.set_wrote_position(position);",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(canonical_mutations):
+            with self.subTest(owner_mutation_index=mutation_index):
+                self.assertNotEqual(canonical_source, mutation)
+                self.assertNotEqual([], commit_log_loader_owner_violations(mutation))
+
+        adapter_source = (
+            STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
+        ).read_text(encoding="utf-8")
+        self.assertEqual([], store_commit_log_loader_adapter_violations(adapter_source))
+        adapter_mutations = [
+            adapter_source.replace(
+                "pub use rocketmq_store_local::commit_log::loader::CommitLogLoader;",
+                "pub use rocketmq_store_local::commit_log::loader::CommitLogLoader as LocalCommitLogLoader;",
+                1,
+            ),
+            adapter_source.replace(
+                "pub use rocketmq_store_local::commit_log::load::LoadStatistics;",
+                "pub type LoadStatistics = rocketmq_store_local::commit_log::load::LoadStatistics;",
+                1,
+            ),
+            adapter_source.replace(
+                "#[cfg(test)]",
+                "pub struct CommitLogLoader;\n\n#[cfg(test)]",
+                1,
+            ),
+            adapter_source.replace(
+                "#[cfg(test)]",
+                "fn load_optimized() {}\n\n#[cfg(test)]",
+                1,
+            ),
+            adapter_source.replace(
+                "#[cfg(test)]",
+                "fn create_mapped_files_parallel() {}\n\n#[cfg(test)]",
+                1,
+            ),
+        ]
+        for mutation_index, mutation in enumerate(adapter_mutations):
+            with self.subTest(adapter_mutation_index=mutation_index):
+                self.assertNotEqual(adapter_source, mutation)
+                self.assertNotEqual([], store_commit_log_loader_adapter_violations(mutation))
+
+        production_sources = {
+            path: path.read_text(encoding="utf-8")
+            for crate in (LOCAL_CRATE, STORE_CRATE)
+            for path in crate.glob("src/**/*.rs")
+        }
+        alias_copy = """
+use owner::discover_commit_log_files as discover;
+use owner::CommitLogFileDiscovery as Discovery;
+use owner::collect_commit_log_metadata as collect_metadata;
+use owner::CommitLogMetadataCollectionOptions as MetadataOptions;
+use owner::CommitLogMappingPlan as MappingPlan;
+use owner::CommitLogMappingExecution as MappingExecution;
+use owner::apply_recovery_mmap_advice as mmap_hint;
+use owner::apply_recovery_file_prefetch as prefetch_hint;
+use owner::record_mmap_advice as mmap_reduce;
+use owner::record_file_prefetch as prefetch_reduce;
+fn copied_loader_flow() {
+    let files = match discover(path)? {
+        Discovery::DirectoryMissing => return,
+        Discovery::NoFiles => return,
+        Discovery::Files(files) => files,
+    };
+    let metadata = collect_metadata(&files, MetadataOptions {
+        expected_file_size: file_size,
+        parallel_enabled: parallel,
+    })?;
+    let plan = MappingPlan::new(metadata, options);
+    match plan.execution() {
+        MappingExecution::Parallel => map_parallel(),
+        MappingExecution::Sequential => map_sequential(),
+    }
+    entries.par_iter().for_each(|mapped| mapped.mark_fully_loaded(position));
+    mmap_reduce(stats, mmap_outcome);
+    prefetch_reduce(stats, prefetch_outcome);
+    let (mmap, name) = mapped.recovery_mapping().unwrap();
+    mmap_hint(advice, mmap, name);
+    prefetch_hint(prefetch, mmap, name);
+    stats.log_summary();
+}
+"""
+        copied_sources = dict(production_sources)
+        copied_sources[Path("rocketmq-store/src/copied_commit_log_loader.rs")] = alias_copy
+        self.assertNotEqual([], commit_log_loader_copy_violations(copied_sources))
+
+        active_post_test = dict(production_sources)
+        active_post_test[Path("rocketmq-store-local/src/post_test_loader.rs")] = (
+            "#[cfg(test)] mod tests { fn decoy() {} }\n" + alias_copy
+        )
+        self.assertNotEqual([], commit_log_loader_copy_violations(active_post_test))
+
+        cfg_copy = dict(production_sources)
+        cfg_copy[Path("rocketmq-store-local/src/cfg_loader.rs")] = (
+            "#[cfg(any())] mod duplicate {\n" + alias_copy + "\n}"
+        )
+        self.assertNotEqual([], commit_log_loader_copy_violations(cfg_copy))
+        cfg_attr_copy = dict(production_sources)
+        cfg_attr_copy[Path("rocketmq-store-local/src/cfg_attr_loader.rs")] = (
+            "#[cfg_attr(any(), cfg(any()))] mod duplicate {\n" + alias_copy + "\n}"
+        )
+        self.assertNotEqual([], commit_log_loader_copy_violations(cfg_attr_copy))
+
+        test_only_decoy = dict(production_sources)
+        test_only_decoy[Path("rocketmq-store/src/test_only_loader.rs")] = (
+            "#[cfg(test)] mod tests {\n" + alias_copy + "\n}"
+        )
+        self.assertEqual([], commit_log_loader_copy_violations(test_only_decoy))
+        near_miss = dict(production_sources)
+        near_miss[Path("rocketmq-store/src/partial_loader.rs")] = alias_copy.replace(
+            "    stats.log_summary();\n", "", 1
+        )
+        self.assertEqual([], commit_log_loader_copy_violations(near_miss))
 
     def test_commit_log_mapping_plan_has_one_local_owner_and_store_adapter_only(self) -> None:
         canonical_file = LOCAL_CRATE / "src" / "commit_log" / "load.rs"
@@ -12832,24 +22834,23 @@ mod tests""",
         self.assertEqual([], store_commit_log_mapping_plan_violations(source))
         mutations = [
             source.replace(
-                "CommitLogMappingOptions {\n                parallel_enabled: self.enable_parallel",
-                "CommitLogMappingOptions {\n                parallel_enabled: false",
+                "pub use rocketmq_store_local::commit_log::loader::CommitLogLoader;",
+                "pub use rocketmq_store_local::commit_log::loader::CommitLogLoader as LocalCommitLogLoader;",
                 1,
             ),
             source.replace(
-                "CommitLogMappingOptions {\n                parallel_enabled: self.enable_parallel,\n                lazy_mmap_enabled: self.lazy_mmap_enable",
-                "CommitLogMappingOptions {\n                parallel_enabled: self.enable_parallel,\n                lazy_mmap_enabled: false",
+                "#[cfg(test)]",
+                "fn create_mapped_files_parallel() {}\n\n#[cfg(test)]",
                 1,
             ),
-            source.replace("match mapping_plan.execution()", "if self.enable_parallel", 1),
-            source.replace("mapping_plan.entries()", "&[]", 1),
-            source.replace(".par_iter()\n            .map(|entry|", ".par_iter()\n            .enumerate()\n            .map(|(_, entry)|", 1),
-            source.replace("for entry in entries", "for (idx, entry) in entries.iter().enumerate()", 1),
-            source.replace("match entry.mode()", "if self.lazy_mmap_enable", 1),
-            source.replace("let mapping_plan = CommitLogMappingPlan::new", "let mapping_plan_copy = CommitLogMappingPlan::new(file_metadata, CommitLogMappingOptions { parallel_enabled: false, lazy_mmap_enabled: false });\n        let mapping_plan = CommitLogMappingPlan::new", 1),
             source.replace(
-                "use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;",
-                "pub use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;",
+                "#[cfg(test)]",
+                "fn create_mapped_files_sequential() {}\n\n#[cfg(test)]",
+                1,
+            ),
+            source.replace(
+                "#[cfg(test)]",
+                "struct CommitLogMappingPlan;\n\n#[cfg(test)]",
                 1,
             ),
         ]
@@ -12883,8 +22884,13 @@ mod tests""",
         for item in COMMIT_LOG_HINT_ITEMS:
             self.assertNotIn(item, facade)
 
-        ffi_source = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
+        ffi_source = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
         self.assertEqual([], store_prefetch_ffi_compatibility_violations(ffi_source))
+        store_ffi = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
+        self.assertIn(
+            "pub use rocketmq_store_local::utils::ffi::prefetch_virtual_memory;",
+            active_rust_source(store_ffi),
+        )
 
         self.assertNotIn("rocketmq_error", canonical_source)
         manifest = tomllib.loads((LOCAL_CRATE / "Cargo.toml").read_text(encoding="utf-8"))
@@ -12933,8 +22939,8 @@ mod tests""",
                 1,
             ),
             source.replace(
-                "Storage read failed for 'PrefetchVirtualMemory': {error}",
-                "PrefetchVirtualMemory failed: {error}",
+                "crate::utils::ffi::prefetch_virtual_memory(mmap.as_ptr(), mmap.len())",
+                "Ok(true)",
                 1,
             ),
             source.replace("use tracing::info;", "use tracing::info;\nuse tracing::warn;", 1).replace(
@@ -12950,65 +22956,32 @@ mod tests""",
         path = STORE_CRATE / "src" / "log_file" / "commit_log_loader.rs"
         source = path.read_text(encoding="utf-8")
         self.assertEqual([], store_commit_log_hint_adapter_violations(source))
-        skip = (
-            "        if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped() {\n"
-            "            return (HintOutcome::not_attempted(), HintOutcome::not_attempted());\n"
-            "        }\n\n"
-        )
-        moved_skip = source.replace(skip, "", 1).replace(
-            "        let mmap = mapped_file.get_mapped_file();\n",
-            "        let mmap = mapped_file.get_mapped_file();\n" + skip,
-            1,
-        )
         mutations = [
             source.replace(
-                "use rocketmq_store_local::commit_log::load::HintOutcome;",
-                "pub use rocketmq_store_local::commit_log::load::HintOutcome;",
+                "pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;",
+                "pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice as LocalRecoveryMmapAdvice;",
                 1,
             ),
             source.replace(
-                "use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;",
-                "pub use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;",
+                "#[cfg(test)]",
+                "fn apply_memory_hints() {}\n\n#[cfg(test)]",
                 1,
             ),
             source.replace(
-                "use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;",
-                "use rocketmq_store_local::commit_log::load::{apply_recovery_mmap_advice};",
+                "#[cfg(test)]",
+                "fn record_mmap_advice() {}\n\n#[cfg(test)]",
                 1,
             ),
             source.replace(
-                "use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;",
-                "use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice as apply_advice;",
+                "#[cfg(test)]",
+                "struct CommitLogLoadAdapter;\n\n#[cfg(test)]",
                 1,
             ),
             source.replace(
-                "use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;",
-                "use rocketmq_store_local::commit_log::load::*;",
+                "#[cfg(test)]",
+                "use crate::log_file::mapped_file::DefaultMappedFile;\n\n#[cfg(test)]",
                 1,
             ),
-            source.replace(skip, "", 1),
-            moved_skip,
-            source.replace(
-                "apply_recovery_mmap_advice(self.recovery_mmap_advice, mmap, file_name)",
-                "apply_recovery_file_prefetch(self.recovery_file_prefetch, mmap, file_name)",
-                1,
-            ),
-            source.replace(
-                "        let mmap = mapped_file.get_mapped_file();",
-                "        let mmap = mapped_file.get_mapped_file();\n        let _ = memmap2::Advice::Sequential;",
-                1,
-            ),
-            source.replace(
-                "\n#[cfg(test)]\nmod tests {",
-                "\nfn apply_recovery_mmap_advice() {}\n\n#[cfg(test)]\nmod tests {",
-                1,
-            ),
-            source.replace(
-                "record_mmap_advice(statistics, mmap_advice_outcome);",
-                "statistics.mmap_advice_attempts += 1;",
-                1,
-            ),
-            source.replace("let results = results?;", "record_mmap_advice(statistics, HintOutcome::not_attempted());\n        let results = results?;", 1),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
@@ -13016,7 +22989,7 @@ mod tests""",
                 self.assertNotEqual([], store_commit_log_hint_adapter_violations(mutation))
 
     def test_store_prefetch_virtual_memory_contract_rejects_compatibility_mutations(self) -> None:
-        source = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
+        source = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
         self.assertEqual([], store_prefetch_ffi_compatibility_violations(source))
         mutations = [
             source.replace(
@@ -13132,44 +23105,28 @@ mod tests""",
         self.assertEqual([], store_commit_log_file_validation_violations(source))
         mutations = [
             source.replace(
-                "use rocketmq_store_local::commit_log::load::collect_commit_log_metadata;",
-                "pub use rocketmq_store_local::commit_log::load::collect_commit_log_metadata;",
+                "pub use rocketmq_store_local::commit_log::load::LoadStatistics;",
+                "pub type LoadStatistics = rocketmq_store_local::commit_log::load::LoadStatistics;",
                 1,
             ),
             source.replace(
-                "use rocketmq_store_local::commit_log::load::CommitLogMetadataCollectionOptions;",
-                "use rocketmq_store_local::commit_log::load::CommitLogMetadataCollectionOptions as Options;",
+                "#[cfg(test)]",
+                "fn collect_commit_log_metadata() {}\n\n#[cfg(test)]",
                 1,
             ),
             source.replace(
-                "expected_file_size: self.mapped_file_size",
-                "expected_file_size: 0",
+                "#[cfg(test)]",
+                "fn create_native_mapped_file() {}\n\n#[cfg(test)]",
                 1,
             ),
             source.replace(
-                "parallel_enabled: self.enable_parallel",
-                "parallel_enabled: false",
+                "#[cfg(test)]",
+                "struct CommitLogLoader;\n\n#[cfg(test)]",
                 1,
             ),
             source.replace(
-                "let file_metadata = collect_commit_log_metadata(",
-                "let _legacy = fs::metadata(&file_paths[0]);\n        let file_metadata = collect_commit_log_metadata(",
-                1,
-            ),
-            source.replace(
-                "let file_metadata = collect_commit_log_metadata(",
-                "let file_metadata = collect_commit_log_metadata_old(",
-                1,
-            ),
-            source.replace(
-                "pub fn new(store_path: String, mapped_file_size: u64, enable_parallel: bool) -> Self",
-                "pub fn new(store_path: String, mapped_file_size: u64, enable_parallel: usize) -> Self",
-                1,
-            ),
-            source.replace("Ok((mapped_files, stats))", "stats.files_removed += 1; Ok((mapped_files, stats))", 1),
-            source.replace(
-                "impl CommitLogLoader {",
-                "fn collect_metadata_parallel() {}\n\nimpl CommitLogLoader {",
+                "#[cfg(test)]",
+                "use rocketmq_store_local::mapped_file::DefaultMappedFile;\n\n#[cfg(test)]",
                 1,
             ),
         ]
@@ -13183,38 +23140,30 @@ mod tests""",
         self.assertEqual([], store_commit_log_file_discovery_violations(source))
         mutations = [
             source.replace(
-                "use rocketmq_store_local::commit_log::load::discover_commit_log_files;",
-                "pub use rocketmq_store_local::commit_log::load::discover_commit_log_files;",
+                "pub use rocketmq_store_local::commit_log::loader::CommitLogLoader;",
+                "pub type CommitLogLoader = rocketmq_store_local::commit_log::loader::CommitLogLoader;",
                 1,
             ),
             source.replace(
-                "use rocketmq_store_local::commit_log::load::CommitLogFileDiscovery;",
-                "use rocketmq_store_local::commit_log::load::CommitLogFileDiscovery as Discovery;",
+                "pub use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;",
+                "pub use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch as LocalRecoveryFilePrefetch;",
                 1,
             ),
             source.replace(
-                "CommitLogFileDiscovery::DirectoryMissing => {",
-                "CommitLogFileDiscovery::DirectoryMissing => {\n                stats.total_load_time_ms = start.elapsed().as_millis();",
+                "#[cfg(test)]",
+                "fn discover_commit_log_files() {}\n\n#[cfg(test)]",
                 1,
             ),
             source.replace(
-                "CommitLogFileDiscovery::NoFiles => {",
-                "CommitLogFileDiscovery::DirectoryMissing => {",
-                1,
-            ),
-            source.replace("stats.total_load_time_ms = start.elapsed().as_millis();", "", 1),
-            source.replace(
-                "discover_commit_log_files(Path::new(&self.store_path))?",
-                "CommitLogFileDiscovery::Files(Vec::new())",
+                "#[cfg(test)]",
+                "fn load_optimized() {}\n\n#[cfg(test)]",
                 1,
             ),
             source.replace(
-                "let file_paths = match discover_commit_log_files",
-                "let _legacy = fs::read_dir(Path::new(&self.store_path));\n        let file_paths = match discover_commit_log_files",
+                "#[cfg(test)]",
+                "fn create_mapped_files_sequential() {}\n\n#[cfg(test)]",
                 1,
             ),
-            source.replace("CommitLog directory does not exist", "CommitLog path missing", 1),
-            source.replace("No commit log files found in", "CommitLog directory empty", 1),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):
@@ -13291,7 +23240,7 @@ mod tests""",
             1,
         )
 
-        mapped_file_path = Path("rocketmq-store/src/log_file/mapped_file/default_mapped_file_impl.rs")
+        mapped_file_path = Path("rocketmq-store-local/src/mapped_file/default_mapped_file.rs")
         mapped_file_source = sources[mapped_file_path]
         wrong_manager_receiver = mapped_file_source.replace(
             "memory_lock_manager.lock_region_with(category, addr, len, locker)",
@@ -13508,14 +23457,19 @@ fn forbidden_destroy_seam_alias_reference() {
         canonical = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
         facade = (STORE_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
         self.assertEqual([], memory_lock_ffi_owner_violations(canonical))
-        for item in ("mlock", "munlock"):
+        for item in (
+            "get_page_size",
+            "madvise",
+            "mincore",
+            "mlock",
+            "munlock",
+            "prefetch_virtual_memory",
+        ):
             self.assertEqual(
                 [],
                 direct_exact_reexport_violations(facade, "rocketmq_store_local::utils::ffi", item),
                 item,
             )
-        for retained in ("get_page_size", "madvise", "prefetch_virtual_memory", "mincore"):
-            self.assertRegex(active_rust_source(facade), rf"pub\s+fn\s+{retained}\b")
 
     def test_memory_lock_syscall_contract_rejects_platform_mutations(self) -> None:
         source = (LOCAL_CRATE / "src" / "utils" / "ffi.rs").read_text(encoding="utf-8")
@@ -13524,7 +23478,7 @@ fn forbidden_destroy_seam_alias_reference() {
             source.replace("libc::mlock", "libc::munlock", 1),
             source.replace("unsafe { VirtualUnlock", "unsafe { VirtualLock", 1),
             source.replace("memory lock (mlock)", "mlock failed", 1),
-            source.replace("// SAFETY:", "// platform call:", 1),
+            source.replace("// SAFETY: mlock", "// platform call: mlock", 1),
         ]
         for mutation_index, mutation in enumerate(mutations):
             with self.subTest(mutation_index=mutation_index):

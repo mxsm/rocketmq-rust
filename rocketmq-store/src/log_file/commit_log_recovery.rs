@@ -24,11 +24,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use bytes::Buf;
 use bytes::Bytes;
-use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_POSITION;
-use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_V2;
-use rocketmq_common::MessageDecoder::SYSFLAG_POSITION;
 use tracing::info;
 
 pub use rocketmq_store_local::commit_log::record::is_blank_message;
@@ -44,6 +40,10 @@ use crate::base::dispatch_request::DispatchRequest;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::log_file::commit_log::check_message_and_return_size;
+#[allow(
+    unused_imports,
+    reason = "preserve the governed DefaultMappedFile import fingerprint until ArcMut retirement"
+)]
 use crate::log_file::commit_log::MESSAGE_MAGIC_CODE;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
@@ -204,44 +204,13 @@ fn is_mapped_file_matched_recover(
     mapped_file: &Arc<DefaultMappedFile>,
     store_checkpoint: &StoreCheckpoint,
 ) -> bool {
-    use std::mem;
-
-    use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
     use rocketmq_common::UtilAll::time_millis_to_human_string;
 
-    // Read magic code
-    let magic_code = mapped_file
-        .get_bytes(MESSAGE_MAGIC_CODE_POSITION, mem::size_of::<i32>())
-        .unwrap_or(Bytes::from([0u8; mem::size_of::<i32>()].as_ref()))
-        .get_i32();
-
-    if magic_code != MESSAGE_MAGIC_CODE && magic_code != MESSAGE_MAGIC_CODE_V2 {
+    let Some(store_timestamp) = rocketmq_store_local::commit_log::header::probe_store_timestamp(|offset, len| {
+        mapped_file.get_bytes(offset, len)
+    }) else {
         return false;
-    }
-
-    // Read sys flag
-    let sys_flag = mapped_file
-        .get_bytes(SYSFLAG_POSITION, mem::size_of::<i32>())
-        .unwrap_or(Bytes::from([0u8; mem::size_of::<i32>()].as_ref()))
-        .get_i32();
-
-    let born_host_length = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
-        8
-    } else {
-        20
     };
-
-    let msg_store_time_pos = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + born_host_length;
-
-    // Read store timestamp
-    let store_timestamp = mapped_file
-        .get_bytes(msg_store_time_pos, mem::size_of::<i64>())
-        .unwrap_or(Bytes::from([0u8; mem::size_of::<i64>()].as_ref()))
-        .get_i64();
-
-    if store_timestamp == 0 {
-        return false;
-    }
 
     if message_store_config.message_index_enable && message_store_config.message_index_safe {
         if store_timestamp <= store_checkpoint.get_min_timestamp_index() as i64 {

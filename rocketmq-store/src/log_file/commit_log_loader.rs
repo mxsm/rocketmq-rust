@@ -21,254 +21,16 @@
 //! - Zero-copy buffer reuse
 //! - Platform-specific optimizations (madvise on Unix, PrefetchVirtualMemory on Windows)
 
-use std::io;
-use std::path::Path;
-use std::sync::Arc;
-
-use cheetah_string::CheetahString;
-use rayon::prelude::*;
-use tracing::info;
-use tracing::warn;
-
-use rocketmq_store_local::commit_log::load::apply_recovery_file_prefetch;
-use rocketmq_store_local::commit_log::load::apply_recovery_mmap_advice;
-use rocketmq_store_local::commit_log::load::collect_commit_log_metadata;
-use rocketmq_store_local::commit_log::load::discover_commit_log_files;
-use rocketmq_store_local::commit_log::load::record_file_prefetch;
-use rocketmq_store_local::commit_log::load::record_mmap_advice;
-use rocketmq_store_local::commit_log::load::CommitLogFileDiscovery;
-use rocketmq_store_local::commit_log::load::CommitLogMappingEntry;
-use rocketmq_store_local::commit_log::load::CommitLogMappingExecution;
-use rocketmq_store_local::commit_log::load::CommitLogMappingMode;
-use rocketmq_store_local::commit_log::load::CommitLogMappingOptions;
-use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;
-use rocketmq_store_local::commit_log::load::CommitLogMetadataCollectionOptions;
-use rocketmq_store_local::commit_log::load::HintOutcome;
 pub use rocketmq_store_local::commit_log::load::LoadStatistics;
 pub use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
 pub use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
-
-use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
-use crate::log_file::mapped_file::MappedFile;
-
-/// Optimized loader for CommitLog files
-pub struct CommitLogLoader {
-    store_path: String,
-    mapped_file_size: u64,
-    enable_parallel: bool,
-    recovery_mmap_advice: RecoveryMmapAdvice,
-    recovery_file_prefetch: RecoveryFilePrefetch,
-    lazy_mmap_enable: bool,
-}
-
-impl CommitLogLoader {
-    /// Create a new loader
-    pub fn new(store_path: String, mapped_file_size: u64, enable_parallel: bool) -> Self {
-        Self::new_with_recovery_mmap_advice(
-            store_path,
-            mapped_file_size,
-            enable_parallel,
-            RecoveryMmapAdvice::Sequential,
-        )
-    }
-
-    pub fn new_with_recovery_mmap_advice(
-        store_path: String,
-        mapped_file_size: u64,
-        enable_parallel: bool,
-        recovery_mmap_advice: RecoveryMmapAdvice,
-    ) -> Self {
-        Self::new_with_recovery_hints(
-            store_path,
-            mapped_file_size,
-            enable_parallel,
-            recovery_mmap_advice,
-            RecoveryFilePrefetch::Disabled,
-        )
-    }
-
-    pub fn new_with_recovery_hints(
-        store_path: String,
-        mapped_file_size: u64,
-        enable_parallel: bool,
-        recovery_mmap_advice: RecoveryMmapAdvice,
-        recovery_file_prefetch: RecoveryFilePrefetch,
-    ) -> Self {
-        Self {
-            store_path,
-            mapped_file_size,
-            enable_parallel,
-            recovery_mmap_advice,
-            recovery_file_prefetch,
-            lazy_mmap_enable: false,
-        }
-    }
-
-    pub fn with_lazy_mmap(mut self, lazy_mmap_enable: bool) -> Self {
-        self.lazy_mmap_enable = lazy_mmap_enable;
-        self
-    }
-
-    /// Load files with optimizations enabled
-    ///
-    /// # Performance Optimizations
-    /// - Phase 1: Parallel metadata collection (fs::metadata + filtering)
-    /// - Phase 2: Batch validation (size checks, empty file removal)
-    /// - Phase 3: Parallel mmap creation with memory hints
-    ///
-    /// # Returns
-    /// `Ok((files, stats))` on success, `Err(io::Error)` on failure
-    pub fn load_optimized(&self) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
-        let start = std::time::Instant::now();
-        let mut stats = LoadStatistics {
-            recovery_mmap_advice: self.recovery_mmap_advice,
-            recovery_file_prefetch: self.recovery_file_prefetch,
-            ..LoadStatistics::default()
-        };
-
-        let file_paths = match discover_commit_log_files(Path::new(&self.store_path))? {
-            CommitLogFileDiscovery::DirectoryMissing => {
-                warn!("CommitLog directory does not exist: {}", self.store_path);
-                return Ok((Vec::new(), stats));
-            }
-            CommitLogFileDiscovery::NoFiles => {
-                info!("No commit log files found in {}", self.store_path);
-                stats.total_load_time_ms = start.elapsed().as_millis();
-                return Ok((Vec::new(), stats));
-            }
-            CommitLogFileDiscovery::Files(file_paths) => file_paths,
-        };
-
-        let parallel_start = std::time::Instant::now();
-        let file_metadata = collect_commit_log_metadata(
-            &file_paths,
-            CommitLogMetadataCollectionOptions {
-                expected_file_size: self.mapped_file_size,
-                parallel_enabled: self.enable_parallel,
-            },
-        )?;
-
-        stats.parallel_load_time_ms = parallel_start.elapsed().as_millis();
-        stats.total_files = file_metadata.len();
-        stats.total_size_bytes = file_metadata.iter().map(|metadata| metadata.size).sum();
-
-        let mapping_plan = CommitLogMappingPlan::new(
-            file_metadata,
-            CommitLogMappingOptions {
-                parallel_enabled: self.enable_parallel,
-                lazy_mmap_enabled: self.lazy_mmap_enable,
-            },
-        );
-        let mapped_files = match mapping_plan.execution() {
-            CommitLogMappingExecution::Parallel => {
-                self.create_mapped_files_parallel(mapping_plan.entries(), &mut stats)?
-            }
-            CommitLogMappingExecution::Sequential => {
-                self.create_mapped_files_sequential(mapping_plan.entries(), &mut stats)?
-            }
-        };
-
-        stats.total_load_time_ms = start.elapsed().as_millis();
-        stats.log_summary();
-
-        Ok((mapped_files, stats))
-    }
-
-    /// Create mapped files in parallel (with synchronization for Vec::push)
-    fn create_mapped_files_parallel(
-        &self,
-        entries: &[CommitLogMappingEntry],
-        statistics: &mut LoadStatistics,
-    ) -> io::Result<Vec<Arc<DefaultMappedFile>>> {
-        // Parallel creation with ordered collection
-        let results: Result<Vec<_>, io::Error> = entries
-            .par_iter()
-            .map(|entry| {
-                let mapped_file = self.create_mapped_file(entry)?;
-
-                // Apply memory hints for sequential access
-                let (mmap_advice_outcome, file_prefetch_outcome) = self.apply_memory_hints(&mapped_file);
-
-                // Set positions (all full since we're loading existing files)
-                mapped_file.set_wrote_position(self.mapped_file_size as i32);
-                mapped_file.set_flushed_position(self.mapped_file_size as i32);
-                mapped_file.set_committed_position(self.mapped_file_size as i32);
-
-                Ok((Arc::new(mapped_file), mmap_advice_outcome, file_prefetch_outcome))
-            })
-            .collect();
-
-        // Convert to sequential Vec (maintains order from par_iter)
-        let results = results?;
-        let mut mapped_files = Vec::with_capacity(results.len());
-        for (mapped_file, mmap_advice_outcome, file_prefetch_outcome) in results {
-            record_mmap_advice(statistics, mmap_advice_outcome);
-            record_file_prefetch(statistics, file_prefetch_outcome);
-            mapped_files.push(mapped_file);
-        }
-        Ok(mapped_files)
-    }
-
-    /// Fallback: sequential mapped file creation
-    fn create_mapped_files_sequential(
-        &self,
-        entries: &[CommitLogMappingEntry],
-        statistics: &mut LoadStatistics,
-    ) -> io::Result<Vec<Arc<DefaultMappedFile>>> {
-        let mut mapped_files = Vec::with_capacity(entries.len());
-
-        for entry in entries {
-            let mapped_file = self.create_mapped_file(entry)?;
-
-            let (mmap_advice_outcome, file_prefetch_outcome) = self.apply_memory_hints(&mapped_file);
-            record_mmap_advice(statistics, mmap_advice_outcome);
-            record_file_prefetch(statistics, file_prefetch_outcome);
-
-            mapped_file.set_wrote_position(self.mapped_file_size as i32);
-            mapped_file.set_flushed_position(self.mapped_file_size as i32);
-            mapped_file.set_committed_position(self.mapped_file_size as i32);
-
-            mapped_files.push(Arc::new(mapped_file));
-        }
-
-        Ok(mapped_files)
-    }
-
-    fn create_mapped_file(&self, entry: &CommitLogMappingEntry) -> io::Result<DefaultMappedFile> {
-        let metadata = entry.metadata();
-        let file_name = CheetahString::from_string(metadata.path.to_string_lossy().to_string());
-        match entry.mode() {
-            CommitLogMappingMode::LazyReadOnly => {
-                DefaultMappedFile::try_new_lazy_read_only(file_name, self.mapped_file_size)
-            }
-            CommitLogMappingMode::Eager => DefaultMappedFile::try_new(file_name, self.mapped_file_size),
-        }
-    }
-
-    /// Apply platform-specific memory access hints
-    ///
-    /// # Platform-specific behavior
-    /// - **Linux/Unix**: Local applies `madvise(MADV_SEQUENTIAL)` when enabled.
-    /// - **Windows**: Local applies `PrefetchVirtualMemory` when enabled.
-    ///
-    /// # Implementation
-    /// Lazy mappings are skipped before initialization; initialized mappings are passed to the
-    /// Local platform adapters, and their non-fatal outcomes are reduced by the caller.
-    fn apply_memory_hints(&self, mapped_file: &DefaultMappedFile) -> (HintOutcome, HintOutcome) {
-        if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped() {
-            return (HintOutcome::not_attempted(), HintOutcome::not_attempted());
-        }
-
-        let mmap = mapped_file.get_mapped_file();
-        let file_name = mapped_file.get_file_name().as_str();
-        let mmap_advice_outcome = apply_recovery_mmap_advice(self.recovery_mmap_advice, mmap, file_name);
-        let file_prefetch_outcome = apply_recovery_file_prefetch(self.recovery_file_prefetch, mmap, file_name);
-        (mmap_advice_outcome, file_prefetch_outcome)
-    }
-}
+pub use rocketmq_store_local::commit_log::loader::CommitLogLoader;
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
+    use crate::log_file::mapped_file::MappedFile;
     use tempfile::TempDir;
 
     use super::*;
@@ -288,7 +50,14 @@ mod tests {
     }
 
     #[test]
-    fn m06_load_type_identity_preserves_defaults_and_vocabulary() {
+    fn m06_load_facade_preserves_construction_behavior_and_vocabulary() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("missing");
+        let loader = CommitLogLoader::new(missing.to_string_lossy().to_string(), 1, false);
+        let (files, loader_stats) = loader.load_optimized().unwrap();
+        assert!(files.is_empty());
+        assert_eq!(loader_stats.total_files, 0);
+        assert_eq!(loader_stats.total_load_time_ms, 0);
         let stats = canonical_load_statistics(LoadStatistics::default());
         assert_eq!(stats.total_files, 0);
         assert_eq!(

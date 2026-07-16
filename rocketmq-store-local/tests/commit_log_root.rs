@@ -12,5 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResourceBase;
-pub(crate) use rocketmq_store_local::mapped_file::kernel::ReferenceResourceCounter;
+use rocketmq_store_local::commit_log::root::CommitLogRoot;
+
+#[test]
+fn commit_log_root_preserves_exclusive_adapter_identity() {
+    let root = CommitLogRoot::new(String::from("commitlog-adapter"));
+
+    assert_eq!(root.adapter(), "commitlog-adapter");
+    assert_eq!(root.into_adapter(), "commitlog-adapter");
+}
+
+#[test]
+fn commit_log_root_exposes_one_mutable_adapter_owner() {
+    let mut root = CommitLogRoot::new(vec![1_u64, 2]);
+
+    root.adapter_mut().push(3);
+
+    assert_eq!(root.adapter(), &[1, 2, 3]);
+}

@@ -23,6 +23,22 @@
 | Phase 3 | M10–M11 | 未开始 | 待分配 | 8–12 周 | — | — |
 | Phase 4 | M12 | 未开始 | 待分配 | 8–12 周 | — | — |
 
+### 2.1 剩余重构盘点（2026-07-16）
+
+> 统计口径：只统计 82 个顶层 `PR-Mxx-yy` 工作包；M06-03a～ah 等内部迁移证据不重复计数。
+
+| 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
+|---|---:|---:|---:|---:|
+| PR 级工作包 | 31 | 0 | 51 未开始；合计 51 尚未完成 | 82 |
+| 里程碑 | 5（M01–M05） | 1（M06） | 6（M07–M12） | 12 |
+| 新增边界 crate | 6 | 0 | 4（store-rocksdb、proxy-core/cluster/local） | 10 |
+| 根 workspace package | 28 | — | 还差 4 | 32 |
+| Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
+
+剩余 51 个未开始工作包分布：M06-04～12 为 9 个、M07 为 7 个、M08 为 6 个、M09 为 6 个、
+M10 为 5 个、M11 为 12 个、M12 为 6 个。PR-M06-03 的 Local crate、MappedFile/Queue 与 CommitLog append/load/recovery
+owner、Store compatibility facade 和 ledger 已完成；下一顶层工作包为 PR-M06-04。
+
 ## 3. Phase 1：安全性与基础治理
 
 ### M01 治理、依赖策略与可重复基线
@@ -106,7 +122,7 @@
 
 - [x] PR-M06-01：完成 Store capability spike
 - [x] PR-M06-02：迁移中立 receipt/read result 与 compatibility bridge
-- [ ] PR-M06-03：创建 Local crate 并迁移 CommitLog/load/recovery
+- [x] PR-M06-03：创建 Local crate 并迁移 CommitLog/load/recovery
   - [x] M06-03a：创建 Local leaf foundation 并迁移六个纯 MappedFile leaf
   - [x] M06-03b：迁移 CommitLog load/recovery 中立规划值与纯 planner
   - [x] M06-03c：迁移 mapped-file progress 与 reference lifecycle kernel
@@ -131,6 +147,39 @@
   - [x] M06-03v：迁移 recovery ConsumeQueue truncate 纯判定到 Local，四条 Store recovery 路径直接共享同一策略
   - [x] M06-03w：迁移 abnormal recovery confirm-candidate checked calculation 到 Local，保留 Store 两条 raw-input adapter
   - [x] M06-03x：迁移 CommitLog active memory-lock target 纯 planner 到 Local，保留 Store config 与锁生命周期适配
+  - [x] M06-03y：迁移 MappedFile cache-residency 纯范围校验到 Local，保留 Store 三平台探测与指标适配
+  - [x] M06-03z：迁移 Linux MappedFile cache-residency 纯整数页规划到 Local，保留 Store 平台探测与指针适配
+  - [x] M06-03aa：迁移 CommitLogLoader 完整编排到 Local，Store 保留薄 wrapper 与函数表 target adapter
+  - [x] M06-03ab：迁移 DefaultMappedFile raw byte/progress owner 到 Local，Store 保留 mmap/lifecycle/platform adapter
+  - [x] M06-03ac：迁移 CommitLog append frame finalization/segment-roll/blank marker kernel 到 Local，Store 保留业务、CRC 与 I/O adapter
+  - [x] M06-03ad：迁移 CommitLog append TOTALSIZE 解码与 batch frame traversal owner 到 Local，Store 保留业务、CRC、context、计时/result 与 MappedFile I/O adapter
+  - [x] M06-03ae：迁移 CommitLog fixed-header layout 与 Store timestamp probe owner 到 Local，Store recovery/pickup 仅保留 MappedFile、checkpoint 与范围 adapter
+  - [x] M06-03af0：修复 CommitLog EOF retry encoded buffer ownership，三条 callback 在 EndOfFile 前归还原 BytesMut
+  - [x] M06-03af：迁移 CommitLog bounded append-attempt 编排到 Local，Store 保留 mapped-file、active-lock、计时/result 与后处理 adapter
+  - [x] M06-03ag：迁移 CommitLog standard recovery declared-frame read owner 到 Local，Store normal/abnormal 各保留一条 MappedFile exact-read adapter
+  - [x] M06-03ah：迁移 CommitLog normal recovery 单 segment record-loop 编排到 Local，Store standard/optimized 仅保留 MappedFile、解析、dispatch、日志与统计 adapter
+  - [x] M06-03（MappedFile owner）：迁移 `MappedFile` trait、`DefaultMappedFile`、mapping backend、select result 与平台 FFI 到 Local；Store 仅保留 append/mmap compatibility adapter
+  - [x] M06-03（native mmap/load owner）：迁移 `NativeMappedMemory`、zero-copy region 与 native `CommitLogLoader` adapter 到 Local；Store loader 收敛为四条精确 re-export
+  - [x] M06-03ai：迁移 abnormal recovery 单 segment record-loop 编排到 Local，Store standard/optimized 仅保留 MappedFile、解析、dispatch、日志与统计 adapter
+  - [x] M06-03aj：迁移 CommitLog safe/optimized/sequential load 外层决策与 fallback 顺序到 Local，Store 仅保留两个 load adapter 与 legacy 日志
+  - [x] M06-03ak：迁移 CommitLog optimized/standard recovery route 与环境值语义到 Local，Store normal/abnormal 各保留两个 async adapter
+  - [x] M06-03al：迁移 CommitLog put-message lock 统计/快照与 active memory-lock 当前区域状态到 Local，Store 保留平台 lock/unlock adapter
+  - [x] M06-03am：将 CommitLog confirm/put-lock/begin-lock/active-lock/load-statistics 组合状态收敛为 Local `CommitLogRuntimeState`，Store 根结构只持一个 Local runtime-state owner
+  - [x] M06-03an：迁移 MappedFileQueue flushed/committed/store-timestamp 原子进度与 commit 串行锁到 Local，Store 保留文件集合与 I/O 编排
+  - [x] M06-03ao：迁移 MappedFileQueue path/segment-size/collection 组合 owner 到 Local 泛型 storage，Store 注入 ArcSwap 后端并保留算法/allocate adapter
+  - [x] M06-03ap：迁移 MappedFileQueue 相邻连续性、范围窗口、按时间与按 offset 索引算法到 Local，Store 保留 ArcSwap 快照、日志与对象适配
+  - [x] M06-03aq：迁移 MappedFileQueue 80% 预分配与空/满 segment roll 纯决策到 Local，Store 保留两阶段状态观察及 allocate/create 副作用
+  - [x] M06-03ar：迁移 AllocateMappedFileService request path/size 身份、offset 解析、Display/Eq 与优先级排序到 Local key，Store request 只保留完成通知和结果状态
+  - [x] M06-03as：迁移 AllocateMappedFileService 预热配置/阈值与 TransientStorePool fast-fail 容量决策到 Local，Store 只采集 MessageStoreConfig 和 queue/pool 快照
+  - [x] M06-03at：迁移 MappedFileQueue dirty-tail truncate 与 recovery reset 纯规划到 Local，Store 保留 position/destroy/ArcSwap 副作用及两快照观察顺序
+  - [x] M06-03au：将 AllocateMappedFileService worker/request table/queue、通知、timeout、TransientStorePool 与 mapped-file create owner 整体迁到 Local，Store 仅保留 MessageStoreConfig 投影与精确 re-export
+  - [x] M06-03av：迁移 MappedFileQueue 目录发现、排序/校验、尾部空文件清理、加载初始化与 service/sync create I/O owner 到 Local，Store 仅应用 load outcome 与 ArcSwap collection
+  - [x] M06-03aw：迁移 MappedFileQueue delete/retry-delete、swap/clean、shutdown/destroy lifecycle owner 到 Local，Store 仅保留 check/time-source 与 ArcSwap collection 应用
+  - [x] M06-03ax：迁移 MappedFileQueue warmup/lazy-mmap 聚合及 max/min/total/available/fall-behind/roll 查询 owner 到 Local，Store 精确 re-export stats 并保留 snapshot adapter
+  - [x] M06-03ay：迁移 CommitLog 根 owner 到 Local 泛型 `CommitLogRoot`，Store 旧 `CommitLog` 收敛为单字段 facade 与 composition adapter
+  - [x] M06-03az：迁移 CommitLog append outcome resolution owner 到 Local，Store 仅保留 status/log/lock/flush/HA adapter
+  - [x] M06-03ba：迁移 CommitLog recovery completion owner 到 Local，Store 四条 recovery 路径统一为 completion side-effect adapter
+  - [x] M06-03bb：冻结 Local/Store compatibility ledger、feature/re-export/facade contract 并完成父项收口
 - [ ] PR-M06-04：机械迁移 Flush 与 Group Commit
 - [ ] PR-M06-05：迁移 CQ 与 Index
 - [ ] PR-M06-06：迁移 HA、Replication 与 Transfer
