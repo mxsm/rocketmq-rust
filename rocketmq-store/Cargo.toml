@@ -36,7 +36,7 @@ rust-version.workspace = true
 [features]
 default          = ["local_file_store", "fast-load"]
 local_file_store = []
-rocksdb_store    = ["dep:rocksdb"]
+rocksdb_store    = ["dep:rocketmq-store-rocksdb"]
 rocksdb-store    = ["rocksdb_store"]
 data_store       = ["local_file_store"]
 # io_uring support for advanced async I/O (Linux 5.1+)
@@ -61,10 +61,10 @@ rocketmq-remoting = { workspace = true }
 rocketmq-error    = { workspace = true }
 rocketmq-store-api = { workspace = true }
 rocketmq-store-local = { workspace = true }
+rocketmq-store-rocksdb = { workspace = true, optional = true }
 rocketmq-observability = { workspace = true }
 rocketmq-runtime  = { workspace = true }
 rocketmq-tieredstore = { version = "1.0.0", path = "../rocketmq-tieredstore", optional = true }
-rocksdb             = { workspace = true, optional = true }
 
 #tools
 dirs.workspace = true

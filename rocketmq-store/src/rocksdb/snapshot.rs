@@ -12,33 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bytes::Bytes;
-use rocketmq_error::RocketMQError;
-
-use crate::rocksdb::error::column_family_missing_error;
-use crate::rocksdb::error::RocksDbErrorKind;
-use crate::rocksdb::error::RocksDbResultExt;
-
-pub struct RocksDbSnapshot<'a> {
-    db: &'a ::rocksdb::DB,
-    snapshot: ::rocksdb::Snapshot<'a>,
-}
-
-impl<'a> RocksDbSnapshot<'a> {
-    pub(crate) fn new(db: &'a ::rocksdb::DB) -> Self {
-        Self {
-            db,
-            snapshot: db.snapshot(),
-        }
-    }
-
-    pub fn get_cf(&self, cf: &str, key: &[u8]) -> Result<Option<Bytes>, RocketMQError> {
-        let handle = self.db.cf_handle(cf).ok_or_else(|| column_family_missing_error(cf))?;
-        let mut read_options = ::rocksdb::ReadOptions::default();
-        read_options.set_snapshot(&self.snapshot);
-        self.db
-            .get_cf_opt(&handle, key, &read_options)
-            .map(|value| value.map(Bytes::from))
-            .map_rocksdb(RocksDbErrorKind::Snapshot)
-    }
-}
+pub use rocketmq_store_rocksdb::snapshot::RocksDbSnapshot;

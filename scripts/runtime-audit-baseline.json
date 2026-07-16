@@ -176,22 +176,22 @@
                                                                                       "migration_phase":  "PR-4-remoting-lifecycle"
                                                                                   },
                                                                                   {
-                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-store/src/rocksdb/runtime.rs|d53236a4ada899f5",
-                                                                                      "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-store-rocksdb/src/runtime.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq-store-rocksdb/src/runtime.rs",
                                                                                       "kind":  "current-runtime-adapter",
                                                                                       "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
                                                                                       "migration_phase":  "PR-7-store-controller-auth-blocking"
                                                                                   },
                                                                                   {
-                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-store/src/rocksdb/runtime.rs|d53236a4ada899f5",
-                                                                                      "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-store-rocksdb/src/runtime.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq-store-rocksdb/src/runtime.rs",
                                                                                       "kind":  "current-runtime-adapter",
                                                                                       "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
                                                                                       "migration_phase":  "PR-7-store-controller-auth-blocking"
                                                                                   },
                                                                                   {
-                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-store/src/rocksdb/runtime.rs|d53236a4ada899f5",
-                                                                                      "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-store-rocksdb/src/runtime.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq-store-rocksdb/src/runtime.rs",
                                                                                       "kind":  "current-runtime-adapter",
                                                                                       "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
                                                                                       "migration_phase":  "PR-7-store-controller-auth-blocking"
@@ -414,22 +414,22 @@
                                                                               "migration_phase":  "PR-4-remoting-lifecycle"
                                                                           },
                                                                           {
-                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-store/src/rocksdb/runtime.rs|469b27d8dc42470e",
-                                                                              "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                                      "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-store-rocksdb/src/runtime.rs|469b27d8dc42470e",
+                                                                                      "path":  "rocketmq-store-rocksdb/src/runtime.rs",
                                                                               "kind":  "task-group-root",
                                                                               "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
                                                                               "migration_phase":  "PR-7-store-controller-auth-blocking"
                                                                           },
                                                                           {
-                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-store/src/rocksdb/runtime.rs|d91f79cc4353b1ae",
-                                                                              "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                                      "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-store-rocksdb/src/runtime.rs|d91f79cc4353b1ae",
+                                                                                      "path":  "rocketmq-store-rocksdb/src/runtime.rs",
                                                                               "kind":  "task-group-root",
                                                                               "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
                                                                               "migration_phase":  "PR-7-store-controller-auth-blocking"
                                                                           },
                                                                           {
-                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-store/src/rocksdb/runtime.rs|6ec00bbb409fc751",
-                                                                              "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                                      "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-store-rocksdb/src/runtime.rs|6ec00bbb409fc751",
+                                                                                      "path":  "rocketmq-store-rocksdb/src/runtime.rs",
                                                                               "kind":  "task-group-root",
                                                                               "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
                                                                               "migration_phase":  "PR-7-store-controller-auth-blocking"

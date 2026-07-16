@@ -12,6 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use rocketmq_store_rocksdb::store::KeyValueStore;
-pub use rocketmq_store_rocksdb::store::RocksDbStore;
-pub use rocketmq_store_rocksdb::store::RocksDbStoreState;
+pub mod batch;
+pub mod checkpoint;
+pub mod codec;
+pub mod column_family;
+pub mod config;
+pub mod consume_queue;
+pub mod error;
+pub mod index;
+pub mod iterator;
+pub mod key;
+pub mod maintenance;
+pub mod message;
+pub mod options;
+#[doc(hidden)]
+pub mod runtime;
+pub mod snapshot;
+pub mod store;
+pub mod value;
+
+pub use config::RocksDbConfig;
+pub use error::RocksDbErrorKind;
+pub use error::RocksDbResultExt;
+pub use store::RocksDbStore;

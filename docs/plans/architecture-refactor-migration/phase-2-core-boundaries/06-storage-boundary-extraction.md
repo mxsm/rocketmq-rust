@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06/PR-M06-07/PR-M06-08 已完成，继续 PR-M06-09 |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03/PR-M06-04/PR-M06-05/PR-M06-06/PR-M06-07/PR-M06-08/PR-M06-09 已完成，继续 PR-M06-10 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -130,11 +130,11 @@
 
 ### PR-M06-09：创建 RocksDB Foundation
 
-- [ ] 入口：`[ARCH]` Rocks column family、key/value、snapshot和持久格式 golden 已冻结；Local 唯一 CommitLog 已稳定。
-- [ ] `[DEV]` 创建 `rocketmq-store-rocksdb`，`default = []`；先机械迁移 native foundation、CQ/Index、maintenance/runtime/snapshot，不接 message-store adapter。
-- [ ] `[TEST]` focused test：现有 `rocksdb_foundation_tests`、snapshot/reopen、column family和 default/local tree无 native RocksDB。
-- [ ] `[REV]` 检查 foundation 只依赖 store-api/local/model/runtime/error/observability，不依赖 store facade/tiered/Broker。
-- [ ] 回滚点：不启用新 Rocks crate 的 factory；Local/default 路径完全不受影响。
+- [x] 入口：`[ARCH]` Rocks column family、key/value、snapshot和持久格式 golden 已冻结；Local 唯一 CommitLog 已稳定。
+- [x] `[DEV]` 创建 `rocketmq-store-rocksdb`，`default = []`；先机械迁移 native foundation、CQ/Index、maintenance/runtime/snapshot，不接 message-store adapter。
+- [x] `[TEST]` focused test：现有 `rocksdb_foundation_tests`、snapshot/reopen、column family和 default/local tree无 native RocksDB。
+- [x] `[REV]` 检查 foundation 只依赖 store-api/local/model/runtime/error/observability，不依赖 store facade/tiered/Broker。
+- [x] 回滚点：不启用新 Rocks crate 的 factory；Local/default 路径完全不受影响。
 
 ### PR-M06-10：RocksDB MessageStore Adapter 与 Parity
 
@@ -2399,3 +2399,35 @@ python scripts/arc_mut_guard.py
   无需迁移，且不得回滚 M06-03～07 已完成 owner。
 - [x] `[INVENTORY]` PR-M06-08 父项关闭；82 个顶层工作包更新为 36 已完成、0 进行中、46 未开始，即
   46 个尚未完成。M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-09。
+
+## M06-09 RocksDB foundation evidence
+
+- [x] `[ARCH/SCOPE]` 冻结现有 `rocksdb_foundation_tests` 82 项、column family 名称、CQ/Index/Timer/Transaction
+  key/value bytes、snapshot/reopen、旧 Store 深路径、`rocksdb_store`/`rocksdb-store` feature 和 Local 唯一 CommitLog。
+  本包不迁 `RocksDBMessageStore`、Timer/Transaction dispatcher 或 backend factory，不修改消息日志与磁盘目录。
+- [x] `[DEV/CRATE]` 新增 root workspace package `rocketmq-store-rocksdb`，`default = []`；native `rocksdb`、options、
+  batch/store/error、CF/key/value/codec、snapshot/checkpoint/backup、message storage、CQ/Index kernel 与
+  maintenance/runtime 已由新 crate canonical 拥有。CQ group commit 从 837 行 owner 文件拆为独立子模块，新增 owner
+  文件均不超过 800 行。
+- [x] `[DEV/ADAPTER]` Store `rocksdb` 旧模块保持精确 re-export；config 只实现 `RocksDbConfigSource`，CQ/Index 只实现
+  backend-neutral dispatch source trait和保留 CommitLog dispatcher。`RocksDBMessageStore`、Timer/Transaction adapter
+  留在 Store 等待 PR-M06-10，没有把 `DispatchRequest`、`MessageStoreConfig`、Common/Broker 或第二 CommitLog 带入新 owner。
+- [x] `[FEATURE/TREE]` Store `rocksdb_store` 从直接 `dep:rocksdb` 改为 optional `dep:rocketmq-store-rocksdb`，旧 alias 不变。
+  Store default、Store no-default 和 Local normal tree 均无 `rocketmq-store-rocksdb`/`rocksdb`/`librocksdb-sys`；仅 Rocks
+  owner tree包含 native library。root workspace 为 29/32，尚缺 proxy-core/cluster/local 三个 planned package。
+- [x] `[COMPAT]` 旧 `rocketmq_store::rocksdb::*` 类型、常量、函数、config 构造方法和 Broker import 均保留；新 config/
+  CQ/Index source traits只读取既有 DTO 字段。独立
+  [`06-storage-rocksdb-compatibility-ledger.md`](06-storage-rocksdb-compatibility-ledger.md) 冻结 owner、format、feature、
+  retained adapter、删除条件和整体 revert 回滚点。
+- [x] `[TEST]` 新 owner no-default check、1 个 unit/2 个 native integration tests、source contract 4/4、legacy
+  foundation 82/82、Store semantics 5/5、Broker rocks 20/20 与 pop_consumer 4/4 通过，覆盖 config projection、CF、
+  key/value、snapshot、reopen 和消费路径。MSVC native standalone test PDB 超限通过仅作用于该 package test profile
+  的 `debug = 0` 解决；dev/release 与其他 package 不受影响。
+- [x] `[RUNTIME/ERROR]` Rocks runtime 的 3 个 current-runtime adapter 和 3 个 TaskGroup root 一对一迁移，baseline 只替换
+  path，指纹后缀/数量未扩大，enforcing audit 通过。typed-error guard 在候选分支和未修改 `origin/main` worktree 均复现
+  相同 Broker/MCP allowlist及两份缺失治理文档基线；本包没有新增 finding，因此诚实记录为 pre-existing failure，未计为通过。
+- [x] `[GOVERNANCE]` architecture dependency、enforcing runtime audit、ArcMut final guard、63 个 ArcMut 单测、24 fixtures
+  与 AGENTS routing 通过；Rocks owner manifest/source 禁止 Store/Tiered/Broker/Remoting/Common/rocketmq-rust、facade DTO
+  和第二 CommitLog。Rocks/Store/Broker strict Clippy、workspace fmt 与 workspace all-target/all-feature Clippy 均通过。
+- [x] `[INVENTORY]` PR-M06-09 父项关闭；82 个顶层工作包更新为 37 已完成、0 进行中、45 未开始，即
+  45 个尚未完成。M06 整体仍进行中且 Exit Checklist 保持未完成；下一工作包为 PR-M06-10。

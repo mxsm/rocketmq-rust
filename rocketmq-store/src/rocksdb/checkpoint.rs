@@ -12,25 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use rocketmq_error::RocketMQError;
-
-use crate::rocksdb::store::RocksDbStore;
-
-pub async fn create_checkpoint(store: Arc<RocksDbStore>, target_dir: PathBuf) -> Result<(), RocketMQError> {
-    store.create_checkpoint(target_dir).await
-}
-
-pub async fn create_backup(store: Arc<RocksDbStore>, backup_dir: PathBuf) -> Result<(), RocketMQError> {
-    store.create_backup(backup_dir).await
-}
-
-pub async fn restore_latest_backup(
-    backup_dir: PathBuf,
-    db_dir: PathBuf,
-    wal_dir: Option<PathBuf>,
-) -> Result<(), RocketMQError> {
-    RocksDbStore::restore_latest_backup(backup_dir, db_dir, wal_dir).await
-}
+pub use rocketmq_store_rocksdb::checkpoint::create_backup;
+pub use rocketmq_store_rocksdb::checkpoint::create_checkpoint;
+pub use rocketmq_store_rocksdb::checkpoint::restore_latest_backup;

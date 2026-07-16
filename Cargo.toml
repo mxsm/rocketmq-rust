@@ -34,6 +34,7 @@ members = [
   "rocketmq-security-api",
   "rocketmq-store-api",
   "rocketmq-store-local",
+  "rocketmq-store-rocksdb",
   "rocketmq-transport",
   "rocketmq-tieredstore",
   "rocketmq-store",
@@ -86,6 +87,7 @@ rocketmq-protocol    = { version = "1.0.0", path = "./rocketmq-protocol" }
 rocketmq-security-api = { version = "1.0.0", path = "./rocketmq-security-api" }
 rocketmq-store-api     = { version = "1.0.0", path = "./rocketmq-store-api", default-features = false }
 rocketmq-store-local   = { version = "1.0.0", path = "./rocketmq-store-local", default-features = false }
+rocketmq-store-rocksdb = { version = "1.0.0", path = "./rocketmq-store-rocksdb", default-features = false }
 rocketmq-transport    = { version = "1.0.0", path = "./rocketmq-transport", default-features = false }
 
 tokio        = { version = "1.52", features = ["full"] }
@@ -145,3 +147,8 @@ opentelemetry-semantic-conventions = { version = "0.32" }
 tracing-opentelemetry              = { version = "0.33", default-features = false }
 prometheus                         = { version = "0.14", default-features = false }
 rocksdb                            = { version = "0.24", default-features = false, features = ["multi-threaded-cf", "lz4", "zstd"] }
+
+# Native RocksDB debug symbols exceed MSVC's PDB limits when linking this crate's
+# standalone test binaries. Keep the override scoped to the new backend owner.
+[profile.test.package.rocketmq-store-rocksdb]
+debug = 0

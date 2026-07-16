@@ -12,25 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum RocksDbColumnFamily {
-    Default,
-    ConsumeQueueOffset,
-    Timer,
-    Transaction,
-    PopState,
-    Config(String),
-}
-
-impl RocksDbColumnFamily {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Default => "default",
-            Self::ConsumeQueueOffset => "offset",
-            Self::Timer => "timer",
-            Self::Transaction => "trans",
-            Self::PopState => "popState",
-            Self::Config(name) => name.as_str(),
-        }
-    }
-}
+pub use rocketmq_store_rocksdb::column_family::RocksDbColumnFamily;

@@ -4888,8 +4888,8 @@ dependencies = [
  "rocketmq-rust",
  "rocketmq-store-api",
  "rocketmq-store-local",
+ "rocketmq-store-rocksdb",
  "rocketmq-tieredstore",
- "rocksdb",
  "serde",
  "serde_json",
  "sysinfo",
@@ -4948,6 +4948,20 @@ dependencies = [
  "tokio-util",
  "tracing",
  "windows",
+]
+
+[[package]]
+name = "rocketmq-store-rocksdb"
+version = "1.0.0"
+dependencies = [
+ "bytes",
+ "rocketmq-error",
+ "rocketmq-observability",
+ "rocketmq-runtime",
+ "rocksdb",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
