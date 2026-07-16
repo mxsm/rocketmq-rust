@@ -20,7 +20,10 @@ use rocketmq_store_local::commit_log::append::AppendMessageStatus;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAborted;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendCompleted;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendFailure;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendResolution;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus;
 
 struct Segment {
     name: &'static str,
@@ -384,4 +387,113 @@ fn every_non_put_ok_retry_is_rejected_without_a_third_attempt() {
         }
         assert_eq!(2, attempts);
     }
+}
+
+#[test]
+fn completed_outcomes_resolve_to_continue_status_and_unlock_identity() {
+    let put_ok = CommitLogAppendOutcome::<(), &'static str>::Completed(CommitLogAppendCompleted::PutOk {
+        result: result(AppendMessageStatus::PutOk, 61),
+        rolled_segment: None,
+    });
+    assert!(matches!(
+        put_ok.resolve(),
+        CommitLogAppendResolution::Continue {
+            status: CommitLogAppendStatus::PutOk,
+            result: AppendMessageResult { wrote_offset: 61, .. },
+            unlock_segment: None,
+        }
+    ));
+
+    let retry_rejected =
+        CommitLogAppendOutcome::<&'static str, &'static str>::Completed(CommitLogAppendCompleted::RetryRejected {
+            result: result(AppendMessageStatus::UnknownError, 62),
+            rolled_segment: "old",
+        });
+    assert!(matches!(
+        retry_rejected.resolve(),
+        CommitLogAppendResolution::Continue {
+            status: CommitLogAppendStatus::UnknownError,
+            result: AppendMessageResult { wrote_offset: 62, .. },
+            unlock_segment: Some("old"),
+        }
+    ));
+}
+
+#[test]
+fn aborted_outcomes_resolve_every_return_status_and_owned_detail() {
+    let cases = [
+        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable),
+        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error: "initial-lock" }),
+        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialMessageIllegal {
+            result: result(AppendMessageStatus::MessageSizeExceeded, 71),
+        }),
+        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialUnknown {
+            result: result(AppendMessageStatus::UnknownError, 72),
+        }),
+        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable {
+            first_eof: result(AppendMessageStatus::EndOfFile, 73),
+            old: "old-unavailable",
+        }),
+        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledActiveLockFailed {
+            first_eof: result(AppendMessageStatus::EndOfFile, 74),
+            old: "old-lock",
+            error: "rolled-lock",
+        }),
+    ];
+
+    let [initial_unavailable, initial_lock, initial_illegal, initial_unknown, rolled_unavailable, rolled_lock] =
+        cases.map(CommitLogAppendOutcome::resolve);
+    assert!(matches!(
+        initial_unavailable,
+        CommitLogAppendResolution::Return {
+            status: CommitLogAppendStatus::CreateSegmentFailed,
+            append_result: None,
+            abandoned_segment: None,
+            failure: CommitLogAppendFailure::InitialSegmentUnavailable,
+        }
+    ));
+    assert!(matches!(
+        initial_lock,
+        CommitLogAppendResolution::Return {
+            status: CommitLogAppendStatus::CreateSegmentFailed,
+            failure: CommitLogAppendFailure::InitialActiveLockFailed { error: "initial-lock" },
+            ..
+        }
+    ));
+    assert!(matches!(
+        initial_illegal,
+        CommitLogAppendResolution::Return {
+            status: CommitLogAppendStatus::MessageIllegal,
+            append_result: Some(AppendMessageResult { wrote_offset: 71, .. }),
+            failure: CommitLogAppendFailure::InitialMessageIllegal,
+            ..
+        }
+    ));
+    assert!(matches!(
+        initial_unknown,
+        CommitLogAppendResolution::Return {
+            status: CommitLogAppendStatus::UnknownError,
+            append_result: Some(AppendMessageResult { wrote_offset: 72, .. }),
+            failure: CommitLogAppendFailure::InitialUnknown,
+            ..
+        }
+    ));
+    assert!(matches!(
+        rolled_unavailable,
+        CommitLogAppendResolution::Return {
+            status: CommitLogAppendStatus::CreateSegmentFailed,
+            append_result: Some(AppendMessageResult { wrote_offset: 73, .. }),
+            abandoned_segment: Some("old-unavailable"),
+            failure: CommitLogAppendFailure::RolledSegmentUnavailable,
+        }
+    ));
+    assert!(matches!(
+        rolled_lock,
+        CommitLogAppendResolution::Return {
+            status: CommitLogAppendStatus::CreateSegmentFailed,
+            append_result: Some(AppendMessageResult { wrote_offset: 74, .. }),
+            abandoned_segment: Some("old-lock"),
+            failure: CommitLogAppendFailure::RolledActiveLockFailed { error: "rolled-lock" },
+        }
+    ));
 }

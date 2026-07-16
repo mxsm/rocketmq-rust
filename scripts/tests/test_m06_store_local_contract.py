@@ -11998,7 +11998,15 @@ def commit_log_append_attempt_contract_violations(
 
     if len(re.findall(r"\bpub\s+mod\s+append_attempt\s*;", module)) != 1:
         violations.append("commit_log root must expose one append_attempt module")
-    for item in ("CommitLogAppendAttempt", "CommitLogAppendOutcome", "CommitLogAppendCompleted", "CommitLogAppendAborted"):
+    for item in (
+        "CommitLogAppendAttempt",
+        "CommitLogAppendOutcome",
+        "CommitLogAppendCompleted",
+        "CommitLogAppendAborted",
+        "CommitLogAppendStatus",
+        "CommitLogAppendFailure",
+        "CommitLogAppendResolution",
+    ):
         if len(re.findall(rf"\bpub\s+(?:struct|enum)\s+{item}\b", local)) != 1:
             violations.append(f"Local append-attempt owner changed: {item}")
     expected_shapes = {
@@ -12016,6 +12024,20 @@ def commit_log_append_attempt_contract_violations(
         "CommitLogAppendOutcome": (
             "Completed(CommitLogAppendCompleted<S>),"
             "Aborted(CommitLogAppendAborted<S,E>),"
+        ),
+        "CommitLogAppendStatus": (
+            "PutOk,UnknownError,CreateSegmentFailed,MessageIllegal,"
+        ),
+        "CommitLogAppendFailure": (
+            "InitialSegmentUnavailable,InitialActiveLockFailed{error:E},"
+            "InitialMessageIllegal,InitialUnknown,RolledSegmentUnavailable,"
+            "RolledActiveLockFailed{error:E},"
+        ),
+        "CommitLogAppendResolution": (
+            "Continue{status:CommitLogAppendStatus,result:AppendMessageResult,"
+            "unlock_segment:Option<S>,},Return{status:CommitLogAppendStatus,"
+            "append_result:Option<AppendMessageResult>,abandoned_segment:Option<S>,"
+            "failure:CommitLogAppendFailure<E>,},"
         ),
     }
     for item, expected in expected_shapes.items():
@@ -12084,6 +12106,25 @@ def commit_log_append_attempt_contract_violations(
         or run_body.count("lock_active(") != 2
     ):
         violations.append("Local append-attempt bounded acquire/append count changed")
+    resolve_body = compact_rust(named_function_body(local, "resolve") or "")
+    expected_resolution_fragments = {
+        "CommitLogAppendResolution::Continue{": 2,
+        "CommitLogAppendResolution::Return{": 6,
+        "status:CommitLogAppendStatus::PutOk": 1,
+        "status:CommitLogAppendStatus::UnknownError": 2,
+        "status:CommitLogAppendStatus::CreateSegmentFailed": 4,
+        "status:CommitLogAppendStatus::MessageIllegal": 1,
+        "unlock_segment:rolled_segment": 1,
+        "unlock_segment:Some(rolled_segment)": 1,
+        "append_result:Some(first_eof)": 2,
+        "abandoned_segment:Some(old)": 2,
+        "failure:CommitLogAppendFailure::": 6,
+    }
+    for fragment, count in expected_resolution_fragments.items():
+        if resolve_body.count(fragment) != count:
+            violations.append(f"Local append resolution mapping changed: {fragment}")
+    if ".clone(" in resolve_body or "panic!(" in resolve_body or "unwrap(" in resolve_body:
+        violations.append("Local append resolution copied ownership or introduced panic")
     full_acquire = run_body.find("matchacquire(){Some(acquired)=>{drop(segment);")
     first_drop = run_body.find("drop(segment);")
     first_append = run_body.find("letfirst=append(&segment);")
@@ -12105,10 +12146,10 @@ def commit_log_append_attempt_contract_violations(
         if kind == "use" and "commit_log::append_attempt" in body
     ]
     expected_imports = {
-        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAborted",
         "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt",
-        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendCompleted",
-        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome",
+        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendFailure",
+        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendResolution",
+        "rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus",
     }
     if set(imports) != expected_imports or len(imports) != len(expected_imports):
         violations.append("Store append-attempt imports changed")
@@ -12166,71 +12207,57 @@ def commit_log_append_attempt_contract_violations(
             violations.append(f"Store {function_name} append closure changed")
         if append_attempt_call(body) != expected_adapters[function_name]:
             violations.append(f"Store {function_name} exact closure adapter changed")
-        for outcome in (
-            "CommitLogAppendCompleted::PutOk",
-            "CommitLogAppendCompleted::RetryRejected",
-            "CommitLogAppendAborted::InitialSegmentUnavailable",
-            "CommitLogAppendAborted::InitialActiveLockFailed",
-            "CommitLogAppendAborted::InitialMessageIllegal",
-            "CommitLogAppendAborted::InitialUnknown",
-            "CommitLogAppendAborted::RolledSegmentUnavailable",
-            "CommitLogAppendAborted::RolledActiveLockFailed",
+        if body.count("append_attempt.resolve()") != 1:
+            violations.append(f"Store {function_name} must delegate outcome resolution to Local")
+        if body.count("CommitLogAppendResolution::Continue") != 1 or body.count(
+            "CommitLogAppendResolution::Return"
+        ) != 1:
+            violations.append(f"Store {function_name} resolution adapter shape changed")
+        for failure in (
+            "InitialSegmentUnavailable",
+            "InitialActiveLockFailed",
+            "InitialMessageIllegal",
+            "InitialUnknown",
+            "RolledSegmentUnavailable",
+            "RolledActiveLockFailed",
         ):
-            if body.count(outcome) != 1:
-                violations.append(f"Store {function_name} outcome mapping changed: {outcome}")
-        outcome_statuses = {
-            "CommitLogAppendCompleted::PutOk": "PutOk",
-            "CommitLogAppendCompleted::RetryRejected": "UnknownError",
-            "CommitLogAppendAborted::InitialSegmentUnavailable": "CreateMappedFileFailed",
-            "CommitLogAppendAborted::InitialActiveLockFailed": "CreateMappedFileFailed",
-            "CommitLogAppendAborted::InitialMessageIllegal": "MessageIllegal",
-            "CommitLogAppendAborted::InitialUnknown": "UnknownError",
-            "CommitLogAppendAborted::RolledSegmentUnavailable": "CreateMappedFileFailed",
-            "CommitLogAppendAborted::RolledActiveLockFailed": "CreateMappedFileFailed",
-        }
-        ordered_outcomes = tuple(outcome_statuses)
-        for outcome_index, (outcome, expected_status) in enumerate(outcome_statuses.items()):
-            arm_start = body.find(outcome)
-            later_starts = [
-                body.find(later, arm_start + 1)
-                for later in ordered_outcomes[outcome_index + 1:]
-                if body.find(later, arm_start + 1) != -1
-            ]
-            arm_end = min(later_starts) if later_starts else body.find("};letelapsed_time_in_lock", arm_start)
-            arm = body[arm_start:arm_end]
-            statuses = re.findall(r"PutMessageStatus::([A-Za-z0-9_]+)", arm)
-            if statuses != [expected_status]:
-                violations.append(
-                    f"Store {function_name} outcome status mapping changed: "
-                    f"{outcome} -> {statuses}"
-                )
+            if body.count(f"CommitLogAppendFailure::{failure}") != 1:
+                violations.append(f"Store {function_name} failure observation changed: {failure}")
         if (
-            body.count("drop(old);") != 2
-            or "old:_," in body
-            or "matchresult.status" in body
-            or "letmutmapped_file=" in body
+            body.count("Self::put_message_status(status)") != 2
+            or body.count("drop(abandoned_segment);") != 1
+            or "CommitLogAppendCompleted::" in body
+            or "CommitLogAppendAborted::" in body
+            or "CommitLogAppendOutcome::" in body
         ):
-            violations.append(f"Store {function_name} rolled-segment lifecycle changed")
-        if body.count("PutMessageStatus::UnknownError,Some(result)") != 2:
-            violations.append(f"Store {function_name} unknown-result mapping changed")
-        rolled_outcomes = (
-            "CommitLogAppendAborted::RolledSegmentUnavailable",
-            "CommitLogAppendAborted::RolledActiveLockFailed",
-        )
-        for outcome_index, outcome in enumerate(rolled_outcomes):
-            arm_start = body.find(outcome)
-            arm_end = body.find(
-                rolled_outcomes[outcome_index + 1],
-                arm_start + 1,
-            ) if outcome_index + 1 < len(rolled_outcomes) else body.find("};letelapsed_time_in_lock", arm_start)
-            arm = body[arm_start:arm_end]
-            release = arm.find("self.release_put_message_lock(")
-            topic_drop = arm.find("drop(_topic_queue_guard);")
-            log = arm.find("error!(")
-            old_drop = arm.find("drop(old);")
-            result_return = arm.find("returnPutMessageResult::")
-            if not (-1 < release < topic_drop < log < old_drop < result_return):
-                violations.append(f"Store {function_name} rolled abort order changed: {outcome}")
+            violations.append(f"Store {function_name} retained append outcome ownership")
+        return_start = body.find("CommitLogAppendResolution::Return")
+        return_end = body.find("};letelapsed_time_in_lock", return_start)
+        return_arm = body[return_start:return_end]
+        release = return_arm.find("self.release_put_message_lock(")
+        topic_drop = return_arm.find("drop(_topic_queue_guard);")
+        failure_match = return_arm.find("matchfailure{")
+        segment_drop = return_arm.find("drop(abandoned_segment);")
+        result_return = return_arm.find("returnPutMessageResult::new_append_result(")
+        if not (-1 < release < topic_drop < failure_match < segment_drop < result_return):
+            violations.append(f"Store {function_name} terminal cleanup order changed")
+        raw_body = named_raw_function_body(store_source, function_name) or ""
+        for message in (
+            "create mapped file error, topic: {}  clientAddr: {}",
+            "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+            "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+        ):
+            if raw_body.count(message) != 1:
+                violations.append(f"Store {function_name} append failure logging changed: {message}")
+
+    put_status_body = compact_rust(named_function_body(store, "put_message_status") or "")
+    if put_status_body != (
+        "matchstatus{CommitLogAppendStatus::PutOk=>PutMessageStatus::PutOk,"
+        "CommitLogAppendStatus::UnknownError=>PutMessageStatus::UnknownError,"
+        "CommitLogAppendStatus::CreateSegmentFailed=>PutMessageStatus::CreateMappedFileFailed,"
+        "CommitLogAppendStatus::MessageIllegal=>PutMessageStatus::MessageIllegal,}"
+    ):
+        violations.append("Store append status adapter changed")
 
     default_wrapper_records = inherent_method_records(
         store,
@@ -12279,6 +12306,8 @@ def commit_log_append_attempt_contract_violations(
         "first_eof_rolls_once_and_retry_put_ok_returns_old_segment",
         "rolled_abort_outcomes_retain_first_eof_and_old_segment",
         "every_non_put_ok_retry_is_rejected_without_a_third_attempt",
+        "completed_outcomes_resolve_to_continue_status_and_unlock_identity",
+        "aborted_outcomes_resolve_every_return_status_and_owned_detail",
     )
     for test_name in required_local_tests:
         if named_function_body(local_test_source, test_name) is None:
@@ -15633,6 +15662,12 @@ class StoreLocalContractTests(unittest.TestCase):
             local.replace("pub fn run", "#[cfg(any())]\n    pub fn run", 1),
             local.replace("RetryRejected", "RetryAccepted", 1),
             local.replace(
+                "status: CommitLogAppendStatus::PutOk,",
+                "status: CommitLogAppendStatus::UnknownError,",
+                1,
+            ),
+            local.replace("abandoned_segment: Some(old),", "abandoned_segment: None,", 1),
+            local.replace(
                 "did not complete successfully, including terminal append rejections",
                 "aborted before it could produce a final append result",
                 1,
@@ -15649,25 +15684,15 @@ class StoreLocalContractTests(unittest.TestCase):
         self.assertNotEqual(module, module_mutation)
         self.assertNotEqual([], violations(candidate_module=module_mutation))
 
-        rolled_marker = "CommitLogAppendAborted::RolledSegmentUnavailable"
-        rolled_start = store.find(rolled_marker)
-        rolled_log = store.find("error!(", rolled_start)
-        rolled_drop = store.find("drop(old);", rolled_log)
-        moved_drop_store = store[:rolled_log] + "drop(old);\n                " + store[rolled_log:rolled_drop] + store[rolled_drop + len("drop(old);\n"):]
-        batch_start = store.find("pub async fn put_messages")
-        illegal_marker = store.find("CommitLogAppendAborted::InitialMessageIllegal", batch_start)
-        illegal_status = store.find("PutMessageStatus::MessageIllegal", illegal_marker)
-        unknown_marker = store.find("CommitLogAppendAborted::InitialUnknown", illegal_status)
-        unknown_status = store.find("PutMessageStatus::UnknownError", unknown_marker)
-        swapped_batch_statuses = (
-            store[:unknown_status]
-            + "PutMessageStatus::MessageIllegal"
-            + store[unknown_status + len("PutMessageStatus::UnknownError"):]
-        )
-        swapped_batch_statuses = (
-            swapped_batch_statuses[:illegal_status]
-            + "PutMessageStatus::UnknownError"
-            + swapped_batch_statuses[illegal_status + len("PutMessageStatus::MessageIllegal"):]
+        return_start = store.find("CommitLogAppendResolution::Return")
+        failure_match = store.find("match failure", return_start)
+        segment_drop = store.find("drop(abandoned_segment);", failure_match)
+        segment_drop_end = segment_drop + len("drop(abandoned_segment);")
+        moved_drop_store = (
+            store[:failure_match]
+            + "drop(abandoned_segment);\n                "
+            + store[failure_match:segment_drop]
+            + store[segment_drop_end:]
         )
         store_mutations = [
             store.replace(
@@ -15688,10 +15713,19 @@ class StoreLocalContractTests(unittest.TestCase):
                 1,
             ),
             store.replace("mapped_file.append_messages(", "mapped_file.append_message(", 1),
-            store.replace("PutMessageStatus::UnknownError, Some(result)", "PutMessageStatus::PutOk, Some(result)", 1),
-            swapped_batch_statuses,
-            store.replace("drop(old);", "", 1),
+            store.replace("append_attempt.resolve()", "append_attempt", 1),
+            store.replace(
+                "CommitLogAppendStatus::UnknownError => PutMessageStatus::UnknownError",
+                "CommitLogAppendStatus::UnknownError => PutMessageStatus::PutOk",
+                1,
+            ),
+            store.replace("drop(abandoned_segment);", "", 1),
             moved_drop_store,
+            store.replace(
+                "CommitLogAppendFailure::RolledSegmentUnavailable",
+                "CommitLogAppendFailure::InitialSegmentUnavailable",
+                1,
+            ),
             store.replace(
                 "self.runtime_state.active_memory_lock_parts();",
                 "self.runtime_state.active_memory_lock_parts_disabled();",
@@ -15725,6 +15759,14 @@ class StoreLocalContractTests(unittest.TestCase):
             (
                 "local",
                 local_tests.replace("struct Segment {", "#[derive(Clone)]\nstruct Segment {", 1),
+            ),
+            (
+                "local",
+                local_tests.replace(
+                    "fn aborted_outcomes_resolve_every_return_status_and_owned_detail",
+                    "fn aborted_outcome_resolution_regression_removed",
+                    1,
+                ),
             ),
             (
                 "store",

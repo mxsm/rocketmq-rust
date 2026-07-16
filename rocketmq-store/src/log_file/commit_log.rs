@@ -108,10 +108,10 @@ use crate::utils::ffi::MADV_RANDOM;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObservation;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentOutcome;
-use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAborted;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt;
-use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendCompleted;
-use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendFailure;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendResolution;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus;
 use rocketmq_store_local::commit_log::load_orchestration::drive_commit_log_load;
 use rocketmq_store_local::commit_log::load_orchestration::safe_load_requested;
 use rocketmq_store_local::commit_log::load_orchestration::CommitLogLoadObservation;
@@ -815,6 +815,15 @@ impl CommitLog {
         Ok(need_ack_nums)
     }
 
+    fn put_message_status(status: CommitLogAppendStatus) -> PutMessageStatus {
+        match status {
+            CommitLogAppendStatus::PutOk => PutMessageStatus::PutOk,
+            CommitLogAppendStatus::UnknownError => PutMessageStatus::UnknownError,
+            CommitLogAppendStatus::CreateSegmentFailed => PutMessageStatus::CreateMappedFileFailed,
+            CommitLogAppendStatus::MessageIllegal => PutMessageStatus::MessageIllegal,
+        }
+    }
+
     #[tracing::instrument(
         level = "debug",
         name = "RocketMQ STORE APPEND",
@@ -929,72 +938,52 @@ impl CommitLog {
                 },
             )
         };
-        let (put_message_result, unlock_mapped_file) = match append_attempt {
-            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::PutOk { result, rolled_segment }) => (
-                PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result)),
-                rolled_segment,
+        let (put_message_result, unlock_mapped_file) = match append_attempt.resolve() {
+            CommitLogAppendResolution::Continue {
+                status,
+                result,
+                unlock_segment,
+            } => (
+                PutMessageResult::new_append_result(Self::put_message_status(status), Some(result)),
+                unlock_segment,
             ),
-            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::RetryRejected { result, rolled_segment }) => (
-                PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result)),
-                Some(rolled_segment),
-            ),
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable) => {
+            CommitLogAppendResolution::Return {
+                status,
+                append_result,
+                abandoned_segment,
+                failure,
+            } => {
                 self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
-                error!(
-                    "create mapped file error, topic: {}  clientAddr: {}",
-                    msg_batch.message_ext_broker_inner.topic(),
-                    msg_batch.message_ext_broker_inner.born_host()
-                );
-                return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-            }
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error }) => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                error!(
-                    "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                    msg_batch.message_ext_broker_inner.topic(),
-                    msg_batch.message_ext_broker_inner.born_host(),
-                    error
-                );
-                return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-            }
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialMessageIllegal { result }) => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
-            }
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialUnknown { result }) => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
-            }
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable { first_eof, old }) => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                error!(
-                    "create mapped file error, topic: {}  clientAddr: {}",
-                    msg_batch.message_ext_broker_inner.topic(),
-                    msg_batch.message_ext_broker_inner.born_host()
-                );
-                drop(old);
-                return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(first_eof));
-            }
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledActiveLockFailed {
-                first_eof,
-                old,
-                error,
-            }) => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                error!(
-                    "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                    msg_batch.message_ext_broker_inner.topic(),
-                    msg_batch.message_ext_broker_inner.born_host(),
-                    error
-                );
-                drop(old);
-                return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(first_eof));
+                match failure {
+                    CommitLogAppendFailure::InitialSegmentUnavailable
+                    | CommitLogAppendFailure::RolledSegmentUnavailable => {
+                        error!(
+                            "create mapped file error, topic: {}  clientAddr: {}",
+                            msg_batch.message_ext_broker_inner.topic(),
+                            msg_batch.message_ext_broker_inner.born_host()
+                        );
+                    }
+                    CommitLogAppendFailure::InitialActiveLockFailed { error } => {
+                        error!(
+                            "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                            msg_batch.message_ext_broker_inner.topic(),
+                            msg_batch.message_ext_broker_inner.born_host(),
+                            error
+                        );
+                    }
+                    CommitLogAppendFailure::RolledActiveLockFailed { error } => {
+                        error!(
+                            "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                            msg_batch.message_ext_broker_inner.topic(),
+                            msg_batch.message_ext_broker_inner.born_host(),
+                            error
+                        );
+                    }
+                    CommitLogAppendFailure::InitialMessageIllegal | CommitLogAppendFailure::InitialUnknown => {}
+                }
+                drop(abandoned_segment);
+                return PutMessageResult::new_append_result(Self::put_message_status(status), append_result);
             }
         };
         let elapsed_time_in_lock = self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
@@ -1161,72 +1150,52 @@ impl CommitLog {
                 |mapped_file| mapped_file.append_message(&mut msg, append_message_callback, &put_message_context),
             )
         };
-        let (put_message_result, unlock_mapped_file) = match append_attempt {
-            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::PutOk { result, rolled_segment }) => (
-                PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result)),
-                rolled_segment,
+        let (put_message_result, unlock_mapped_file) = match append_attempt.resolve() {
+            CommitLogAppendResolution::Continue {
+                status,
+                result,
+                unlock_segment,
+            } => (
+                PutMessageResult::new_append_result(Self::put_message_status(status), Some(result)),
+                unlock_segment,
             ),
-            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::RetryRejected { result, rolled_segment }) => (
-                PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result)),
-                Some(rolled_segment),
-            ),
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable) => {
+            CommitLogAppendResolution::Return {
+                status,
+                append_result,
+                abandoned_segment,
+                failure,
+            } => {
                 self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
                 drop(_topic_queue_guard);
-                error!(
-                    "create mapped file error, topic: {}  clientAddr: {}",
-                    msg.topic(),
-                    msg.born_host()
-                );
-                return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-            }
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error }) => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                error!(
-                    "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                    msg.topic(),
-                    msg.born_host(),
-                    error
-                );
-                return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
-            }
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialMessageIllegal { result }) => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
-            }
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialUnknown { result }) => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
-            }
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable { first_eof, old }) => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                error!(
-                    "create mapped file error, topic: {}  clientAddr: {}",
-                    msg.topic(),
-                    msg.born_host()
-                );
-                drop(old);
-                return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(first_eof));
-            }
-            CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledActiveLockFailed {
-                first_eof,
-                old,
-                error,
-            }) => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                error!(
-                    "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                    msg.topic(),
-                    msg.born_host(),
-                    error
-                );
-                drop(old);
-                return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(first_eof));
+                match failure {
+                    CommitLogAppendFailure::InitialSegmentUnavailable
+                    | CommitLogAppendFailure::RolledSegmentUnavailable => {
+                        error!(
+                            "create mapped file error, topic: {}  clientAddr: {}",
+                            msg.topic(),
+                            msg.born_host()
+                        );
+                    }
+                    CommitLogAppendFailure::InitialActiveLockFailed { error } => {
+                        error!(
+                            "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                            msg.topic(),
+                            msg.born_host(),
+                            error
+                        );
+                    }
+                    CommitLogAppendFailure::RolledActiveLockFailed { error } => {
+                        error!(
+                            "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
+                            msg.topic(),
+                            msg.born_host(),
+                            error
+                        );
+                    }
+                    CommitLogAppendFailure::InitialMessageIllegal | CommitLogAppendFailure::InitialUnknown => {}
+                }
+                drop(abandoned_segment);
+                return PutMessageResult::new_append_result(Self::put_message_status(status), append_result);
             }
         };
         let elapsed_time_in_lock = self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);

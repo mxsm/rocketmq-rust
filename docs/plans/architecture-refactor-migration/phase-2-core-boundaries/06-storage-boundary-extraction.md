@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au/M06-03av/M06-03aw/M06-03ax/M06-03ay 已完成，继续 M06-03 |
+| 状态 | 进行中；M06-01/M06-02/M06-03a/M06-03b/M06-03c/M06-03d/M06-03e/M06-03f/M06-03g/M06-03h/M06-03i/M06-03j/M06-03k/M06-03l/M06-03m/M06-03n/M06-03o/M06-03p/M06-03q/M06-03r/M06-03s/M06-03t/M06-03u/M06-03v/M06-03w/M06-03x/M06-03y/M06-03z/M06-03aa/M06-03ab/M06-03ac/M06-03ad/M06-03ae/M06-03af0/M06-03af/M06-03ag/M06-03ah/M06-03ai/M06-03aj/M06-03ak/M06-03al/M06-03am/M06-03an/M06-03ao/M06-03ap/M06-03aq/M06-03ar/M06-03as/M06-03at/M06-03au/M06-03av/M06-03aw/M06-03ax/M06-03ay/M06-03az 已完成，继续 M06-03 |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -1981,3 +1981,24 @@ python scripts/arc_mut_guard.py
 - [x] `[INVENTORY/SCOPE]` 本切片关闭 CommitLog 根结构 owner；MappedFileQueue 本阶段范围也已完成。PR-M06-03 仅剩 append/recovery
   composition method owner 与 Store facade 最终收口，flush/group-commit、CQ/Index、HA、Timer/POP 仍分别保留给 M06-04..07。
   顶层统计不变：30 已完成、1 进行中、51 未开始，即 52 个尚未完成。
+
+## M06-03az CommitLog append outcome resolution owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local `append_attempt` 新增四值 `CommitLogAppendStatus`、六值 `CommitLogAppendFailure` 与
+  `CommitLogAppendResolution<S,E>`，并由 `CommitLogAppendOutcome::resolve` 穷尽拥有 2 个 completed 与 6 个 aborted outcome
+  到 continue/return、append result、unlock/abandoned segment 及 error detail 的唯一映射。
+- [x] `[DEV/ADAPTER]` Store batch/single 两条路径删除 8-arm outcome/status/resource mapping，统一在 Local attempt 后调用一次
+  `resolve()`；Store 只把四个中立 status 投影到 legacy `PutMessageStatus`，按 failure detail 保留原日志，按 Local 决策释放 request lock、
+  topic lock 和 abandoned segment，并继续既有 offset/stats/flush/HA 后处理。
+- [x] `[COMPAT]` PutOk、retry rejected、initial unavailable/lock/message-illegal/unknown、rolled unavailable/lock 的 legacy status、
+  append-result presence、EOF old-segment lifetime和日志顺序均不变；Local resolution 不 clone segment/result/error，不增加第三次 append，
+  Store 仍在 failure 日志之后 drop abandoned segment，并在任何 return 前释放两把 request lock。
+- [x] `[TEST]` Local append-attempt integration 10/10、Local all-feature crate 单元 104/104 及全部 integration/doctest、Store
+  single/batch EOF encoded-buffer ownership focused 2/2 与 Store lib 537/537 通过；新增 completed/aborted 穷尽 resolution 回归。
+- [x] `[CONTRACT]` append-attempt contract 扩展为冻结三个 resolution 类型、8-arm mapping、status/result/segment/error 所有权、
+  Store exact imports、一次 resolve、四值 legacy status adapter、failure logging/cleanup 顺序和两个新增回归；定向 baseline + mutation
+  2/2 与完整 M06 contract 158/158 通过（758.101s）。Local/Store all-target/all-feature strict Clippy、workspace fmt、
+  architecture dependency guard、ArcMut guard、AGENTS routing、enforcing runtime audit 与 diff check 均通过。
+- [x] `[INVENTORY/SCOPE]` append attempt/roll/retry/terminal resolution composition 已由 Local 拥有；Store 留存 message admission/encode、
+  lock acquisition、legacy result facade 与 M06-04/M06-06 的 flush/HA port。PR-M06-03 继续收口 recovery completion owner 与最终 facade；
+  顶层统计保持 30 已完成、1 进行中、51 未开始，即 52 个尚未完成。

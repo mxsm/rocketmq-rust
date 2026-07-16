@@ -57,6 +57,120 @@ pub enum CommitLogAppendOutcome<S, E> {
     Aborted(CommitLogAppendAborted<S, E>),
 }
 
+/// Store-neutral status selected after resolving a bounded append attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitLogAppendStatus {
+    /// The append completed successfully.
+    PutOk,
+    /// The append result must be reported as an unknown error.
+    UnknownError,
+    /// A required mapped segment could not be created or prepared.
+    CreateSegmentFailed,
+    /// The initial append rejected the encoded message.
+    MessageIllegal,
+}
+
+/// Terminal failure details retained for Store logging and resource cleanup.
+pub enum CommitLogAppendFailure<E> {
+    /// No initial segment was available.
+    InitialSegmentUnavailable,
+    /// Preparing the initial segment failed.
+    InitialActiveLockFailed { error: E },
+    /// The initial append rejected the message.
+    InitialMessageIllegal,
+    /// The initial append returned an unknown status.
+    InitialUnknown,
+    /// No replacement segment was available after EOF.
+    RolledSegmentUnavailable,
+    /// Preparing the replacement segment failed.
+    RolledActiveLockFailed { error: E },
+}
+
+/// Fully resolved append control flow returned to the Store facade.
+pub enum CommitLogAppendResolution<S, E> {
+    /// Continue append post-processing with the mapped status and result.
+    Continue {
+        status: CommitLogAppendStatus,
+        result: AppendMessageResult,
+        /// Old segment to unlock after a successful EOF roll.
+        unlock_segment: Option<S>,
+    },
+    /// Release request locks and return immediately.
+    Return {
+        status: CommitLogAppendStatus,
+        append_result: Option<AppendMessageResult>,
+        /// Old segment retained until the Store adapter records the failure.
+        abandoned_segment: Option<S>,
+        failure: CommitLogAppendFailure<E>,
+    },
+}
+
+impl<S, E> CommitLogAppendOutcome<S, E> {
+    /// Resolves every low-level append outcome into one Store-neutral terminal decision.
+    pub fn resolve(self) -> CommitLogAppendResolution<S, E> {
+        match self {
+            Self::Completed(CommitLogAppendCompleted::PutOk { result, rolled_segment }) => {
+                CommitLogAppendResolution::Continue {
+                    status: CommitLogAppendStatus::PutOk,
+                    result,
+                    unlock_segment: rolled_segment,
+                }
+            }
+            Self::Completed(CommitLogAppendCompleted::RetryRejected { result, rolled_segment }) => {
+                CommitLogAppendResolution::Continue {
+                    status: CommitLogAppendStatus::UnknownError,
+                    result,
+                    unlock_segment: Some(rolled_segment),
+                }
+            }
+            Self::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable) => CommitLogAppendResolution::Return {
+                status: CommitLogAppendStatus::CreateSegmentFailed,
+                append_result: None,
+                abandoned_segment: None,
+                failure: CommitLogAppendFailure::InitialSegmentUnavailable,
+            },
+            Self::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error }) => {
+                CommitLogAppendResolution::Return {
+                    status: CommitLogAppendStatus::CreateSegmentFailed,
+                    append_result: None,
+                    abandoned_segment: None,
+                    failure: CommitLogAppendFailure::InitialActiveLockFailed { error },
+                }
+            }
+            Self::Aborted(CommitLogAppendAborted::InitialMessageIllegal { result }) => {
+                CommitLogAppendResolution::Return {
+                    status: CommitLogAppendStatus::MessageIllegal,
+                    append_result: Some(result),
+                    abandoned_segment: None,
+                    failure: CommitLogAppendFailure::InitialMessageIllegal,
+                }
+            }
+            Self::Aborted(CommitLogAppendAborted::InitialUnknown { result }) => CommitLogAppendResolution::Return {
+                status: CommitLogAppendStatus::UnknownError,
+                append_result: Some(result),
+                abandoned_segment: None,
+                failure: CommitLogAppendFailure::InitialUnknown,
+            },
+            Self::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable { first_eof, old }) => {
+                CommitLogAppendResolution::Return {
+                    status: CommitLogAppendStatus::CreateSegmentFailed,
+                    append_result: Some(first_eof),
+                    abandoned_segment: Some(old),
+                    failure: CommitLogAppendFailure::RolledSegmentUnavailable,
+                }
+            }
+            Self::Aborted(CommitLogAppendAborted::RolledActiveLockFailed { first_eof, old, error }) => {
+                CommitLogAppendResolution::Return {
+                    status: CommitLogAppendStatus::CreateSegmentFailed,
+                    append_result: Some(first_eof),
+                    abandoned_segment: Some(old),
+                    failure: CommitLogAppendFailure::RolledActiveLockFailed { error },
+                }
+            }
+        }
+    }
+}
+
 /// Runs the pure, bounded control flow around a CommitLog append operation.
 pub struct CommitLogAppendAttempt;
 
