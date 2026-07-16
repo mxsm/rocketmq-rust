@@ -12,13 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use rocketmq_store_local::flush::group_commit::complete_group_commit_batch;
 use rocketmq_store_local::flush::group_commit::complete_group_commit_batch_error;
+use rocketmq_store_local::flush::group_commit::run_group_commit_worker;
 use rocketmq_store_local::flush::group_commit::GroupCommitRequest;
 use rocketmq_store_local::flush::group_commit::GroupCommitStatus;
+use rocketmq_store_local::flush::group_commit::GroupCommitWorkerConfig;
+use rocketmq_store_local::flush::group_commit::GroupCommitWorkerPorts;
 use rocketmq_store_local::flush::group_commit::SyncFlushStats;
+use rocketmq_store_local::flush::FlushProgress;
+use tokio::sync::mpsc;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn batch_completion_uses_final_durable_watermark_for_every_waiter() {
@@ -59,4 +69,118 @@ fn expiration_preserves_zero_timeout_contract() {
     let (request, _response) = GroupCommitRequest::<()>::new(1, 0);
 
     assert!(request.is_expired());
+}
+
+#[tokio::test]
+async fn worker_batches_waiters_and_applies_checkpoint_after_completion() {
+    let stats = SyncFlushStats::default();
+    let (first, first_response) = GroupCommitRequest::<String>::new(64, 5_000);
+    let (second, second_response) = GroupCommitRequest::<String>::new(96, 5_000);
+    stats.record_enqueue(first.enqueue_time_millis());
+    stats.record_enqueue(second.enqueue_time_millis());
+    let (sender, receiver) = mpsc::channel(2);
+    sender.send(first).await.unwrap();
+    sender.send(second).await.unwrap();
+    drop(sender);
+
+    let durable = Arc::new(AtomicI64::new(96));
+    let timestamp = Arc::new(AtomicU64::new(77));
+    let checkpoint = Arc::new(AtomicU64::new(0));
+    let flush_calls = Arc::new(AtomicU64::new(0));
+    let ports = GroupCommitWorkerPorts::new(
+        {
+            let durable = durable.clone();
+            let timestamp = timestamp.clone();
+            let flush_calls = flush_calls.clone();
+            move || {
+                flush_calls.fetch_add(1, Ordering::Relaxed);
+                let durable = durable.load(Ordering::Relaxed);
+                let timestamp = timestamp.load(Ordering::Relaxed);
+                async move {
+                    Ok::<_, Arc<String>>(FlushProgress {
+                        appended: durable,
+                        durable_before: durable,
+                        durable,
+                        store_timestamp: timestamp,
+                    })
+                }
+            }
+        },
+        {
+            let durable = durable.clone();
+            move || durable.load(Ordering::Relaxed)
+        },
+        move || timestamp.load(Ordering::Relaxed),
+        {
+            let checkpoint = checkpoint.clone();
+            move |value| checkpoint.store(value, Ordering::Relaxed)
+        },
+        |_| panic!("flush failure adapter must not run"),
+        |_| async {},
+    );
+
+    run_group_commit_worker(
+        receiver,
+        Arc::new(Notify::new()),
+        CancellationToken::new(),
+        stats,
+        None,
+        GroupCommitWorkerConfig::legacy(),
+        ports,
+    )
+    .await;
+
+    assert_eq!(first_response.await.unwrap().unwrap(), GroupCommitStatus::Flushed);
+    assert_eq!(second_response.await.unwrap().unwrap(), GroupCommitStatus::Flushed);
+    assert_eq!(flush_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(checkpoint.load(Ordering::Relaxed), 77);
+}
+
+#[tokio::test]
+async fn worker_propagates_forced_error_once_to_the_whole_batch() {
+    let stats = SyncFlushStats::default();
+    let (request, response) = GroupCommitRequest::<String>::new(64, 5_000);
+    stats.record_enqueue(request.enqueue_time_millis());
+    let (sender, receiver) = mpsc::channel(1);
+    sender.send(request).await.unwrap();
+    drop(sender);
+
+    let error = Arc::new(String::from("injected flush failure"));
+    let failure_calls = Arc::new(AtomicU64::new(0));
+    let flush_calls = Arc::new(AtomicU64::new(0));
+    let ports = GroupCommitWorkerPorts::new(
+        {
+            let flush_calls = flush_calls.clone();
+            move || {
+                flush_calls.fetch_add(1, Ordering::Relaxed);
+                async { Ok::<_, Arc<String>>(FlushProgress::default()) }
+            }
+        },
+        || 0,
+        || 0,
+        |_| panic!("checkpoint adapter must not run"),
+        {
+            let failure_calls = failure_calls.clone();
+            move |_| {
+                failure_calls.fetch_add(1, Ordering::Relaxed);
+            }
+        },
+        |_| async {},
+    );
+
+    run_group_commit_worker(
+        receiver,
+        Arc::new(Notify::new()),
+        CancellationToken::new(),
+        stats,
+        Some(error.clone()),
+        GroupCommitWorkerConfig::legacy(),
+        ports,
+    )
+    .await;
+
+    let received = response.await.unwrap().unwrap_err();
+    assert!(Arc::ptr_eq(&received, &error));
+    assert_eq!(failure_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(flush_calls.load(Ordering::Relaxed), 0);
 }

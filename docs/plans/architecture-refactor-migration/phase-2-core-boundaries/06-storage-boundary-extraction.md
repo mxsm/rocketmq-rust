@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；M06-01/M06-02/PR-M06-03 已完成，PR-M06-04a/b 已完成，继续 M06-04c |
+| 状态 | 进行中；M06-01/M06-02/PR-M06-03 已完成，PR-M06-04a～c 已完成，继续 M06-04d |
 | 预计周期 | 4–6 周 |
 | 工作包 | WP11 `storage-capability-spike`、WP12 `store-local-extract`、WP13 `store-rocks-extract`；承接 WP02 |
 | 前置条件 | flush/watermark 语义稳定；model 查询值可用；storage golden 和 RocksDB baseline 已冻结 |
@@ -2083,3 +2083,23 @@ python scripts/arc_mut_guard.py
 - [x] `[SCOPE]` 未修改 batch/channel/retry/fsync/checkpoint/default config；GroupCommit worker/checkpoint、
   AsyncFlush/CommitRealTime worker 和最终 facade 继续由 M06-04c～e 承接。顶层统计仍为 31 已完成、1 进行中、
   50 未开始，即 51 个尚未完成。
+
+## M06-04c GroupCommit worker and checkpoint owner extraction evidence
+
+- [x] `[DEV/OWNER]` Local `run_group_commit_worker` 现唯一拥有 request channel drain、同批最大 target offset、取消时尾批
+  flush、forced/I/O error fan-out、最多 1000 次 flush、1ms retry policy、deadline stop 和正 timestamp checkpoint 判定；
+  `GROUP_COMMIT_CHANNEL_CAPACITY=1024` 与 `GroupCommitWorkerConfig::legacy()` 冻结原 R0 参数。
+- [x] `[ADAPTER/RUNTIME]` Store `GroupCommitService::start` 只创建既有 TaskGroup/channel，并注入 flush I/O、当前 durable
+  watermark/timestamp、`StoreCheckpoint::set_physic_msg_timestamp`、health recorder 与 timer adapter。Local 不创建 runtime/task，
+  retry sleep 通过 Store scheduler adapter 执行，enforcing runtime audit 因而保持零 action-required 增量。
+- [x] `[COMPAT]` blocking-pool flush helper 直接返回 canonical Local `FlushProgress`，不再复制中间 result；Store error mapping
+  仍保留 `MappedFileError -> StoreError` 和 runtime task failure -> `InvalidState`，同一 `Arc<StoreError>` 继续同时提供给 health
+  recorder 与全批 waiter。channel、batch、重试、checkpoint、fsync 和 shutdown 顺序均未改变。
+- [x] `[TEST/CONTRACT]` Local GroupCommit suite 从 3 扩展为 5/5，新增双 waiter worker batching/checkpoint 与 forced-error
+  单次记录/共享 `Arc`；Store FlushManager 原回归 9/9。source contract 新增 Local worker/config/ports owner，并禁止 Store
+  留存 `for 0..1000` 和 `rx_in.try_recv` worker 算法。
+- [x] `[REV]` Local/Store all-target/all-feature strict Clippy、workspace fmt、architecture dependency、AGENTS routing、
+  enforcing runtime audit 和 diff check 通过。ArcMut 3 个既有 occurrence（测试 glob、flush helper `ArcMut` 参数、
+  `WeakArcMut` import）按 ADR-013 一对一 relocation 后仍为 1,171 identities/3,233 occurrences，零新增债务。
+- [x] `[SCOPE]` 本切片不迁移 AsyncFlush/CommitRealTime worker 或最终 FlushManager facade；它们继续由 M06-04d/e
+  承接。顶层统计保持 31 已完成、1 进行中、50 未开始，即 51 个尚未完成。

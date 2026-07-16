@@ -15,14 +15,24 @@
 //! Runtime-neutral group-commit request and batch-completion ownership.
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use parking_lot::Mutex;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+
+use crate::flush::FlushProgress;
+
+/// Frozen request-channel capacity used by the R0 group-commit worker.
+pub const GROUP_COMMIT_CHANNEL_CAPACITY: usize = 1024;
 
 /// Neutral completion state for a Local group-commit request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -202,6 +212,171 @@ pub fn complete_group_commit_batch_error<E>(
     for request in requests {
         sync_flush_stats.record_completion(&request, GroupCommitStatus::TimedOut);
         request.complete_error(error.clone());
+    }
+}
+
+/// Frozen retry policy for the R0 group-commit worker.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupCommitWorkerConfig {
+    max_flush_attempts: usize,
+    retry_interval: Duration,
+}
+
+impl GroupCommitWorkerConfig {
+    /// Returns the existing Store worker policy without changing batching or fsync behavior.
+    #[doc(hidden)]
+    pub const fn legacy() -> Self {
+        Self {
+            max_flush_attempts: 1000,
+            retry_interval: Duration::from_millis(1),
+        }
+    }
+}
+
+/// Store-owned side-effect adapters invoked by the canonical Local worker.
+#[doc(hidden)]
+pub struct GroupCommitWorkerPorts<Flush, CurrentFlushed, CurrentTimestamp, Checkpoint, Failure, Delay> {
+    flush: Flush,
+    current_flushed_where: CurrentFlushed,
+    current_store_timestamp: CurrentTimestamp,
+    checkpoint: Checkpoint,
+    flush_failure: Failure,
+    retry_delay: Delay,
+}
+
+impl<Flush, CurrentFlushed, CurrentTimestamp, Checkpoint, Failure, Delay>
+    GroupCommitWorkerPorts<Flush, CurrentFlushed, CurrentTimestamp, Checkpoint, Failure, Delay>
+{
+    /// Creates the adapter bundle used by [`run_group_commit_worker`].
+    #[doc(hidden)]
+    pub fn new(
+        flush: Flush,
+        current_flushed_where: CurrentFlushed,
+        current_store_timestamp: CurrentTimestamp,
+        checkpoint: Checkpoint,
+        flush_failure: Failure,
+        retry_delay: Delay,
+    ) -> Self {
+        Self {
+            flush,
+            current_flushed_where,
+            current_store_timestamp,
+            checkpoint,
+            flush_failure,
+            retry_delay,
+        }
+    }
+}
+
+/// Runs the canonical Local group-commit batching, retry, cancellation, and checkpoint loop.
+#[doc(hidden)]
+pub async fn run_group_commit_worker<
+    E,
+    Flush,
+    FlushFuture,
+    CurrentFlushed,
+    CurrentTimestamp,
+    Checkpoint,
+    Failure,
+    Delay,
+    DelayFuture,
+>(
+    mut request_receiver: mpsc::Receiver<GroupCommitRequest<E>>,
+    notified: Arc<Notify>,
+    shutdown_token: CancellationToken,
+    sync_flush_stats: SyncFlushStats,
+    forced_flush_error: Option<Arc<E>>,
+    config: GroupCommitWorkerConfig,
+    mut ports: GroupCommitWorkerPorts<Flush, CurrentFlushed, CurrentTimestamp, Checkpoint, Failure, Delay>,
+) where
+    Flush: FnMut() -> FlushFuture,
+    FlushFuture: Future<Output = Result<FlushProgress, Arc<E>>>,
+    CurrentFlushed: FnMut() -> i64,
+    CurrentTimestamp: FnMut() -> u64,
+    Checkpoint: FnMut(u64),
+    Failure: FnMut(Arc<E>),
+    Delay: FnMut(Duration) -> DelayFuture,
+    DelayFuture: Future<Output = ()>,
+{
+    loop {
+        tokio::select! {
+            _ = shutdown_token.cancelled() => {
+                let mut remaining = Vec::new();
+                while let Ok(request) = request_receiver.try_recv() {
+                    remaining.push(request);
+                }
+                if !remaining.is_empty() {
+                    match (ports.flush)().await {
+                        Ok(progress) => {
+                            complete_group_commit_batch(remaining, progress.durable, &sync_flush_stats);
+                        }
+                        Err(error) => {
+                            (ports.flush_failure)(error.clone());
+                            complete_group_commit_batch_error(remaining, error, &sync_flush_stats);
+                        }
+                    }
+                }
+                break;
+            }
+            _ = notified.notified() => {
+                let progress = match (ports.flush)().await {
+                    Ok(progress) => progress,
+                    Err(error) => {
+                        (ports.flush_failure)(error.clone());
+                        continue;
+                    }
+                };
+                checkpoint_if_present(progress.store_timestamp, &mut ports.checkpoint);
+            }
+            maybe_request = request_receiver.recv() => match maybe_request {
+                None => break,
+                Some(first_request) => {
+                    let mut requests = vec![first_request];
+                    while let Ok(request) = request_receiver.try_recv() {
+                        requests.push(request);
+                    }
+
+                    let target_offset = requests.iter().map(GroupCommitRequest::next_offset).max().unwrap_or(0);
+                    let mut flush_ok = (ports.current_flushed_where)() >= target_offset;
+                    let mut flush_error = forced_flush_error.clone();
+                    for _ in 0..config.max_flush_attempts {
+                        if flush_ok || flush_error.is_some() || requests.iter().all(GroupCommitRequest::is_expired) {
+                            break;
+                        }
+                        match (ports.flush)().await {
+                            Ok(progress) => {
+                                flush_ok = progress.durable >= target_offset;
+                            }
+                            Err(error) => {
+                                flush_error = Some(error);
+                                break;
+                            }
+                        }
+                        if flush_ok || requests.iter().all(GroupCommitRequest::is_expired) {
+                            break;
+                        }
+                        (ports.retry_delay)(config.retry_interval).await;
+                    }
+
+                    if let Some(error) = flush_error {
+                        (ports.flush_failure)(error.clone());
+                        complete_group_commit_batch_error(requests, error, &sync_flush_stats);
+                        continue;
+                    }
+
+                    let flushed_where = (ports.current_flushed_where)();
+                    checkpoint_if_present((ports.current_store_timestamp)(), &mut ports.checkpoint);
+                    complete_group_commit_batch(requests, flushed_where, &sync_flush_stats);
+                }
+            }
+        }
+    }
+}
+
+fn checkpoint_if_present(timestamp: u64, checkpoint: &mut impl FnMut(u64)) {
+    if timestamp > 0 {
+        checkpoint(timestamp);
     }
 }
 

@@ -48,6 +48,9 @@ class M06FlushLocalContractTests(unittest.TestCase):
             "pub struct SyncFlushRuntimeInfo",
             "pub fn complete_group_commit_batch<E>",
             "pub fn complete_group_commit_batch_error<E>",
+            "pub async fn run_group_commit_worker<",
+            "pub struct GroupCommitWorkerConfig",
+            "pub struct GroupCommitWorkerPorts<",
         ):
             self.assertIn(owner, local)
 
@@ -74,6 +77,9 @@ class M06FlushLocalContractTests(unittest.TestCase):
         )
         self.assertNotIn("fn complete_group_commit_batch(", store_manager)
         self.assertNotIn("struct SyncFlushStats", store_manager)
+        self.assertIn("run_group_commit_worker(", store_manager)
+        self.assertNotIn("for _ in 0..1000", store_manager)
+        self.assertNotIn("while let Ok(request) = rx_in.try_recv()", store_manager)
 
         for owner in (
             "pub struct FlushProgress",
