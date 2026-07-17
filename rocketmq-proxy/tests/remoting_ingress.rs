@@ -21,7 +21,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rocketmq_auth::authentication::acl_signer;
-use rocketmq_proxy::context::ProxyContext;
 use rocketmq_proxy::context::ResolvedEndpoint;
 use rocketmq_proxy::ClusterServiceManager;
 use rocketmq_proxy::DefaultAssignmentService;
@@ -40,6 +39,7 @@ use rocketmq_proxy::RemotingConfig;
 use rocketmq_proxy::ResourceIdentity;
 use rocketmq_proxy::RouteService;
 use rocketmq_proxy::SubscriptionGroupMetadata;
+use rocketmq_proxy_core::ProxyContext;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::connection::Connection;

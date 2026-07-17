@@ -1,6 +1,6 @@
 # RocketMQ Rust 架构重构迁移执行手册
 
-> 状态：实施中（Phase 2，M04–M07 已完成，M08 进行中，下一工作包为 PR-M08-02）
+> 状态：实施中（Phase 2，M04–M07 已完成，M08 进行中，下一工作包为 PR-M08-03）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`

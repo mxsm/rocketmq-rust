@@ -15,13 +15,18 @@
 #![warn(rust_2018_idioms)]
 #![warn(clippy::all)]
 
-//! Runtime-neutral contracts and ingress state for RocketMQ Proxy.
+//! Backend-neutral contracts and ingress state for RocketMQ Proxy.
 
 pub mod config;
 pub mod context;
 pub mod error;
+pub mod grpc;
 pub mod identity;
+pub mod message;
+pub mod processor;
 pub mod proto;
+pub mod remoting;
+pub mod service;
 pub mod session;
 pub mod status;
 
@@ -38,6 +43,15 @@ pub use context::ResolvedEndpoint;
 pub use error::ProxyError;
 pub use error::ProxyResult;
 pub use identity::ResourceIdentity;
+pub use message::ProxyMessage;
+pub use message::ProxyMessageExt;
+pub use processor::*;
+pub use remoting::classify_remoting_request;
+pub use remoting::ProxyRemotingBackend;
+pub use remoting::RemotingIngressDispatcher;
+pub use remoting::RemotingIngressRoute;
+pub use remoting::RemotingStatusMapper;
+pub use service::*;
 pub use session::build_lite_subscription_sync_request;
 pub use session::ClientSession;
 pub use session::ClientSessionRegistry;

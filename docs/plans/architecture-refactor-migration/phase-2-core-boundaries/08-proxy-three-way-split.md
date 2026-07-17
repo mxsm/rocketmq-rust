@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 实施中；PR-M08-01 已完成，下一工作包为 PR-M08-02 |
+| 状态 | 实施中；PR-M08-02 已完成，下一工作包为 PR-M08-03 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP19 `proxy-three-way-split` |
 | 前置条件 | model/protocol/transport/security/store-api 边界稳定；除 Proxy 外 Client 清边完成 |
@@ -76,13 +76,31 @@ M07 已交付 [`Client 边界收口与 M08 交接清单`](07-client-edge-closeou
 
 ### PR-M08-02：迁中立 plan、port、service 与 ingress
 
-- [ ] `[DEV]` 按 send/pull/pop/ack/route/transaction 迁 plan 和 port，跨边界只用 model/PullOutcome/core DTO。
-- [ ] `[DEV]` 消费已迁入 Core 的 ResourceIdentity，从混合 `service.rs` 精确提取 port/default/static service、ServiceManager contract。
-- [ ] `[DEV]` 从混合 `remoting.rs` 精确提取 ingress processor/dispatcher/转换；不迁 cluster address resolution。
-- [ ] `[DEV]` 迁 gRPC handler/middleware/server/service，只调用 port，不持 backend。
-- [ ] `[TEST]` 对旧 proxy 与 core+test adapter 执行 ingress/status/error/plan 差分。
-- [ ] `[REV]` 检查 source slice 不重叠、core 无 backend 类型、public enum/DTO 兼容。
-- [ ] 回滚点：以 plan/port/gRPC/remoting 四批回滚，旧 proxy facade 始终可组合。
+- [x] `[DEV]` 按 send/pull/pop/ack/route/transaction 迁 plan 和 port，跨边界只用 model/PullOutcome/core DTO。
+- [x] `[DEV]` 消费已迁入 Core 的 ResourceIdentity，从混合 `service.rs` 精确提取 port/default/static service、ServiceManager contract。
+- [x] `[DEV]` 从混合 `remoting.rs` 精确提取 ingress processor/dispatcher/转换；不迁 cluster address resolution。
+- [x] `[DEV]` 迁 gRPC handler/middleware/server/service，只调用 port，不持 backend。
+- [x] `[TEST]` 对旧 proxy 与 core+test adapter 执行 ingress/status/error/plan 差分。
+- [x] `[REV]` 检查 source slice 不重叠、core 无 backend 类型、public enum/DTO 兼容。
+- [x] 回滚点：以 plan/port/gRPC/remoting 四批回滚，旧 proxy facade 始终可组合。
+
+#### PR-M08-02 实施结果
+
+- Core 新增 owned `ProxyMessage`/`ProxyMessageExt`，send/pull/pop/ack/route/transaction 的 request/plan/result、
+  `MessagingProcessor`/`DefaultMessagingProcessor`、六组 service port、`ServiceManager` 与 default/static service 均迁入
+  canonical owner；旧 `processor.rs` 降为精确 re-export，旧 `service.rs` 只保留 Cluster/Local provider 实现与兼容导出。
+- Core port 统一接收无认证证明的中立 `ProxyContext`；facade 在调用 port 前执行 `without_principal()`。Metadata
+  service 返回 Protocol `UserInfo`/`AclInfo`，provider/auth facade 承担转换，Core 不再持有 auth provider 类型。
+- Core 拥有 gRPC wire adapter、transport-context middleware、listener/shutdown lifecycle，以及 admission、topic、consumer、
+  producer、transaction、telemetry、housekeeping 中立策略。现有 Proxy 只保留 generated tonic service、auth/metrics/hook
+  composition；事务 producer group 通过 Transaction port 获取，不再从 gRPC ingress 直接调用 Cluster 模块。
+- Core Remoting 拥有 request support matrix、classifier、dispatch contract 与 send/pull/offset status mapping；旧 Proxy 保留
+  TCP/auth、legacy header/body codec、session channel binding 和 cluster lock/unlock address resolution，未把 backend 地址解析迁入 Core。
+- canonical/legacy type identity、gRPC/remoting ingress、status/error/plan 由差分与集成测试覆盖：Core 45 项 unit + 2 项
+  proto contract，Proxy 104 项 unit/bin/compat/gRPC/remoting test 全绿；default/no-default、根 30-package strict Clippy、
+  runtime audit 以及 Example/Tauri/Web standalone 累计路线通过。Typed-error guard 仅报告 main 既有 11 项，Core/Proxy 零新增。
+- target guard 仍精确为 66 项，Core 零 finding；normal closure 无 Client/Broker/store/auth/common/remoting/legacy facade。
+  回滚可按 message/plan+port、gRPC、Remoting 四个批次独立恢复，facade 始终保持可组合。下一工作包为 PR-M08-03。
 
 ### PR-M08-03：创建 Cluster adapter
 

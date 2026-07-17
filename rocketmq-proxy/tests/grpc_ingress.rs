@@ -23,15 +23,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use cheetah_string::CheetahString;
 use futures::StreamExt;
 use hmac::digest::KeyInit;
 use hmac::Hmac;
 use hmac::Mac;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::MessageConst;
 use rocketmq_model::result::SendStatus;
-use rocketmq_proxy::context::ProxyContext;
 use rocketmq_proxy::context::ResolvedEndpoint;
 use rocketmq_proxy::proto::v2;
 use rocketmq_proxy::proto::v2::messaging_service_client::MessagingServiceClient;
@@ -74,6 +70,9 @@ use rocketmq_proxy::StaticRouteService;
 use rocketmq_proxy::SubscriptionGroupMetadata;
 use rocketmq_proxy::UpdateOffsetPlan;
 use rocketmq_proxy::UpdateOffsetRequest;
+use rocketmq_proxy_core::ProxyContext;
+use rocketmq_proxy_core::ProxyMessage;
+use rocketmq_proxy_core::ProxyMessageExt;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use sha1::Sha1;
 use tokio::sync::oneshot;
@@ -152,17 +151,15 @@ impl ConsumerService for StreamingConsumerService {
         _context: &ProxyContext,
         request: &ReceiveMessageRequest,
     ) -> ProxyResult<ReceiveMessagePlan> {
-        let mut message = MessageExt::default();
-        message.set_topic(CheetahString::from(request.target.topic.to_string()));
-        message.set_body(Some(Bytes::from_static(b"integration-body")));
-        message.set_msg_id(CheetahString::from("integration-msg-id"));
-        message.set_queue_id(request.target.queue_id);
-        message.set_queue_offset(7);
-        rocketmq_common::common::message::MessageTrait::put_property(
-            &mut message,
-            CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
-            CheetahString::from("integration-receipt-handle"),
-        );
+        let mut payload = ProxyMessage::new(request.target.topic.to_string(), b"integration-body".to_vec());
+        payload.put_property("POP_CK", "integration-receipt-handle");
+        let message = ProxyMessageExt {
+            message: payload,
+            queue_id: request.target.queue_id,
+            queue_offset: 7,
+            msg_id: "integration-msg-id".to_owned(),
+            ..ProxyMessageExt::default()
+        };
 
         Ok(ReceiveMessagePlan {
             status: ProxyPayloadStatus::new(v2::Code::Ok as i32, "OK"),

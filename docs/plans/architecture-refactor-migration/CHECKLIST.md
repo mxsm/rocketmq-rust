@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 48 | 0 | 34 未开始；合计 34 尚未完成 | 82 |
+| PR 级工作包 | 49 | 0 | 33 未开始；合计 33 尚未完成 | 82 |
 | 里程碑 | 7（M01–M07） | 1（M08） | 4（M09–M12） | 12 |
 | 新增边界 crate | 8 | 0 | 2（proxy-cluster/local） | 10 |
 | 根 workspace package | 30 | — | 还差 2 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 34 个未开始工作包分布：M08 为 5 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
-PR-M08-01 已完成 Proxy Core 与 proto owner；M08 进行中，当前下一工作包为 PR-M08-02。
+剩余 33 个未开始工作包分布：M08 为 4 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
+PR-M08-02 已完成 Proxy Core 的中立 plan/port/service 与 ingress；M08 进行中，当前下一工作包为 PR-M08-03。
 
 目标态差距快照不能与工作包计数混用：`architecture_dependency_guard.py --mode target --allow-missing-planned-crates`
 仍报告 2 个计划 Proxy crate 缺失和 66 项差距，其中 Client source 13、Client manifest 1、目标 DAG 直接边 50、传递闭包边 2。
@@ -319,7 +319,17 @@ PR-M08-01 已完成 Proxy Core 与 proto owner；M08 进行中，当前下一工
   - [x] Core default/no-default、34 项 test、Proxy 113 项 unit/bin/compat/gRPC/remoting test 与两 crate strict Clippy 通过
   - [x] Core manifest/source/normal closure 无 Client、admin-core、Broker、store、auth provider、common、remoting 或 legacy facade
   - [x] 目标差距保持 66 且 Core 零 finding；48/82 已完成、34 未完成，下一工作包 PR-M08-02
-- [ ] PR-M08-02：迁移中立 plan、port、service 与 ingress
+- [x] PR-M08-02：迁移中立 plan、port、service 与 ingress
+  - [x] send/pull/pop/ack/route/transaction 的 request/plan/result、`MessagingProcessor` 与默认 processor 迁入 Core
+  - [x] 六组 service port、`ServiceManager`、default/static service 与 `ResourceIdentity` 由 Core 唯一拥有
+  - [x] Core-owned `ProxyMessage`/`ProxyMessageExt` 隔离 Common 消息类型；Metadata port 改用 Protocol `UserInfo`/`AclInfo`
+  - [x] gRPC adapter/middleware/server lifecycle 与中立 admission/session/consumer/transaction/telemetry policy 迁入 Core
+  - [x] Remoting request classifier、dispatch contract 与 status conversion 迁入 Core；cluster address resolution 留在 adapter
+  - [x] gRPC transaction producer group 改由 Core Transaction port 提供，ingress 不再直接调用 Cluster backend
+  - [x] Core 45 项 unit + 2 项 proto contract、Proxy 104 项 unit/bin/compat/gRPC/remoting test 全绿
+  - [x] Core/Proxy default/no-default、根 30-package strict Clippy、runtime audit 与 Example/Tauri/Web standalone 累计路线通过
+  - [x] target gap 保持 66 且 Core 零 finding；typed-error 仅剩 main 既有 11 项，未新增 Core/Proxy finding
+  - [x] 49/82 已完成、33 未完成，下一工作包 PR-M08-03
 - [ ] PR-M08-03：创建 Cluster adapter
 - [ ] PR-M08-04：创建 Local adapter
 - [ ] PR-M08-05：将现有 Proxy 降为 composition/facade

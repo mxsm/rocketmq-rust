@@ -26,7 +26,6 @@ use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
@@ -80,10 +79,11 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::config::LocalConfig;
-use crate::context::ProxyContext;
 use crate::context::ResolvedEndpoint;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
+use crate::message::message_ext_to_core;
+use crate::message::message_properties_from_core;
 use crate::processor::AckMessageRequest;
 use crate::processor::AckMessageResultEntry;
 use crate::processor::ChangeInvisibleDurationPlan;
@@ -123,6 +123,8 @@ use crate::service::RouteService;
 use crate::service::SubscriptionGroupMetadata;
 use crate::service::TransactionService;
 use crate::status::ProxyStatusMapper;
+use rocketmq_proxy_core::ProxyContext;
+use rocketmq_proxy_core::ProxyMessage;
 
 #[derive(Clone)]
 pub struct LocalBrokerFacadeClient {
@@ -191,6 +193,10 @@ impl LocalBrokerFacadeClient {
 
     pub fn broker_name(&self) -> &str {
         self.broker_name.as_str()
+    }
+
+    pub fn transaction_producer_group(&self, context: &ProxyContext) -> String {
+        build_local_proxy_producer_group(context.client_id(), context.request_id())
     }
 
     pub async fn query_route(&self, topic: ResourceIdentity) -> ProxyResult<TopicRouteData> {
@@ -457,6 +463,10 @@ impl LocalTransactionService {
 
 #[async_trait]
 impl TransactionService for LocalTransactionService {
+    fn transaction_producer_group(&self, context: &ProxyContext) -> Option<String> {
+        Some(self.client.transaction_producer_group(context))
+    }
+
     async fn end_transaction(
         &self,
         context: &ProxyContext,
@@ -1208,7 +1218,7 @@ fn build_send_message_request(
         born_timestamp: current_millis() as i64,
         flag: entry.message.flag(),
         properties: Some(MessageDecoder::message_properties_to_string(
-            entry.message.properties().as_map(),
+            &message_properties_from_core(&entry.message),
         )),
         reconsume_times: None,
         unit_mode: Some(false),
@@ -1228,7 +1238,8 @@ fn build_send_message_request(
             format!("message body is missing for topic '{}'", entry.topic),
         )
     })?;
-    let mut command = RemotingCommand::create_request_command(RequestCode::SendMessage, header).set_body(body);
+    let mut command = RemotingCommand::create_request_command(RequestCode::SendMessage, header)
+        .set_body(bytes::Bytes::copy_from_slice(body));
     command.make_custom_header_to_net();
     Ok(command)
 }
@@ -1403,7 +1414,7 @@ fn process_pop_response(
                 messages: messages
                     .into_iter()
                     .map(|message| ReceivedMessage {
-                        message,
+                        message: message_ext_to_core(&message),
                         invisible_duration,
                     })
                     .collect(),
@@ -1447,7 +1458,10 @@ fn process_pull_response(mut response: RemotingCommand) -> ProxyResult<PullMessa
             messages: response
                 .get_body_mut()
                 .map(|body| MessageDecoder::decodes_batch(body, true, true))
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .into_iter()
+                .map(|message| message_ext_to_core(&message))
+                .collect(),
         }),
         ResponseCode::PullNotFound | ResponseCode::PullRetryImmediately => Ok(PullMessagePlan {
             status: ProxyStatusMapper::from_payload_code(
@@ -1703,27 +1717,22 @@ fn decode_broker_message_id(message_id: &str) -> ProxyResult<rocketmq_common::co
         .map_err(|error| ProxyError::illegal_message_id(format!("failed to decode broker message id: {error}")))
 }
 
-fn attach_transaction_producer_group(message: &mut Message, producer_group: &str) {
+fn attach_transaction_producer_group(message: &mut ProxyMessage, producer_group: &str) {
     if !is_transaction_prepared(message) {
         return;
     }
 
-    message.put_property(
-        CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP),
-        CheetahString::from(producer_group),
-    );
+    message.put_property(MessageConst::PROPERTY_PRODUCER_GROUP, producer_group);
 }
 
-fn is_transaction_prepared(message: &Message) -> bool {
+fn is_transaction_prepared(message: &ProxyMessage) -> bool {
     message
-        .property_ref(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_TRANSACTION_PREPARED,
-        ))
+        .property(MessageConst::PROPERTY_TRANSACTION_PREPARED)
         .and_then(|value| value.parse().ok())
         .unwrap_or(false)
 }
 
-fn send_message_sys_flag(message: &Message) -> i32 {
+fn send_message_sys_flag(message: &ProxyMessage) -> i32 {
     if is_transaction_prepared(message) {
         MessageSysFlag::TRANSACTION_PREPARED_TYPE
     } else {

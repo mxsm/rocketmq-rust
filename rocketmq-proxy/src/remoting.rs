@@ -17,7 +17,6 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
@@ -34,7 +33,11 @@ use rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::result::SendResult;
-use rocketmq_model::result::SendStatus;
+use rocketmq_proxy_core::identity::ResourceIdentity;
+pub use rocketmq_proxy_core::remoting::ProxyRemotingBackend;
+use rocketmq_proxy_core::remoting::RemotingIngressDispatcher;
+use rocketmq_proxy_core::remoting::RemotingIngressRoute;
+use rocketmq_proxy_core::remoting::RemotingStatusMapper;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -98,6 +101,8 @@ use crate::config::ProxyMode;
 use crate::context::ProxyContext;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
+use crate::message::message_ext_from_core;
+use crate::message::message_to_core;
 use crate::processor::ConsumerFilterExpression;
 use crate::processor::GetOffsetRequest;
 use crate::processor::MessageQueueTarget;
@@ -109,14 +114,7 @@ use crate::processor::QueryOffsetRequest;
 use crate::processor::QueryRouteRequest;
 use crate::processor::SendMessageEntry;
 use crate::processor::SendMessageRequest;
-use crate::service::ResourceIdentity;
 use crate::session::ClientSessionRegistry;
-use crate::status::ProxyPayloadStatus;
-
-#[async_trait]
-pub trait ProxyRemotingBackend: Send + Sync {
-    async fn process(&self, request: RemotingCommand) -> ProxyResult<RemotingCommand>;
-}
 
 pub struct ProxyRemotingRequestProcessor<P> {
     dispatcher: Arc<ProxyRemotingDispatcher<P>>,
@@ -165,7 +163,8 @@ where
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut context = ProxyContext::from_remoting_request(remoting_rpc_name(request.code()), &channel, request);
+        let mut context =
+            ProxyContext::from_remoting_request(RemotingIngressRoute::rpc_name(request.code()), &channel, request);
         if let Some(auth_runtime) = &self.auth_runtime {
             let source_ip = channel.remote_address().ip().to_string();
             match auth_runtime
@@ -315,42 +314,29 @@ where
     }
 
     pub async fn dispatch(&self, context: &ProxyContext, request: &RemotingCommand) -> RemotingCommand {
-        match RequestCode::from(request.code()) {
-            RequestCode::GetRouteinfoByTopic => self.dispatch_query_route(context, request).await,
-            RequestCode::QueryAssignment => self.dispatch_query_assignment(context, request).await,
-            RequestCode::SendMessage | RequestCode::SendMessageV2 | RequestCode::SendBatchMessage => {
-                self.dispatch_send_message(context, request).await
-            }
-            RequestCode::HeartBeat => self.dispatch_heartbeat(context, request).await,
-            RequestCode::UnregisterClient => self.dispatch_unregister_client(request).await,
-            RequestCode::GetConsumerListByGroup => self.dispatch_get_consumer_list_by_group(request).await,
-            RequestCode::NotifyConsumerIdsChanged => self.dispatch_notify_consumer_ids_changed(request).await,
-            RequestCode::NotifyUnsubscribeLite => self.dispatch_notify_unsubscribe_lite(request).await,
-            RequestCode::LockBatchMq => self.dispatch_lock_batch_mq(request).await,
-            RequestCode::UnlockBatchMq => self.dispatch_unlock_batch_mq(request).await,
-            RequestCode::CheckClientConfig => self.dispatch_check_client_config(request).await,
-            RequestCode::PullMessage | RequestCode::LitePullMessage => {
-                self.dispatch_pull_message(context, request).await
-            }
-            RequestCode::UpdateConsumerOffset => self.dispatch_update_consumer_offset(context, request).await,
-            RequestCode::QueryConsumerOffset => self.dispatch_query_consumer_offset(context, request).await,
-            RequestCode::GetMaxOffset => self.dispatch_get_max_offset(context, request).await,
-            RequestCode::GetMinOffset => self.dispatch_get_min_offset(context, request).await,
-            RequestCode::SearchOffsetByTimestamp => self.dispatch_search_offset(context, request).await,
-            RequestCode::GetBrokerLiteInfo => self.dispatch_get_broker_lite_info(request).await,
-            RequestCode::GetParentTopicInfo => self.dispatch_get_parent_topic_info(request).await,
-            RequestCode::GetLiteTopicInfo => self.dispatch_get_lite_topic_info(request).await,
-            RequestCode::GetLiteGroupInfo => self.dispatch_get_lite_group_info(request).await,
-            RequestCode::AuthCreateUser
-            | RequestCode::AuthUpdateUser
-            | RequestCode::AuthDeleteUser
-            | RequestCode::AuthGetUser
-            | RequestCode::AuthListUsers
-            | RequestCode::AuthCreateAcl
-            | RequestCode::AuthUpdateAcl
-            | RequestCode::AuthDeleteAcl
-            | RequestCode::AuthGetAcl
-            | RequestCode::AuthListAcl => unsupported_response(
+        match RemotingIngressDispatcher::route(request) {
+            RemotingIngressRoute::QueryRoute => self.dispatch_query_route(context, request).await,
+            RemotingIngressRoute::QueryAssignment => self.dispatch_query_assignment(context, request).await,
+            RemotingIngressRoute::SendMessage => self.dispatch_send_message(context, request).await,
+            RemotingIngressRoute::Heartbeat => self.dispatch_heartbeat(context, request).await,
+            RemotingIngressRoute::UnregisterClient => self.dispatch_unregister_client(request).await,
+            RemotingIngressRoute::GetConsumerListByGroup => self.dispatch_get_consumer_list_by_group(request).await,
+            RemotingIngressRoute::NotifyConsumerIdsChanged => self.dispatch_notify_consumer_ids_changed(request).await,
+            RemotingIngressRoute::NotifyUnsubscribeLite => self.dispatch_notify_unsubscribe_lite(request).await,
+            RemotingIngressRoute::LockBatchMessageQueue => self.dispatch_lock_batch_mq(request).await,
+            RemotingIngressRoute::UnlockBatchMessageQueue => self.dispatch_unlock_batch_mq(request).await,
+            RemotingIngressRoute::CheckClientConfig => self.dispatch_check_client_config(request).await,
+            RemotingIngressRoute::PullMessage => self.dispatch_pull_message(context, request).await,
+            RemotingIngressRoute::UpdateConsumerOffset => self.dispatch_update_consumer_offset(context, request).await,
+            RemotingIngressRoute::QueryConsumerOffset => self.dispatch_query_consumer_offset(context, request).await,
+            RemotingIngressRoute::GetMaxOffset => self.dispatch_get_max_offset(context, request).await,
+            RemotingIngressRoute::GetMinOffset => self.dispatch_get_min_offset(context, request).await,
+            RemotingIngressRoute::SearchOffsetByTimestamp => self.dispatch_search_offset(context, request).await,
+            RemotingIngressRoute::GetBrokerLiteInfo => self.dispatch_get_broker_lite_info(request).await,
+            RemotingIngressRoute::GetParentTopicInfo => self.dispatch_get_parent_topic_info(request).await,
+            RemotingIngressRoute::GetLiteTopicInfo => self.dispatch_get_lite_topic_info(request).await,
+            RemotingIngressRoute::GetLiteGroupInfo => self.dispatch_get_lite_group_info(request).await,
+            RemotingIngressRoute::AuthAdminUnsupported => unsupported_response(
                 request.opaque(),
                 format!(
                     "proxy remoting ingress does not support request code {}; auth admin request, send it to broker \
@@ -358,7 +344,7 @@ where
                     request.code()
                 ),
             ),
-            _ => unsupported_response(
+            RemotingIngressRoute::Unsupported => unsupported_response(
                 request.opaque(),
                 format!(
                     "proxy remoting ingress does not support request code {}",
@@ -392,7 +378,7 @@ where
         let plan = match self
             .processor
             .query_route(
-                context,
+                &context.without_principal(),
                 QueryRouteRequest {
                     topic: ResourceIdentity::new(String::new(), header.topic.to_string()),
                     endpoints: Vec::new(),
@@ -433,7 +419,7 @@ where
         let plan = match self
             .processor
             .query_assignment(
-                context,
+                &context.without_principal(),
                 QueryAssignmentRequest {
                     topic: ResourceIdentity::new(String::new(), request_body.topic.to_string()),
                     group: ResourceIdentity::new(String::new(), request_body.consumer_group.to_string()),
@@ -713,7 +699,11 @@ where
             .first()
             .and_then(|entry| entry.queue_id)
             .unwrap_or_default();
-        let plan = match self.processor.send_message(context, send_request).await {
+        let plan = match self
+            .processor
+            .send_message(&context.without_principal(), send_request)
+            .await
+        {
             Ok(plan) => plan,
             Err(error) => return proxy_error_response(request.opaque(), error),
         };
@@ -728,7 +718,7 @@ where
             let response_header = build_send_message_response_header(send_result, fallback_queue_id);
             return response_with_header(
                 request.opaque(),
-                send_result_to_response_code(send_result),
+                RemotingStatusMapper::from_send_result(send_result),
                 response_header,
                 None,
                 None,
@@ -737,7 +727,7 @@ where
 
         response_with_code(
             request.opaque(),
-            send_payload_status_to_response_code(&entry.status),
+            RemotingStatusMapper::from_send_payload(&entry.status),
             entry.status.message().to_owned(),
         )
     }
@@ -748,7 +738,11 @@ where
             Err(error) => return decode_error_response(request.opaque(), "decode pullMessage header", error),
         };
         let pull_request = build_pull_message_request(&header);
-        let plan = match self.processor.pull_message(context, pull_request).await {
+        let plan = match self
+            .processor
+            .pull_message(&context.without_principal(), pull_request)
+            .await
+        {
             Ok(plan) => plan,
             Err(error) => return proxy_error_response(request.opaque(), error),
         };
@@ -756,7 +750,8 @@ where
         let body = if plan.messages.is_empty() {
             None
         } else {
-            match encode_message_ext_batch(plan.messages.as_slice()) {
+            let messages = plan.messages.iter().map(message_ext_from_core).collect::<Vec<_>>();
+            match encode_message_ext_batch(messages.as_slice()) {
                 Ok(body) => Some(body),
                 Err(error) => return proxy_error_response(request.opaque(), error),
             }
@@ -773,7 +768,7 @@ where
         };
         response_with_header(
             request.opaque(),
-            pull_payload_status_to_response_code(&plan.status),
+            RemotingStatusMapper::from_pull_payload(&plan.status),
             response_header,
             (!plan.status.is_ok()).then(|| plan.status.message().to_owned()),
             body,
@@ -793,7 +788,7 @@ where
         };
         let plan = match self
             .processor
-            .update_offset(context, build_update_offset_request(&header))
+            .update_offset(&context.without_principal(), build_update_offset_request(&header))
             .await
         {
             Ok(plan) => plan,
@@ -801,7 +796,7 @@ where
         };
         response_with_header(
             request.opaque(),
-            offset_payload_status_to_response_code(&plan.status, ResponseCode::QueryNotFound),
+            RemotingStatusMapper::from_offset_payload(&plan.status, ResponseCode::QueryNotFound),
             UpdateConsumerOffsetResponseHeader::default(),
             (!plan.status.is_ok()).then(|| plan.status.message().to_owned()),
             None,
@@ -821,7 +816,7 @@ where
         };
         let plan = match self
             .processor
-            .get_offset(context, build_get_offset_request(&header))
+            .get_offset(&context.without_principal(), build_get_offset_request(&header))
             .await
         {
             Ok(plan) => plan,
@@ -829,7 +824,7 @@ where
         };
         response_with_header(
             request.opaque(),
-            offset_payload_status_to_response_code(&plan.status, ResponseCode::QueryNotFound),
+            RemotingStatusMapper::from_offset_payload(&plan.status, ResponseCode::QueryNotFound),
             QueryConsumerOffsetResponseHeader {
                 offset: plan.status.is_ok().then_some(plan.offset),
             },
@@ -846,7 +841,7 @@ where
         let plan = match self
             .processor
             .query_offset(
-                context,
+                &context.without_principal(),
                 build_query_offset_request(
                     topic_identity(&header),
                     header.queue_id,
@@ -862,7 +857,7 @@ where
         };
         response_with_header(
             request.opaque(),
-            offset_payload_status_to_response_code(&plan.status, ResponseCode::QueryNotFound),
+            RemotingStatusMapper::from_offset_payload(&plan.status, ResponseCode::QueryNotFound),
             GetMaxOffsetResponseHeader {
                 offset: if plan.status.is_ok() { plan.offset } else { 0 },
             },
@@ -879,7 +874,7 @@ where
         let plan = match self
             .processor
             .query_offset(
-                context,
+                &context.without_principal(),
                 build_query_offset_request(
                     topic_identity(&header),
                     header.queue_id,
@@ -895,7 +890,7 @@ where
         };
         response_with_header(
             request.opaque(),
-            offset_payload_status_to_response_code(&plan.status, ResponseCode::QueryNotFound),
+            RemotingStatusMapper::from_offset_payload(&plan.status, ResponseCode::QueryNotFound),
             GetMinOffsetResponseHeader {
                 offset: if plan.status.is_ok() { plan.offset } else { 0 },
             },
@@ -912,7 +907,7 @@ where
         let plan = match self
             .processor
             .query_offset(
-                context,
+                &context.without_principal(),
                 build_query_offset_request(
                     topic_identity(&header),
                     header.queue_id,
@@ -928,7 +923,7 @@ where
         };
         response_with_header(
             request.opaque(),
-            offset_payload_status_to_response_code(&plan.status, ResponseCode::QueryNotFound),
+            RemotingStatusMapper::from_offset_payload(&plan.status, ResponseCode::QueryNotFound),
             SearchOffsetResponseHeader {
                 offset: if plan.status.is_ok() { plan.offset } else { 0 },
             },
@@ -1188,36 +1183,6 @@ where
     }
 }
 
-fn remoting_rpc_name(code: i32) -> &'static str {
-    match RequestCode::from(code) {
-        RequestCode::GetRouteinfoByTopic => "RemotingGetRouteinfoByTopic",
-        RequestCode::QueryAssignment => "RemotingQueryAssignment",
-        RequestCode::SendMessage => "RemotingSendMessage",
-        RequestCode::SendMessageV2 => "RemotingSendMessageV2",
-        RequestCode::SendBatchMessage => "RemotingSendBatchMessage",
-        RequestCode::HeartBeat => "RemotingHeartBeat",
-        RequestCode::UnregisterClient => "RemotingUnregisterClient",
-        RequestCode::GetConsumerListByGroup => "RemotingGetConsumerListByGroup",
-        RequestCode::NotifyConsumerIdsChanged => "RemotingNotifyConsumerIdsChanged",
-        RequestCode::NotifyUnsubscribeLite => "RemotingNotifyUnsubscribeLite",
-        RequestCode::LockBatchMq => "RemotingLockBatchMq",
-        RequestCode::UnlockBatchMq => "RemotingUnlockBatchMq",
-        RequestCode::CheckClientConfig => "RemotingCheckClientConfig",
-        RequestCode::PullMessage => "RemotingPullMessage",
-        RequestCode::LitePullMessage => "RemotingLitePullMessage",
-        RequestCode::UpdateConsumerOffset => "RemotingUpdateConsumerOffset",
-        RequestCode::QueryConsumerOffset => "RemotingQueryConsumerOffset",
-        RequestCode::GetMaxOffset => "RemotingGetMaxOffset",
-        RequestCode::GetMinOffset => "RemotingGetMinOffset",
-        RequestCode::SearchOffsetByTimestamp => "RemotingSearchOffsetByTimestamp",
-        RequestCode::GetBrokerLiteInfo => "RemotingGetBrokerLiteInfo",
-        RequestCode::GetParentTopicInfo => "RemotingGetParentTopicInfo",
-        RequestCode::GetLiteTopicInfo => "RemotingGetLiteTopicInfo",
-        RequestCode::GetLiteGroupInfo => "RemotingGetLiteGroupInfo",
-        _ => "RemotingRequest",
-    }
-}
-
 fn ensure_cluster_mode(config: &ProxyConfig) -> ProxyResult<()> {
     if matches!(config.mode, ProxyMode::Cluster) {
         Ok(())
@@ -1357,7 +1322,7 @@ fn build_send_message_request(
                 SendMessageEntry {
                     topic: topic.clone(),
                     client_message_id,
-                    message,
+                    message: message_to_core(&message),
                     queue_id,
                 }
             })
@@ -1390,7 +1355,7 @@ fn build_send_message_request(
         messages: vec![SendMessageEntry {
             topic,
             client_message_id,
-            message,
+            message: message_to_core(&message),
             queue_id,
         }],
         timeout: None,
@@ -1520,76 +1485,6 @@ fn is_transaction_prepared(message: &Message) -> bool {
         .unwrap_or(false)
 }
 
-fn send_result_to_response_code(send_result: &SendResult) -> ResponseCode {
-    match send_result.send_status {
-        SendStatus::SendOk => ResponseCode::Success,
-        SendStatus::FlushDiskTimeout => ResponseCode::FlushDiskTimeout,
-        SendStatus::FlushSlaveTimeout => ResponseCode::FlushSlaveTimeout,
-        SendStatus::SlaveNotAvailable => ResponseCode::SlaveNotAvailable,
-    }
-}
-
-fn send_payload_status_to_response_code(status: &ProxyPayloadStatus) -> ResponseCode {
-    match payload_code(status) {
-        crate::proto::v2::Code::Ok => ResponseCode::Success,
-        crate::proto::v2::Code::MasterPersistenceTimeout => ResponseCode::FlushDiskTimeout,
-        crate::proto::v2::Code::SlavePersistenceTimeout => ResponseCode::FlushSlaveTimeout,
-        crate::proto::v2::Code::HaNotAvailable => ResponseCode::SlaveNotAvailable,
-        crate::proto::v2::Code::TopicNotFound => ResponseCode::TopicNotExist,
-        crate::proto::v2::Code::ConsumerGroupNotFound => ResponseCode::SubscriptionGroupNotExist,
-        crate::proto::v2::Code::Forbidden | crate::proto::v2::Code::Unauthorized => ResponseCode::NoPermission,
-        crate::proto::v2::Code::TooManyRequests => ResponseCode::SystemBusy,
-        crate::proto::v2::Code::BadRequest
-        | crate::proto::v2::Code::IllegalMessageId
-        | crate::proto::v2::Code::IllegalMessageKey
-        | crate::proto::v2::Code::IllegalMessageTag
-        | crate::proto::v2::Code::IllegalMessageGroup
-        | crate::proto::v2::Code::IllegalDeliveryTime
-        | crate::proto::v2::Code::MessageBodyTooLarge
-        | crate::proto::v2::Code::MessagePropertyConflictWithType => ResponseCode::MessageIllegal,
-        crate::proto::v2::Code::NotImplemented
-        | crate::proto::v2::Code::Unsupported
-        | crate::proto::v2::Code::VersionUnsupported => ResponseCode::RequestCodeNotSupported,
-        _ => ResponseCode::SystemError,
-    }
-}
-
-fn pull_payload_status_to_response_code(status: &ProxyPayloadStatus) -> ResponseCode {
-    match payload_code(status) {
-        crate::proto::v2::Code::Ok => ResponseCode::Success,
-        crate::proto::v2::Code::MessageNotFound => ResponseCode::PullNotFound,
-        crate::proto::v2::Code::IllegalOffset => ResponseCode::PullOffsetMoved,
-        crate::proto::v2::Code::TopicNotFound => ResponseCode::TopicNotExist,
-        crate::proto::v2::Code::ConsumerGroupNotFound => ResponseCode::SubscriptionGroupNotExist,
-        crate::proto::v2::Code::Forbidden | crate::proto::v2::Code::Unauthorized => ResponseCode::NoPermission,
-        crate::proto::v2::Code::TooManyRequests => ResponseCode::SystemBusy,
-        crate::proto::v2::Code::BadRequest | crate::proto::v2::Code::IllegalFilterExpression => {
-            ResponseCode::InvalidParameter
-        }
-        _ => ResponseCode::SystemError,
-    }
-}
-
-fn offset_payload_status_to_response_code(status: &ProxyPayloadStatus, not_found: ResponseCode) -> ResponseCode {
-    match payload_code(status) {
-        crate::proto::v2::Code::Ok => ResponseCode::Success,
-        crate::proto::v2::Code::OffsetNotFound | crate::proto::v2::Code::MessageNotFound => not_found,
-        crate::proto::v2::Code::TopicNotFound => ResponseCode::TopicNotExist,
-        crate::proto::v2::Code::ConsumerGroupNotFound => ResponseCode::SubscriptionGroupNotExist,
-        crate::proto::v2::Code::Forbidden | crate::proto::v2::Code::Unauthorized => ResponseCode::NoPermission,
-        crate::proto::v2::Code::TooManyRequests => ResponseCode::SystemBusy,
-        crate::proto::v2::Code::BadRequest | crate::proto::v2::Code::IllegalOffset => ResponseCode::InvalidParameter,
-        crate::proto::v2::Code::NotImplemented
-        | crate::proto::v2::Code::Unsupported
-        | crate::proto::v2::Code::VersionUnsupported => ResponseCode::RequestCodeNotSupported,
-        _ => ResponseCode::SystemError,
-    }
-}
-
-fn payload_code(status: &ProxyPayloadStatus) -> crate::proto::v2::Code {
-    crate::proto::v2::Code::try_from(status.code()).unwrap_or(crate::proto::v2::Code::InternalError)
-}
-
 fn response_with_header<H>(
     opaque: i32,
     code: ResponseCode,
@@ -1686,12 +1581,10 @@ mod tests {
     use rocketmq_common::common::entity::ClientGroup;
     use rocketmq_common::common::message::message_decoder;
     use rocketmq_common::common::message::message_enum::MessageRequestMode;
-    use rocketmq_common::common::message::message_ext::MessageExt;
     use rocketmq_common::common::message::message_queue::MessageQueue;
     use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
     use rocketmq_common::common::message::message_single::Message;
     use rocketmq_common::common::message::MessageConst;
-    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::MessageDecoder;
     use rocketmq_error::RocketMQError;
     use rocketmq_model::result::SendResult;
@@ -1773,12 +1666,15 @@ mod tests {
     use crate::service::DefaultTransactionService;
     use crate::service::LocalServiceManager;
     use crate::service::MessageService;
-    use crate::service::ResourceIdentity;
     use crate::service::StaticMetadataService;
     use crate::service::StaticRouteService;
     use crate::session::build_lite_subscription_sync_request;
     use crate::session::ClientSessionRegistry;
     use crate::status::ProxyStatusMapper;
+    use rocketmq_proxy_core::identity::ResourceIdentity;
+    use rocketmq_proxy_core::ProxyContext as CoreProxyContext;
+    use rocketmq_proxy_core::ProxyMessage;
+    use rocketmq_proxy_core::ProxyMessageExt;
 
     fn test_context() -> ProxyContext {
         ProxyContext::for_internal_client("Remoting", "remoting-client")
@@ -2790,7 +2686,7 @@ mod tests {
     impl AssignmentService for TestAssignmentService {
         async fn query_assignment(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             _topic: &ResourceIdentity,
             _group: &ResourceIdentity,
             _endpoints: &[crate::context::ResolvedEndpoint],
@@ -2809,7 +2705,7 @@ mod tests {
     impl MessageService for TestMessageService {
         async fn send_message(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             request: &SendMessageRequest,
         ) -> crate::error::ProxyResult<Vec<SendMessageResultEntry>> {
             Ok(request
@@ -2838,7 +2734,7 @@ mod tests {
 
         async fn recall_message(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             request: &RecallMessageRequest,
         ) -> crate::error::ProxyResult<RecallMessagePlan> {
             Ok(RecallMessagePlan {
@@ -2854,7 +2750,7 @@ mod tests {
     impl ConsumerService for TestConsumerService {
         async fn receive_message(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             _request: &ReceiveMessageRequest,
         ) -> crate::error::ProxyResult<ReceiveMessagePlan> {
             Err(crate::error::ProxyError::not_implemented("test receive"))
@@ -2862,15 +2758,16 @@ mod tests {
 
         async fn pull_message(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             request: &PullMessageRequest,
         ) -> crate::error::ProxyResult<PullMessagePlan> {
-            let mut message = MessageExt::default();
-            message.set_topic(CheetahString::from(request.target.topic.to_string()));
-            message.set_body(Bytes::from_static(b"hello"));
-            message.set_msg_id(CheetahString::from("pull-msg-id"));
-            message.set_queue_id(request.target.queue_id);
-            message.set_queue_offset(request.offset);
+            let message = ProxyMessageExt {
+                message: ProxyMessage::new(request.target.topic.to_string(), b"hello".to_vec()),
+                msg_id: "pull-msg-id".to_owned(),
+                queue_id: request.target.queue_id,
+                queue_offset: request.offset,
+                ..ProxyMessageExt::default()
+            };
             Ok(PullMessagePlan {
                 status: ProxyStatusMapper::ok_payload(),
                 next_offset: request.offset + 1,
@@ -2882,7 +2779,7 @@ mod tests {
 
         async fn ack_message(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             _request: &AckMessageRequest,
         ) -> crate::error::ProxyResult<Vec<AckMessageResultEntry>> {
             Err(crate::error::ProxyError::not_implemented("test ack"))
@@ -2890,7 +2787,7 @@ mod tests {
 
         async fn forward_message_to_dead_letter_queue(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             _request: &ForwardMessageToDeadLetterQueueRequest,
         ) -> crate::error::ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
             Err(crate::error::ProxyError::not_implemented("test dlq"))
@@ -2898,7 +2795,7 @@ mod tests {
 
         async fn change_invisible_duration(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             _request: &ChangeInvisibleDurationRequest,
         ) -> crate::error::ProxyResult<ChangeInvisibleDurationPlan> {
             Err(crate::error::ProxyError::not_implemented("test change invisible"))
@@ -2906,7 +2803,7 @@ mod tests {
 
         async fn update_offset(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             _request: &UpdateOffsetRequest,
         ) -> crate::error::ProxyResult<UpdateOffsetPlan> {
             Ok(UpdateOffsetPlan {
@@ -2916,7 +2813,7 @@ mod tests {
 
         async fn get_offset(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             _request: &GetOffsetRequest,
         ) -> crate::error::ProxyResult<GetOffsetPlan> {
             Ok(GetOffsetPlan {
@@ -2927,7 +2824,7 @@ mod tests {
 
         async fn query_offset(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             request: &QueryOffsetRequest,
         ) -> crate::error::ProxyResult<QueryOffsetPlan> {
             let offset = match request.policy {

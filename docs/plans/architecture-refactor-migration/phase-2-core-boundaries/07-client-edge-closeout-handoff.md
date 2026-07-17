@@ -154,3 +154,13 @@ Client 临时账本归零且 32-package/target-DAG 证据可重复。
 - Core normal closure 无 Client、Broker、store、auth provider、common、remoting 或 legacy facade；M07 冻结的
   Client 临时账本仍精确为 Proxy manifest 1、`cluster.rs` 12、`remoting.rs` 1，归 PR-M08-03～05 删除。
 - target guard finding 总数保持 66，新 Core 零 finding；下一串行工作包为 PR-M08-02。
+
+## 10. PR-M08-02 消费记录（2026-07-17）
+
+- processor request/plan/result、六组 service port、default/static service、gRPC 中立策略和 Remoting dispatch contract 已由
+  `rocketmq-proxy-core` 拥有；Core message DTO 与无 principal context 阻止 Common/auth provider 类型跨入 port。
+- Metadata port 的 `UserInfo`/`AclInfo` 已改用 Protocol canonical DTO；gRPC 事务 producer group 改由 Transaction port
+  返回，ingress 源码不再直接引用 Cluster 模块。
+- M07 冻结的 Client 临时账本仍精确为 Proxy manifest 1、`cluster.rs` 12、`remoting.rs` 1；本切片没有迁移或伪装
+  Client runtime，PR-M08-03 将把这些真实 Cluster lifecycle/source edge 搬入 `rocketmq-proxy-cluster`。
+- target guard finding 总数保持 66，Core 零 finding；49/82 工作包已完成、33 未完成，下一串行工作包为 PR-M08-03。

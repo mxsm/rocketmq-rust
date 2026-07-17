@@ -13,27 +13,17 @@
 // limitations under the License.
 
 use std::pin::Pin;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use futures::stream;
 use futures::Stream;
 use futures::StreamExt;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
 use rocketmq_runtime::RuntimeHandle;
-use rocketmq_runtime::ScheduledTaskConfig;
-use rocketmq_runtime::ScheduledTaskGroup;
-use rocketmq_runtime::ScheduledTaskSnapshot;
-use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use tokio::sync::mpsc;
 use tokio::sync::OwnedSemaphorePermit;
-use tokio::sync::Semaphore;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
@@ -56,75 +46,31 @@ use crate::observability::ProxyMetricsSnapshot;
 use crate::observability::ProxyRequestOutcome;
 use crate::processor::MessagingProcessor;
 use crate::proto::v2;
-use crate::service::ResourceIdentity;
 use crate::session::ClientSessionRegistry;
-use crate::session::ClientSettingsSnapshot;
-use crate::session::PreparedTransactionRegistration;
-use crate::session::ReceiptHandleRegistration;
-use crate::session::TelemetryCommandKind;
 use crate::status::ProxyStatusMapper;
+
+use rocketmq_proxy_core::grpc::service::consumer;
+use rocketmq_proxy_core::grpc::service::housekeeping;
+use rocketmq_proxy_core::grpc::service::telemetry;
+use rocketmq_proxy_core::grpc::service::topic;
+use rocketmq_proxy_core::grpc::service::transaction;
+use rocketmq_proxy_core::grpc::service::ExecutionGuards;
+use rocketmq_proxy_core::grpc::service::ReapSchedule;
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
-const DEFAULT_MAX_BODY_SIZE_BYTES: i32 = 4 * 1024 * 1024;
-const DEFAULT_PRODUCER_MAX_ATTEMPTS: i32 = 3;
-const DEFAULT_PRODUCER_BACKOFF_INITIAL_MS: u64 = 10;
-const DEFAULT_PRODUCER_BACKOFF_MAX_MS: u64 = 1_000;
-const DEFAULT_PRODUCER_BACKOFF_MULTIPLIER: f32 = 2.0;
-const DEFAULT_CONSUMER_MAX_ATTEMPTS: i32 = 17;
-const DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE: i32 = 32;
-const DEFAULT_CONSUMER_LONG_POLLING_TIMEOUT_MS: u64 = 20_000;
-const DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS: [u64; 18] = [
-    1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 180_000, 240_000, 300_000, 360_000, 420_000, 480_000, 540_000,
-    600_000, 1_200_000, 1_800_000, 3_600_000, 7_200_000,
-];
-
-#[derive(Clone)]
-struct ExecutionGuards {
-    route: Arc<Semaphore>,
-    producer: Arc<Semaphore>,
-    consumer: Arc<Semaphore>,
-    client_manager: Arc<Semaphore>,
-}
-
-impl ExecutionGuards {
-    fn from_config(config: &ProxyConfig) -> Self {
-        Self {
-            route: Arc::new(Semaphore::new(config.runtime.route_permits)),
-            producer: Arc::new(Semaphore::new(config.runtime.producer_permits)),
-            consumer: Arc::new(Semaphore::new(config.runtime.consumer_permits)),
-            client_manager: Arc::new(Semaphore::new(config.runtime.client_manager_permits)),
-        }
-    }
-
-    fn try_route(&self) -> ProxyResult<OwnedSemaphorePermit> {
-        self.route
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ProxyError::too_many_requests("route"))
-    }
-
-    fn try_consumer(&self) -> ProxyResult<OwnedSemaphorePermit> {
-        self.consumer
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ProxyError::too_many_requests("consumer"))
-    }
-
-    fn try_producer(&self) -> ProxyResult<OwnedSemaphorePermit> {
-        self.producer
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ProxyError::too_many_requests("producer"))
-    }
-
-    fn try_client_manager(&self) -> ProxyResult<OwnedSemaphorePermit> {
-        self.client_manager
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ProxyError::too_many_requests("client-manager"))
-    }
-}
+// Kept as private facade aliases for the existing behavior tests while Core
+// owns the canonical policy values.
+#[cfg(test)]
+const DEFAULT_MAX_BODY_SIZE_BYTES: i32 = telemetry::DEFAULT_MAX_BODY_SIZE_BYTES;
+#[cfg(test)]
+const DEFAULT_PRODUCER_MAX_ATTEMPTS: i32 = telemetry::DEFAULT_PRODUCER_MAX_ATTEMPTS;
+#[cfg(test)]
+const DEFAULT_CONSUMER_MAX_ATTEMPTS: i32 = telemetry::DEFAULT_CONSUMER_MAX_ATTEMPTS;
+#[cfg(test)]
+const DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE: i32 = telemetry::DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE;
+#[cfg(test)]
+const DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS: [u64; 18] = telemetry::DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS;
 
 #[derive(Clone)]
 struct RequestObservation {
@@ -193,17 +139,13 @@ pub struct ProxyGrpcService<P> {
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     guards: ExecutionGuards,
-    next_reap_at_ms: Arc<AtomicU64>,
+    reap_schedule: ReapSchedule,
     auth_runtime: Option<Arc<ProxyAuthRuntime>>,
     hooks: ProxyHookChain,
     metrics: ProxyMetrics,
 }
 
-#[derive(Clone, Debug)]
-pub struct ProxyHousekeepingRunReport {
-    pub schedule_snapshot: Vec<ScheduledTaskSnapshot>,
-    pub shutdown_report: ShutdownReport,
-}
+pub type ProxyHousekeepingRunReport = housekeeping::GrpcHousekeepingRunReport;
 
 impl<P> Clone for ProxyGrpcService<P> {
     fn clone(&self) -> Self {
@@ -212,7 +154,7 @@ impl<P> Clone for ProxyGrpcService<P> {
             processor: Arc::clone(&self.processor),
             sessions: self.sessions.clone(),
             guards: self.guards.clone(),
-            next_reap_at_ms: Arc::clone(&self.next_reap_at_ms),
+            reap_schedule: self.reap_schedule.clone(),
             auth_runtime: self.auth_runtime.clone(),
             hooks: self.hooks.clone(),
             metrics: self.metrics.clone(),
@@ -226,11 +168,11 @@ impl<P> ProxyGrpcService<P> {
             .as_millis()
             .clamp(1, u128::from(u64::MAX)) as u64;
         Self {
-            guards: ExecutionGuards::from_config(config.as_ref()),
+            guards: ExecutionGuards::from_config(&config.runtime),
             config,
             processor,
             sessions,
-            next_reap_at_ms: Arc::new(AtomicU64::new(current_epoch_millis().saturating_add(interval_ms))),
+            reap_schedule: ReapSchedule::new(Duration::from_millis(interval_ms)),
             auth_runtime: None,
             hooks: ProxyHookChain::default(),
             metrics: ProxyMetrics::default(),
@@ -481,28 +423,14 @@ impl<P> ProxyGrpcService<P> {
             },
             |parent_task_group| parent_task_group.child("rocketmq-proxy.grpc.housekeeping"),
         );
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let service = self.clone();
-        let schedule_result = scheduled_tasks.schedule_fixed_rate_no_overlap(
-            ScheduledTaskConfig::fixed_rate_no_overlap("proxy.grpc.housekeeping", self.housekeeping_interval()),
-            move || {
-                let service = service.clone();
-                async move {
-                    service.run_housekeeping_once().await;
-                }
-            },
-        );
-        if let Err(error) = schedule_result {
-            tracing::warn!(%error, "failed to schedule proxy gRPC housekeeping task");
-        }
-
-        shutdown.await;
-        let schedule_snapshot = scheduled_tasks.snapshot();
-        let shutdown_report = task_group.shutdown(Duration::from_secs(5)).await;
-        ProxyHousekeepingRunReport {
-            schedule_snapshot,
-            shutdown_report,
-        }
+        housekeeping::run_housekeeping_until(self.housekeeping_interval(), shutdown, task_group, move || {
+            let service = service.clone();
+            async move {
+                service.run_housekeeping_once().await;
+            }
+        })
+        .await
     }
 
     async fn run_housekeeping_once(&self)
@@ -516,12 +444,11 @@ impl<P> ProxyGrpcService<P> {
     }
 
     fn housekeeping_interval(&self) -> Duration {
-        Self::housekeeping_interval_from_config(self.config.as_ref())
+        housekeeping::housekeeping_interval(&self.config.session)
     }
 
     fn housekeeping_interval_from_config(config: &ProxyConfig) -> Duration {
-        let min_ttl = config.session.client_ttl().min(config.session.receipt_handle_ttl());
-        Duration::from_millis(min_ttl.as_millis().saturating_div(2).clamp(1_000, 30_000) as u64)
+        housekeeping::housekeeping_interval(&config.session)
     }
 
     fn reap_session_state(&self) {
@@ -532,29 +459,11 @@ impl<P> ProxyGrpcService<P> {
     }
 
     fn schedule_next_reap(&self) {
-        let next = current_epoch_millis()
-            .saturating_add(self.housekeeping_interval().as_millis().clamp(1, u128::from(u64::MAX)) as u64);
-        self.next_reap_at_ms.store(next, Ordering::Relaxed);
+        self.reap_schedule.schedule_next(self.housekeeping_interval());
     }
 
     fn reap_session_state_if_due(&self) {
-        let now = current_epoch_millis();
-        let next = self.next_reap_at_ms.load(Ordering::Relaxed);
-        if now < next {
-            return;
-        }
-
-        let interval_ms = self.housekeeping_interval().as_millis().clamp(1, u128::from(u64::MAX)) as u64;
-        if self
-            .next_reap_at_ms
-            .compare_exchange(
-                next,
-                now.saturating_add(interval_ms),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            )
-            .is_ok()
-        {
+        if self.reap_schedule.claim_if_due(self.housekeeping_interval()) {
             self.reap_session_state();
         }
     }
@@ -611,118 +520,27 @@ where
     P: MessagingProcessor + 'static,
 {
     fn validate_client_context<'a>(&self, context: &'a ProxyContext) -> ProxyResult<&'a str> {
-        context.require_client_id()
+        topic::validate_client_context(context)
     }
 
     fn validate_heartbeat_request(&self, context: &ProxyContext, client_type: i32) -> ProxyResult<()> {
-        self.validate_client_context(context)?;
-
-        match v2::ClientType::try_from(client_type) {
-            Ok(v2::ClientType::Producer)
-            | Ok(v2::ClientType::PushConsumer)
-            | Ok(v2::ClientType::SimpleConsumer)
-            | Ok(v2::ClientType::PullConsumer)
-            | Ok(v2::ClientType::LitePushConsumer)
-            | Ok(v2::ClientType::LiteSimpleConsumer) => Ok(()),
-            _ => Err(ProxyError::UnrecognizedClientType(client_type)),
-        }
+        topic::validate_heartbeat_request(context, client_type)
     }
 
     fn telemetry_status(status: v2::Status) -> v2::TelemetryCommand {
-        v2::TelemetryCommand {
-            status: Some(status),
-            command: None,
-        }
+        telemetry::telemetry_status(status)
     }
 
     pub fn send_reconnect_endpoints_command(&self, client_id: &str, nonce: impl Into<String>) -> bool {
-        let nonce = nonce.into();
-        if !self.sessions.register_pending_telemetry_command(
-            client_id,
-            TelemetryCommandKind::ReconnectEndpoints,
-            nonce.as_str(),
-        ) {
-            return false;
-        }
-        if self.send_server_telemetry_command(
-            client_id,
-            v2::TelemetryCommand {
-                status: Some(ProxyStatusMapper::ok()),
-                command: Some(v2::telemetry_command::Command::ReconnectEndpointsCommand(
-                    v2::ReconnectEndpointsCommand { nonce: nonce.clone() },
-                )),
-            },
-        ) {
-            true
-        } else {
-            let _ = self.sessions.remove_pending_telemetry_command(
-                client_id,
-                TelemetryCommandKind::ReconnectEndpoints,
-                nonce.as_str(),
-            );
-            false
-        }
+        telemetry::send_reconnect_endpoints(&self.sessions, client_id, nonce)
     }
 
     pub fn send_print_thread_stack_trace_command(&self, client_id: &str, nonce: impl Into<String>) -> bool {
-        let nonce = nonce.into();
-        if !self.sessions.register_pending_telemetry_command(
-            client_id,
-            TelemetryCommandKind::PrintThreadStackTrace,
-            nonce.as_str(),
-        ) {
-            return false;
-        }
-        if self.send_server_telemetry_command(
-            client_id,
-            v2::TelemetryCommand {
-                status: Some(ProxyStatusMapper::ok()),
-                command: Some(v2::telemetry_command::Command::PrintThreadStackTraceCommand(
-                    v2::PrintThreadStackTraceCommand { nonce: nonce.clone() },
-                )),
-            },
-        ) {
-            true
-        } else {
-            let _ = self.sessions.remove_pending_telemetry_command(
-                client_id,
-                TelemetryCommandKind::PrintThreadStackTrace,
-                nonce.as_str(),
-            );
-            false
-        }
+        telemetry::send_print_thread_stack_trace(&self.sessions, client_id, nonce)
     }
 
     pub fn send_verify_message_command(&self, client_id: &str, nonce: impl Into<String>, message: v2::Message) -> bool {
-        let nonce = nonce.into();
-        if !self.sessions.register_pending_telemetry_command(
-            client_id,
-            TelemetryCommandKind::VerifyMessage,
-            nonce.as_str(),
-        ) {
-            return false;
-        }
-        if self.send_server_telemetry_command(
-            client_id,
-            v2::TelemetryCommand {
-                status: Some(ProxyStatusMapper::ok()),
-                command: Some(v2::telemetry_command::Command::VerifyMessageCommand(
-                    v2::VerifyMessageCommand {
-                        nonce: nonce.clone(),
-                        message: Some(message),
-                    },
-                )),
-            },
-        ) {
-            true
-        } else {
-            let _ = self.sessions.remove_pending_telemetry_command(
-                client_id,
-                TelemetryCommandKind::VerifyMessage,
-                nonce.as_str(),
-            );
-            false
-        }
+        telemetry::send_verify_message(&self.sessions, client_id, nonce, message)
     }
 
     pub fn send_recover_orphaned_transaction_command(
@@ -731,124 +549,23 @@ where
         message: v2::Message,
         transaction_id: impl Into<String>,
     ) -> bool {
-        self.send_server_telemetry_command(
-            client_id,
-            v2::TelemetryCommand {
-                status: Some(ProxyStatusMapper::ok()),
-                command: Some(v2::telemetry_command::Command::RecoverOrphanedTransactionCommand(
-                    v2::RecoverOrphanedTransactionCommand {
-                        message: Some(message),
-                        transaction_id: transaction_id.into(),
-                    },
-                )),
-            },
-        )
+        telemetry::send_recover_orphaned_transaction(&self.sessions, client_id, message, transaction_id)
     }
 
     pub fn send_notify_unsubscribe_lite_command(&self, client_id: &str, lite_topic: impl Into<String>) -> bool {
-        let lite_topic = lite_topic.into();
-        if !self
-            .sessions
-            .register_pending_lite_unsubscribe_notice(client_id, lite_topic.as_str())
-        {
-            return false;
-        }
-        if self.send_server_telemetry_command(
-            client_id,
-            v2::TelemetryCommand {
-                status: Some(ProxyStatusMapper::ok()),
-                command: Some(v2::telemetry_command::Command::NotifyUnsubscribeLiteCommand(
-                    v2::NotifyUnsubscribeLiteCommand {
-                        lite_topic: lite_topic.clone(),
-                    },
-                )),
-            },
-        ) {
-            true
-        } else {
-            let _ = self
-                .sessions
-                .remove_pending_lite_unsubscribe_notice(client_id, lite_topic.as_str());
-            false
-        }
-    }
-
-    fn send_server_telemetry_command(&self, client_id: &str, command: v2::TelemetryCommand) -> bool {
-        self.sessions.send_telemetry_command(client_id, command)
+        telemetry::send_notify_unsubscribe_lite(&self.sessions, client_id, lite_topic)
     }
 
     fn merged_telemetry_settings(&self, settings: &v2::Settings) -> v2::Settings {
-        let mut merged = settings.clone();
-        let mut backoff_policy = None;
-        match merged.pub_sub.as_mut() {
-            Some(v2::settings::PubSub::Publishing(publishing)) => {
-                if publishing.max_body_size <= 0 {
-                    publishing.max_body_size = DEFAULT_MAX_BODY_SIZE_BYTES;
-                }
-                publishing.validate_message_type = true;
-                backoff_policy = Some(default_producer_retry_policy());
-            }
-            Some(v2::settings::PubSub::Subscription(subscription)) => {
-                subscription.receive_batch_size = Some(DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE);
-                let timeout = Duration::from_millis(DEFAULT_CONSUMER_LONG_POLLING_TIMEOUT_MS);
-                subscription.long_polling_timeout = Some(duration_to_proto_duration(clamp_duration(
-                    timeout,
-                    self.config.session.min_long_polling_timeout(),
-                    self.config.session.max_long_polling_timeout(),
-                )));
-                backoff_policy = Some(default_consumer_retry_policy());
-
-                if is_lite_client(merged.client_type) {
-                    subscription.lite_subscription_quota.get_or_insert(1200);
-                    subscription.max_lite_topic_size.get_or_insert(64);
-                }
-            }
-            None => {}
-        }
-        if let Some(backoff_policy) = backoff_policy {
-            merged.backoff_policy = Some(backoff_policy);
-        }
-        merged
+        telemetry::merged_settings(settings, &self.config.session)
     }
 
     fn effective_receive_request(
         &self,
         context: &ProxyContext,
-        mut request: crate::processor::ReceiveMessageRequest,
+        request: crate::processor::ReceiveMessageRequest,
     ) -> ProxyResult<crate::processor::ReceiveMessageRequest> {
-        if let Some(client_id) = context.client_id() {
-            if let Some(settings) = self.sessions.settings_for_client(client_id) {
-                self.apply_receive_settings(&mut request, &settings);
-            }
-        }
-
-        request.long_polling_timeout = clamp_duration(
-            request.long_polling_timeout,
-            self.config.session.min_long_polling_timeout(),
-            self.config.session.max_long_polling_timeout(),
-        );
-
-        if let Some(deadline) = context.deadline() {
-            request.long_polling_timeout = request.long_polling_timeout.min(deadline);
-        }
-
-        Ok(request)
-    }
-
-    fn apply_receive_settings(
-        &self,
-        request: &mut crate::processor::ReceiveMessageRequest,
-        settings: &ClientSettingsSnapshot,
-    ) {
-        let Some(subscription) = settings.subscription.as_ref() else {
-            return;
-        };
-
-        if let Some(receive_batch_size) = subscription.receive_batch_size {
-            request.batch_size = request.batch_size.min(receive_batch_size.max(1));
-        }
-
-        request.target.fifo |= subscription.fifo;
+        consumer::effective_receive_request(&self.sessions, &self.config.session, context, request)
     }
 
     fn track_received_receipt_handles(
@@ -857,37 +574,7 @@ where
         request: &crate::processor::ReceiveMessageRequest,
         plan: &crate::processor::ReceiveMessagePlan,
     ) {
-        if !(self.config.session.auto_renew_enabled && request.auto_renew) {
-            return;
-        }
-        let Some(client_id) = context.client_id() else {
-            return;
-        };
-
-        for message in &plan.messages {
-            let Some(receipt_handle) = message
-                .message
-                .property(&cheetah_string::CheetahString::from_static_str(
-                    MessageConst::PROPERTY_POP_CK,
-                ))
-                .map(|value| value.to_string())
-            else {
-                continue;
-            };
-
-            let tracked = self.sessions.track_receipt_handle(ReceiptHandleRegistration {
-                client_id: client_id.to_owned(),
-                group: request.group.clone(),
-                topic: ResourceIdentity::new(
-                    request.target.topic.namespace().to_owned(),
-                    message.message.topic().to_string(),
-                ),
-                message_id: message.message.msg_id().to_string(),
-                receipt_handle,
-                invisible_duration: message.invisible_duration,
-            });
-            let _ = tracked;
-        }
+        consumer::track_received_receipt_handles(&self.sessions, &self.config.session, context, request, plan);
     }
 
     fn reconcile_ack_result(
@@ -896,21 +583,7 @@ where
         request: &crate::processor::AckMessageRequest,
         plan: &crate::processor::AckMessagePlan,
     ) {
-        let Some(client_id) = context.client_id() else {
-            return;
-        };
-
-        for entry in &plan.entries {
-            if entry.status.is_ok() {
-                let _ = self.sessions.remove_receipt_handle_matching(
-                    client_id,
-                    &request.group,
-                    &request.topic,
-                    entry.message_id.as_str(),
-                    entry.receipt_handle.as_str(),
-                );
-            }
-        }
+        consumer::reconcile_ack_result(&self.sessions, context, request, plan);
     }
 
     fn reconcile_change_invisible_result(
@@ -919,81 +592,18 @@ where
         request: &crate::processor::ChangeInvisibleDurationRequest,
         plan: &crate::processor::ChangeInvisibleDurationPlan,
     ) {
-        let Some(client_id) = context.client_id() else {
-            return;
-        };
-        if !plan.status.is_ok() {
-            return;
-        }
-
-        let _ = self.sessions.update_receipt_handle_matching(
-            client_id,
-            &request.group,
-            &request.topic,
-            request.message_id.as_str(),
-            request.receipt_handle.as_str(),
-            plan.receipt_handle.as_str(),
-            request.invisible_duration,
-        );
+        consumer::reconcile_change_invisible_result(&self.sessions, context, request, plan);
     }
 
     fn track_prepared_transactions(
         &self,
         context: &ProxyContext,
+        producer_group: &str,
         grpc_request: &v2::SendMessageRequest,
         request: &crate::processor::SendMessageRequest,
         plan: &crate::processor::SendMessagePlan,
     ) {
-        let Some(client_id) = context.client_id() else {
-            return;
-        };
-        let producer_group =
-            crate::cluster::build_proxy_producer_group(&self.config.cluster, Some(client_id), context.request_id());
-
-        for ((grpc_message, message), result) in grpc_request
-            .messages
-            .iter()
-            .zip(request.messages.iter())
-            .zip(plan.entries.iter())
-        {
-            if !is_transaction_message(&message.message) {
-                continue;
-            }
-            let Some(send_result) = result.send_result.as_ref() else {
-                continue;
-            };
-            let Some(transaction_id) = send_result.transaction_id.clone() else {
-                continue;
-            };
-            let Some(commit_log_message_id) = send_result
-                .offset_msg_id
-                .clone()
-                .or_else(|| send_result.msg_id.as_ref().map(ToString::to_string))
-            else {
-                continue;
-            };
-            let client_visible_message_id = send_result
-                .msg_id
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| message.client_message_id.clone());
-            self.sessions
-                .track_prepared_transaction(PreparedTransactionRegistration {
-                    client_id: client_id.to_owned(),
-                    topic: message.topic.clone(),
-                    message_id: client_visible_message_id,
-                    transaction_id,
-                    producer_group: producer_group.clone(),
-                    transaction_state_table_offset: send_result.queue_offset,
-                    commit_log_message_id,
-                    message: grpc_message.clone(),
-                    orphaned_transaction_recovery_duration: grpc_message
-                        .system_properties
-                        .as_ref()
-                        .and_then(|system| system.orphaned_transaction_recovery_duration.as_ref())
-                        .and_then(proto_duration),
-                });
-        }
+        transaction::track_prepared_transactions(&self.sessions, producer_group, context, grpc_request, request, plan);
     }
 
     fn enrich_end_transaction_request(
@@ -1001,20 +611,7 @@ where
         context: &ProxyContext,
         request: &mut crate::processor::EndTransactionRequest,
     ) -> ProxyResult<()> {
-        let client_id = self.validate_client_context(context)?;
-        let tracked = self
-            .sessions
-            .prepared_transaction(client_id, request.transaction_id.as_str(), request.message_id.as_str())
-            .ok_or_else(|| {
-                ProxyError::invalid_transaction_id(format!(
-                    "transaction '{}' was not found in proxy session state",
-                    request.transaction_id
-                ))
-            })?;
-        request.producer_group = Some(tracked.producer_group);
-        request.transaction_state_table_offset = Some(tracked.transaction_state_table_offset);
-        request.commit_log_message_id = Some(tracked.commit_log_message_id);
-        Ok(())
+        transaction::enrich_end_transaction_request(&self.sessions, context, request)
     }
 
     fn reconcile_end_transaction_result(
@@ -1023,17 +620,7 @@ where
         request: &crate::processor::EndTransactionRequest,
         plan: &crate::processor::EndTransactionPlan,
     ) {
-        if !plan.status.is_ok() {
-            return;
-        }
-        let Some(client_id) = context.client_id() else {
-            return;
-        };
-        let _ = self.sessions.remove_prepared_transaction(
-            client_id,
-            request.transaction_id.as_str(),
-            request.message_id.as_str(),
-        );
+        transaction::reconcile_end_transaction_result(&self.sessions, context, request, plan);
     }
 
     async fn renew_due_receipt_handles(&self) {
@@ -1072,7 +659,7 @@ where
                     };
 
                     match processor
-                        .change_invisible_duration(&context, renew_request.clone())
+                        .change_invisible_duration(&context.without_principal(), renew_request.clone())
                         .await
                     {
                         Ok(plan) if plan.status.is_ok() => {
@@ -1145,116 +732,16 @@ where
                     Err(error) => Self::telemetry_status(ProxyStatusMapper::from_error(&error)),
                 }
             }
-            Some(v2::telemetry_command::Command::ThreadStackTrace(thread_stack_trace)) => {
-                let Some(client_id) = context.client_id() else {
-                    return Self::telemetry_status(ProxyStatusMapper::from_error(&ProxyError::ClientIdRequired));
-                };
-                if self.sessions.complete_print_thread_stack_trace(
-                    client_id,
-                    thread_stack_trace.nonce.as_str(),
-                    thread_stack_trace.thread_stack_trace,
-                ) {
-                    Self::telemetry_status(ProxyStatusMapper::ok())
-                } else {
+            Some(command) => telemetry::handle_client_report(&self.sessions, context.client_id(), &command)
+                .unwrap_or_else(|| {
                     Self::telemetry_status(ProxyStatusMapper::from_code(
-                        v2::Code::BadRequest,
-                        "client reported a thread stack trace for an unknown telemetry nonce",
+                        v2::Code::InternalError,
+                        "telemetry command was not handled",
                     ))
-                }
-            }
-            Some(v2::telemetry_command::Command::VerifyMessageResult(verify_message_result)) => {
-                let Some(client_id) = context.client_id() else {
-                    return Self::telemetry_status(ProxyStatusMapper::from_error(&ProxyError::ClientIdRequired));
-                };
-                if self
-                    .sessions
-                    .complete_verify_message(client_id, verify_message_result.nonce.as_str())
-                {
-                    Self::telemetry_status(ProxyStatusMapper::ok())
-                } else {
-                    Self::telemetry_status(ProxyStatusMapper::from_code(
-                        v2::Code::BadRequest,
-                        "client reported a verify-message result for an unknown telemetry nonce",
-                    ))
-                }
-            }
-            Some(_) => Self::telemetry_status(ProxyStatusMapper::from_code(
-                v2::Code::BadRequest,
-                "client sent an unsupported telemetry command",
-            )),
+                }),
             None => Self::telemetry_status(ProxyStatusMapper::ok()),
         }
     }
-}
-
-fn clamp_duration(duration: Duration, minimum: Duration, maximum: Duration) -> Duration {
-    duration.max(minimum).min(maximum)
-}
-
-fn proto_duration(duration: &prost_types::Duration) -> Option<Duration> {
-    if duration.seconds < 0 || duration.nanos < 0 || duration.nanos >= 1_000_000_000 {
-        return None;
-    }
-
-    let seconds = u64::try_from(duration.seconds).ok()?;
-    let nanos = u32::try_from(duration.nanos).ok()?;
-    Some(Duration::new(seconds, nanos))
-}
-
-fn duration_to_proto_duration(duration: Duration) -> prost_types::Duration {
-    prost_types::Duration {
-        seconds: duration.as_secs() as i64,
-        nanos: duration.subsec_nanos() as i32,
-    }
-}
-
-fn default_producer_retry_policy() -> v2::RetryPolicy {
-    v2::RetryPolicy {
-        max_attempts: DEFAULT_PRODUCER_MAX_ATTEMPTS,
-        strategy: Some(v2::retry_policy::Strategy::ExponentialBackoff(v2::ExponentialBackoff {
-            initial: Some(duration_to_proto_duration(Duration::from_millis(
-                DEFAULT_PRODUCER_BACKOFF_INITIAL_MS,
-            ))),
-            max: Some(duration_to_proto_duration(Duration::from_millis(
-                DEFAULT_PRODUCER_BACKOFF_MAX_MS,
-            ))),
-            multiplier: DEFAULT_PRODUCER_BACKOFF_MULTIPLIER,
-        })),
-    }
-}
-
-fn default_consumer_retry_policy() -> v2::RetryPolicy {
-    v2::RetryPolicy {
-        max_attempts: DEFAULT_CONSUMER_MAX_ATTEMPTS,
-        strategy: Some(v2::retry_policy::Strategy::CustomizedBackoff(v2::CustomizedBackoff {
-            next: DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS
-                .iter()
-                .map(|millis| duration_to_proto_duration(Duration::from_millis(*millis)))
-                .collect(),
-        })),
-    }
-}
-
-fn is_lite_client(client_type: Option<i32>) -> bool {
-    matches!(
-        client_type.and_then(|client_type| v2::ClientType::try_from(client_type).ok()),
-        Some(v2::ClientType::LitePushConsumer | v2::ClientType::LiteSimpleConsumer)
-    )
-}
-
-fn current_epoch_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64)
-        .unwrap_or(0)
-}
-
-fn is_transaction_message(message: &rocketmq_common::common::message::message_single::Message) -> bool {
-    message
-        .property(&cheetah_string::CheetahString::from_static_str(
-            MessageConst::PROPERTY_TRANSACTION_PREPARED,
-        ))
-        .is_some()
 }
 
 fn receive_message_stream_status(response: &v2::ReceiveMessageResponse) -> Option<&v2::Status> {
@@ -1302,7 +789,7 @@ where
                     .await
                 {
                     Ok(()) => match self.guards.try_route() {
-                        Ok(_permit) => match self.processor.query_route(&context, input).await {
+                        Ok(_permit) => match self.processor.query_route(&context.without_principal(), input).await {
                             Ok(plan) => adapter::build_query_route_response(&request, &plan),
                             Err(error) => adapter::error_query_route_response(ProxyStatusMapper::from_error(&error)),
                         },
@@ -1383,9 +870,23 @@ where
                     .await
                 {
                     Ok(()) => match self.guards.try_producer() {
-                        Ok(_permit) => match self.processor.send_message(&context, input.clone()).await {
+                        Ok(_permit) => match self
+                            .processor
+                            .send_message(&context.without_principal(), input.clone())
+                            .await
+                        {
                             Ok(plan) => {
-                                self.track_prepared_transactions(&context, &request, &input, &plan);
+                                if let Some(producer_group) =
+                                    self.processor.transaction_producer_group(&context.without_principal())
+                                {
+                                    self.track_prepared_transactions(
+                                        &context,
+                                        producer_group.as_str(),
+                                        &request,
+                                        &input,
+                                        &plan,
+                                    );
+                                }
                                 adapter::build_send_message_response(&plan, &input)
                             }
                             Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
@@ -1427,7 +928,11 @@ where
                     .await
                 {
                     Ok(()) => match self.guards.try_route() {
-                        Ok(_permit) => match self.processor.query_assignment(&context, input).await {
+                        Ok(_permit) => match self
+                            .processor
+                            .query_assignment(&context.without_principal(), input)
+                            .await
+                        {
                             Ok(plan) => adapter::build_query_assignment_response(&request, &plan),
                             Err(error) => {
                                 adapter::error_query_assignment_response(ProxyStatusMapper::from_error(&error))
@@ -1474,7 +979,11 @@ where
                     Ok(()) => match self.guards.try_consumer() {
                         Ok(_permit) => {
                             self.sessions.upsert_from_context(&context);
-                            match self.processor.receive_message(&context, input.clone()).await {
+                            match self
+                                .processor
+                                .receive_message(&context.without_principal(), input.clone())
+                                .await
+                            {
                                 Ok(plan) => {
                                     self.track_received_receipt_handles(&context, &input, &plan);
                                     adapter::build_receive_message_responses(&plan)
@@ -1525,7 +1034,11 @@ where
                     .await
                 {
                     Ok(()) => match self.guards.try_consumer() {
-                        Ok(_permit) => match self.processor.ack_message(&context, input.clone()).await {
+                        Ok(_permit) => match self
+                            .processor
+                            .ack_message(&context.without_principal(), input.clone())
+                            .await
+                        {
                             Ok(plan) => {
                                 self.reconcile_ack_result(&context, &input, &plan);
                                 adapter::build_ack_message_response(&plan)
@@ -1579,7 +1092,7 @@ where
                     Ok(()) => match self.guards.try_consumer() {
                         Ok(_permit) => match self
                             .processor
-                            .forward_message_to_dead_letter_queue(&context, input)
+                            .forward_message_to_dead_letter_queue(&context.without_principal(), input)
                             .await
                         {
                             Ok(plan) => adapter::build_forward_message_to_dead_letter_queue_response(&plan),
@@ -1633,7 +1146,7 @@ where
                     {
                         Ok(()) => {
                             self.sessions.upsert_from_context(&context);
-                            match self.processor.pull_message(&context, input).await {
+                            match self.processor.pull_message(&context.without_principal(), input).await {
                                 Ok(plan) => adapter::build_pull_message_responses(&plan),
                                 Err(error) => {
                                     adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error))
@@ -1680,7 +1193,7 @@ where
                         .authorize_contexts(&context, principal.as_ref(), &auth::update_offset_contexts(&input))
                         .await
                     {
-                        Ok(()) => match self.processor.update_offset(&context, input).await {
+                        Ok(()) => match self.processor.update_offset(&context.without_principal(), input).await {
                             Ok(plan) => adapter::build_update_offset_response(&plan),
                             Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
                         },
@@ -1719,7 +1232,7 @@ where
                         .authorize_contexts(&context, principal.as_ref(), &auth::get_offset_contexts(&input))
                         .await
                     {
-                        Ok(()) => match self.processor.get_offset(&context, input).await {
+                        Ok(()) => match self.processor.get_offset(&context.without_principal(), input).await {
                             Ok(plan) => adapter::build_get_offset_response(&plan),
                             Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
                         },
@@ -1758,7 +1271,7 @@ where
                         .authorize_contexts(&context, principal.as_ref(), &auth::query_offset_contexts(&input))
                         .await
                     {
-                        Ok(()) => match self.processor.query_offset(&context, input).await {
+                        Ok(()) => match self.processor.query_offset(&context.without_principal(), input).await {
                             Ok(plan) => adapter::build_query_offset_response(&plan),
                             Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
                         },
@@ -1801,7 +1314,11 @@ where
                     .await
                 {
                     Ok(()) => match self.guards.try_producer() {
-                        Ok(_permit) => match self.processor.end_transaction(&context, input.clone()).await {
+                        Ok(_permit) => match self
+                            .processor
+                            .end_transaction(&context.without_principal(), input.clone())
+                            .await
+                        {
                             Ok(plan) => {
                                 self.reconcile_end_transaction_result(&context, &input, &plan);
                                 adapter::build_end_transaction_response(&plan)
@@ -1977,7 +1494,11 @@ where
                     .await
                 {
                     Ok(()) => match self.guards.try_consumer() {
-                        Ok(_permit) => match self.processor.change_invisible_duration(&context, input.clone()).await {
+                        Ok(_permit) => match self
+                            .processor
+                            .change_invisible_duration(&context.without_principal(), input.clone())
+                            .await
+                        {
                             Ok(plan) => {
                                 self.reconcile_change_invisible_result(&context, &input, &plan);
                                 adapter::build_change_invisible_duration_response(&plan)
@@ -2027,7 +1548,7 @@ where
                     .await
                 {
                     Ok(()) => match self.guards.try_producer() {
-                        Ok(_permit) => match self.processor.recall_message(&context, input).await {
+                        Ok(_permit) => match self.processor.recall_message(&context.without_principal(), input).await {
                             Ok(plan) => adapter::build_recall_message_response(&plan),
                             Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
                         },
@@ -2113,9 +1634,6 @@ mod tests {
     use rocketmq_auth::authorization::model::policy::Policy;
     use rocketmq_auth::authorization::model::resource::Resource;
     use rocketmq_common::common::action::Action;
-    use rocketmq_common::common::message::message_ext::MessageExt;
-    use rocketmq_common::common::message::MessageConst;
-    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_model::result::SendResult;
     use rocketmq_model::result::SendStatus;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
@@ -2181,6 +1699,9 @@ mod tests {
     use crate::status::ProxyPayloadStatus;
     use crate::status::ProxyStatusMapper;
     use crate::PreparedTransactionRegistration;
+    use rocketmq_proxy_core::ProxyContext as CoreProxyContext;
+    use rocketmq_proxy_core::ProxyMessage;
+    use rocketmq_proxy_core::ProxyMessageExt;
 
     struct PartialMessageService;
 
@@ -2255,7 +1776,7 @@ mod tests {
     impl MessageService for PartialMessageService {
         async fn send_message(
             &self,
-            _context: &crate::context::ProxyContext,
+            _context: &CoreProxyContext,
             request: &SendMessageRequest,
         ) -> crate::error::ProxyResult<Vec<SendMessageResultEntry>> {
             Ok(request
@@ -2290,7 +1811,7 @@ mod tests {
 
         async fn recall_message(
             &self,
-            _context: &crate::context::ProxyContext,
+            _context: &CoreProxyContext,
             request: &crate::processor::RecallMessageRequest,
         ) -> crate::error::ProxyResult<crate::processor::RecallMessagePlan> {
             Ok(crate::processor::RecallMessagePlan {
@@ -2304,20 +1825,19 @@ mod tests {
     impl ConsumerService for TestConsumerService {
         async fn receive_message(
             &self,
-            _context: &crate::context::ProxyContext,
+            _context: &CoreProxyContext,
             _request: &ReceiveMessageRequest,
         ) -> crate::error::ProxyResult<ReceiveMessagePlan> {
-            let mut message = MessageExt::default();
-            message.set_topic(CheetahString::from("TopicA"));
-            message.set_body(Bytes::from_static(b"hello"));
-            message.set_msg_id(CheetahString::from("server-msg-id"));
-            message.set_queue_id(3);
-            message.set_queue_offset(42);
-            message.set_reconsume_times(1);
-            message.put_property(
-                CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
-                CheetahString::from("receipt-handle"),
-            );
+            let mut payload = ProxyMessage::new("TopicA", b"hello".to_vec());
+            payload.put_property("POP_CK", "receipt-handle");
+            let message = ProxyMessageExt {
+                message: payload,
+                msg_id: "server-msg-id".to_owned(),
+                queue_id: 3,
+                queue_offset: 42,
+                reconsume_times: 1,
+                ..ProxyMessageExt::default()
+            };
 
             Ok(ReceiveMessagePlan {
                 status: ProxyStatusMapper::ok_payload(),
@@ -2331,15 +1851,16 @@ mod tests {
 
         async fn pull_message(
             &self,
-            _context: &crate::context::ProxyContext,
+            _context: &CoreProxyContext,
             request: &PullMessageRequest,
         ) -> crate::error::ProxyResult<PullMessagePlan> {
-            let mut message = MessageExt::default();
-            message.set_topic(CheetahString::from(request.target.topic.to_string()));
-            message.set_body(Bytes::from_static(b"pull"));
-            message.set_msg_id(CheetahString::from("pull-msg-id"));
-            message.set_queue_id(request.target.queue_id);
-            message.set_queue_offset(request.offset);
+            let message = ProxyMessageExt {
+                message: ProxyMessage::new(request.target.topic.to_string(), b"pull".to_vec()),
+                msg_id: "pull-msg-id".to_owned(),
+                queue_id: request.target.queue_id,
+                queue_offset: request.offset,
+                ..ProxyMessageExt::default()
+            };
 
             Ok(PullMessagePlan {
                 status: ProxyStatusMapper::ok_payload(),
@@ -2352,7 +1873,7 @@ mod tests {
 
         async fn ack_message(
             &self,
-            _context: &crate::context::ProxyContext,
+            _context: &CoreProxyContext,
             request: &AckMessageRequest,
         ) -> crate::error::ProxyResult<Vec<AckMessageResultEntry>> {
             Ok(request
@@ -2368,7 +1889,7 @@ mod tests {
 
         async fn forward_message_to_dead_letter_queue(
             &self,
-            _context: &crate::context::ProxyContext,
+            _context: &CoreProxyContext,
             request: &ForwardMessageToDeadLetterQueueRequest,
         ) -> crate::error::ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
             self.dlq_requests
@@ -2382,7 +1903,7 @@ mod tests {
 
         async fn change_invisible_duration(
             &self,
-            _context: &crate::context::ProxyContext,
+            _context: &CoreProxyContext,
             request: &ChangeInvisibleDurationRequest,
         ) -> crate::error::ProxyResult<ChangeInvisibleDurationPlan> {
             Ok(ChangeInvisibleDurationPlan {
@@ -2393,7 +1914,7 @@ mod tests {
 
         async fn update_offset(
             &self,
-            _context: &crate::context::ProxyContext,
+            _context: &CoreProxyContext,
             request: &UpdateOffsetRequest,
         ) -> crate::error::ProxyResult<UpdateOffsetPlan> {
             self.updated_offsets
@@ -2407,7 +1928,7 @@ mod tests {
 
         async fn get_offset(
             &self,
-            _context: &crate::context::ProxyContext,
+            _context: &CoreProxyContext,
             _request: &GetOffsetRequest,
         ) -> crate::error::ProxyResult<GetOffsetPlan> {
             Ok(GetOffsetPlan {
@@ -2418,7 +1939,7 @@ mod tests {
 
         async fn query_offset(
             &self,
-            _context: &crate::context::ProxyContext,
+            _context: &CoreProxyContext,
             request: &QueryOffsetRequest,
         ) -> crate::error::ProxyResult<QueryOffsetPlan> {
             let offset = match request.policy {
@@ -2435,9 +1956,16 @@ mod tests {
 
     #[async_trait]
     impl TransactionService for TestTransactionService {
+        fn transaction_producer_group(&self, context: &CoreProxyContext) -> Option<String> {
+            Some(format!(
+                "PROXY_SEND-{}",
+                context.client_id().unwrap_or(context.request_id())
+            ))
+        }
+
         async fn end_transaction(
             &self,
-            _context: &crate::context::ProxyContext,
+            _context: &CoreProxyContext,
             request: &EndTransactionRequest,
         ) -> crate::error::ProxyResult<EndTransactionPlan> {
             self.requests
@@ -3030,10 +2558,12 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_tracks_prepared_transactions_for_transactional_entries() {
-        let service = test_service_with_message_service(
+        let service = test_service_with_all_services(
             StaticRouteService::default(),
             StaticMetadataService::default(),
             Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(DefaultConsumerService),
+            Arc::new(TestTransactionService::default()),
         );
         let mut request = Request::new(v2::SendMessageRequest {
             messages: vec![v2::Message {

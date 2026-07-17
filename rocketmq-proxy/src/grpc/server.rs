@@ -15,14 +15,11 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use tokio::net::TcpListener;
-use tokio::sync::watch;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Server;
 
 use rocketmq_runtime::RuntimeHandle;
-use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 
 use crate::config::ProxyConfig;
@@ -30,26 +27,11 @@ use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::grpc::middleware;
 use crate::grpc::service::ProxyGrpcService;
-use crate::grpc::service::ProxyHousekeepingRunReport;
 use crate::processor::MessagingProcessor;
 use crate::proto::v2::messaging_service_server::MessagingServiceServer;
 
 #[doc(hidden)]
-#[derive(Debug, Clone)]
-pub struct ProxyGrpcServerShutdownReport {
-    pub task_group: ShutdownReport,
-    pub housekeeping: Option<ProxyHousekeepingRunReport>,
-}
-
-impl ProxyGrpcServerShutdownReport {
-    pub fn is_healthy(&self) -> bool {
-        self.task_group.is_healthy()
-            && self
-                .housekeeping
-                .as_ref()
-                .is_none_or(|report| report.shutdown_report.is_healthy())
-    }
-}
+pub type ProxyGrpcServerShutdownReport = rocketmq_proxy_core::grpc::server::GrpcServerShutdownReport;
 
 pub async fn serve<P, F>(config: Arc<ProxyConfig>, service: ProxyGrpcService<P>, shutdown: F) -> ProxyResult<()>
 where
@@ -96,17 +78,6 @@ where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
-    let addr = config.grpc.socket_addr()?;
-    let listener = TcpListener::bind(addr).await.map_err(|error| ProxyError::Transport {
-        message: format!("proxy gRPC server failed to bind {addr}: {error}"),
-    })?;
-    let local_addr = listener.local_addr().map_err(|error| ProxyError::Transport {
-        message: format!("proxy gRPC server failed to resolve local address for {addr}: {error}"),
-    })?;
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let shutdown_signal = shutdown_tx.clone();
-    let housekeeping_service = service.clone();
-    let (housekeeping_report_tx, housekeeping_report_rx) = tokio::sync::oneshot::channel();
     let task_group = if let Some(parent_task_group) = parent_task_group {
         parent_task_group.child("rocketmq-proxy.grpc-server")
     } else {
@@ -115,61 +86,51 @@ where
         })?;
         TaskGroup::root("rocketmq-proxy.grpc-server", RuntimeHandle::new(runtime))
     };
-    let housekeeping_task_group = task_group.clone();
-    task_group
-        .spawn_service("proxy.grpc.housekeeping", async move {
-            let mut shutdown_rx = shutdown_rx;
-            let report = housekeeping_service
+    let housekeeping_service = service.clone();
+    let grpc_config = config.grpc.clone();
+    let max_decoding_message_size = grpc_config.max_decoding_message_size;
+    let max_encoding_message_size = grpc_config.max_encoding_message_size;
+    let concurrency_limit_per_connection = grpc_config.concurrency_limit_per_connection;
+    let shutdown_report = rocketmq_proxy_core::grpc::server::serve_with_lifecycle(
+        &grpc_config,
+        shutdown,
+        task_group,
+        move |mut shutdown_rx, housekeeping_task_group| async move {
+            housekeeping_service
                 .run_housekeeping_until_with_task_group(
                     async move {
                         loop {
-                            if *shutdown_rx.borrow() {
-                                break;
-                            }
-                            if shutdown_rx.changed().await.is_err() {
+                            if *shutdown_rx.borrow() || shutdown_rx.changed().await.is_err() {
                                 break;
                             }
                         }
                     },
                     housekeeping_task_group,
                 )
-                .await;
-            let _ = housekeeping_report_tx.send(report);
-        })
-        .map_err(|error| ProxyError::Transport {
-            message: format!("proxy gRPC server failed to spawn housekeeping task: {error}"),
-        })?;
-    let service = MessagingServiceServer::new(service)
-        .max_decoding_message_size(config.grpc.max_decoding_message_size)
-        .max_encoding_message_size(config.grpc.max_encoding_message_size);
-    let service = InterceptedService::new(service, middleware::ingress_context_interceptor(local_addr));
-
-    let result = Server::builder()
-        .concurrency_limit_per_connection(config.grpc.concurrency_limit_per_connection)
-        .add_service(service)
-        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
-            shutdown.await;
-            let _ = shutdown_signal.send(true);
-        })
-        .await;
-    let _ = shutdown_tx.send(true);
-    let task_group_report = task_group.shutdown(std::time::Duration::from_secs(10)).await;
-    let housekeeping_report =
-        match tokio::time::timeout(std::time::Duration::from_secs(1), housekeeping_report_rx).await {
-            Ok(Ok(report)) => Some(report),
-            Ok(Err(_closed)) => {
-                tracing::warn!("Proxy gRPC housekeeping report channel closed before report was sent");
-                None
-            }
-            Err(_elapsed) => {
-                tracing::warn!("Timed out waiting for proxy gRPC housekeeping report");
-                None
-            }
-        };
-    let shutdown_report = ProxyGrpcServerShutdownReport {
-        task_group: task_group_report,
-        housekeeping: housekeeping_report,
-    };
+                .await
+        },
+        move |listener, local_addr, mut shutdown_rx| async move {
+            let service = MessagingServiceServer::new(service)
+                .max_decoding_message_size(max_decoding_message_size)
+                .max_encoding_message_size(max_encoding_message_size);
+            let service = InterceptedService::new(service, middleware::ingress_context_interceptor(local_addr));
+            Server::builder()
+                .concurrency_limit_per_connection(concurrency_limit_per_connection)
+                .add_service(service)
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+                    loop {
+                        if *shutdown_rx.borrow() || shutdown_rx.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                })
+                .await
+                .map_err(|error| ProxyError::Transport {
+                    message: format!("proxy gRPC server failed: {error}"),
+                })
+        },
+    )
+    .await?;
     if !shutdown_report.is_healthy() {
         tracing::warn!(
             task_group = %shutdown_report.task_group.to_json(),
@@ -177,9 +138,6 @@ where
         );
     }
 
-    result.map_err(|error| ProxyError::Transport {
-        message: format!("proxy gRPC server failed: {error}"),
-    })?;
     Ok(shutdown_report)
 }
 #[cfg(test)]
@@ -214,7 +172,6 @@ mod tests {
     use crate::config::GrpcConfig;
     use crate::config::ProxyAuthConfig;
     use crate::config::ProxyConfig;
-    use crate::context::ProxyContext;
     use crate::context::ResolvedEndpoint;
     use crate::error::ProxyResult;
     use crate::grpc::service::ProxyGrpcService;
@@ -232,6 +189,7 @@ mod tests {
     use crate::service::RouteService;
     use crate::service::SubscriptionGroupMetadata;
     use crate::session::ClientSessionRegistry;
+    use rocketmq_proxy_core::ProxyContext as CoreProxyContext;
 
     const AUTH_TEST_DATETIME: &str = "20260322T010203Z";
 
@@ -257,7 +215,7 @@ mod tests {
     impl RouteService for RecordingRouteService {
         async fn query_route(
             &self,
-            context: &ProxyContext,
+            context: &CoreProxyContext,
             _topic: &ResourceIdentity,
             _endpoints: &[ResolvedEndpoint],
         ) -> ProxyResult<TopicRouteData> {
@@ -267,9 +225,7 @@ mod tests {
                 .push(ObservedRouteContext {
                     local_addr: context.local_addr().map(str::to_owned),
                     remote_addr: context.remote_addr().map(str::to_owned),
-                    principal: context
-                        .authenticated_principal()
-                        .map(|principal| principal.username().to_owned()),
+                    principal: None,
                 });
             Ok(TopicRouteData::default())
         }
@@ -282,7 +238,7 @@ mod tests {
     impl MetadataService for StaticMetadataService {
         async fn topic_message_type(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             _topic: &ResourceIdentity,
         ) -> ProxyResult<ProxyTopicMessageType> {
             Ok(ProxyTopicMessageType::Normal)
@@ -290,7 +246,7 @@ mod tests {
 
         async fn subscription_group(
             &self,
-            _context: &ProxyContext,
+            _context: &CoreProxyContext,
             _topic: &ResourceIdentity,
             _group: &ResourceIdentity,
         ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
@@ -462,7 +418,7 @@ mod tests {
         assert_eq!(observed.len(), 1);
         let expected_local_addr = listen_addr.to_string();
         assert_eq!(observed[0].local_addr.as_deref(), Some(expected_local_addr.as_str()));
-        assert_eq!(observed[0].principal.as_deref(), Some("alice"));
+        assert_eq!(observed[0].principal, None);
         assert!(
             observed[0]
                 .remote_addr
