@@ -244,6 +244,20 @@ impl Channel {
     }
 }
 
+impl rocketmq_transport::connection_context::ConnectionContext for Channel {
+    fn local_address(&self) -> SocketAddr {
+        Channel::local_address(self)
+    }
+
+    fn remote_address(&self) -> SocketAddr {
+        Channel::remote_address(self)
+    }
+
+    fn connection_id(&self) -> &str {
+        self.channel_id()
+    }
+}
+
 impl PartialEq for Channel {
     fn eq(&self, other: &Self) -> bool {
         self.local_address == other.local_address

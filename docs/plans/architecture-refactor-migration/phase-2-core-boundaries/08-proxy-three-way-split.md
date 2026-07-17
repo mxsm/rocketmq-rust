@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 入口就绪；M05–M07 已完成，下一工作包为 PR-M08-01 |
+| 状态 | 实施中；PR-M08-01 已完成，下一工作包为 PR-M08-02 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP19 `proxy-three-way-split` |
 | 前置条件 | model/protocol/transport/security/store-api 边界稳定；除 Proxy 外 Client 清边完成 |
@@ -30,10 +30,10 @@
 M07 已交付 [`Client 边界收口与 M08 交接清单`](07-client-edge-closeout-handoff.md)，其中包含精确临时账本、
 物理 owner、转换 seam、remoting lock/unlock 切片与 lifecycle 风险；以下项目在 PR-M08-01 候选快照上正式签署。
 
-- [ ] `[ARCH]` 冻结 core port、model/PullOutcome 边界、cluster/local lifecycle 和 facade feature 两阶段策略。
-- [ ] `[TEST]` 准备 gRPC ingress、remoting ingress、send/pull/pop/ack/route/transaction、mode closure corpus。
-- [ ] `[DEV]` 确认 proxy build.rs/proto/service/remoting/cluster/local 文件无用户修改重叠。
-- [ ] `[HUMAN]` 批准 R0 不实现 optional mode feature，下一 major 才改变 `--no-default-features` 语义。
+- [x] `[ARCH]` 冻结 core port、model/PullOutcome 边界、cluster/local lifecycle 和 facade feature 两阶段策略。
+- [x] `[TEST]` 准备 gRPC ingress、remoting ingress、send/pull/pop/ack/route/transaction、mode closure corpus。
+- [x] `[DEV]` 确认 proxy build.rs/proto/service/remoting/cluster/local 文件无用户修改重叠。
+- [x] `[HUMAN]` 批准 R0 不实现 optional mode feature，下一 major 才改变 `--no-default-features` 语义。
 
 ## 交付物
 
@@ -50,17 +50,34 @@ M07 已交付 [`Client 边界收口与 M08 交接清单`](07-client-edge-closeou
 
 ### PR-M08-01：创建 `rocketmq-proxy-core` 与 proto owner
 
-- [ ] `[ARCH]` 冻结 core 允许依赖及 canonical root exports。
-- [ ] `[DEV]` 创建 crate并迁 build.rs/proto/generated contract 的唯一 owner；现有 proxy re-export。
-- [ ] `[DEV]` 迁 context/error/status/session 和 ingress config，替换 client/provider 类型为 model/security/core DTO。
-- [ ] `[TEST]` gRPC schema/hash/generated API、canonical/legacy compile 和 ingress error mapping 差分。
-- [ ] `[REV]` 检查 core closure 无 Client/admin-core/Broker/store facade/auth provider/legacy。
-- [ ] 回滚点：proto generation 归还旧 proxy；不允许两个 build.rs 同时生成同一 contract。
+- [x] `[ARCH]` 冻结 core 允许依赖及 canonical root exports。
+- [x] `[DEV]` 创建 crate并迁 build.rs/proto/generated contract 的唯一 owner；现有 proxy re-export。
+- [x] `[DEV]` 迁 context/error/status/session 和 ingress config，替换 client/provider 类型为 model/security/core DTO。
+- [x] `[TEST]` gRPC schema/hash/generated API、canonical/legacy compile 和 ingress error mapping 差分。
+- [x] `[REV]` 检查 core closure 无 Client/admin-core/Broker/store facade/auth provider/legacy。
+- [x] 回滚点：proto generation 归还旧 proxy；不允许两个 build.rs 同时生成同一 contract。
+
+#### PR-M08-01 实施结果
+
+- `rocketmq-proxy-core` 已加入根 workspace（30/32），`default = []`；唯一拥有 build script、两个 proto schema、
+  generated module、Proxy error/status、request context、session registry、resource identity 与 normalized ingress config。
+- Context 对认证证明类型泛化，通过 `rocketmq-transport::ConnectionContext` 读取连接元数据；旧 Proxy 将 context
+  专用于 facade 私有构造的 `AuthenticatedPrincipal`，白名单信任位无法由外部调用者伪造。Session registry 对 Channel
+  slot 泛化，旧 Proxy 继续精确导出 `ClientSessionRegistry<rocketmq_remoting::Channel>`，没有复制第二份 state owner。
+- Lite topic compose/parse helper 迁至 `rocketmq-model::lite`，Common 只做兼容 re-export；status 的 ResponseCode
+  使用 `rocketmq-protocol` canonical path。Core 不依赖 common/remoting/auth provider/Client/Broker/store/legacy facade。
+- `definition.proto` 与 `service.proto` 的 SHA-256 分别冻结为
+  `28706c9d2dee01dadf54daaf7a070a1ab4b30172f284ffb2f8189569f13ac2c1` 和
+  `b7e1026b16c2284921a4d11a0b348074df82a15a8399c43f00e6005142bb5128`；Proxy family 的 v2 schema 只有一个
+  `compile_protos` 和一个 `include_proto!("apache.rocketmq.v2")` owner。
+- canonical/legacy type identity、generated client/wire、七类 ingress error mapping、ProxyConfig Serde/default、gRPC 与
+  remoting ingress 均由可重复测试覆盖。target guard 仍为预期 66 项，但新 Core 零 finding，缺失计划 package 由 3 降至 2。
+- 回滚边界是整个 Core owner slice：恢复旧 Proxy build/proto/source owner并删除单一 facade re-export；禁止保留双生成或双状态 owner。
 
 ### PR-M08-02：迁中立 plan、port、service 与 ingress
 
 - [ ] `[DEV]` 按 send/pull/pop/ack/route/transaction 迁 plan 和 port，跨边界只用 model/PullOutcome/core DTO。
-- [ ] `[DEV]` 从混合 `service.rs` 精确提取 ResourceIdentity、port/default/static service、ServiceManager contract。
+- [ ] `[DEV]` 消费已迁入 Core 的 ResourceIdentity，从混合 `service.rs` 精确提取 port/default/static service、ServiceManager contract。
 - [ ] `[DEV]` 从混合 `remoting.rs` 精确提取 ingress processor/dispatcher/转换；不迁 cluster address resolution。
 - [ ] `[DEV]` 迁 gRPC handler/middleware/server/service，只调用 port，不持 backend。
 - [ ] `[TEST]` 对旧 proxy 与 core+test adapter 执行 ingress/status/error/plan 差分。

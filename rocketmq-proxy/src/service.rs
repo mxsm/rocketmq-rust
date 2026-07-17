@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -61,39 +60,7 @@ use crate::processor::SendMessageResultEntry;
 use crate::processor::UpdateOffsetPlan;
 use crate::processor::UpdateOffsetRequest;
 use crate::status::ProxyStatusMapper;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ResourceIdentity {
-    namespace: String,
-    name: String,
-}
-
-impl ResourceIdentity {
-    pub fn new(namespace: impl Into<String>, name: impl Into<String>) -> Self {
-        Self {
-            namespace: namespace.into(),
-            name: name.into(),
-        }
-    }
-
-    pub fn namespace(&self) -> &str {
-        &self.namespace
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-impl fmt::Display for ResourceIdentity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.namespace.is_empty() {
-            write!(f, "{}", self.name)
-        } else {
-            write!(f, "{}%{}", self.namespace, self.name)
-        }
-    }
-}
+pub use rocketmq_proxy_core::ResourceIdentity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProxyTopicMessageType {

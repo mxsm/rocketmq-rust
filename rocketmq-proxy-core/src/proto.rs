@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Compatibility exports for the Proxy protocol contract.
+#[allow(clippy::large_enum_variant)]
+#[allow(clippy::doc_lazy_continuation)]
+pub mod v2 {
+    tonic::include_proto!("apache.rocketmq.v2");
+}
 
-pub use rocketmq_proxy_core::proto::*;
+pub use v2::*;

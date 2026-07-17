@@ -28,6 +28,7 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 RUST_SUFFIX = ".rs"
+PROXY_STATUS_MAPPER = ROOT / "rocketmq-proxy-core" / "src" / "status.rs"
 
 SENSITIVE_FIELD_TERMS = (
     "secret",
@@ -411,7 +412,7 @@ def check_required_mapping_adapters() -> list[Finding]:
             "query_not_found_with_remark",
             "internal_error_with_opaque",
         ],
-        ROOT / "rocketmq-proxy" / "src" / "status.rs": [
+        PROXY_STATUS_MAPPER: [
             "ProxyErrorKind",
             "broker_response_payload_override",
             "boundary_view().grpc()",
@@ -489,7 +490,7 @@ def check_required_mapping_adapters() -> list[Finding]:
 
 
 def check_proxy_grpc_boundary() -> list[Finding]:
-    path = ROOT / "rocketmq-proxy" / "src" / "status.rs"
+    path = PROXY_STATUS_MAPPER
     if not path.exists():
         return [Finding(path, 1, "proxy gRPC status mapper is missing")]
 

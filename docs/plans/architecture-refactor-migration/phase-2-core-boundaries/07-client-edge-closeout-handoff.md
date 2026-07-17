@@ -143,3 +143,14 @@ core request、dispatch 与 response encode。
 
 M08 完成条件不是“代码已移动”，而是三个新 crate 成为真实物理 owner、现有 Proxy 只做 composition，
 Client 临时账本归零且 32-package/target-DAG 证据可重复。
+
+## 9. PR-M08-01 消费记录（2026-07-17）
+
+- `rocketmq-proxy-core` 已创建，根 workspace 从本交接快照的 29/32 推进到 30/32；剩余 package 为
+  `rocketmq-proxy-cluster` 与 `rocketmq-proxy-local`。
+- proto/error/status/context/session/ResourceIdentity/normalized ingress config 已由 Core 唯一拥有，旧 Proxy 只保留
+  兼容 re-export、认证证明/Remoting `Channel` 专用 type alias 与 provider/composition adapter；白名单信任位仍由
+  Proxy auth facade 私有签发，Core context 不公开可伪造的授权捷径。
+- Core normal closure 无 Client、Broker、store、auth provider、common、remoting 或 legacy facade；M07 冻结的
+  Client 临时账本仍精确为 Proxy manifest 1、`cluster.rs` 12、`remoting.rs` 1，归 PR-M08-03～05 删除。
+- target guard finding 总数保持 66，新 Core 零 finding；下一串行工作包为 PR-M08-02。

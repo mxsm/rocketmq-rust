@@ -105,6 +105,7 @@ pub(crate) fn build_cluster_acl_rpc_hook(config: &ProxyConfig) -> Option<Arc<dyn
     }
 }
 
+/// Authenticated identity and authorization trust decision issued by this crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedPrincipal {
     username: String,

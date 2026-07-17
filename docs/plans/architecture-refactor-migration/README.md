@@ -1,10 +1,10 @@
 # RocketMQ Rust 架构重构迁移执行手册
 
-> 状态：实施中（Phase 2，M04–M07 已完成，下一工作包为 PR-M08-01）
+> 状态：实施中（Phase 2，M04–M07 已完成，M08 进行中，下一工作包为 PR-M08-02）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
-> 当前复核状态：根 workspace 29 个 package，目标 32 个 package，剩余 3 个计划 package
+> 当前复核状态：根 workspace 30 个 package，目标 32 个 package，剩余 2 个计划 package
 
 ## 1. 使用方式
 
@@ -49,7 +49,8 @@
 
 M01 入口有 22 个根 workspace package；M03 加入 `rocketmq-model` 和 `rocketmq-security-api`，M04 加入
 `rocketmq-protocol`，M05 加入 `rocketmq-transport`，M06 capability spike 加入 `rocketmq-store-api`，
-M06-03a leaf foundation 加入 `rocketmq-store-local`，PR-M06-09 加入 `rocketmq-store-rocksdb`，当前为 29 个。
+M06-03a leaf foundation 加入 `rocketmq-store-local`，PR-M06-09 加入 `rocketmq-store-rocksdb`，PR-M08-01
+加入 `rocketmq-proxy-core`，当前为 30 个。
 以下 10 个新 crate 按计划逐步加入，最终精确达到 32 个：
 
 | 新 crate | 首次创建里程碑 | 最终职责 |
