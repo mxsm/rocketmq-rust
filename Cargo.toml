@@ -31,6 +31,7 @@ members = [
   "rocketmq-proxy",
   "rocketmq-proxy-cluster",
   "rocketmq-proxy-core",
+  "rocketmq-proxy-local",
   "rocketmq-remoting",
   "rocketmq-runtime",
   "rocketmq-security-api",
@@ -88,6 +89,7 @@ rocketmq-model       = { version = "1.0.0", path = "./rocketmq-model" }
 rocketmq-protocol    = { version = "1.0.0", path = "./rocketmq-protocol" }
 rocketmq-proxy-cluster = { version = "1.0.0", path = "./rocketmq-proxy-cluster" }
 rocketmq-proxy-core  = { version = "1.0.0", path = "./rocketmq-proxy-core" }
+rocketmq-proxy-local = { version = "1.0.0", path = "./rocketmq-proxy-local" }
 rocketmq-security-api = { version = "1.0.0", path = "./rocketmq-security-api" }
 rocketmq-store-api     = { version = "1.0.0", path = "./rocketmq-store-api", default-features = false }
 rocketmq-store-local   = { version = "1.0.0", path = "./rocketmq-store-local", default-features = false }

@@ -29,18 +29,18 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 50 | 0 | 32 未开始；合计 32 尚未完成 | 82 |
+| PR 级工作包 | 51 | 0 | 31 未开始；合计 31 尚未完成 | 82 |
 | 里程碑 | 7（M01–M07） | 1（M08） | 4（M09–M12） | 12 |
-| 新增边界 crate | 9 | 0 | 1（proxy-local） | 10 |
-| 根 workspace package | 31 | — | 还差 1 | 32 |
+| 新增边界 crate | 10 | 0 | 0 | 10 |
+| 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 32 个未开始工作包分布：M08 为 3 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
-PR-M08-03 已完成 Cluster adapter 与完整 Client runtime 的物理迁移；M08 进行中，当前下一工作包为 PR-M08-04。
+剩余 31 个未开始工作包分布：M08 为 2 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
+PR-M08-04 已完成 Local adapter 与嵌入式 Broker runtime 的物理迁移；M08 进行中，当前下一工作包为 PR-M08-05。
 
-目标态差距快照不能与工作包计数混用：`architecture_dependency_guard.py --mode target --allow-missing-planned-crates`
-仅报告计划中的 `rocketmq-proxy-local` 尚未创建，以及 51 项差距：目标 DAG 直接边 49、传递闭包边 2。
-`rocketmq-proxy-core` 与 `rocketmq-proxy-cluster` 均无所属边界的 target finding；Client 临时账本 manifest/source 均为 0，
+目标态差距快照不能与工作包计数混用：`architecture_dependency_guard.py --mode target`
+当前 32 个目标 package 已全部创建，剩余 49 项差距：目标 DAG 直接边 47、传递闭包边 2。
+`rocketmq-proxy-core`、`rocketmq-proxy-cluster` 与 `rocketmq-proxy-local` 均无所属边界的 target finding；Client 临时账本 manifest/source 均为 0，
 历史 Proxy manifest 1、source 13 已由 PR-M08-03 完整消费，后续工作不得恢复 facade 对完整 Client 的直接依赖。
 
 ## 3. Phase 1：安全性与基础治理
@@ -341,7 +341,15 @@ PR-M08-03 已完成 Cluster adapter 与完整 Client runtime 的物理迁移；M
   - [x] target guard 为 51（目标 DAG 直接边 49 + 传递闭包边 2）；Client 临时账本 manifest/source 均为 0，Cluster 直边/源码无 Broker/store/local/auth provider，backend closure 无 Broker/store/local
   - [x] Cluster 19、Proxy 101、Core 47、Client 聚焦 9 项与 Auth signer 1 项测试通过；architecture contract 120（含 M08 9）、ArcMut guard 65 + fixture 24 与 runtime audit 全绿；typed-error 仅复现 main 已登记的 11 项，零新增
   - [x] 50/82 已完成、32 未完成，下一工作包 PR-M08-04
-- [ ] PR-M08-04：创建 Local adapter
+- [x] PR-M08-04：创建 Local adapter
+  - [x] `rocketmq-proxy-local` 已加入根 workspace（32/32），唯一拥有 Local Broker facade client、LocalServiceManager、message/consumer/route/transaction adapter 与 local lifecycle
+  - [x] Proxy 旧 `local`/`config`/`service` public path 保持精确 re-export；Proxy manifest 不再直接依赖 Broker/Store，Local manifest 只使用允许的 Broker/Core/Model/Runtime/Error 边
+  - [x] Local 通过 Broker 私有兼容 surface 消费协议实现类型，源码无 Common/Remoting/Store/Client/Cluster 直接 import，normal closure 无完整 Client 或 Cluster
+  - [x] Local worker 由注入的 `ServiceContext` 子域持有，使用 1024 容量有界队列、取消令牌和单一 `ShutdownDeadline`；未注入 context 的历史构造 fail closed 为 typed startup error
+  - [x] Local 8 项覆盖 send/pull/pop/ack/route/transaction、bounded queue 与 embedded lifecycle；Proxy 99 项兼容/ingress 测试通过，no-default、tieredstore 与 Local all-target/all-feature strict Clippy 通过
+  - [x] baseline guard 通过；target guard 由 51 降至 49（目标 DAG 直接边 47 + 传递闭包边 2），无缺失计划 package，Core/Cluster/Local 均为零 finding
+  - [x] architecture contract 354、ArcMut 实际 guard + fixture 24、runtime enforcing audit、32-package workspace fmt/strict Clippy 与 AGENTS routing 全绿；typed-error 仅复现 main 既有 11 项，零新增
+  - [x] 51/82 已完成、31 未完成，下一工作包 PR-M08-05
 - [ ] PR-M08-05：将现有 Proxy 降为 composition/facade
 - [ ] PR-M08-06：验证 feature closure 与下一 major fixture
 - [ ] 对应任务文档的 Exit Checklist 全部通过

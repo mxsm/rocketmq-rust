@@ -186,3 +186,21 @@ Client 临时账本归零且 32-package/target-DAG 证据可重复。
 - target guard 从历史快照的 66 降至 51，现由目标 DAG 直接边 49 与传递闭包边 2 构成，Client manifest/source
   分类均为 0；architecture contract 120（含 M08 9）、ArcMut guard 65 + fixture 24 与 runtime audit 全绿；
   typed-error guard 仅复现 main 已登记的 11 项且本切片零新增；50/82 个工作包已完成、32 个未完成。
+
+## 12. PR-M08-04 消费记录（2026-07-17）
+
+- `rocketmq-proxy-local` 已创建并加入根 workspace，目标 package 由 31/32 推进到 32/32；三个 Proxy
+  物理边界 crate 均已存在，下一串行工作包为 PR-M08-05。
+- Local Broker facade client、LocalServiceManager、message/consumer/route/transaction adapter 与 lifecycle 已由
+  Local crate 唯一拥有；Proxy 旧 local/config/service 路径精确 re-export canonical owner，manifest 已删除
+  Broker/Store 直接依赖。
+- Local 只通过 Broker 隐藏的窄兼容 surface 消费实现类型，源码无 Common、Remoting、Store、Client 或 Cluster
+  直接 import；normal closure 不含完整 Client/Cluster，Local 类型未泄漏到 Cluster 或 Core port。
+- 旧 detached ActorRuntime、构造期 `expect` 与无界队列已删除；注入的 `ServiceContext` 子域持有 worker，1024
+  容量有界队列承载 command，取消覆盖初始化/启动/活动/排队工作，嵌入式 Broker 在单一
+  `ShutdownDeadline` 内关闭。未注入 context 的历史构造 fail closed 为 typed startup error。
+- Local 8 项行为/生命周期测试与 Proxy 99 项兼容/ingress 测试通过；no-default、tieredstore、Local
+  all-target/all-feature strict Clippy 通过。target guard 从 51 降至 49，现为直接边 47 与传递闭包边 2，
+  不再有缺失计划 package，Core/Cluster/Local 均无 target finding。architecture contract 354、ArcMut 实际
+  guard + fixture 24、runtime enforcing audit、32-package workspace fmt/strict Clippy 与 AGENTS routing 全绿；
+  typed-error 仅复现 main 已登记的 11 项且本切片零新增；51/82 工作包完成、31 个未完成。

@@ -34,6 +34,7 @@ use crate::error::ProxyResult;
 use crate::grpc::server;
 use crate::grpc::ProxyGrpcService;
 use crate::local::local_components_from_config;
+use crate::local::local_components_from_config_with_service_context;
 use crate::local::LocalRemotingBackend;
 use crate::observability::ProxyHookChain;
 use crate::observability::ProxyMetrics;
@@ -413,10 +414,20 @@ fn default_service_manager_and_backend(
             )
         }
         ProxyMode::Local => {
-            let (manager, client) = local_components_from_config(
-                config.local.clone(),
-                config.cluster.query_assignment_strategy_name.clone(),
-            );
+            let (manager, client) = match service_context {
+                Some(service_context) => {
+                    let local_context = service_context.child("rocketmq-proxy.local");
+                    local_components_from_config_with_service_context(
+                        config.local.clone(),
+                        config.cluster.query_assignment_strategy_name.clone(),
+                        &local_context,
+                    )
+                }
+                None => local_components_from_config(
+                    config.local.clone(),
+                    config.cluster.query_assignment_strategy_name.clone(),
+                ),
+            };
             (Arc::new(manager), Some(Arc::new(LocalRemotingBackend::new(client))))
         }
     }

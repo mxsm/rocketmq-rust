@@ -37,7 +37,7 @@ class ProtocolBoundaryTests(unittest.TestCase):
         self.assertIn("rocketmq-protocol", packages)
 
         policy = json.loads((ROOT / "scripts" / "architecture-dependency-policy.json").read_text(encoding="utf-8"))
-        self.assertEqual(policy["package_counts"]["baseline"] + 1, len(packages))
+        self.assertEqual(policy["package_counts"]["target"], len(packages))
         self.assertIn("rocketmq-protocol", policy["planned_packages"])
 
         protocol = packages["rocketmq-protocol"]

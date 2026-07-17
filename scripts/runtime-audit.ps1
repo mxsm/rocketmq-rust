@@ -2067,7 +2067,7 @@ function Get-ShutdownDisposition {
         }
     }
 
-    if ($path -match "^rocketmq-proxy(?:-core|-cluster)?/src/") {
+    if ($path -match "^rocketmq-proxy(?:-core|-cluster|-local)?/src/") {
         return [pscustomobject]@{
             Disposition = "proxy-lifecycle-boundary"
             ActionRequired = $false
