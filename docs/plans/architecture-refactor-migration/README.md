@@ -1,10 +1,10 @@
 # RocketMQ Rust 架构重构迁移执行手册
 
-> 状态：实施中（Phase 3，M10-04 已完成，下一工作包为 PR-M10-05）
+> 状态：实施中（Phase 3；M10 工作包已完成但真实性能/HUMAN Gate 待验收，下一工作包为 PR-M11-01）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
-> 当前复核状态：根 workspace 已达到目标 32 个 package；63/82 工作包完成，剩余 19 个
+> 当前复核状态：根 workspace 已达到目标 32 个 package；64/82 工作包完成，剩余 18 个
 
 ## 1. 使用方式
 
@@ -216,6 +216,8 @@ cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 python scripts/architecture_dependency_guard.py --mode target
 python scripts/architecture_dependency_guard.py --mode baseline
 python scripts/architecture_release_guard.py
+python scripts/architecture_performance_guard.py --validate-profiles
+python scripts/architecture_performance_guard.py --baseline <baseline.json> --candidate <candidate.json>
 python scripts/arc_mut_guard.py
 .\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline
 .\scripts\check-error-hygiene.ps1
@@ -228,15 +230,16 @@ git diff --check
 
 ### 9.2 由里程碑新增后才执行的命令
 
-下列脚本是 M10/M11 的计划交付物，当前不能作为已存在的门禁报告成功：
+下列脚本是 M11 的计划交付物，当前不能作为已存在的门禁报告成功：
 
 ```powershell
-python scripts/architecture_performance_guard.py --baseline <baseline.json> --candidate <candidate.json>
 python scripts/telemetry_semantic_guard.py
 .\scripts\kind-architecture-refactor-e2e.ps1
 ```
 
-脚本落地前，用 `cargo metadata`、`cargo tree`、`rg`、现有 benchmark 和人工证据完成同等预检；脚本落地的 PR 必须同时提供正向和故意违规的 fixture。
+M10 性能 guard 已落地；`--validate-profiles` 只验证合同，baseline/candidate 命令只有消费真实目标硬件报告时
+才构成性能验收。M11 脚本落地前，用 `cargo metadata`、`cargo tree`、`rg`、现有测试和人工证据完成同等预检；
+脚本落地的 PR 必须同时提供正向和故意违规的 fixture。
 
 ### 9.3 证据目录
 

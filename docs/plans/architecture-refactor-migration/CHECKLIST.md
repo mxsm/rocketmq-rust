@@ -29,14 +29,15 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 63 | 0 | 19 未开始；合计 19 尚未完成 | 82 |
-| 里程碑 | 9（M01–M09） | 1（M10） | 2（M11–M12） | 12 |
+| PR 级工作包 | 64 | 0 | 18 未开始；合计 18 尚未完成 | 82 |
+| 里程碑 | 9（M01–M09） | 1（M10，工作包完成、Gate 待验收） | 2（M11–M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 19 个未开始工作包分布：M10 为 1 个、M11 为 12 个、M12 为 6 个。
-PR-M10-04 已完成 Index 与 Compaction generation，当前下一工作包为 PR-M10-05。
+剩余 18 个未开始工作包分布：M10 为 0 个、M11 为 12 个、M12 为 6 个。
+PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
+`待验收`而非`已完成`。当前下一工作包为 PR-M11-01。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -60,7 +61,7 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
 
 额外治理风险：默认 ArcMut baseline guard、24 fixtures 与 65 项 guard 单测均通过，但显式以 M09 检查时，
 现有 baseline 的 `current_milestone` 仍为 M05，并报告 821 个 M05/M06/M08 过期条目。本次未新增 ArcMut，
-也未篡改 baseline 消除告警；该治理漂移不计入上述 25 个工作包数量，必须在后续 ArcMut/R1/M10 收口时纠正。
+也未篡改 baseline 消除告警；该治理漂移不计入上述顶层工作包统计，必须在后续 ArcMut/R1/M11 收口时纠正。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -501,7 +502,16 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] public API 31/31 零差异；依赖/ArcMut/runtime/error/release/routing 门禁通过
   - [x] [`M10-04 证据`](phase-3-production-readiness/10-index-compaction-generation-evidence.md) 记录目标、基线/环境失败、验证与回滚
   - [x] 63/82 已完成、19 未完成，下一工作包 PR-M10-05
-- [ ] PR-M10-05：完成 benchmark、soak 与性能 Gate
+- [x] PR-M10-05：建立 benchmark、soak 与性能 Gate
+  - [x] 固定 8 个 profile、11 个变体和 50 个 profile 指标合同；现有 Criterion 命令只作为局部参考
+  - [x] guard 强制完整环境、正确性证据、原始 sidecar hash、至少 5 次样本和 baseline/candidate 环境一致
+  - [x] 吞吐、p99、RSS、allocation 与 I/O amplification 使用方向敏感的 5% 硬门禁
+  - [x] MAD/样本偏离噪声 fail closed；提升目标与 provider/native call 仅作为非门禁 hypothesis
+  - [x] 例外要求 owner、批准人、期限和回退配置，且不能覆盖 correctness/schema/环境/噪声失败
+  - [x] guard 聚焦测试 11/11、全架构 guard 125/125 与 dependency/release/ArcMut/routing 门禁通过
+  - [x] [`M10-05 证据`](phase-3-production-readiness/10-performance-gate-evidence.md) 明确区分 fixture 与真实测量
+  - [x] 64/82 已完成、18 未完成，下一工作包 PR-M11-01
+  - [ ] 真实固定硬件 baseline/candidate、原始数据 hash 与 `[HUMAN]` M10 Gate 待签署
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 
 ### M11 安全、可观测性与云原生生产化
