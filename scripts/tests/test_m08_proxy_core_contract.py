@@ -206,7 +206,7 @@ class ProxyCoreContractTests(unittest.TestCase):
         output = guard.stdout + guard.stderr
         findings = [line for line in output.splitlines() if line.startswith("VIOLATION ")]
         self.assertEqual([], findings)
-        self.assertIn("TARGET_COMPATIBILITY_LEDGER active_edges=49 entries=49", output)
+        self.assertIn("TARGET_COMPATIBILITY_LEDGER active_edges=38 entries=38", output)
         self.assertIn("TARGET_TEST_DEPENDENCIES active_edges=3 entries=3", output)
         self.assertFalse(any("caller=rocketmq-proxy-core " in line for line in findings))
         self.assertFalse(any("caller=rocketmq-proxy-cluster " in line for line in findings))

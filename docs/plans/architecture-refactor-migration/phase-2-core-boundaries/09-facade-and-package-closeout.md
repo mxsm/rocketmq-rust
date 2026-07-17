@@ -59,11 +59,15 @@
 
 ### PR-M09-02：Facade 与 legacy purity 审查
 
-- [ ] `[ARCH]` 为 common/remoting/store/proxy/rocketmq-rust 列出允许保留的 public path、composition 和真正通用工具。
-- [ ] `[DEV]` 删除误留在 facade 的新算法/owner 状态，把实现归 canonical crate；不删除兼容入口。
-- [ ] `[REV]` 检查 facade 只做精确 re-export、config conversion、factory/composition、legacy forwarding。
-- [ ] `[TEST]` canonical/legacy path编译和运行差分，验证 old path 仍可用。
-- [ ] 回滚点：若纯化影响 public surface，恢复 forwarding adapter并将删除移到下一 major，不恢复算法复制。
+- [x] `[ARCH]` 为 common/remoting/store/proxy/rocketmq-rust 列出允许保留的 public path、composition 和真正通用工具。
+- [x] `[DEV]` 删除误留在 facade 的新算法/owner 状态，把实现归 canonical crate；不删除兼容入口。
+- [x] `[REV]` 检查 facade 只做精确 re-export、config conversion、factory/composition、legacy forwarding。
+- [x] `[TEST]` canonical/legacy path编译和运行差分，验证 old path 仍可用。
+- [x] 回滚点：若纯化影响 public surface，恢复 forwarding adapter并将删除移到下一 major，不恢复算法复制。
+
+完成证据：[`09-facade-purity-closeout-evidence.md`](09-facade-purity-closeout-evidence.md)。3 条非 owner 依赖已物理
+删除，8 条必要 composition/error/lifecycle 边纳入目标 DAG；M09-02 到期项从 11 降为 0，总 ledger 49 → 38。
+五个 facade 的允许职责、canonical/legacy 差分和只恢复 forwarding adapter 的回滚边界均已冻结。
 
 ### PR-M09-03：Public API、feature、wire/storage 兼容证明
 

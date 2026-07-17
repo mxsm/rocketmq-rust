@@ -33,6 +33,7 @@ pub mod filter;
 pub mod ha;
 pub mod hook;
 mod index;
+pub mod inspection;
 mod kv;
 pub mod log_file;
 pub(crate) mod message_encoder;

@@ -33,8 +33,8 @@ rust-version.workspace = true
 #json spupport
 serde.workspace = true
 cheetah-string  = { workspace = true }
-rocketmq-common = { workspace = true }
 rocketmq-error  = { workspace = true }
+rocketmq-protocol = { workspace = true }
 ahash           = "0.8"
 dashmap         = "6.2"
 
