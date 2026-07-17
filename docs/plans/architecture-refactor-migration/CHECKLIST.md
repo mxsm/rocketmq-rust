@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 61 | 0 | 21 未开始；合计 21 尚未完成 | 82 |
+| PR 级工作包 | 62 | 0 | 20 未开始；合计 20 尚未完成 | 82 |
 | 里程碑 | 9（M01–M09） | 1（M10） | 2（M11–M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 21 个未开始工作包分布：M10 为 3 个、M11 为 12 个、M12 为 6 个。
-PR-M10-02 已完成 Tiered cursor、retry ledger 与背压，当前下一工作包为 PR-M10-03。
+剩余 20 个未开始工作包分布：M10 为 2 个、M11 为 12 个、M12 为 6 个。
+PR-M10-03 已完成 CQ、RocksDB 与 Tiered 读路径优化，当前下一工作包为 PR-M10-04。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -482,7 +482,15 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] public API additive diff 已审核并最终 31/31 零差异；ArcMut/依赖/runtime/error/MCP 门禁通过
   - [x] [`M10-02 证据`](phase-3-production-readiness/10-tiered-cursor-retry-evidence.md) 记录目标、基线失败、验证与回滚
   - [x] 61/82 已完成、21 未完成，下一工作包 PR-M10-03
-- [ ] PR-M10-03：优化 CQ、Rocks 与 Tiered 读取
+- [x] PR-M10-03：优化 CQ、Rocks 与 Tiered 读取
+  - [x] Local CQ 直接借用 mmap slice 解码 20B unit，按有界请求预分配结果，不为单元创建临时 buffer
+  - [x] Rocks CQ 使用一次原生 range scan 返回 typed value，移除 typed→Bytes→typed 往返
+  - [x] Tiered 使用全局 byte-bounded、generation-aware block cache，并合并相邻 CQ/CommitLog range
+  - [x] 32 条冷拉精确 2 次 provider read、热拉 0；Rocks 完整拉取精确 2 次 point read + 1 次 scan
+  - [x] cache retained bytes、generation/path 失效与 body lease 生命周期已审查并由测试覆盖
+  - [x] public API additive diff 已审核；ArcMut/依赖/runtime/error/MCP/Rocks 专项门禁通过
+  - [x] [`M10-03 证据`](phase-3-production-readiness/10-read-path-optimization-evidence.md) 记录目标、基线失败、验证与回滚
+  - [x] 62/82 已完成、20 未完成，下一工作包 PR-M10-04
 - [ ] PR-M10-04：实现 Index/Compaction generation
 - [ ] PR-M10-05：完成 benchmark、soak 与性能 Gate
 - [ ] 对应任务文档的 Exit Checklist 全部通过
