@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 实施中；PR-M08-04 已完成，下一工作包为 PR-M08-05 |
+| 状态 | 实施中；PR-M08-05 已完成，下一工作包为 PR-M08-06 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP19 `proxy-three-way-split` |
 | 前置条件 | model/protocol/transport/security/store-api 边界稳定；除 Proxy 外 Client 清边完成 |
@@ -172,12 +172,33 @@ M07 已交付 [`Client 边界收口与 M08 交接清单`](07-client-edge-closeou
 
 ### PR-M08-05：现有 Proxy 降为 composition/facade
 
-- [ ] `[DEV]` 只保 bootstrap、分区 config conversion、auth runtime、observability、binary 和旧 public path re-export。
-- [ ] `[DEV]` R0 facade 对 cluster/local 使用非 optional dependency，继续 `default = []`；保持 facade 不恢复完整 Client direct edge。
-- [ ] `[DEV]` 保持 ProxyConfig Serde/env/CLI 默认模式；core/cluster/local 分别消费 normalized config。
-- [ ] `[TEST]` 运行现有默认和 no-default，两者继续编译两端并保持运行行为。
-- [ ] `[REV]` 检查 facade 不新增业务算法，core/local 不经 facade 反向到 cluster/client。
-- [ ] 回滚点：按 bootstrap/config/re-export 适配器回滚；不得提前启用下一 major feature 语义。
+- [x] `[DEV]` 只保 bootstrap、分区 config conversion、auth runtime、observability、binary 和旧 public path re-export。
+- [x] `[DEV]` R0 facade 对 cluster/local 使用非 optional dependency，继续 `default = []`；保持 facade 不恢复完整 Client direct edge。
+- [x] `[DEV]` 保持 ProxyConfig Serde/env/CLI 默认模式；core/cluster/local 分别消费 normalized config。
+- [x] `[TEST]` 运行现有默认和 no-default，两者继续编译两端并保持运行行为。
+- [x] `[REV]` 检查 facade 不新增业务算法，core/local 不经 facade 反向到 cluster/client。
+- [x] 回滚点：按 bootstrap/config/re-export 适配器回滚；不得提前启用下一 major feature 语义。
+
+#### PR-M08-05 实施结果
+
+- **Facade boundary**：Proxy manifest 删除未使用的 `rocketmq-rust`，继续只在 composition root 同时看见
+  Core/Cluster/Local；三者保持非 optional 且 `default = []`，`cluster-mode`、`local-mode`、
+  `compat-all-modes` 仍只属于下一 major 设计，不进入 R0 manifest。
+- **Ownership**：processor/service/cluster/local 与 core context/error/status/proto 等旧路径继续精确转发 canonical
+  owner。实现态文件只承担 bootstrap、config/auth/observability、gRPC/Remoting wire ingress、binary 与兼容转换，
+  不重新定义 MessagingProcessor、ServiceManager 或 Cluster/Local runtime owner。
+- **Config/compatibility**：`ProxyConfig` 的公开字段、Serde/env/CLI 默认模式不变；Core 的
+  Grpc/Remoting/Runtime/Session、Cluster 的 ClusterConfig 与 Local 的 LocalConfig 继续由各自 owner 定义并由
+  facade 分区交付。默认/no-default 均继续编译 Cluster 与 Local。
+- **Guard evidence**：M08 合同新增 R0 facade dependency/source/reverse-edge 断言，禁止 Client、Broker、Store 和
+  legacy runtime 回流；Core/Cluster/Local 继续零 target finding。target gap 由 49 降至 48（46 项直接边 + 2 项
+  传递闭包边），Proxy 自身剩余 Common/Error/Model/Remoting 4 项 ingress 兼容直边，交由 M09 strict target
+  closeout 统一收口，不把目标债务误记为完成。
+- **Validation**：Proxy default/no-default 各 99 项、architecture contract 355 项、根 workspace fmt 与 32-package
+  all-target/all-feature strict Clippy、baseline guard、ArcMut 实际扫描、runtime enforcing audit、AGENTS routing 和
+  diff check 全绿。typed-error guard 仅复现 main 已登记的 Broker source stringification 1、MCP anyhow 8、缺失治理
+  文档 2，共 11 项；本切片零新增，不将该门禁误报为通过。
+- **Progress**：52/82 个工作包完成，30 个尚未完成；下一串行工作包为 PR-M08-06。
 
 ### PR-M08-06：Feature closure 与下一 major fixture
 

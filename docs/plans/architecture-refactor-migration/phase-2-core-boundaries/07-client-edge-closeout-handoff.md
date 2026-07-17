@@ -204,3 +204,18 @@ Client 临时账本归零且 32-package/target-DAG 证据可重复。
   不再有缺失计划 package，Core/Cluster/Local 均无 target finding。architecture contract 354、ArcMut 实际
   guard + fixture 24、runtime enforcing audit、32-package workspace fmt/strict Clippy 与 AGENTS routing 全绿；
   typed-error 仅复现 main 已登记的 11 项且本切片零新增；51/82 工作包完成、31 个未完成。
+
+## 13. PR-M08-05 消费记录（2026-07-17）
+
+- 现有 Proxy 已按 R0 冻结为 composition/facade：Core/Cluster/Local 仍为非 optional 且 `default = []`，下一 major
+  的 mode feature 没有提前启用；Proxy 未使用的 `rocketmq-rust` manifest/lockfile 直边已删除。
+- processor/service/cluster/local 等 owner 路径继续精确 re-export；Proxy 实现态只保 bootstrap、config/auth、
+  observability、binary、gRPC/Remoting ingress adapter 与兼容转换。静态合同禁止 Client/Broker/Store/legacy
+  runtime 回流，并禁止 Core/Local 反向依赖 facade、Cluster 或 Client。
+- ProxyConfig 的公开 Serde/env/CLI envelope 与默认模式不变，Core/Cluster/Local normalized config 仍由各自
+  canonical owner 定义和消费；默认/no-default 行为均保留双 adapter。
+- target guard 从 49 降至 48（直接边 46 + 传递闭包边 2）；Core/Cluster/Local 零 finding，Proxy 剩余的
+  Common/Error/Model/Remoting 4 项 ingress 兼容直边显式进入 M09 strict target closeout，不以 re-export 绕行。
+- Proxy default/no-default 各 99 项、architecture contract 355 项、根 fmt/strict Clippy、baseline、ArcMut、runtime、
+  routing 与 diff check 通过；typed-error 仅复现 main 既有 11 项且本切片零新增。
+- 52/82 个工作包已完成、30 个未完成，M08 只剩 PR-M08-06 feature closure 与下一 major fixture。
