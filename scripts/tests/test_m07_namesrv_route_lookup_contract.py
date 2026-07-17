@@ -101,7 +101,10 @@ class NamesrvRouteLookupContractTest(unittest.TestCase):
             (ROOT / "scripts" / "architecture-dependency-baseline.json").read_text(encoding="utf-8")
         )
 
-        self.assertEqual(2, policy["client_policy"]["baseline_manifest_consumers"])
+        self.assertNotIn(
+            "rocketmq-namesrv",
+            {entry["caller"] for entry in policy["client_policy"]["target_manifest_allowlist"]},
+        )
         self.assertIn("rocketmq-protocol", policy["target_dag"]["rocketmq-namesrv"])
         self.assertIn("rocketmq-transport", policy["target_dag"]["rocketmq-namesrv"])
         self.assertNotIn("rocketmq-client-rust", policy["target_dag"]["rocketmq-namesrv"])

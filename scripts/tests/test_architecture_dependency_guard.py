@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import subprocess
 import sys
@@ -68,6 +69,8 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
         mode: str = "target",
         source_files: dict[str, str] | None = None,
         allow_missing: bool = True,
+        policy_override: dict[str, object] | None = None,
+        baseline_override: dict[str, object] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
@@ -80,13 +83,24 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")
 
+            policy_path = POLICY
+            if policy_override is not None:
+                policy_path = temp / "policy.json"
+                policy_path.write_text(json.dumps(policy_override), encoding="utf-8")
+            baseline_path = BASELINE
+            if baseline_override is not None:
+                baseline_path = temp / "baseline.json"
+                baseline_path.write_text(json.dumps(baseline_override), encoding="utf-8")
+
             command = [
                 sys.executable,
                 str(GUARD),
                 "--mode",
                 mode,
                 "--policy",
-                str(POLICY),
+                str(policy_path),
+                "--baseline",
+                str(baseline_path),
                 "--metadata-file",
                 str(metadata_file),
                 "--source-root",
@@ -288,6 +302,181 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
             ]
         )
         self.assert_rule(self.run_guard(fixture), "transport-no-high-level")
+
+    def test_forbidden_consumers_cannot_reexport_client_through_a_transitive_edge(self) -> None:
+        forbidden_callers = [
+            "rocketmq-broker",
+            "rocketmq-namesrv",
+            "rocketmq-proxy-core",
+            "rocketmq-proxy-local",
+            "rocketmq-common",
+            "rocketmq-remoting",
+        ]
+        fixture = metadata(
+            [package(caller, [dependency("rocketmq-admin-core")]) for caller in forbidden_callers]
+            + [
+                package("rocketmq-admin-core", [dependency("rocketmq-client-rust")]),
+                package("rocketmq-client-rust"),
+            ]
+        )
+        result = self.run_guard(fixture)
+        findings = [
+            line
+            for line in result.stdout.splitlines()
+            if "rule=transitive-forbidden-reachability" in line
+            and "target=rocketmq-client-rust" in line
+        ]
+
+        self.assertEqual(len(forbidden_callers), len(findings), result.stdout)
+        for caller in forbidden_callers:
+            self.assertTrue(any(f"caller={caller}" in line for line in findings), result.stdout)
+
+    def test_client_manifest_allowlist_matches_the_full_edge_identity_once(self) -> None:
+        manifest = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml"
+        valid = metadata(
+            [
+                package(
+                    "rocketmq-admin-core",
+                    [dependency("rocketmq-client-rust")],
+                    manifest_path=manifest,
+                ),
+                package("rocketmq-client-rust"),
+            ]
+        )
+        self.assertNotIn("rule=client-manifest-allowlist", self.run_guard(valid).stdout)
+
+        invalid_cases = {
+            "wrong kind": package(
+                "rocketmq-admin-core",
+                [dependency("rocketmq-client-rust", kind="dev")],
+                manifest_path=manifest,
+            ),
+            "renamed alias": package(
+                "rocketmq-admin-core",
+                [dependency("rocketmq-client-rust", rename="renamed_client")],
+                manifest_path=manifest,
+            ),
+            "wrong path": package(
+                "rocketmq-admin-core",
+                [dependency("rocketmq-client-rust")],
+                manifest_path="other/Cargo.toml",
+            ),
+            "duplicate edge": package(
+                "rocketmq-admin-core",
+                [dependency("rocketmq-client-rust"), dependency("rocketmq-client-rust")],
+                manifest_path=manifest,
+            ),
+        }
+        for label, caller in invalid_cases.items():
+            with self.subTest(label=label):
+                result = self.run_guard(metadata([caller, package("rocketmq-client-rust")]))
+                self.assert_rule(result, "client-manifest-allowlist")
+
+    def test_client_source_allowlist_matches_caller_prefix_and_alias(self) -> None:
+        manifest = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml"
+        fixture = metadata(
+            [
+                package(
+                    "rocketmq-admin-core",
+                    [dependency("rocketmq-client-rust")],
+                    manifest_path=manifest,
+                ),
+                package("rocketmq-client-rust"),
+            ]
+        )
+        allowed = self.run_guard(
+            fixture,
+            source_files={
+                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/ok.rs": (
+                    "use rocketmq_client_rust::ClientConfig;\n"
+                )
+            },
+        )
+        self.assertNotIn("rule=client-source-allowlist", allowed.stdout)
+
+        outside = self.run_guard(
+            fixture,
+            source_files={
+                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/outside.rs": (
+                    "use rocketmq_client_rust::ClientConfig;\n"
+                )
+            },
+        )
+        self.assert_rule(outside, "client-source-allowlist")
+
+        renamed_fixture = metadata(
+            [
+                package(
+                    "rocketmq-admin-core",
+                    [dependency("rocketmq-client-rust", rename="renamed_client")],
+                    manifest_path=manifest,
+                ),
+                package("rocketmq-client-rust"),
+            ]
+        )
+        renamed = self.run_guard(
+            renamed_fixture,
+            source_files={
+                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/renamed.rs": (
+                    "use renamed_client::ClientConfig;\n"
+                )
+            },
+        )
+        self.assert_rule(renamed, "client-source-allowlist")
+
+    def test_client_policy_schema_rejects_broadened_entries(self) -> None:
+        fixture = metadata([package("rocketmq-model")])
+        policy = json.loads(POLICY.read_text(encoding="utf-8"))
+        invalid_policies = []
+
+        extra_key = copy.deepcopy(policy)
+        extra_key["client_policy"]["unexpected"] = True
+        invalid_policies.append(("extra key", extra_key))
+
+        unknown_alias = copy.deepcopy(policy)
+        unknown_alias["client_policy"]["target_source_allowlist"][0]["aliases"] = [
+            "renamed_client"
+        ]
+        invalid_policies.append(("unknown alias", unknown_alias))
+
+        duplicate_identity = copy.deepcopy(policy)
+        duplicate_identity["client_policy"]["target_manifest_allowlist"].append(
+            copy.deepcopy(duplicate_identity["client_policy"]["target_manifest_allowlist"][0])
+        )
+        invalid_policies.append(("duplicate identity", duplicate_identity))
+
+        for label, invalid_policy in invalid_policies:
+            with self.subTest(label=label):
+                result = self.run_guard(fixture, policy_override=invalid_policy)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("policy client", result.stderr)
+
+    def test_client_ledger_schema_rejects_broadened_proxy_debt(self) -> None:
+        fixture = metadata([package("rocketmq-model")])
+        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+        invalid_baselines = []
+
+        wrong_owner = copy.deepcopy(baseline)
+        wrong_owner["source_exceptions"][0]["owner"] = "other"
+        invalid_baselines.append(("wrong owner", wrong_owner))
+
+        broadened_path = copy.deepcopy(baseline)
+        broadened_path["source_exceptions"][0]["path"] = "rocketmq-proxy/src/other.rs"
+        invalid_baselines.append(("broadened path", broadened_path))
+
+        broadened_count = copy.deepcopy(baseline)
+        broadened_count["source_exceptions"][0]["count"] = 13
+        invalid_baselines.append(("broadened count", broadened_count))
+
+        wrong_milestone = copy.deepcopy(baseline)
+        wrong_milestone["manifest_exceptions"][-1]["remove_by"] = "M09"
+        invalid_baselines.append(("wrong milestone", wrong_milestone))
+
+        for label, invalid_baseline in invalid_baselines:
+            with self.subTest(label=label):
+                result = self.run_guard(fixture, baseline_override=invalid_baseline)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("temporary Client", result.stderr)
 
     def test_client_source_alias_is_detected(self) -> None:
         fixture = metadata(

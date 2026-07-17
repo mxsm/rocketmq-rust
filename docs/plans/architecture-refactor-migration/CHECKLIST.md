@@ -29,18 +29,19 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 46 | 0 | 36 未开始；合计 36 尚未完成 | 82 |
-| 里程碑 | 6（M01–M06） | 1（M07） | 5（M08–M12） | 12 |
+| PR 级工作包 | 47 | 0 | 35 未开始；合计 35 尚未完成 | 82 |
+| 里程碑 | 7（M01–M07） | 0 | 5（M08–M12） | 12 |
 | 新增边界 crate | 7 | 0 | 3（proxy-core/cluster/local） | 10 |
 | 根 workspace package | 29 | — | 还差 3 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 36 个未开始工作包分布：M07 为 1 个、M08 为 6 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、
-M12 为 6 个。PR-M07-06 已完成 Dashboard Admin Session 迁移；M07 继续进行，当前下一工作包为 PR-M07-07。
+剩余 35 个未开始工作包分布：M08 为 6 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
+PR-M07-07 已完成 allowlist/consumer closeout，M07 完成；当前下一工作包为 PR-M08-01。
 
 目标态差距快照不能与工作包计数混用：`architecture_dependency_guard.py --mode target --allow-missing-planned-crates`
-仍报告 3 个计划 Proxy crate 缺失和 87 项差距，其中 Client source 35、Client manifest 1、目标 DAG 直接边 49、传递闭包边 2。
-Client source 与 manifest 差距均只位于 Proxy；Dashboard、Admin Core、Broker 已从 Client 违规差距清单退出。
+仍报告 3 个计划 Proxy crate 缺失和 66 项差距，其中 Client source 13、Client manifest 1、目标 DAG 直接边 50、传递闭包边 2。
+Client source 与 manifest 差距均只位于 Proxy；Dashboard、Admin Core、Broker 已从 Client 违规差距清单退出。新增的一项目标 DAG
+差距是现有 Proxy 在物理拆分前直接使用 model 中立结果，M08 将其迁入 proxy-core，不把临时直边扩大为目标依赖。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -296,8 +297,15 @@ Client source 与 manifest 差距均只位于 Proxy；Dashboard、Admin Core、B
   - [x] Tauri 76 tests、Web backend 23 tests、两项目 strict Clippy/build 与两套 Node production build 通过；Admin dashboard 6 项专项测试及 Admin/CLI/TUI 兼容测试通过
   - [x] architecture baseline、8 项 M07-06 contract、98 项治理测试、24 fixtures、runtime/ArcMut/routing guard 通过
   - [x] 目标态差距由 115 降至 87；父项关闭后 46/82 已完成、36 尚未完成，唯一下一工作包为 PR-M07-07
-- [ ] PR-M07-07：完成 allowlist 与 consumer closeout
-- [ ] 对应任务文档的 Exit Checklist 全部通过
+- [x] PR-M07-07：完成 allowlist 与 consumer closeout
+  - [x] manifest allowlist 按 caller/target/kind/path/alias 精确匹配，source allowlist 按 caller/path/alias 精确匹配
+  - [x] 永久 Admin/Example allowlist 与临时 baseline 分离；Client 临时账本只剩 Proxy 1 manifest + 13 source，owner/remove_by 为 Proxy/M08
+  - [x] Proxy 22 处中立 Send/Pull DTO 改用 model canonical path，真正 Client runtime 只剩 cluster/remoting 两文件
+  - [x] Broker、NameServer、proxy-core/local、common、remoting normal closure 固定禁止到达 Client，违规 fixture 覆盖绕行
+  - [x] 根、Proxy、Admin/MCP、Example、Tauri、Web、frontend 与 governance 累计验证完成；GPUI 未被本次变更触发
+  - [x] [`M08 交接清单`](phase-2-core-boundaries/07-client-edge-closeout-handoff.md) 已冻结 owner、转换 seam、临时账本和 lifecycle 风险
+  - [x] 目标差距由 87 降至 66；47/82 已完成、35 未完成，下一工作包 PR-M08-01
+- [x] 对应任务文档的 Exit Checklist 全部通过
 
 ### M08 Proxy Core、Cluster、Local 三向物理拆分
 

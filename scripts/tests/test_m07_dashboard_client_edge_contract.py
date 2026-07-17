@@ -179,14 +179,19 @@ class DashboardClientEdgeContractTest(unittest.TestCase):
         policy = json.loads(read(ROOT / "scripts" / "architecture-dependency-policy.json"))
         client_policy = policy["client_policy"]
 
+        manifest_callers = {entry["caller"] for entry in client_policy["target_manifest_allowlist"]}
+        source_entries = client_policy["target_source_allowlist"]
+        source_callers = {entry["caller"] for entry in source_entries}
+        source_prefixes = {entry["path_prefix"] for entry in source_entries}
+
         self.assertTrue(
-            DASHBOARD_SOURCE_ROOTS.issubset(set(client_policy["source_consumer_roots"]))
+            set(DASHBOARDS).isdisjoint(manifest_callers)
         )
         self.assertTrue(
-            set(DASHBOARDS).isdisjoint(client_policy["target_manifest_allowlist"])
+            set(DASHBOARDS).isdisjoint(source_callers)
         )
         self.assertTrue(
-            DASHBOARD_SOURCE_ROOTS.isdisjoint(client_policy["target_source_allowlist"])
+            DASHBOARD_SOURCE_ROOTS.isdisjoint(source_prefixes)
         )
 
     def test_architecture_baseline_cannot_restore_dashboard_bypass_edges(self) -> None:

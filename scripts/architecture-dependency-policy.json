@@ -409,7 +409,14 @@
       "forbidden_targets": ["rocketmq-common", "rocketmq-remoting", "rocketmq-store", "rocketmq-rust", "rocketmq-broker"]
     },
     {
-      "callers": ["rocketmq-proxy-core", "rocketmq-proxy-local"],
+      "callers": [
+        "rocketmq-broker",
+        "rocketmq-namesrv",
+        "rocketmq-proxy-core",
+        "rocketmq-proxy-local",
+        "rocketmq-common",
+        "rocketmq-remoting"
+      ],
       "forbidden_targets": ["rocketmq-client-rust"]
     },
     {
@@ -426,27 +433,45 @@
   "client_policy": {
     "package": "rocketmq-client-rust",
     "crate_names": ["rocketmq_client_rust", "rocketmq_client"],
-    "baseline_manifest_consumers": 2,
-    "baseline_standalone_consumers": 3,
     "target_manifest_allowlist": [
-      "rocketmq-proxy-cluster",
-      "rocketmq-admin-core",
-      "rocketmq-example"
+      {
+        "caller": "rocketmq-admin-core",
+        "target": "rocketmq-client-rust",
+        "kind": "normal",
+        "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml",
+        "alias": "rocketmq_client_rust"
+      },
+      {
+        "caller": "rocketmq-proxy-cluster",
+        "target": "rocketmq-client-rust",
+        "kind": "normal",
+        "path": "rocketmq-proxy-cluster/Cargo.toml",
+        "alias": "rocketmq_client_rust"
+      },
+      {
+        "caller": "rocketmq-example",
+        "target": "rocketmq-client-rust",
+        "kind": "dev",
+        "path": "rocketmq-example/Cargo.toml",
+        "alias": "rocketmq_client_rust"
+      }
     ],
     "target_source_allowlist": [
-      "rocketmq-proxy-cluster/",
-      "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/",
-      "rocketmq-example/"
-    ],
-    "source_consumer_roots": [
-      "rocketmq-broker/",
-      "rocketmq-namesrv/",
-      "rocketmq-proxy/",
-      "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/",
-      "rocketmq-tools/rocketmq-mcp/",
-      "rocketmq-example/",
-      "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/",
-      "rocketmq-dashboard/rocketmq-dashboard-web/backend/"
+      {
+        "caller": "rocketmq-admin-core",
+        "path_prefix": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/",
+        "aliases": ["rocketmq_client_rust"]
+      },
+      {
+        "caller": "rocketmq-proxy-cluster",
+        "path_prefix": "rocketmq-proxy-cluster/src/",
+        "aliases": ["rocketmq_client_rust"]
+      },
+      {
+        "caller": "rocketmq-example",
+        "path_prefix": "rocketmq-example/examples/",
+        "aliases": ["rocketmq_client_rust"]
+      }
     ]
   },
   "facade_rules": [

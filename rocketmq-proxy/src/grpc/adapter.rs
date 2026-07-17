@@ -1560,13 +1560,13 @@ mod tests {
 
     use bytes::Bytes;
     use cheetah_string::CheetahString;
-    use rocketmq_client_rust::producer::send_result::SendResult;
-    use rocketmq_client_rust::producer::send_status::SendStatus;
     use rocketmq_common::common::message::message_enum::MessageRequestMode;
     use rocketmq_common::common::message::message_queue::MessageQueue;
     use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
     use rocketmq_common::common::message::message_single::Message;
     use rocketmq_common::common::message::MessageConst;
+    use rocketmq_model::result::SendResult;
+    use rocketmq_model::result::SendStatus;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
