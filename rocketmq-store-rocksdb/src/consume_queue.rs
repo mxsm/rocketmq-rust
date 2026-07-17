@@ -20,6 +20,7 @@ use std::sync::Weak;
 
 use crate::batch::RocksDbWriteBatch;
 use crate::column_family::RocksDbColumnFamily;
+use crate::iterator::RocksDbRangeScanOptions;
 use crate::iterator::RocksDbScanOptions;
 use crate::key::ConsumeQueueKey;
 use crate::key::ConsumeQueueOffsetBoundary;
@@ -281,12 +282,33 @@ impl<'a> RocksDbConsumeQueueBatchWriter<'a> {
         }
 
         let topic = topic.into();
-        let mut values = Vec::with_capacity(num as usize);
-        for offset_delta in 0..num {
-            match self.get_cq_value(topic.clone(), queue_id, start_index + i64::from(offset_delta))? {
-                Some(value) => values.push(value),
-                None => break,
+        let end_index = start_index
+            .checked_add(i64::from(num))
+            .ok_or_else(|| RocketMQError::ConfigInvalidValue {
+                key: "rocksdb.consume_queue.range",
+                value: format!("{start_index}+{num}"),
+                reason: "consume queue range overflowed i64".to_string(),
+            })?;
+        let start = encode_consume_queue_key(&topic, queue_id, start_index)?;
+        let end = encode_consume_queue_key(&topic, queue_id, end_index)?;
+        let items = self.store.range_scan(&RocksDbRangeScanOptions::new(
+            RocksDbColumnFamily::Default.name(),
+            start,
+            end,
+            num as usize,
+        ))?;
+        let mut values = Vec::with_capacity(items.len());
+        for (offset_delta, item) in items.into_iter().enumerate() {
+            let offset_delta = i64::try_from(offset_delta).map_err(|_| RocketMQError::ConfigInvalidValue {
+                key: "rocksdb.consume_queue.range",
+                value: offset_delta.to_string(),
+                reason: "consume queue range index exceeds i64".to_string(),
+            })?;
+            let expected_key = encode_consume_queue_key(&topic, queue_id, start_index + offset_delta)?;
+            if item.key.as_ref() != expected_key.as_slice() {
+                break;
             }
+            values.push(ConsumeQueueValue::decode(item.value.as_ref())?);
         }
         Ok(values)
     }
@@ -433,6 +455,21 @@ impl RocksDbConsumeQueueStore {
             .into_iter()
             .map(encode_consume_queue_value)
             .collect()
+    }
+
+    /// Reads a contiguous ConsumeQueue range as typed values with one native range scan.
+    ///
+    /// The scan stops at the first missing logical offset and never performs the legacy
+    /// typed-to-bytes-to-typed round trip used by the compatibility facade.
+    pub fn range_query_values(
+        &self,
+        topic: impl Into<String>,
+        queue_id: i32,
+        start_index: i64,
+        num: i32,
+    ) -> Result<Vec<ConsumeQueueValue>, RocketMQError> {
+        let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
+        writer.range_query_cq_values(topic, queue_id, start_index, num)
     }
 
     pub fn get_max_offset_in_queue(&self, topic: impl Into<String>, queue_id: i32) -> Result<i64, RocketMQError> {
@@ -720,4 +757,15 @@ fn encode_consume_queue_value(value: ConsumeQueueValue) -> Result<Bytes, RocketM
     let mut encoded_value = Vec::with_capacity(ConsumeQueueValue::ENCODED_LEN);
     value.encode(&mut encoded_value)?;
     Ok(Bytes::from(encoded_value))
+}
+
+fn encode_consume_queue_key(topic: &str, queue_id: i32, cq_offset: i64) -> Result<Vec<u8>, RocketMQError> {
+    let key = ConsumeQueueKey {
+        topic: topic.to_owned(),
+        queue_id,
+        cq_offset,
+    };
+    let mut encoded = Vec::with_capacity(key.encoded_len());
+    key.encode(&mut encoded)?;
+    Ok(encoded)
 }

@@ -914,8 +914,8 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
             None => None,
             Some(value) => Some(Box::new(ConsumeQueueIterator {
                 smbr: Some(value),
-                relative_pos: 0,
                 counter: 0,
+                remaining: usize::MAX,
                 consume_queue_ext: self.consume_queue_ext.clone(),
             })),
         }
@@ -924,9 +924,16 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     fn iterate_from_with_count(
         &self,
         start_index: i64,
-        _count: i32,
+        count: i32,
     ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
-        self.iterate_from(start_index)
+        self.get_index_buffer(start_index).map(|value| {
+            Box::new(ConsumeQueueIterator {
+                smbr: Some(value),
+                counter: 0,
+                remaining: count.max(0) as usize,
+                consume_queue_ext: self.consume_queue_ext.clone(),
+            }) as Box<dyn Iterator<Item = CqUnit> + Send + '_>
+        })
     }
 
     fn get_offset_in_queue_by_time_with_boundary(&self, timestamp: i64, boundary_type: BoundaryType) -> i64 {
@@ -943,8 +950,8 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
 
 struct ConsumeQueueIterator {
     smbr: Option<SelectMappedBufferResult>,
-    relative_pos: i32,
     counter: i32,
+    remaining: usize,
     consume_queue_ext: Option<ConsumeQueueExt>,
 }
 
@@ -961,6 +968,9 @@ impl Iterator for ConsumeQueueIterator {
     type Item = CqUnit;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
         match self.smbr.as_ref() {
             None => None,
             Some(value) => {
@@ -972,6 +982,7 @@ impl Iterator for ConsumeQueueIterator {
                 self.counter += 1;
                 let end = start + CQ_STORE_UNIT_SIZE as usize;
                 let record = ConsumeQueueRecord::decode(&mmp[start..end])?;
+                self.remaining = self.remaining.saturating_sub(1);
                 let mut cq_unit = CqUnit {
                     queue_offset: start as i64 / CQ_STORE_UNIT_SIZE as i64,
                     size: record.message_size,
@@ -1171,6 +1182,40 @@ mod tests {
         assert_eq!(cq_ext_unit.tags_code(), 456);
         assert_eq!(cq_ext_unit.msg_store_time(), 7890);
         assert_eq!(cq_ext_unit.filter_bit_map(), Some(bitmap.as_slice()));
+    }
+
+    #[test]
+    fn consume_queue_borrowed_iterator_honors_request_count() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-bounded-iterator-topic");
+        let mut consume_queue = new_test_consume_queue(&temp_dir, &topic, (8 * CQ_STORE_UNIT_SIZE) as usize);
+
+        for queue_offset in 0_i64..4 {
+            consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+                topic: topic.clone(),
+                queue_id: 0,
+                commit_log_offset: queue_offset * 32,
+                msg_size: 32,
+                consume_queue_offset: queue_offset,
+                success: true,
+                ..DispatchRequest::default()
+            });
+        }
+
+        let records = consume_queue
+            .iterate_from_with_count(0, 2)
+            .expect("bounded iterator")
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].queue_offset, 0);
+        assert_eq!(records[1].queue_offset, 1);
+        assert_eq!(
+            consume_queue
+                .iterate_from_with_count(0, 0)
+                .expect("empty bounded iterator")
+                .count(),
+            0
+        );
     }
 
     #[test]

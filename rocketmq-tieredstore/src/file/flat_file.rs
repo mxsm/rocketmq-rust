@@ -14,7 +14,6 @@
 
 use std::sync::Arc;
 
-use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -24,6 +23,8 @@ use rocketmq_model::boundary_type::BoundaryType;
 
 use crate::config::TieredStoreConfig;
 use crate::error;
+use crate::fetcher::read_ahead_cache::block_size;
+use crate::fetcher::read_ahead_cache::ReadAheadCache;
 use crate::file::FileSegment;
 use crate::file::FileSegmentStatus;
 use crate::file::FileSegmentType;
@@ -52,17 +53,28 @@ impl ConsumeQueueUnit {
         bytes.freeze()
     }
 
-    pub fn decode(mut bytes: Bytes) -> Result<Self, RocketMQError> {
+    pub fn decode(bytes: Bytes) -> Result<Self, RocketMQError> {
+        Self::decode_slice(bytes.as_ref())
+    }
+
+    /// Decodes one borrowed ConsumeQueue unit without allocating a temporary buffer.
+    pub fn decode_slice(bytes: &[u8]) -> Result<Self, RocketMQError> {
         if bytes.len() != CONSUME_QUEUE_UNIT_SIZE {
             return Err(error::illegal_argument(format!(
                 "tiered consume queue unit must be {CONSUME_QUEUE_UNIT_SIZE} bytes, got {}",
                 bytes.len()
             )));
         }
+        let mut commit_log_offset = [0_u8; 8];
+        commit_log_offset.copy_from_slice(&bytes[..8]);
+        let mut size = [0_u8; 4];
+        size.copy_from_slice(&bytes[8..12]);
+        let mut tags_code = [0_u8; 8];
+        tags_code.copy_from_slice(&bytes[12..20]);
         Ok(Self {
-            commit_log_offset: bytes.get_i64(),
-            size: bytes.get_i32(),
-            tags_code: bytes.get_i64(),
+            commit_log_offset: i64::from_be_bytes(commit_log_offset),
+            size: i32::from_be_bytes(size),
+            tags_code: i64::from_be_bytes(tags_code),
         })
     }
 }
@@ -76,6 +88,7 @@ where
     config: Arc<TieredStoreConfig>,
     metadata_store: Arc<JsonMetadataStore>,
     provider: P,
+    read_ahead_cache: Arc<ReadAheadCache>,
     commit_log_segments: Mutex<Vec<Arc<TieredFileSegment<P>>>>,
     consume_queue_segments: Mutex<Vec<Arc<TieredFileSegment<P>>>>,
 }
@@ -91,12 +104,29 @@ where
         metadata_store: Arc<JsonMetadataStore>,
         provider: P,
     ) -> Self {
+        let read_ahead_cache = Arc::new(ReadAheadCache::new(
+            config.read_ahead_cache_enable,
+            config.read_ahead_cache_max_bytes,
+            config.read_ahead_cache_expire,
+        ));
+        Self::new_with_read_ahead_cache(topic, queue_id, config, metadata_store, provider, read_ahead_cache)
+    }
+
+    pub(crate) fn new_with_read_ahead_cache(
+        topic: String,
+        queue_id: i32,
+        config: Arc<TieredStoreConfig>,
+        metadata_store: Arc<JsonMetadataStore>,
+        provider: P,
+        read_ahead_cache: Arc<ReadAheadCache>,
+    ) -> Self {
         Self {
             topic,
             queue_id,
             config,
             metadata_store,
             provider,
+            read_ahead_cache,
             commit_log_segments: Mutex::new(Vec::new()),
             consume_queue_segments: Mutex::new(Vec::new()),
         }
@@ -300,7 +330,7 @@ where
         else {
             return Ok(None);
         };
-        ConsumeQueueUnit::decode(bytes).map(Some)
+        ConsumeQueueUnit::decode_slice(bytes.as_ref()).map(Some)
     }
 
     pub async fn read_message_by_queue_offset(&self, queue_offset: i64) -> Result<Option<Bytes>, RocketMQError> {
@@ -522,6 +552,7 @@ where
             .await?;
         segment.mark_deleted();
         self.provider.delete(metadata.path.clone()).await?;
+        self.read_ahead_cache.invalidate_path(&metadata.path);
         self.remove_segment(metadata.segment_type, metadata.base_offset, &metadata.path);
         Ok(())
     }
@@ -551,7 +582,15 @@ where
             if segment.commit_position() < CONSUME_QUEUE_UNIT_SIZE as u64 {
                 continue;
             }
-            let unit = ConsumeQueueUnit::decode(segment.read(0..CONSUME_QUEUE_UNIT_SIZE as u64).await?)?;
+            let bytes = self
+                .read_ahead_cache
+                .read(
+                    &segment,
+                    0..CONSUME_QUEUE_UNIT_SIZE as u64,
+                    block_size(segment.segment_type()),
+                )
+                .await?;
+            let unit = ConsumeQueueUnit::decode_slice(bytes.as_ref())?;
             if unit.commit_log_offset < 0 {
                 continue;
             }
@@ -599,8 +638,13 @@ where
             return Ok(None);
         };
         let relative_offset = absolute_offset.saturating_sub(segment.base_offset());
-        let bytes = segment
-            .read(relative_offset..relative_offset.saturating_add(length as u64))
+        let bytes = self
+            .read_ahead_cache
+            .read(
+                &segment,
+                relative_offset..relative_offset.saturating_add(length as u64),
+                block_size(segment_type),
+            )
             .await?;
         Ok(Some(bytes))
     }
@@ -689,6 +733,20 @@ mod tests {
             .copy_from_slice(&store_timestamp.to_be_bytes());
         bytes.extend_from_slice(body);
         bytes.freeze()
+    }
+
+    #[test]
+    fn consume_queue_unit_supports_owned_and_borrowed_decode() -> Result<(), RocketMQError> {
+        let unit = ConsumeQueueUnit {
+            commit_log_offset: 42,
+            size: 128,
+            tags_code: 7,
+        };
+        let encoded = unit.encode();
+
+        assert_eq!(ConsumeQueueUnit::decode(encoded.clone())?, unit);
+        assert_eq!(ConsumeQueueUnit::decode_slice(encoded.as_ref())?, unit);
+        Ok(())
     }
 
     #[tokio::test]

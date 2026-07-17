@@ -270,6 +270,11 @@ impl GetMessageResult {
         self.message_mapped_list.as_slice()
     }
 
+    #[cfg(test)]
+    pub(crate) fn message_mapped_capacity(&self) -> usize {
+        self.message_mapped_list.capacity()
+    }
+
     #[inline]
     pub fn message_mapped_list_mut(&mut self) -> &mut [SelectMappedBufferResult] {
         self.message_mapped_list.as_mut()

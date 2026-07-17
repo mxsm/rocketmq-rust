@@ -2268,9 +2268,13 @@ fn consume_queue_range_query_returns_contiguous_values_until_first_missing() {
 
     writer.write(&request).expect("seed write should succeed");
 
+    let metrics_before = store.metrics();
     let values = writer
         .range_query_cq_values("TopicA", 3, 0, 3)
         .expect("range query should succeed");
+    let metrics_after = store.metrics();
+    assert_eq!(metrics_after.scan_count - metrics_before.scan_count, 1);
+    assert_eq!(metrics_after.read_count - metrics_before.read_count, 0);
     assert_eq!(
         values,
         vec![ConsumeQueueValue {
@@ -2284,6 +2288,9 @@ fn consume_queue_range_query_returns_contiguous_values_until_first_missing() {
     let values_after_gap = writer
         .range_query_cq_values("TopicA", 3, 2, 3)
         .expect("range query after gap should succeed");
+    let metrics_after_gap = store.metrics();
+    assert_eq!(metrics_after_gap.scan_count - metrics_after.scan_count, 1);
+    assert_eq!(metrics_after_gap.read_count - metrics_after.read_count, 0);
     assert_eq!(
         values_after_gap,
         vec![ConsumeQueueValue {

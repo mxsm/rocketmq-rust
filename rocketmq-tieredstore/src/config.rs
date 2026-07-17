@@ -78,6 +78,8 @@ pub struct TieredStoreConfig {
     /// Source CommitLog segment size used to expose the minimum WAL pin.
     pub source_wal_segment_size: u64,
     pub read_ahead_cache_enable: bool,
+    /// Global byte budget for Tiered ConsumeQueue and CommitLog read-ahead blocks.
+    pub read_ahead_cache_max_bytes: usize,
     pub read_ahead_message_count: usize,
     pub read_ahead_message_size: usize,
     pub read_ahead_cache_expire: Duration,
@@ -116,6 +118,7 @@ impl Default for TieredStoreConfig {
             retry_backoff_max: Duration::from_secs(30),
             source_wal_segment_size: 1024 * 1024 * 1024,
             read_ahead_cache_enable: true,
+            read_ahead_cache_max_bytes: 64 * 1024 * 1024,
             read_ahead_message_count: 4096,
             read_ahead_message_size: 16 * 1024 * 1024,
             read_ahead_cache_expire: Duration::from_secs(15),
@@ -166,6 +169,7 @@ mod tests {
         assert_eq!(config.retry_backoff_max, Duration::from_secs(30));
         assert_eq!(config.source_wal_segment_size, 1024 * 1024 * 1024);
         assert!(config.read_ahead_cache_enable);
+        assert_eq!(config.read_ahead_cache_max_bytes, 64 * 1024 * 1024);
         assert_eq!(config.read_ahead_message_count, 4096);
         assert_eq!(config.read_ahead_message_size, 16 * 1024 * 1024);
         assert_eq!(config.read_ahead_cache_expire, Duration::from_secs(15));

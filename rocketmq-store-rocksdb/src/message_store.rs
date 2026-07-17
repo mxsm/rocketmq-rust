@@ -464,7 +464,7 @@ impl RocksDbMessageStoreRoot {
             status = GetStatus::NoMatchedMessage;
             let max_pull_size = request.max_total_message_size.clamp(100, request.max_pull_message_size);
             let read_count = request.max_message_count.max(0);
-            let values = self.derived.consume_queue_store.range_query(
+            let values = self.derived.consume_queue_store.range_query_values(
                 request.topic.to_string(),
                 request.queue_id,
                 request.offset,
@@ -474,19 +474,12 @@ impl RocksDbMessageStoreRoot {
                 status = GetStatus::OffsetFoundNull;
                 next_begin_offset = local.correct_queue_offset(request.offset, request.offset.saturating_add(1));
             } else {
-                for (index, encoded_value) in values.into_iter().enumerate() {
+                for (index, value) in values.into_iter().enumerate() {
                     if message_count >= request.max_message_count || buffer_total_size >= max_pull_size {
                         break;
                     }
                     let queue_offset = request.offset + index as i64;
                     next_begin_offset = queue_offset + 1;
-                    let value = match ConsumeQueueValue::decode(encoded_value.as_ref()) {
-                        Ok(value) => value,
-                        Err(_) => {
-                            status = GetStatus::OffsetFoundNull;
-                            break;
-                        }
-                    };
                     if !cq_filter(value.tag_hash_code) {
                         continue;
                     }

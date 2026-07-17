@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M10-02 已完成，下一工作包 PR-M10-03） |
+| 状态 | 实施中（PR-M10-03 已完成，下一工作包 PR-M10-04） |
 | 预计周期 | 5–8 周 |
 | 工作包 | WP14 `tiered-cursor`；延续 WP02、WP11–WP13 |
 | 前置条件 | 32-package Gate 通过；CommitLog/receipt/progress 和 Local/Rocks golden 稳定 |
@@ -73,12 +73,17 @@
 
 ### PR-M10-03：CQ、Rocks 与 Tiered 读取优化
 
-- [ ] `[DEV]` CQ 在借用 slice 上解析 20B unit，结果按请求上限预分配。
-- [ ] `[DEV]` Rocks 使用 prefix/range iterator 或 multi-get，直接返回 typed value。
-- [ ] `[DEV]` Tiered 使用按 bytes 限制的 generation-aware block cache并合并相邻 ranges。
-- [ ] `[TEST]` 验证 CQ allocation=0、Rocks native calls≤3、cold pull provider calls≤4、warm=0 的假设；未达假设不影响正确性结论。
-- [ ] `[REV]` 检查 body lease 生命周期、cache key generation 和无额外 decode round-trip。
-- [ ] 回滚点：读取优化可切换到已通过同一读取正确性、generation 和 durability corpus 的上一 read adapter；否则停止受影响读取、保留 cache/generation 证据，不做未验证降级。
+- [x] `[DEV]` CQ 在借用 slice 上解析 20B unit，结果按请求上限预分配。
+- [x] `[DEV]` Rocks 使用 prefix/range iterator 或 multi-get，直接返回 typed value。
+- [x] `[DEV]` Tiered 使用按 bytes 限制的 generation-aware block cache并合并相邻 ranges。
+- [x] `[TEST]` 验证 CQ allocation=0、Rocks native calls≤3、cold pull provider calls≤4、warm=0 的假设；未达假设不影响正确性结论。
+- [x] `[REV]` 检查 body lease 生命周期、cache key generation 和无额外 decode round-trip。
+- [x] 回滚点：读取优化可切换到已通过同一读取正确性、generation 和 durability corpus 的上一 read adapter；否则停止受影响读取、保留 cache/generation 证据，不做未验证降级。
+
+完成证据：[`10-read-path-optimization-evidence.md`](10-read-path-optimization-evidence.md)。候选提交
+`e3ef67282f420334a4f2bccc7fa01c81facbd60a` 保持 Local/Rocks/Tiered 持久格式不变；CQ 单元借用解析的
+每单元临时 allocation 为 0，Rocks 完整拉取为 2 次点读加 1 次 range scan，Tiered 32 条冷拉为 2 次
+provider read、热拉为 0。62/82 已完成，下一工作包为 PR-M10-04。
 
 ### PR-M10-04：Index/Compaction generation
 
