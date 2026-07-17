@@ -45,6 +45,14 @@ use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::net::channel::Channel;
+#[cfg(test)]
+use rocketmq_remoting::protocol::body::acl_info::AclInfo;
+#[cfg(test)]
+use rocketmq_remoting::protocol::body::acl_info::PolicyEntryInfo;
+#[cfg(test)]
+use rocketmq_remoting::protocol::body::acl_info::PolicyInfo;
+#[cfg(test)]
+use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -469,7 +477,12 @@ impl ProxyAuthRuntime {
 
         let context = ProxyContext::for_internal_client("SyncAuthMetadata", "proxy-auth");
         let provider = self.provider_registry.authentication_metadata_provider();
-        match metadata_service.user(&context, username).await? {
+        let user = metadata_service
+            .user(&context.without_principal(), username)
+            .await?
+            .as_ref()
+            .and_then(crate::auth_metadata::user_from_info);
+        match user {
             Some(user) => {
                 let existing = match provider.get_user(user.username().as_str()).await {
                     Ok(existing) => Some(existing),
@@ -505,7 +518,14 @@ impl ProxyAuthRuntime {
         let subject = MetadataSubject::parse(subject)?;
         let context = ProxyContext::for_internal_client("SyncAuthMetadata", "proxy-auth");
         let provider = self.provider_registry.authorization_metadata_provider();
-        match metadata_service.acl(&context, subject.subject_key()).await? {
+        let acl = metadata_service
+            .acl(&context.without_principal(), subject.subject_key())
+            .await?
+            .as_ref()
+            .map(|info| crate::auth_metadata::acl_from_info(info, subject.subject_key()))
+            .transpose()?
+            .flatten();
+        match acl {
             Some(acl) => {
                 let existing = provider.get_acl(&subject).await.map_err(map_authorization_error)?;
                 if existing.as_ref() == Some(&acl) {
@@ -903,15 +923,15 @@ mod tests {
 
     #[derive(Default)]
     struct TestAuthMetadataService {
-        users: HashMap<String, User>,
-        acls: HashMap<String, Acl>,
+        users: HashMap<String, UserInfo>,
+        acls: HashMap<String, AclInfo>,
     }
 
     #[async_trait::async_trait]
     impl MetadataService for TestAuthMetadataService {
         async fn topic_message_type(
             &self,
-            _context: &ProxyContext,
+            _context: &rocketmq_proxy_core::ProxyContext,
             _topic: &ResourceIdentity,
         ) -> ProxyResult<ProxyTopicMessageType> {
             Ok(ProxyTopicMessageType::Unspecified)
@@ -919,18 +939,26 @@ mod tests {
 
         async fn subscription_group(
             &self,
-            _context: &ProxyContext,
+            _context: &rocketmq_proxy_core::ProxyContext,
             _topic: &ResourceIdentity,
             _group: &ResourceIdentity,
         ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
             Ok(None)
         }
 
-        async fn user(&self, _context: &ProxyContext, username: &str) -> ProxyResult<Option<User>> {
+        async fn user(
+            &self,
+            _context: &rocketmq_proxy_core::ProxyContext,
+            username: &str,
+        ) -> ProxyResult<Option<UserInfo>> {
             Ok(self.users.get(username).cloned())
         }
 
-        async fn acl(&self, _context: &ProxyContext, subject: &str) -> ProxyResult<Option<Acl>> {
+        async fn acl(
+            &self,
+            _context: &rocketmq_proxy_core::ProxyContext,
+            subject: &str,
+        ) -> ProxyResult<Option<AclInfo>> {
             Ok(self.acls.get(subject).cloned())
         }
     }
@@ -980,8 +1008,30 @@ mod tests {
             ),
         );
         let metadata_service = TestAuthMetadataService {
-            users: HashMap::from([("alice".to_owned(), user.clone())]),
-            acls: HashMap::from([("User:alice".to_owned(), acl.clone())]),
+            users: HashMap::from([(
+                "alice".to_owned(),
+                UserInfo {
+                    username: Some(CheetahString::from_static_str("alice")),
+                    password: Some(CheetahString::from_static_str("secret")),
+                    user_type: Some(CheetahString::from_static_str("Normal")),
+                    user_status: Some(CheetahString::from_static_str("Enable")),
+                },
+            )]),
+            acls: HashMap::from([(
+                "User:alice".to_owned(),
+                AclInfo {
+                    subject: Some(CheetahString::from_static_str("User:alice")),
+                    policies: Some(vec![PolicyInfo {
+                        policy_type: Some(CheetahString::from_static_str("Custom")),
+                        entries: Some(vec![PolicyEntryInfo {
+                            resource: Some(CheetahString::from_static_str("Topic:TopicA")),
+                            actions: Some(vec![CheetahString::from_static_str("Pub")]),
+                            source_ips: None,
+                            decision: Some(CheetahString::from_static_str("Allow")),
+                        }]),
+                    }]),
+                },
+            )]),
         };
         let runtime = ProxyAuthRuntime::from_proxy_config_with_metadata_service(
             &ProxyAuthConfig {

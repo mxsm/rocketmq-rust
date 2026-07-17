@@ -4781,12 +4781,14 @@ dependencies = [
 name = "rocketmq-proxy-core"
 version = "1.0.0"
 dependencies = [
+ "async-trait",
  "dashmap",
  "prost",
  "prost-types",
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-protocol",
+ "rocketmq-runtime",
  "rocketmq-transport",
  "serde",
  "thiserror 2.0.18",

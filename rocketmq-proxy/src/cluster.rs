@@ -21,8 +21,6 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use cheetah_string::CheetahString;
-use rocketmq_auth::authentication::model::user::User;
-use rocketmq_auth::authorization::model::acl::Acl;
 use rocketmq_client_rust::base::client_config::ClientConfig as RocketmqClientConfig;
 use rocketmq_client_rust::consumer::ack_callback::AckCallback;
 use rocketmq_client_rust::consumer::ack_result::AckResult;
@@ -50,7 +48,9 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::result::SendResult;
+use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
+use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
 use rocketmq_remoting::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
@@ -72,12 +72,11 @@ use rocketmq_rust::ArcMut;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::auth_metadata::acl_from_info;
-use crate::auth_metadata::user_from_info;
 use crate::config::ClusterConfig;
-use crate::context::ProxyContext;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
+use crate::message::message_ext_to_core;
+use crate::message::message_from_core;
 use crate::processor::AckMessageRequest;
 use crate::processor::AckMessageResultEntry;
 use crate::processor::ChangeInvisibleDurationPlan;
@@ -112,9 +111,14 @@ use crate::service::ResourceIdentity;
 use crate::service::SubscriptionGroupMetadata;
 use crate::status::ProxyPayloadStatus;
 use crate::status::ProxyStatusMapper;
+use rocketmq_proxy_core::ProxyContext;
 
 #[async_trait]
 pub trait ClusterClient: Send + Sync {
+    fn transaction_producer_group(&self, _context: &ProxyContext) -> Option<String> {
+        None
+    }
+
     async fn query_route(&self, topic: &ResourceIdentity) -> ProxyResult<TopicRouteData>;
 
     async fn query_assignment(
@@ -132,11 +136,11 @@ pub trait ClusterClient: Send + Sync {
         group: &ResourceIdentity,
     ) -> ProxyResult<Option<SubscriptionGroupMetadata>>;
 
-    async fn query_user(&self, _username: &str) -> ProxyResult<Option<User>> {
+    async fn query_user(&self, _username: &str) -> ProxyResult<Option<UserInfo>> {
         Ok(None)
     }
 
-    async fn query_acl(&self, _subject: &str) -> ProxyResult<Option<Acl>> {
+    async fn query_acl(&self, _subject: &str) -> ProxyResult<Option<AclInfo>> {
         Ok(None)
     }
 
@@ -197,6 +201,7 @@ pub trait ClusterClient: Send + Sync {
 
 pub struct RocketmqClusterClient {
     executor: ClusterTaskExecutor,
+    producer_group_prefix: String,
 }
 
 impl RocketmqClusterClient {
@@ -206,7 +211,10 @@ impl RocketmqClusterClient {
 
     pub fn with_rpc_hook(config: ClusterConfig, rpc_hook: Option<Arc<dyn RPCHook>>) -> Self {
         let executor = ClusterTaskExecutor::new(config.clone(), rpc_hook);
-        Self { executor }
+        Self {
+            executor,
+            producer_group_prefix: config.producer_group_prefix,
+        }
     }
 }
 
@@ -218,6 +226,12 @@ impl Default for RocketmqClusterClient {
 
 #[async_trait]
 impl ClusterClient for RocketmqClusterClient {
+    fn transaction_producer_group(&self, context: &ProxyContext) -> Option<String> {
+        let prefix = sanitize_group_component(self.producer_group_prefix.as_str());
+        let identity = sanitize_group_component(context.client_id().unwrap_or(context.request_id()));
+        Some(format!("{prefix}-{identity}"))
+    }
+
     async fn query_route(&self, topic: &ResourceIdentity) -> ProxyResult<TopicRouteData> {
         self.executor.query_route(topic.clone()).await
     }
@@ -247,11 +261,11 @@ impl ClusterClient for RocketmqClusterClient {
             .await
     }
 
-    async fn query_user(&self, username: &str) -> ProxyResult<Option<User>> {
+    async fn query_user(&self, username: &str) -> ProxyResult<Option<UserInfo>> {
         self.executor.query_user(username.to_owned()).await
     }
 
-    async fn query_acl(&self, subject: &str) -> ProxyResult<Option<Acl>> {
+    async fn query_acl(&self, subject: &str) -> ProxyResult<Option<AclInfo>> {
         self.executor.query_acl(subject.to_owned()).await
     }
 
@@ -382,11 +396,11 @@ enum ClusterCommand {
     },
     QueryUser {
         username: String,
-        reply: oneshot::Sender<ProxyResult<Option<User>>>,
+        reply: oneshot::Sender<ProxyResult<Option<UserInfo>>>,
     },
     QueryAcl {
         subject: String,
-        reply: oneshot::Sender<ProxyResult<Option<Acl>>>,
+        reply: oneshot::Sender<ProxyResult<Option<AclInfo>>>,
     },
     SendMessage {
         request: SendMessageRequest,
@@ -474,8 +488,8 @@ struct ClusterWorkerState {
     route_cache: HashMap<String, CachedValue<TopicRouteData>>,
     topic_message_type_cache: HashMap<String, CachedValue<ProxyTopicMessageType>>,
     subscription_group_cache: HashMap<(String, String), CachedValue<Option<SubscriptionGroupMetadata>>>,
-    user_cache: HashMap<String, CachedValue<Option<User>>>,
-    acl_cache: HashMap<String, CachedValue<Option<Acl>>>,
+    user_cache: HashMap<String, CachedValue<Option<UserInfo>>>,
+    acl_cache: HashMap<String, CachedValue<Option<AclInfo>>>,
 }
 
 impl ClusterWorkerState {
@@ -543,19 +557,19 @@ impl ClusterWorkerState {
         );
     }
 
-    fn cached_user(&mut self, username: &str) -> Option<Option<User>> {
+    fn cached_user(&mut self, username: &str) -> Option<Option<UserInfo>> {
         cached_value(&mut self.user_cache, &username.to_owned())
     }
 
-    fn cache_user(&mut self, username: impl Into<String>, user: Option<User>, ttl: Duration) {
+    fn cache_user(&mut self, username: impl Into<String>, user: Option<UserInfo>, ttl: Duration) {
         cache_value(&mut self.user_cache, username.into(), user, ttl);
     }
 
-    fn cached_acl(&mut self, subject: &str) -> Option<Option<Acl>> {
+    fn cached_acl(&mut self, subject: &str) -> Option<Option<AclInfo>> {
         cached_value(&mut self.acl_cache, &subject.to_owned())
     }
 
-    fn cache_acl(&mut self, subject: impl Into<String>, acl: Option<Acl>, ttl: Duration) {
+    fn cache_acl(&mut self, subject: impl Into<String>, acl: Option<AclInfo>, ttl: Duration) {
         cache_value(&mut self.acl_cache, subject.into(), acl, ttl);
     }
 }
@@ -607,12 +621,12 @@ impl ClusterTaskExecutor {
             .await
     }
 
-    async fn query_user(&self, username: String) -> ProxyResult<Option<User>> {
+    async fn query_user(&self, username: String) -> ProxyResult<Option<UserInfo>> {
         self.execute(|reply| ClusterCommand::QueryUser { username, reply })
             .await
     }
 
-    async fn query_acl(&self, subject: String) -> ProxyResult<Option<Acl>> {
+    async fn query_acl(&self, subject: String) -> ProxyResult<Option<AclInfo>> {
         self.execute(|reply| ClusterCommand::QueryAcl { subject, reply }).await
     }
 
@@ -1007,7 +1021,7 @@ async fn query_user_inner(
     config: &ClusterConfig,
     state: &mut ClusterWorkerState,
     username: String,
-) -> ProxyResult<Option<User>> {
+) -> ProxyResult<Option<UserInfo>> {
     if let Some(user) = state.cached_user(username.as_str()) {
         return Ok(user);
     }
@@ -1020,9 +1034,7 @@ async fn query_user_inner(
             CheetahString::from(username.as_str()),
             config.mq_client_api_timeout_ms,
         )
-        .await?
-        .as_ref()
-        .and_then(user_from_info);
+        .await?;
 
     state.cache_user(username, user.clone(), config.metadata_cache_ttl());
     Ok(user)
@@ -1032,7 +1044,7 @@ async fn query_acl_inner(
     config: &ClusterConfig,
     state: &mut ClusterWorkerState,
     subject: String,
-) -> ProxyResult<Option<Acl>> {
+) -> ProxyResult<Option<AclInfo>> {
     if let Some(acl) = state.cached_acl(subject.as_str()) {
         return Ok(acl);
     }
@@ -1045,11 +1057,7 @@ async fn query_acl_inner(
             CheetahString::from(subject.as_str()),
             config.mq_client_api_timeout_ms,
         )
-        .await?
-        .as_ref()
-        .map(|acl_info| acl_from_info(acl_info, subject.as_str()))
-        .transpose()?
-        .flatten();
+        .await?;
 
     state.cache_acl(subject, acl.clone(), config.metadata_cache_ttl());
     Ok(acl)
@@ -1969,7 +1977,7 @@ fn build_receive_plan(pop_result: PopResult) -> ReceiveMessagePlan {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|message| ReceivedMessage {
-                    message,
+                    message: message_ext_to_core(&message),
                     invisible_duration,
                 })
                 .collect::<Vec<_>>();
@@ -2012,7 +2020,7 @@ fn build_pull_plan(pull_result: rocketmq_client_rust::consumer::pull_result::Pul
                 .cloned()
                 .unwrap_or_default()
                 .into_iter()
-                .map(|message| message.as_ref().clone())
+                .map(|message| message_ext_to_core(message.as_ref()))
                 .collect(),
         },
         PullStatus::NoNewMsg | PullStatus::NoMatchedMsg => PullMessagePlan {
@@ -2160,17 +2168,16 @@ async fn send_message_entry(
 
 async fn send_message_entry_inner(
     producer: &mut DefaultMQProducer,
-    mut entry: SendMessageEntry,
+    entry: SendMessageEntry,
     timeout: u64,
 ) -> ProxyResult<SendResult> {
-    attach_transaction_producer_group(&mut entry.message, producer.producer_group());
+    let mut message = message_from_core(&entry.message);
+    attach_transaction_producer_group(&mut message, producer.producer_group());
     let queue = resolve_target_queue(producer, &entry).await?;
     let result = if let Some(queue) = queue {
-        producer
-            .send_to_queue_with_timeout(entry.message, queue, timeout)
-            .await?
+        producer.send_to_queue_with_timeout(message, queue, timeout).await?
     } else {
-        producer.send_with_timeout(entry.message, timeout).await?
+        producer.send_with_timeout(message, timeout).await?
     };
 
     result.ok_or_else(|| ProxyError::Transport {

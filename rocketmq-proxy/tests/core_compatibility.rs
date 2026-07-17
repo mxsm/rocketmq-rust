@@ -42,6 +42,19 @@ fn legacy_paths_reexport_canonical_core_types() {
     let _: rocketmq_proxy::GrpcConfig = canonical_config;
     let canonical_resource = rocketmq_proxy_core::ResourceIdentity::new("tenant-a", "TopicA");
     let _: rocketmq_proxy::ResourceIdentity = canonical_resource;
+
+    let canonical_message = rocketmq_proxy_core::ProxyMessage::new("TopicA", b"hello".to_vec());
+    let _: rocketmq_proxy::ProxyMessage = canonical_message;
+    let canonical_request = rocketmq_proxy_core::QueryRouteRequest {
+        topic: rocketmq_proxy_core::ResourceIdentity::new("tenant-a", "TopicA"),
+        endpoints: Vec::new(),
+    };
+    let _: rocketmq_proxy::QueryRouteRequest = canonical_request;
+
+    fn accept_legacy_route_service(_: std::sync::Arc<dyn rocketmq_proxy::RouteService>) {}
+    let canonical_service: std::sync::Arc<dyn rocketmq_proxy_core::RouteService> =
+        std::sync::Arc::new(rocketmq_proxy_core::StaticRouteService::default());
+    accept_legacy_route_service(canonical_service);
 }
 
 #[test]

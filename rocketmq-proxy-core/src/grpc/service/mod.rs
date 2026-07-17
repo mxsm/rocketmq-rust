@@ -12,4 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) use rocketmq_proxy_core::grpc::middleware::ingress_context_interceptor;
+//! Provider-neutral gRPC handler state and policies.
+//!
+//! Authentication, authorization, backend selection, and provider-specific
+//! observability remain composition concerns of the `rocketmq-proxy` facade.
+
+pub mod admission;
+pub mod consumer;
+pub mod housekeeping;
+pub mod producer;
+pub mod telemetry;
+pub mod topic;
+pub mod transaction;
+
+pub use admission::ExecutionGuards;
+pub use housekeeping::GrpcHousekeepingRunReport;
+pub use housekeeping::ReapSchedule;

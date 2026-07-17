@@ -12,4 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) use rocketmq_proxy_core::grpc::middleware::ingress_context_interceptor;
+//! Backend-neutral gRPC ingress components.
+
+pub mod adapter;
+pub mod middleware;
+pub mod server;
+pub mod service;

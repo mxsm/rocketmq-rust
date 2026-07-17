@@ -37,6 +37,7 @@ EXPECTED_INTERNAL_DEPENDENCIES = {
     "rocketmq-error",
     "rocketmq-model",
     "rocketmq-protocol",
+    "rocketmq-runtime",
     "rocketmq-transport",
 }
 FORBIDDEN_CORE_TOKENS = (
@@ -210,6 +211,77 @@ class ProxyCoreContractTests(unittest.TestCase):
         )
         self.assertNotIn('ROOT / "rocketmq-proxy" / "src" / "status.rs"', error_guard)
 
+    def test_core_owns_neutral_plans_ports_services_and_ingress(self) -> None:
+        for name in ("message.rs", "processor.rs", "service.rs", "remoting.rs", "grpc.rs"):
+            self.assertTrue((CORE / "src" / name).is_file(), name)
+        for name in (
+            "adapter.rs",
+            "middleware.rs",
+            "server.rs",
+            "service/admission.rs",
+            "service/consumer.rs",
+            "service/housekeeping.rs",
+            "service/producer.rs",
+            "service/telemetry.rs",
+            "service/topic.rs",
+            "service/transaction.rs",
+        ):
+            self.assertTrue((CORE / "src" / "grpc" / name).is_file(), name)
+
+        processor = (CORE / "src" / "processor.rs").read_text(encoding="utf-8")
+        for type_name in (
+            "SendMessagePlan",
+            "PullMessagePlan",
+            "AckMessagePlan",
+            "QueryRoutePlan",
+            "EndTransactionPlan",
+            "MessagingProcessor",
+            "DefaultMessagingProcessor",
+        ):
+            self.assertIn(type_name, processor)
+
+        service = (CORE / "src" / "service.rs").read_text(encoding="utf-8")
+        for trait_name in (
+            "RouteService",
+            "MetadataService",
+            "AssignmentService",
+            "MessageService",
+            "ConsumerService",
+            "TransactionService",
+            "ServiceManager",
+        ):
+            self.assertIn(f"pub trait {trait_name}", service)
+
+        facade_processor = (FACADE / "src" / "processor.rs").read_text(encoding="utf-8")
+        self.assertIn("pub use rocketmq_proxy_core::processor::*;", facade_processor)
+        self.assertLess(len(facade_processor.splitlines()), 30)
+        facade_service = (FACADE / "src" / "service.rs").read_text(encoding="utf-8")
+        self.assertIn("pub use rocketmq_proxy_core::service::*;", facade_service)
+        for trait_name in ("RouteService", "MessageService", "ConsumerService", "TransactionService"):
+            self.assertNotIn(f"pub trait {trait_name}", facade_service)
+
+        facade_adapter = (FACADE / "src" / "grpc" / "adapter.rs").read_text(encoding="utf-8")
+        self.assertIn("pub use rocketmq_proxy_core::grpc::adapter::*;", facade_adapter)
+        self.assertLess(len(facade_adapter.splitlines()), 60)
+        facade_middleware = (FACADE / "src" / "grpc" / "middleware.rs").read_text(encoding="utf-8")
+        self.assertIn("rocketmq_proxy_core::grpc::middleware::ingress_context_interceptor", facade_middleware)
+        self.assertLess(len(facade_middleware.splitlines()), 30)
+
+        core_server = (CORE / "src" / "grpc" / "server.rs").read_text(encoding="utf-8")
+        facade_server = (FACADE / "src" / "grpc" / "server.rs").read_text(encoding="utf-8")
+        self.assertIn("pub async fn serve_with_lifecycle", core_server)
+        self.assertIn("rocketmq_proxy_core::grpc::server::serve_with_lifecycle", facade_server)
+
+        core_remoting = (CORE / "src" / "remoting.rs").read_text(encoding="utf-8")
+        self.assertIn("pub trait ProxyRemotingBackend", core_remoting)
+        self.assertIn("pub enum RemotingIngressRoute", core_remoting)
+        self.assertIn("pub struct RemotingStatusMapper", core_remoting)
+        self.assertNotIn("initialize_client_instance", core_remoting)
+
+        facade_grpc_service = (FACADE / "src" / "grpc" / "service.rs").read_text(encoding="utf-8")
+        self.assertNotIn("crate::cluster", facade_grpc_service)
+        self.assertIn("transaction_producer_group", facade_grpc_service)
+
     def test_migration_checklists_record_completion_and_next_slice(self) -> None:
         checklist = (PLAN_ROOT / "CHECKLIST.md").read_text(encoding="utf-8")
         task = (
@@ -224,24 +296,26 @@ class ProxyCoreContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         readme = (PLAN_ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertIn("| PR 级工作包 | 48 | 0 | 34 未开始；合计 34 尚未完成 | 82 |", checklist)
+        self.assertIn("| PR 级工作包 | 49 | 0 | 33 未开始；合计 33 尚未完成 | 82 |", checklist)
         self.assertIn("- [x] PR-M08-01：创建 `rocketmq-proxy-core` 与 proto owner", checklist)
-        self.assertIn("当前下一工作包为 PR-M08-02", checklist)
+        self.assertIn("- [x] PR-M08-02：迁移中立 plan、port、service 与 ingress", checklist)
+        self.assertIn("当前下一工作包为 PR-M08-03", checklist)
         work_packages = re.findall(r"^- \[([ x])\] (PR-M\d{2}-\d{2}[a-z]?)：", checklist, re.MULTILINE)
         self.assertEqual(82, len(work_packages))
-        self.assertEqual(48, sum(state == "x" for state, _ in work_packages))
-        self.assertEqual(34, sum(state == " " for state, _ in work_packages))
+        self.assertEqual(49, sum(state == "x" for state, _ in work_packages))
+        self.assertEqual(33, sum(state == " " for state, _ in work_packages))
         open_by_milestone: dict[str, int] = {}
         for state, package in work_packages:
             if state == " ":
                 milestone = package.split("-")[1]
                 open_by_milestone[milestone] = open_by_milestone.get(milestone, 0) + 1
-        self.assertEqual({"M08": 5, "M09": 6, "M10": 5, "M11": 12, "M12": 6}, open_by_milestone)
-        self.assertIn("Core default/no-default、34 项 test、Proxy 113 项", checklist)
-        self.assertIn("PR-M08-01 已完成，下一工作包为 PR-M08-02", task)
-        self.assertIn("- [x] `[DEV]` 迁 context/error/status/session 和 ingress config", task)
-        self.assertIn("## 9. PR-M08-01 消费记录（2026-07-17）", handoff)
+        self.assertEqual({"M08": 4, "M09": 6, "M10": 5, "M11": 12, "M12": 6}, open_by_milestone)
+        self.assertIn("Core 45 项 unit + 2 项 proto contract、Proxy 104 项", checklist)
+        self.assertIn("PR-M08-02 已完成，下一工作包为 PR-M08-03", task)
+        self.assertIn("- [x] `[DEV]` 按 send/pull/pop/ack/route/transaction 迁 plan 和 port", task)
+        self.assertIn("## 10. PR-M08-02 消费记录（2026-07-17）", handoff)
         self.assertIn("根 workspace 30 个 package", readme)
+        self.assertIn("下一工作包为 PR-M08-03", readme)
 
 
 if __name__ == "__main__":

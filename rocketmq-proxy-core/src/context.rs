@@ -84,6 +84,24 @@ pub struct ProxyContextWithPrincipal<P> {
 pub type ProxyContext = ProxyContextWithPrincipal<()>;
 
 impl<P> ProxyContextWithPrincipal<P> {
+    /// Clones the request metadata while dropping the facade-owned principal proof.
+    pub fn without_principal(&self) -> ProxyContext {
+        ProxyContextWithPrincipal {
+            request_id: self.request_id.clone(),
+            rpc_name: self.rpc_name,
+            remote_addr: self.remote_addr.clone(),
+            local_addr: self.local_addr.clone(),
+            client_id: self.client_id.clone(),
+            language: self.language.clone(),
+            client_version: self.client_version.clone(),
+            namespace: self.namespace.clone(),
+            connection_id: self.connection_id.clone(),
+            deadline: self.deadline,
+            received_at: self.received_at,
+            authenticated_principal: None,
+        }
+    }
+
     pub fn from_grpc_request<T>(rpc_name: &'static str, request: &Request<T>) -> ProxyResult<Self> {
         let metadata = request.metadata();
         let deadline = parse_grpc_timeout_metadata(metadata)?;
@@ -271,6 +289,7 @@ mod tests {
     use super::parse_grpc_timeout;
     use super::GrpcTransportContext;
     use super::ProxyContext;
+    use super::ProxyContextWithPrincipal;
     use crate::error::ProxyError;
 
     struct TestConnectionContext {
@@ -358,5 +377,19 @@ mod tests {
         assert_eq!(context.client_id(), Some("client-a"));
         assert_eq!(context.namespace(), Some("tenant-a"));
         assert_eq!(context.client_version(), Some("123"));
+    }
+
+    #[test]
+    fn without_principal_preserves_metadata_and_drops_proof() {
+        let mut context = ProxyContextWithPrincipal::<String>::for_internal_client("SendMessage", "client-a");
+        context.set_authenticated_principal("alice".to_owned());
+
+        let neutral = context.without_principal();
+
+        assert_eq!(neutral.request_id(), context.request_id());
+        assert_eq!(neutral.rpc_name(), "SendMessage");
+        assert_eq!(neutral.client_id(), Some("client-a"));
+        assert!(neutral.authenticated_principal().is_none());
+        assert_eq!(context.authenticated_principal().map(String::as_str), Some("alice"));
     }
 }
