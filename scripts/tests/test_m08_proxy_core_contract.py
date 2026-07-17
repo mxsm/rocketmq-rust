@@ -92,6 +92,18 @@ EXPECTED_LOCAL_INTERNAL_DEPENDENCIES = {
     "rocketmq-proxy-core",
     "rocketmq-runtime",
 }
+EXPECTED_FACADE_INTERNAL_DEPENDENCIES = {
+    "rocketmq-auth",
+    "rocketmq-common",
+    "rocketmq-error",
+    "rocketmq-model",
+    "rocketmq-observability",
+    "rocketmq-proxy-cluster",
+    "rocketmq-proxy-core",
+    "rocketmq-proxy-local",
+    "rocketmq-remoting",
+    "rocketmq-runtime",
+}
 FORBIDDEN_LOCAL_TOKENS = (
     "rocketmq_auth",
     "rocketmq_client_rust",
@@ -194,10 +206,10 @@ class ProxyCoreContractTests(unittest.TestCase):
         self.assertEqual(1, guard.returncode)
         output = guard.stdout + guard.stderr
         findings = [line for line in output.splitlines() if line.startswith("VIOLATION ")]
-        self.assertEqual(49, len(findings))
+        self.assertEqual(48, len(findings))
         self.assertEqual(0, sum("rule=client-manifest-allowlist" in line for line in findings))
         self.assertEqual(0, sum("rule=client-source-allowlist" in line for line in findings))
-        self.assertEqual(47, sum("rule=target-dag-direct-dependency" in line for line in findings))
+        self.assertEqual(46, sum("rule=target-dag-direct-dependency" in line for line in findings))
         self.assertEqual(2, sum("rule=transitive-forbidden-reachability" in line for line in findings))
         self.assertFalse(any("caller=rocketmq-proxy-core " in line for line in findings))
         self.assertFalse(any("caller=rocketmq-proxy-cluster " in line for line in findings))
@@ -388,6 +400,75 @@ class ProxyCoreContractTests(unittest.TestCase):
         self.assertIn("pub use rocketmq_proxy_cluster::service::*;", service)
         self.assertNotIn("pub struct ClusterServiceManager", service)
 
+    def test_r0_facade_manifest_and_source_are_composition_only(self) -> None:
+        manifest = load_manifest(FACADE / "Cargo.toml")
+        internal = {name for name in manifest["dependencies"] if name.startswith("rocketmq-")}
+        self.assertEqual(EXPECTED_FACADE_INTERNAL_DEPENDENCIES, internal)
+        self.assertEqual([], manifest["features"]["default"])
+
+        for adapter in ("rocketmq-proxy-core", "rocketmq-proxy-cluster", "rocketmq-proxy-local"):
+            dependency = manifest["dependencies"][adapter]
+            self.assertNotEqual(True, dependency.get("optional", False), adapter)
+
+        for next_major_feature in ("cluster-mode", "local-mode", "compat-all-modes"):
+            self.assertNotIn(next_major_feature, manifest["features"])
+
+        for forbidden_dependency in (
+            "rocketmq-broker",
+            "rocketmq-client-rust",
+            "rocketmq-rust",
+            "rocketmq-store",
+        ):
+            self.assertNotIn(forbidden_dependency, manifest["dependencies"])
+
+        source = "\n".join(path.read_text(encoding="utf-8") for path in (FACADE / "src").rglob("*.rs"))
+        for forbidden_token in (
+            "rocketmq_broker",
+            "rocketmq_client_rust",
+            "rocketmq_rust",
+            "rocketmq_store::",
+        ):
+            self.assertNotIn(forbidden_token, source, forbidden_token)
+
+        config = (FACADE / "src" / "config.rs").read_text(encoding="utf-8")
+        for normalized_owner in (
+            "rocketmq_proxy_core::config::GrpcConfig",
+            "rocketmq_proxy_core::config::RemotingConfig",
+            "rocketmq_proxy_core::config::RuntimeConfig",
+            "rocketmq_proxy_core::config::SessionConfig",
+            "rocketmq_proxy_cluster::ClusterConfig",
+            "rocketmq_proxy_local::LocalConfig",
+        ):
+            self.assertIn(normalized_owner, config, normalized_owner)
+
+        bootstrap = (FACADE / "src" / "bootstrap.rs").read_text(encoding="utf-8")
+        for composition_contract in (
+            "default_service_manager_and_backend",
+            "config.cluster.clone()",
+            "config.local.clone()",
+            "ClusterServiceManager::from_cluster_client",
+            "local_components_from_config_with_service_context",
+        ):
+            self.assertIn(composition_contract, bootstrap, composition_contract)
+
+        owner_declarations = {
+            "processor.rs": ("pub trait MessagingProcessor", "pub struct DefaultMessagingProcessor"),
+            "service.rs": ("pub trait ServiceManager", "pub struct ClusterServiceManager", "pub struct LocalServiceManager"),
+            "cluster.rs": ("pub trait ClusterClient", "pub struct RocketmqClusterClient"),
+            "local.rs": ("pub struct LocalServiceManager",),
+        }
+        for name, declarations in owner_declarations.items():
+            wrapper = (FACADE / "src" / name).read_text(encoding="utf-8")
+            for declaration in declarations:
+                self.assertNotIn(declaration, wrapper, f"{name}: {declaration}")
+
+        core_source = "\n".join(path.read_text(encoding="utf-8") for path in (CORE / "src").rglob("*.rs"))
+        local_source = "\n".join(path.read_text(encoding="utf-8") for path in (LOCAL / "src").rglob("*.rs"))
+        for reverse_token in ("rocketmq_proxy::", "rocketmq_proxy_cluster", "rocketmq_client_rust"):
+            self.assertNotIn(reverse_token, core_source, reverse_token)
+        for reverse_token in ("rocketmq_proxy::", "rocketmq_proxy_cluster", "rocketmq_client_rust"):
+            self.assertNotIn(reverse_token, local_source, reverse_token)
+
     def test_core_owns_error_status_context_session_identity_and_ingress_config(self) -> None:
         for name in ("config.rs", "context.rs", "error.rs", "identity.rs", "proto.rs", "session.rs", "status.rs"):
             self.assertTrue((CORE / "src" / name).is_file(), name)
@@ -494,28 +575,29 @@ class ProxyCoreContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         readme = (PLAN_ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertIn("| PR 级工作包 | 51 | 0 | 31 未开始；合计 31 尚未完成 | 82 |", checklist)
+        self.assertIn("| PR 级工作包 | 52 | 0 | 30 未开始；合计 30 尚未完成 | 82 |", checklist)
         self.assertIn("- [x] PR-M08-01：创建 `rocketmq-proxy-core` 与 proto owner", checklist)
         self.assertIn("- [x] PR-M08-02：迁移中立 plan、port、service 与 ingress", checklist)
         self.assertIn("- [x] PR-M08-03：创建 Cluster adapter", checklist)
         self.assertIn("- [x] PR-M08-04：创建 Local adapter", checklist)
-        self.assertIn("当前下一工作包为 PR-M08-05", checklist)
+        self.assertIn("- [x] PR-M08-05：将现有 Proxy 降为 composition/facade", checklist)
+        self.assertIn("当前下一工作包为 PR-M08-06", checklist)
         work_packages = re.findall(r"^- \[([ x])\] (PR-M\d{2}-\d{2}[a-z]?)：", checklist, re.MULTILINE)
         self.assertEqual(82, len(work_packages))
-        self.assertEqual(51, sum(state == "x" for state, _ in work_packages))
-        self.assertEqual(31, sum(state == " " for state, _ in work_packages))
+        self.assertEqual(52, sum(state == "x" for state, _ in work_packages))
+        self.assertEqual(30, sum(state == " " for state, _ in work_packages))
         open_by_milestone: dict[str, int] = {}
         for state, package in work_packages:
             if state == " ":
                 milestone = package.split("-")[1]
                 open_by_milestone[milestone] = open_by_milestone.get(milestone, 0) + 1
-        self.assertEqual({"M08": 2, "M09": 6, "M10": 5, "M11": 12, "M12": 6}, open_by_milestone)
+        self.assertEqual({"M08": 1, "M09": 6, "M10": 5, "M11": 12, "M12": 6}, open_by_milestone)
         self.assertIn("Local 8 项", checklist)
-        self.assertIn("PR-M08-04 已完成，下一工作包为 PR-M08-05", task)
+        self.assertIn("PR-M08-05 已完成，下一工作包为 PR-M08-06", task)
         self.assertIn("- [x] `[DEV]` 按 send/pull/pop/ack/route/transaction 迁 plan 和 port", task)
         self.assertIn("## 12. PR-M08-04 消费记录（2026-07-17）", handoff)
         self.assertIn("根 workspace 已达到目标 32 个 package", readme)
-        self.assertIn("下一工作包为 PR-M08-05", readme)
+        self.assertIn("下一工作包为 PR-M08-06", readme)
 
 
 if __name__ == "__main__":

@@ -4764,7 +4764,6 @@ dependencies = [
  "rocketmq-proxy-local",
  "rocketmq-remoting",
  "rocketmq-runtime",
- "rocketmq-rust",
  "serde",
  "serde_json",
  "sha1",

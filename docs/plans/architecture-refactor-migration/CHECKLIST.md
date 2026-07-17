@@ -29,19 +29,35 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 51 | 0 | 31 未开始；合计 31 尚未完成 | 82 |
+| PR 级工作包 | 52 | 0 | 30 未开始；合计 30 尚未完成 | 82 |
 | 里程碑 | 7（M01–M07） | 1（M08） | 4（M09–M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 31 个未开始工作包分布：M08 为 2 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
-PR-M08-04 已完成 Local adapter 与嵌入式 Broker runtime 的物理迁移；M08 进行中，当前下一工作包为 PR-M08-05。
+剩余 30 个未开始工作包分布：M08 为 1 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
+PR-M08-05 已完成 Proxy composition/facade 收口与 R0 依赖/feature 语义冻结；M08 进行中，当前下一工作包为 PR-M08-06。
 
 目标态差距快照不能与工作包计数混用：`architecture_dependency_guard.py --mode target`
-当前 32 个目标 package 已全部创建，剩余 49 项差距：目标 DAG 直接边 47、传递闭包边 2。
+当前 32 个目标 package 已全部创建，剩余 48 项差距：目标 DAG 直接边 46、传递闭包边 2。
 `rocketmq-proxy-core`、`rocketmq-proxy-cluster` 与 `rocketmq-proxy-local` 均无所属边界的 target finding；Client 临时账本 manifest/source 均为 0，
 历史 Proxy manifest 1、source 13 已由 PR-M08-03 完整消费，后续工作不得恢复 facade 对完整 Client 的直接依赖。
+
+剩余目标差距按 caller 精确分布如下；这里是依赖目标态差距，不是剩余工作包数量：
+
+| Caller | 差距数 | 后续收口重点 |
+|---|---:|---|
+| `rocketmq-store` | 6 | Common/Error/Observability/Remoting/Runtime/legacy runtime |
+| `rocketmq-broker` | 5 | Common/Error/Remoting/Runtime/legacy runtime |
+| `rocketmq-remoting` | 5 | Common/Macros/Runtime/legacy runtime 与 facade 纯化 |
+| `rocketmq-namesrv` | 4 | Common/Error/Remoting/legacy runtime |
+| `rocketmq-proxy` | 4 | Common/Error/Model/Remoting ingress 兼容边；Client/Broker/Store/legacy runtime 已清零 |
+| `rocketmq-admin-cli`、`rocketmq-admin-tui`、`rocketmq-client-rust`、`rocketmq-controller`、`rocketmq-mcp`、`rocketmq-tieredstore` | 各 3 | M09 facade/consumer closeout 与后续 owner 收口 |
+| `rocketmq-auth` | 2 | 目标 DAG 直边收口 |
+| `rocketmq-common`、`rocketmq-filter`、`rocketmq-rust`、`rocketmq-store-inspect` | 各 1 | 单点 legacy/facade 边收口 |
+
+其中 46 项为直接边，另有 `rocketmq-tieredstore → rocketmq-common` 与
+`rocketmq-tieredstore → rocketmq-common → rocketmq-rust` 两项传递闭包差距；严格 target mode 仍应失败，直到 M09-01 收口为零。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -350,7 +366,15 @@ PR-M08-04 已完成 Local adapter 与嵌入式 Broker runtime 的物理迁移；
   - [x] baseline guard 通过；target guard 由 51 降至 49（目标 DAG 直接边 47 + 传递闭包边 2），无缺失计划 package，Core/Cluster/Local 均为零 finding
   - [x] architecture contract 354、ArcMut 实际 guard + fixture 24、runtime enforcing audit、32-package workspace fmt/strict Clippy 与 AGENTS routing 全绿；typed-error 仅复现 main 既有 11 项，零新增
   - [x] 51/82 已完成、31 未完成，下一工作包 PR-M08-05
-- [ ] PR-M08-05：将现有 Proxy 降为 composition/facade
+- [x] PR-M08-05：将现有 Proxy 降为 composition/facade
+  - [x] 删除 Proxy 未使用的 `rocketmq-rust` manifest/lockfile 直边，target gap 由 49 降至 48
+  - [x] facade 继续以非 optional 方式依赖 Core/Cluster/Local，保持 R0 `default = []`；未提前定义下一 major mode feature
+  - [x] ProxyConfig 继续持有 Serde/env/CLI envelope，并将 Core/Cluster/Local normalized config 交给各自 owner
+  - [x] processor/service/cluster/local 等业务 owner 路径保持精确 re-export；Proxy 只保留 bootstrap/config/auth/observability/binary、gRPC/Remoting ingress adapter 与兼容导出
+  - [x] 新增静态合同，禁止 Client/Broker/Store/legacy runtime 回流，并验证 Core/Local 不经 facade 反向到 Cluster/Client
+  - [x] Proxy default/no-default 各 82 unit + 1 binary + 4 compatibility + 9 gRPC + 3 Remoting 共 99 项通过
+  - [x] architecture contract 355、根 fmt/32-package strict Clippy、baseline guard、ArcMut、runtime audit、AGENTS routing 与 diff check 全绿；target 按预期精确剩余 48，typed-error 仅复现 main 既有 11 项
+  - [x] 52/82 已完成、30 未完成，下一工作包 PR-M08-06
 - [ ] PR-M08-06：验证 feature closure 与下一 major fixture
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

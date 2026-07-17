@@ -45,7 +45,6 @@ rocketmq-proxy-cluster = { workspace = true }
 rocketmq-proxy-local = { workspace = true }
 rocketmq-remoting    = { workspace = true }
 rocketmq-auth        = { workspace = true, features = ["grpc"] }
-rocketmq-rust        = { workspace = true }
 rocketmq-observability = { workspace = true }
 rocketmq-runtime     = { workspace = true }
 
