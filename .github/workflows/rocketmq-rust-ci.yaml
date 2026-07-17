@@ -77,6 +77,9 @@ jobs:
       - name: Check dependency baseline
         run: python scripts/architecture_dependency_guard.py --mode baseline
 
+      - name: Check architecture release package
+        run: python scripts/architecture_release_guard.py
+
       - name: Check shared-mutation fixtures
         run: python scripts/arc_mut_guard.py --fixtures
 

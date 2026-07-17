@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "milestone": "M09-05",
+  "design_source": "docs/architecture-refactor-design.md#59-发布迁移与兼容策略",
+  "human_approval": {
+    "scope": "R0, R1 and next-major relative release windows plus external notification plan",
+    "status": "approved",
+    "recorded_on": "2026-07-17",
+    "destructive_removal": "pending-next-major-evidence-gate",
+    "constraint": "Approval of the release package does not authorize early removal of compatibility paths or early activation of Proxy mode features."
+  },
+  "release_topology": {
+    "required_chain": [
+      "model/error/runtime/security/store-api",
+      "protocol/observability",
+      "transport/auth/local/tiered",
+      "rocks",
+      "facade",
+      "service/tool"
+    ],
+    "publish_order": [
+      "rocketmq-error",
+      "rocketmq-macros",
+      "rocketmq-runtime",
+      "rocketmq-model",
+      "rocketmq-security-api",
+      "rocketmq-store-api",
+      "rocketmq-protocol",
+      "rocketmq-observability",
+      "rocketmq-transport",
+      "rocketmq-auth",
+      "rocketmq-store-local",
+      "rocketmq-tieredstore",
+      "rocketmq-filter",
+      "rocketmq-store-rocksdb",
+      "rocketmq-common",
+      "rocketmq-remoting",
+      "rocketmq-store",
+      "rocketmq-rust",
+      "rocketmq-client-rust",
+      "rocketmq-controller",
+      "rocketmq-proxy-core",
+      "rocketmq-dashboard-common",
+      "rocketmq-admin-core",
+      "rocketmq-broker",
+      "rocketmq-namesrv",
+      "rocketmq-proxy-cluster",
+      "rocketmq-store-inspect",
+      "rocketmq-admin-cli",
+      "rocketmq-admin-tui",
+      "rocketmq-mcp",
+      "rocketmq-proxy-local",
+      "rocketmq-proxy"
+    ],
+    "rule": "A package is published only after every package in its target-DAG dependency set is available at the same release version."
+  },
+  "r0": {
+    "window": "first compatibility release after Phase 2 approval",
+    "behavior_contract": "No behavior, wire-format, storage-format, default-feature or public-path removal is permitted in the R0 release package.",
+    "new_crates": [
+      {
+        "package": "rocketmq-model",
+        "path": "rocketmq-model/Cargo.toml",
+        "canonical_import": "rocketmq_model",
+        "legacy_owner": "rocketmq-common model and message paths"
+      },
+      {
+        "package": "rocketmq-protocol",
+        "path": "rocketmq-protocol/Cargo.toml",
+        "canonical_import": "rocketmq_protocol",
+        "legacy_owner": "rocketmq-remoting protocol and rocketmq-common boundary paths"
+      },
+      {
+        "package": "rocketmq-transport",
+        "path": "rocketmq-transport/Cargo.toml",
+        "canonical_import": "rocketmq_transport",
+        "legacy_owner": "rocketmq-remoting transport paths"
+      },
+      {
+        "package": "rocketmq-security-api",
+        "path": "rocketmq-security-api/Cargo.toml",
+        "canonical_import": "rocketmq_security_api",
+        "legacy_owner": "rocketmq-common and rocketmq-remoting security contracts"
+      },
+      {
+        "package": "rocketmq-store-api",
+        "path": "rocketmq-store-api/Cargo.toml",
+        "canonical_import": "rocketmq_store_api",
+        "legacy_owner": "rocketmq-store public store contracts"
+      },
+      {
+        "package": "rocketmq-store-local",
+        "path": "rocketmq-store-local/Cargo.toml",
+        "canonical_import": "rocketmq_store_local",
+        "legacy_owner": "rocketmq-store local implementation paths"
+      },
+      {
+        "package": "rocketmq-store-rocksdb",
+        "path": "rocketmq-store-rocksdb/Cargo.toml",
+        "canonical_import": "rocketmq_store_rocksdb",
+        "legacy_owner": "rocketmq-store RocksDB implementation paths"
+      },
+      {
+        "package": "rocketmq-proxy-core",
+        "path": "rocketmq-proxy-core/Cargo.toml",
+        "canonical_import": "rocketmq_proxy_core",
+        "legacy_owner": "rocketmq-proxy mode-neutral contracts"
+      },
+      {
+        "package": "rocketmq-proxy-cluster",
+        "path": "rocketmq-proxy-cluster/Cargo.toml",
+        "canonical_import": "rocketmq_proxy_cluster",
+        "legacy_owner": "rocketmq-proxy cluster adapter paths"
+      },
+      {
+        "package": "rocketmq-proxy-local",
+        "path": "rocketmq-proxy-local/Cargo.toml",
+        "canonical_import": "rocketmq_proxy_local",
+        "legacy_owner": "rocketmq-proxy local adapter paths"
+      }
+    ],
+    "rollback": "Withdraw the facade/service release, republish the previous lockstep version, and keep canonical crates plus deprecated forwarding paths intact; never roll back by deleting persisted data or rewriting wire/storage formats."
+  },
+  "r1": {
+    "window": "the release train immediately following R0",
+    "expected_edges": 29,
+    "consumers": [
+      {
+        "caller": "rocketmq-admin-cli",
+        "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/Cargo.toml",
+        "targets": ["rocketmq-common", "rocketmq-remoting", "rocketmq-rust"]
+      },
+      {
+        "caller": "rocketmq-admin-core",
+        "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml",
+        "targets": ["rocketmq-common"]
+      },
+      {
+        "caller": "rocketmq-admin-tui",
+        "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/Cargo.toml",
+        "targets": ["rocketmq-common", "rocketmq-remoting", "rocketmq-rust"]
+      },
+      {
+        "caller": "rocketmq-auth",
+        "path": "rocketmq-auth/Cargo.toml",
+        "targets": ["rocketmq-common", "rocketmq-remoting"]
+      },
+      {
+        "caller": "rocketmq-broker",
+        "path": "rocketmq-broker/Cargo.toml",
+        "targets": ["rocketmq-common", "rocketmq-remoting", "rocketmq-rust"]
+      },
+      {
+        "caller": "rocketmq-client-rust",
+        "path": "rocketmq-client/Cargo.toml",
+        "targets": ["rocketmq-common", "rocketmq-remoting", "rocketmq-rust"]
+      },
+      {
+        "caller": "rocketmq-common",
+        "path": "rocketmq-common/Cargo.toml",
+        "targets": ["rocketmq-rust"]
+      },
+      {
+        "caller": "rocketmq-controller",
+        "path": "rocketmq-controller/Cargo.toml",
+        "targets": ["rocketmq-common", "rocketmq-remoting", "rocketmq-rust"]
+      },
+      {
+        "caller": "rocketmq-namesrv",
+        "path": "rocketmq-namesrv/Cargo.toml",
+        "targets": ["rocketmq-common", "rocketmq-remoting", "rocketmq-rust"]
+      },
+      {
+        "caller": "rocketmq-proxy",
+        "path": "rocketmq-proxy/Cargo.toml",
+        "targets": ["rocketmq-common", "rocketmq-remoting"]
+      },
+      {
+        "caller": "rocketmq-remoting",
+        "path": "rocketmq-remoting/Cargo.toml",
+        "targets": ["rocketmq-common", "rocketmq-rust"]
+      },
+      {
+        "caller": "rocketmq-store",
+        "path": "rocketmq-store/Cargo.toml",
+        "targets": ["rocketmq-common", "rocketmq-remoting", "rocketmq-rust"]
+      }
+    ],
+    "ci_policy": "scripts/architecture_dependency_guard.py --mode baseline runs on Linux and Windows and rejects every unregistered caller/target/kind/path/alias facade edge or any count increase."
+  },
+  "next_major": {
+    "window": "first major release after all evidence gates are satisfied",
+    "expected_edges": 4,
+    "dependency_edges": [
+      {
+        "caller": "rocketmq-example",
+        "target": "rocketmq-common",
+        "kind": "dev",
+        "path": "rocketmq-example/Cargo.toml",
+        "alias": "rocketmq_common"
+      },
+      {
+        "caller": "rocketmq-example",
+        "target": "rocketmq-remoting",
+        "kind": "dev",
+        "path": "rocketmq-example/Cargo.toml",
+        "alias": "rocketmq_remoting"
+      },
+      {
+        "caller": "rocketmq-example",
+        "target": "rocketmq-rust",
+        "kind": "dev",
+        "path": "rocketmq-example/Cargo.toml",
+        "alias": "rocketmq_rust"
+      },
+      {
+        "caller": "rocketmq-common",
+        "target": "rocketmq-protocol",
+        "kind": "normal",
+        "path": "rocketmq-common/Cargo.toml",
+        "alias": "rocketmq_protocol"
+      }
+    ],
+    "removal_scopes": [
+      "admin legacy and legacy-common-compat public API",
+      "rocketmq-common compatibility re-exports",
+      "rocketmq-remoting deprecated deep public paths",
+      "rocketmq-proxy optional cluster-mode/local-mode feature activation"
+    ],
+    "proxy_feature_fixture": "scripts/fixtures/proxy-next-major-features.toml"
+  },
+  "long_term": {
+    "expected_edges": 2,
+    "preserved_edges": [
+      {
+        "caller": "rocketmq-broker",
+        "target": "rocketmq-store",
+        "kind": "normal",
+        "path": "rocketmq-broker/Cargo.toml",
+        "alias": "rocketmq_store"
+      },
+      {
+        "caller": "rocketmq-store-inspect",
+        "target": "rocketmq-store",
+        "kind": "normal",
+        "path": "rocketmq-tools/rocketmq-store-inspect/Cargo.toml",
+        "alias": "rocketmq_store"
+      }
+    ]
+  },
+  "external_usage": {
+    "collection_sources": [
+      "crates.io reverse dependencies and download trend",
+      "GitHub code search for deprecated crate and module paths",
+      "GitHub issues and discussions labeled architecture-migration",
+      "release deprecation feedback and opt-in telemetry when available"
+    ],
+    "cadence": "capture at R0, refresh for every R1 minor release, and freeze a signed snapshot before next-major removal",
+    "removal_gates": {
+      "minimum_deprecation_releases": 2,
+      "minimum_major_boundaries": 1,
+      "workspace_and_standalone_internal_usages": 0,
+      "unresolved_high_impact_external_consumers": 0,
+      "migration_guide_published": true,
+      "release_manager_and_human_approval_required": true
+    },
+    "notification_channels": [
+      "R0 and R1 release notes",
+      "versioned migration guide",
+      "GitHub tracking issue and discussion",
+      "Rust deprecation attributes and canonical replacement notes"
+    ]
+  },
+  "documents": {
+    "r0": "docs/plans/architecture-refactor-migration/phase-2-core-boundaries/09-r0-release-notes.md",
+    "r1": "docs/plans/architecture-refactor-migration/phase-2-core-boundaries/09-r1-consumer-migration-plan.md",
+    "next_major": "docs/plans/architecture-refactor-migration/phase-2-core-boundaries/09-next-major-removal-plan.md",
+    "evidence": "docs/plans/architecture-refactor-migration/phase-2-core-boundaries/09-r0-r1-next-major-release-package-evidence.md"
+  }
+}

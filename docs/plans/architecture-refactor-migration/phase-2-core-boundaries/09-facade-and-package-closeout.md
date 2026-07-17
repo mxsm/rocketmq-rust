@@ -97,11 +97,15 @@ lifecycle 边纳入目标 DAG，M09-04 ledger 3 → 0、总 ledger 38 → 35。M
 
 ### PR-M09-05：R0/R1/下一 major 发布包
 
-- [ ] `[ARCH]` 按 model/error/runtime/security/store-api → protocol/observability → transport/auth/local/tiered → rocks → facade → service/tool 固定发布拓扑。
-- [ ] `[DEV]` 生成 R0 release note：新 crate、canonical path、deprecated path、无行为变化声明和回滚方式。
-- [ ] `[DEV]` 生成 R1 consumer list和 CI 禁止新 facade 边规则；记录外部用量采集方式。
-- [ ] `[ARCH]` 生成下一 major 删除列表：admin legacy、common compat、remoting 深路径、Proxy optional mode feature。
-- [ ] `[HUMAN]` 批准版本窗口和外部通知，不在代码中提前删除。
+- [x] `[ARCH]` 按 model/error/runtime/security/store-api → protocol/observability → transport/auth/local/tiered → rocks → facade → service/tool 固定发布拓扑。
+- [x] `[DEV]` 生成 R0 release note：新 crate、canonical path、deprecated path、无行为变化声明和回滚方式。
+- [x] `[DEV]` 生成 R1 consumer list和 CI 禁止新 facade 边规则；记录外部用量采集方式。
+- [x] `[ARCH]` 生成下一 major 删除列表：admin legacy、common compat、remoting 深路径、Proxy optional mode feature。
+- [x] `[HUMAN]` 批准版本窗口和外部通知，不在代码中提前删除。
+
+完成证据：[`09-r0-r1-next-major-release-package-evidence.md`](09-r0-r1-next-major-release-package-evidence.md)。发布计划将
+32-package 拓扑、10 个 R0 canonical crate、R1 29 条兼容边、next-major 4 条兼容边与 2 条长期 composition 边固化为
+机器可读合同；CI 同时执行依赖基线守卫和 release package 守卫，next-major 删除与 Proxy mode feature 激活仍须独立证据 Gate。
 
 ### PR-M09-06：冻结快照并执行 Phase 2 Gate
 
