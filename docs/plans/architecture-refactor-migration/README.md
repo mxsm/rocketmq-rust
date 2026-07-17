@@ -1,10 +1,10 @@
 # RocketMQ Rust 架构重构迁移执行手册
 
-> 状态：实施中（Phase 3，M10-03 已完成，下一工作包为 PR-M10-04）
+> 状态：实施中（Phase 3，M10-04 已完成，下一工作包为 PR-M10-05）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
-> 当前复核状态：根 workspace 已达到目标 32 个 package；62/82 工作包完成，剩余 20 个
+> 当前复核状态：根 workspace 已达到目标 32 个 package；63/82 工作包完成，剩余 19 个
 
 ## 1. 使用方式
 
@@ -195,7 +195,8 @@ M09-05 发布包索引：[`R0 release notes`](phase-2-core-boundaries/09-r0-rele
 
 ## 8. 全局不变量
 
-- CommitLog 是唯一权威 WAL；CQ、Index、RocksDB、Tiered、Compaction 只持久 cursor/watermark 等派生元数据。
+- CommitLog 是唯一权威 WAL；CQ、Index、RocksDB、Tiered 只持久 cursor/watermark 等派生元数据；Compaction
+  额外持久只含 live record 的可重建 generation，但不承担 WAL、replay source 或主写 ack 职责。
 - SyncFlush 只有在 durable watermark 达标后确认；失败不得推进 watermark。
 - 生产 task/thread/connection/pending request 都有 owner、count+byte budget、绝对 deadline 和完成报告。
 - 基础合同 crate 不通过 feature 引入 Tokio、transport、facade、service 或 native backend。

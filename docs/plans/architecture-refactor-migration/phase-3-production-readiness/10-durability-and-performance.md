@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M10-03 已完成，下一工作包 PR-M10-04） |
+| 状态 | 实施中（PR-M10-04 已完成，下一工作包 PR-M10-05） |
 | 预计周期 | 5–8 周 |
 | 工作包 | WP14 `tiered-cursor`；延续 WP02、WP11–WP13 |
 | 前置条件 | 32-package Gate 通过；CommitLog/receipt/progress 和 Local/Rocks golden 稳定 |
@@ -14,7 +14,8 @@
 
 ## 目标
 
-- 以 CommitLog 作为唯一 WAL/outbox，让 CQ、Index、RocksDB、Tiered、Compaction 各自持久连续 cursor/watermark。
+- 以 CommitLog 作为唯一 WAL/outbox，让 CQ、Index、RocksDB、Tiered 持久连续 cursor/watermark，Compaction
+  额外发布只含 live record 的可重建 generation。
 - 消除派生事件丢失、裸 CommitLog 回退和无界 retry/queue 状态。
 - 通过 byte backpressure、零/少复制和 I/O 合并改善 RSS、p99 与 amplification。
 - 建立可重复的正确性、故障和性能 Gate，关键指标相对固定基线不恶化超过 5%。
@@ -87,12 +88,17 @@ provider read、热拉为 0。62/82 已完成，下一工作包为 PR-M10-04。
 
 ### PR-M10-04：Index/Compaction generation
 
-- [ ] `[DEV]` 构建 `gen-N.tmp`，校验 CRC/条数/边界，sync 后原子切换 CURRENT，延迟删除旧 generation。
-- [ ] `[DEV]` reader 持 generation lease；旧 generation 在最后 reader 退出后删除。
-- [ ] `[DEV]` compaction 只保 key→latest offset，未追平时返回 Recovering 或经过证明的旧 generation+delta，不裸回退 CommitLog。
-- [ ] `[TEST]` 在 build/sync/rename/CURRENT/cleanup 每个故障点 kill/restart，并验证旧 key 不重新可见。
-- [ ] `[REV]` 检查目录 fsync、lease/epoch、version兼容和回滚到上一 generation。
-- [ ] 回滚点：只有上一 generation 通过同一 CRC/边界/kill-restart/durability corpus 时，才原子将 CURRENT 指回；否则保持 Recovering/readiness=false 并修复当前 generation。
+- [x] `[DEV]` 构建 `gen-N.tmp`，校验 CRC/条数/边界，sync 后原子切换 CURRENT，延迟删除旧 generation。
+- [x] `[DEV]` reader 持 generation lease；旧 generation 在最后 reader 退出后删除。
+- [x] `[DEV]` compaction 只保 key→latest offset/代内 payload 位置，未追平时返回 Recovering 或经过证明的旧 generation+delta，不裸回退 CommitLog。
+- [x] `[TEST]` 在 build/sync/rename/CURRENT/cleanup 每个故障点 kill/restart，并验证旧 key 不重新可见。
+- [x] `[REV]` 检查目录 fsync、lease/epoch、version兼容和回滚到上一 generation。
+- [x] 回滚点：只有上一 generation 通过同一 CRC/边界/kill-restart/durability corpus 时，才原子将 CURRENT 指回；否则保持 Recovering/readiness=false 并修复当前 generation。
+
+完成证据：[`10-index-compaction-generation-evidence.md`](10-index-compaction-generation-evidence.md)。冻结代码候选
+`92608c2962bc6e3f0e226980eb7bbf92ac162c1f` 实现 Index/Compaction 的 versioned generation、原子 CURRENT、
+reader lease、validated rollback 和五故障点恢复；Compaction generation 复制 live record，删除 CommitLog resolver
+并重启后仍可读取。63/82 已完成，下一工作包为 PR-M10-05。
 
 ### PR-M10-05：Benchmark、soak 与性能 Gate
 
@@ -154,10 +160,10 @@ python scripts/architecture_dependency_guard.py --mode target
 
 - [ ] `[TEST]` SyncFlush ack 消息 crash/restart 后 100% 可见。
 - [ ] `[TEST]` 各派生 replay 无 hole/重复，cursor/retry 故障可恢复。
-- [ ] `[REV]` CommitLog 是唯一 WAL，派生 metadata 不含 payload。
+- [x] `[REV]` CommitLog 是唯一 WAL；cursor/retry metadata 不含 payload，Compaction 只复制 live record 到可重建 generation。
 - [ ] `[TEST]` Tiered 满载有界且不丢事件，readiness/alert 正确。
-- [ ] `[TEST]` compaction/index 所有 kill point 可恢复或回到上一 generation。
-- [ ] `[REV]` 不存在裸 CommitLog 语义回退。
+- [x] `[TEST]` compaction/index 所有 kill point 可恢复或回到上一 generation。
+- [x] `[REV]` 不存在裸 CommitLog 语义回退。
 - [ ] `[TEST]` Tiered/派生停止、冻结 cursor、pin WAL、checkpoint 重放和“仅切换已验证上一实现”的回滚演练通过。
 - [ ] `[TEST]` 性能 Gate和报告元数据完整。
 - [ ] `[HUMAN]` 持久格式、性能例外和 M10 Gate 已签署。
