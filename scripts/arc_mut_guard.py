@@ -956,16 +956,54 @@ def validate_relocation_approvals(approvals: dict | None) -> dict:
     return approvals
 
 
-def compare_baselines(old: dict, new: dict, relocation_approvals: dict | None = None) -> list[Issue]:
+def validate_identity_relocations(relocations: dict | None) -> dict:
+    relocations = relocations or {}
+    for target_identity, relocation in relocations.items():
+        if not isinstance(target_identity, str) or not target_identity:
+            raise BaselineError("identity relocation target must be a non-empty string")
+        if set(relocation) != {"from", "reason", "adr"}:
+            raise BaselineError(f"identity relocation {target_identity} has invalid fields")
+        if not all(isinstance(relocation[field], str) and relocation[field].strip() for field in relocation):
+            raise BaselineError(f"identity relocation {target_identity} fields must be non-empty strings")
+        if relocation["from"] == target_identity:
+            raise BaselineError(f"identity relocation {target_identity} must change identity")
+        if relocation["adr"] not in APPROVED_ADRS:
+            raise BaselineError(f"identity relocation {target_identity} references an unapproved ADR")
+        if relocation["reason"].strip().lower() in PLACEHOLDERS:
+            raise BaselineError(f"identity relocation {target_identity} has a placeholder reason")
+    return relocations
+
+
+def compare_baselines(
+    old: dict,
+    new: dict,
+    relocation_approvals: dict | None = None,
+    identity_relocations: dict | None = None,
+) -> list[Issue]:
     validate_baseline(old); validate_baseline(new)
     relocation_approvals = validate_relocation_approvals(relocation_approvals)
+    identity_relocations = validate_identity_relocations(identity_relocations)
     old_entries = {e["identity"]: e for e in old["entries"]}
+    new_entries = {e["identity"]: e for e in new["entries"]}
     issues: list[Issue] = []
     consumed_relocations: set[tuple[str, str]] = set()
+    consumed_identity_relocations: set[str] = set()
     for entry in new["entries"]:
         previous = old_entries.get(entry["identity"])
         if previous is None:
-            issues.append(Issue("EXPANDED", entry["identity"])); continue
+            identity_relocation = identity_relocations.get(entry["identity"])
+            previous = old_entries.get(identity_relocation["from"]) if identity_relocation else None
+            if previous is None:
+                issues.append(Issue("EXPANDED", entry["identity"])); continue
+            consumed_identity_relocations.add(entry["identity"])
+            for field in ("category", "owner", "reason", "adr"):
+                if entry[field] != previous[field]:
+                    issues.append(Issue("CHANGED", f"{entry['identity']} {field}"))
+            old_m = MILESTONES.get(previous["remove_by"])
+            new_m = MILESTONES.get(entry["remove_by"])
+            if old_m is None or new_m is None or new_m > old_m:
+                issues.append(Issue("DEADLINE_EXTENDED", entry["identity"]))
+            continue
         for field in ("path", "symbol", "kind", "category", "owner", "reason", "adr"):
             if entry[field] != previous[field]: issues.append(Issue("CHANGED", f"{entry['identity']} {field}"))
         old_occurrences = {o["id"]: o for o in previous["occurrences"]}
@@ -1001,6 +1039,31 @@ def compare_baselines(old: dict, new: dict, relocation_approvals: dict | None = 
             issues.append(Issue("DEADLINE_EXTENDED", entry["identity"]))
     for relocation_key in relocation_approvals.keys() - consumed_relocations:
         issues.append(Issue("UNUSED_RELOCATION", f"{relocation_key[0]} occurrence={relocation_key[1]}"))
+    for target_identity in identity_relocations.keys() - consumed_identity_relocations:
+        issues.append(Issue("UNUSED_IDENTITY_RELOCATION", target_identity))
+    identity_sources = {relocation["from"] for relocation in identity_relocations.values()}
+    for source_identity in identity_sources:
+        if source_identity in new_entries:
+            issues.append(Issue("IDENTITY_RELOCATION_NOT_MOVE", source_identity))
+            continue
+        source = old_entries.get(source_identity)
+        if source is None:
+            issues.append(Issue("IDENTITY_RELOCATION_SOURCE_MISSING", source_identity))
+            continue
+        targets = [
+            new_entries[target_identity]
+            for target_identity, relocation in identity_relocations.items()
+            if relocation["from"] == source_identity and target_identity in new_entries
+        ]
+        old_occurrences = len(source["occurrences"])
+        new_occurrences = sum(len(target["occurrences"]) for target in targets)
+        if new_occurrences > old_occurrences:
+            issues.append(
+                Issue(
+                    "IDENTITY_RELOCATION_EXPANDED",
+                    f"{source_identity} occurrences={old_occurrences}->{new_occurrences}",
+                )
+            )
     return issues
 
 
@@ -1009,12 +1072,14 @@ def promote_findings(
     baseline: dict,
     milestone: str,
     relocation_approvals: dict | None = None,
+    identity_relocations: dict | None = None,
 ) -> dict:
     """Create a refreshed baseline only when governed debt strictly does not expand."""
     validate_baseline(baseline)
     if milestone not in MILESTONES:
         raise BaselineError("current milestone must be one of M01 through M12")
     previous = {entry["identity"]: entry for entry in baseline["entries"]}
+    identity_relocations = validate_identity_relocations(identity_relocations)
     previous_occurrences = sum(len(entry["occurrences"]) for entry in previous.values())
     current_occurrences = sum(len(finding.occurrences) for finding in findings)
     if current_occurrences > previous_occurrences:
@@ -1025,6 +1090,8 @@ def promote_findings(
     entries = []
     for finding in findings:
         old_entry = previous.get(finding.identity)
+        if old_entry is None and finding.identity in identity_relocations:
+            old_entry = previous.get(identity_relocations[finding.identity]["from"])
         if old_entry is None:
             raise BaselineError(f"ArcMut identity debt expanded: {finding.identity}")
         entries.append({
@@ -1038,7 +1105,7 @@ def promote_findings(
 
     promoted = {"schema_version": 1, "current_milestone": milestone, "entries": entries}
     validate_baseline(promoted)
-    issues = compare_baselines(baseline, promoted, relocation_approvals)
+    issues = compare_baselines(baseline, promoted, relocation_approvals, identity_relocations)
     if issues:
         details = "; ".join(f"{issue.code}: {issue.detail}" for issue in issues)
         raise BaselineError(f"baseline promotion is not monotonic: {details}")
@@ -1104,14 +1171,17 @@ def _load(path: Path) -> dict:
         raise BaselineError(f"cannot load {path}: {exc}") from exc
 
 
-def _load_relocation_approvals(path: Path | None) -> dict:
+def _load_relocation_approvals(path: Path | None) -> tuple[dict, dict]:
     if path is None:
-        return {}
+        return {}, {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise BaselineError(f"cannot load {path}: {exc}") from exc
-    if set(data) != {"schema_version", "adr", "relocations"} or data["schema_version"] != 1:
+    if set(data) not in (
+        {"schema_version", "adr", "relocations"},
+        {"schema_version", "adr", "relocations", "identity_relocations"},
+    ) or data["schema_version"] != 1:
         raise BaselineError("relocation approvals must use schema version 1 and exact top-level fields")
     if data["adr"] not in APPROVED_ADRS:
         raise BaselineError("relocation approvals reference an unapproved ADR")
@@ -1129,7 +1199,25 @@ def _load_relocation_approvals(path: Path | None) -> dict:
             "reason": relocation["reason"],
             "adr": data["adr"],
         }
-    return validate_relocation_approvals(approvals)
+    identity_relocations = {}
+    raw_identity_relocations = data.get("identity_relocations", [])
+    if not isinstance(raw_identity_relocations, list):
+        raise BaselineError("identity_relocations must be a list")
+    for number, relocation in enumerate(raw_identity_relocations, start=1):
+        if set(relocation) != {"from", "to", "reason"}:
+            raise BaselineError(f"identity relocation {number} has invalid fields")
+        target_identity = relocation["to"]
+        if target_identity in identity_relocations:
+            raise BaselineError(f"duplicate identity relocation approval {target_identity}")
+        identity_relocations[target_identity] = {
+            "from": relocation["from"],
+            "reason": relocation["reason"],
+            "adr": data["adr"],
+        }
+    return (
+        validate_relocation_approvals(approvals),
+        validate_identity_relocations(identity_relocations),
+    )
 
 
 def resolve_current_milestone(override: str | None, baseline: dict) -> str:
@@ -1152,10 +1240,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.fixtures: return run_fixtures()
-        relocation_approvals = _load_relocation_approvals(args.relocation_approvals)
+        relocation_approvals, identity_relocations = _load_relocation_approvals(args.relocation_approvals)
         if args.compare_baseline:
             issues = compare_baselines(
-                _load(args.baseline), _load(args.compare_baseline), relocation_approvals
+                _load(args.baseline),
+                _load(args.compare_baseline),
+                relocation_approvals,
+                identity_relocations,
             )
         else:
             findings = scan_tree(args.root.resolve())
@@ -1165,7 +1256,13 @@ def main(argv: list[str] | None = None) -> int:
             if args.promote_baseline:
                 baseline = _load(args.baseline)
                 milestone = resolve_current_milestone(args.current_milestone, baseline)
-                promoted = promote_findings(findings, baseline, milestone, relocation_approvals)
+                promoted = promote_findings(
+                    findings,
+                    baseline,
+                    milestone,
+                    relocation_approvals,
+                    identity_relocations,
+                )
                 _write_below_target(
                     promoted, args.promote_baseline, args.root.resolve(), "--promote-baseline"
                 )

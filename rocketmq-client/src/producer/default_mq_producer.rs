@@ -389,6 +389,16 @@ impl DefaultMQProducer {
         <Self as MQProducer>::shutdown(self).await;
     }
 
+    /// Stops producer-owned work without shutting down the shared Client factory.
+    #[doc(hidden)]
+    pub async fn shutdown_for_shared_factory(&mut self) {
+        if let Some(producer) = self.default_mqproducer_impl.as_mut() {
+            if let Err(error) = producer.shutdown_after_partial_start_with_factory(false).await {
+                error!(?error, "DefaultMQProducerImpl shared-factory shutdown failed");
+            }
+        }
+    }
+
     pub async fn fetch_publish_message_queues(
         &mut self,
         topic: &str,

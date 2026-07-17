@@ -50,8 +50,7 @@
       "path": "rocketmq-tieredstore->rocketmq-common->rocketmq-rust",
       "owner": "tieredstore",
       "remove_by": "M06"
-    },
-    {"caller": "rocketmq-proxy", "target": "rocketmq-client-rust", "kind": "normal", "path": "rocketmq-proxy/Cargo.toml", "alias": "rocketmq_client_rust", "count": 1, "owner": "proxy", "remove_by": "M08"}
+    }
   ],
   "compatibility_manifest_exceptions": [
     {"rule": "compatibility-manifest-burn-down", "caller": "rocketmq-example", "target": "rocketmq-common", "kind": "dev", "path": "rocketmq-example/Cargo.toml", "alias": "rocketmq_common", "count": 1, "owner": "examples", "reason": "standalone example compatibility", "remove_by": "M09", "adr": "docs/architecture-refactor-design.md#54-目标依赖-dag"},
@@ -97,8 +96,5 @@
     {"rule": "compatibility-manifest-burn-down", "caller": "rocketmq-tieredstore", "target": "rocketmq-common", "kind": "normal", "path": "rocketmq-tieredstore/Cargo.toml", "alias": "rocketmq_common", "count": 1, "owner": "tieredstore", "reason": "legacy common compatibility", "remove_by": "M06", "adr": "docs/architecture-refactor-design.md#53-目标-crate-职责允许依赖与禁边"},
     {"rule": "compatibility-manifest-burn-down", "caller": "rocketmq-common", "target": "rocketmq-protocol", "kind": "normal", "path": "rocketmq-common/Cargo.toml", "alias": "rocketmq_protocol", "count": 1, "owner": "common", "reason": "R0 protocol re-export edge activated by M04", "remove_by": "M09", "adr": "docs/architecture-refactor-design.md#54-目标依赖-dag"}
   ],
-  "source_exceptions": [
-    {"path": "rocketmq-proxy/src/cluster.rs", "alias": "rocketmq_client_rust", "count": 12, "owner": "proxy", "remove_by": "M08"},
-    {"path": "rocketmq-proxy/src/remoting.rs", "alias": "rocketmq_client_rust", "count": 1, "owner": "proxy", "remove_by": "M08"}
-  ]
+  "source_exceptions": []
 }

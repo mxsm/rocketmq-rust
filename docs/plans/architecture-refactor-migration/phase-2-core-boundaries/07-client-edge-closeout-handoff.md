@@ -164,3 +164,25 @@ Client 临时账本归零且 32-package/target-DAG 证据可重复。
 - M07 冻结的 Client 临时账本仍精确为 Proxy manifest 1、`cluster.rs` 12、`remoting.rs` 1；本切片没有迁移或伪装
   Client runtime，PR-M08-03 将把这些真实 Cluster lifecycle/source edge 搬入 `rocketmq-proxy-cluster`。
 - target guard finding 总数保持 66，Core 零 finding；49/82 工作包已完成、33 未完成，下一串行工作包为 PR-M08-03。
+
+## 11. PR-M08-03 消费记录（2026-07-17）
+
+- `rocketmq-proxy-cluster` 已创建并加入根 workspace，package 进度由 30/32 推进到 31/32；计划中仅剩
+  `rocketmq-proxy-local`，下一串行工作包为 PR-M08-04。
+- Client instance/manager、Cluster service/manager、worker/cache/state、producer/consumer/route 与 Remoting
+  lock/unlock/address resolution 已由 Cluster 唯一拥有；Core 继续只拥有中立 port、classifier、dispatch 与 status contract。
+- Client callback/result 和 Message/MessageExt 在 Cluster 边界转换为 model/Core DTO；Cluster 只消费注入的
+  security-api `OutboundSigner`，auth provider 的创建、配置组合与敏感字段脱敏继续由 Proxy facade 负责。
+- 启动、取消、shutdown/join 的 owner 已随 Client worker、producer 与 instance 迁入 Cluster；每个 adapter 使用
+  独立 `ServiceContext` 子域，Client 与 send producer 使用同一域化配置，取消活动/排队工作后在一个绝对
+  deadline 内按 producer→Client 顺序关闭。验证覆盖 send/pull/pop/ack/route、retry、signing、shutdown、
+  fault/lifecycle，以及 canonical/legacy 与 Serde/default 兼容面；Cluster 19 项、Proxy 101 项、Core 47 项、
+  Client 聚焦 9 项与 Auth signer 1 项测试通过。
+- Client 兼容层以私有载荷的 `ClientInstanceHandle` 隔离共享可变实现，Cluster 源码不再出现 `ArcMut`；受管账本
+  从 3207 降到 3191 个 occurrence。Proxy facade 的兼容构造会借用当前 runtime 或自持 `RuntimeOwner` 并统一 shutdown，
+  生产 binary 继续显式注入顶层 `ServiceContext`。
+- 第 3 节冻结的历史账本表保持不变；其 Proxy manifest 1、source 13 已被本切片完整消费，当前 Client 临时账本
+  manifest/source 均为 0。永久 Admin Core、Cluster、Example allowlist 与临时账本继续分离。
+- target guard 从历史快照的 66 降至 51，现由目标 DAG 直接边 49 与传递闭包边 2 构成，Client manifest/source
+  分类均为 0；architecture contract 120（含 M08 9）、ArcMut guard 65 + fixture 24 与 runtime audit 全绿；
+  typed-error guard 仅复现 main 已登记的 11 项且本切片零新增；50/82 个工作包已完成、32 个未完成。

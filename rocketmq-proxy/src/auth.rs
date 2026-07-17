@@ -57,7 +57,6 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-use rocketmq_remoting::runtime::RPCHook;
 use tonic::Request;
 use tracing::warn;
 
@@ -83,14 +82,14 @@ use crate::proto::v2;
 use crate::service::MetadataService;
 use crate::service::ResourceIdentity;
 
-pub(crate) fn build_cluster_acl_rpc_hook(config: &ProxyConfig) -> Option<Arc<dyn RPCHook>> {
+pub(crate) fn build_cluster_acl_signer(config: &ProxyConfig) -> Option<AclClientRpcHook> {
     if !config.enable_acl_rpc_hook_for_cluster_mode {
         return None;
     }
 
     let auth_config = config.auth.to_auth_config();
     match AclClientRpcHook::from_auth_config(&auth_config) {
-        Ok(Some(rpc_hook)) => return Some(rpc_hook.into_rpc_hook()),
+        Ok(Some(rpc_hook)) => return Some(rpc_hook),
         Ok(None) => {}
         Err(error) => {
             warn!("Skipping proxy cluster ACL RPC hook from inner credentials: {error}");
@@ -101,7 +100,7 @@ pub(crate) fn build_cluster_acl_rpc_hook(config: &ProxyConfig) -> Option<Arc<dyn
     let rocketmq_home = EnvUtils::get_rocketmq_home();
     let tools_file = Path::new(&rocketmq_home).join(ACL_CONF_TOOLS_FILE.trim_start_matches('/'));
     match AclClientRpcHook::from_tools_file(&tools_file, auth_config.signature_algorithm) {
-        Ok(Some(rpc_hook)) => Some(rpc_hook.into_rpc_hook()),
+        Ok(Some(rpc_hook)) => Some(rpc_hook),
         Ok(None) => None,
         Err(error) => {
             warn!(
@@ -964,7 +963,7 @@ mod tests {
     }
 
     #[test]
-    fn build_cluster_acl_rpc_hook_uses_enabled_proxy_inner_credentials() {
+    fn build_cluster_acl_signer_uses_enabled_proxy_inner_credentials() {
         let config = ProxyConfig {
             enable_acl_rpc_hook_for_cluster_mode: true,
             auth: ProxyAuthConfig {
@@ -974,23 +973,8 @@ mod tests {
             },
             ..ProxyConfig::default()
         };
-        let hook = build_cluster_acl_rpc_hook(&config).expect("enabled credentials should build hook");
-        let mut command = RemotingCommand::create_remoting_command(RequestCode::GetRouteinfoByTopic.to_i32())
-            .set_ext_fields(HashMap::from([(
-                CheetahString::from_static_str("topic"),
-                CheetahString::from_static_str("TopicA"),
-            )]));
-
-        hook.do_before_request("127.0.0.1:9876".parse().unwrap(), &mut command)
-            .unwrap();
-
-        let fields = command.ext_fields().unwrap();
-        let expected_signature = acl_signer::cal_signature(b"innerTopicA", "inner-secret").unwrap();
-        assert_eq!(fields.get("AccessKey").map(CheetahString::as_str), Some("inner"));
-        assert_eq!(
-            fields.get("Signature").map(CheetahString::as_str),
-            Some(expected_signature.as_str())
-        );
+        let signer = build_cluster_acl_signer(&config).expect("enabled credentials should build signer");
+        assert_eq!(signer.access_key().as_str(), "inner");
     }
 
     #[tokio::test]

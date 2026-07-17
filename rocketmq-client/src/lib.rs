@@ -120,6 +120,859 @@ pub mod admin_adapter_compat {
         pub use rocketmq_common::common::message::MessageTrait;
     }
 }
+
+/// Compatibility surface used by the Proxy Cluster adapter while Client
+/// runtime signatures are narrowed to canonical protocol contracts.
+#[doc(hidden)]
+pub mod proxy_adapter_compat {
+    use std::collections::HashMap;
+    use std::net::SocketAddr;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::sync::LazyLock;
+    use std::sync::Mutex;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::runtime::RPCHook;
+    use rocketmq_security_api::OutboundSigner;
+    use rocketmq_security_api::SecurityRequestView;
+
+    pub use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
+    pub use rocketmq_common::common::boundary_type::BoundaryType;
+    pub use rocketmq_common::common::filter::expression_type::ExpressionType;
+    pub use rocketmq_common::common::message::message_ext::MessageExt;
+    pub use rocketmq_common::common::message::message_id::MessageId;
+    pub use rocketmq_common::common::message::message_queue::MessageQueue;
+    pub use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
+    pub use rocketmq_common::common::message::message_single::Message;
+    pub use rocketmq_common::common::message::MessageConst;
+    pub use rocketmq_common::common::message::MessageTrait;
+    pub use rocketmq_common::common::mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX;
+    pub use rocketmq_common::common::mix_all::MASTER_ID;
+    pub use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+    pub use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
+    pub use rocketmq_common::MessageDecoder;
+    pub use rocketmq_common::TimeUtils::current_millis;
+    pub use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
+
+    pub type ClientRpcHook = dyn RPCHook;
+
+    /// Opaque compatibility handle for the Client instance owned by the Proxy
+    /// Cluster worker.
+    ///
+    /// The raw shared-mutation carrier remains private to Client; the Cluster
+    /// adapter can only use the instance API and must keep cloned handles on
+    /// its single managed worker.
+    pub struct ClientInstanceHandle {
+        inner: rocketmq_rust::ArcMut<crate::factory::mq_client_instance::MQClientInstance>,
+        owner: ManagedClientOwner,
+    }
+
+    #[derive(Clone, Eq, Hash, PartialEq)]
+    struct ManagedClientKey {
+        client_id: CheetahString,
+    }
+
+    #[derive(Eq, PartialEq)]
+    struct ManagedClientIdentity {
+        namesrv_addr: Option<CheetahString>,
+        use_tls: bool,
+        vip_channel_enabled: bool,
+        api_timeout_millis: u64,
+        rpc_hook_identity: Option<usize>,
+    }
+
+    struct ManagedClientEntry {
+        identity: ManagedClientIdentity,
+        owners: AtomicUsize,
+        operation_gate: Arc<tokio::sync::Mutex<()>>,
+    }
+
+    struct ManagedClientOwner {
+        key: ManagedClientKey,
+        entry: Arc<ManagedClientEntry>,
+        released: AtomicBool,
+    }
+
+    static MANAGED_CLIENTS: LazyLock<dashmap::DashMap<ManagedClientKey, Arc<ManagedClientEntry>>> =
+        LazyLock::new(dashmap::DashMap::new);
+
+    /// Isolates a managed Client owner in the global Client manager while
+    /// preserving the caller-provided instance name as a readable prefix.
+    pub fn client_config_for_managed_domain(
+        domain_id: u64,
+        mut client_config: crate::base::client_config::ClientConfig,
+    ) -> crate::base::client_config::ClientConfig {
+        client_config.set_instance_name(CheetahString::from_string(format!(
+            "{}#managed-domain-{domain_id}",
+            client_config.instance_name
+        )));
+        client_config
+    }
+
+    impl ClientInstanceHandle {
+        pub fn get_or_create(
+            domain_id: u64,
+            client_config: crate::base::client_config::ClientConfig,
+            rpc_hook: Option<Arc<ClientRpcHook>>,
+        ) -> rocketmq_error::RocketMQResult<Self> {
+            let client_config = client_config_for_managed_domain(domain_id, client_config);
+            let client_id = CheetahString::from_string(client_config.build_mq_client_id());
+            let key = ManagedClientKey { client_id };
+            let identity = ManagedClientIdentity {
+                namesrv_addr: client_config.namesrv_addr.clone(),
+                use_tls: client_config.use_tls,
+                vip_channel_enabled: client_config.vip_channel_enabled,
+                api_timeout_millis: client_config.mq_client_api_timeout,
+                rpc_hook_identity: rpc_hook.as_ref().map(|hook| Arc::as_ptr(hook).cast::<()>() as usize),
+            };
+            let entry = match MANAGED_CLIENTS.entry(key.clone()) {
+                dashmap::mapref::entry::Entry::Occupied(entry) => {
+                    if entry.get().identity != identity {
+                        return Err(rocketmq_error::RocketMQError::IllegalArgument(
+                            "managed Client instance configuration conflicts with an existing owner".to_owned(),
+                        ));
+                    }
+                    entry.get().owners.fetch_add(1, Ordering::AcqRel);
+                    entry.get().clone()
+                }
+                dashmap::mapref::entry::Entry::Vacant(entry) => {
+                    let managed = Arc::new(ManagedClientEntry {
+                        identity,
+                        owners: AtomicUsize::new(1),
+                        operation_gate: Arc::new(tokio::sync::Mutex::new(())),
+                    });
+                    entry.insert(managed.clone());
+                    managed
+                }
+            };
+            let inner = crate::implementation::mq_client_manager::MQClientManager::get_instance()
+                .get_or_create_mq_client_instance(client_config, rpc_hook);
+            Ok(Self {
+                inner,
+                owner: ManagedClientOwner {
+                    key,
+                    entry,
+                    released: AtomicBool::new(false),
+                },
+            })
+        }
+
+        pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
+            let _operation = self.operation().await;
+            let mut instance = self.inner.clone();
+            instance.start(self.inner.clone()).await
+        }
+
+        pub async fn topic_route(
+            &self,
+            topic: &str,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>>
+        {
+            let _operation = self.operation().await;
+            self.inner
+                .get_mq_client_api_impl()?
+                .get_topic_route_info_from_name_server(topic, timeout_millis)
+                .await
+        }
+
+        pub async fn lock_batch_mq(
+            &self,
+            broker_addr: &str,
+            request: rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<std::collections::HashSet<MessageQueue>> {
+            let _operation = self.operation().await;
+            self.inner
+                .get_mq_client_api_impl()?
+                .lock_batch_mq(broker_addr, request, timeout_millis)
+                .await
+        }
+
+        pub async fn unlock_batch_mq(
+            &self,
+            broker_addr: &CheetahString,
+            request: rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<()> {
+            let _operation = self.operation().await;
+            self.inner
+                .get_mq_client_api_impl()?
+                .unlock_batch_mq(broker_addr, request, timeout_millis, false)
+                .await
+        }
+
+        #[allow(
+            clippy::too_many_arguments,
+            reason = "mirrors the RocketMQ query-assignment wire contract"
+        )]
+        pub async fn query_assignment(
+            &self,
+            broker_addr: &CheetahString,
+            topic: CheetahString,
+            consumer_group: CheetahString,
+            client_id: CheetahString,
+            strategy_name: CheetahString,
+            message_model: rocketmq_protocol::protocol::heartbeat::message_model::MessageModel,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<Option<Vec<MessageQueueAssignment>>> {
+            let _operation = self.operation().await;
+            self.inner
+                .get_mq_client_api_impl()?
+                .query_assignment(
+                    broker_addr,
+                    topic,
+                    consumer_group,
+                    client_id,
+                    strategy_name,
+                    message_model,
+                    timeout_millis,
+                )
+                .await
+                .map(|assignments| assignments.map(|items| items.into_iter().collect()))
+        }
+
+        pub async fn pop_message(
+            &self,
+            broker_name: &CheetahString,
+            broker_addr: &CheetahString,
+            request: rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<crate::consumer::pop_result::PopResult> {
+            let _operation = self.operation().await;
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            self.inner
+                .get_mq_client_api_impl()?
+                .pop_message_async(
+                    broker_name,
+                    broker_addr,
+                    request,
+                    timeout_millis,
+                    OwnedPopCallback { sender: Some(sender) },
+                )
+                .await?;
+            receiver.await.unwrap_or_else(|_| {
+                Err(rocketmq_error::RocketMQError::Internal(
+                    "Client pop callback closed without a result".to_owned(),
+                ))
+            })
+        }
+
+        pub async fn ack_message(
+            &self,
+            broker_addr: &CheetahString,
+            request: rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult> {
+            let _operation = self.operation().await;
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            self.inner
+                .get_mq_client_api_impl()?
+                .ack_message_async(broker_addr, request, timeout_millis, OwnedAckCallback::new(sender))
+                .await?;
+            receiver.await.unwrap_or_else(|_| {
+                Err(rocketmq_error::RocketMQError::Internal(
+                    "Client ack callback closed without a result".to_owned(),
+                ))
+            })
+        }
+
+        pub async fn change_invisible_time(
+            &self,
+            broker_name: &CheetahString,
+            broker_addr: &CheetahString,
+            request: rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult> {
+            let _operation = self.operation().await;
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            self.inner
+                .get_mq_client_api_impl()?
+                .change_invisible_time_async(
+                    broker_name,
+                    broker_addr,
+                    request,
+                    timeout_millis,
+                    OwnedAckCallback::new(sender),
+                )
+                .await?;
+            receiver.await.unwrap_or_else(|_| {
+                Err(rocketmq_error::RocketMQError::Internal(
+                    "Client change-invisible callback closed without a result".to_owned(),
+                ))
+            })
+        }
+
+        pub async fn end_transaction(
+            &self,
+            broker_addr: &CheetahString,
+            request: rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader,
+            remark: CheetahString,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<()> {
+            let _operation = self.operation().await;
+            self.inner
+                .get_mq_client_api_impl()?
+                .end_transaction_oneway(broker_addr, request, remark, timeout_millis)
+                .await
+        }
+
+        pub async fn find_subscribe_broker_addr(
+            &self,
+            broker_name: &CheetahString,
+            broker_id: u64,
+            only_this_broker: bool,
+        ) -> Option<CheetahString> {
+            let _operation = self.operation().await;
+            let mut instance = self.inner.clone();
+            instance
+                .find_broker_address_in_subscribe(broker_name, broker_id, only_this_broker)
+                .await
+                .map(|found| found.broker_addr)
+        }
+
+        pub async fn refresh_topic_route(&self, topic: &CheetahString) -> bool {
+            let _operation = self.operation().await;
+            let mut instance = self.inner.clone();
+            instance.update_topic_route_info_from_name_server_topic(topic).await
+        }
+
+        pub async fn broker_name_for_queue(&self, queue: &MessageQueue) -> CheetahString {
+            let _operation = self.operation().await;
+            self.inner.get_broker_name_from_message_queue(queue).await
+        }
+
+        pub async fn pull_outcome_from_broker(
+            &self,
+            broker_addr: &str,
+            request: rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<rocketmq_model::result::PullOutcome<MessageExt>> {
+            let _operation = self.operation().await;
+            let result = self
+                .inner
+                .pull_message_from_broker(broker_addr, request, timeout_millis)
+                .await?;
+            Ok((&result).into())
+        }
+
+        #[allow(clippy::too_many_arguments, reason = "mirrors the RocketMQ send-back wire contract")]
+        pub async fn consumer_send_message_back(
+            &self,
+            broker_addr: &str,
+            broker_name: Option<&str>,
+            message: &MessageExt,
+            consumer_group: &str,
+            delay_level: i32,
+            timeout_millis: u64,
+            max_consume_retry_times: i32,
+        ) -> rocketmq_error::RocketMQResult<()> {
+            let _operation = self.operation().await;
+            let mut instance = self.inner.clone();
+            instance
+                .consumer_send_message_back(
+                    broker_addr,
+                    broker_name,
+                    message,
+                    consumer_group,
+                    delay_level,
+                    timeout_millis,
+                    max_consume_retry_times,
+                )
+                .await
+        }
+
+        pub async fn update_consumer_offset(
+            &self,
+            broker_addr: &CheetahString,
+            request: rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<()> {
+            let _operation = self.operation().await;
+            self.inner
+                .update_consumer_offset(broker_addr, request, timeout_millis)
+                .await
+        }
+
+        pub async fn query_consumer_offset(
+            &self,
+            broker_addr: &str,
+            request: rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<i64> {
+            let _operation = self.operation().await;
+            self.inner
+                .query_consumer_offset(broker_addr, request, timeout_millis)
+                .await
+        }
+
+        pub async fn min_offset(
+            &self,
+            broker_addr: &str,
+            queue: &MessageQueue,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<i64> {
+            let _operation = self.operation().await;
+            self.inner.get_min_offset(broker_addr, queue, timeout_millis).await
+        }
+
+        pub async fn max_offset(
+            &self,
+            broker_addr: &str,
+            queue: &MessageQueue,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<i64> {
+            let _operation = self.operation().await;
+            self.inner.get_max_offset(broker_addr, queue, timeout_millis).await
+        }
+
+        pub async fn search_offset(
+            &self,
+            broker_addr: &str,
+            queue: &MessageQueue,
+            timestamp: i64,
+            boundary_type: BoundaryType,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<i64> {
+            let _operation = self.operation().await;
+            self.inner
+                .search_offset_by_timestamp(broker_addr, queue, timestamp, boundary_type, timeout_millis)
+                .await
+        }
+
+        pub async fn topic_config(
+            &self,
+            broker_addr: &CheetahString,
+            topic: CheetahString,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<rocketmq_common::common::config::TopicConfig> {
+            let _operation = self.operation().await;
+            self.inner.get_topic_config(broker_addr, topic, timeout_millis).await
+        }
+
+        pub async fn subscription_group_config(
+            &self,
+            broker_addr: &CheetahString,
+            group: CheetahString,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<
+            rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig,
+        > {
+            let _operation = self.operation().await;
+            self.inner
+                .get_subscription_group_config(broker_addr, group, timeout_millis)
+                .await
+        }
+
+        pub async fn broker_cluster_info(
+            &self,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo>
+        {
+            let _operation = self.operation().await;
+            self.inner.get_broker_cluster_info(timeout_millis).await
+        }
+
+        pub async fn user(
+            &self,
+            broker_addr: CheetahString,
+            username: CheetahString,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<Option<rocketmq_protocol::protocol::body::user_info::UserInfo>> {
+            let _operation = self.operation().await;
+            self.inner.get_user(broker_addr, username, timeout_millis).await
+        }
+
+        pub async fn acl(
+            &self,
+            broker_addr: CheetahString,
+            subject: CheetahString,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<Option<rocketmq_protocol::protocol::body::acl_info::AclInfo>> {
+            let _operation = self.operation().await;
+            self.inner.get_acl(broker_addr, subject, timeout_millis).await
+        }
+
+        pub async fn shutdown_owned(&self) {
+            if !self.release_managed() {
+                return;
+            }
+            let _operation = self.operation().await;
+            let mut instance = self.inner.clone();
+            instance.shutdown().await;
+        }
+
+        fn release_managed(&self) -> bool {
+            if self.owner.released.swap(true, Ordering::AcqRel) {
+                return false;
+            }
+            let dashmap::mapref::entry::Entry::Occupied(entry) = MANAGED_CLIENTS.entry(self.owner.key.clone()) else {
+                return false;
+            };
+            if !Arc::ptr_eq(entry.get(), &self.owner.entry) {
+                return false;
+            }
+            let owners = entry.get().owners.load(Ordering::Acquire);
+            if owners == 0 {
+                return false;
+            }
+            entry.get().owners.store(owners - 1, Ordering::Release);
+            if owners != 1 {
+                return false;
+            }
+
+            let expected = Arc::as_ptr(self.inner.get_inner()).cast::<()>();
+            crate::implementation::mq_client_manager::MQClientManager::get_instance()
+                .remove_client_factory_if_same(&self.owner.key.client_id, expected);
+            entry.remove();
+            true
+        }
+
+        async fn operation(&self) -> tokio::sync::OwnedMutexGuard<()> {
+            self.owner.entry.operation_gate.clone().lock_owned().await
+        }
+    }
+
+    impl Drop for ClientInstanceHandle {
+        fn drop(&mut self) {
+            if self.release_managed() {
+                tracing::warn!(
+                    client_id = %self.owner.key.client_id,
+                    "managed Client handle dropped before asynchronous shutdown completed"
+                );
+            }
+        }
+    }
+
+    struct OwnedPopCallback {
+        sender: Option<
+            tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<crate::consumer::pop_result::PopResult>>,
+        >,
+    }
+
+    impl crate::consumer::pop_callback::PopCallback for OwnedPopCallback {
+        async fn on_success(&mut self, pop_result: crate::consumer::pop_result::PopResult) {
+            if let Some(sender) = self.sender.take() {
+                let _ = sender.send(Ok(pop_result));
+            }
+        }
+
+        fn on_error(&mut self, error: rocketmq_error::RocketMQError) {
+            if let Some(sender) = self.sender.take() {
+                let _ = sender.send(Err(error));
+            }
+        }
+    }
+
+    struct OwnedAckCallback {
+        sender: Mutex<
+            Option<
+                tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult>>,
+            >,
+        >,
+    }
+
+    impl OwnedAckCallback {
+        fn new(
+            sender: tokio::sync::oneshot::Sender<
+                rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult>,
+            >,
+        ) -> Self {
+            Self {
+                sender: Mutex::new(Some(sender)),
+            }
+        }
+
+        fn send(&self, result: rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult>) {
+            let mut sender = match self.sender.lock() {
+                Ok(sender) => sender,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Some(sender) = sender.take() {
+                let _ = sender.send(result);
+            }
+        }
+    }
+
+    impl crate::consumer::ack_callback::AckCallback for OwnedAckCallback {
+        fn on_success(&self, ack_result: crate::consumer::ack_result::AckResult) {
+            self.send(Ok(ack_result));
+        }
+
+        fn on_exception(&self, error: rocketmq_error::RocketMQError) {
+            self.send(Err(error));
+        }
+    }
+
+    pub fn rpc_hook_from_outbound_signer(signer: Arc<dyn OutboundSigner>) -> Arc<ClientRpcHook> {
+        Arc::new(OutboundSignerRpcHook { signer })
+    }
+
+    struct OutboundSignerRpcHook {
+        signer: Arc<dyn OutboundSigner>,
+    }
+
+    impl RPCHook for OutboundSignerRpcHook {
+        fn do_before_request(
+            &self,
+            _remote_addr: SocketAddr,
+            request: &mut RemotingCommand,
+        ) -> rocketmq_error::RocketMQResult<()> {
+            // RPCHook callers normally serialize the custom header first, but
+            // keep the adapter correct when invoked directly or by another
+            // Client transport path.
+            request.make_custom_header_to_net();
+            let empty_fields = HashMap::new();
+            let fields = request.ext_fields().unwrap_or(&empty_fields);
+            let signature = self
+                .signer
+                .sign(SecurityRequestView::new(
+                    request.code(),
+                    request.version(),
+                    fields,
+                    request.body().map(AsRef::as_ref),
+                    None,
+                ))
+                .map_err(|_| rocketmq_error::RocketMQError::authentication_failed("outbound request signing failed"))?;
+
+            request.ensure_ext_fields_initialized();
+            for (key, value) in signature.fields() {
+                request.add_ext_field(key.clone(), value.expose_secret().clone());
+            }
+            Ok(())
+        }
+
+        fn do_after_response(
+            &self,
+            _remote_addr: SocketAddr,
+            _request: &RemotingCommand,
+            _response: &mut RemotingCommand,
+        ) -> rocketmq_error::RocketMQResult<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::sync::Arc;
+
+        use super::client_config_for_managed_domain;
+        use super::rpc_hook_from_outbound_signer;
+        use super::CheetahString;
+        use super::ClientInstanceHandle;
+        use super::ManagedClientKey;
+        use super::OutboundSigner;
+        use super::RemotingCommand;
+        use super::SecurityRequestView;
+        use super::MANAGED_CLIENTS;
+        use rocketmq_protocol::code::request_code::RequestCode;
+        use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+        use rocketmq_security_api::Secret;
+        use rocketmq_security_api::Signature;
+        use rocketmq_security_api::SigningError;
+
+        struct FixedSigner;
+
+        impl OutboundSigner for FixedSigner {
+            fn sign(&self, request: SecurityRequestView<'_>) -> Result<Signature, SigningError> {
+                assert_eq!(
+                    request.fields().get("topic").map(|value| value.as_str()),
+                    Some("TopicA")
+                );
+                Ok(Signature::new(vec![
+                    ("AccessKey".into(), Secret::new("cluster-client".into())),
+                    ("Signature".into(), Secret::new("redacted-signature".into())),
+                ]))
+            }
+        }
+
+        struct FailingSigner;
+
+        impl OutboundSigner for FailingSigner {
+            fn sign(&self, _request: SecurityRequestView<'_>) -> Result<Signature, SigningError> {
+                Err(SigningError::Failed(CheetahString::from("secret signing diagnostic")))
+            }
+        }
+
+        #[test]
+        fn outbound_signer_adapter_applies_fields_to_client_rpc_request() {
+            let hook = rpc_hook_from_outbound_signer(Arc::new(FixedSigner));
+            let mut request = RemotingCommand::create_request_command(
+                RequestCode::GetRouteinfoByTopic,
+                GetRouteInfoRequestHeader::new("TopicA", None),
+            );
+
+            hook.do_before_request("127.0.0.1:9876".parse().unwrap(), &mut request)
+                .unwrap();
+
+            let fields = request.ext_fields().unwrap();
+            assert_eq!(
+                fields.get("AccessKey").map(|value| value.as_str()),
+                Some("cluster-client")
+            );
+            assert_eq!(
+                fields.get("Signature").map(|value| value.as_str()),
+                Some("redacted-signature")
+            );
+        }
+
+        #[test]
+        fn outbound_signer_adapter_redacts_signer_failures() {
+            let hook = rpc_hook_from_outbound_signer(Arc::new(FailingSigner));
+            let mut request = RemotingCommand::create_request_command(
+                RequestCode::GetRouteinfoByTopic,
+                GetRouteInfoRequestHeader::new("TopicA", None),
+            );
+
+            let error = hook
+                .do_before_request("127.0.0.1:9876".parse().unwrap(), &mut request)
+                .expect_err("signing failure must fail closed");
+            let message = error.to_string();
+            assert!(message.contains("outbound request signing failed"));
+            assert!(!message.contains("secret signing diagnostic"));
+        }
+
+        #[tokio::test]
+        async fn managed_client_is_shared_until_the_last_owner_releases_it() {
+            let domain_id = 71_001;
+            let mut config = crate::base::client_config::ClientConfig::default();
+            config.set_instance_name("managed-client-shared".into());
+            let client_id = client_config_for_managed_domain(domain_id, config.clone())
+                .build_mq_client_id()
+                .into();
+            let key = ManagedClientKey { client_id };
+
+            let first = ClientInstanceHandle::get_or_create(domain_id, config.clone(), None).unwrap();
+            let second = ClientInstanceHandle::get_or_create(domain_id, config, None).unwrap();
+
+            assert!(Arc::ptr_eq(first.inner.get_inner(), second.inner.get_inner(),));
+            assert_eq!(
+                MANAGED_CLIENTS
+                    .get(&key)
+                    .unwrap()
+                    .owners
+                    .load(std::sync::atomic::Ordering::Acquire),
+                2
+            );
+
+            first.shutdown_owned().await;
+            assert_eq!(
+                MANAGED_CLIENTS
+                    .get(&key)
+                    .unwrap()
+                    .owners
+                    .load(std::sync::atomic::Ordering::Acquire),
+                1
+            );
+
+            second.shutdown_owned().await;
+            assert!(!MANAGED_CLIENTS.contains_key(&key));
+        }
+
+        #[tokio::test]
+        async fn managed_client_rejects_conflicting_configuration_for_the_same_identity() {
+            let domain_id = 71_002;
+            let mut first_config = crate::base::client_config::ClientConfig::default();
+            first_config.set_instance_name("managed-client-conflict".into());
+            first_config.set_namesrv_addr("127.0.0.1:9876".into());
+            let mut second_config = first_config.clone();
+            second_config.set_namesrv_addr("127.0.0.2:9876".into());
+
+            let first = ClientInstanceHandle::get_or_create(domain_id, first_config, None).unwrap();
+            let error = ClientInstanceHandle::get_or_create(domain_id, second_config, None)
+                .err()
+                .expect("conflicting managed configuration must fail closed");
+
+            assert!(matches!(error, rocketmq_error::RocketMQError::IllegalArgument(_)));
+            first.shutdown_owned().await;
+        }
+
+        #[tokio::test]
+        async fn managed_client_isolated_across_runtime_domains() {
+            let mut config = crate::base::client_config::ClientConfig::default();
+            config.set_instance_name("managed-client-cross-domain".into());
+            let first_domain = 71_004;
+            let second_domain = 71_005;
+            let first_key = ManagedClientKey {
+                client_id: client_config_for_managed_domain(first_domain, config.clone())
+                    .build_mq_client_id()
+                    .into(),
+            };
+            let second_key = ManagedClientKey {
+                client_id: client_config_for_managed_domain(second_domain, config.clone())
+                    .build_mq_client_id()
+                    .into(),
+            };
+            let first = ClientInstanceHandle::get_or_create(first_domain, config.clone(), None).unwrap();
+            let second = ClientInstanceHandle::get_or_create(second_domain, config, None).unwrap();
+
+            assert!(!Arc::ptr_eq(first.inner.get_inner(), second.inner.get_inner(),));
+            assert_eq!(
+                MANAGED_CLIENTS
+                    .get(&first_key)
+                    .unwrap()
+                    .owners
+                    .load(std::sync::atomic::Ordering::Acquire),
+                1
+            );
+            assert_eq!(
+                MANAGED_CLIENTS
+                    .get(&second_key)
+                    .unwrap()
+                    .owners
+                    .load(std::sync::atomic::Ordering::Acquire),
+                1
+            );
+
+            first.shutdown_owned().await;
+            assert!(!MANAGED_CLIENTS.contains_key(&first_key));
+            assert!(MANAGED_CLIENTS.contains_key(&second_key));
+            second.shutdown_owned().await;
+            assert!(!MANAGED_CLIENTS.contains_key(&second_key));
+        }
+
+        #[test]
+        fn dropping_managed_handles_releases_the_global_lease() {
+            let domain_id = 71_006;
+            let mut config = crate::base::client_config::ClientConfig::default();
+            config.set_instance_name("managed-client-drop-release".into());
+            let client_id = client_config_for_managed_domain(domain_id, config.clone())
+                .build_mq_client_id()
+                .into();
+            let key = ManagedClientKey { client_id };
+            let first = ClientInstanceHandle::get_or_create(domain_id, config.clone(), None).unwrap();
+            let second = ClientInstanceHandle::get_or_create(domain_id, config, None).unwrap();
+
+            drop(first);
+            assert_eq!(
+                MANAGED_CLIENTS
+                    .get(&key)
+                    .unwrap()
+                    .owners
+                    .load(std::sync::atomic::Ordering::Acquire),
+                1
+            );
+            drop(second);
+            assert!(!MANAGED_CLIENTS.contains_key(&key));
+        }
+
+        #[tokio::test]
+        async fn releasing_the_last_lease_prevents_manager_aba_reuse() {
+            let mut config = crate::base::client_config::ClientConfig::default();
+            config.set_instance_name("managed-client-aba".into());
+            let first = ClientInstanceHandle::get_or_create(71_008, config.clone(), None).unwrap();
+            first.shutdown_owned().await;
+
+            let second = ClientInstanceHandle::get_or_create(71_008, config, None).unwrap();
+            assert!(!Arc::ptr_eq(first.inner.get_inner(), second.inner.get_inner()));
+            second.shutdown_owned().await;
+        }
+    }
+}
 #[doc(hidden)]
 pub use crate::consumer::consumer_impl::consume_message_concurrently_service::run_concurrent_clean_expire_lifecycle_probe;
 #[doc(hidden)]

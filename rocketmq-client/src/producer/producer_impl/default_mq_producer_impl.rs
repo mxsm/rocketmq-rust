@@ -3188,6 +3188,42 @@ impl DefaultMQProducerImpl {
         }
     }
 
+    /// Rolls back a producer whose owned start future failed or was cancelled.
+    ///
+    /// The caller must own the start future and ensure it is no longer being
+    /// polled before invoking this method.
+    pub(crate) async fn shutdown_after_partial_start_with_factory(
+        &mut self,
+        shutdown_factory: bool,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        loop {
+            let state = self.load_state(Ordering::SeqCst);
+            match state {
+                ProducerState::Running => return self.shutdown_with_factory(shutdown_factory).await,
+                ProducerState::Starting | ProducerState::StartFailed => {
+                    if self
+                        .compare_exchange_state(state, ProducerState::Stopping, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    self.shutdown_producer_tasks().await;
+                    if let Err(error) = self.do_shutdown_internal(shutdown_factory).await {
+                        self.store_state(ProducerState::StartFailed, Ordering::SeqCst);
+                        return Err(error);
+                    }
+                    self.service_state = ServiceState::ShutdownAlready;
+                    self.store_state(ProducerState::Stopped, Ordering::SeqCst);
+                    return Ok(());
+                }
+                ProducerState::Stopping => {
+                    self.wait_until_state_changes_from(ProducerState::Stopping).await;
+                }
+                ProducerState::Created | ProducerState::Stopped => return Ok(()),
+            }
+        }
+    }
+
     /// Internal shutdown logic
     async fn do_shutdown_internal(&mut self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
         let producer_group = self.producer_config.producer_group().to_string();
@@ -3918,6 +3954,23 @@ mod tests {
             ProducerState::StartFailed
         );
         assert_eq!(producer.service_state, ServiceState::StartFailed);
+    }
+
+    #[tokio::test]
+    async fn owned_partial_start_shutdown_cleans_starting_and_failed_states() {
+        for state in [ProducerState::Starting, ProducerState::StartFailed] {
+            let mut producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+            producer.service_state = ServiceState::StartFailed;
+            producer.store_state(state, Ordering::SeqCst);
+
+            producer
+                .shutdown_after_partial_start_with_factory(false)
+                .await
+                .expect("owned partial startup must be cleaned up");
+
+            assert_eq!(producer.load_state(Ordering::SeqCst), ProducerState::Stopped);
+            assert_eq!(producer.service_state, ServiceState::ShutdownAlready);
+        }
     }
 
     #[tokio::test]

@@ -470,6 +470,69 @@ class ArcMutBaselineTests(unittest.TestCase):
         with self.assertRaises(guard.BaselineError):
             guard.promote_findings(expanded, old, "M03")
 
+    def test_promote_allows_reviewed_identity_split_without_occurrence_growth(self):
+        guard = load_guard()
+        old_entry = self.entry("a", "M04")
+        old_entry["occurrences"].append(
+            {"id": "a-extra", "fingerprint": "extra", "item": "fn extra", "line": 20}
+        )
+        findings = [
+            guard.Finding(
+                "b",
+                "b/src/lib.rs",
+                "ClientHandle",
+                "alias",
+                "production",
+                ({"id": "b-occ", "fingerprint": "b", "item": "mod compat", "line": 1},),
+            ),
+            guard.Finding(
+                "c",
+                "c/src/lib.rs",
+                "ClientHandle",
+                "type_reference",
+                "production",
+                ({"id": "c-occ", "fingerprint": "c", "item": "fn use_handle", "line": 2},),
+            ),
+        ]
+        identity_relocations = {
+            target: {
+                "from": "a",
+                "reason": "The physical owner split preserves the same governed occurrence budget",
+                "adr": "ADR-013",
+            }
+            for target in ("b", "c")
+        }
+
+        promoted = guard.promote_findings(
+            findings,
+            self.baseline([old_entry]),
+            "M03",
+            {},
+            identity_relocations,
+        )
+
+        self.assertEqual({"b", "c"}, {entry["identity"] for entry in promoted["entries"]})
+        self.assertTrue(all(entry["owner"] == "runtime" for entry in promoted["entries"]))
+
+    def test_compare_rejects_identity_split_occurrence_growth(self):
+        guard = load_guard()
+        old = self.baseline([self.entry("a", "M04")])
+        new_entries = [self.entry("b", "M04"), self.entry("c", "M04")]
+        for entry in new_entries:
+            entry["path"] = f"{entry['identity']}/src/lib.rs"
+        identity_relocations = {
+            target: {
+                "from": "a",
+                "reason": "The physical owner split requires an explicit non-expansion review",
+                "adr": "ADR-013",
+            }
+            for target in ("b", "c")
+        }
+
+        issues = guard.compare_baselines(old, self.baseline(new_entries), {}, identity_relocations)
+
+        self.assertIn("IDENTITY_RELOCATION_EXPANDED", {issue.code for issue in issues})
+
     def test_promote_rejects_replaced_occurrence_without_approval(self):
         guard = load_guard()
         old = self.baseline([self.entry("a", "M04")])

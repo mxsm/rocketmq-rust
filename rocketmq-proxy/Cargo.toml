@@ -44,8 +44,8 @@ rocketmq-store       = { workspace = true }
 rocketmq-error       = { workspace = true }
 rocketmq-model       = { workspace = true }
 rocketmq-proxy-core  = { workspace = true }
+rocketmq-proxy-cluster = { workspace = true }
 rocketmq-remoting    = { workspace = true }
-rocketmq-client-rust = { workspace = true }
 rocketmq-auth        = { workspace = true, features = ["grpc"] }
 rocketmq-rust        = { workspace = true }
 rocketmq-observability = { workspace = true }

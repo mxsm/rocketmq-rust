@@ -26,6 +26,11 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_security_api::OutboundSigner;
+use rocketmq_security_api::Secret;
+use rocketmq_security_api::SecurityRequestView;
+use rocketmq_security_api::Signature;
+use rocketmq_security_api::SigningError;
 use serde::Deserialize;
 
 use crate::authentication::builder::DefaultAuthenticationContextBuilder;
@@ -129,6 +134,10 @@ impl AclClientRpcHook {
         Arc::new(self)
     }
 
+    pub fn into_outbound_signer(self) -> Arc<dyn OutboundSigner> {
+        Arc::new(self)
+    }
+
     pub fn access_key(&self) -> &CheetahString {
         &self.access_key
     }
@@ -184,6 +193,45 @@ impl RPCHook for AclClientRpcHook {
         _response: &mut RemotingCommand,
     ) -> RocketMQResult<()> {
         Ok(())
+    }
+}
+
+impl OutboundSigner for AclClientRpcHook {
+    fn sign(&self, request: SecurityRequestView<'_>) -> Result<Signature, SigningError> {
+        let mut sorted_fields = request
+            .fields()
+            .iter()
+            .filter(|(key, _)| key.as_str() != SIGNATURE)
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
+        sorted_fields.insert(CheetahString::from(ACCESS_KEY), self.access_key.clone());
+        if let Some(security_token) = &self.security_token {
+            sorted_fields.insert(CheetahString::from(SECURITY_TOKEN), security_token.clone());
+        }
+
+        let mut content = Vec::new();
+        for value in sorted_fields.values() {
+            content.extend_from_slice(value.as_bytes());
+        }
+        if let Some(body) = request.body() {
+            content.extend_from_slice(body);
+        }
+        let signature = acl_signer::cal_signature_with_algorithm(
+            content.as_slice(),
+            self.secret_key.as_str(),
+            self.signature_algorithm,
+        )
+        .map_err(|_| SigningError::Failed(CheetahString::from("HMAC signature calculation failed")))?;
+
+        let mut fields = vec![(CheetahString::from(ACCESS_KEY), Secret::new(self.access_key.clone()))];
+        if let Some(security_token) = &self.security_token {
+            fields.push((CheetahString::from(SECURITY_TOKEN), Secret::new(security_token.clone())));
+        }
+        fields.push((
+            CheetahString::from(SIGNATURE),
+            Secret::new(CheetahString::from(signature)),
+        ));
+        Ok(Signature::new(fields))
     }
 }
 
@@ -303,5 +351,25 @@ mod tests {
             fields.get(SIGNATURE).map(CheetahString::as_str),
             Some(expected_signature.as_str())
         );
+    }
+
+    #[test]
+    fn outbound_signer_matches_java_rpc_hook_signature_fields() {
+        let signer = AclClientRpcHook::new("alice", "secret", Some("token"), SignatureAlgorithm::HmacSha1).unwrap();
+        let fields = HashMap::from([(CheetahString::from("topic"), CheetahString::from("topic-a"))]);
+
+        let signature = signer
+            .sign(SecurityRequestView::new(10, 0, &fields, None, None))
+            .unwrap();
+        let signed_fields = signature
+            .fields()
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.expose_secret().as_str()))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(signed_fields.get(ACCESS_KEY), Some(&"alice"));
+        assert_eq!(signed_fields.get(SECURITY_TOKEN), Some(&"token"));
+        let expected = acl_signer::cal_signature(b"alicetokentopic-a", "secret").unwrap();
+        assert_eq!(signed_fields.get(SIGNATURE), Some(&expected.as_str()));
     }
 }
