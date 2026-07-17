@@ -1,10 +1,10 @@
 # RocketMQ Rust 架构重构迁移执行手册
 
-> 状态：实施中（Phase 2，M09-04 已完成，下一工作包为 PR-M09-05）
+> 状态：实施中（Phase 2，M09-05 已完成，下一工作包为 PR-M09-06）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
-> 当前复核状态：根 workspace 已达到目标 32 个 package；57/82 工作包完成，剩余 25 个
+> 当前复核状态：根 workspace 已达到目标 32 个 package；58/82 工作包完成，剩余 24 个
 
 ## 1. 使用方式
 
@@ -187,6 +187,12 @@ MCP 与 Dashboard 只能经 `rocketmq-admin-core` 的受控 adapter 间接到达
 - 删除 admin-core 的 `legacy-common-compat`、common 的 protocol/observability compatibility dependency，以及已经排空的 remoting/legacy 深路径。
 - `rocketmq-store` 的 backend composition 职责可长期保留，不因目录整齐而强制删除。
 
+M09-05 发布包索引：[`R0 release notes`](phase-2-core-boundaries/09-r0-release-notes.md)、
+[`R1 consumer migration plan`](phase-2-core-boundaries/09-r1-consumer-migration-plan.md)、
+[`next-major removal plan`](phase-2-core-boundaries/09-next-major-removal-plan.md) 与
+[`release package evidence`](phase-2-core-boundaries/09-r0-r1-next-major-release-package-evidence.md)。机器可读版本为
+`scripts/architecture-release-plan.json`，由 `scripts/architecture_release_guard.py` 和 CI 同步守卫。
+
 ## 8. 全局不变量
 
 - CommitLog 是唯一权威 WAL；CQ、Index、RocksDB、Tiered、Compaction 只持久 cursor/watermark 等派生元数据。
@@ -206,6 +212,10 @@ MCP 与 Dashboard 只能经 `rocketmq-admin-core` 的受控 adapter 间接到达
 ```powershell
 cargo fmt --all -- --check
 cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+python scripts/architecture_dependency_guard.py --mode target
+python scripts/architecture_dependency_guard.py --mode baseline
+python scripts/architecture_release_guard.py
+python scripts/arc_mut_guard.py
 .\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline
 .\scripts\check-error-hygiene.ps1
 python scripts/error_architecture_guard.py
@@ -217,11 +227,9 @@ git diff --check
 
 ### 9.2 由里程碑新增后才执行的命令
 
-下列脚本是 M01/M10/M11 的计划交付物，当前不能作为已存在的门禁报告成功：
+下列脚本是 M10/M11 的计划交付物，当前不能作为已存在的门禁报告成功：
 
 ```powershell
-python scripts/architecture_dependency_guard.py
-python scripts/arc_mut_guard.py
 python scripts/architecture_performance_guard.py --baseline <baseline.json> --candidate <candidate.json>
 python scripts/telemetry_semantic_guard.py
 .\scripts\kind-architecture-refactor-e2e.ps1

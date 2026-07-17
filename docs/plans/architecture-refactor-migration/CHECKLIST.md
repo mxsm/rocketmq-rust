@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 57 | 0 | 25 未开始；合计 25 尚未完成 | 82 |
+| PR 级工作包 | 58 | 0 | 24 未开始；合计 24 尚未完成 | 82 |
 | 里程碑 | 8（M01–M08） | 1（M09） | 3（M10–M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 25 个未开始工作包分布：M09 为 2 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
-PR-M09-04 已完成 Client allowlist 与跨项目消费者验证，当前下一工作包为 PR-M09-05。
+剩余 24 个未开始工作包分布：M09 为 1 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
+PR-M09-05 已完成 R0/R1/next-major 发布包，当前下一工作包为 PR-M09-06。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -429,7 +429,15 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Example、Tauri frontend/backend、Web frontend/backend 全部按最近 AGENTS 验证通过；GPUI 条件未触发
   - [x] [`M09-04 跨项目证据`](phase-2-core-boundaries/09-client-allowlist-cross-project-evidence.md) 已记录 allowlist、三条处置、锁文件差分、提示与回滚边界
   - [x] 57/82 已完成、25 未完成，下一工作包 PR-M09-05
-- [ ] PR-M09-05：准备 R0/R1/下一 major 发布包
+- [x] PR-M09-05：准备 R0/R1/下一 major 发布包
+  - [x] 32-package publish order 按目标 DAG 固定，并保留六阶段 conceptual release chain
+  - [x] R0 release notes 完整列出 10 个新 crate、canonical/deprecated owner、无行为变化声明与回滚
+  - [x] R1 consumer plan 精确覆盖 12 个 caller、29 条兼容边；CI baseline/release guards 禁止新增或扩张
+  - [x] 外部用量采集覆盖 crates.io、GitHub code search、Issue/Discussion 与 release feedback，未知信号 fail closed
+  - [x] next-major 精确列出 4 条依赖边及 admin legacy、common compat、remoting 深路径、Proxy mode feature 范围
+  - [x] 2 条长期 Store composition 边明确排除；破坏性删除仍须 next-major 独立证据 Gate
+  - [x] [`M09-05 发布包证据`](phase-2-core-boundaries/09-r0-r1-next-major-release-package-evidence.md) 已记录机器合同、CI、验证与回滚边界
+  - [x] 58/82 已完成、24 未完成，下一工作包 PR-M09-06
 - [ ] PR-M09-06：冻结快照并执行 Phase 2 Gate
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 
