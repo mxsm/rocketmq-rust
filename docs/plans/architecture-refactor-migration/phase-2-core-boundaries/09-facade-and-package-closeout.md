@@ -71,11 +71,16 @@
 
 ### PR-M09-03：Public API、feature、wire/storage 兼容证明
 
-- [ ] `[TEST]` 运行 public API snapshot/diff；任何差异分类为 additive、deprecated 或未批准 breaking。
-- [ ] `[TEST]` 运行 protocol simd、transport TLS/observability、store 精确矩阵、admin no-default/adapter/legacy、Proxy R0 矩阵。
-- [ ] `[TEST]` 运行 wire JSON/binary、20B CQ/Index、CommitLog/Rocks 和 canonical/legacy golden。
-- [ ] `[REV]` 检查 default/no-default 与 R0 设计一致，下一 major feature 未提前启用。
-- [ ] `[HUMAN]` 逐项签署允许的 additive/deprecated diff；未批准 breaking 必须修复。
+- [x] `[TEST]` 运行 public API snapshot/diff；任何差异分类为 additive、deprecated 或未批准 breaking。
+- [x] `[TEST]` 运行 protocol simd、transport TLS/observability、store 精确矩阵、admin no-default/adapter/legacy、Proxy R0 矩阵。
+- [x] `[TEST]` 运行 wire JSON/binary、20B CQ/Index、CommitLog/Rocks 和 canonical/legacy golden。
+- [x] `[REV]` 检查 default/no-default 与 R0 设计一致，下一 major feature 未提前启用。
+- [x] `[HUMAN]` 逐项签署允许的 additive/deprecated diff；未批准 breaking 必须修复。
+
+完成证据：[`09-public-api-feature-wire-storage-evidence.md`](09-public-api-feature-wire-storage-evidence.md)。31 个
+library/proc-macro target 的默认 feature API diff 为 0；24 条 feature/default、6 条 wire/canonical-legacy 和
+10 条 storage/CommitLog/Rocks 命令共 40/40 通过。additive、deprecated、breaking、unclassified 均为 0，
+Proxy 下一 major mode feature 未提前启用。
 
 ### PR-M09-04：Client allowlist 与跨项目验证
 
