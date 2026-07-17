@@ -40,8 +40,8 @@ rocketmq-store-integration = []
 otel-metrics = ["rocketmq-observability/otel-metrics"]
 
 [dependencies]
-rocketmq-common = { workspace = true }
 rocketmq-error = { workspace = true }
+rocketmq-model = { workspace = true }
 rocketmq-observability = { workspace = true }
 rocketmq-runtime = { workspace = true }
 rocketmq-store-api = { workspace = true }

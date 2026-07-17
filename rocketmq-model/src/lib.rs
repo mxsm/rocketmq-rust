@@ -15,6 +15,7 @@
 //! Runtime-neutral RocketMQ domain contracts.
 
 pub mod allocation;
+pub mod boundary_type;
 pub mod consistent_hash;
 pub mod lite;
 pub mod message;

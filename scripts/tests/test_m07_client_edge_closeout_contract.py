@@ -117,14 +117,13 @@ class ClientEdgeCloseoutContractTest(unittest.TestCase):
                 str(GUARD),
                 "--mode",
                 "target",
-                "--allow-missing-planned-crates",
             ],
             cwd=ROOT,
             capture_output=True,
             text=True,
             check=False,
         )
-        self.assertEqual(1, completed.returncode, completed.stdout + completed.stderr)
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
         findings = [
             line
             for line in completed.stdout.splitlines()

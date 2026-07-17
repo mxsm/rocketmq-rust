@@ -96,6 +96,7 @@ def validate_policy(policy: dict[str, Any]) -> None:
             "target_dag",
             "closure_rules",
             "client_policy",
+            "test_dependency_policy",
             "facade_rules",
             "compatibility_manifest_policy",
             "milestone_order",
@@ -208,6 +209,40 @@ def validate_policy(policy: dict[str, Any]) -> None:
                 raise InputError(f"duplicate policy client source allowlist identity: {identity}")
             source_identities.add(identity)
 
+    test_policy = policy["test_dependency_policy"]
+    require_keys(test_policy, ("allowed_edges",), "policy test_dependency_policy")
+    if set(test_policy) != {"allowed_edges"}:
+        raise InputError("policy test_dependency_policy contains unsupported keys")
+    test_identities: set[tuple[str, str, str, str, str]] = set()
+    required_test_keys = {
+        "caller",
+        "target",
+        "kind",
+        "path",
+        "alias",
+        "owner",
+        "reason",
+        "review_by",
+        "adr",
+    }
+    for index, entry in enumerate(test_policy["allowed_edges"]):
+        if not isinstance(entry, dict) or set(entry) != required_test_keys:
+            raise InputError(f"policy test dependency allowlist[{index}] has an invalid schema")
+        path = entry["path"]
+        if (
+            entry["kind"] != "dev"
+            or not all(entry[key] for key in required_test_keys)
+            or not isinstance(path, str)
+            or not path.endswith("Cargo.toml")
+            or "\\" in path
+            or Path(path).is_absolute()
+        ):
+            raise InputError(f"policy test dependency allowlist[{index}] is invalid")
+        identity = (entry["caller"], entry["target"], entry["kind"], path, entry["alias"])
+        if identity in test_identities:
+            raise InputError(f"duplicate policy test dependency identity: {identity}")
+        test_identities.add(identity)
+
 
 def validate_baseline(baseline: dict[str, Any], policy: dict[str, Any]) -> None:
     require_keys(
@@ -291,13 +326,8 @@ def validate_baseline(baseline: dict[str, Any], policy: dict[str, Any]) -> None:
             raise InputError(f"duplicate baseline source exception identity: {identity}")
         source_identities.add(identity)
 
-    temporary_manifest = [
-        exception
-        for exception in baseline["manifest_exceptions"]
-        if exception.get("rule") is None
-    ]
-    if temporary_manifest:
-        raise InputError("temporary Client manifest ledger was retired by PR-M08-03 and must stay empty")
+    if baseline["manifest_exceptions"]:
+        raise InputError("temporary manifest exceptions were retired by PR-M09-01 and must stay empty")
     if baseline["source_exceptions"]:
         raise InputError("temporary Client source ledger was retired by PR-M08-03 and must stay empty")
     compatibility_identities: set[tuple[Any, ...]] = set()
@@ -321,10 +351,14 @@ def validate_baseline(baseline: dict[str, Any], policy: dict[str, Any]) -> None:
         )
         if exception["rule"] != "compatibility-manifest-burn-down":
             raise InputError(f"baseline compatibility_manifest_exceptions[{index}] has an invalid rule")
-        if not isinstance(exception["count"], int) or exception["count"] < 0:
-            raise InputError(f"baseline compatibility_manifest_exceptions[{index}] count must be non-negative")
+        if exception["count"] != 1:
+            raise InputError(f"baseline compatibility_manifest_exceptions[{index}] count must be exactly one")
         if not exception["reason"] or not exception["adr"]:
             raise InputError(f"baseline compatibility_manifest_exceptions[{index}] requires reason and adr")
+        if exception["remove_by"] not in {"M09-02", "M09-04", "R1", "next-major", "long-term"}:
+            raise InputError(
+                f"baseline compatibility_manifest_exceptions[{index}] has an expired removal window"
+            )
         identity = (
             exception["caller"],
             exception["target"],
@@ -536,15 +570,36 @@ def package_rule_findings(edges: list[Edge], policy: dict[str, Any]) -> list[Fin
 
 
 def target_dag_findings(
-    edges: list[Edge], policy: dict[str, Any], mode: str
+    edges: list[Edge], policy: dict[str, Any], baseline: dict[str, Any], mode: str
 ) -> list[Finding]:
     planned = set(policy["planned_packages"])
+    compatibility_allowances = Counter(
+        (
+            item["caller"],
+            item["target"],
+            item["kind"],
+            item["path"],
+            item["alias"],
+        )
+        for item in baseline["compatibility_manifest_exceptions"]
+        for _ in range(item["count"])
+    )
+    test_allowances = Counter(
+        (item["caller"], item["target"], item["kind"], item["path"], item["alias"])
+        for item in policy["test_dependency_policy"]["allowed_edges"]
+    )
+    used_allowances: Counter[tuple[str, str, str, str, str | None]] = Counter()
     findings: list[Finding] = []
     for edge in edges:
         allowed = policy["target_dag"].get(edge.caller)
         if allowed is None or (mode == "baseline" and edge.caller not in planned):
             continue
         if edge.target not in set(allowed):
+            identity = (edge.caller, edge.target, edge.kind, edge.path, edge.alias)
+            permitted = compatibility_allowances[identity] + test_allowances[identity]
+            if mode == "target" and used_allowances[identity] < permitted:
+                used_allowances[identity] += 1
+                continue
             findings.append(
                 Finding(
                     "target-dag-direct-dependency",
@@ -739,8 +794,6 @@ def manifest_client_findings(
 def compatibility_manifest_findings(
     edges: list[Edge], mode: str, policy: dict[str, Any], baseline: dict[str, Any]
 ) -> list[Finding]:
-    if mode != "baseline":
-        return []
     ledger = baseline["compatibility_manifest_exceptions"]
     targets = set(policy["compatibility_manifest_policy"]["targets"])
     planned_identities = {(item["caller"], item["target"]) for item in ledger}
@@ -772,8 +825,10 @@ def compatibility_manifest_findings(
             continue
         caller, target, kind, path, alias = identity
         findings.append(
-            Finding(
-                "compatibility-manifest-baseline-growth",
+                Finding(
+                "compatibility-manifest-baseline-growth"
+                if mode == "baseline"
+                else "compatibility-manifest-target-growth",
                 caller,
                 target,
                 path,
@@ -782,30 +837,6 @@ def compatibility_manifest_findings(
             )
         )
     return findings
-
-
-def apply_baseline_exceptions(findings: list[Finding], baseline: dict[str, Any]) -> list[Finding]:
-    """Suppress only findings that exactly match a reviewed, expiring exception."""
-    remaining: list[Finding] = []
-    for finding in findings:
-        matched = False
-        for exception in baseline["manifest_exceptions"]:
-            rule = exception.get("rule")
-            if rule is None:
-                continue
-            if (
-                rule == finding.rule
-                and exception.get("caller") == finding.caller
-                and exception.get("target") == finding.target
-                and exception.get("kind", finding.kind) == finding.kind
-                and exception.get("path", finding.path) == finding.path
-                and exception.get("detail", finding.detail) == finding.detail
-            ):
-                matched = True
-                break
-        if not matched:
-            remaining.append(finding)
-    return remaining
 
 
 def source_aliases_by_caller(edges: list[Edge], policy: dict[str, Any]) -> dict[str, set[str]]:
@@ -1042,7 +1073,7 @@ def validate_package_state(
     packages: list[dict[str, Any]],
     policy: dict[str, Any],
     baseline: dict[str, Any],
-    allow_missing: bool,
+    enforce_target_package_state: bool,
 ) -> list[str]:
     names = sorted(item["name"] for item in packages)
     messages: list[str] = []
@@ -1058,12 +1089,16 @@ def validate_package_state(
         if len(frozen) != policy["package_counts"]["baseline"]:
             raise InputError(f"frozen baseline must contain {policy['package_counts']['baseline']} packages")
     else:
-        missing = sorted(set(policy["planned_packages"]) - set(names))
-        if missing and not allow_missing:
-            raise InputError(f"missing planned packages: {', '.join(missing)}")
-        if missing:
-            messages.append(f"TARGET_INCOMPLETE missing_planned_packages={','.join(missing)}")
-        elif len(names) != policy["package_counts"]["target"]:
+        expected = set(policy["target_dag"])
+        actual = set(names)
+        if enforce_target_package_state and actual != expected:
+            missing = sorted(expected - actual)
+            unexpected = sorted(actual - expected)
+            raise InputError(
+                "target workspace package set mismatch: "
+                f"missing={','.join(missing) or '-'} unexpected={','.join(unexpected) or '-'}"
+            )
+        if enforce_target_package_state and len(names) != policy["package_counts"]["target"]:
             raise InputError(f"target workspace must contain {policy['package_counts']['target']} packages")
     return messages
 
@@ -1074,10 +1109,10 @@ def evaluate(
     source_root: Path,
     policy: dict[str, Any],
     baseline: dict[str, Any],
-    allow_missing: bool,
+    enforce_target_package_state: bool = True,
 ) -> tuple[list[Finding], list[str]]:
     packages = workspace_packages(metadata)
-    messages = validate_package_state(mode, packages, policy, baseline, allow_missing)
+    messages = validate_package_state(mode, packages, policy, baseline, enforce_target_package_state)
     edges = dependency_edges(packages, source_root)
     edges.extend(standalone_dependency_edges(source_root, policy))
     internal_names = {item["name"] for item in packages}
@@ -1085,14 +1120,38 @@ def evaluate(
     normal_internal_edges = [edge for edge in internal_edges if edge.kind == "normal"]
     findings = cycle_findings(internal_edges)
     findings.extend(package_rule_findings(edges, policy))
-    findings.extend(target_dag_findings(internal_edges, policy, mode))
+    findings.extend(target_dag_findings(internal_edges, policy, baseline, mode))
     findings.extend(facade_rule_findings(internal_edges, policy))
     findings.extend(closure_rule_findings(normal_internal_edges, policy))
-    if mode == "baseline":
-        findings = apply_baseline_exceptions(findings, baseline)
     findings.extend(manifest_client_findings(edges, mode, policy, baseline))
     findings.extend(compatibility_manifest_findings(edges, mode, policy, baseline))
     findings.extend(source_client_findings(source_root, packages, edges, mode, policy, baseline))
+    if mode == "target":
+        actual = Counter((edge.caller, edge.target, edge.kind, edge.path, edge.alias) for edge in edges)
+        compatibility = Counter(
+            (
+                item["caller"],
+                item["target"],
+                item["kind"],
+                item["path"],
+                item["alias"],
+            )
+            for item in baseline["compatibility_manifest_exceptions"]
+            for _ in range(item["count"])
+        )
+        tests = Counter(
+            (item["caller"], item["target"], item["kind"], item["path"], item["alias"])
+            for item in policy["test_dependency_policy"]["allowed_edges"]
+        )
+        active_compatibility = sum(min(actual[item], count) for item, count in compatibility.items())
+        active_tests = sum(min(actual[item], count) for item, count in tests.items())
+        messages.extend(
+            (
+                "TARGET_COMPATIBILITY_LEDGER "
+                f"active_edges={active_compatibility} entries={sum(compatibility.values())}",
+                f"TARGET_TEST_DEPENDENCIES active_edges={active_tests} entries={sum(tests.values())}",
+            )
+        )
     return sorted(findings, key=lambda item: item.render()), messages
 
 
@@ -1152,11 +1211,11 @@ def run_fixtures(policy: dict[str, Any], baseline: dict[str, Any]) -> int:
     with tempfile.TemporaryDirectory() as temp_dir:
         source_root = Path(temp_dir)
         clean = fixture_metadata([("rocketmq-model", []), ("rocketmq-protocol", [])])
-        findings, _ = evaluate("target", clean, source_root, policy, baseline, True)
+        findings, _ = evaluate("target", clean, source_root, policy, baseline, False)
         if findings:
             failures.append("clean fixture produced findings")
         for name, (metadata, expected) in cases.items():
-            findings, _ = evaluate("target", metadata, source_root, policy, baseline, True)
+            findings, _ = evaluate("target", metadata, source_root, policy, baseline, False)
             if expected not in {finding.rule for finding in findings}:
                 failures.append(f"{name} did not produce {expected}")
         alias_metadata = fixture_metadata(
@@ -1168,7 +1227,7 @@ def run_fixtures(policy: dict[str, Any], baseline: dict[str, Any]) -> int:
         alias_source = source_root / "rocketmq-broker" / "src" / "lib.rs"
         alias_source.parent.mkdir(parents=True)
         alias_source.write_text("use mq_client::producer::DefaultMQProducer;\n", encoding="utf-8")
-        alias_findings, _ = evaluate("target", alias_metadata, source_root, policy, baseline, True)
+        alias_findings, _ = evaluate("target", alias_metadata, source_root, policy, baseline, False)
         if "client-source-allowlist" not in {finding.rule for finding in alias_findings}:
             failures.append("client-source-alias did not produce client-source-allowlist")
     if failures:
@@ -1180,11 +1239,10 @@ def run_fixtures(policy: dict[str, Any], baseline: dict[str, Any]) -> int:
 
 
 def write_output(path: Path, mode: str, findings: list[Finding], messages: list[str]) -> None:
-    incomplete = any(message.startswith("TARGET_INCOMPLETE") for message in messages)
     payload = {
         "schema_version": 1,
         "mode": mode,
-        "status": "incomplete" if incomplete else ("compliant" if not findings else "violation"),
+        "status": "compliant" if not findings else "violation",
         "messages": messages,
         "findings": [dataclasses.asdict(finding) for finding in findings],
     }
@@ -1204,7 +1262,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-root", type=Path, default=ROOT)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--fixtures", action="store_true")
-    parser.add_argument("--allow-missing-planned-crates", action="store_true")
     return parser.parse_args()
 
 
@@ -1237,7 +1294,6 @@ def main() -> int:
             args.source_root.resolve(),
             policy,
             baseline,
-            args.allow_missing_planned_crates,
         )
         for message in messages:
             print(message)
@@ -1247,9 +1303,6 @@ def main() -> int:
             write_output(args.output, args.mode, findings, messages)
         if findings:
             print(f"ARCHITECTURE_DEPENDENCY_GUARD_FAILED findings={len(findings)}")
-            return 1
-        if any(message.startswith("TARGET_INCOMPLETE") for message in messages):
-            print("ARCHITECTURE_DEPENDENCY_GUARD_INCOMPLETE")
             return 1
         print(f"ARCHITECTURE_DEPENDENCY_GUARD_OK mode={args.mode}")
         return 0

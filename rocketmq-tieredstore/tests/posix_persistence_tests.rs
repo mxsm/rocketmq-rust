@@ -14,8 +14,8 @@
 
 use bytes::Bytes;
 use bytes::BytesMut;
-use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::boundary_type::BoundaryType;
 use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
 use rocketmq_tieredstore::TieredDispatchRequest;
 use rocketmq_tieredstore::TieredDispatcher;

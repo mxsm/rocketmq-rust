@@ -189,32 +189,29 @@ class ProxyCoreContractTests(unittest.TestCase):
         packages = {line.split()[0] for line in cargo_tree.splitlines() if line.strip()}
         self.assertEqual(set(), FORBIDDEN_CORE_PACKAGES & packages)
 
-    def test_target_gap_ledger_stays_exact_and_proxy_adapters_have_no_findings(self) -> None:
+    def test_target_closeout_ledger_stays_exact_and_proxy_adapters_have_no_findings(self) -> None:
         guard = subprocess.run(
             [
                 "python",
                 "scripts/architecture_dependency_guard.py",
                 "--mode",
                 "target",
-                "--allow-missing-planned-crates",
             ],
             cwd=ROOT,
             check=False,
             capture_output=True,
             text=True,
         )
-        self.assertEqual(1, guard.returncode)
+        self.assertEqual(0, guard.returncode, guard.stdout + guard.stderr)
         output = guard.stdout + guard.stderr
         findings = [line for line in output.splitlines() if line.startswith("VIOLATION ")]
-        self.assertEqual(48, len(findings))
-        self.assertEqual(0, sum("rule=client-manifest-allowlist" in line for line in findings))
-        self.assertEqual(0, sum("rule=client-source-allowlist" in line for line in findings))
-        self.assertEqual(46, sum("rule=target-dag-direct-dependency" in line for line in findings))
-        self.assertEqual(2, sum("rule=transitive-forbidden-reachability" in line for line in findings))
+        self.assertEqual([], findings)
+        self.assertIn("TARGET_COMPATIBILITY_LEDGER active_edges=49 entries=49", output)
+        self.assertIn("TARGET_TEST_DEPENDENCIES active_edges=3 entries=3", output)
         self.assertFalse(any("caller=rocketmq-proxy-core " in line for line in findings))
         self.assertFalse(any("caller=rocketmq-proxy-cluster " in line for line in findings))
         self.assertFalse(any("caller=rocketmq-proxy-local " in line for line in findings))
-        self.assertNotIn("TARGET_INCOMPLETE", output)
+        self.assertIn("ARCHITECTURE_DEPENDENCY_GUARD_OK mode=target", output)
 
     def test_cluster_dependency_source_and_runtime_closure_is_owned(self) -> None:
         manifest = load_manifest(CLUSTER / "Cargo.toml")
@@ -575,30 +572,30 @@ class ProxyCoreContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         readme = (PLAN_ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertIn("| PR 级工作包 | 53 | 0 | 29 未开始；合计 29 尚未完成 | 82 |", checklist)
+        self.assertIn("| PR 级工作包 | 54 | 0 | 28 未开始；合计 28 尚未完成 | 82 |", checklist)
         self.assertIn("- [x] PR-M08-01：创建 `rocketmq-proxy-core` 与 proto owner", checklist)
         self.assertIn("- [x] PR-M08-02：迁移中立 plan、port、service 与 ingress", checklist)
         self.assertIn("- [x] PR-M08-03：创建 Cluster adapter", checklist)
         self.assertIn("- [x] PR-M08-04：创建 Local adapter", checklist)
         self.assertIn("- [x] PR-M08-05：将现有 Proxy 降为 composition/facade", checklist)
         self.assertIn("- [x] PR-M08-06：验证 feature closure 与下一 major fixture", checklist)
-        self.assertIn("当前下一工作包为 PR-M09-01", checklist)
+        self.assertIn("当前下一工作包为 PR-M09-02", checklist)
         work_packages = re.findall(r"^- \[([ x])\] (PR-M\d{2}-\d{2}[a-z]?)：", checklist, re.MULTILINE)
         self.assertEqual(82, len(work_packages))
-        self.assertEqual(53, sum(state == "x" for state, _ in work_packages))
-        self.assertEqual(29, sum(state == " " for state, _ in work_packages))
+        self.assertEqual(54, sum(state == "x" for state, _ in work_packages))
+        self.assertEqual(28, sum(state == " " for state, _ in work_packages))
         open_by_milestone: dict[str, int] = {}
         for state, package in work_packages:
             if state == " ":
                 milestone = package.split("-")[1]
                 open_by_milestone[milestone] = open_by_milestone.get(milestone, 0) + 1
-        self.assertEqual({"M09": 6, "M10": 5, "M11": 12, "M12": 6}, open_by_milestone)
+        self.assertEqual({"M09": 5, "M10": 5, "M11": 12, "M12": 6}, open_by_milestone)
         self.assertIn("Local 8 项", checklist)
         self.assertIn("PR-M08-06 与 M08 Gate 已签署，下一工作包为 PR-M09-01", task)
         self.assertIn("- [x] `[DEV]` 按 send/pull/pop/ack/route/transaction 迁 plan 和 port", task)
         self.assertIn("## 12. PR-M08-04 消费记录（2026-07-17）", handoff)
         self.assertIn("根 workspace 已达到目标 32 个 package", readme)
-        self.assertIn("下一工作包为 PR-M09-01", readme)
+        self.assertIn("下一工作包为 PR-M09-02", readme)
 
 
 if __name__ == "__main__":
