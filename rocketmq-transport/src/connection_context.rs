@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Compatibility exports for the Proxy protocol contract.
+use std::net::SocketAddr;
 
-pub use rocketmq_proxy_core::proto::*;
+/// Runtime-neutral metadata exposed by an accepted transport connection.
+pub trait ConnectionContext {
+    fn local_address(&self) -> SocketAddr;
+
+    fn remote_address(&self) -> SocketAddr;
+
+    fn connection_id(&self) -> &str;
+}

@@ -4752,7 +4752,6 @@ dependencies = [
  "futures",
  "hex",
  "hmac",
- "prost",
  "prost-types",
  "rocketmq-auth",
  "rocketmq-broker",
@@ -4761,6 +4760,7 @@ dependencies = [
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-observability",
+ "rocketmq-proxy-core",
  "rocketmq-remoting",
  "rocketmq-runtime",
  "rocketmq-rust",
@@ -4773,9 +4773,28 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tonic",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "rocketmq-proxy-core"
+version = "1.0.0"
+dependencies = [
+ "dashmap",
+ "prost",
+ "prost-types",
+ "rocketmq-error",
+ "rocketmq-model",
+ "rocketmq-protocol",
+ "rocketmq-transport",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tonic",
  "tonic-prost",
  "tonic-prost-build",
- "tracing",
  "uuid",
 ]
 

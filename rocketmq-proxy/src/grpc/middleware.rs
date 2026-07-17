@@ -14,36 +14,13 @@
 
 use std::net::SocketAddr;
 
+use rocketmq_proxy_core::GrpcTransportContext;
 use tonic::Request;
 use tonic::Status;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct GrpcTransportContext {
-    local_addr: String,
-}
-
-impl GrpcTransportContext {
-    pub(crate) fn new(local_addr: SocketAddr) -> Self {
-        Self {
-            local_addr: local_addr.to_string(),
-        }
-    }
-
-    pub(crate) fn local_addr(&self) -> &str {
-        self.local_addr.as_str()
-    }
-}
 
 pub(crate) fn ingress_context_interceptor(local_addr: SocketAddr) -> impl tonic::service::Interceptor + Clone {
     move |mut request: Request<()>| -> Result<Request<()>, Status> {
         request.extensions_mut().insert(GrpcTransportContext::new(local_addr));
         Ok(request)
     }
-}
-
-pub(crate) fn request_local_addr<T>(request: &Request<T>) -> Option<&str> {
-    request
-        .extensions()
-        .get::<GrpcTransportContext>()
-        .map(GrpcTransportContext::local_addr)
 }

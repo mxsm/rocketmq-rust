@@ -99,12 +99,11 @@ class StorageCloseoutContractTests(unittest.TestCase):
         members = root["workspace"]["members"]
         policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(29, len(members))
+        self.assertEqual(30, len(members))
         self.assertTrue(STORAGE_PACKAGES.issubset(set(members)))
         self.assertEqual(32, policy["package_counts"]["target"])
         self.assertEqual(
             {
-                "rocketmq-proxy-core",
                 "rocketmq-proxy-cluster",
                 "rocketmq-proxy-local",
             },
@@ -238,7 +237,7 @@ class StorageCloseoutContractTests(unittest.TestCase):
                 relative_path,
             )
 
-    def test_broker_send_processor_is_the_direct_capability_consumer(self) -> None:
+    def test_broker_capability_consumers_are_exact(self) -> None:
         broker_manifest = load_manifest(ROOT / "rocketmq-broker/Cargo.toml")
         self.assertEqual(
             {"workspace": True},
@@ -260,7 +259,14 @@ class StorageCloseoutContractTests(unittest.TestCase):
             if "rocketmq_store_api" in path.read_text(encoding="utf-8")
         }
         self.assertEqual(
-            {"rocketmq-broker/src/processor/send_message_processor.rs"},
+            {
+                "rocketmq-broker/src/processor/processor_service/pop_revive_service.rs",
+                "rocketmq-broker/src/processor/send_message_processor.rs",
+                "rocketmq-broker/src/store_read.rs",
+                "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs",
+                "rocketmq-broker/src/transaction/queue/get_result.rs",
+                "rocketmq-broker/src/transaction/queue/transactional_message_bridge.rs",
+            },
             direct_broker_files,
         )
 

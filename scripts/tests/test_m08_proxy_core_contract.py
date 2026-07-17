@@ -1,0 +1,248 @@
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+import tomllib
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CORE = ROOT / "rocketmq-proxy-core"
+FACADE = ROOT / "rocketmq-proxy"
+POLICY = ROOT / "scripts" / "architecture-dependency-policy.json"
+PLAN_ROOT = ROOT / "docs" / "plans" / "architecture-refactor-migration"
+
+EXPECTED_SCHEMA_HASHES = {
+    "definition.proto": "28706c9d2dee01dadf54daaf7a070a1ab4b30172f284ffb2f8189569f13ac2c1",
+    "service.proto": "b7e1026b16c2284921a4d11a0b348074df82a15a8399c43f00e6005142bb5128",
+}
+EXPECTED_INTERNAL_DEPENDENCIES = {
+    "rocketmq-error",
+    "rocketmq-model",
+    "rocketmq-protocol",
+    "rocketmq-transport",
+}
+FORBIDDEN_CORE_TOKENS = (
+    "rocketmq_auth",
+    "rocketmq_broker",
+    "rocketmq_client_rust",
+    "rocketmq_common",
+    "rocketmq_remoting",
+    "rocketmq_rust",
+    "rocketmq_store",
+)
+FORBIDDEN_CORE_PACKAGES = {
+    "rocketmq-auth",
+    "rocketmq-broker",
+    "rocketmq-client-rust",
+    "rocketmq-common",
+    "rocketmq-proxy",
+    "rocketmq-remoting",
+    "rocketmq-store",
+}
+
+
+def load_manifest(path: Path) -> dict:
+    return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
+class ProxyCoreContractTests(unittest.TestCase):
+    def test_workspace_has_thirty_packages_and_only_two_planned_packages_are_missing(self) -> None:
+        root = load_manifest(ROOT / "Cargo.toml")
+        members = root["workspace"]["members"]
+        policy = json.loads(POLICY.read_text(encoding="utf-8"))
+
+        self.assertEqual(30, len(members))
+        self.assertIn("rocketmq-proxy-core", members)
+        self.assertEqual(
+            {"rocketmq-proxy-cluster", "rocketmq-proxy-local"},
+            set(policy["planned_packages"]) - set(members),
+        )
+        self.assertEqual("./rocketmq-proxy-core", root["workspace"]["dependencies"]["rocketmq-proxy-core"]["path"])
+
+    def test_proto_schema_hashes_and_generation_owner_are_unique(self) -> None:
+        for name, expected in EXPECTED_SCHEMA_HASHES.items():
+            schema = CORE / "proto" / name
+            self.assertTrue(schema.is_file(), schema)
+            self.assertEqual(expected, hashlib.sha256(schema.read_bytes()).hexdigest())
+
+        self.assertTrue((CORE / "build.rs").is_file())
+        self.assertFalse((FACADE / "build.rs").exists())
+        self.assertFalse((FACADE / "proto").exists())
+
+        build_owners = []
+        include_owners = []
+        for crate in ROOT.glob("rocketmq-proxy*"):
+            for path in crate.rglob("*.rs"):
+                source = path.read_text(encoding="utf-8")
+                if "compile_protos" in source:
+                    build_owners.append(path.relative_to(ROOT).as_posix())
+                if 'include_proto!("apache.rocketmq.v2")' in source:
+                    include_owners.append(path.relative_to(ROOT).as_posix())
+        self.assertEqual(["rocketmq-proxy-core/build.rs"], build_owners)
+        self.assertEqual(["rocketmq-proxy-core/src/proto.rs"], include_owners)
+
+    def test_core_dependency_and_source_closure_is_neutral(self) -> None:
+        manifest = load_manifest(CORE / "Cargo.toml")
+        internal = {name for name in manifest["dependencies"] if name.startswith("rocketmq-")}
+        self.assertEqual(EXPECTED_INTERNAL_DEPENDENCIES, internal)
+        self.assertEqual([], manifest["features"]["default"])
+
+        source = "\n".join(path.read_text(encoding="utf-8") for path in (CORE / "src").rglob("*.rs"))
+        for token in FORBIDDEN_CORE_TOKENS:
+            self.assertNotIn(token, source, token)
+
+        cargo_tree = subprocess.run(
+            [
+                "cargo",
+                "tree",
+                "--locked",
+                "-p",
+                "rocketmq-proxy-core",
+                "-e",
+                "normal",
+                "--prefix",
+                "none",
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        packages = {line.split()[0] for line in cargo_tree.splitlines() if line.strip()}
+        self.assertEqual(set(), FORBIDDEN_CORE_PACKAGES & packages)
+
+    def test_target_gap_ledger_stays_exact_and_core_has_no_findings(self) -> None:
+        guard = subprocess.run(
+            [
+                "python",
+                "scripts/architecture_dependency_guard.py",
+                "--mode",
+                "target",
+                "--allow-missing-planned-crates",
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(1, guard.returncode)
+        output = guard.stdout + guard.stderr
+        findings = [line for line in output.splitlines() if line.startswith("VIOLATION ")]
+        self.assertEqual(66, len(findings))
+        self.assertEqual(1, sum("rule=client-manifest-allowlist" in line for line in findings))
+        self.assertEqual(13, sum("rule=client-source-allowlist" in line for line in findings))
+        self.assertEqual(50, sum("rule=target-dag-direct-dependency" in line for line in findings))
+        self.assertEqual(2, sum("rule=transitive-forbidden-reachability" in line for line in findings))
+        self.assertFalse(any("caller=rocketmq-proxy-core " in line for line in findings))
+        self.assertIn(
+            "TARGET_INCOMPLETE missing_planned_packages=rocketmq-proxy-cluster,rocketmq-proxy-local",
+            output,
+        )
+
+    def test_facade_modules_are_reexports_of_the_canonical_owners(self) -> None:
+        wrappers = {
+            "error.rs": "rocketmq_proxy_core::error::*",
+            "proto.rs": "rocketmq_proxy_core::proto::*",
+            "status.rs": "rocketmq_proxy_core::status::*",
+        }
+        for name, expected in wrappers.items():
+            source = (FACADE / "src" / name).read_text(encoding="utf-8")
+            self.assertIn(f"pub use {expected};", source)
+            self.assertLess(len(source.splitlines()), 30)
+
+        context = (FACADE / "src" / "context.rs").read_text(encoding="utf-8")
+        self.assertIn(
+            "rocketmq_proxy_core::context::ProxyContextWithPrincipal<crate::auth::AuthenticatedPrincipal>",
+            context,
+        )
+        self.assertNotIn("pub use rocketmq_proxy_core::context::*", context)
+
+        auth = (FACADE / "src" / "auth.rs").read_text(encoding="utf-8")
+        self.assertIn("pub struct AuthenticatedPrincipal", auth)
+        self.assertIn("fn white_listed(", auth)
+        self.assertNotIn("pub fn white_listed(", auth)
+        self.assertNotIn("pub fn new(username: String, source_ip: String", auth)
+
+        session = (FACADE / "src" / "session.rs").read_text(encoding="utf-8")
+        self.assertIn("rocketmq_proxy_core::session::ClientSessionRegistry<Channel>", session)
+        self.assertNotIn("struct ClientSessionRegistry", session)
+
+        facade_manifest = load_manifest(FACADE / "Cargo.toml")
+        self.assertIn("rocketmq-proxy-core", facade_manifest["dependencies"])
+        self.assertNotIn("build-dependencies", facade_manifest)
+
+    def test_core_owns_error_status_context_session_identity_and_ingress_config(self) -> None:
+        for name in ("config.rs", "context.rs", "error.rs", "identity.rs", "proto.rs", "session.rs", "status.rs"):
+            self.assertTrue((CORE / "src" / name).is_file(), name)
+
+        config = (FACADE / "src" / "config.rs").read_text(encoding="utf-8")
+        for type_name in ("GrpcConfig", "ProxyMode", "RemotingConfig", "RuntimeConfig", "SessionConfig"):
+            self.assertIn(f"pub use rocketmq_proxy_core::config::{type_name};", config)
+            self.assertNotIn(f"pub struct {type_name}", config)
+            self.assertNotIn(f"pub enum {type_name}", config)
+
+        service = (FACADE / "src" / "service.rs").read_text(encoding="utf-8")
+        self.assertIn("pub use rocketmq_proxy_core::ResourceIdentity;", service)
+        self.assertNotIn("pub struct ResourceIdentity", service)
+
+        error_guard = (ROOT / "scripts" / "error_architecture_guard.py").read_text(encoding="utf-8")
+        self.assertIn(
+            'PROXY_STATUS_MAPPER = ROOT / "rocketmq-proxy-core" / "src" / "status.rs"',
+            error_guard,
+        )
+        self.assertNotIn('ROOT / "rocketmq-proxy" / "src" / "status.rs"', error_guard)
+
+    def test_migration_checklists_record_completion_and_next_slice(self) -> None:
+        checklist = (PLAN_ROOT / "CHECKLIST.md").read_text(encoding="utf-8")
+        task = (
+            PLAN_ROOT
+            / "phase-2-core-boundaries"
+            / "08-proxy-three-way-split.md"
+        ).read_text(encoding="utf-8")
+        handoff = (
+            PLAN_ROOT
+            / "phase-2-core-boundaries"
+            / "07-client-edge-closeout-handoff.md"
+        ).read_text(encoding="utf-8")
+        readme = (PLAN_ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("| PR 级工作包 | 48 | 0 | 34 未开始；合计 34 尚未完成 | 82 |", checklist)
+        self.assertIn("- [x] PR-M08-01：创建 `rocketmq-proxy-core` 与 proto owner", checklist)
+        self.assertIn("当前下一工作包为 PR-M08-02", checklist)
+        work_packages = re.findall(r"^- \[([ x])\] (PR-M\d{2}-\d{2}[a-z]?)：", checklist, re.MULTILINE)
+        self.assertEqual(82, len(work_packages))
+        self.assertEqual(48, sum(state == "x" for state, _ in work_packages))
+        self.assertEqual(34, sum(state == " " for state, _ in work_packages))
+        open_by_milestone: dict[str, int] = {}
+        for state, package in work_packages:
+            if state == " ":
+                milestone = package.split("-")[1]
+                open_by_milestone[milestone] = open_by_milestone.get(milestone, 0) + 1
+        self.assertEqual({"M08": 5, "M09": 6, "M10": 5, "M11": 12, "M12": 6}, open_by_milestone)
+        self.assertIn("Core default/no-default、34 项 test、Proxy 113 项", checklist)
+        self.assertIn("PR-M08-01 已完成，下一工作包为 PR-M08-02", task)
+        self.assertIn("- [x] `[DEV]` 迁 context/error/status/session 和 ingress config", task)
+        self.assertIn("## 9. PR-M08-01 消费记录（2026-07-17）", handoff)
+        self.assertIn("根 workspace 30 个 package", readme)
+
+
+if __name__ == "__main__":
+    unittest.main()

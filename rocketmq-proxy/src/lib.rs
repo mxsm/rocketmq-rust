@@ -135,10 +135,10 @@ pub use session::TrackedReceiptHandle;
 pub use status::ProxyPayloadStatus;
 
 /// Default gRPC port used by the proxy runtime.
-pub const DEFAULT_PROXY_GRPC_PORT: u16 = 8081;
+pub const DEFAULT_PROXY_GRPC_PORT: u16 = rocketmq_proxy_core::DEFAULT_PROXY_GRPC_PORT;
 
 /// Default remoting port used by the proxy runtime.
-pub const DEFAULT_PROXY_REMOTING_PORT: u16 = 8080;
+pub const DEFAULT_PROXY_REMOTING_PORT: u16 = rocketmq_proxy_core::DEFAULT_PROXY_REMOTING_PORT;
 
 #[doc(hidden)]
 pub mod bench_support {

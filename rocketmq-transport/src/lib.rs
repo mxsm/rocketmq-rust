@@ -24,6 +24,7 @@ pub mod client;
 pub mod codec;
 pub mod config;
 pub mod connection;
+pub mod connection_context;
 pub mod error_helpers;
 pub mod security;
 pub mod server;

@@ -16,6 +16,7 @@
 
 pub mod allocation;
 pub mod consistent_hash;
+pub mod lite;
 pub mod message;
 pub mod result;
 pub mod topic;

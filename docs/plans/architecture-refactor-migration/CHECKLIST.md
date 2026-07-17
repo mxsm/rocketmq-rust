@@ -29,19 +29,19 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 47 | 0 | 35 未开始；合计 35 尚未完成 | 82 |
-| 里程碑 | 7（M01–M07） | 0 | 5（M08–M12） | 12 |
-| 新增边界 crate | 7 | 0 | 3（proxy-core/cluster/local） | 10 |
-| 根 workspace package | 29 | — | 还差 3 | 32 |
+| PR 级工作包 | 48 | 0 | 34 未开始；合计 34 尚未完成 | 82 |
+| 里程碑 | 7（M01–M07） | 1（M08） | 4（M09–M12） | 12 |
+| 新增边界 crate | 8 | 0 | 2（proxy-cluster/local） | 10 |
+| 根 workspace package | 30 | — | 还差 2 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 35 个未开始工作包分布：M08 为 6 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
-PR-M07-07 已完成 allowlist/consumer closeout，M07 完成；当前下一工作包为 PR-M08-01。
+剩余 34 个未开始工作包分布：M08 为 5 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
+PR-M08-01 已完成 Proxy Core 与 proto owner；M08 进行中，当前下一工作包为 PR-M08-02。
 
 目标态差距快照不能与工作包计数混用：`architecture_dependency_guard.py --mode target --allow-missing-planned-crates`
-仍报告 3 个计划 Proxy crate 缺失和 66 项差距，其中 Client source 13、Client manifest 1、目标 DAG 直接边 50、传递闭包边 2。
-Client source 与 manifest 差距均只位于 Proxy；Dashboard、Admin Core、Broker 已从 Client 违规差距清单退出。新增的一项目标 DAG
-差距是现有 Proxy 在物理拆分前直接使用 model 中立结果，M08 将其迁入 proxy-core，不把临时直边扩大为目标依赖。
+仍报告 2 个计划 Proxy crate 缺失和 66 项差距，其中 Client source 13、Client manifest 1、目标 DAG 直接边 50、传递闭包边 2。
+新建 `rocketmq-proxy-core` 本身没有 target finding，normal closure 不含 Client/Broker/store/auth/common/remoting/legacy facade；
+现有 Proxy 的 Client source 与 manifest 差距保持在 M08 临时账本中，由 PR-M08-03～05 迁入 Cluster adapter 并清零。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -311,7 +311,14 @@ Client source 与 manifest 差距均只位于 Proxy；Dashboard、Admin Core、B
 
 任务文档：[`08-proxy-three-way-split.md`](phase-2-core-boundaries/08-proxy-three-way-split.md)
 
-- [ ] PR-M08-01：创建 `rocketmq-proxy-core` 与 proto owner
+- [x] PR-M08-01：创建 `rocketmq-proxy-core` 与 proto owner
+  - [x] 根 workspace 达到 30/32；Core 成为 proto/error/status/context/session/identity/ingress config 唯一物理 owner
+  - [x] `definition.proto`/`service.proto` SHA-256 golden、唯一 build/include owner和 generated client/wire contract 已冻结
+  - [x] 旧 Proxy 的 proto/error/status/context/session/config/root 路径保持精确 re-export 或 Channel 专用 type alias
+  - [x] Context 对认证证明泛型化并使用 transport connection metadata；白名单信任位保持 facade 私有；Session 使用泛型 Channel slot
+  - [x] Core default/no-default、34 项 test、Proxy 113 项 unit/bin/compat/gRPC/remoting test 与两 crate strict Clippy 通过
+  - [x] Core manifest/source/normal closure 无 Client、admin-core、Broker、store、auth provider、common、remoting 或 legacy facade
+  - [x] 目标差距保持 66 且 Core 零 finding；48/82 已完成、34 未完成，下一工作包 PR-M08-02
 - [ ] PR-M08-02：迁移中立 plan、port、service 与 ingress
 - [ ] PR-M08-03：创建 Cluster adapter
 - [ ] PR-M08-04：创建 Local adapter
