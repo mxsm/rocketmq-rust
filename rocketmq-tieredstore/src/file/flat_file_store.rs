@@ -19,6 +19,7 @@ use rocketmq_error::RocketMQError;
 
 use crate::config::TieredStoreConfig;
 use crate::dispatcher::TieredDispatchRequest;
+use crate::fetcher::read_ahead_cache::ReadAheadCache;
 use crate::file::FileSegmentStatus;
 use crate::file::FileSegmentType;
 use crate::file::IndexFileSegment;
@@ -41,6 +42,7 @@ where
     config: Arc<TieredStoreConfig>,
     metadata_store: Arc<JsonMetadataStore>,
     provider: P,
+    read_ahead_cache: Arc<ReadAheadCache>,
     files: DashMap<FlatFileKey, Arc<TieredFlatFile<P>>>,
     index_file: IndexFileSegment<P>,
 }
@@ -50,6 +52,11 @@ where
     P: TieredStoreProvider,
 {
     pub fn new(config: Arc<TieredStoreConfig>, metadata_store: Arc<JsonMetadataStore>, provider: P) -> Self {
+        let read_ahead_cache = Arc::new(ReadAheadCache::new(
+            config.read_ahead_cache_enable,
+            config.read_ahead_cache_max_bytes,
+            config.read_ahead_cache_expire,
+        ));
         let index_file = IndexFileSegment::with_limits(
             IndexFileSegment::<P>::default_path().to_owned(),
             provider.clone(),
@@ -60,6 +67,7 @@ where
             config,
             metadata_store,
             provider,
+            read_ahead_cache,
             files: DashMap::new(),
             index_file,
         }
@@ -97,12 +105,13 @@ where
             queue_id,
         };
         let entry = self.files.entry(key).or_insert_with(|| {
-            Arc::new(TieredFlatFile::new(
+            Arc::new(TieredFlatFile::new_with_read_ahead_cache(
                 topic,
                 queue_id,
                 self.config.clone(),
                 self.metadata_store.clone(),
                 self.provider.clone(),
+                self.read_ahead_cache.clone(),
             ))
         });
         Ok(entry.value().clone())
@@ -128,6 +137,7 @@ where
 
     pub async fn destroy(&self) -> Result<(), RocketMQError> {
         self.files.clear();
+        self.read_ahead_cache.clear();
         Ok(())
     }
 

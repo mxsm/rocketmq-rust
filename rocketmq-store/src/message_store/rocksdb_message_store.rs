@@ -414,7 +414,7 @@ impl RocksDBMessageStore {
                 return None;
             }
         };
-        let mut result = GetMessageResult::new();
+        let mut result = GetMessageResult::new_result_size(read_result.records.len());
         for record in read_result.records {
             result.add_message(record.selection, record.queue_offset, record.batch_count);
         }

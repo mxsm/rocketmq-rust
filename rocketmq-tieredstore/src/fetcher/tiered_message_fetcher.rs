@@ -382,6 +382,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
     use bytes::Bytes;
@@ -392,10 +394,66 @@ mod tests {
     use crate::config::TieredStoreConfig;
     use crate::dispatcher::TieredDispatchRequest;
     use crate::file::ConsumeQueueUnit;
+    use crate::file::FileSegmentType;
+    use crate::file::TieredFileSegment;
     use crate::file::TieredFlatFileStore;
+    use crate::metadata::FileSegmentMetadata;
     use crate::metadata::JsonMetadataStore;
     use crate::metadata::TieredMetadataStore;
     use crate::provider::MemoryProvider;
+    use crate::provider::TieredStoreProvider;
+
+    #[derive(Clone, Default)]
+    struct CountingProvider {
+        inner: MemoryProvider,
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl CountingProvider {
+        fn reset_reads(&self) {
+            self.reads.store(0, Ordering::Release);
+        }
+
+        fn read_count(&self) -> usize {
+            self.reads.load(Ordering::Acquire)
+        }
+    }
+
+    impl TieredStoreProvider for CountingProvider {
+        async fn create_segment(
+            &self,
+            path: String,
+            segment_type: FileSegmentType,
+            base_offset: u64,
+            max_size: u64,
+        ) -> Result<TieredFileSegment<Self>, RocketMQError> {
+            Ok(TieredFileSegment::new(
+                path.clone(),
+                segment_type,
+                base_offset,
+                max_size,
+                FileSegmentMetadata::new(path, segment_type, base_offset),
+                self.clone(),
+            ))
+        }
+
+        async fn segment_size(&self, path: String) -> Result<u64, RocketMQError> {
+            self.inner.segment_size(path).await
+        }
+
+        async fn read(&self, path: String, position: u64, length: usize) -> Result<Bytes, RocketMQError> {
+            self.reads.fetch_add(1, Ordering::AcqRel);
+            self.inner.read(path, position, length).await
+        }
+
+        async fn write(&self, path: String, position: u64, data: Bytes) -> Result<usize, RocketMQError> {
+            self.inner.write(path, position, data).await
+        }
+
+        async fn delete(&self, path: String) -> Result<(), RocketMQError> {
+            self.inner.delete(path).await
+        }
+    }
 
     async fn build_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, RocketMQError> {
         let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
@@ -589,6 +647,62 @@ mod tests {
         assert_eq!(result.status, TieredGetMessageStatus::Found);
         assert_eq!(result.messages, vec![Bytes::from_static(b"first")]);
         assert_eq!(result.next_begin_offset, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_ahead_cache_coalesces_cold_pull_and_eliminates_warm_provider_reads() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            backend_provider: "memory".to_owned(),
+            commit_log_segment_size: 1024 * 1024,
+            consume_queue_segment_size: 64 * 1024,
+            read_ahead_cache_enable: true,
+            read_ahead_cache_max_bytes: 4 * 1024 * 1024,
+            read_ahead_message_count: 32,
+            read_ahead_message_size: 32 * 64,
+            ..TieredStoreConfig::default()
+        });
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let provider = CountingProvider::default();
+        let flat_file_store = Arc::new(TieredFlatFileStore::new(
+            config.clone(),
+            metadata_store,
+            provider.clone(),
+        ));
+        let flat_file = flat_file_store.get_or_create("TopicA".to_owned(), 0)?;
+        for queue_offset in 0_i64..32 {
+            let message = Bytes::from(vec![queue_offset as u8; 64]);
+            let commit_log_offset = flat_file.append_commit_log(message.clone(), queue_offset).await?;
+            flat_file
+                .append_consume_queue(
+                    queue_offset,
+                    ConsumeQueueUnit {
+                        commit_log_offset: commit_log_offset as i64,
+                        size: message.len() as i32,
+                        tags_code: queue_offset,
+                    },
+                    queue_offset,
+                )
+                .await?;
+        }
+        flat_file.commit().await?;
+        let fetcher = DefaultTieredMessageFetcher::new(config, flat_file_store);
+
+        provider.reset_reads();
+        let cold = fetcher.get_message("TopicA".to_owned(), 0, 0, 32).await?;
+        assert_eq!(cold.messages.len(), 32);
+        assert_eq!(
+            provider.read_count(),
+            2,
+            "cold pull must coalesce CQ and CommitLog reads"
+        );
+
+        provider.reset_reads();
+        let warm = fetcher.get_message("TopicA".to_owned(), 0, 0, 32).await?;
+        assert_eq!(warm.messages, cold.messages);
+        assert_eq!(provider.read_count(), 0);
         Ok(())
     }
 

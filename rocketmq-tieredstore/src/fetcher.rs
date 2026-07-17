@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod read_ahead_cache;
 pub mod tiered_message_fetcher;
 
 pub use tiered_message_fetcher::DefaultTieredMessageFetcher;

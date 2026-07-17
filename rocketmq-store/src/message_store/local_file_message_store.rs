@@ -2124,7 +2124,8 @@ impl MessageStore for LocalFileMessageStore {
         let mut next_begin_offset = offset;
         let mut min_offset = 0;
         let mut max_offset = 0;
-        let mut get_result = GetMessageResult::new();
+        let result_capacity = (max_msg_nums.max(0) as usize).min(self.message_store_config.max_msgs_num_batch.max(1));
+        let mut get_result = GetMessageResult::new_result_size(result_capacity);
         let max_offset_py = self.commit_log.get_max_offset();
         let consume_queue = self.find_consume_queue(topic, queue_id);
         if let Some(consume_queue) = consume_queue {
@@ -7785,6 +7786,7 @@ mod tests {
         assert_eq!(result.min_offset(), 0);
         assert_eq!(result.max_offset(), 2);
         assert_eq!(result.message_mapped_list().len(), 2);
+        assert_eq!(result.message_mapped_capacity(), 32);
     }
 
     #[tokio::test]

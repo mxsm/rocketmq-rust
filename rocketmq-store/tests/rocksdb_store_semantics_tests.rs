@@ -156,10 +156,14 @@ async fn rocksdb_store_load_start_recover_round_trip() {
     assert!(reloaded.load().await, "load reloaded store");
     reloaded.start().await.expect("start reloaded store");
 
+    let metrics_before_pull = reloaded.rocksdb_store().metrics();
     let get_result = reloaded
         .get_message(&group, &topic, 0, 0, 32, None)
         .await
         .expect("get message result");
+    let metrics_after_pull = reloaded.rocksdb_store().metrics();
+    assert_eq!(metrics_after_pull.read_count - metrics_before_pull.read_count, 2);
+    assert_eq!(metrics_after_pull.scan_count - metrics_before_pull.scan_count, 1);
     assert_eq!(get_result.status(), Some(GetMessageStatus::Found));
     assert_eq!(get_result.message_count(), 1);
     assert_eq!(reloaded.get_max_offset_in_queue(&topic, 0), 1);
