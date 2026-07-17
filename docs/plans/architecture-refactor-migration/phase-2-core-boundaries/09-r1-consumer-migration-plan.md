@@ -50,6 +50,9 @@ The external usage snapshot is collected at R0, refreshed on every R1 minor rele
 Each snapshot records query/time, raw count, deduplicated active consumers, known migration owner, blocker severity, and
 canonical replacement. Absence of telemetry is recorded as unknown evidence, never as zero usage.
 
+R1 also tracks external calls to the deprecated MCP `anyhow` bootstrap/transport wrappers. Internal MCP process entry
+points already use the source-preserving `McpError` canonical functions; wrapper removal remains a next-major API action.
+
 ## Notifications and exit criteria
 
 External notification uses R0/R1 release notes, a versioned migration guide, a GitHub tracking issue/discussion, and

@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 已批准，等待 M04–M08 |
+| 状态 | 已完成（Phase 2 Gate 于 2026-07-18 签署） |
 | 预计周期 | 1–2 周 |
 | 工作包 | 汇总 WP06–WP13、WP15、WP17–WP19 的目标态证据 |
 | 前置条件 | 10 个新 crate 均已落地；所有临时迁移例外有结论 |
@@ -27,10 +27,10 @@
 
 ## 入口条件
 
-- [ ] `[ARCH]` 逐 crate 核对目标 owner、canonical path、facade ledger 和待删除版本。
-- [ ] `[TEST]` 固定最终快照的根/feature/standalone/compatibility 验证矩阵。
-- [ ] `[DEV]` 停止功能开发，只修复 Gate 阻塞；每次修复产生新快照。
-- [ ] `[HUMAN]` 确认所有 public/feature/format 差异都有明确批准或归零。
+- [x] `[ARCH]` 逐 crate 核对目标 owner、canonical path、facade ledger 和待删除版本。
+- [x] `[TEST]` 固定最终快照的根/feature/standalone/compatibility 验证矩阵。
+- [x] `[DEV]` 停止功能开发，只修复 Gate 阻塞；每次修复产生新快照。
+- [x] `[HUMAN]` 确认所有 public/feature/format 差异都有明确批准或归零。
 
 ## 交付物
 
@@ -109,12 +109,16 @@ lifecycle 边纳入目标 DAG，M09-04 ledger 3 → 0、总 ledger 38 → 35。M
 
 ### PR-M09-06：冻结快照并执行 Phase 2 Gate
 
-- [ ] `[DEV]` 提交候选快照说明和 evidence index，释放 writer lease。
-- [ ] `[REV]` 独立审查同一快照，输出 dependency/API/compat/lifecycle findings。
-- [ ] `[TEST]` 独立运行完整矩阵，输出命令、退出码、环境、hash 和 skipped 原因。
-- [ ] 任一修复返回同一 `[DEV]`；修复后更新快照并重跑受影响 Review/Test。
-- [ ] `[ARCH]` 确认设计到实现追踪完整。
-- [ ] `[HUMAN]` 四方结论无未解决 material finding 后批准 Gate。
+- [x] `[DEV]` 提交候选快照说明和 evidence index，释放 writer lease。
+- [x] `[REV]` 独立审查同一快照，输出 dependency/API/compat/lifecycle findings。
+- [x] `[TEST]` 独立运行完整矩阵，输出命令、退出码、环境、hash 和 skipped 原因。
+- [x] 任一修复返回同一 `[DEV]`；修复后更新快照并重跑受影响 Review/Test。
+- [x] `[ARCH]` 确认设计到实现追踪完整。
+- [x] `[HUMAN]` 四方结论无未解决 material finding 后批准 Gate。
+
+完成证据：[`09-phase-2-gate-evidence.md`](09-phase-2-gate-evidence.md)。Reviewer 与 Tester 均绑定候选
+`490c583e94b31dc7ae1b83c55ed811e2b90d4cce`；错误架构首轮 11 项阻塞已修复并重跑，最终无未解决
+material finding。M09 与 Phase 2 完成，下一工作包为 PR-M10-01。
 
 ## 公共兼容面
 
@@ -161,14 +165,14 @@ M09 本身不通过大范围回滚解决：把问题路由回产生它的 M03–
 
 ## Exit Checklist
 
-- [ ] `[DEV]` `cargo metadata` 精确报告 32 个根 workspace package。
-- [ ] `[REV]` 10 个新 crate 的禁边为零，目标 DAG 无环。
-- [ ] `[REV]` Client allowlist精确为 workspace 2 + standalone 1。
-- [ ] `[TEST]` API/feature/wire/storage/canonical-legacy/standalone 矩阵全部成功或有获批的环境性跳过。
-- [ ] `[REV]` common/remoting/store/proxy/legacy 只保批准职责，ledger 只降不增。
-- [ ] `[ARCH]` R0/R1/下一 major 发布与删除计划完整。
-- [ ] `[REV]` 与 `[TEST]` 结论针对同一冻结快照。
-- [ ] `[HUMAN]` Phase 2 Gate 已签署，无未解决 material finding。
+- [x] `[DEV]` `cargo metadata` 精确报告 32 个根 workspace package。
+- [x] `[REV]` 10 个新 crate 的禁边为零，目标 DAG 无环。
+- [x] `[REV]` Client allowlist精确为 workspace 2 + standalone 1。
+- [x] `[TEST]` API/feature/wire/storage/canonical-legacy/standalone 矩阵全部成功或有获批的环境性跳过。
+- [x] `[REV]` common/remoting/store/proxy/legacy 只保批准职责，ledger 只降不增。
+- [x] `[ARCH]` R0/R1/下一 major 发布与删除计划完整。
+- [x] `[REV]` 与 `[TEST]` 结论针对同一冻结快照。
+- [x] `[HUMAN]` Phase 2 Gate 已签署，无未解决 material finding。
 
 ## 交接物
 

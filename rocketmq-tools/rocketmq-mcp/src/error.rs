@@ -22,4 +22,44 @@ pub enum McpError {
 
     #[error("unsupported transport: {0}")]
     UnsupportedTransport(String),
+
+    #[error("{operation} failed")]
+    Infrastructure {
+        operation: &'static str,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    #[error("transport `{transport}` requires Cargo feature `{feature}`")]
+    FeatureDisabled {
+        transport: &'static str,
+        feature: &'static str,
+    },
+}
+
+impl McpError {
+    pub(crate) fn infrastructure(
+        operation: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::Infrastructure {
+            operation,
+            source: Box::new(source),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use super::McpError;
+
+    #[test]
+    fn infrastructure_error_preserves_its_source() {
+        let error = McpError::infrastructure("bind HTTP listener", std::io::Error::other("busy"));
+
+        assert_eq!("bind HTTP listener failed", error.to_string());
+        assert_eq!(Some("busy"), error.source().map(ToString::to_string).as_deref());
+    }
 }

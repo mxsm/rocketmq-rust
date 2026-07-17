@@ -72,6 +72,9 @@ ANYHOW_RESULT_ALLOWLIST: dict[str, str] = {
     "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/main.rs": "web backend process boundary",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs": "TUI process boundary",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/rocketmq_tui_app.rs": "TUI terminal runtime boundary",
+    "rocketmq-tools/rocketmq-mcp/src/app.rs": "R0 public compatibility wrappers forward to typed McpError bootstrap and tracing APIs",
+    "rocketmq-tools/rocketmq-mcp/src/transport/stdio.rs": "R0 public compatibility wrapper forwards to the typed stdio service API",
+    "rocketmq-tools/rocketmq-mcp/src/transport/streamable_http.rs": "R0 public compatibility wrappers forward to typed HTTP service and router APIs",
 }
 
 PROCESSOR_GENERIC_RESPONSE_ALLOWLIST: dict[str, str] = {

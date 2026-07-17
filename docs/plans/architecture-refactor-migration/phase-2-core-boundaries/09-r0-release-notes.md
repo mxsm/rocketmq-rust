@@ -48,6 +48,8 @@ R1.
 - Wire/storage: JSON/binary protocol goldens, Serde names/defaults, CommitLog/CQ/Index and RocksDB semantics remain
   unchanged.
 - Runtime: no new detached background work or blocking boundary is introduced by this release package.
+- MCP error boundary: the process uses source-preserving `McpError` canonical APIs; existing public `anyhow` bootstrap
+  and transport signatures remain callable as deprecated R0 wrappers.
 
 ## Rollback
 

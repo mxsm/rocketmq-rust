@@ -31,6 +31,9 @@ and feature decisions and must each have their own API/feature evidence.
 4. **Proxy optional mode feature**: replace R0’s always-present Cluster/Local adapter dependencies with the
    `cluster-mode`, `local-mode`, `compat-all-modes`, and `tieredstore` closure defined in
    `scripts/fixtures/proxy-next-major-features.toml`.
+5. **MCP `anyhow` compatibility wrappers**: remove deprecated `McpApp::bootstrap`, `init_tracing`, stdio `serve`, and
+   Streamable HTTP `serve`/`build_router` only after external callers adopt their `McpError`-returning `*_typed`
+   replacements. The MCP process binary already uses the typed paths in R0.
 
 The approved long-term `rocketmq-broker → rocketmq-store` and `rocketmq-store-inspect → rocketmq-store` composition
 edges are explicitly outside this removal list.
@@ -62,6 +65,7 @@ wire formats are never rolled back by conversion.
 
 - [x] Four dependency-ledger edges are listed exactly.
 - [x] admin legacy, common compat, remoting deep path, and Proxy optional mode feature scopes are explicit.
+- [x] MCP public `anyhow` wrappers have typed canonical replacements and a next-major removal window.
 - [x] Two long-term Store composition edges are excluded from deletion.
 - [x] Evidence thresholds and a separate destructive Human approval are required.
 - [x] Current R0/R1 source is guarded against early removal and early Proxy feature activation.

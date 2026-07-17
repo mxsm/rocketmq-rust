@@ -15,11 +15,23 @@
 use rmcp::ServiceExt;
 
 use crate::app::McpApp;
+use crate::error::McpError;
 use crate::protocol::server::RocketmqMcpServer;
 
-pub async fn serve(app: McpApp) -> anyhow::Result<()> {
+pub async fn serve_typed(app: McpApp) -> Result<(), McpError> {
     let server = RocketmqMcpServer::new(app);
-    let service = server.serve(rmcp::transport::stdio()).await?;
-    service.waiting().await?;
+    let service = server
+        .serve(rmcp::transport::stdio())
+        .await
+        .map_err(|source| McpError::infrastructure("start MCP stdio service", source))?;
+    service
+        .waiting()
+        .await
+        .map_err(|source| McpError::infrastructure("wait for MCP stdio service", source))?;
     Ok(())
+}
+
+#[deprecated(since = "1.0.0", note = "use serve_typed")]
+pub async fn serve(app: McpApp) -> anyhow::Result<()> {
+    serve_typed(app).await.map_err(anyhow::Error::new)
 }

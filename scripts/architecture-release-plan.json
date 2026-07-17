@@ -225,7 +225,8 @@
       "admin legacy and legacy-common-compat public API",
       "rocketmq-common compatibility re-exports",
       "rocketmq-remoting deprecated deep public paths",
-      "rocketmq-proxy optional cluster-mode/local-mode feature activation"
+      "rocketmq-proxy optional cluster-mode/local-mode feature activation",
+      "rocketmq-mcp deprecated anyhow compatibility wrappers after typed API adoption"
     ],
     "proxy_feature_fixture": "scripts/fixtures/proxy-next-major-features.toml"
   },
