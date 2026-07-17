@@ -15,8 +15,8 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::boundary_type::BoundaryType;
 
 use crate::config::TieredStoreConfig;
 use crate::file::TieredFlatFileStore;

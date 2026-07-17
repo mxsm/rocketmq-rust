@@ -19,8 +19,8 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use parking_lot::Mutex;
-use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::boundary_type::BoundaryType;
 
 use crate::config::TieredStoreConfig;
 use crate::error;

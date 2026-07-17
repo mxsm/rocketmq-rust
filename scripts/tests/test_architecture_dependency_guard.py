@@ -68,13 +68,21 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
         *,
         mode: str = "target",
         source_files: dict[str, str] | None = None,
-        allow_missing: bool = True,
+        complete_target: bool = True,
         policy_override: dict[str, object] | None = None,
         baseline_override: dict[str, object] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             metadata_file = temp / "metadata.json"
+            selected_policy = policy_override or json.loads(POLICY.read_text(encoding="utf-8"))
+            if mode == "target" and complete_target:
+                fixture = copy.deepcopy(fixture)
+                existing = {item["name"] for item in fixture["packages"]}
+                for name in selected_policy["target_dag"]:
+                    if name not in existing:
+                        fixture["packages"].append(package(name))
+                fixture["workspace_members"] = [item["id"] for item in fixture["packages"]]
             metadata_file.write_text(json.dumps(fixture), encoding="utf-8")
             source_root = temp / "source"
             source_root.mkdir()
@@ -106,8 +114,6 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
                 "--source-root",
                 str(source_root),
             ]
-            if allow_missing:
-                command.append("--allow-missing-planned-crates")
             return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
 
     def assert_rule(self, result: subprocess.CompletedProcess[str], rule: str) -> None:
@@ -124,45 +130,15 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
         values.extend(extra or [])
         return values
 
-    def test_clean_target_fixture_reports_incomplete_and_fails(self) -> None:
+    def test_clean_target_fixture_is_completed_to_exact_package_set(self) -> None:
         result = self.run_guard(metadata([package("rocketmq-model"), package("rocketmq-protocol")]))
-        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
-        self.assertIn("TARGET_INCOMPLETE", result.stdout)
-        self.assertNotIn("ARCHITECTURE_DEPENDENCY_GUARD_OK", result.stdout)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("ARCHITECTURE_DEPENDENCY_GUARD_OK mode=target", result.stdout)
 
-    def test_target_incomplete_json_status(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp = Path(temp_dir)
-            metadata_file = temp / "metadata.json"
-            output_file = temp / "result.json"
-            source_root = temp / "source"
-            source_root.mkdir()
-            metadata_file.write_text(json.dumps(metadata([package("rocketmq-model")])), encoding="utf-8")
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(GUARD),
-                    "--mode",
-                    "target",
-                    "--policy",
-                    str(POLICY),
-                    "--baseline",
-                    str(BASELINE),
-                    "--metadata-file",
-                    str(metadata_file),
-                    "--source-root",
-                    str(source_root),
-                    "--output",
-                    str(output_file),
-                    "--allow-missing-planned-crates",
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(1, result.returncode)
-            self.assertEqual("incomplete", json.loads(output_file.read_text(encoding="utf-8"))["status"])
+    def test_target_rejects_incomplete_package_set(self) -> None:
+        result = self.run_guard(metadata([package("rocketmq-model")]), complete_target=False)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("target workspace package set mismatch", result.stderr)
 
     def test_cycle_is_rejected(self) -> None:
         fixture = metadata(
@@ -451,6 +427,21 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
                 self.assertEqual(2, result.returncode, result.stdout + result.stderr)
                 self.assertIn("policy client", result.stderr)
 
+    def test_test_dependency_policy_rejects_non_dev_or_broadened_entries(self) -> None:
+        fixture = metadata([package("rocketmq-model")])
+        policy = json.loads(POLICY.read_text(encoding="utf-8"))
+
+        normal = copy.deepcopy(policy)
+        normal["test_dependency_policy"]["allowed_edges"][0]["kind"] = "normal"
+        extra_key = copy.deepcopy(policy)
+        extra_key["test_dependency_policy"]["allowed_edges"][0]["glob"] = "rocketmq-broker/**"
+
+        for label, invalid_policy in (("normal", normal), ("glob", extra_key)):
+            with self.subTest(label=label):
+                result = self.run_guard(fixture, policy_override=invalid_policy)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("policy test dependency", result.stderr)
+
     def test_client_ledger_schema_rejects_reintroduced_proxy_debt(self) -> None:
         fixture = metadata([package("rocketmq-model")])
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
@@ -469,7 +460,9 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
                 "remove_by": "M08",
             }
         )
-        invalid_baselines.append(("manifest debt", manifest_debt))
+        invalid_baselines.append(
+            ("manifest debt", manifest_debt, "retired by PR-M09-01")
+        )
 
         source_debt = copy.deepcopy(baseline)
         source_debt["source_exceptions"].append(
@@ -481,13 +474,13 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
                 "remove_by": "M08",
             }
         )
-        invalid_baselines.append(("source debt", source_debt))
+        invalid_baselines.append(("source debt", source_debt, "retired by PR-M08-03"))
 
-        for label, invalid_baseline in invalid_baselines:
+        for label, invalid_baseline, expected in invalid_baselines:
             with self.subTest(label=label):
                 result = self.run_guard(fixture, baseline_override=invalid_baseline)
                 self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-                self.assertIn("retired by PR-M08-03", result.stderr)
+                self.assertIn(expected, result.stderr)
 
     def test_client_source_alias_is_detected(self) -> None:
         fixture = metadata(
@@ -656,6 +649,81 @@ use rocketmq_client_rust::producer::Producer;
             "compatibility-manifest-baseline-growth",
         )
 
+    def test_target_compatibility_ledger_is_exact_and_only_decreases(self) -> None:
+        exact = metadata(
+            [
+                package(
+                    "rocketmq-broker",
+                    [dependency("rocketmq-common")],
+                    manifest_path="rocketmq-broker/Cargo.toml",
+                ),
+                package("rocketmq-common"),
+            ]
+        )
+        accepted = self.run_guard(exact)
+        self.assertEqual(0, accepted.returncode, accepted.stdout + accepted.stderr)
+        self.assertIn("TARGET_COMPATIBILITY_LEDGER", accepted.stdout)
+
+        for label, changed_dependency in (
+            ("renamed", dependency("rocketmq-common", rename="legacy_common")),
+            ("kind", dependency("rocketmq-common", kind="dev")),
+        ):
+            with self.subTest(label=label):
+                changed = metadata(
+                    [
+                        package(
+                            "rocketmq-broker",
+                            [changed_dependency],
+                            manifest_path="rocketmq-broker/Cargo.toml",
+                        ),
+                        package("rocketmq-common"),
+                    ]
+                )
+                result = self.run_guard(changed)
+                self.assert_rule(result, "target-dag-direct-dependency")
+                self.assertIn("rule=compatibility-manifest-target-growth", result.stdout)
+
+        duplicate = metadata(
+            [
+                package(
+                    "rocketmq-broker",
+                    [dependency("rocketmq-common"), dependency("rocketmq-common")],
+                    manifest_path="rocketmq-broker/Cargo.toml",
+                ),
+                package("rocketmq-common"),
+            ]
+        )
+        result = self.run_guard(duplicate)
+        self.assert_rule(result, "target-dag-direct-dependency")
+        self.assertIn("rule=compatibility-manifest-target-growth", result.stdout)
+
+    def test_test_dependency_allowlist_cannot_promote_to_normal(self) -> None:
+        accepted = metadata(
+            [
+                package(
+                    "rocketmq-broker",
+                    [dependency("rocketmq-controller", kind="dev")],
+                    manifest_path="rocketmq-broker/Cargo.toml",
+                ),
+                package("rocketmq-controller"),
+            ]
+        )
+        result = self.run_guard(accepted)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("TARGET_TEST_DEPENDENCIES", result.stdout)
+
+        promoted = metadata(
+            [
+                package(
+                    "rocketmq-broker",
+                    [dependency("rocketmq-controller")],
+                    manifest_path="rocketmq-broker/Cargo.toml",
+                ),
+                package("rocketmq-controller"),
+            ]
+        )
+        self.assert_rule(self.run_guard(promoted), "target-dag-direct-dependency")
+
     def test_standalone_compatibility_growth_rename_and_kind_fail(self) -> None:
         result = self.run_guard(
             metadata(self.baseline_packages()),
@@ -776,9 +844,18 @@ rocketmq-client-rust = { path = "../../rocketmq-client" }
     def test_distinct_directed_cycles_are_not_collapsed_by_node_set(self) -> None:
         fixture = metadata(
             [
-                package("a", [dependency("b"), dependency("c")]),
-                package("b", [dependency("a"), dependency("c")]),
-                package("c", [dependency("a"), dependency("b")]),
+                package(
+                    "rocketmq-model",
+                    [dependency("rocketmq-protocol"), dependency("rocketmq-security-api")],
+                ),
+                package(
+                    "rocketmq-protocol",
+                    [dependency("rocketmq-model"), dependency("rocketmq-security-api")],
+                ),
+                package(
+                    "rocketmq-security-api",
+                    [dependency("rocketmq-model"), dependency("rocketmq-protocol")],
+                ),
             ]
         )
         result = self.run_guard(fixture)
@@ -821,10 +898,16 @@ rocketmq-client-rust = { path = "../../rocketmq-client" }
                 )
                 self.assert_rule(self.run_guard(fixture), "target-dag-direct-dependency")
 
-    def test_missing_planned_crates_without_override_is_input_error(self) -> None:
-        result = self.run_guard(metadata([package("rocketmq-model")]), allow_missing=False)
+    def test_removed_allow_missing_override_is_rejected(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(GUARD), "--allow-missing-planned-crates"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-        self.assertIn("missing planned packages", result.stderr)
+        self.assertIn("unrecognized arguments", result.stderr)
 
     def test_unknown_mode_is_input_error(self) -> None:
         result = subprocess.run(

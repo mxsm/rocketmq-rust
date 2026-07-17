@@ -47,11 +47,15 @@
 
 ### PR-M09-01：Workspace 与目标 DAG 收口
 
-- [ ] `[DEV]` 运行 metadata，断言根 workspace package 数恰为 32，standalone 没有误加入。
-- [ ] `[DEV]` dependency guard 切到严格 target mode，移除 `--allow-missing-planned-crates` 和全部到期临时例外。
-- [ ] `[TEST]` 故意违规 fixture仍能拒绝 foundation→facade、protocol→transport、store-api→backend、proxy-local→client 等边。
-- [ ] `[REV]` 人工复核 guard 报告与 `cargo tree -e normal`，确认无环和无 re-export 绕行。
-- [ ] 回滚点：closeout 不回滚已完成迁移；失败返回原里程碑修复并重新冻结快照。
+- [x] `[DEV]` 运行 metadata，断言根 workspace package 数恰为 32，standalone 没有误加入。
+- [x] `[DEV]` dependency guard 切到严格 target mode，移除 `--allow-missing-planned-crates` 和全部到期临时例外。
+- [x] `[TEST]` 故意违规 fixture仍能拒绝 foundation→facade、protocol→transport、store-api→backend、proxy-local→client 等边。
+- [x] `[REV]` 人工复核 guard 报告与 `cargo tree -e normal`，确认无环和无 re-export 绕行。
+- [x] 回滚点：closeout 不回滚已完成迁移；失败返回原里程碑修复并重新冻结快照。
+
+完成证据：[`09-target-dag-closeout-evidence.md`](09-target-dag-closeout-evidence.md)。严格 target 的未授权 finding
+为 0；49 条活动 R0 兼容/组合边和 3 条测试专用边分别计数，继续进入 M09-02/M09-04/R1/下一 major，
+不计为物理迁移完成。
 
 ### PR-M09-02：Facade 与 legacy purity 审查
 

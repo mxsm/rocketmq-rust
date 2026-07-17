@@ -474,6 +474,43 @@
       }
     ]
   },
+  "test_dependency_policy": {
+    "allowed_edges": [
+      {
+        "caller": "rocketmq-broker",
+        "target": "rocketmq-controller",
+        "kind": "dev",
+        "path": "rocketmq-broker/Cargo.toml",
+        "alias": "rocketmq_controller",
+        "owner": "broker",
+        "reason": "broker integration tests exercise the embedded controller bootstrap",
+        "review_by": "M12",
+        "adr": "docs/architecture-refactor-design.md#54-目标依赖-dag"
+      },
+      {
+        "caller": "rocketmq-broker",
+        "target": "rocketmq-namesrv",
+        "kind": "dev",
+        "path": "rocketmq-broker/Cargo.toml",
+        "alias": "rocketmq_namesrv",
+        "owner": "broker",
+        "reason": "broker integration tests exercise the in-process NameServer fixture",
+        "review_by": "M12",
+        "adr": "docs/architecture-refactor-design.md#54-目标依赖-dag"
+      },
+      {
+        "caller": "rocketmq-rust",
+        "target": "rocketmq-observability",
+        "kind": "dev",
+        "path": "rocketmq/Cargo.toml",
+        "alias": "rocketmq_observability",
+        "owner": "runtime",
+        "reason": "legacy runtime facade tests verify observability integration without a production edge",
+        "review_by": "M12",
+        "adr": "docs/architecture-refactor-design.md#54-目标依赖-dag"
+      }
+    ]
+  },
   "facade_rules": [
     {
       "facade": "rocketmq-remoting",
