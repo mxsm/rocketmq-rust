@@ -26,12 +26,37 @@ mod topic;
 
 use rocketmq_dashboard_common::NameServerConfigStore;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Duration;
 use tauri::Manager;
+
+const ADMIN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone)]
+struct DashboardAdminLifecycle {
+    cluster_manager: cluster::ClusterManager,
+    consumer_manager: consumer::ConsumerManager,
+    message_manager: message::MessageManager,
+    producer_manager: producer::ProducerManager,
+    topic_manager: topic::TopicManager,
+}
+
+impl DashboardAdminLifecycle {
+    async fn shutdown(&self) {
+        self.cluster_manager.shutdown().await;
+        self.consumer_manager.shutdown().await;
+        self.message_manager.shutdown().await;
+        self.producer_manager.shutdown().await;
+        self.topic_manager.shutdown().await;
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .setup(|app| {
+    let admin_lifecycle = Arc::new(OnceLock::new());
+    let setup_lifecycle = admin_lifecycle.clone();
+    let app = tauri::Builder::default()
+        .setup(move |app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -82,6 +107,16 @@ pub fn run() {
                 proxy_db.db_path().display()
             );
             let proxy_manager = proxy::ProxyManager::new(proxy_db)?;
+
+            setup_lifecycle
+                .set(DashboardAdminLifecycle {
+                    cluster_manager: cluster_manager.clone(),
+                    consumer_manager: consumer_manager.clone(),
+                    message_manager: message_manager.clone(),
+                    producer_manager: producer_manager.clone(),
+                    topic_manager: topic_manager.clone(),
+                })
+                .map_err(|_| anyhow::anyhow!("dashboard admin lifecycle was initialized more than once"))?;
 
             app.manage(auth_service);
             app.manage(auth::SessionState::default());
@@ -154,6 +189,32 @@ pub fn run() {
             topic::commands::skip_message_accumulate,
             topic::commands::send_topic_message
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    #[cfg(desktop)]
+    {
+        let exit_code = app.run_return(|_, _| {});
+        if let Some(lifecycle) = admin_lifecycle.get() {
+            // This is the desktop application's top-level runtime boundary.
+            // The event loop has stopped, so owned sessions can be awaited
+            // without spawning detached cleanup work.
+            let shutdown =
+                tauri::async_runtime::block_on(tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, lifecycle.shutdown()));
+            if shutdown.is_err() {
+                log::error!(
+                    "Timed out after {} seconds while shutting down dashboard admin sessions",
+                    ADMIN_SHUTDOWN_TIMEOUT.as_secs()
+                );
+            }
+        }
+        std::process::exit(exit_code);
+    }
+
+    #[cfg(mobile)]
+    {
+        // Mobile event loops do not support `run_return`; platform process
+        // teardown owns the terminal resource cleanup on those targets.
+        app.run(|_, _| {});
+    }
 }

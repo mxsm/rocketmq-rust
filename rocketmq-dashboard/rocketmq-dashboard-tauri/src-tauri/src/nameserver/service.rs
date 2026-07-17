@@ -18,16 +18,13 @@ use crate::nameserver::runtime::NameServerRuntimeState;
 use crate::nameserver::types::NameServerHomePageView;
 use crate::nameserver::types::NameServerStatusItem;
 use anyhow::Result;
-use cheetah_string::CheetahString;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_admin_core::client_adapter::ClientAdminBuilder;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::NameServerMutationResult;
 use rocketmq_dashboard_common::NameServerService;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 use uuid::Uuid;
 
 const NAMESERVER_PROBE_TIMEOUT_MILLIS: u64 = 1_500;
@@ -49,30 +46,24 @@ impl NameServerProbe for DefaultNameServerProbe {
         address: &'a str,
     ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
         Box::pin(async move {
-            let mut admin = DefaultMQAdminExt::with_admin_ext_group_and_timeout(
-                format!("dashboard-nameserver-probe-{}", Uuid::new_v4()),
-                Duration::from_millis(NAMESERVER_PROBE_TIMEOUT_MILLIS),
-            );
-            admin.client_config_mut().set_namesrv_addr(CheetahString::from(address));
-            admin
-                .client_config_mut()
-                .set_vip_channel_enabled(snapshot.use_vip_channel);
-            admin.client_config_mut().set_use_tls(snapshot.use_tls);
-
-            let started = match admin.start().await {
-                Ok(_) => true,
+            let mut admin = match ClientAdminBuilder::new()
+                .admin_group(format!("dashboard-nameserver-probe-{}", Uuid::new_v4()))
+                .namesrv_addr(address)
+                .timeout_millis(NAMESERVER_PROBE_TIMEOUT_MILLIS)
+                .vip_channel_enabled(snapshot.use_vip_channel)
+                .use_tls(snapshot.use_tls)
+                .build_and_start()
+                .await
+            {
+                Ok(admin) => admin,
                 Err(error) => {
                     log::warn!("NameServer probe start failed for `{}`: {}", address, error);
-                    false
+                    return false;
                 }
             };
 
-            if !started {
-                return false;
-            }
-
             let probe_result = admin
-                .probe_name_server(CheetahString::from(address))
+                .probe_name_server(address)
                 .await
                 .map(|_| true)
                 .unwrap_or_else(|error| {

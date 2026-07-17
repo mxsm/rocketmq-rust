@@ -19,6 +19,7 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_client_rust::admin_adapter_compat::error::RocketMQError;
 use rocketmq_client_rust::DefaultMQAdminExt;
 
 use crate::core::clock::Clock;
@@ -29,9 +30,12 @@ use crate::core::AdminResult;
 #[derive(Clone)]
 pub struct ClientAdminBuilder {
     namesrv_addr: Option<String>,
+    admin_group: Option<String>,
     instance_name: Option<String>,
     timeout_millis: u64,
     unit_name: Option<String>,
+    vip_channel_enabled: bool,
+    use_tls: bool,
     clock: Arc<dyn Clock>,
 }
 
@@ -39,9 +43,12 @@ impl Default for ClientAdminBuilder {
     fn default() -> Self {
         Self {
             namesrv_addr: None,
+            admin_group: None,
             instance_name: None,
             timeout_millis: 5_000,
             unit_name: None,
+            vip_channel_enabled: false,
+            use_tls: false,
             clock: Arc::new(SystemClock),
         }
     }
@@ -52,9 +59,12 @@ impl std::fmt::Debug for ClientAdminBuilder {
         formatter
             .debug_struct("ClientAdminBuilder")
             .field("namesrv_addr", &self.namesrv_addr)
+            .field("admin_group", &self.admin_group)
             .field("instance_name", &self.instance_name)
             .field("timeout_millis", &self.timeout_millis)
             .field("unit_name", &self.unit_name)
+            .field("vip_channel_enabled", &self.vip_channel_enabled)
+            .field("use_tls", &self.use_tls)
             .field("clock", &"dyn Clock")
             .finish()
     }
@@ -67,6 +77,11 @@ impl ClientAdminBuilder {
 
     pub fn namesrv_addr(mut self, addr: impl Into<String>) -> Self {
         self.namesrv_addr = Some(addr.into());
+        self
+    }
+
+    pub fn admin_group(mut self, group: impl Into<String>) -> Self {
+        self.admin_group = Some(group.into());
         self
     }
 
@@ -85,13 +100,29 @@ impl ClientAdminBuilder {
         self
     }
 
+    pub fn vip_channel_enabled(mut self, enabled: bool) -> Self {
+        self.vip_channel_enabled = enabled;
+        self
+    }
+
+    pub fn use_tls(mut self, use_tls: bool) -> Self {
+        self.use_tls = use_tls;
+        self
+    }
+
     pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
         self
     }
 
     pub async fn build_and_start(self) -> AdminResult<AdminSession> {
-        let mut admin = DefaultMQAdminExt::with_timeout(Duration::from_millis(self.timeout_millis));
+        let admin_group = self
+            .admin_group
+            .unwrap_or_else(|| format!("tools-admin-{}", self.clock.now_millis()));
+        let mut admin = DefaultMQAdminExt::with_admin_ext_group_and_timeout(
+            admin_group,
+            Duration::from_millis(self.timeout_millis),
+        );
         if let Some(namesrv_addr) = self.namesrv_addr {
             admin.set_namesrv_addr(namesrv_addr);
         }
@@ -100,13 +131,15 @@ impl ClientAdminBuilder {
             .unwrap_or_else(|| format!("tools-{}", self.clock.now_millis()));
         let client_config = admin.client_config_mut();
         client_config.set_instance_name(instance_name.into());
+        client_config.set_vip_channel_enabled(self.vip_channel_enabled);
         if let Some(unit_name) = self.unit_name {
             client_config.set_unit_name(unit_name.into());
         }
+        admin.set_use_tls(self.use_tls);
         admin
             .start()
             .await
-            .map_err(|error| AdminError::backend("start_admin_session", error.to_string()))?;
+            .map_err(|error| backend_error("start_admin_session", error))?;
 
         Ok(AdminSession {
             inner: admin,
@@ -136,6 +169,15 @@ impl AdminSession {
 
     pub fn is_closed(&self) -> bool {
         self.closed
+    }
+
+    pub async fn probe_name_server(&self, name_server: &str) -> AdminResult<()> {
+        self.ensure_open()?;
+        use rocketmq_client_rust::MQAdminExt;
+        self.inner
+            .probe_name_server(name_server.into())
+            .await
+            .map_err(|error| backend_error("probe_name_server", error))
     }
 
     pub(crate) fn ensure_open(&self) -> AdminResult<()> {
@@ -232,4 +274,17 @@ pub async fn create_admin_with_guard(namesrv_addr: impl Into<String>) -> AdminRe
         .namesrv_addr(namesrv_addr)
         .build_with_guard()
         .await
+}
+
+fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
+    let view = error.boundary_view();
+    let context = (!view.context().is_empty()).then(|| view.context().to_string());
+    AdminError::backend_view(
+        operation,
+        view.code().as_str(),
+        view.message(),
+        context,
+        view.http().status.as_u16(),
+        view.is_retryable(),
+    )
 }

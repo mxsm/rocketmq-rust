@@ -29,18 +29,18 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 45 | 0 | 37 未开始；合计 37 尚未完成 | 82 |
+| PR 级工作包 | 46 | 0 | 36 未开始；合计 36 尚未完成 | 82 |
 | 里程碑 | 6（M01–M06） | 1（M07） | 5（M08–M12） | 12 |
 | 新增边界 crate | 7 | 0 | 3（proxy-core/cluster/local） | 10 |
 | 根 workspace package | 29 | — | 还差 3 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 37 个未开始工作包分布：M07 为 2 个、M08 为 6 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、
-M12 为 6 个。PR-M07-05 已完成 Admin contract 与 Client adapter 收口；M07 继续进行，当前下一工作包为 PR-M07-06。
+剩余 36 个未开始工作包分布：M07 为 1 个、M08 为 6 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、
+M12 为 6 个。PR-M07-06 已完成 Dashboard Admin Session 迁移；M07 继续进行，当前下一工作包为 PR-M07-07。
 
 目标态差距快照不能与工作包计数混用：`architecture_dependency_guard.py --mode target --allow-missing-planned-crates`
-仍报告 3 个计划 Proxy crate 缺失和 115 项差距，其中 Client source 61、Client manifest 3、目标 DAG 直接边 49、传递闭包边 2。
-Client source 差距位于 Proxy 35、Tauri backend 24、Web backend 2；Admin Core 与 Broker 已从该差距清单退出。
+仍报告 3 个计划 Proxy crate 缺失和 87 项差距，其中 Client source 35、Client manifest 1、目标 DAG 直接边 49、传递闭包边 2。
+Client source 与 manifest 差距均只位于 Proxy；Dashboard、Admin Core、Broker 已从 Client 违规差距清单退出。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -289,7 +289,13 @@ Client source 差距位于 Proxy 35、Tauri backend 24、Web backend 2；Admin C
   - [x] Example、Tauri backend、Web backend 按最近 AGENTS 完成 fmt/Clippy；Web backend all-target/all-feature build 通过
   - [x] architecture baseline、119 项治理测试、runtime audit、ArcMut guard/24 fixtures 通过；ArcMut 降至 1,155/3,207
   - [x] 目标态差距由 153 降至 115，Admin Core 完全退出 Client source 与违规 DAG 清单
-- [ ] PR-M07-06：迁移 Web/Tauri Dashboard
+- [x] PR-M07-06：迁移 Web/Tauri Dashboard
+  - [x] Tauri/Web backend 均显式使用 admin-core `default-features = false, features = ["client-adapter"]`，直接 Client/common/remoting 清单与源码边清零
+  - [x] 管理查询、普通/事务测试发送、message/trace、Consumer/Topic/Broker/ACL 与 NameServer/VIP/TLS 配置变更统一经 Admin Session/facade，且不修改进程级环境变量
+  - [x] Tauri message page cache 使用 dashboard-owned QueueKey 与 admin-owned QueueRef；无 model/protocol 绕界、完整 MQAdminExt 生命周期或自建 producer/runtime
+  - [x] Tauri 76 tests、Web backend 23 tests、两项目 strict Clippy/build 与两套 Node production build 通过；Admin dashboard 6 项专项测试及 Admin/CLI/TUI 兼容测试通过
+  - [x] architecture baseline、8 项 M07-06 contract、98 项治理测试、24 fixtures、runtime/ArcMut/routing guard 通过
+  - [x] 目标态差距由 115 降至 87；父项关闭后 46/82 已完成、36 尚未完成，唯一下一工作包为 PR-M07-07
 - [ ] PR-M07-07：完成 allowlist 与 consumer closeout
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

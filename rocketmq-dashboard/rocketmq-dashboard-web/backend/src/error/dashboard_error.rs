@@ -15,9 +15,11 @@ use crate::model::ApiResponse;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use rocketmq_admin_core::core::AdminError;
 use rocketmq_dashboard_common::DashboardCommonError;
 use rocketmq_error::HttpStatusCode;
 use rocketmq_error::RocketMQError;
+use std::borrow::Cow;
 use std::error::Error as StdError;
 use thiserror::Error;
 
@@ -37,6 +39,8 @@ pub enum DashboardError {
     },
     #[error(transparent)]
     RocketMq(#[from] RocketMQError),
+    #[error(transparent)]
+    Admin(AdminError),
     #[error("{0}")]
     NotFound(String),
     #[error("{0}")]
@@ -65,6 +69,16 @@ impl From<DashboardCommonError> for DashboardError {
     }
 }
 
+impl From<AdminError> for DashboardError {
+    fn from(error: AdminError) -> Self {
+        match error {
+            AdminError::InvalidArgument { field, reason } => Self::Validation(format!("{field}: {reason}")),
+            AdminError::NotFound { resource, name } => Self::NotFound(format!("{resource} `{name}` was not found")),
+            error => Self::Admin(error),
+        }
+    }
+}
+
 impl DashboardError {
     pub fn config_source<E>(message: &'static str, source: E) -> Self
     where
@@ -86,15 +100,16 @@ impl DashboardError {
         }
     }
 
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> Cow<'_, str> {
         match self {
-            Self::Validation(_) => "VALIDATION_ERROR",
-            Self::Config(_) | Self::ConfigSource { .. } => "CONFIG_ERROR",
-            Self::RocketMq(error) => error.boundary_view().code().as_str(),
-            Self::NotFound(_) => "NOT_FOUND",
-            Self::Auth(_) => "AUTH_ERROR",
-            Self::NotImplemented(_) => "NOT_IMPLEMENTED",
-            Self::Internal(_) | Self::InternalSource { .. } => "INTERNAL_ERROR",
+            Self::Validation(_) => Cow::Borrowed("VALIDATION_ERROR"),
+            Self::Config(_) | Self::ConfigSource { .. } => Cow::Borrowed("CONFIG_ERROR"),
+            Self::RocketMq(error) => Cow::Borrowed(error.boundary_view().code().as_str()),
+            Self::Admin(error) => Cow::Owned(error.code().unwrap_or("ADMIN_ERROR").to_string()),
+            Self::NotFound(_) => Cow::Borrowed("NOT_FOUND"),
+            Self::Auth(_) => Cow::Borrowed("AUTH_ERROR"),
+            Self::NotImplemented(_) => Cow::Borrowed("NOT_IMPLEMENTED"),
+            Self::Internal(_) | Self::InternalSource { .. } => Cow::Borrowed("INTERNAL_ERROR"),
         }
     }
 
@@ -103,6 +118,10 @@ impl DashboardError {
             Self::Validation(_) => StatusCode::BAD_REQUEST,
             Self::Config(_) | Self::ConfigSource { .. } => StatusCode::BAD_REQUEST,
             Self::RocketMq(error) => status_code_from_spec(error.boundary_view().http().status),
+            Self::Admin(error) => error
+                .http_status()
+                .and_then(|status| StatusCode::from_u16(status).ok())
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Auth(_) => StatusCode::UNAUTHORIZED,
             Self::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
@@ -120,6 +139,7 @@ impl DashboardError {
             | Self::Internal(message) => message.clone(),
             Self::ConfigSource { message, .. } | Self::InternalSource { message, .. } => (*message).to_string(),
             Self::RocketMq(error) => rocketmq_response_message(error),
+            Self::Admin(error) => admin_response_message(error),
         }
     }
 }
@@ -127,7 +147,7 @@ impl DashboardError {
 impl IntoResponse for DashboardError {
     fn into_response(self) -> axum::response::Response {
         let status = self.status_code();
-        let body = ApiResponse::failure(self.code(), self.response_message());
+        let body = ApiResponse::failure(self.code().into_owned(), self.response_message());
         (status, Json(body)).into_response()
     }
 }
@@ -145,6 +165,16 @@ fn rocketmq_response_message(error: &RocketMQError) -> String {
     }
 }
 
+fn admin_response_message(error: &AdminError) -> String {
+    match error {
+        AdminError::Backend { reason, context, .. } => context
+            .as_deref()
+            .filter(|context| !context.is_empty())
+            .map_or_else(|| reason.clone(), |context| format!("{reason} ({context})")),
+        _ => error.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::DashboardError;
@@ -152,6 +182,7 @@ mod tests {
     use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
+    use rocketmq_admin_core::core::AdminError;
     use rocketmq_error::REDACTED;
     use rocketmq_error::RocketMQError;
     use serde_json::Value;
@@ -192,6 +223,33 @@ mod tests {
         assert_eq!(body.code, "INTERNAL");
         assert!(body.message.contains(REDACTED));
         assert!(!body.message.contains("password=plain-text"));
+    }
+
+    #[tokio::test]
+    async fn admin_error_preserves_boundary_code_status_and_context() {
+        let error = AdminError::backend_view(
+            "query",
+            "ROUTE_NOT_FOUND",
+            "No route info",
+            Some("topic=Orders".to_string()),
+            404,
+            false,
+        );
+
+        let (status, body) = failure_response(DashboardError::from(error)).await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body.code, "ROUTE_NOT_FOUND");
+        assert_eq!(body.message, "No route info (topic=Orders)");
+    }
+
+    #[tokio::test]
+    async fn admin_not_found_uses_existing_dashboard_contract() {
+        let (status, body) = failure_response(DashboardError::from(AdminError::not_found("topic", "Orders"))).await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body.code, "NOT_FOUND");
+        assert_eq!(body.message, "topic `Orders` was not found");
     }
 
     #[tokio::test]

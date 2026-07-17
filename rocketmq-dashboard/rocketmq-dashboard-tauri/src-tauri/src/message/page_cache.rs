@@ -14,7 +14,7 @@
 
 use crate::message::types::MessageError;
 use crate::message::types::MessageResult;
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_admin_core::core::queue::QueueRef;
 use rocketmq_dashboard_common::MessagePageQueryRequest;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,6 +32,33 @@ pub(crate) struct MessagePageCacheKey {
     pub(crate) topic: String,
     pub(crate) begin: i64,
     pub(crate) end: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct QueueKey {
+    pub(crate) topic: String,
+    pub(crate) broker_name: String,
+    pub(crate) queue_id: i32,
+}
+
+impl From<&QueueRef> for QueueKey {
+    fn from(queue: &QueueRef) -> Self {
+        Self {
+            topic: queue.topic.clone(),
+            broker_name: queue.broker_name.clone(),
+            queue_id: queue.queue_id,
+        }
+    }
+}
+
+impl From<&QueueKey> for QueueRef {
+    fn from(queue: &QueueKey) -> Self {
+        Self {
+            topic: queue.topic.clone(),
+            broker_name: queue.broker_name.clone(),
+            queue_id: queue.queue_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +132,7 @@ impl MessagePageCache {
 pub(crate) struct QueueScanState {
     pub(crate) idx: usize,
     pub(crate) broker_addr: String,
-    pub(crate) message_queue: MessageQueue,
+    pub(crate) queue_key: QueueKey,
     pub(crate) start: i64,
     pub(crate) end: i64,
     pub(crate) start_offset: i64,
@@ -113,16 +140,20 @@ pub(crate) struct QueueScanState {
 }
 
 impl QueueScanState {
-    pub(crate) fn new(idx: usize, broker_addr: String, message_queue: MessageQueue, start: i64, end: i64) -> Self {
+    pub(crate) fn new(idx: usize, broker_addr: String, queue: QueueRef, start: i64, end: i64) -> Self {
         Self {
             idx,
             broker_addr,
-            message_queue,
+            queue_key: QueueKey::from(&queue),
             start,
             end,
             start_offset: start,
             end_offset: start,
         }
+    }
+
+    pub(crate) fn queue_ref(&self) -> QueueRef {
+        QueueRef::from(&self.queue_key)
     }
 
     pub(crate) fn span(&self) -> usize {
@@ -338,11 +369,13 @@ mod tests {
     use super::MessagePageCacheEntry;
     use super::MessagePageCacheKey;
     use super::NormalizedMessagePageQuery;
+    use super::QueueKey;
     use super::QueueScanState;
     use super::build_page_selection;
     use super::normalize_message_page_query;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_admin_core::core::queue::QueueRef;
     use rocketmq_dashboard_common::MessagePageQueryRequest;
+    use std::collections::HashSet;
     use std::time::Duration;
     use std::time::Instant;
 
@@ -416,11 +449,30 @@ mod tests {
         assert!(!entry.matches_request(&query, 8));
     }
 
+    #[test]
+    fn queue_key_round_trips_admin_queue_ref_and_remains_hashable() {
+        let queue = QueueRef {
+            topic: "TopicTest".to_string(),
+            broker_name: "broker-a".to_string(),
+            queue_id: 3,
+        };
+        let key = QueueKey::from(&queue);
+        let mut keys = HashSet::new();
+
+        assert!(keys.insert(key.clone()));
+        assert!(!keys.insert(key.clone()));
+        assert_eq!(QueueRef::from(&key), queue);
+    }
+
     fn queue_state(idx: usize, start: i64, end: i64) -> QueueScanState {
         QueueScanState::new(
             idx,
             "broker-a:10911".to_string(),
-            MessageQueue::from_parts("TopicTest", "broker-a", idx as i32),
+            QueueRef {
+                topic: "TopicTest".to_string(),
+                broker_name: "broker-a".to_string(),
+                queue_id: idx as i32,
+            },
             start,
             end,
         )

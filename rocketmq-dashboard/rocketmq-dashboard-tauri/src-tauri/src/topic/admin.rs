@@ -15,15 +15,14 @@
 use crate::nameserver::NameServerRuntimeState;
 use crate::topic::types::TopicError;
 use crate::topic::types::TopicResult;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_admin_core::client_adapter::AdminSession;
+use rocketmq_admin_core::client_adapter::ClientAdminBuilder;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use std::sync::Arc;
-use std::time::Duration;
 use uuid::Uuid;
 
 pub(crate) struct ManagedTopicAdmin {
-    pub(crate) admin: DefaultMQAdminExt,
+    pub(crate) admin: AdminSession,
     pub(crate) snapshot: NameServerConfigSnapshot,
     pub(crate) generation: u64,
 }
@@ -35,18 +34,15 @@ impl ManagedTopicAdmin {
             TopicError::Configuration("No active NameServer is configured. Add and select a NameServer first.".into())
         })?;
 
-        let mut admin = DefaultMQAdminExt::with_admin_ext_group_and_timeout(
-            format!("dashboard-topic-admin-{}", Uuid::new_v4()),
-            Duration::from_millis(5_000),
-        );
-        admin
-            .client_config_mut()
-            .set_namesrv_addr(current_namesrv.clone().into());
-        admin
-            .client_config_mut()
-            .set_vip_channel_enabled(snapshot.use_vip_channel);
-        admin.client_config_mut().set_use_tls(snapshot.use_tls);
-        admin.start().await.map_err(TopicError::RocketMQ)?;
+        let admin = ClientAdminBuilder::new()
+            .admin_group(format!("dashboard-topic-admin-{}", Uuid::new_v4()))
+            .namesrv_addr(current_namesrv)
+            .timeout_millis(5_000)
+            .vip_channel_enabled(snapshot.use_vip_channel)
+            .use_tls(snapshot.use_tls)
+            .build_and_start()
+            .await
+            .map_err(TopicError::from)?;
 
         Ok(Self {
             admin,

@@ -25,8 +25,11 @@ pub mod admin;
 pub mod broker;
 pub mod clock;
 pub mod consumer;
+pub mod dashboard;
 pub mod error;
 pub mod lite;
+pub mod message;
+pub mod queue;
 pub mod security;
 pub mod static_topic;
 pub mod topic;
@@ -97,11 +100,6 @@ pub mod ha {
 }
 
 #[cfg(feature = "legacy-common-compat")]
-pub mod message {
-    pub use crate::client_adapter::legacy::core::message::*;
-}
-
-#[cfg(feature = "legacy-common-compat")]
 pub mod namesrv {
     pub use crate::client_adapter::legacy::core::namesrv::*;
 }
@@ -114,11 +112,6 @@ pub mod offset {
 #[cfg(feature = "legacy-common-compat")]
 pub mod producer {
     pub use crate::client_adapter::legacy::core::producer::*;
-}
-
-#[cfg(feature = "legacy-common-compat")]
-pub mod queue {
-    pub use crate::client_adapter::legacy::core::queue::*;
 }
 
 #[cfg(feature = "legacy-common-compat")]

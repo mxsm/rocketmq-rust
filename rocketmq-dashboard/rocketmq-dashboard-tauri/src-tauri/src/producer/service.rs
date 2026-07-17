@@ -19,13 +19,12 @@ use crate::producer::types::ProducerConnectionView;
 use crate::producer::types::ProducerError;
 use crate::producer::types::ProducerResult;
 use crate::producer::types::ProducerTopicOptionsView;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_admin_core::client_adapter::AdminSession;
+use rocketmq_admin_core::core::dashboard::DashboardAdmin;
+use rocketmq_admin_core::core::dashboard::DashboardProducerConnections;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::ProducerConnectionQueryRequest;
 use rocketmq_dashboard_common::ProducerTopicOptionsRequest;
-use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -40,6 +39,13 @@ impl ProducerManager {
         Self {
             runtime,
             admin_session: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        let mut session = self.admin_session.lock().await;
+        if let Some(mut admin) = session.take() {
+            admin.shutdown().await;
         }
     }
 
@@ -163,30 +169,35 @@ impl ProducerManager {
     }
 
     fn should_reset_session<T>(result: &ProducerResult<T>) -> bool {
-        matches!(result, Err(ProducerError::RocketMQ(_)))
+        matches!(
+            result,
+            Err(ProducerError::Admin(error)) if error.is_retryable()
+                || matches!(error, rocketmq_admin_core::core::AdminError::SessionClosed)
+        )
     }
 
     async fn query_producer_connections_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: ProducerConnectionQueryRequest,
     ) -> ProducerResult<ProducerConnectionView> {
         let connection = admin
-            .examine_producer_connection_info(request.producer_group.clone().into(), request.topic.clone().into())
+            .dashboard_producer_connections(&request.topic, &request.producer_group)
             .await
-            .map_err(ProducerError::RocketMQ)?;
+            .map_err(ProducerError::Admin)?;
 
         Ok(build_connection_view(request, connection))
     }
 
     async fn get_producer_topic_options_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         snapshot: &NameServerConfigSnapshot,
     ) -> ProducerResult<ProducerTopicOptionsView> {
-        let topic_list = admin.fetch_all_topic_list().await.map_err(ProducerError::RocketMQ)?;
-        let mut topics: Vec<String> = topic_list.topic_list.iter().map(|topic| topic.to_string()).collect();
+        let topic_list = admin.dashboard_list_topics().await.map_err(ProducerError::Admin)?;
+        let mut topics: Vec<String> = topic_list.items.into_iter().map(|item| item.topic).collect();
         topics.sort();
+        topics.dedup();
 
         Ok(ProducerTopicOptionsView {
             topics,
@@ -199,19 +210,17 @@ impl ProducerManager {
 
 fn build_connection_view(
     request: ProducerConnectionQueryRequest,
-    connection: ProducerConnection,
+    connection: DashboardProducerConnections,
 ) -> ProducerConnectionView {
     let mut connections: Vec<ProducerConnectionItem> = connection
-        .connection_set()
-        .iter()
+        .connections
+        .into_iter()
         .map(|item| ProducerConnectionItem {
-            client_id: item.get_client_id().to_string(),
-            client_addr: item.get_client_addr().to_string(),
-            language: item.get_language().to_string(),
-            version: item.get_version(),
-            version_desc: RocketMqVersion::from_ordinal(item.get_version() as u32)
-                .name()
-                .to_string(),
+            client_id: item.client_id,
+            client_addr: item.client_addr,
+            language: item.language,
+            version: item.version,
+            version_desc: item.version_desc,
         })
         .collect();
     connections.sort_by(|left, right| left.client_id.cmp(&right.client_id));
@@ -228,31 +237,32 @@ fn build_connection_view(
 mod tests {
     use super::ProducerTopicOptionsView;
     use super::build_connection_view;
-    use cheetah_string::CheetahString;
-    use rocketmq_common::common::mq_version::RocketMqVersion;
+    use rocketmq_admin_core::core::dashboard::DashboardProducerConnection;
+    use rocketmq_admin_core::core::dashboard::DashboardProducerConnections;
     use rocketmq_dashboard_common::ProducerConnectionQueryRequest;
-    use rocketmq_remoting::protocol::LanguageCode;
-    use rocketmq_remoting::protocol::body::connection::Connection;
-    use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
 
     #[test]
     fn build_connection_view_sorts_connections_and_maps_version_desc() {
-        let mut producer_connection = ProducerConnection::new();
-
-        let mut second = Connection::new();
-        second.set_client_id(CheetahString::from("client-b"));
-        second.set_client_addr(CheetahString::from("127.0.0.1:10911"));
-        second.set_language(LanguageCode::JAVA);
-        second.set_version(ordinal_for_v5_0_0());
-
-        let mut first = Connection::new();
-        first.set_client_id(CheetahString::from("client-a"));
-        first.set_client_addr(CheetahString::from("127.0.0.1:10912"));
-        first.set_language(LanguageCode::RUST);
-        first.set_version(ordinal_for_v5_0_0());
-
-        producer_connection.connection_set_mut().insert(second);
-        producer_connection.connection_set_mut().insert(first);
+        let producer_connection = DashboardProducerConnections {
+            topic: "TopicTest".to_string(),
+            producer_group: "producer-group".to_string(),
+            connections: vec![
+                DashboardProducerConnection {
+                    client_id: "client-b".to_string(),
+                    client_addr: "127.0.0.1:10911".to_string(),
+                    language: "JAVA".to_string(),
+                    version: 433,
+                    version_desc: "V5_0_0".to_string(),
+                },
+                DashboardProducerConnection {
+                    client_id: "client-a".to_string(),
+                    client_addr: "127.0.0.1:10912".to_string(),
+                    language: "RUST".to_string(),
+                    version: 433,
+                    version_desc: "V5_0_0".to_string(),
+                },
+            ],
+        };
 
         let view = build_connection_view(
             ProducerConnectionQueryRequest {
@@ -265,14 +275,8 @@ mod tests {
         assert_eq!(view.connection_count, 2);
         assert_eq!(view.connections[0].client_id, "client-a");
         assert_eq!(view.connections[1].client_id, "client-b");
-        assert_eq!(
-            view.connections[0].version_desc,
-            RocketMqVersion::from_ordinal(ordinal_for_v5_0_0() as u32).name()
-        );
-    }
-
-    const fn ordinal_for_v5_0_0() -> i32 {
-        433
+        assert_eq!(view.connections[0].version, 433);
+        assert_eq!(view.connections[0].version_desc, "V5_0_0");
     }
 
     #[test]

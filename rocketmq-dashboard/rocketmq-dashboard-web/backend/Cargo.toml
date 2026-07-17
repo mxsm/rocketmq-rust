@@ -24,11 +24,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 rocketmq-dashboard-common = { path = "../../rocketmq-dashboard-common", features = ["admin"] }
-rocketmq-admin-core = { path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core" }
-rocketmq-client-rust = { path = "../../../rocketmq-client" }
-rocketmq-common = { path = "../../../rocketmq-common" }
+rocketmq-admin-core = { path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
 rocketmq-error = { path = "../../../rocketmq-error" }
-rocketmq-remoting = { path = "../../../rocketmq-remoting" }
 
 [dev-dependencies]
 tempfile = "3"

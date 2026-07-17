@@ -51,13 +51,7 @@ password-hash    = "0.5"
 rand_core        = { version = "0.6", features = ["getrandom"] }
 uuid             = { version = "1", features = ["v4", "serde"] }
 chrono           = { version = "0.4", features = ["serde"] }
-tokio            = { version = "1", features = ["sync"] }
+tokio            = { version = "1", features = ["sync", "time"] }
 rocketmq-dashboard-common = { path = "../../rocketmq-dashboard-common" }
 anyhow           = "1.0"
-cheetah-string   = { version = "2.1.0", features = ["serde", "bytes", "simd"] }
-rocketmq-common  = { path = "../../../rocketmq-common" }
-rocketmq-admin-core = { path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core" }
-rocketmq-client-rust = { path = "../../../rocketmq-client" }
-rocketmq-remoting = { path = "../../../rocketmq-remoting" }
-rocketmq-error = { path = "../../../rocketmq-error" }
-rocketmq-runtime = { path = "../../../rocketmq-runtime" }
+rocketmq-admin-core = { path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }

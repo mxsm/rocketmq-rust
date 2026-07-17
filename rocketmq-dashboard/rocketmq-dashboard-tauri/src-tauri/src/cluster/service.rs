@@ -21,15 +21,14 @@ use crate::cluster::types::ClusterHomePageResponse;
 use crate::cluster::types::ClusterOverviewSummary;
 use crate::cluster::types::ClusterResult;
 use crate::nameserver::NameServerRuntimeState;
-use cheetah_string::CheetahString;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_admin_core::client_adapter::AdminSession;
+use rocketmq_admin_core::core::dashboard::DashboardAdmin;
+use rocketmq_admin_core::core::dashboard::DashboardBrokerInfo;
+use rocketmq_admin_core::core::dashboard::DashboardBrokerTarget;
 use rocketmq_dashboard_common::ClusterBrokerConfigRequest;
 use rocketmq_dashboard_common::ClusterBrokerStatusRequest;
 use rocketmq_dashboard_common::ClusterHomePageRequest;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
-use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
-use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -45,6 +44,13 @@ impl ClusterManager {
         Self {
             runtime,
             admin_session: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        let mut session = self.admin_session.lock().await;
+        if let Some(mut admin) = session.take() {
+            admin.shutdown().await;
         }
     }
 
@@ -195,25 +201,21 @@ impl ClusterManager {
     }
 
     fn should_reset_session<T>(result: &ClusterResult<T>) -> bool {
-        matches!(result, Err(ClusterError::RocketMQ(_)))
+        matches!(
+            result,
+            Err(ClusterError::Admin(error)) if error.is_retryable()
+                || matches!(error, rocketmq_admin_core::core::AdminError::SessionClosed)
+        )
     }
 
     async fn get_cluster_home_page_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         snapshot: &NameServerConfigSnapshot,
     ) -> ClusterResult<ClusterHomePageResponse> {
-        let cluster_info = admin
-            .examine_broker_cluster_info()
-            .await
-            .map_err(ClusterError::RocketMQ)?;
-        let items = build_cluster_items(admin, &cluster_info).await;
-        let mut clusters: Vec<String> = cluster_info
-            .cluster_addr_table
-            .as_ref()
-            .map(|table| table.keys().map(|cluster| cluster.to_string()).collect())
-            .unwrap_or_default();
-        clusters.sort();
+        let broker_list = admin.dashboard_list_brokers().await.map_err(ClusterError::Admin)?;
+        let clusters = broker_list.clusters;
+        let items = build_cluster_items(broker_list.items);
         let summary = build_summary(clusters.len(), &items);
 
         let response = ClusterHomePageResponse {
@@ -237,7 +239,7 @@ impl ClusterManager {
 
     async fn get_cluster_broker_config_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: ClusterBrokerConfigRequest,
     ) -> ClusterResult<ClusterBrokerConfigView> {
         let broker_addr = request.broker_addr.trim();
@@ -245,23 +247,24 @@ impl ClusterManager {
             return Err(ClusterError::Validation("Broker address cannot be empty.".into()));
         }
 
-        let properties = admin
-            .get_broker_config(CheetahString::from(broker_addr))
+        let target = DashboardBrokerTarget {
+            broker_name: String::new(),
+            broker_addr: Some(broker_addr.to_string()),
+        };
+        let config = admin
+            .dashboard_broker_config(&target)
             .await
-            .map_err(ClusterError::RocketMQ)?;
+            .map_err(ClusterError::Admin)?;
 
         Ok(ClusterBrokerConfigView {
             broker_addr: broker_addr.to_string(),
-            entries: properties
-                .into_iter()
-                .map(|(key, value)| (key.to_string(), value.to_string()))
-                .collect(),
+            entries: config.entries,
         })
     }
 
     async fn get_cluster_broker_status_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: ClusterBrokerStatusRequest,
     ) -> ClusterResult<ClusterBrokerStatusView> {
         let broker_addr = request.broker_addr.trim();
@@ -269,89 +272,44 @@ impl ClusterManager {
             return Err(ClusterError::Validation("Broker address cannot be empty.".into()));
         }
 
-        let kv_table = admin
-            .fetch_broker_runtime_stats(CheetahString::from(broker_addr))
+        let target = DashboardBrokerTarget {
+            broker_name: String::new(),
+            broker_addr: Some(broker_addr.to_string()),
+        };
+        let runtime = admin
+            .dashboard_broker_runtime(&target)
             .await
-            .map_err(ClusterError::RocketMQ)?;
+            .map_err(ClusterError::Admin)?;
 
         Ok(ClusterBrokerStatusView {
             broker_addr: broker_addr.to_string(),
-            entries: kv_table_to_map(&kv_table),
+            entries: runtime.entries,
         })
     }
 }
 
-async fn build_cluster_items(admin: &mut DefaultMQAdminExt, cluster_info: &ClusterInfo) -> Vec<ClusterBrokerCardItem> {
-    let mut items = Vec::new();
-    let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() else {
-        return items;
-    };
-    let Some(broker_addr_table) = cluster_info.broker_addr_table.as_ref() else {
-        return items;
-    };
+fn build_cluster_items(mut brokers: Vec<DashboardBrokerInfo>) -> Vec<ClusterBrokerCardItem> {
+    brokers.sort_by(|left, right| {
+        (&left.cluster_name, &left.broker_name, left.broker_id, &left.address).cmp(&(
+            &right.cluster_name,
+            &right.broker_name,
+            right.broker_id,
+            &right.address,
+        ))
+    });
 
-    let mut cluster_names: Vec<_> = cluster_addr_table.keys().cloned().collect();
-    cluster_names.sort();
-
-    for cluster_name in cluster_names {
-        let Some(broker_names) = cluster_addr_table.get(cluster_name.as_str()) else {
-            continue;
-        };
-        let mut sorted_broker_names: Vec<_> = broker_names.iter().cloned().collect();
-        sorted_broker_names.sort();
-
-        for broker_name in sorted_broker_names {
-            let Some(broker_data) = broker_addr_table.get(broker_name.as_str()) else {
-                log::warn!(
-                    "Cluster `{}` references broker `{}` but broker address table has no matching entry",
-                    cluster_name,
-                    broker_name
-                );
-                continue;
-            };
-
-            let mut broker_addresses: Vec<_> = broker_data
-                .broker_addrs()
-                .iter()
-                .map(|(broker_id, address)| (*broker_id, address.clone()))
-                .collect();
-            broker_addresses.sort_by_key(|(broker_id, _)| *broker_id);
-
-            for (broker_id, address) in broker_addresses {
-                let runtime_stats = admin.fetch_broker_runtime_stats(address.clone()).await;
-                let (raw_status, status_load_error) = match runtime_stats {
-                    Ok(kv_table) => (kv_table_to_map(&kv_table), None),
-                    Err(error) => {
-                        log::warn!(
-                            "Failed to fetch runtime stats for broker `{}` at `{}`: {}",
-                            broker_name,
-                            address,
-                            error
-                        );
-                        (BTreeMap::new(), Some(error.to_string()))
-                    }
-                };
-
-                items.push(build_cluster_item(
-                    cluster_name.as_str(),
-                    broker_name.as_str(),
-                    broker_id,
-                    address.as_str(),
-                    raw_status,
-                    status_load_error,
-                ));
-            }
-        }
-    }
-
-    items
-}
-
-fn kv_table_to_map(kv_table: &KVTable) -> BTreeMap<String, String> {
-    kv_table
-        .table
-        .iter()
-        .map(|(key, value)| (key.to_string(), value.to_string()))
+    brokers
+        .into_iter()
+        .map(|broker| {
+            build_cluster_item(
+                &broker.cluster_name,
+                &broker.broker_name,
+                broker.broker_id,
+                &broker.address,
+                broker.runtime_entries,
+                broker.runtime_error,
+            )
+        })
         .collect()
 }
 

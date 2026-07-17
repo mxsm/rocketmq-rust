@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::mix_all;
 use rocketmq_dashboard_common::DashboardCommonResult;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::NameServerRuntimeAdapter;
-use std::env;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -88,22 +86,8 @@ impl NameServerRuntimeAdapter for NameServerRuntimeState {
             state.generation += 1;
         }
 
-        sync_nameserver_process_env(snapshot);
         self.reset_hook.reset_clients();
         Ok(())
-    }
-}
-
-fn sync_nameserver_process_env(snapshot: &NameServerConfigSnapshot) {
-    let Some(current_namesrv) = snapshot.current_namesrv.as_deref() else {
-        return;
-    };
-
-    // The Rust RocketMQ client resolves NameServer from process environment, so we keep both
-    // keys in sync with the current runtime selection.
-    unsafe {
-        env::set_var(mix_all::NAMESRV_ADDR_ENV, current_namesrv);
-        env::set_var(mix_all::NAMESRV_ADDR_PROPERTY, current_namesrv);
     }
 }
 
@@ -111,15 +95,10 @@ fn sync_nameserver_process_env(snapshot: &NameServerConfigSnapshot) {
 mod tests {
     use super::ClientResetHook;
     use super::NameServerRuntimeState;
-    use rocketmq_common::common::mix_all;
     use rocketmq_dashboard_common::NameServerConfigSnapshot;
     use rocketmq_dashboard_common::NameServerRuntimeAdapter;
-    use std::env;
     use std::sync::Arc;
-    use std::sync::LazyLock;
     use std::sync::Mutex;
-
-    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     #[derive(Default)]
     struct ResetSpy {
@@ -141,9 +120,6 @@ mod tests {
 
     #[test]
     fn apply_snapshot_updates_runtime_state_and_resets_clients() {
-        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_env = env::var(mix_all::NAMESRV_ADDR_ENV).ok();
-        let previous_property = env::var(mix_all::NAMESRV_ADDR_PROPERTY).ok();
         let reset_spy = Arc::new(ResetSpy::default());
         let runtime = NameServerRuntimeState::with_reset_hook(
             NameServerConfigSnapshot {
@@ -167,24 +143,5 @@ mod tests {
         assert_eq!(runtime.snapshot().current_namesrv.as_deref(), Some("127.0.0.2:9876"));
         assert_eq!(runtime.generation(), 1);
         assert_eq!(reset_spy.count(), 1);
-        assert_eq!(
-            env::var(mix_all::NAMESRV_ADDR_ENV).ok().as_deref(),
-            Some("127.0.0.2:9876")
-        );
-        assert_eq!(
-            env::var(mix_all::NAMESRV_ADDR_PROPERTY).ok().as_deref(),
-            Some("127.0.0.2:9876")
-        );
-
-        unsafe {
-            match previous_env {
-                Some(value) => env::set_var(mix_all::NAMESRV_ADDR_ENV, value),
-                None => env::remove_var(mix_all::NAMESRV_ADDR_ENV),
-            }
-            match previous_property {
-                Some(value) => env::set_var(mix_all::NAMESRV_ADDR_PROPERTY, value),
-                None => env::remove_var(mix_all::NAMESRV_ADDR_PROPERTY),
-            }
-        }
     }
 }
