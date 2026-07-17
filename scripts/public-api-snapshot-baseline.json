@@ -1,0 +1,229 @@
+{
+  "feature_profile": "default",
+  "packages": {
+    "rocketmq-admin-cli": {
+      "crate_version": "1.0.0",
+      "public_path_count": 294,
+      "public_path_sha256": "15df468d980ab0dbcfbfff8c4179604bde17fe67b25519d7c8de0e4eae8093ec",
+      "rustdoc_json_sha256": "2220dfc60bfc6f52895f59d82b9f9d087027b86d36f3e042ffd858389aec6f7b",
+      "target": "rocketmq_admin_cli"
+    },
+    "rocketmq-admin-core": {
+      "crate_version": "1.0.0",
+      "public_path_count": 186,
+      "public_path_sha256": "427678ac85d4f76728993ad32b402626d24f41eaeb293c9fa5994ab9cc6bfa0d",
+      "rustdoc_json_sha256": "11a3365595a7cdaeceb539c30d12f7fa3e8049abdc1a5cce8889d990f1b30e78",
+      "target": "rocketmq_admin_core"
+    },
+    "rocketmq-auth": {
+      "crate_version": "1.0.0",
+      "public_path_count": 199,
+      "public_path_sha256": "3e919362f222f5a4ae299f5e860d10934105feae4f410a985e729643d31952c1",
+      "rustdoc_json_sha256": "d82fb38fea1babe0275e867d7f17e445ae9146637154ac8487c4e6a58b9537b6",
+      "target": "rocketmq_auth"
+    },
+    "rocketmq-broker": {
+      "crate_version": "1.0.0",
+      "public_path_count": 50,
+      "public_path_sha256": "efb1b554cfdc1275bb621adf4d3dd1ffa51fd50e323e8ced14075251a92644db",
+      "rustdoc_json_sha256": "0ec4076d7c4d8300d3aae0a8947c37eeb62ffe34fae5122491621ec10eb0864b",
+      "target": "rocketmq_broker"
+    },
+    "rocketmq-client-rust": {
+      "crate_version": "1.0.0",
+      "public_path_count": 386,
+      "public_path_sha256": "421f3b97ff6e9b48202f5e9b51f5d0cc98dfaf61d4f60c9dce15ecaad4f86d81",
+      "rustdoc_json_sha256": "60ed1c14fdf8356b6cb7da1209d07b397ff9cd5ebd3c6b11be4f6e7fa576335a",
+      "target": "rocketmq_client_rust"
+    },
+    "rocketmq-common": {
+      "crate_version": "1.0.0",
+      "public_path_count": 620,
+      "public_path_sha256": "21cb8a8a110ebfb2dab0bdc82c6a8c1e32d7faf62b0c60be2849b6972ada8447",
+      "rustdoc_json_sha256": "589a828ac0ac50334ece7e67c6fe3fab691ee58b405b1f261635fcef81da8de3",
+      "target": "rocketmq_common"
+    },
+    "rocketmq-controller": {
+      "crate_version": "1.0.0",
+      "public_path_count": 250,
+      "public_path_sha256": "c3bcca468f5d744ccd6a5f4ad23d6970f905e6fee605acb246d1198a397e9d05",
+      "rustdoc_json_sha256": "66fdb5987ed71fcb877734f14954d42972b5c5bf706526d4dd89b6cd83ba1b73",
+      "target": "rocketmq_controller"
+    },
+    "rocketmq-dashboard-common": {
+      "crate_version": "1.0.0",
+      "public_path_count": 72,
+      "public_path_sha256": "53119813bb29a935661a9eefc5c3beb4e634efa3cf990251d2b1119437bd77a3",
+      "rustdoc_json_sha256": "6fa715d71d6d409c2da8d2a3f10d2d2ab887ae6776d9c8ef992c569a232158bf",
+      "target": "rocketmq_dashboard_common"
+    },
+    "rocketmq-error": {
+      "crate_version": "1.0.0",
+      "public_path_count": 384,
+      "public_path_sha256": "f020f97a8225de4a55e669ebd18b6769da76590d87b5c2ca9f163ea05c90ab87",
+      "rustdoc_json_sha256": "efa10cecb555440443dd33821674eaee5357a3f4f8799364bc156fe742ff1dec",
+      "target": "rocketmq_error"
+    },
+    "rocketmq-filter": {
+      "crate_version": "1.0.0",
+      "public_path_count": 51,
+      "public_path_sha256": "9c28fefbe55ee3fba3b85e13f5f477113c7eca0438e62d8d4ed61f766b47cfff",
+      "rustdoc_json_sha256": "1667326271290d9f41467132fee9ef3ae2d97be6c388800d7aff6e594bd24b68",
+      "target": "rocketmq_filter"
+    },
+    "rocketmq-macros": {
+      "crate_version": "1.0.0",
+      "public_path_count": 4,
+      "public_path_sha256": "5eb090b94c11d3670a9c0306db5a2144bf278cb4e372000b7e789539f578f314",
+      "rustdoc_json_sha256": "1374f713b499329fdeea05b6764c296b631e2b07bff06c4b05a490a5e55c8e3d",
+      "target": "rocketmq_macros"
+    },
+    "rocketmq-mcp": {
+      "crate_version": "1.0.0",
+      "public_path_count": 205,
+      "public_path_sha256": "fedfd1ba436c0b22d416cae56848ad0453e4205593264787c60dc01096b7534e",
+      "rustdoc_json_sha256": "f9cc9282e6a020f29e62447fcf22059ca73e480170f7b37a64f8fef18197fea8",
+      "target": "rocketmq_mcp"
+    },
+    "rocketmq-model": {
+      "crate_version": "1.0.0",
+      "public_path_count": 684,
+      "public_path_sha256": "99d2d30e35a59ecc00b4cd371fc9a61235b2ddfaa3457d730debfd81c6796818",
+      "rustdoc_json_sha256": "bab7d1da8290c986c7819709cd66bbf8e87451a1746c41aaee9e030a9f6af0a6",
+      "target": "rocketmq_model"
+    },
+    "rocketmq-namesrv": {
+      "crate_version": "1.0.0",
+      "public_path_count": 55,
+      "public_path_sha256": "b9d02df04a02dbe99e0931f0b9e2c006993f1663a836bbce532cc59566b3fb31",
+      "rustdoc_json_sha256": "127803026599e91d9a9b6aa6d56930703cb3d1a5c7b89705abbad69e502396a5",
+      "target": "rocketmq_namesrv"
+    },
+    "rocketmq-observability": {
+      "crate_version": "1.0.0",
+      "public_path_count": 561,
+      "public_path_sha256": "cf3c7051fa974110205db2119cc52584e373556c185dcd452535e9b2ea0a55b7",
+      "rustdoc_json_sha256": "34f1a871aa9531209c7c896aa5b3f2c5cff0b738f4935cdef5ea2c075d5ebff0",
+      "target": "rocketmq_observability"
+    },
+    "rocketmq-protocol": {
+      "crate_version": "1.0.0",
+      "public_path_count": 952,
+      "public_path_sha256": "2ce550aca727636dcaa36ba7ddfe160d043127ac18ff46a0e0a08350b83a02de",
+      "rustdoc_json_sha256": "85412e36332d5f3bb711597b81c4103711045926e0966beeeae67e407dd1d0e9",
+      "target": "rocketmq_protocol"
+    },
+    "rocketmq-proxy": {
+      "crate_version": "1.0.0",
+      "public_path_count": 65,
+      "public_path_sha256": "a45a59482ae7b3410ade405dc53f2ca4ca2fb66cc1d3feba986f3aa6cf48efda",
+      "rustdoc_json_sha256": "9cdd5f52a3ca6c6beab07df4c7b863ebcd9618d8a393f09adaf6225bb4241230",
+      "target": "rocketmq_proxy"
+    },
+    "rocketmq-proxy-cluster": {
+      "crate_version": "1.0.0",
+      "public_path_count": 16,
+      "public_path_sha256": "a54347aa28148322afe3d20aaf05915c76060a2c32efb7809271c063296e32b2",
+      "rustdoc_json_sha256": "222b0b3c5b041d9b64ad73f24c071d22b59e4a31ed04f3db3ca698a54bb63e80",
+      "target": "rocketmq_proxy_cluster"
+    },
+    "rocketmq-proxy-core": {
+      "crate_version": "1.0.0",
+      "public_path_count": 515,
+      "public_path_sha256": "c1954a10d1e67609ab29463cd5bf1a1a08cec7210b86f8127fb90df605d33668",
+      "rustdoc_json_sha256": "63a0bf1ac1e0be86b842ca918bcb31223dfc377ac4a36a61163393ca034ddf78",
+      "target": "rocketmq_proxy_core"
+    },
+    "rocketmq-proxy-local": {
+      "crate_version": "1.0.0",
+      "public_path_count": 17,
+      "public_path_sha256": "3d9e0f9ac569160099d432c85bbb30d17ee1a107e9f665ee636bd4b5898ebc6b",
+      "rustdoc_json_sha256": "d8c1097a1176ee324e78d15ff782efdcecdc1c9978d7f3d8b299a8236172f20a",
+      "target": "rocketmq_proxy_local"
+    },
+    "rocketmq-remoting": {
+      "crate_version": "1.0.0",
+      "public_path_count": 207,
+      "public_path_sha256": "4b537a17b7eee97f26fed4a5a18c503250f401cd964bc723697301f0d237d7c9",
+      "rustdoc_json_sha256": "e87abfd148dcf4232f493b3aa50c97a17a46bdd01f60243c2f158e0766b5b249",
+      "target": "rocketmq_remoting"
+    },
+    "rocketmq-runtime": {
+      "crate_version": "1.0.0",
+      "public_path_count": 172,
+      "public_path_sha256": "7be7f60b4b9949a706117e7b0f50a8f85e3383aa84c468db7dc86526919fdad1",
+      "rustdoc_json_sha256": "f77c8292cd0760ffe454a1e3353fd31a3e4b4cd8c990084660b40327dc328e13",
+      "target": "rocketmq_runtime"
+    },
+    "rocketmq-rust": {
+      "crate_version": "1.0.0",
+      "public_path_count": 12,
+      "public_path_sha256": "87cde1ada0419c671424248e02b341670a67ef89ac8d9ee270c356d501004719",
+      "rustdoc_json_sha256": "191213d89873686a8995530f4ce0855321cba18ad695837e019159a9864e50e8",
+      "target": "rocketmq_rust"
+    },
+    "rocketmq-security-api": {
+      "crate_version": "1.0.0",
+      "public_path_count": 58,
+      "public_path_sha256": "60870f03e3440f2668e5a52056f508d5d6f450b892ea7770528fc0e5a9de2d8f",
+      "rustdoc_json_sha256": "9c2a1a3c3111ed9172a605b1e37c3575045b388b0dcfd2753ef64c54d71f5f0d",
+      "target": "rocketmq_security_api"
+    },
+    "rocketmq-store": {
+      "crate_version": "1.0.0",
+      "public_path_count": 382,
+      "public_path_sha256": "93a543b1cf785538c6ddedc51c70f705824d9a6f425c6169cb7382b48b60b78a",
+      "rustdoc_json_sha256": "7331d6d305a55b849d19042f9c9398ebb48d57ca8108a75857aebb201f295dfd",
+      "target": "rocketmq_store"
+    },
+    "rocketmq-store-api": {
+      "crate_version": "1.0.0",
+      "public_path_count": 86,
+      "public_path_sha256": "373ed7b52892ab8d1131476d01483bda37d52255846e2b15b4dfba6b72a093a2",
+      "rustdoc_json_sha256": "33caa3efef007cc1d45ed4afa195495274cdb87522f70bd79edc851b68550c00",
+      "target": "rocketmq_store_api"
+    },
+    "rocketmq-store-inspect": {
+      "crate_version": "1.0.0",
+      "public_path_count": 7,
+      "public_path_sha256": "c7ac03206be85858d3f2805aba968f45fa3284f5c3265fb823a6435f8e2e929e",
+      "rustdoc_json_sha256": "d4d995fc6e20eaa78fb9247d5ef61e1d754a1259e4d4a0ad4fd11aa44e07a641",
+      "target": "rocketmq_store_inspect"
+    },
+    "rocketmq-store-local": {
+      "crate_version": "1.0.0",
+      "public_path_count": 770,
+      "public_path_sha256": "623132a7c5a3d6f08bc8a584e825a6ee3abf605ef574330307fc4b415d7aea85",
+      "rustdoc_json_sha256": "a7024cdd490e8ffa7a251e034da9e3a753ba3082fc56074b1bcb74aea25a59b4",
+      "target": "rocketmq_store_local"
+    },
+    "rocketmq-store-rocksdb": {
+      "crate_version": "1.0.0",
+      "public_path_count": 165,
+      "public_path_sha256": "89b9028df0c4643a9e718af49f979144b6e1a03635ce69fde0cdad591fe6701b",
+      "rustdoc_json_sha256": "350497a83a7b707e94721b99e9c3e210ee6654b87e9f50b1c8f3e2c3b8c74902",
+      "target": "rocketmq_store_rocksdb"
+    },
+    "rocketmq-tieredstore": {
+      "crate_version": "1.0.0",
+      "public_path_count": 105,
+      "public_path_sha256": "d081e4002cc88eded04a07ff75116dc5e626b8519d76858bcf2d871003f3399c",
+      "rustdoc_json_sha256": "de0c8f5c8bb006b15eedfdff6501f203bd3a4fac1e35932bfcc7b0918c60f094",
+      "target": "rocketmq_tieredstore"
+    },
+    "rocketmq-transport": {
+      "crate_version": "1.0.0",
+      "public_path_count": 111,
+      "public_path_sha256": "e11695741dffe2a835278e4c932b85132df2df6a3db706ec1366aba0b2d71548",
+      "rustdoc_json_sha256": "29a0e9e4150cb674601a7f70cfe3c0b41301351bae0fe3c034dfc50ef7748455",
+      "target": "rocketmq_transport"
+    }
+  },
+  "schema_version": 1,
+  "source_commit": "ac45630a55512713de7a13350086e3c186ad97f2",
+  "toolchain": {
+    "cargo": "cargo 1.99.0-nightly (2f0e7011e 2026-07-05)",
+    "rustc": "rustc 1.99.0-nightly (3659db0d3 2026-07-05)",
+    "rustdoc": "rustdoc 1.99.0-nightly (3659db0d3 2026-07-05)"
+  }
+}
