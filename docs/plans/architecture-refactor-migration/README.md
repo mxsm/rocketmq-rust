@@ -1,16 +1,16 @@
 # RocketMQ Rust 架构重构迁移执行手册
 
-> 状态：实施中（Phase 2，M09-01 已完成，下一工作包为 PR-M09-02）
+> 状态：实施中（Phase 2，M09-02 已完成，下一工作包为 PR-M09-03）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
-> 当前复核状态：根 workspace 已达到目标 32 个 package；54/82 工作包完成，剩余 28 个
+> 当前复核状态：根 workspace 已达到目标 32 个 package；55/82 工作包完成，剩余 27 个
 
 ## 1. 使用方式
 
 本目录把总体设计转换为 12 个可独立审查、验证和回滚的里程碑。当前交付拓扑经用户批准为
-“每个 Phase 一个 Issue、一个 branch、一个 PR”；任务文档中的 PR-Mxx-yy 继续作为该 Phase PR 内部的
-独立切片和证据索引，不再要求各自创建远端 PR。
+“每个 PR-Mxx-yy 工作包一个 Issue、一个 branch、一个 ready PR”；任务文档中的 PR-Mxx-yy 是独立交付、
+验证、回滚和证据索引单位。
 
 - 里程碑实施细节以本页“里程碑导航”链接的 12 份任务文档为准。
 - 全局进度、每次 PR 完成记录与 Phase Gate 签署统一填写 [`CHECKLIST.md`](CHECKLIST.md)。
@@ -24,8 +24,8 @@
 
 ### 1.1 Git 与多 Agent 交付约束
 
-- 每个 Phase 从最新 `main` 创建独立 branch；只使用 branch，不使用 worktree。
-- 每个 Phase 创建一个 GitHub Issue 和一个 ready PR；PR 不等待 CI 完成即可由管理员 squash merge。
+- 每个工作包从最新 `main` 创建独立 branch；只使用 branch，不使用 worktree。
+- 每个工作包创建一个 GitHub Issue 和一个 ready PR；PR 不等待 CI 完成即可由管理员 squash merge。
 - squash merge subject 必须为 `PR标题 (#PR号)`；合并后切回 `main`、拉取最新提交，再创建下一 Phase branch。
 - 多 Agent 只并行处理文件集合互不重叠的 writer lane；root manifest、lockfile、CI、architecture baseline、
   public re-export 和最终集成始终由主协调者单写。

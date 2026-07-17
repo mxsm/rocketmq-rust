@@ -28,7 +28,6 @@ categories             = ["development-tools"]
 rust-version.workspace = true
 
 [dependencies]
-rocketmq-common = { workspace = true }
 rocketmq-error  = { workspace = true }
 rocketmq-store  = { workspace = true }
 

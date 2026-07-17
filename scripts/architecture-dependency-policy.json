@@ -274,12 +274,20 @@
       "rocketmq-protocol",
       "rocketmq-transport"
     ],
-    "rocketmq-remoting": ["rocketmq-protocol", "rocketmq-transport"],
+    "rocketmq-remoting": [
+      "rocketmq-protocol",
+      "rocketmq-transport",
+      "rocketmq-runtime",
+      "rocketmq-error"
+    ],
     "rocketmq-store": [
       "rocketmq-store-api",
       "rocketmq-store-local",
       "rocketmq-store-rocksdb",
-      "rocketmq-tieredstore"
+      "rocketmq-tieredstore",
+      "rocketmq-runtime",
+      "rocketmq-error",
+      "rocketmq-observability"
     ],
     "rocketmq-runtime": [],
     "rocketmq-error": [],
@@ -316,7 +324,9 @@
       "rocketmq-proxy-cluster",
       "rocketmq-proxy-local",
       "rocketmq-auth",
+      "rocketmq-model",
       "rocketmq-runtime",
+      "rocketmq-error",
       "rocketmq-observability"
     ],
     "rocketmq-client-rust": [
@@ -358,7 +368,8 @@
       "rocketmq-security-api",
       "rocketmq-runtime",
       "rocketmq-error",
-      "rocketmq-observability"
+      "rocketmq-observability",
+      "rocketmq-controller"
     ],
     "rocketmq-controller": [
       "rocketmq-model",

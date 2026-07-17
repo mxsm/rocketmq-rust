@@ -181,7 +181,8 @@ class StorageCloseoutContractTests(unittest.TestCase):
             & STORAGE_PACKAGES,
         )
         self.assertEqual(
-            STORAGE_PACKAGES - {"rocketmq-store"},
+            (STORAGE_PACKAGES - {"rocketmq-store"})
+            | {"rocketmq-runtime", "rocketmq-error", "rocketmq-observability"},
             set(policy["target_dag"]["rocketmq-store"]),
         )
 

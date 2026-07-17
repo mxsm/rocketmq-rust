@@ -14,15 +14,23 @@
 
 use std::cmp::Ordering;
 use std::fmt;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::TimeUtils::current_millis;
 
 use crate::expression::EvaluationContext;
 use crate::expression::EvaluationError;
 use crate::expression::Expression;
 use crate::expression::Value;
 use crate::filter::filter_spi::FilterError;
+
+fn current_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 pub(crate) fn compile_expression(expr: &str) -> Result<Box<dyn Expression>, FilterError> {
     let trimmed = expr.trim();
@@ -935,6 +943,7 @@ impl TokenKind {
 #[cfg(test)]
 mod tests {
     use super::compile_expression;
+    use super::current_millis;
     use crate::expression::EmptyEvaluationContext;
     use crate::expression::EvaluationError;
     use crate::expression::MessageEvaluationContext;
@@ -1036,7 +1045,7 @@ mod tests {
 
     #[test]
     fn evaluate_now_keyword() {
-        let before = rocketmq_common::TimeUtils::current_millis() as i64 - 1;
+        let before = current_millis() as i64 - 1;
         let value = evaluate("ts <= NOW", &[("ts", &before.to_string())]).expect("evaluation should succeed");
         assert_eq!(value, Value::Boolean(true));
     }

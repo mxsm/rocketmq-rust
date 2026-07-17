@@ -36,7 +36,7 @@
 //! let expr = filter.compile("age > 18 AND region = 'US'")?;
 //! ```
 
-use rocketmq_common::common::filter::expression_type::ExpressionType;
+use rocketmq_protocol::common::filter::expression_type::ExpressionType;
 
 use crate::expression::Expression;
 use crate::filter::filter_spi::Filter;
