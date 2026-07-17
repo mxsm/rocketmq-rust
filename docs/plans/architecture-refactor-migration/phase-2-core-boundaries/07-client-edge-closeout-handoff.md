@@ -219,3 +219,18 @@ Client 临时账本归零且 32-package/target-DAG 证据可重复。
 - Proxy default/no-default 各 99 项、architecture contract 355 项、根 fmt/strict Clippy、baseline、ArcMut、runtime、
   routing 与 diff check 通过；typed-error 仅复现 main 既有 11 项且本切片零新增。
 - 52/82 个工作包已完成、30 个未完成，M08 只剩 PR-M08-06 feature closure 与下一 major fixture。
+
+## 14. PR-M08-06 消费记录（2026-07-17）
+
+- R0 Core/Cluster/Local/Facade 的 default、no-default、Local+Tiered、Facade observability/tiered 实际矩阵已完成；
+  Core 47、Cluster 19、Local default/tiered 各 8、Facade 99 项测试通过。
+- normal closure 与 dev edge 分开检查：Core 无 Client/Broker/Store/Auth provider，Cluster 无 Broker/Store/Local，
+  Local/Local+Tiered 无 Client/Cluster；四个 package 没有 RocketMQ 内部 dev-only 绕行。
+- Client allowlist 精确保持 Admin Core adapter、Proxy Cluster、standalone Example，Proxy facade 临时账本和 target
+  Client finding 均为 0。
+- 下一 major feature 的机器可读 fixture 与 Markdown 迁移公告已冻结：两个 adapter 届时才 optional，
+  `compat-all-modes` 才成为 default；当前 R0 manifest 没有提前启用这些语义。
+- architecture contract 362、根 fmt/strict Clippy、baseline、ArcMut、runtime、routing 与 diff check 通过；target
+  精确剩余 48，typed-error 仅复现 main 既有 11 项且本切片零新增。
+- M08 Gate 已完成，53/82 个工作包完成、29 个未完成；向 M09-01 交付 32-package、Proxy closure、facade ledger、
+  Client allowlist 与下一 major feature 证据。

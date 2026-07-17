@@ -575,29 +575,30 @@ class ProxyCoreContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         readme = (PLAN_ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertIn("| PR 级工作包 | 52 | 0 | 30 未开始；合计 30 尚未完成 | 82 |", checklist)
+        self.assertIn("| PR 级工作包 | 53 | 0 | 29 未开始；合计 29 尚未完成 | 82 |", checklist)
         self.assertIn("- [x] PR-M08-01：创建 `rocketmq-proxy-core` 与 proto owner", checklist)
         self.assertIn("- [x] PR-M08-02：迁移中立 plan、port、service 与 ingress", checklist)
         self.assertIn("- [x] PR-M08-03：创建 Cluster adapter", checklist)
         self.assertIn("- [x] PR-M08-04：创建 Local adapter", checklist)
         self.assertIn("- [x] PR-M08-05：将现有 Proxy 降为 composition/facade", checklist)
-        self.assertIn("当前下一工作包为 PR-M08-06", checklist)
+        self.assertIn("- [x] PR-M08-06：验证 feature closure 与下一 major fixture", checklist)
+        self.assertIn("当前下一工作包为 PR-M09-01", checklist)
         work_packages = re.findall(r"^- \[([ x])\] (PR-M\d{2}-\d{2}[a-z]?)：", checklist, re.MULTILINE)
         self.assertEqual(82, len(work_packages))
-        self.assertEqual(52, sum(state == "x" for state, _ in work_packages))
-        self.assertEqual(30, sum(state == " " for state, _ in work_packages))
+        self.assertEqual(53, sum(state == "x" for state, _ in work_packages))
+        self.assertEqual(29, sum(state == " " for state, _ in work_packages))
         open_by_milestone: dict[str, int] = {}
         for state, package in work_packages:
             if state == " ":
                 milestone = package.split("-")[1]
                 open_by_milestone[milestone] = open_by_milestone.get(milestone, 0) + 1
-        self.assertEqual({"M08": 1, "M09": 6, "M10": 5, "M11": 12, "M12": 6}, open_by_milestone)
+        self.assertEqual({"M09": 6, "M10": 5, "M11": 12, "M12": 6}, open_by_milestone)
         self.assertIn("Local 8 项", checklist)
-        self.assertIn("PR-M08-05 已完成，下一工作包为 PR-M08-06", task)
+        self.assertIn("PR-M08-06 与 M08 Gate 已签署，下一工作包为 PR-M09-01", task)
         self.assertIn("- [x] `[DEV]` 按 send/pull/pop/ack/route/transaction 迁 plan 和 port", task)
         self.assertIn("## 12. PR-M08-04 消费记录（2026-07-17）", handoff)
         self.assertIn("根 workspace 已达到目标 32 个 package", readme)
-        self.assertIn("下一工作包为 PR-M08-06", readme)
+        self.assertIn("下一工作包为 PR-M09-01", readme)
 
 
 if __name__ == "__main__":
