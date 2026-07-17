@@ -2112,12 +2112,12 @@ mod tests {
     use rocketmq_auth::authorization::model::acl::Acl;
     use rocketmq_auth::authorization::model::policy::Policy;
     use rocketmq_auth::authorization::model::resource::Resource;
-    use rocketmq_client_rust::producer::send_result::SendResult;
-    use rocketmq_client_rust::producer::send_status::SendStatus;
     use rocketmq_common::common::action::Action;
     use rocketmq_common::common::message::message_ext::MessageExt;
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_model::result::SendResult;
+    use rocketmq_model::result::SendStatus;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;

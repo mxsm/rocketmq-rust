@@ -4759,6 +4759,7 @@ dependencies = [
  "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-model",
  "rocketmq-observability",
  "rocketmq-remoting",
  "rocketmq-runtime",

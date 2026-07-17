@@ -80,9 +80,14 @@ class McpClientEdgeContractTest(unittest.TestCase):
         )
         client_policy = policy["client_policy"]
 
-        self.assertEqual(2, client_policy["baseline_manifest_consumers"])
-        self.assertNotIn("rocketmq-mcp", client_policy["target_manifest_allowlist"])
-        self.assertIn("rocketmq-tools/rocketmq-mcp/", client_policy["source_consumer_roots"])
+        self.assertNotIn(
+            "rocketmq-mcp",
+            {entry["caller"] for entry in client_policy["target_manifest_allowlist"]},
+        )
+        self.assertNotIn(
+            "rocketmq-mcp",
+            {entry["caller"] for entry in client_policy["target_source_allowlist"]},
+        )
         self.assertNotIn("rocketmq-client-rust", policy["target_dag"]["rocketmq-mcp"])
         self.assertFalse(
             any(

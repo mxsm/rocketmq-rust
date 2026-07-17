@@ -123,7 +123,10 @@ class BrokerClientEdgeContractTest(unittest.TestCase):
             read(ROOT / "scripts" / "architecture-dependency-baseline.json")
         )
 
-        self.assertEqual(2, policy["client_policy"]["baseline_manifest_consumers"])
+        self.assertNotIn(
+            "rocketmq-broker",
+            {entry["caller"] for entry in policy["client_policy"]["target_manifest_allowlist"]},
+        )
         self.assertNotIn("rocketmq-client-rust", policy["target_dag"]["rocketmq-broker"])
         self.assertFalse(
             any(

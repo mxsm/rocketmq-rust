@@ -1,6 +1,6 @@
 # RocketMQ Rust 架构重构迁移执行手册
 
-> 状态：实施中（Phase 2，M04/M05/M06 已完成，M07 进行中，下一工作包为 PR-M07-07）
+> 状态：实施中（Phase 2，M04–M07 已完成，下一工作包为 PR-M08-01）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
@@ -132,7 +132,10 @@ flowchart LR
 2. workspace：`rocketmq-admin-core/src/client_adapter/`；
 3. standalone：`rocketmq-example`。
 
-Broker、NameServer、MCP、Dashboard、`rocketmq-proxy-core` 和 `rocketmq-proxy-local` 必须同时满足 manifest/source 无直接边。对 `proxy-core/local` 还要验证 normal dependency 的完整传递闭包不含 Client。MCP 与 Dashboard 只能经 `rocketmq-admin-core` 的受控 adapter 间接到达 Client。
+Broker、NameServer、MCP、Dashboard、`rocketmq-proxy-core` 和 `rocketmq-proxy-local` 必须同时满足 manifest/source 无直接边。
+Broker、NameServer、`proxy-core/local`、common 与 remoting 还要验证 normal dependency 的完整传递闭包不含 Client。
+MCP 与 Dashboard 只能经 `rocketmq-admin-core` 的受控 adapter 间接到达 Client。M07 的精确永久 allowlist、Proxy M08
+临时账本和物理拆分输入见 [`Client 边界收口与 M08 交接清单`](phase-2-core-boundaries/07-client-edge-closeout-handoff.md)。
 
 ## 6. 工作包追踪
 

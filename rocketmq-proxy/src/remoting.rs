@@ -33,6 +33,8 @@ use rocketmq_common::common::mix_all::IS_SUB_CHANGE;
 use rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::result::SendResult;
+use rocketmq_model::result::SendStatus;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -1473,10 +1475,7 @@ fn topic_identity<T: TopicRequestHeaderTrait>(header: &T) -> ResourceIdentity {
     ResourceIdentity::new(header.namespace().unwrap_or_default(), header.topic().to_string())
 }
 
-fn build_send_message_response_header(
-    send_result: &rocketmq_client_rust::producer::send_result::SendResult,
-    fallback_queue_id: i32,
-) -> SendMessageResponseHeader {
+fn build_send_message_response_header(send_result: &SendResult, fallback_queue_id: i32) -> SendMessageResponseHeader {
     let queue_id = send_result
         .message_queue
         .as_ref()
@@ -1521,12 +1520,12 @@ fn is_transaction_prepared(message: &Message) -> bool {
         .unwrap_or(false)
 }
 
-fn send_result_to_response_code(send_result: &rocketmq_client_rust::producer::send_result::SendResult) -> ResponseCode {
+fn send_result_to_response_code(send_result: &SendResult) -> ResponseCode {
     match send_result.send_status {
-        rocketmq_client_rust::producer::send_status::SendStatus::SendOk => ResponseCode::Success,
-        rocketmq_client_rust::producer::send_status::SendStatus::FlushDiskTimeout => ResponseCode::FlushDiskTimeout,
-        rocketmq_client_rust::producer::send_status::SendStatus::FlushSlaveTimeout => ResponseCode::FlushSlaveTimeout,
-        rocketmq_client_rust::producer::send_status::SendStatus::SlaveNotAvailable => ResponseCode::SlaveNotAvailable,
+        SendStatus::SendOk => ResponseCode::Success,
+        SendStatus::FlushDiskTimeout => ResponseCode::FlushDiskTimeout,
+        SendStatus::FlushSlaveTimeout => ResponseCode::FlushSlaveTimeout,
+        SendStatus::SlaveNotAvailable => ResponseCode::SlaveNotAvailable,
     }
 }
 
@@ -1682,8 +1681,6 @@ mod tests {
     use rocketmq_auth::authorization::model::acl::Acl;
     use rocketmq_auth::authorization::model::policy::Policy;
     use rocketmq_auth::authorization::model::resource::Resource;
-    use rocketmq_client_rust::producer::send_result::SendResult;
-    use rocketmq_client_rust::producer::send_status::SendStatus;
     use rocketmq_common::common::action::Action;
     use rocketmq_common::common::boundary_type::BoundaryType;
     use rocketmq_common::common::entity::ClientGroup;
@@ -1697,6 +1694,8 @@ mod tests {
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::MessageDecoder;
     use rocketmq_error::RocketMQError;
+    use rocketmq_model::result::SendResult;
+    use rocketmq_model::result::SendStatus;
     use rocketmq_remoting::code::request_code::RequestCode;
     use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::local::LocalRequestHarness;

@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 已批准，等待 M05–M07 |
+| 状态 | 入口就绪；M05–M07 已完成，下一工作包为 PR-M08-01 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP19 `proxy-three-way-split` |
 | 前置条件 | model/protocol/transport/security/store-api 边界稳定；除 Proxy 外 Client 清边完成 |
@@ -26,6 +26,9 @@
 - 不在 core 放 backend adapter，不让 cluster 依赖 Broker/store，也不让 local 依赖 Client。
 
 ## 入口条件
+
+M07 已交付 [`Client 边界收口与 M08 交接清单`](07-client-edge-closeout-handoff.md)，其中包含精确临时账本、
+物理 owner、转换 seam、remoting lock/unlock 切片与 lifecycle 风险；以下项目在 PR-M08-01 候选快照上正式签署。
 
 - [ ] `[ARCH]` 冻结 core port、model/PullOutcome 边界、cluster/local lifecycle 和 facade feature 两阶段策略。
 - [ ] `[TEST]` 准备 gRPC ingress、remoting ingress、send/pull/pop/ack/route/transaction、mode closure corpus。

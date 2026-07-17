@@ -20,12 +20,12 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_auth::authentication::model::user::User;
 use rocketmq_auth::authorization::model::acl::Acl;
-use rocketmq_client_rust::producer::send_result::SendResult;
-use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::result::SendResult;
+use rocketmq_model::result::SendStatus;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::runtime::RPCHook;
 

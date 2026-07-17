@@ -119,8 +119,97 @@ def validate_policy(policy: dict[str, Any]) -> None:
     if len(policy["target_dag"]) != policy["package_counts"]["target"]:
         raise InputError("target_dag must encode all 32 target workspace packages")
 
+    client_policy = policy["client_policy"]
+    require_keys(
+        client_policy,
+        ("package", "crate_names", "target_manifest_allowlist", "target_source_allowlist"),
+        "policy client_policy",
+    )
+    if set(client_policy) != {
+        "package",
+        "crate_names",
+        "target_manifest_allowlist",
+        "target_source_allowlist",
+    }:
+        raise InputError("policy client_policy contains unsupported keys")
+    client = client_policy["package"]
+    crate_names = client_policy["crate_names"]
+    if not isinstance(client, str) or not client:
+        raise InputError("policy client_policy package must be a non-empty string")
+    if (
+        not isinstance(crate_names, list)
+        or not crate_names
+        or any(not isinstance(alias, str) or not alias for alias in crate_names)
+        or len(crate_names) != len(set(crate_names))
+    ):
+        raise InputError("policy client_policy crate_names must be unique non-empty strings")
 
-def validate_baseline(baseline: dict[str, Any]) -> None:
+    manifest_identities: set[tuple[str, str, str, str, str]] = set()
+    for index, entry in enumerate(client_policy["target_manifest_allowlist"]):
+        if not isinstance(entry, dict):
+            raise InputError(f"policy client manifest allowlist[{index}] must be an object")
+        require_keys(
+            entry,
+            ("caller", "target", "kind", "path", "alias"),
+            f"policy client manifest allowlist[{index}]",
+        )
+        if set(entry) != {"caller", "target", "kind", "path", "alias"}:
+            raise InputError(f"policy client manifest allowlist[{index}] contains unsupported keys")
+        path = entry["path"]
+        if (
+            not isinstance(entry["caller"], str)
+            or not entry["caller"]
+            or entry["target"] != client
+            or entry["kind"] not in {"normal", "dev", "build"}
+            or not isinstance(path, str)
+            or not path.endswith("Cargo.toml")
+            or "\\" in path
+            or Path(path).is_absolute()
+            or not isinstance(entry["alias"], str)
+            or not entry["alias"]
+            or entry["alias"] not in crate_names
+        ):
+            raise InputError(f"policy client manifest allowlist[{index}] is invalid")
+        identity = (entry["caller"], entry["target"], entry["kind"], path, entry["alias"])
+        if identity in manifest_identities:
+            raise InputError(f"duplicate policy client manifest allowlist identity: {identity}")
+        manifest_identities.add(identity)
+
+    source_identities: set[tuple[str, str, str]] = set()
+    for index, entry in enumerate(client_policy["target_source_allowlist"]):
+        if not isinstance(entry, dict):
+            raise InputError(f"policy client source allowlist[{index}] must be an object")
+        require_keys(
+            entry,
+            ("caller", "path_prefix", "aliases"),
+            f"policy client source allowlist[{index}]",
+        )
+        if set(entry) != {"caller", "path_prefix", "aliases"}:
+            raise InputError(f"policy client source allowlist[{index}] contains unsupported keys")
+        prefix = entry["path_prefix"]
+        aliases = entry["aliases"]
+        if (
+            not isinstance(entry["caller"], str)
+            or not entry["caller"]
+            or not isinstance(prefix, str)
+            or not prefix.endswith("/")
+            or "\\" in prefix
+            or Path(prefix).is_absolute()
+            or not isinstance(aliases, list)
+            or not aliases
+            or any(not isinstance(alias, str) or not alias for alias in aliases)
+            or len(aliases) != len(set(aliases))
+            or not set(aliases).issubset(crate_names)
+        ):
+            raise InputError(f"policy client source allowlist[{index}] is invalid")
+        for alias in aliases:
+            identity = (entry["caller"], prefix, alias)
+            if identity in source_identities:
+                raise InputError(f"duplicate policy client source allowlist identity: {identity}")
+            source_identities.add(identity)
+
+
+def validate_baseline(baseline: dict[str, Any], policy: dict[str, Any]) -> None:
     require_keys(
         baseline,
         (
@@ -201,6 +290,38 @@ def validate_baseline(baseline: dict[str, Any]) -> None:
         if identity in source_identities:
             raise InputError(f"duplicate baseline source exception identity: {identity}")
         source_identities.add(identity)
+
+    client = policy["client_policy"]["package"]
+    temporary_manifest = [
+        exception
+        for exception in baseline["manifest_exceptions"]
+        if exception.get("rule") is None
+    ]
+    if any(
+        exception["caller"] != "rocketmq-proxy"
+        or exception["target"] != client
+        or exception["kind"] != "normal"
+        or exception["path"] != "rocketmq-proxy/Cargo.toml"
+        or exception["alias"] != "rocketmq_client_rust"
+        or exception["count"] != 1
+        or exception["owner"] != "proxy"
+        or exception["remove_by"] != "M08"
+        for exception in temporary_manifest
+    ):
+        raise InputError("temporary Client manifest ledger must be the exact Proxy M08 edge")
+    source_exception_limits = {
+        "rocketmq-proxy/src/cluster.rs": 12,
+        "rocketmq-proxy/src/remoting.rs": 1,
+    }
+    if any(
+        exception["path"] not in source_exception_limits
+        or exception["count"] > source_exception_limits.get(exception["path"], 0)
+        or exception["alias"] != "rocketmq_client_rust"
+        or exception["owner"] != "proxy"
+        or exception["remove_by"] != "M08"
+        for exception in baseline["source_exceptions"]
+    ):
+        raise InputError("temporary Client source ledger must contain only Proxy M08 source entries")
     compatibility_identities: set[tuple[Any, ...]] = set()
     for index, exception in enumerate(baseline["compatibility_manifest_exceptions"]):
         require_keys(
@@ -575,12 +696,22 @@ def manifest_client_findings(
     client = policy["client_policy"]["package"]
     findings: list[Finding] = []
     client_edges = [edge for edge in edges if edge.target == client and edge.caller != client]
-    if mode == "baseline":
-        actual = Counter(
-            (edge.caller, edge.target, edge.kind, edge.path, edge.alias)
-            for edge in client_edges
+    actual = Counter(
+        (edge.caller, edge.target, edge.kind, edge.path, edge.alias)
+        for edge in client_edges
+    )
+    allowed = Counter(
+        (
+            entry["caller"],
+            entry["target"],
+            entry["kind"],
+            entry["path"],
+            entry["alias"],
         )
-        expected = Counter(
+        for entry in policy["client_policy"]["target_manifest_allowlist"]
+    )
+    if mode == "baseline":
+        permitted = allowed + Counter(
             (
                 item["caller"],
                 item["target"],
@@ -593,8 +724,8 @@ def manifest_client_findings(
             for _ in range(item.get("count", 1))
         )
         for identity, count in sorted(actual.items()):
-            permitted = expected[identity]
-            if count <= permitted:
+            baseline_count = permitted[identity]
+            if count <= baseline_count:
                 continue
             caller, target, kind, path, alias = identity
             findings.append(
@@ -604,24 +735,26 @@ def manifest_client_findings(
                     target,
                     path,
                     kind,
-                    f"alias={alias} count={count} baseline={permitted}",
+                    f"alias={alias} count={count} baseline={baseline_count}",
                 )
             )
         return findings
 
-    allowed = set(policy["client_policy"]["target_manifest_allowlist"])
-    for edge in client_edges:
-        if edge.caller not in allowed:
-            findings.append(
-                Finding(
-                    "client-manifest-allowlist",
-                    edge.caller,
-                    client,
-                    edge.path,
-                    edge.kind,
-                    f"alias={edge.alias}",
-                )
+    for identity, count in sorted(actual.items()):
+        permitted = allowed[identity]
+        if count <= permitted:
+            continue
+        caller, target, kind, path, alias = identity
+        findings.append(
+            Finding(
+                "client-manifest-allowlist",
+                caller,
+                target,
+                path,
+                kind,
+                f"alias={alias} count={count} allowlist={permitted}",
             )
+        )
     return findings
 
 
@@ -728,6 +861,17 @@ def source_caller(relative: str, packages: list[dict[str, Any]]) -> str:
     return first
 
 
+def source_client_occurrence_allowed(
+    relative: str, caller: str, alias: str, policy: dict[str, Any]
+) -> bool:
+    return any(
+        caller == entry["caller"]
+        and relative.startswith(entry["path_prefix"])
+        and alias in entry["aliases"]
+        for entry in policy["client_policy"]["target_source_allowlist"]
+    )
+
+
 def lex_rust_code(text: str, path: Path) -> str:
     """Mask Rust comments and literals while preserving code and line numbers."""
     output = list(text)
@@ -832,7 +976,6 @@ def source_client_findings(
         raise InputError(f"source root is not a directory: {source_root}")
     aliases_by_caller = source_aliases_by_caller(edges, policy)
     client_package = policy["client_policy"]["package"]
-    allowed_prefixes = policy["client_policy"]["target_source_allowlist"]
     occurrences: list[tuple[str, str, str, int]] = []
     ignored_parts = {".git", "target", "node_modules"}
     for path in sorted(source_root.rglob("*.rs")):
@@ -866,13 +1009,23 @@ def source_client_findings(
 
     findings: list[Finding] = []
     if mode == "baseline":
-        actual = Counter((path, alias) for path, _, alias, _ in occurrences)
+        temporary_occurrences = [
+            occurrence
+            for occurrence in occurrences
+            if not source_client_occurrence_allowed(
+                occurrence[0], occurrence[1], occurrence[2], policy
+            )
+        ]
+        actual = Counter((path, alias) for path, _, alias, _ in temporary_occurrences)
         expected = Counter(
             (item["path"], item["alias"])
             for item in baseline["source_exceptions"]
             for _ in range(item["count"])
         )
-        callers = {(path, alias): caller for path, caller, alias, _ in occurrences}
+        callers = {
+            (path, alias): caller
+            for path, caller, alias, _ in temporary_occurrences
+        }
         for identity, count in sorted(actual.items()):
             permitted = expected[identity]
             if count <= permitted:
@@ -891,7 +1044,7 @@ def source_client_findings(
         return findings
 
     for relative, caller, alias, line_number in occurrences:
-        if any(relative.startswith(prefix) for prefix in allowed_prefixes):
+        if source_client_occurrence_allowed(relative, caller, alias, policy):
             continue
         findings.append(
             Finding(
@@ -1083,7 +1236,7 @@ def main() -> int:
         policy = load_json(args.policy, "policy")
         baseline = load_json(args.baseline, "baseline")
         validate_policy(policy)
-        validate_baseline(baseline)
+        validate_baseline(baseline, policy)
         if args.fixtures:
             return run_fixtures(policy, baseline)
         metadata = read_metadata(args.metadata_file)

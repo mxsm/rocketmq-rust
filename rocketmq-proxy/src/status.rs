@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_client_rust::producer::send_result::SendResult;
-use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_error::GrpcPayloadCode;
 use rocketmq_error::GrpcStatusCode;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::result::SendResult;
+use rocketmq_model::result::SendStatus;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use tonic::Code as TonicCode;
 use tonic::Status as TonicStatus;

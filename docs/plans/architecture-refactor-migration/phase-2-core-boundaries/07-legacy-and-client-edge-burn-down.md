@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；PR-M07-01、PR-M07-02、PR-M07-03、PR-M07-04、PR-M07-05 已完成 |
+| 状态 | 已完成；PR-M07-01～PR-M07-07 全部完成，下一工作包为 PR-M08-01 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP15 `rocketmq-rust-drain`、WP18 `client-edge-burn-down`；完成 WP17 的 consumer 迁移 |
 | 前置条件 | model/protocol/transport/store-api canonical 边界稳定；Client allowlist/source guard 可用 |
@@ -28,10 +28,10 @@
 
 ## 入口条件
 
-- [ ] `[ARCH]` 对每条当前 Client 直接边指定目标 owner 和 adapter，冻结禁止绕行规则。
-- [ ] `[TEST]` 从各项目最近的 `AGENTS.md` 生成根、Example、Tauri、Web 的累计验证路线；仅当本里程碑实际修改 `rocketmq-dashboard-common` 时，额外加入 GPUI 条件验证。
-- [ ] `[DEV]` 分别检查根和 standalone 目标文件的用户修改，不跨 writer lease 修改。
-- [ ] `[HUMAN]` 批准 admin-core R0 feature：legacy compatibility 显式蕴含 client-adapter，下一 major 删除。
+- [x] `[ARCH]` 对每条当前 Client 直接边指定目标 owner 和 adapter，冻结禁止绕行规则。
+- [x] `[TEST]` 从各项目最近的 `AGENTS.md` 生成根、Example、Tauri、Web 的累计验证路线；仅当本里程碑实际修改 `rocketmq-dashboard-common` 时，额外加入 GPUI 条件验证。
+- [x] `[DEV]` 分别检查根和 standalone 目标文件的用户修改，不跨 writer lease 修改。
+- [x] `[HUMAN]` 批准 admin-core R0 feature：legacy compatibility 显式蕴含 client-adapter，下一 major 删除。
 
 ## 交付物
 
@@ -102,11 +102,11 @@
 
 ### PR-M07-07：Allowlist 与 consumer closeout
 
-- [ ] `[DEV]` dependency/source guard 固定 workspace 两个目标位置和 standalone example；Proxy 现状在 M08 完成物理迁移前必须有带到期里程碑的临时 ledger。
-- [ ] `[TEST]` 执行根 workspace、Example、Tauri、Web backend/frontend 的适用验证；若 dashboard-common 未变化，不运行或宣称 GPUI 迁移验证。
-- [ ] `[REV]` 核对 manifest/source/normal closure，确保 common/remoting re-export 不隐藏 Client 直边。
-- [ ] `[ARCH]` 发布给 M08 的 Proxy DTO/port/client runtime 清单。
-- [ ] `[HUMAN]` 只在除 Proxy 待迁边外其余消费者已清零时批准进入 M08。
+- [x] `[DEV]` dependency/source guard 固定 workspace 两个目标位置和 standalone example；Proxy 现状在 M08 完成物理迁移前必须有带到期里程碑的临时 ledger。
+- [x] `[TEST]` 执行根 workspace、Example、Tauri、Web backend/frontend 的适用验证；若 dashboard-common 未变化，不运行或宣称 GPUI 迁移验证。
+- [x] `[REV]` 核对 manifest/source/normal closure，确保 common/remoting re-export 不隐藏 Client 直边。
+- [x] `[ARCH]` 发布给 M08 的 Proxy DTO/port/client runtime 清单。
+- [x] `[HUMAN]` 只在除 Proxy 待迁边外其余消费者已清零时批准进入 M08。
 
 ## 公共兼容面
 
@@ -187,18 +187,18 @@ python scripts/arc_mut_guard.py
 
 ## Exit Checklist
 
-- [ ] `[REV]` 新 crate 无 `rocketmq-rust` 依赖，legacy ledger 只降不增。
-- [ ] `[TEST]` MCP 默认/feature/doc contract 全绿且仍无副作用。
-- [ ] `[REV]` Broker、NameServer manifest/source/normal closure无完整 Client。
-- [ ] `[REV]` admin-core Client import 只在 `src/client_adapter/`，no-default/legacy feature 均符合设计。
-- [ ] `[TEST]` 受影响 Dashboard 与 Example 按各自 AGENTS 完整验证。
-- [ ] `[DEV]` source/metadata guard 报告除 M08 待迁 Proxy 外无临时例外。
-- [ ] `[ARCH]` M08 的端口和 DTO 边界已冻结。
-- [ ] `[HUMAN]` 所有临时例外有 owner、到期为 M08，批准进入 Proxy 拆分。
+- [x] `[REV]` 新 crate 无 `rocketmq-rust` 依赖，legacy ledger 只降不增。
+- [x] `[TEST]` MCP 默认/feature/doc contract 全绿且仍无副作用。
+- [x] `[REV]` Broker、NameServer manifest/source/normal closure无完整 Client。
+- [x] `[REV]` admin-core Client import 只在 `src/client_adapter/`，no-default/legacy feature 均符合设计。
+- [x] `[TEST]` 受影响 Dashboard 与 Example 按各自 AGENTS 完整验证。
+- [x] `[DEV]` source/metadata guard 报告除 M08 待迁 Proxy 外无 Client 临时例外。
+- [x] `[ARCH]` M08 的端口和 DTO 边界已冻结。
+- [x] `[HUMAN]` 所有 Client 临时例外有 owner、到期为 M08，批准进入 Proxy 拆分。
 
 ## 交接物
 
-- 向 M08 交付中立 DTO/port、Proxy 临时 Client 边清单和 allowlist target rule。
+- 向 M08 交付 [`M07 Client 边界收口与 M08 交接清单`](07-client-edge-closeout-handoff.md)，冻结中立 DTO/port、Proxy 临时 Client 边和 allowlist target rule。
 - 向 M09 交付 legacy/admin/common compatibility ledger 和 standalone consumer 证据。
 - 向 M11 交付 ServiceContext 注入、runtime drain 与剩余 ArcMut ledger。
 
@@ -367,3 +367,28 @@ python scripts/arc_mut_guard.py
 - [x] `[TARGET GAP/INVENTORY]` target guard 差距由 115 降至 87：Client source 35、Client manifest 1、目标 DAG 直接边 49、
   传递闭包 2；Client source/manifest 均只剩 Proxy。父项关闭后 82 个顶层工作包为 46 已完成、0 阻塞、36 未开始；剩余 M07 1、
   M08 6、M09 6、M10 5、M11 12、M12 6，唯一下一工作包为 PR-M07-07 allowlist 与 consumer closeout。
+
+## PR-M07-07 Allowlist 与 consumer closeout evidence
+
+- [x] `[ALLOWLIST/GUARD]` Client manifest 永久 allowlist 改为 caller/target/kind/path/alias 精确五元组且每个身份最多一条；
+  source allowlist 同时匹配 caller、目录前缀和 alias。错误 kind、rename、重复边、错误 manifest path、越界 source 与错误 alias
+  均由新增 fixture 拒绝；Broker、NameServer、proxy-core/local、common、remoting 的 normal closure 固定禁止到达 Client。
+- [x] `[LEDGER]` 永久合法的 Admin Core adapter 与 Example 从 baseline exception 删除。Client 临时账本只剩 Proxy manifest 1 条、
+  `cluster.rs` 12 处和 `remoting.rs` 1 处，owner=`proxy`、remove_by=`M08`；guard schema 拒绝其他 caller、路径、alias、owner 或到期值。
+- [x] `[DTO/CANONICAL]` Proxy 的 SendResult、SendStatus、PullStatus 共 22 处兼容路径改为 `rocketmq-model` canonical owner；
+  Proxy 126 unit、1 binary、9 gRPC integration、3 remoting integration 和 doc test 通过，no-default check 与 all-target/all-feature
+  strict Clippy 通过。新增 model 直边作为 M08 core 迁移前的 target-DAG 差距保留，不扩大目标 DAG。
+- [x] `[GOVERNANCE]` 69 项 M07/architecture contract、1 clean/6 violation fixtures、architecture baseline、ArcMut guard 与 24 fixtures、
+  runtime enforcing audit、AGENTS routing、root fmt 与 all-target/all-feature strict Clippy、`git diff --check` 通过。
+- [x] `[ADMIN/MCP]` Admin Core no-default、client-adapter、legacy 三套 check 通过；MCP default 72 unit + 2 integration、all-feature
+  89 unit + 2 integration、streamable-http strict Clippy 与 no-deps Rustdoc 通过，外部集群 e2e 各有 1 项按环境条件 ignored。
+- [x] `[STANDALONE]` Example、Tauri backend、Web backend 的各自 fmt/strict Clippy 通过，Web backend all-target/all-feature build
+  通过；Tauri/Web frontend `npm ci` 与 production build 通过。Tauri npm audit 仍报告既有 1 moderate + 3 high，Web 为 0；
+  dashboard-common 未变化，因此未运行或宣称 GPUI 验证。
+- [x] `[ERROR]` error architecture guard 完整运行并只复现 main 既有 11 项：Broker source stringification 1、MCP anyhow 8、
+  缺失治理文档 2；该预存失败未计为通过，本包未新增 finding。
+- [x] `[TARGET/HANDOFF]` target guard 的预期非零快照由 87 降至 66：Client manifest 1、Client source 13、目标 DAG 50、
+  TieredStore 既有传递闭包 2；14 项 Client finding 全部属于 Proxy。专门交接文档冻结 core/cluster/local/facade owner、结果转换 seam、
+  lock/unlock 下沉和 worker shutdown/join 风险。父项关闭后 47/82 已完成、35 未完成，M07 完成，下一工作包为 PR-M08-01。
+- [x] `[HUMAN]` 用户在持续目标中明确要求按计划自主完成后续重构并逐阶段 Issue/PR/管理员 squash merge；M07 只剩 Proxy M08
+  待迁 Client 债务后，按该授权进入 M08，未代签 Phase 2 Gate 或扩大兼容性例外。
