@@ -24,7 +24,6 @@ use rocketmq_common::common::entity::ClientGroup;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
@@ -49,9 +48,6 @@ use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLit
 use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
-use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
-use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
-use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::command_custom_header::CommandCustomHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
@@ -63,7 +59,6 @@ use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOf
 use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
-use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
@@ -76,7 +71,6 @@ use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::Q
 use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
-use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader;
@@ -92,12 +86,9 @@ use rocketmq_runtime::ShutdownReport;
 use tokio::net::TcpListener;
 use tracing::warn;
 
-use crate::auth::build_cluster_acl_rpc_hook;
 use crate::auth::is_auth_error;
 use crate::auth::ProxyAuthRuntime;
-use crate::cluster::initialize_client_instance;
 use crate::config::ProxyConfig;
-use crate::config::ProxyMode;
 use crate::context::ProxyContext;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
@@ -289,7 +280,6 @@ where
 }
 
 pub struct ProxyRemotingDispatcher<P> {
-    config: Arc<ProxyConfig>,
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
@@ -300,13 +290,12 @@ where
     P: MessagingProcessor + 'static,
 {
     pub fn new(
-        config: Arc<ProxyConfig>,
+        _config: Arc<ProxyConfig>,
         processor: Arc<P>,
         sessions: ClientSessionRegistry,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
     ) -> Self {
         Self {
-            config,
             processor,
             sessions,
             remoting_backend,
@@ -625,58 +614,15 @@ where
     }
 
     async fn dispatch_lock_batch_mq(&self, request: &RemotingCommand) -> RemotingCommand {
-        if let Some(response) = self.dispatch_via_local_backend(request).await {
-            return response;
-        }
-        if let Err(error) = request.decode_command_custom_header::<LockBatchMqRequestHeader>() {
-            return decode_error_response(request.opaque(), "decode lockBatchMQ header", error);
-        }
-        let Some(body) = request.body() else {
-            return transport_error_response(
-                request.opaque(),
-                "decode lockBatchMQ body",
-                "lockBatchMQ request body is missing",
-            );
-        };
-        let request_body = match LockBatchRequestBody::decode(body.as_ref()) {
-            Ok(body) => body,
-            Err(error) => return transport_error_response(request.opaque(), "decode lockBatchMQ body", error),
-        };
-        let response_body = match self.lock_batch_mq_cluster(request_body).await {
-            Ok(response_body) => response_body,
-            Err(error) => return proxy_error_response(request.opaque(), error),
-        };
-        let body = match response_body.encode() {
-            Ok(body) => body,
-            Err(error) => return transport_error_response(request.opaque(), "encode lockBatchMQ response", error),
-        };
-        RemotingCommand::create_response_command_with_code(ResponseCode::Success)
-            .set_body(body)
-            .set_opaque(request.opaque())
+        self.dispatch_via_backend(request)
+            .await
+            .unwrap_or_else(|| unsupported_response(request.opaque(), "cluster remoting backend is unavailable"))
     }
 
     async fn dispatch_unlock_batch_mq(&self, request: &RemotingCommand) -> RemotingCommand {
-        if let Some(response) = self.dispatch_via_local_backend(request).await {
-            return response;
-        }
-        if let Err(error) = request.decode_command_custom_header::<UnlockBatchMqRequestHeader>() {
-            return decode_error_response(request.opaque(), "decode unlockBatchMQ header", error);
-        }
-        let Some(body) = request.body() else {
-            return transport_error_response(
-                request.opaque(),
-                "decode unlockBatchMQ body",
-                "unlockBatchMQ request body is missing",
-            );
-        };
-        let request_body = match UnlockBatchRequestBody::decode(body.as_ref()) {
-            Ok(body) => body,
-            Err(error) => return transport_error_response(request.opaque(), "decode unlockBatchMQ body", error),
-        };
-        if let Err(error) = self.unlock_batch_mq_cluster(request_body).await {
-            return proxy_error_response(request.opaque(), error);
-        }
-        RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(request.opaque())
+        self.dispatch_via_backend(request)
+            .await
+            .unwrap_or_else(|| unsupported_response(request.opaque(), "cluster remoting backend is unavailable"))
     }
 
     async fn dispatch_check_client_config(&self, request: &RemotingCommand) -> RemotingCommand {
@@ -1031,76 +977,12 @@ where
             .set_opaque(request.opaque())
     }
 
-    async fn dispatch_via_local_backend(&self, request: &RemotingCommand) -> Option<RemotingCommand> {
-        if !matches!(self.config.mode, ProxyMode::Local) {
-            return None;
-        }
+    async fn dispatch_via_backend(&self, request: &RemotingCommand) -> Option<RemotingCommand> {
         let backend = self.remoting_backend.as_ref()?;
         Some(match backend.process(request.clone()).await {
             Ok(response) => response.set_opaque(request.opaque()),
             Err(error) => proxy_error_response(request.opaque(), error),
         })
-    }
-
-    async fn lock_batch_mq_cluster(&self, request_body: LockBatchRequestBody) -> ProxyResult<LockBatchResponseBody> {
-        ensure_cluster_mode(&self.config)?;
-        let mut response_body = LockBatchResponseBody::default();
-        if request_body.mq_set.is_empty() {
-            return Ok(response_body);
-        }
-        let (broker_name, topic_name) = single_broker_and_topic(&request_body.mq_set)?;
-        let mut client = initialize_client_instance(
-            self.config.cluster.clone(),
-            build_cluster_acl_rpc_hook(self.config.as_ref()),
-        )
-        .await?;
-        let broker_addr = resolve_remoting_broker_addr(
-            &mut client,
-            broker_name.as_str(),
-            topic_name.as_str(),
-            request_body.only_this_broker,
-        )
-        .await?;
-        let locked = client
-            .get_mq_client_api_impl()?
-            .lock_batch_mq(
-                broker_addr.as_str(),
-                request_body,
-                self.config.cluster.mq_client_api_timeout_ms,
-            )
-            .await?;
-        response_body.lock_ok_mq_set = locked;
-        Ok(response_body)
-    }
-
-    async fn unlock_batch_mq_cluster(&self, request_body: UnlockBatchRequestBody) -> ProxyResult<()> {
-        ensure_cluster_mode(&self.config)?;
-        if request_body.mq_set.is_empty() {
-            return Ok(());
-        }
-        let (broker_name, topic_name) = single_broker_and_topic(&request_body.mq_set)?;
-        let mut client = initialize_client_instance(
-            self.config.cluster.clone(),
-            build_cluster_acl_rpc_hook(self.config.as_ref()),
-        )
-        .await?;
-        let broker_addr = resolve_remoting_broker_addr(
-            &mut client,
-            broker_name.as_str(),
-            topic_name.as_str(),
-            request_body.only_this_broker,
-        )
-        .await?;
-        client
-            .get_mq_client_api_impl()?
-            .unlock_batch_mq(
-                &broker_addr,
-                request_body,
-                self.config.cluster.mq_client_api_timeout_ms,
-                false,
-            )
-            .await
-            .map_err(Into::into)
     }
 
     fn build_broker_lite_info_response(&self) -> GetBrokerLiteInfoResponseBody {
@@ -1181,62 +1063,6 @@ where
             .with_earliest_unconsumed_timestamp(0);
         Some(body)
     }
-}
-
-fn ensure_cluster_mode(config: &ProxyConfig) -> ProxyResult<()> {
-    if matches!(config.mode, ProxyMode::Cluster) {
-        Ok(())
-    } else {
-        Err(ProxyError::not_implemented(
-            "remoting request is only supported through the broker-backed local passthrough or cluster backend",
-        ))
-    }
-}
-
-fn single_broker_and_topic(mq_set: &HashSet<MessageQueue>) -> ProxyResult<(CheetahString, CheetahString)> {
-    let mut broker_name: Option<CheetahString> = None;
-    let mut topic_name: Option<CheetahString> = None;
-    for mq in mq_set {
-        if let Some(existing) = broker_name.as_ref() {
-            if existing != mq.broker_name() {
-                return Err(ProxyError::invalid_metadata(
-                    "lock/unlock batch request must target a single broker",
-                ));
-            }
-        } else {
-            broker_name = Some(CheetahString::from(mq.broker_name()));
-        }
-        topic_name.get_or_insert_with(|| CheetahString::from(mq.topic()));
-    }
-    Ok((
-        broker_name.ok_or_else(|| ProxyError::invalid_metadata("message queue set must not be empty"))?,
-        topic_name.ok_or_else(|| ProxyError::invalid_metadata("message queue set must not be empty"))?,
-    ))
-}
-
-async fn resolve_remoting_broker_addr(
-    client: &mut rocketmq_client_rust::factory::mq_client_instance::MQClientInstance,
-    broker_name: &str,
-    topic: &str,
-    only_this_broker: bool,
-) -> ProxyResult<CheetahString> {
-    let mut result = client
-        .find_broker_address_in_subscribe(&CheetahString::from(broker_name), 0, only_this_broker)
-        .await;
-    if result.is_none() {
-        client
-            .update_topic_route_info_from_name_server_topic(&CheetahString::from(topic))
-            .await;
-        result = client
-            .find_broker_address_in_subscribe(&CheetahString::from(broker_name), 0, only_this_broker)
-            .await;
-    }
-    result
-        .map(|found| found.broker_addr)
-        .ok_or_else(|| RocketMQError::BrokerNotFound {
-            name: broker_name.to_owned(),
-        })
-        .map_err(Into::into)
 }
 
 fn build_lite_topic_meta(subscriptions: &[crate::session::LiteSubscriptionSnapshot]) -> HashMap<CheetahString, i32> {

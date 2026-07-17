@@ -29,19 +29,19 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 49 | 0 | 33 未开始；合计 33 尚未完成 | 82 |
+| PR 级工作包 | 50 | 0 | 32 未开始；合计 32 尚未完成 | 82 |
 | 里程碑 | 7（M01–M07） | 1（M08） | 4（M09–M12） | 12 |
-| 新增边界 crate | 8 | 0 | 2（proxy-cluster/local） | 10 |
-| 根 workspace package | 30 | — | 还差 2 | 32 |
+| 新增边界 crate | 9 | 0 | 1（proxy-local） | 10 |
+| 根 workspace package | 31 | — | 还差 1 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 33 个未开始工作包分布：M08 为 4 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
-PR-M08-02 已完成 Proxy Core 的中立 plan/port/service 与 ingress；M08 进行中，当前下一工作包为 PR-M08-03。
+剩余 32 个未开始工作包分布：M08 为 3 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
+PR-M08-03 已完成 Cluster adapter 与完整 Client runtime 的物理迁移；M08 进行中，当前下一工作包为 PR-M08-04。
 
 目标态差距快照不能与工作包计数混用：`architecture_dependency_guard.py --mode target --allow-missing-planned-crates`
-仍报告 2 个计划 Proxy crate 缺失和 66 项差距，其中 Client source 13、Client manifest 1、目标 DAG 直接边 50、传递闭包边 2。
-新建 `rocketmq-proxy-core` 本身没有 target finding，normal closure 不含 Client/Broker/store/auth/common/remoting/legacy facade；
-现有 Proxy 的 Client source 与 manifest 差距保持在 M08 临时账本中，由 PR-M08-03～05 迁入 Cluster adapter 并清零。
+仅报告计划中的 `rocketmq-proxy-local` 尚未创建，以及 51 项差距：目标 DAG 直接边 49、传递闭包边 2。
+`rocketmq-proxy-core` 与 `rocketmq-proxy-cluster` 均无所属边界的 target finding；Client 临时账本 manifest/source 均为 0，
+历史 Proxy manifest 1、source 13 已由 PR-M08-03 完整消费，后续工作不得恢复 facade 对完整 Client 的直接依赖。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -330,7 +330,17 @@ PR-M08-02 已完成 Proxy Core 的中立 plan/port/service 与 ingress；M08 进
   - [x] Core/Proxy default/no-default、根 30-package strict Clippy、runtime audit 与 Example/Tauri/Web standalone 累计路线通过
   - [x] target gap 保持 66 且 Core 零 finding；typed-error 仅剩 main 既有 11 项，未新增 Core/Proxy finding
   - [x] 49/82 已完成、33 未完成，下一工作包 PR-M08-03
-- [ ] PR-M08-03：创建 Cluster adapter
+- [x] PR-M08-03：创建 Cluster adapter
+  - [x] `rocketmq-proxy-cluster` 已加入根 workspace（31/32），唯一拥有 Client instance/manager、Cluster service/manager、worker/cache/state 与 producer/consumer/route runtime
+  - [x] Client callback、SendResult/PullResult 与 Message/MessageExt 在 Cluster 边界转换为 model/Core DTO，Client 类型未泄漏到 Core port
+  - [x] Cluster 仅消费注入的 security-api `OutboundSigner`；auth provider composition 与敏感字段脱敏仍由 Proxy facade 负责
+  - [x] Client worker、producer 与 instance 的启动、取消、shutdown/join 由 Cluster 持有；每个 adapter 使用独立 `ServiceContext` 子域，取消活动/排队工作后在一个绝对 deadline 内先停 producer、再停 Client
+  - [x] Client 的 `ClientInstanceHandle` 隐藏原始共享可变载荷，Cluster 源码无 `ArcMut`；账本由 3207 降至 3191 个 occurrence
+  - [x] Remoting lock/unlock 与 Cluster address resolution 迁入 Cluster；Proxy 保留兼容 wrapper，Core 只保留中立 classifier/dispatch/status contract
+  - [x] 旧 cluster/config/service/root public path 保持精确 re-export，ProxyConfig Serde/default 与 canonical/legacy compile contract 保持兼容
+  - [x] target guard 为 51（目标 DAG 直接边 49 + 传递闭包边 2）；Client 临时账本 manifest/source 均为 0，Cluster 直边/源码无 Broker/store/local/auth provider，backend closure 无 Broker/store/local
+  - [x] Cluster 19、Proxy 101、Core 47、Client 聚焦 9 项与 Auth signer 1 项测试通过；architecture contract 120（含 M08 9）、ArcMut guard 65 + fixture 24 与 runtime audit 全绿；typed-error 仅复现 main 已登记的 11 项，零新增
+  - [x] 50/82 已完成、32 未完成，下一工作包 PR-M08-04
 - [ ] PR-M08-04：创建 Local adapter
 - [ ] PR-M08-05：将现有 Proxy 降为 composition/facade
 - [ ] PR-M08-06：验证 feature closure 与下一 major fixture

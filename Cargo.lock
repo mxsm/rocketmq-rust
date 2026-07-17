@@ -4467,6 +4467,7 @@ dependencies = [
  "rocketmq-remoting",
  "rocketmq-runtime",
  "rocketmq-rust",
+ "rocketmq-security-api",
  "serde",
  "serde_json",
  "smallvec",
@@ -4755,11 +4756,11 @@ dependencies = [
  "prost-types",
  "rocketmq-auth",
  "rocketmq-broker",
- "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-observability",
+ "rocketmq-proxy-cluster",
  "rocketmq-proxy-core",
  "rocketmq-remoting",
  "rocketmq-runtime",
@@ -4775,6 +4776,26 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "rocketmq-proxy-cluster"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cheetah-string",
+ "rocketmq-client-rust",
+ "rocketmq-error",
+ "rocketmq-model",
+ "rocketmq-protocol",
+ "rocketmq-proxy-core",
+ "rocketmq-runtime",
+ "rocketmq-security-api",
+ "serde",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

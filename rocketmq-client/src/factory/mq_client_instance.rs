@@ -506,7 +506,7 @@ impl MQClientInstance {
 
     pub async fn shutdown(&mut self) {
         match self.service_state {
-            ServiceState::CreateJust | ServiceState::ShutdownAlready | ServiceState::StartFailed => {
+            ServiceState::CreateJust | ServiceState::ShutdownAlready => {
                 warn!(
                     "MQClientInstance shutdown called but state is {:?}, ignoring shutdown request",
                     self.service_state
@@ -526,6 +526,12 @@ impl MQClientInstance {
                 self.shutdown_connection_event_listener(Duration::from_secs(1)).await;
                 self.shutdown_rebalance_delay_tasks(Duration::from_secs(1)).await;
                 return;
+            }
+            ServiceState::StartFailed => {
+                warn!(
+                    "MQClientInstance[{}] cleaning up resources from a partial startup",
+                    self.client_id
+                );
             }
             ServiceState::Running => {
                 info!(
@@ -3229,5 +3235,19 @@ mod tests {
             rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait::lo(&header),
             Some(true)
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_rolls_back_a_partially_started_client() {
+        let client_config = ClientConfig {
+            namesrv_addr: Some(CheetahString::from_static_str("127.0.0.1:9876")),
+            ..Default::default()
+        };
+        let mut instance = MQClientInstance::new_arc(client_config, 0, "partial-start-shutdown", None);
+        instance.service_state = ServiceState::StartFailed;
+
+        instance.shutdown().await;
+
+        assert_eq!(instance.service_state, ServiceState::ShutdownAlready);
     }
 }

@@ -291,37 +291,15 @@ def validate_baseline(baseline: dict[str, Any], policy: dict[str, Any]) -> None:
             raise InputError(f"duplicate baseline source exception identity: {identity}")
         source_identities.add(identity)
 
-    client = policy["client_policy"]["package"]
     temporary_manifest = [
         exception
         for exception in baseline["manifest_exceptions"]
         if exception.get("rule") is None
     ]
-    if any(
-        exception["caller"] != "rocketmq-proxy"
-        or exception["target"] != client
-        or exception["kind"] != "normal"
-        or exception["path"] != "rocketmq-proxy/Cargo.toml"
-        or exception["alias"] != "rocketmq_client_rust"
-        or exception["count"] != 1
-        or exception["owner"] != "proxy"
-        or exception["remove_by"] != "M08"
-        for exception in temporary_manifest
-    ):
-        raise InputError("temporary Client manifest ledger must be the exact Proxy M08 edge")
-    source_exception_limits = {
-        "rocketmq-proxy/src/cluster.rs": 12,
-        "rocketmq-proxy/src/remoting.rs": 1,
-    }
-    if any(
-        exception["path"] not in source_exception_limits
-        or exception["count"] > source_exception_limits.get(exception["path"], 0)
-        or exception["alias"] != "rocketmq_client_rust"
-        or exception["owner"] != "proxy"
-        or exception["remove_by"] != "M08"
-        for exception in baseline["source_exceptions"]
-    ):
-        raise InputError("temporary Client source ledger must contain only Proxy M08 source entries")
+    if temporary_manifest:
+        raise InputError("temporary Client manifest ledger was retired by PR-M08-03 and must stay empty")
+    if baseline["source_exceptions"]:
+        raise InputError("temporary Client source ledger was retired by PR-M08-03 and must stay empty")
     compatibility_identities: set[tuple[Any, ...]] = set()
     for index, exception in enumerate(baseline["compatibility_manifest_exceptions"]):
         require_keys(

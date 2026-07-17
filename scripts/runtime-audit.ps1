@@ -814,13 +814,14 @@ function Get-BoundaryDisposition {
 
             if ($path -in @(
                     "rocketmq-observability/src/exporter/prometheus.rs",
+                    "rocketmq-proxy/src/bootstrap.rs",
                     "rocketmq-proxy/src/grpc/server.rs",
                     "rocketmq-proxy/src/grpc/service.rs"
                 )) {
                 return New-BoundaryDisposition `
                     -Disposition "current-runtime-compat-adapter" `
                     -ActionRequired $false `
-                    -Reason "Proxy and observability compatibility entrypoints bind the current Tokio runtime only through fallback paths; *_with_task_group APIs attach background tasks to an injected parent TaskGroup." `
+                    -Reason "Proxy and observability compatibility entrypoints bind the current Tokio runtime only through fallback paths; injected ServiceContext and *_with_task_group APIs attach background tasks to a managed service tree." `
                     -MigrationPhase "legacy-compatibility"
             }
 
@@ -2066,11 +2067,11 @@ function Get-ShutdownDisposition {
         }
     }
 
-    if ($path -match "^rocketmq-proxy/src/") {
+    if ($path -match "^rocketmq-proxy(?:-core|-cluster)?/src/") {
         return [pscustomobject]@{
             Disposition = "proxy-lifecycle-boundary"
             ActionRequired = $false
-            Reason = "Allowed proxy gRPC/remoting/service housekeeping lifecycle boundary."
+            Reason = "Allowed facade, Core ingress, or Cluster adapter lifecycle boundary backed by injected task ownership and reportable shutdown."
         }
     }
 

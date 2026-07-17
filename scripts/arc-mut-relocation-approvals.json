@@ -1,7 +1,46 @@
 {
   "schema_version": 1,
   "adr": "ADR-013",
+  "identity_relocations": [
+    {
+      "from": "8d80e011f2186610d5bdfefc",
+      "to": "eb2cd2ebf89240c3b8d85247",
+      "reason": "M08-03 replaced the interim raw Client ArcMut alias with one Client-owned managed entry hidden behind ClientInstanceHandle and removed all governed Cluster-side handle occurrences"
+    },
+    {
+      "from": "211ae1bf67e6c0b584ca0126",
+      "to": "fb7f777e9544a9116a38f8d9",
+      "reason": "M08-03 physically moved the existing Proxy Cluster client-handle import to the canonical rocketmq-proxy-cluster owner without increasing the governed occurrence budget"
+    },
+    {
+      "from": "0c0422b775c8be5fe46ad9af",
+      "to": "8d80e011f2186610d5bdfefc",
+      "reason": "M08-03 introduced the narrow Client-owned compatibility alias needed to move the existing Proxy Cluster ArcMut debt without exposing it to Core"
+    },
+    {
+      "from": "0c0422b775c8be5fe46ad9af",
+      "to": "f0a1a14ee3dbbb93b154b3ac",
+      "reason": "M08-03 records the ClientInstanceHandle compatibility alias as part of the same non-expanding Proxy Cluster ownership migration"
+    },
+    {
+      "from": "0c0422b775c8be5fe46ad9af",
+      "to": "cbe7a9ef094dca8338cec480",
+      "reason": "M08-03 moved the remaining governed client-instance references from the Proxy facade to the canonical Cluster adapter while keeping the total occurrence count unchanged"
+    }
+  ],
   "relocations": [
+    {
+      "identity": "eb2cd2ebf89240c3b8d85247",
+      "from": "0afad29bb4c3adc1a7014653",
+      "to": "e40bc2b361735e32fa250436",
+      "reason": "M08-03 extended the same opaque ClientInstanceHandle with managed lease metadata while retaining exactly one private Client instance ArcMut payload"
+    },
+    {
+      "identity": "ae678fbbf062eafa59933129",
+      "from": "f2be29a1e62ab57b1239f832",
+      "to": "375e18a0d85cbefe4784517b",
+      "reason": "Adding the M08 Cluster signer composition changed adjacent import context for the existing ConnectionHandlerContext occurrence without adding debt"
+    },
     {
       "identity": "bc0bc7493ce3e7f541fbadbe",
       "from": "d891a0da5414e8be41b74339",

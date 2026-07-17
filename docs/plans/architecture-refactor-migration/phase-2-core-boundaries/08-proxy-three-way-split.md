@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 实施中；PR-M08-02 已完成，下一工作包为 PR-M08-03 |
+| 状态 | 实施中；PR-M08-03 已完成，下一工作包为 PR-M08-04 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP19 `proxy-three-way-split` |
 | 前置条件 | model/protocol/transport/security/store-api 边界稳定；除 Proxy 外 Client 清边完成 |
@@ -104,12 +104,39 @@ M07 已交付 [`Client 边界收口与 M08 交接清单`](07-client-edge-closeou
 
 ### PR-M08-03：创建 Cluster adapter
 
-- [ ] `[DEV]` 创建 `rocketmq-proxy-cluster`，迁 MQClientInstance/Manager、Cluster service/manager、producer/consumer/route/remoting。
-- [ ] `[DEV]` 将 Client SendResult/PullResult/callback 在 crate 边界转换为 model SendResult/PullOutcome/core status。
-- [ ] `[DEV]` 只消费注入的 security-api OutboundSigner；auth provider composition 留 proxy facade。
-- [ ] `[TEST]` 覆盖 send/pull/pop/ack/route、retry、client lifecycle、signing 和 shutdown。
-- [ ] `[REV]` 检查 cluster closure 无 Broker/store/local/auth provider，Client 类型不泄漏到 core port。
-- [ ] 回滚点：facade 临时选择旧 cluster adapter；Client direct edge不得回到 composition manifest作为最终状态。
+- [x] `[DEV]` 创建 `rocketmq-proxy-cluster`，迁 MQClientInstance/Manager、Cluster service/manager、producer/consumer/route/remoting。
+- [x] `[DEV]` 将 Client SendResult/PullResult/callback 在 crate 边界转换为 model SendResult/PullOutcome/core status。
+- [x] `[DEV]` 只消费注入的 security-api OutboundSigner；auth provider composition 留 proxy facade。
+- [x] `[TEST]` 覆盖 send/pull/pop/ack/route、retry、client lifecycle、signing 和 shutdown。
+- [x] `[REV]` 检查 cluster 直边/源码无 Broker/store/local/auth provider、backend closure 无 Broker/store/local，Client 类型不泄漏到 core port。
+- [x] 回滚点：facade 临时选择旧 cluster adapter；Client direct edge 不得回到 composition manifest 作为最终状态。
+
+#### PR-M08-03 实施结果
+
+- **Owner**：`rocketmq-proxy-cluster` 已加入根 workspace（31/32），唯一拥有 Client instance/manager、Cluster
+  service/manager、worker/cache/state，以及 producer/consumer/route runtime；计划中仅剩 `rocketmq-proxy-local` 尚未创建。
+- **Conversion**：Client callback、SendResult/PullResult 与 Message/MessageExt 在 Cluster crate 边界转换为
+  model/Core DTO；Core port 不暴露 Client 类型，Core 与 Cluster 的物理 owner 不重叠。
+- **Signer**：Cluster 只消费注入的 security-api `OutboundSigner`；auth provider 的创建、配置组合与敏感字段脱敏
+  留在 Proxy facade，Cluster 直边与源码不包含 auth provider composition。
+- **Lifecycle 与 Remoting**：Client worker、producer 与 instance 的启动、取消、shutdown/join 由 Cluster 持有；
+  每个 adapter 在注入的 `ServiceContext` 下创建独立子域，Client instance 与 send producer 使用同一域化
+  ClientConfig，避免与其他 adapter 或外部 Client owner 交叉复用。取消先停止活动/排队 command，再以一个绝对
+  `ShutdownDeadline` 依次关闭 producer 和 Client；超时会被有界终止并记录，不会重置分层 deadline。
+  lock/unlock 与 Cluster address resolution 已迁入 Cluster，Proxy 保留兼容 wrapper，Core 只保留中立 classifier/dispatch/status contract。
+  默认 Proxy facade 未注入 `ServiceContext` 时，会借用当前 Tokio runtime 或自持 `RuntimeOwner`，并在 `serve` 返回后
+  统一关闭；生产 binary 仍显式注入顶层 `ServiceContext`。低层 `RocketmqClusterClient::new/with_rpc_hook` 的历史签名保留，
+  但脱离 facade 且未注入 `ServiceContext` 时 fail closed 为 typed startup error，避免恢复 detached ActorRuntime。
+- **Compatibility**：旧 cluster/config/service/root public path 保持精确 re-export；ProxyConfig Serde/default、
+  canonical/legacy compile 与 gRPC/remoting contract 保持兼容，facade 不再拥有第二份 Cluster runtime。Client 以私有载荷的
+  `ClientInstanceHandle` 向 Cluster 提供兼容句柄，不再跨 crate 暴露原始 `ArcMut` alias。
+- **Guard**：Client 临时账本 manifest/source 均为 0；target guard 为 51，其中目标 DAG 直接边 49、传递闭包边 2；
+  Cluster 直边/源码无 Broker/store/local/auth provider，backend closure 无 Broker/store/local；ArcMut 账本由
+  3207 降至 3191 个 occurrence，Cluster 源码为 0。Cluster 19 项 unit/behavior、Proxy 101 项
+  unit/bin/compat/gRPC/remoting、Core 47 项 unit/proto、Client 聚焦 9 项与 Auth signer 1 项通过；architecture
+  contract 120（含 M08 9）、ArcMut guard 65 + fixture 24 全绿，runtime audit 通过；typed-error guard 仅复现
+  main 已登记的 11 项，当前切片零新增。当前 50/82 个工作包
+  已完成、32 个未完成，下一工作包为 PR-M08-04。
 
 ### PR-M08-04：创建 Local adapter
 
@@ -122,7 +149,7 @@ M07 已交付 [`Client 边界收口与 M08 交接清单`](07-client-edge-closeou
 ### PR-M08-05：现有 Proxy 降为 composition/facade
 
 - [ ] `[DEV]` 只保 bootstrap、分区 config conversion、auth runtime、observability、binary 和旧 public path re-export。
-- [ ] `[DEV]` R0 facade 对 cluster/local 使用非 optional dependency，继续 `default = []`；移除 facade 自身的完整 Client direct edge。
+- [ ] `[DEV]` R0 facade 对 cluster/local 使用非 optional dependency，继续 `default = []`；保持 facade 不恢复完整 Client direct edge。
 - [ ] `[DEV]` 保持 ProxyConfig Serde/env/CLI 默认模式；core/cluster/local 分别消费 normalized config。
 - [ ] `[TEST]` 运行现有默认和 no-default，两者继续编译两端并保持运行行为。
 - [ ] `[REV]` 检查 facade 不新增业务算法，core/local 不经 facade 反向到 cluster/client。
@@ -132,7 +159,7 @@ M07 已交付 [`Client 边界收口与 M08 交接清单`](07-client-edge-closeou
 
 - [ ] `[TEST]` R0 实际验证 proxy-core、cluster、local、local+tiered、facade default/no-default、observability。
 - [ ] `[ARCH]` 为下一 major 固化 `cluster-mode`、`local-mode`、`compat-all-modes` 和 default 的预期，不在 R0 manifest 启用。
-- [ ] `[DEV]` dependency guard 移除 Proxy 临时例外，目标 Client allowlist正式达标。
+- [ ] `[DEV]` 复核 dependency guard 已移除 Proxy Client 临时例外，并保持目标 Client allowlist 正式达标。
 - [ ] `[REV]` 使用 `cargo tree -e normal` 检查完整传递闭包，test/dev edge单独报告。
 - [ ] `[TEST]` canonical/legacy path、gRPC/remoting integration 与 shutdown/fault 全绿。
 - [ ] `[HUMAN]` 批准 R0 功能等价和下一 major feature 迁移公告。

@@ -86,4 +86,12 @@ impl MQClientManager {
     pub fn remove_client_factory(&self, client_id: &CheetahString) {
         self.factory_table.remove(client_id);
     }
+
+    pub(crate) fn remove_client_factory_if_same(&self, client_id: &CheetahString, expected: *const ()) -> bool {
+        self.factory_table
+            .remove_if(client_id, |_, current| {
+                std::ptr::addr_eq(Arc::as_ptr(current.get_inner()).cast::<()>(), expected)
+            })
+            .is_some()
+    }
 }

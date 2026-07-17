@@ -451,32 +451,43 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
                 self.assertEqual(2, result.returncode, result.stdout + result.stderr)
                 self.assertIn("policy client", result.stderr)
 
-    def test_client_ledger_schema_rejects_broadened_proxy_debt(self) -> None:
+    def test_client_ledger_schema_rejects_reintroduced_proxy_debt(self) -> None:
         fixture = metadata([package("rocketmq-model")])
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
         invalid_baselines = []
 
-        wrong_owner = copy.deepcopy(baseline)
-        wrong_owner["source_exceptions"][0]["owner"] = "other"
-        invalid_baselines.append(("wrong owner", wrong_owner))
+        manifest_debt = copy.deepcopy(baseline)
+        manifest_debt["manifest_exceptions"].append(
+            {
+                "caller": "rocketmq-proxy",
+                "target": "rocketmq-client-rust",
+                "kind": "normal",
+                "path": "rocketmq-proxy/Cargo.toml",
+                "alias": "rocketmq_client_rust",
+                "count": 1,
+                "owner": "proxy",
+                "remove_by": "M08",
+            }
+        )
+        invalid_baselines.append(("manifest debt", manifest_debt))
 
-        broadened_path = copy.deepcopy(baseline)
-        broadened_path["source_exceptions"][0]["path"] = "rocketmq-proxy/src/other.rs"
-        invalid_baselines.append(("broadened path", broadened_path))
-
-        broadened_count = copy.deepcopy(baseline)
-        broadened_count["source_exceptions"][0]["count"] = 13
-        invalid_baselines.append(("broadened count", broadened_count))
-
-        wrong_milestone = copy.deepcopy(baseline)
-        wrong_milestone["manifest_exceptions"][-1]["remove_by"] = "M09"
-        invalid_baselines.append(("wrong milestone", wrong_milestone))
+        source_debt = copy.deepcopy(baseline)
+        source_debt["source_exceptions"].append(
+            {
+                "path": "rocketmq-proxy/src/remoting.rs",
+                "alias": "rocketmq_client_rust",
+                "count": 1,
+                "owner": "proxy",
+                "remove_by": "M08",
+            }
+        )
+        invalid_baselines.append(("source debt", source_debt))
 
         for label, invalid_baseline in invalid_baselines:
             with self.subTest(label=label):
                 result = self.run_guard(fixture, baseline_override=invalid_baseline)
                 self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-                self.assertIn("temporary Client", result.stderr)
+                self.assertIn("retired by PR-M08-03", result.stderr)
 
     def test_client_source_alias_is_detected(self) -> None:
         fixture = metadata(
@@ -792,14 +803,23 @@ rocketmq-client-rust = { path = "../../rocketmq-client" }
         self.assertEqual(expected, set(policy["target_dag"]))
         self.assertEqual(32, len(policy["target_dag"]))
 
-    def test_target_dag_rejects_edge_without_explicit_package_rule(self) -> None:
-        fixture = metadata(
-            [
-                package("rocketmq-proxy-cluster", [dependency("rocketmq-common")]),
-                package("rocketmq-common"),
-            ]
-        )
-        self.assert_rule(self.run_guard(fixture), "target-dag-direct-dependency")
+    def test_target_dag_rejects_cluster_edges_outside_its_boundary(self) -> None:
+        for target in (
+            "rocketmq-auth",
+            "rocketmq-broker",
+            "rocketmq-common",
+            "rocketmq-remoting",
+            "rocketmq-rust",
+            "rocketmq-store",
+        ):
+            with self.subTest(target=target):
+                fixture = metadata(
+                    [
+                        package("rocketmq-proxy-cluster", [dependency(target)]),
+                        package(target),
+                    ]
+                )
+                self.assert_rule(self.run_guard(fixture), "target-dag-direct-dependency")
 
     def test_missing_planned_crates_without_override_is_input_error(self) -> None:
         result = self.run_guard(metadata([package("rocketmq-model")]), allow_missing=False)
