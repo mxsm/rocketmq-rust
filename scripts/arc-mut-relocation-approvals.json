@@ -880,6 +880,36 @@
       "from": "fc0b1529da669ab60ac25323",
       "to": "8e0dc49bc32586bf05ce832e",
       "reason": "Rustfmt reordered the surrounding compatibility imports while preserving the same DefaultMQAdminExt ArcMut import and occurrence count"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "5fec31e144244d68cfe1e516",
+      "to": "5225e46ff563c824304d8ab6",
+      "reason": "M10-02 made Reput dispatch await bounded Tiered backpressure, shifting the existing ReputMessageServiceInner ArcMut type reference without adding an occurrence"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "d250794d266a1160203f4239",
+      "to": "f8587bafc2ac2f561ea493bb",
+      "reason": "M10-02 made dispatch_reput_batch async so it can await derived sinks, changing the existing ArcMut parameter fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "d73ee824202523f10a8371cb",
+      "from": "db15efbfcb8ca3dd22f134b6",
+      "to": "0dd1883d3024e576e97c64a6",
+      "reason": "M10-02 added bounded Tiered Reput backpressure context around the existing LocalFileMessageStore type reference in ReputMessageServiceInner without adding an occurrence"
+    },
+    {
+      "identity": "6208eeddb838b6b71724bf86",
+      "from": "8104e48e05dd038205b87fe9",
+      "to": "0d94c53f509642321269d6a1",
+      "reason": "M10-02 routed the existing CommitLog cleanup mutation through the WAL-pin-aware deletion entry without adding a mut_from_ref occurrence"
+    },
+    {
+      "identity": "6208eeddb838b6b71724bf86",
+      "from": "3868a2990574ade766ffcdc8",
+      "to": "63278d5eba087cd7f1369da9",
+      "reason": "M10-02 guarded the existing retry-delete mutation with the minimum derived WAL pin without adding a mut_from_ref occurrence"
     }
   ]
 }

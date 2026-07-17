@@ -2438,12 +2438,32 @@ impl CommitLog {
         clean_immediately: bool,
         delete_file_batch_max: i32,
     ) -> i32 {
-        self.mapped_file_queue.delete_expired_file_by_time(
+        self.delete_expired_files_by_time_before(
             expired_time,
             delete_files_interval,
             interval_forcibly,
             clean_immediately,
             delete_file_batch_max,
+            None,
+        )
+    }
+
+    pub fn delete_expired_files_by_time_before(
+        &mut self,
+        expired_time: i64,
+        delete_files_interval: i32,
+        interval_forcibly: i64,
+        clean_immediately: bool,
+        delete_file_batch_max: i32,
+        pinned_file_offset: Option<u64>,
+    ) -> i32 {
+        self.mapped_file_queue.delete_expired_file_by_time_before(
+            expired_time,
+            delete_files_interval,
+            interval_forcibly,
+            clean_immediately,
+            delete_file_batch_max,
+            pinned_file_offset,
         )
     }
 

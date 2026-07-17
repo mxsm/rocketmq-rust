@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 60 | 0 | 22 未开始；合计 22 尚未完成 | 82 |
+| PR 级工作包 | 61 | 0 | 21 未开始；合计 21 尚未完成 | 82 |
 | 里程碑 | 9（M01–M09） | 1（M10） | 2（M11–M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 22 个未开始工作包分布：M10 为 4 个、M11 为 12 个、M12 为 6 个。
-PR-M10-01 已完成派生 cursor 合同和 replay harness，当前下一工作包为 PR-M10-02。
+剩余 21 个未开始工作包分布：M10 为 3 个、M11 为 12 个、M12 为 6 个。
+PR-M10-02 已完成 Tiered cursor、retry ledger 与背压，当前下一工作包为 PR-M10-03。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -472,7 +472,16 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] public API additive diff 已审核并最终 31/31 零差异；ArcMut/依赖/runtime/error guard 通过
   - [x] [`M10-01 证据`](phase-3-production-readiness/10-derived-cursor-replay-evidence.md) 记录基线失败、验证与回滚
   - [x] 60/82 已完成、22 未完成，下一工作包 PR-M10-02
-- [ ] PR-M10-02：实现 Tiered cursor、retry ledger 与背压
+- [x] PR-M10-02：实现 Tiered cursor、retry ledger 与背压
+  - [x] 顺序读取 CommitLog；channel count/bytes 满时把背压传回 reput，不丢事件
+  - [x] 失败记录与 cursor 原子持久化；ledger 仅保存 offset tuple 与 retry metadata，不复制 payload
+  - [x] count/bytes/age 三类硬上限触发 `readiness=false`，并 pin 最小未解决 WAL segment
+  - [x] provider timeout/partial write/restart/duplicate/ledger full/WAL pin corpus 7/7 通过
+  - [x] retry scheduler 由 `ScheduledTaskGroup` 所有；正常 shutdown 排空，取消释放阻塞 sender
+  - [x] Store 82+9、Broker Rocks 20、POP 4 专项通过；Rocks batch flush 回归已由原测试捕获并修复
+  - [x] public API additive diff 已审核并最终 31/31 零差异；ArcMut/依赖/runtime/error/MCP 门禁通过
+  - [x] [`M10-02 证据`](phase-3-production-readiness/10-tiered-cursor-retry-evidence.md) 记录目标、基线失败、验证与回滚
+  - [x] 61/82 已完成、21 未完成，下一工作包 PR-M10-03
 - [ ] PR-M10-03：优化 CQ、Rocks 与 Tiered 读取
 - [ ] PR-M10-04：实现 Index/Compaction generation
 - [ ] PR-M10-05：完成 benchmark、soak 与性能 Gate

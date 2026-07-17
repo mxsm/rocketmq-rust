@@ -62,7 +62,7 @@ impl DerivedEngine {
 }
 
 /// Stable idempotency key for one record read from the authoritative CommitLog.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DerivedRecordId {
     source_epoch: u64,
     physical_offset: u64,

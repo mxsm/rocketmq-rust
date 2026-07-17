@@ -92,6 +92,37 @@ pub fn delete_expired_mapped_files_by_time<N>(
     interval_forcibly: i64,
     clean_immediately: bool,
     delete_file_batch_max: i32,
+    now_millis: N,
+) -> MappedFileQueueDeletion
+where
+    N: FnMut() -> i64,
+{
+    delete_expired_mapped_files_by_time_before(
+        files,
+        expired_time,
+        delete_files_interval,
+        interval_forcibly,
+        clean_immediately,
+        delete_file_batch_max,
+        None,
+        now_millis,
+    )
+}
+
+/// Destroys expired mapped files without crossing an optional derived-engine WAL pin.
+#[doc(hidden)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors the legacy cleanup policy plus one hard WAL boundary"
+)]
+pub fn delete_expired_mapped_files_by_time_before<N>(
+    files: &[Arc<DefaultMappedFile>],
+    expired_time: i64,
+    delete_files_interval: i32,
+    interval_forcibly: i64,
+    clean_immediately: bool,
+    delete_file_batch_max: i32,
+    pinned_file_offset: Option<u64>,
     mut now_millis: N,
 ) -> MappedFileQueueDeletion
 where
@@ -101,6 +132,9 @@ where
     let mut deleted_files = Vec::new();
 
     for (index, mapped_file) in files.iter().enumerate().take(candidate_count) {
+        if pinned_file_offset.is_some_and(|pinned| mapped_file.get_file_from_offset() >= pinned) {
+            break;
+        }
         let live_max_timestamp = mapped_file.get_last_modified_timestamp() as i64 + expired_time;
         if now_millis() >= live_max_timestamp || clean_immediately {
             if mapped_file.destroy(interval_forcibly as u64) {

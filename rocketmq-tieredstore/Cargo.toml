@@ -35,7 +35,7 @@ rust-version.workspace = true
 default = ["posix-provider", "memory-provider", "serde"]
 posix-provider = []
 memory-provider = []
-serde = ["dep:serde", "dep:serde_json"]
+serde = []
 rocketmq-store-integration = []
 otel-metrics = ["rocketmq-observability/otel-metrics"]
 
@@ -49,8 +49,8 @@ rocketmq-store-api = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
-serde = { workspace = true, optional = true, features = ["derive"] }
-serde_json = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }

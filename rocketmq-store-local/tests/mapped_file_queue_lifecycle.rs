@@ -17,6 +17,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_offset;
 use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time;
+use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time_before;
 use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_last_mapped_file;
 use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_file_queue;
 use rocketmq_store_local::mapped_file::queue_lifecycle::mapped_files_after_removal;
@@ -75,6 +76,23 @@ fn time_deletion_keeps_the_newest_file_and_honors_the_batch_limit() {
     let deleted = deletion.into_mapped_files();
     assert!(Arc::ptr_eq(&deleted[0], &files[0]));
     assert!(files[2].is_available());
+}
+
+#[test]
+fn time_deletion_stops_before_the_pinned_wal_segment() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let files = vec![
+        mapped_file(&temp_dir, 0, 16),
+        mapped_file(&temp_dir, 16, 16),
+        mapped_file(&temp_dir, 32, 16),
+        mapped_file(&temp_dir, 48, 16),
+    ];
+
+    let deletion = delete_expired_mapped_files_by_time_before(&files, 0, 0, 1000, true, 10, Some(16), || 0);
+
+    assert_eq!(deletion.deleted_count(), 1);
+    assert!(!files[0].is_available());
+    assert!(files[1..].iter().all(|file| file.is_available()));
 }
 
 #[test]

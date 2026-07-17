@@ -17,9 +17,12 @@ use std::sync::Arc;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::boundary_type::BoundaryType;
+use rocketmq_error::RocketMQError;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
+use rocketmq_store_api::DerivedRecordId;
 use rocketmq_tieredstore::dispatcher::DefaultTieredDispatcher;
 use rocketmq_tieredstore::dispatcher::TieredDispatchRequest;
+use rocketmq_tieredstore::dispatcher::TieredDispatcher;
 use rocketmq_tieredstore::fetcher::TieredGetMessageResult;
 use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
 use rocketmq_tieredstore::fetcher::TieredQueryResult;
@@ -62,7 +65,22 @@ impl TieredStoreDecorator {
     }
 
     pub fn commit_log_dispatcher(&self, body_resolver: Arc<DispatchBodyResolver>) -> Arc<dyn CommitLogDispatcher> {
-        Arc::new(TieredCommitLogDispatcher::new(self.store.dispatcher(), body_resolver))
+        let dispatcher = self.store.dispatcher();
+        let retry_body_resolver = body_resolver.clone();
+        dispatcher.set_retry_payload_resolver(Arc::new(move |physical_offset, length| {
+            let commit_log_offset = i64::try_from(physical_offset).ok()?;
+            let msg_size = i32::try_from(length).ok()?;
+            retry_body_resolver(&DispatchRequest {
+                commit_log_offset,
+                msg_size,
+                ..DispatchRequest::default()
+            })
+        }));
+        Arc::new(TieredCommitLogDispatcher::new_with_source_epoch(
+            dispatcher,
+            body_resolver,
+            self.store.config().source_epoch,
+        ))
     }
 
     pub async fn load(&self) -> Result<(), StoreError> {
@@ -88,6 +106,14 @@ impl TieredStoreDecorator {
 
     pub fn metrics(&self) -> Arc<TieredStoreMetrics> {
         self.store.metrics()
+    }
+
+    pub fn minimum_pinned_wal_segment(&self) -> Option<u64> {
+        self.store.dispatcher().health().minimum_pinned_wal_segment()
+    }
+
+    pub fn is_dispatch_ready(&self) -> bool {
+        self.store.dispatcher().health().is_ready()
     }
 
     pub const fn should_try_get_message(status: GetMessageStatus) -> bool {
@@ -305,6 +331,7 @@ where
 {
     dispatcher: Arc<DefaultTieredDispatcher<P>>,
     body_resolver: Arc<DispatchBodyResolver>,
+    source_epoch: u64,
 }
 
 impl<P> TieredCommitLogDispatcher<P>
@@ -312,10 +339,28 @@ where
     P: TieredStoreProvider,
 {
     pub fn new(dispatcher: Arc<DefaultTieredDispatcher<P>>, body_resolver: Arc<DispatchBodyResolver>) -> Self {
+        Self::new_with_source_epoch(dispatcher, body_resolver, 0)
+    }
+
+    pub fn new_with_source_epoch(
+        dispatcher: Arc<DefaultTieredDispatcher<P>>,
+        body_resolver: Arc<DispatchBodyResolver>,
+        source_epoch: u64,
+    ) -> Self {
         Self {
             dispatcher,
             body_resolver,
+            source_epoch,
         }
+    }
+
+    fn derived_record(&self, request: &DispatchRequest) -> Result<DerivedRecordId, RocketMQError> {
+        let physical_offset = u64::try_from(request.commit_log_offset)
+            .map_err(|_| RocketMQError::illegal_argument("tiered CommitLog offset must not be negative"))?;
+        let length = u32::try_from(request.msg_size)
+            .map_err(|_| RocketMQError::illegal_argument("tiered CommitLog length must be positive"))?;
+        DerivedRecordId::try_new(self.source_epoch, physical_offset, length)
+            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
     }
 }
 
@@ -339,7 +384,10 @@ where
         };
 
         let request = to_tiered_dispatch_request(dispatch_request, body);
-        if let Err(error) = self.dispatcher.try_dispatch(request) {
+        let result = self
+            .derived_record(dispatch_request)
+            .and_then(|record| self.dispatcher.try_dispatch_derived(record, request));
+        if let Err(error) = result {
             warn!(
                 topic = %dispatch_request.topic,
                 queue_id = dispatch_request.queue_id,
@@ -348,6 +396,76 @@ where
                 "failed to enqueue tieredstore dispatch request"
             );
         }
+    }
+
+    fn dispatch_async<'a>(
+        &'a self,
+        dispatch_request: &'a mut DispatchRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            if !dispatch_request.success {
+                return;
+            }
+            let record = match self.derived_record(dispatch_request) {
+                Ok(record) => record,
+                Err(error) => {
+                    warn!(error = %error, "reject invalid tieredstore CommitLog identity");
+                    return;
+                }
+            };
+            let body = loop {
+                if self.dispatcher.is_shutdown() {
+                    return;
+                }
+                if let Some(body) = (self.body_resolver)(dispatch_request) {
+                    break body;
+                }
+                debug!(
+                    topic = %dispatch_request.topic,
+                    queue_id = dispatch_request.queue_id,
+                    queue_offset = dispatch_request.consume_queue_offset,
+                    "pause tieredstore derived reader because CommitLog body is unavailable"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            };
+            let request = to_tiered_dispatch_request(dispatch_request, body);
+            loop {
+                if self.dispatcher.is_shutdown() {
+                    return;
+                }
+                match self.dispatcher.dispatch_derived(record, request.clone()).await {
+                    Ok(()) => break,
+                    Err(error) => {
+                        warn!(
+                            topic = %dispatch_request.topic,
+                            queue_id = dispatch_request.queue_id,
+                            queue_offset = dispatch_request.consume_queue_offset,
+                            error = %error,
+                            "pause tieredstore derived reader after dispatch failure"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        })
+    }
+
+    fn dispatch_batch_async<'a>(
+        &'a self,
+        dispatch_requests: &'a mut [DispatchRequest],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            for request in dispatch_requests.iter_mut() {
+                self.dispatch_async(request).await;
+            }
+        })
+    }
+
+    fn dispatch_progress_offset(&self, _commit_log_min_offset: i64) -> Option<i64> {
+        self.dispatcher
+            .health()
+            .cursor()
+            .and_then(|cursor| i64::try_from(cursor.next_offset()).ok())
     }
 }
 
