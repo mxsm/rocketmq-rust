@@ -706,7 +706,7 @@ distribution/
 | `rocketmq-proxy/`（现有 composition/facade） | binary、config、auth provider 装配、adapter 选择、旧 public path re-export | proxy-core、按 feature 可选 cluster/local、auth、runtime、observability | 新增业务算法；让 core/local 经 facade 反向依赖 cluster/client |
 | `rocketmq-client/`（包名 `rocketmq-client-rust`） | SDK 构造、routing、retry、producer/consumer/admin runtime 与兼容 re-export | model、protocol、transport、security-api、auth、runtime、error、observability | Broker/Store 实现；承载 server/admin/UI owner-specific 合同；绕过 security-api 扩散 auth provider 私有类型 |
 | `rocketmq-admin-core/` | admin-owned capability/request/result 与远程 client adapter | model、protocol、security-api；仅 `client_adapter/` 允许完整 client；R0 的 `legacy-common-compat` 可选边只供旧 facade | 新 `core/` 暴露 client/common 类型；R0 仅允许旧 deprecated facade 在 feature 下保留全部旧签名一个 major，下一 major 删除 common 兼容边 |
-| `rocketmq-tools/rocketmq-mcp/` | 已落地 QueryFacade/AdminSession/live Resource/cache；未来 SRE 控制面 | admin-core、security-api、observability 的公开边界 | 直接 client、数据面私有实现、直接 WAL/socket、绕过授权 |
+| `rocketmq-tools/rocketmq-mcp/` | 已落地 QueryFacade/AdminSession/live Resource/cache；未来 SRE 控制面 | admin-core、security-api、observability，以及 runtime 的 owned lifecycle/BlockingExecutor | 直接 client、数据面私有实现、直接 WAL/socket、绕过授权；未纳入 ServiceContext 的后台任务或裸阻塞 I/O |
 | Dashboard backends | UI/BFF 与 admin DTO 映射 | admin-core、dashboard-common、error | 完整 client、MQAdminExt、UI 自建 producer/runtime |
 | `rocketmq/`（包名 `rocketmq-rust`） | 遗留 ArcMut/锁/队列/调度/task/shutdown 兼容层 | 迁移期只依赖 runtime/error | 作为 umbrella 或新 core；让任何新 crate 依赖 ArcMut |
 

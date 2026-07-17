@@ -23,8 +23,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MCP = ROOT / "rocketmq-tools" / "rocketmq-mcp"
 FORBIDDEN_DIRECT_PACKAGES = {
+    "rocketmq-auth",
     "rocketmq-client-rust",
     "rocketmq-common",
+    "rocketmq-error",
     "rocketmq-remoting",
 }
 FORBIDDEN_SOURCE_CRATES = {

@@ -40,7 +40,7 @@ class TargetDagCloseoutTests(unittest.TestCase):
         )
 
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("TARGET_COMPATIBILITY_LEDGER active_edges=38 entries=38", result.stdout)
+        self.assertIn("TARGET_COMPATIBILITY_LEDGER active_edges=35 entries=35", result.stdout)
         self.assertIn("TARGET_TEST_DEPENDENCIES active_edges=3 entries=3", result.stdout)
         self.assertIn("ARCHITECTURE_DEPENDENCY_GUARD_OK mode=target", result.stdout)
         self.assertNotIn("VIOLATION", result.stdout)
@@ -74,10 +74,10 @@ class TargetDagCloseoutTests(unittest.TestCase):
 
         self.assertEqual([], baseline["manifest_exceptions"])
         self.assertEqual([], baseline["source_exceptions"])
-        self.assertEqual(38, len(ledger))
-        self.assertEqual(38, len(identities))
+        self.assertEqual(35, len(ledger))
+        self.assertEqual(35, len(identities))
         self.assertEqual(
-            Counter({"R1": 29, "next-major": 4, "M09-04": 3, "long-term": 2}),
+            Counter({"R1": 29, "next-major": 4, "long-term": 2}),
             Counter(item["remove_by"] for item in ledger),
         )
 

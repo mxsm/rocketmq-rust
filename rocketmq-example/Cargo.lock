@@ -2417,7 +2417,6 @@ dependencies = [
  "rand 0.10.1",
  "rocketmq-common",
  "rocketmq-error",
- "rocketmq-macros",
  "rocketmq-protocol",
  "rocketmq-runtime",
  "rocketmq-rust",

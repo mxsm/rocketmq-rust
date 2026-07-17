@@ -33,14 +33,12 @@ read-only       = []
 diagnose        = ["read-only"]
 stdio           = ["rmcp/transport-io"]
 observability   = ["dep:rocketmq-observability"]
-auth            = ["dep:rocketmq-auth"]
+auth            = []
 streamable-http = ["rmcp/transport-streamable-http-server", "dep:axum", "dep:tower-http", "auth"]
 change-planning = []
 
 [dependencies]
 rocketmq-admin-core   = { version = "1.0.0", path = "../rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
-rocketmq-auth         = { workspace = true, optional = true }
-rocketmq-error        = { workspace = true }
 rocketmq-observability = { workspace = true, optional = true }
 rocketmq-runtime      = { workspace = true }
 
