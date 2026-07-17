@@ -1,0 +1,61 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Topic management core logic
+//!
+//! This module provides reusable business logic for topic operations,
+//! independent of CLI presentation layer.
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use rocketmq_admin_core::core::topic::{TopicService, TopicClusterList};
+//!
+//! let clusters = TopicService::get_topic_cluster_list(&mut admin, "MyTopic").await?;
+//! ```
+
+pub mod operations;
+pub mod types;
+
+// Re-export all public items from submodules
+pub use self::operations::TopicOperations;
+pub use self::operations::TopicService;
+pub use self::types::AllocateMqQueryRequest;
+pub use self::types::AllocatedMqQueryResult;
+pub use self::types::BrokerData;
+pub use self::types::DeleteTopicRequest;
+pub use self::types::DeleteTopicResult;
+pub use self::types::OrderConfMethod;
+pub use self::types::OrderConfRequest;
+pub use self::types::OrderConfResult;
+pub use self::types::QueueData;
+pub use self::types::TopicClusterList;
+pub use self::types::TopicClusterQueryRequest;
+pub use self::types::TopicConfig;
+pub use self::types::TopicListItem;
+pub use self::types::TopicListQueryRequest;
+pub use self::types::TopicListResult;
+pub use self::types::TopicRouteInfo;
+pub use self::types::TopicRouteQueryRequest;
+pub use self::types::TopicStatus;
+pub use self::types::TopicStatusQueryRequest;
+pub use self::types::TopicTarget;
+pub use self::types::UpdateTopicListRequest;
+pub use self::types::UpdateTopicListResult;
+pub use self::types::UpdateTopicPermRequest;
+pub use self::types::UpdateTopicPermResult;
+pub use self::types::UpdateTopicRequest;
+pub use self::types::UpdateTopicResult;
+pub use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
+pub use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;

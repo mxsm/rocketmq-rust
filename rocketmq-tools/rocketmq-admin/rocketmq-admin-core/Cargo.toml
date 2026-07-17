@@ -34,15 +34,21 @@ description = "Reusable RocketMQ admin capability layer"
 rust-version.workspace = true
 
 [features]
-default        = []
+default        = ["legacy-common-compat"]
+client-adapter = ["dep:rocketmq-client-rust"]
+legacy-common-compat = [
+  "client-adapter",
+  "dep:rocketmq-common",
+]
 rocksdb-export = ["dep:rocksdb"]
 
 [dependencies]
-rocketmq-common      = { workspace = true }
-rocketmq-remoting    = { workspace = true }
-rocketmq-rust        = { workspace = true }
-rocketmq-client-rust = { workspace = true }
-rocketmq-error       = { workspace = true }
+rocketmq-model        = { workspace = true }
+rocketmq-protocol     = { workspace = true }
+rocketmq-security-api = { workspace = true }
+
+rocketmq-client-rust = { workspace = true, optional = true }
+rocketmq-common      = { workspace = true, optional = true }
 
 serde.workspace      = true
 serde_json.workspace = true
@@ -54,3 +60,59 @@ futures        = "0.3.32"
 regex          = "1.12.4"
 bytes          = { workspace = true }
 rocksdb        = { workspace = true, optional = true }
+
+[[example]]
+name              = "admin_builder_pattern"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "auth_core_models"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "cluster_core_models"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "connection_core_models"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "container_core_models"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "controller_core_models"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "export_core_models"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "ha_core_models"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "lite_core_models"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "legacy_surface_compile"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "producer_core_models"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "static_topic_core_models"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "stats_core_models"
+required-features = ["legacy-common-compat"]
+
+[[test]]
+name              = "topic_list_core_models"
+required-features = ["legacy-common-compat"]

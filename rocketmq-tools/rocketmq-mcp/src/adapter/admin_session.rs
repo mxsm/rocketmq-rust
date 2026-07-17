@@ -14,17 +14,17 @@
 
 use std::collections::BTreeMap;
 
-use rocketmq_admin_core::core::admin::AdminBuilder;
-use rocketmq_admin_core::core::admin::AdminGuard;
-use rocketmq_admin_core::core::broker::BrokerRuntimeStatsQueryRequest;
-use rocketmq_admin_core::core::broker::BrokerService;
-use rocketmq_admin_core::core::cluster::ClusterListQueryRequest;
-use rocketmq_admin_core::core::cluster::ClusterService;
-use rocketmq_admin_core::core::consumer::ConsumerProgressRequest;
-use rocketmq_admin_core::core::consumer::ConsumerProgressResult;
-use rocketmq_admin_core::core::consumer::ConsumerService;
-use rocketmq_admin_core::core::topic::TopicListQueryRequest;
-use rocketmq_admin_core::core::topic::TopicService;
+use rocketmq_admin_core::client_adapter::AdminGuard;
+use rocketmq_admin_core::client_adapter::ClientAdminBuilder as AdminBuilder;
+use rocketmq_admin_core::core::broker::BrokerAdmin;
+use rocketmq_admin_core::core::broker::ListBrokersRequest;
+use rocketmq_admin_core::core::broker::ProbeBrokerRuntimeRequest;
+use rocketmq_admin_core::core::consumer::ConsumerAdmin;
+use rocketmq_admin_core::core::consumer::ListConsumerGroupsRequest;
+use rocketmq_admin_core::core::consumer::QueryConsumerLagRequest;
+use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
+use rocketmq_admin_core::core::topic::ListTopicsRequest;
+use rocketmq_admin_core::core::topic::TopicAdmin;
 
 use crate::model::contract::observed_at_from_millis;
 use crate::tools::cluster_tools::BrokerSummary;
@@ -109,12 +109,6 @@ pub(crate) struct AdminCoreSession {
 }
 
 impl AdminCoreSession {
-    fn admin(&self) -> Result<&AdminGuard, ToolExecutionError> {
-        self.admin
-            .as_ref()
-            .ok_or_else(|| ToolExecutionError::internal("admin session is already shut down"))
-    }
-
     fn admin_mut(&mut self) -> Result<&mut AdminGuard, ToolExecutionError> {
         self.admin
             .as_mut()
@@ -125,19 +119,20 @@ impl AdminCoreSession {
 #[async_trait::async_trait]
 impl AdminSession for AdminCoreSession {
     async fn broker_rows(&mut self) -> Result<Vec<BrokerSummary>, ToolExecutionError> {
-        let request = ClusterListQueryRequest::new(false, Some(self.cluster.name.clone()))
-            .with_optional_namesrv_addr(Some(self.cluster.namesrv_addr.clone()));
-        let result = ClusterService::query_cluster_list_with_admin(self.admin()?, &request)
+        let request = ListBrokersRequest::try_new(self.cluster.name.clone()).map_err(ToolExecutionError::backend)?;
+        let result = self
+            .admin_mut()?
+            .list_brokers(&request)
             .await
             .map_err(ToolExecutionError::backend)?;
-        Ok(result.base_rows.iter().map(map_broker_summary).collect())
+        Ok(result.brokers.iter().map(map_broker_summary).collect())
     }
 
     async fn topic_entries(&mut self) -> Result<Vec<TopicListEntry>, ToolExecutionError> {
-        let request = TopicListQueryRequest::new()
-            .with_optional_namesrv_addr(Some(self.cluster.namesrv_addr.clone()))
-            .with_optional_cluster_name(Some(self.cluster.name.clone()));
-        let result = TopicService::query_topic_list_with_admin(self.admin_mut()?, &request)
+        let request = ListTopicsRequest::new(Some(self.cluster.name.clone()));
+        let result = self
+            .admin_mut()?
+            .list_topics(&request)
             .await
             .map_err(ToolExecutionError::backend)?;
         Ok(result
@@ -152,35 +147,38 @@ impl AdminSession for AdminCoreSession {
     }
 
     async fn topic_route(&mut self, topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {
-        let route = TopicService::get_topic_route(self.admin_mut()?, topic.to_string())
+        let request = GetTopicRouteRequest::try_new(topic).map_err(ToolExecutionError::backend)?;
+        let route = self
+            .admin_mut()?
+            .get_topic_route(&request)
             .await
             .map_err(ToolExecutionError::backend)?
             .ok_or_else(|| ToolExecutionError::Backend(format!("topic route not found: {topic}")))?;
         let mut brokers = route
-            .broker_datas
+            .brokers
             .iter()
             .map(|broker| TopicRouteBroker {
-                cluster: broker.cluster().to_string(),
-                broker_name: broker.broker_name().to_string(),
+                cluster: broker.cluster.clone(),
+                broker_name: broker.broker_name.clone(),
                 broker_addrs: broker
-                    .broker_addrs()
+                    .broker_addrs
                     .iter()
                     .map(|(broker_id, broker_addr)| (broker_id.to_string(), broker_addr.to_string()))
                     .collect::<BTreeMap<_, _>>(),
-                zone_name: broker.zone_name().map(ToString::to_string),
-                enable_acting_master: broker.enable_acting_master(),
+                zone_name: broker.zone_name.clone(),
+                enable_acting_master: broker.enable_acting_master,
             })
             .collect::<Vec<_>>();
         brokers.sort_by(|left, right| left.broker_name.cmp(&right.broker_name));
         let mut queues = route
-            .queue_datas
+            .queues
             .iter()
             .map(|queue| TopicRouteQueue {
-                broker_name: queue.broker_name().to_string(),
-                read_queue_nums: queue.read_queue_nums(),
-                write_queue_nums: queue.write_queue_nums(),
-                perm: queue.perm(),
-                topic_sys_flag: queue.topic_sys_flag(),
+                broker_name: queue.broker_name.clone(),
+                read_queue_nums: queue.read_queue_nums,
+                write_queue_nums: queue.write_queue_nums,
+                perm: queue.perm,
+                topic_sys_flag: queue.topic_sys_flag,
             })
             .collect::<Vec<_>>();
         queues.sort_by(|left, right| left.broker_name.cmp(&right.broker_name));
@@ -188,30 +186,20 @@ impl AdminSession for AdminCoreSession {
     }
 
     async fn consumer_groups(&mut self) -> Result<Vec<ConsumerGroupSummary>, ToolExecutionError> {
-        let request = ConsumerProgressRequest::try_new(
-            None,
-            None,
-            false,
-            Some(self.cluster.name.clone()),
-            Some(self.cluster.namesrv_addr.clone()),
-        )
-        .map_err(ToolExecutionError::backend)?;
-        let result = ConsumerService::query_consumer_progress_with_admin(self.admin()?, &request)
+        let result = self
+            .admin_mut()?
+            .list_consumer_groups(&ListConsumerGroupsRequest)
             .await
             .map_err(ToolExecutionError::backend)?;
-        let ConsumerProgressResult::All(groups) = result else {
-            return Err(ToolExecutionError::internal(
-                "consumer group query did not return the expected aggregate result",
-            ));
-        };
-        Ok(groups
+        Ok(result
+            .groups
             .into_iter()
             .map(|group| ConsumerGroupSummary {
                 group: group.group,
                 version: group.version,
-                client_count: group.count,
-                consume_type: format!("{:?}", group.consume_type),
-                message_model: format!("{:?}", group.message_model),
+                client_count: group.client_count,
+                consume_type: group.consume_type,
+                message_model: group.message_model,
                 consume_tps: group.consume_tps,
                 diff_total: group.diff_total,
             })
@@ -223,23 +211,14 @@ impl AdminSession for AdminCoreSession {
         topic: &str,
         consumer_group: &str,
     ) -> Result<SessionConsumerLag, ToolExecutionError> {
-        let request = ConsumerProgressRequest::try_new(
-            Some(consumer_group.to_string()),
-            Some(topic.to_string()),
-            true,
-            Some(self.cluster.name.clone()),
-            Some(self.cluster.namesrv_addr.clone()),
-        )
-        .map_err(ToolExecutionError::backend)?;
-        let result = ConsumerService::query_consumer_progress_with_admin(self.admin()?, &request)
+        let request =
+            QueryConsumerLagRequest::try_new(topic, consumer_group, true).map_err(ToolExecutionError::backend)?;
+        let result = self
+            .admin_mut()?
+            .query_consumer_lag(&request)
             .await
             .map_err(ToolExecutionError::backend)?;
-        let ConsumerProgressResult::Group(progress) = result else {
-            return Err(ToolExecutionError::internal(
-                "consumer lag query did not return the expected group result",
-            ));
-        };
-        let mut queues = progress
+        let mut queues = result
             .rows
             .iter()
             .map(|row| QueueLag {
@@ -248,7 +227,7 @@ impl AdminSession for AdminCoreSession {
                 queue_id: row.queue_id,
                 broker_offset: row.broker_offset,
                 consumer_offset: row.consumer_offset,
-                lag: row.diff,
+                lag: row.lag,
                 inflight: row.inflight,
                 last_observed_at: observed_at_from_millis(row.last_timestamp),
                 client_ip: row.client_ip.clone(),
@@ -261,16 +240,17 @@ impl AdminSession for AdminCoreSession {
         });
         Ok(SessionConsumerLag {
             queues,
-            total_lag: progress.diff_total,
-            consume_tps: progress.consume_tps,
-            inflight_total: progress.inflight_total,
+            total_lag: result.total_lag,
+            consume_tps: result.consume_tps,
+            inflight_total: result.inflight_total,
         })
     }
 
     async fn probe_broker_runtime(&mut self) -> Result<(), ToolExecutionError> {
-        let request = BrokerRuntimeStatsQueryRequest::try_new(None, Some(self.cluster.name.clone()))
-            .map_err(ToolExecutionError::backend)?;
-        BrokerService::query_broker_runtime_stats_with_admin(self.admin()?, &request)
+        let request =
+            ProbeBrokerRuntimeRequest::try_new(self.cluster.name.clone()).map_err(ToolExecutionError::backend)?;
+        self.admin_mut()?
+            .probe_broker_runtime(&request)
             .await
             .map(|_| ())
             .map_err(ToolExecutionError::backend)
@@ -284,12 +264,12 @@ impl AdminSession for AdminCoreSession {
     }
 }
 
-fn map_broker_summary(row: &rocketmq_admin_core::core::cluster::ClusterBaseInfoRow) -> BrokerSummary {
+fn map_broker_summary(row: &rocketmq_admin_core::core::broker::BrokerSummary) -> BrokerSummary {
     BrokerSummary {
-        cluster: row.cluster_name.clone(),
+        cluster: row.cluster.clone(),
         broker_name: row.broker_name.clone(),
         broker_id: row.broker_id,
-        broker_addr: row.broker_addr.to_string(),
+        broker_addr: row.broker_addr.clone(),
         version: row.version.clone(),
         in_tps: row.in_tps.clone(),
         out_tps: row.out_tps.clone(),

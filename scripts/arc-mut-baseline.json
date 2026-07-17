@@ -34137,63 +34137,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "ffa7b93a79b2e7e603e6a6dc",
-      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/message/consume_message_sub_command.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "153f0e6bbbf55aeed5fb3a0a",
-          "fingerprint": "9a01985a92de69ae54ea6373",
-          "item": "fn print_messages",
-          "line": 97
-        }
-      ],
-      "owner": "tools",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M08",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "37deef3937ea0a2097471e29",
-      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/message/print_message_sub_command.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "31dd4fa92f5aa123a7fa17f3",
-          "fingerprint": "491d802ebfb3ae0c4cbb899e",
-          "item": "fn print_message",
-          "line": 101
-        }
-      ],
-      "owner": "tools",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M08",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "14c7b2c8bf9d75f51f77f0bd",
-      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/message/print_msg_by_queue_sub_command.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "f95878f53906169331fe81f7",
-          "fingerprint": "198fc60de53094a353f84a47",
-          "item": "fn print_messages",
-          "line": 149
-        }
-      ],
-      "owner": "tools",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M08",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "e7fddcf18a5c369b02cd2678",
       "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/admin/default_mq_admin_ext.rs",
       "symbol": "ArcMut",
@@ -34262,10 +34205,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "87f8475bd7fccf4f95fdc143",
-          "fingerprint": "e38f05a559593c259d2a45ce",
+          "id": "8e0dc49bc32586bf05ce832e",
+          "fingerprint": "c8bb35fd083b64e69e887496",
           "item": "<module>",
-          "line": 79
+          "line": 65
         }
       ],
       "owner": "tools",
@@ -34313,107 +34256,6 @@
       ],
       "owner": "tools",
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M08",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "55825aa55c70945ce7611c37",
-      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/message.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "6490f7163ee6b9dc0c4cea12",
-          "fingerprint": "4bdac8883ee2a6ab967444ea",
-          "item": "mod tests",
-          "line": 2078
-        }
-      ],
-      "owner": "tools",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M08",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "fd6d49d1218b354856d73a33",
-      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/message.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "673f287006fd9178c74d91cf",
-          "fingerprint": "29a37568011dd4d15f417434",
-          "item": "<module>",
-          "line": 44
-        }
-      ],
-      "owner": "tools",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M08",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "929a0e754e6f4755fa849d2e",
-      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/message.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "27c41fa3ee94de5d6e90ea3d",
-          "fingerprint": "8d851c48f995619a76deb34c",
-          "item": "struct QueryMessageByOffsetResult",
-          "line": 509
-        },
-        {
-          "id": "cd8d1fbebca16e8ba989b143",
-          "fingerprint": "c863fb897d7ae557bc3b4d68",
-          "item": "enum MessagePullEvent",
-          "line": 1020
-        }
-      ],
-      "owner": "tools",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M08",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "3ecd194d58ba7616978adf78",
-      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/view_model/tests.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d77f5777a820fdf5381054c5",
-          "fingerprint": "aa07c5e43daa2d3856371f07",
-          "item": "fn phase_two_message_detail_results_render_as_tables",
-          "line": 462
-        }
-      ],
-      "owner": "tools",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M08",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "0d41077802392f4aeb257d51",
-      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/view_model/tests.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "e495adf45c0a13003672b0e9",
-          "fingerprint": "912db26d75aa4505989bef0c",
-          "item": "<module>",
-          "line": 95
-        }
-      ],
-      "owner": "tools",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
       "remove_by": "M08",
       "adr": "ADR-002"
     }

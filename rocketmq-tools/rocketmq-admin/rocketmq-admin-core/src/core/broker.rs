@@ -12,50 +12,76 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Broker management core logic.
+//! Broker capability contracts.
 
-pub mod operations;
-mod types;
+use serde::Deserialize;
+use serde::Serialize;
 
-pub use self::operations::BrokerService;
-pub use self::types::BrokerBooleanOperationResult;
-pub use self::types::BrokerConfigEntry;
-pub use self::types::BrokerConfigQueryRequest;
-pub use self::types::BrokerConfigQueryResult;
-pub use self::types::BrokerConfigSection;
-pub use self::types::BrokerConfigSectionTarget;
-pub use self::types::BrokerConfigUpdateApplyResult;
-pub use self::types::BrokerConfigUpdatePlan;
-pub use self::types::BrokerConfigUpdatePlanResult;
-pub use self::types::BrokerConfigUpdateRequest;
-pub use self::types::BrokerConsumeStatsQueryRequest;
-pub use self::types::BrokerConsumeStatsResult;
-pub use self::types::BrokerConsumeStatsRow;
-pub use self::types::BrokerEpochEntry;
-pub use self::types::BrokerEpochQueryRequest;
-pub use self::types::BrokerEpochQueryResult;
-pub use self::types::BrokerEpochQueryTarget;
-pub use self::types::BrokerEpochSection;
-pub use self::types::BrokerOperationFailure;
-pub use self::types::BrokerOperationResult;
-pub use self::types::BrokerOptionalTarget;
-pub use self::types::BrokerRuntimeStatsEntry;
-pub use self::types::BrokerRuntimeStatsFailure;
-pub use self::types::BrokerRuntimeStatsQueryRequest;
-pub use self::types::BrokerRuntimeStatsResult;
-pub use self::types::BrokerRuntimeStatsSection;
-pub use self::types::BrokerTarget;
-pub use self::types::CleanExpiredConsumeQueueReport;
-pub use self::types::CleanExpiredConsumeQueueRequest;
-pub use self::types::CleanExpiredConsumeQueueTargetResult;
-pub use self::types::ColdDataFlowCtrGroupConfigRemoveRequest;
-pub use self::types::ColdDataFlowCtrGroupConfigUpdateRequest;
-pub use self::types::ColdDataFlowCtrInfoQueryRequest;
-pub use self::types::ColdDataFlowCtrInfoQueryResult;
-pub use self::types::ColdDataFlowCtrInfoSection;
-pub use self::types::CommitLogReadAheadMode;
-pub use self::types::CommitLogReadAheadRequest;
-pub use self::types::CommitLogReadAheadResult;
-pub use self::types::CommitLogReadAheadSection;
-pub use self::types::ResetMasterFlushOffsetRequest;
-pub use self::types::SwitchTimerEngineRequest;
+use crate::core::error::required;
+use crate::core::AdminFuture;
+use crate::core::AdminResult;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListBrokersRequest {
+    pub cluster: String,
+}
+
+impl ListBrokersRequest {
+    pub fn try_new(cluster: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            cluster: required("cluster", cluster)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrokerSummary {
+    pub cluster: String,
+    pub broker_name: String,
+    pub broker_id: u64,
+    pub broker_addr: String,
+    pub version: String,
+    pub in_tps: String,
+    pub out_tps: String,
+    pub timer_progress: String,
+    pub page_cache_lock_time_millis: String,
+    pub hour: String,
+    pub space: String,
+    pub broker_active: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ListBrokersResult {
+    pub brokers: Vec<BrokerSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeBrokerRuntimeRequest {
+    pub cluster: String,
+}
+
+impl ProbeBrokerRuntimeRequest {
+    pub fn try_new(cluster: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            cluster: required("cluster", cluster)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeBrokerRuntimeResult {
+    pub attempted: usize,
+    pub failures: Vec<String>,
+}
+
+pub trait BrokerAdmin: Send {
+    fn list_brokers<'a>(&'a mut self, request: &'a ListBrokersRequest) -> AdminFuture<'a, ListBrokersResult>;
+
+    fn probe_broker_runtime<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeRequest,
+    ) -> AdminFuture<'a, ProbeBrokerRuntimeResult>;
+}
+
+#[cfg(feature = "legacy-common-compat")]
+pub use crate::client_adapter::legacy::core::broker::*;

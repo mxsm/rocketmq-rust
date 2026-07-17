@@ -829,6 +829,18 @@
       "from": "215312fe8a29b6726059aea2",
       "to": "90f7d694889c075a7c018060",
       "reason": "Replacing transaction Client pull results with store-api outcomes shifted the existing ArcMut import without adding an occurrence"
+    },
+    {
+      "identity": "1c5f3354d36c96905d421b06",
+      "from": "87f8475bd7fccf4f95fdc143",
+      "to": "fc0b1529da669ab60ac25323",
+      "reason": "Routing the existing DefaultMQAdminExt ArcMut import through the Client compatibility adapter changed its fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "1c5f3354d36c96905d421b06",
+      "from": "fc0b1529da669ab60ac25323",
+      "to": "8e0dc49bc32586bf05ce832e",
+      "reason": "Rustfmt reordered the surrounding compatibility imports while preserving the same DefaultMQAdminExt ArcMut import and occurrence count"
     }
   ]
 }

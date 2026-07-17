@@ -26,7 +26,7 @@ fn core_does_not_expose_cli_or_terminal_ui_modules() {
         "rocketmq-admin-core should not depend on tabled terminal rendering"
     );
     assert!(
-        !lib_rs.contains("pub mod cli"),
+        !lib_rs.contains("pub mod cli;") && !lib_rs.contains("pub mod cli {"),
         "rocketmq-admin-core should not expose CLI adapter modules"
     );
     assert!(

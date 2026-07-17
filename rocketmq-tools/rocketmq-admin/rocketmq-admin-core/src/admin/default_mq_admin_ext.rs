@@ -19,21 +19,21 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::client_adapter::legacy::client_sdk::admin::default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
+use crate::client_adapter::legacy::client_sdk::admin::mq_admin_ext_async::MQAdminExt;
+use crate::client_adapter::legacy::client_sdk::base::client_config::ClientConfig;
+use crate::client_adapter::legacy::client_sdk::common::admin_tool_result::AdminToolResult;
+use crate::client_adapter::legacy::common_sdk::common::base::plain_access_config::PlainAccessConfig;
+use crate::client_adapter::legacy::common_sdk::common::config::TopicConfig;
+use crate::client_adapter::legacy::common_sdk::common::message::message_enum::MessageRequestMode;
+use crate::client_adapter::legacy::common_sdk::common::message::message_ext::MessageExt;
+use crate::client_adapter::legacy::common_sdk::common::message::message_queue::MessageQueue;
+#[allow(deprecated)]
+use crate::client_adapter::legacy::common_sdk::common::tools::broker_operator_result::BrokerOperatorResult;
+#[allow(deprecated)]
+use crate::client_adapter::legacy::common_sdk::common::tools::message_track::MessageTrack;
+use crate::client_adapter::legacy::common_sdk::common::topic::TopicValidator;
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::base::client_config::ClientConfig;
-use rocketmq_client_rust::common::admin_tool_result::AdminToolResult;
-use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-#[allow(deprecated)]
-use rocketmq_common::common::tools::broker_operator_result::BrokerOperatorResult;
-#[allow(deprecated)]
-use rocketmq_common::common::tools::message_track::MessageTrack;
-use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
@@ -62,6 +62,7 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 
 use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
 
+use crate::client_adapter::legacy::client_sdk::admin_adapter_compat::runtime::ArcMut;
 use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
@@ -76,7 +77,6 @@ use rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsDat
 use rocketmq_remoting::protocol::subscription::group_forbidden::GroupForbidden;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 
 const ADMIN_EXT_GROUP: &str = "admin_ext_group";
 
@@ -235,7 +235,8 @@ impl DefaultMQAdminExt {
         offset: i64,
         max_nums: i32,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<rocketmq_client_rust::consumer::pull_result::PullResult> {
+    ) -> rocketmq_error::RocketMQResult<crate::client_adapter::legacy::client_sdk::consumer::pull_result::PullResult>
+    {
         self.default_mqadmin_ext_impl
             .pull_message_from_queue(broker_addr, mq, sub_expression, offset, max_nums, timeout_millis)
             .await
@@ -251,7 +252,8 @@ impl DefaultMQAdminExt {
         end_timestamp: i64,
         key_type: CheetahString,
         last_key: Option<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<rocketmq_client_rust::base::query_result::QueryResult> {
+    ) -> rocketmq_error::RocketMQResult<crate::client_adapter::legacy::client_sdk::base::query_result::QueryResult>
+    {
         self.default_mqadmin_ext_impl
             .query_message_by_key(
                 cluster_name,
@@ -274,7 +276,8 @@ impl DefaultMQAdminExt {
         max_num: i32,
         begin_timestamp: i64,
         end_timestamp: i64,
-    ) -> rocketmq_error::RocketMQResult<rocketmq_client_rust::base::query_result::QueryResult> {
+    ) -> rocketmq_error::RocketMQResult<crate::client_adapter::legacy::client_sdk::base::query_result::QueryResult>
+    {
         self.default_mqadmin_ext_impl
             .query_message_by_unique_key(cluster_name, topic, unique_key, max_num, begin_timestamp, end_timestamp)
             .await
@@ -1670,8 +1673,8 @@ impl MQAdminExt for DefaultMQAdminExt {
 
 #[cfg(test)]
 mod tests {
+    use crate::client_adapter::legacy::client_sdk::admin::mq_admin_ext_async::MQAdminExt;
     use cheetah_string::CheetahString;
-    use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
     use rocketmq_error::RocketMQError;
 
     use super::DefaultMQAdminExt;

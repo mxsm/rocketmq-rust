@@ -21,9 +21,9 @@ use rocketmq_admin_core::core::export_data::ExportPopRecordTarget;
 use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcRequest;
 use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcTarget;
 use rocketmq_admin_core::core::export_data::ExportService;
-use rocketmq_remoting::protocol::body::broker_stats_item::BrokerStatsItem;
-use rocketmq_remoting::protocol::body::kv_table::KVTable;
-use rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData;
+use rocketmq_protocol::protocol::body::broker_stats_item::BrokerStatsItem;
+use rocketmq_protocol::protocol::body::kv_table::KVTable;
+use rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsData;
 
 #[test]
 fn export_configs_request_trims_cluster_and_namesrv() {

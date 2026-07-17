@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,50 +12,87 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Topic management core logic
-//!
-//! This module provides reusable business logic for topic operations,
-//! independent of CLI presentation layer.
-//!
-//! # Examples
-//!
-//! ```rust,ignore
-//! use rocketmq_admin_core::core::topic::{TopicService, TopicClusterList};
-//!
-//! let clusters = TopicService::get_topic_cluster_list(&mut admin, "MyTopic").await?;
-//! ```
+//! Topic capability contracts.
 
-pub mod operations;
-pub mod types;
+use std::collections::BTreeMap;
 
-// Re-export all public items from submodules
-pub use self::operations::TopicOperations;
-pub use self::operations::TopicService;
-pub use self::types::AllocateMqQueryRequest;
-pub use self::types::AllocatedMqQueryResult;
-pub use self::types::BrokerData;
-pub use self::types::DeleteTopicRequest;
-pub use self::types::DeleteTopicResult;
-pub use self::types::OrderConfMethod;
-pub use self::types::OrderConfRequest;
-pub use self::types::OrderConfResult;
-pub use self::types::QueueData;
-pub use self::types::TopicClusterList;
-pub use self::types::TopicClusterQueryRequest;
-pub use self::types::TopicConfig;
-pub use self::types::TopicListItem;
-pub use self::types::TopicListQueryRequest;
-pub use self::types::TopicListResult;
-pub use self::types::TopicRouteInfo;
-pub use self::types::TopicRouteQueryRequest;
-pub use self::types::TopicStatus;
-pub use self::types::TopicStatusQueryRequest;
-pub use self::types::TopicTarget;
-pub use self::types::UpdateTopicListRequest;
-pub use self::types::UpdateTopicListResult;
-pub use self::types::UpdateTopicPermRequest;
-pub use self::types::UpdateTopicPermResult;
-pub use self::types::UpdateTopicRequest;
-pub use self::types::UpdateTopicResult;
-pub use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
-pub use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use serde::Deserialize;
+use serde::Serialize;
+
+use crate::core::error::required;
+use crate::core::AdminFuture;
+use crate::core::AdminResult;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListTopicsRequest {
+    pub cluster: Option<String>,
+}
+
+impl ListTopicsRequest {
+    pub fn new(cluster: Option<String>) -> Self {
+        Self {
+            cluster: cluster.and_then(|value| {
+                let value = value.trim().to_string();
+                (!value.is_empty()).then_some(value)
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicSummary {
+    pub topic: String,
+    pub cluster: Option<String>,
+    pub consumer_group: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListTopicsResult {
+    pub topics: Vec<TopicSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetTopicRouteRequest {
+    pub topic: String,
+}
+
+impl GetTopicRouteRequest {
+    pub fn try_new(topic: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            topic: required("topic", topic)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicBroker {
+    pub cluster: String,
+    pub broker_name: String,
+    pub broker_addrs: BTreeMap<u64, String>,
+    pub zone_name: Option<String>,
+    pub enable_acting_master: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicQueue {
+    pub broker_name: String,
+    pub read_queue_nums: u32,
+    pub write_queue_nums: u32,
+    pub perm: u32,
+    pub topic_sys_flag: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicRoute {
+    pub brokers: Vec<TopicBroker>,
+    pub queues: Vec<TopicQueue>,
+}
+
+pub trait TopicAdmin: Send {
+    fn list_topics<'a>(&'a mut self, request: &'a ListTopicsRequest) -> AdminFuture<'a, ListTopicsResult>;
+
+    fn get_topic_route<'a>(&'a mut self, request: &'a GetTopicRouteRequest) -> AdminFuture<'a, Option<TopicRoute>>;
+}
+
+#[cfg(feature = "legacy-common-compat")]
+pub use crate::client_adapter::legacy::core::topic::*;

@@ -94,7 +94,7 @@ impl ConsumeMessageSubCommand {
         )))
     }
 
-    fn print_messages(msgs: &[rocketmq_rust::ArcMut<MessageExt>]) {
+    fn print_messages(msgs: &[MessageExt]) {
         for msg in msgs {
             let body_str = match msg.body() {
                 Some(body) => String::from_utf8(body.to_vec()).unwrap_or_else(|_| "BINARY".to_string()),

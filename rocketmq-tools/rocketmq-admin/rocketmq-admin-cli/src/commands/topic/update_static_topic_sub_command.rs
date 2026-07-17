@@ -19,14 +19,12 @@ use rocketmq_admin_core::core::static_topic::StaticTopicMappingFileRequest;
 use rocketmq_admin_core::core::static_topic::StaticTopicMappingPlan;
 use rocketmq_admin_core::core::static_topic::StaticTopicService;
 use rocketmq_admin_core::core::static_topic::UpdateStaticTopicRequest;
-use rocketmq_common::FileUtils::file_to_string;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
-use rocketmq_remoting::protocol::static_topic::topic_remapping_detail_wrapper::TopicRemappingDetailWrapper;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
+use crate::commands::topic::static_topic_file;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateStaticTopicSubCommand {
@@ -95,9 +93,7 @@ impl UpdateStaticTopicSubCommand {
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> RocketMQResult<()> {
         let map_file_name = map_file_name.trim();
-        if let Ok(map_data) = file_to_string(map_file_name)
-            && let Ok(wrapper) = serde_json::from_str::<TopicRemappingDetailWrapper>(&map_data)
-        {
+        if let Some(wrapper) = static_topic_file::read_mapping(map_file_name) {
             let request = self.mapping_file_request()?;
             StaticTopicService::update_static_topic_from_mapping_by_request_with_rpc_hook(request, wrapper, rpc_hook)
                 .await?;
@@ -106,10 +102,10 @@ impl UpdateStaticTopicSubCommand {
     }
 
     fn write_mapping_plan(plan: &StaticTopicMappingPlan) -> RocketMQResult<()> {
-        let old_mapping_data_file = TopicQueueMappingUtils::write_to_temp(&plan.old_mapping, false)?;
+        let old_mapping_data_file = static_topic_file::write_mapping(&plan.old_mapping, false)?;
         println!("The old mapping data is written to file {}", old_mapping_data_file);
 
-        let new_mapping_data_file = TopicQueueMappingUtils::write_to_temp(&plan.new_mapping, true)?;
+        let new_mapping_data_file = static_topic_file::write_mapping(&plan.new_mapping, true)?;
         println!("The new mapping data is written to file {}", new_mapping_data_file);
 
         Ok(())
