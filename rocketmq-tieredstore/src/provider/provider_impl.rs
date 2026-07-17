@@ -89,4 +89,39 @@ impl TieredStoreProvider for ProviderKind {
             Self::Memory(provider) => provider.delete(path).await,
         }
     }
+
+    async fn sync(&self, path: String) -> Result<(), RocketMQError> {
+        match self {
+            Self::Posix(provider) => provider.sync(path).await,
+            Self::Memory(provider) => provider.sync(path).await,
+        }
+    }
+
+    async fn rename(&self, source: String, destination: String) -> Result<(), RocketMQError> {
+        match self {
+            Self::Posix(provider) => provider.rename(source, destination).await,
+            Self::Memory(provider) => provider.rename(source, destination).await,
+        }
+    }
+
+    async fn list(&self, prefix: String) -> Result<Vec<String>, RocketMQError> {
+        match self {
+            Self::Posix(provider) => provider.list(prefix).await,
+            Self::Memory(provider) => provider.list(prefix).await,
+        }
+    }
+
+    async fn delete_prefix(&self, prefix: String) -> Result<(), RocketMQError> {
+        match self {
+            Self::Posix(provider) => provider.delete_prefix(prefix).await,
+            Self::Memory(provider) => provider.delete_prefix(prefix).await,
+        }
+    }
+
+    async fn atomic_write(&self, path: String, data: Bytes) -> Result<(), RocketMQError> {
+        match self {
+            Self::Posix(provider) => provider.atomic_write(path, data).await,
+            Self::Memory(provider) => provider.atomic_write(path, data).await,
+        }
+    }
 }

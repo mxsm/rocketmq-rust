@@ -89,6 +89,55 @@ impl TieredStoreProvider for MemoryProvider {
         self.files.write().remove(&path);
         Ok(())
     }
+
+    async fn rename(&self, source: String, destination: String) -> Result<(), RocketMQError> {
+        let mut files = self.files.write();
+        let source_prefix = format!("{source}/");
+        let mut replacements = files
+            .keys()
+            .filter(|path| **path == source || path.starts_with(&source_prefix))
+            .cloned()
+            .collect::<Vec<_>>();
+        replacements.sort();
+        if replacements.is_empty() {
+            return Err(RocketMQError::storage_write_failed(
+                source,
+                "source path does not exist",
+            ));
+        }
+
+        let destination_prefix = format!("{destination}/");
+        files.retain(|path, _| *path != destination && !path.starts_with(&destination_prefix));
+        for source_path in replacements {
+            let Some(bytes) = files.remove(&source_path) else {
+                continue;
+            };
+            let suffix = source_path.strip_prefix(&source).unwrap_or_default();
+            files.insert(format!("{destination}{suffix}"), bytes);
+        }
+        Ok(())
+    }
+
+    async fn list(&self, prefix: String) -> Result<Vec<String>, RocketMQError> {
+        let prefix_with_separator = format!("{prefix}/");
+        let mut paths = self
+            .files
+            .read()
+            .keys()
+            .filter(|path| **path == prefix || path.starts_with(&prefix_with_separator))
+            .cloned()
+            .collect::<Vec<_>>();
+        paths.sort();
+        Ok(paths)
+    }
+
+    async fn delete_prefix(&self, prefix: String) -> Result<(), RocketMQError> {
+        let prefix_with_separator = format!("{prefix}/");
+        self.files
+            .write()
+            .retain(|path, _| *path != prefix && !path.starts_with(&prefix_with_separator));
+        Ok(())
+    }
 }
 
 #[cfg(test)]

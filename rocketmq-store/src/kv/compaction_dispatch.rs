@@ -25,11 +25,9 @@ use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::kv::compaction_store::CompactionStore;
-use crate::log_file::commit_log::CommitLog;
 
 pub struct CommitLogDispatcherCompaction {
     compaction_store: Arc<CompactionStore>,
-    commit_log: ArcMut<CommitLog>,
     message_store_config: Arc<MessageStoreConfig>,
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
 }
@@ -37,13 +35,11 @@ pub struct CommitLogDispatcherCompaction {
 impl CommitLogDispatcherCompaction {
     pub fn new(
         compaction_store: Arc<CompactionStore>,
-        commit_log: ArcMut<CommitLog>,
         message_store_config: Arc<MessageStoreConfig>,
         topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     ) -> Self {
         Self {
             compaction_store,
-            commit_log,
             message_store_config,
             topic_config_table,
         }
@@ -70,16 +66,12 @@ impl CommitLogDispatcher for CommitLogDispatcherCompaction {
             return;
         }
 
-        let Some(select_result) = self
-            .commit_log
-            .get_message(dispatch_request.commit_log_offset, dispatch_request.msg_size)
-        else {
-            return;
-        };
-        let Some(payload) = select_result.get_bytes() else {
-            return;
-        };
+        self.compaction_store.put_dispatch_message(dispatch_request);
+    }
 
-        self.compaction_store.put_dispatch_message(dispatch_request, payload);
+    fn dispatch_progress_offset(&self, commit_log_min_offset: i64) -> Option<i64> {
+        self.message_store_config
+            .enable_compaction
+            .then(|| self.compaction_store.durable_dispatch_offset(commit_log_min_offset))
     }
 }

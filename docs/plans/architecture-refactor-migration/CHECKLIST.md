@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 62 | 0 | 20 未开始；合计 20 尚未完成 | 82 |
+| PR 级工作包 | 63 | 0 | 19 未开始；合计 19 尚未完成 | 82 |
 | 里程碑 | 9（M01–M09） | 1（M10） | 2（M11–M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 20 个未开始工作包分布：M10 为 2 个、M11 为 12 个、M12 为 6 个。
-PR-M10-03 已完成 CQ、RocksDB 与 Tiered 读路径优化，当前下一工作包为 PR-M10-04。
+剩余 19 个未开始工作包分布：M10 为 1 个、M11 为 12 个、M12 为 6 个。
+PR-M10-04 已完成 Index 与 Compaction generation，当前下一工作包为 PR-M10-05。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -491,7 +491,16 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] public API additive diff 已审核；ArcMut/依赖/runtime/error/MCP/Rocks 专项门禁通过
   - [x] [`M10-03 证据`](phase-3-production-readiness/10-read-path-optimization-evidence.md) 记录目标、基线失败、验证与回滚
   - [x] 62/82 已完成、20 未完成，下一工作包 PR-M10-04
-- [ ] PR-M10-04：实现 Index/Compaction generation
+- [x] PR-M10-04：实现 Index/Compaction generation
+  - [x] Index/Compaction 使用 versioned `gen-N.tmp`、CRC/条数/边界校验、数据/目录 sync 与原子 CURRENT
+  - [x] reader lease 延迟删除 retired generation；重启清理 tmp/orphan，损坏 current 只回滚到 validated previous
+  - [x] Compaction generation 复制 live record，内存仅保 offset/代内 payload 位置，不依赖旧 CommitLog payload
+  - [x] durable compaction watermark 参与 replay；Recovering/OffsetFoundNull fail closed，不裸扫描 CommitLog
+  - [x] Index 与 Compaction build/sync/rename/CURRENT/cleanup kill/restart corpus 全部通过
+  - [x] Store 486 library、Tiered 66+1+7、Rocks 82+9、Broker 20+4、MCP 与 workspace strict Clippy 通过
+  - [x] public API 31/31 零差异；依赖/ArcMut/runtime/error/release/routing 门禁通过
+  - [x] [`M10-04 证据`](phase-3-production-readiness/10-index-compaction-generation-evidence.md) 记录目标、基线/环境失败、验证与回滚
+  - [x] 63/82 已完成、19 未完成，下一工作包 PR-M10-05
 - [ ] PR-M10-05：完成 benchmark、soak 与性能 Gate
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

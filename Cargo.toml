@@ -127,6 +127,7 @@ trait-variant = "0.1.2"
 
 mockall = "0.15.0"
 cfg-if  = "1.0.4"
+windows-sys = "0.61.2"
 
 sysinfo = "0.39.3"
 uuid = { version = "1.23.3", features = [

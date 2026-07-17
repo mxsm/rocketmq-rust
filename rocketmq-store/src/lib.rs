@@ -996,7 +996,8 @@ pub mod bench_support {
         compaction_store.put_message_with_key(&topic, 0, 1, 1, Some(key), Bytes::from_static(b"latest-message"));
 
         let mut service = CompactionService::new(compaction_store.clone(), 1);
-        let _ = service.load(true);
+        let _ = service.load(true, 0).await;
+        compaction_store.finish_recovery(0);
         service.start();
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(1);

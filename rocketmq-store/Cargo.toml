@@ -106,6 +106,7 @@ rayon     = "1.12"
 libc = "0.2.186"
 
 [target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
 windows = { version = "0.62.2", features = [
   "Win32_Security",
   "Win32_System_Memory_NonVolatile",

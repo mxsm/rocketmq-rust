@@ -13,5 +13,6 @@
 // limitations under the License.
 
 pub(crate) mod compaction_dispatch;
+pub(crate) mod compaction_generation;
 pub(crate) mod compaction_service;
 pub(crate) mod compaction_store;

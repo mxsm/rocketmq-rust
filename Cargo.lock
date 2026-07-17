@@ -4951,6 +4951,7 @@ dependencies = [
  "trait-variant",
  "uuid",
  "windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5037,6 +5038,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "trait-variant",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -16,6 +16,13 @@ use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[cfg(windows)]
+use std::ffi::OsStr;
+#[cfg(windows)]
+use std::iter;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+
 use bytes::Bytes;
 use rocketmq_error::RocketMQError;
 use tokio::fs::OpenOptions;
@@ -85,10 +92,17 @@ impl TieredStoreProvider for PosixProvider {
             .await
             .map_err(|err| error::storage_read_failed(path_to_string(&full_path), err.to_string()))?;
         let mut buffer = vec![0_u8; length];
-        let read = file
-            .read(&mut buffer)
-            .await
-            .map_err(|err| error::storage_read_failed(path_to_string(&full_path), err.to_string()))?;
+        let mut read = 0;
+        while read < length {
+            let chunk = file
+                .read(&mut buffer[read..])
+                .await
+                .map_err(|err| error::storage_read_failed(path_to_string(&full_path), err.to_string()))?;
+            if chunk == 0 {
+                break;
+            }
+            read += chunk;
+        }
         buffer.truncate(read);
         Ok(Bytes::from(buffer))
     }
@@ -127,10 +141,228 @@ impl TieredStoreProvider for PosixProvider {
             Err(err) => Err(error::storage_write_failed(path_to_string(&full_path), err.to_string())),
         }
     }
+
+    async fn sync(&self, path: String) -> Result<(), RocketMQError> {
+        let full_path = self.resolve(&path);
+        let metadata = match tokio::fs::metadata(&full_path).await {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(error::storage_write_failed(path_to_string(&full_path), err.to_string())),
+        };
+        if metadata.is_dir() {
+            return sync_directory(&full_path).await;
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&full_path)
+            .await
+            .map_err(|err| error::storage_write_failed(path_to_string(&full_path), err.to_string()))?;
+        file.sync_all()
+            .await
+            .map_err(|err| error::storage_write_failed(path_to_string(&full_path), err.to_string()))
+    }
+
+    async fn rename(&self, source: String, destination: String) -> Result<(), RocketMQError> {
+        let source_path = self.resolve(&source);
+        let destination_path = self.resolve(&destination);
+        if let Some(parent) = destination_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|err| error::storage_write_failed(path_to_string(parent), err.to_string()))?;
+        }
+        rename_path(&source_path, &destination_path)
+            .await
+            .map_err(|err| error::storage_write_failed(path_to_string(&destination_path), err.to_string()))?;
+        if let Some(parent) = destination_path.parent() {
+            sync_directory(parent).await?;
+        }
+        Ok(())
+    }
+
+    async fn list(&self, prefix: String) -> Result<Vec<String>, RocketMQError> {
+        let root = self.resolve(&prefix);
+        let metadata = match tokio::fs::metadata(&root).await {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(error::storage_read_failed(path_to_string(&root), err.to_string())),
+        };
+        if metadata.is_file() {
+            return Ok(vec![prefix]);
+        }
+
+        let mut directories = vec![root];
+        let mut paths = Vec::new();
+        while let Some(directory) = directories.pop() {
+            let mut entries = tokio::fs::read_dir(&directory)
+                .await
+                .map_err(|err| error::storage_read_failed(path_to_string(&directory), err.to_string()))?;
+            while let Some(entry) = entries
+                .next_entry()
+                .await
+                .map_err(|err| error::storage_read_failed(path_to_string(&directory), err.to_string()))?
+            {
+                let path = entry.path();
+                let file_type = entry
+                    .file_type()
+                    .await
+                    .map_err(|err| error::storage_read_failed(path_to_string(&path), err.to_string()))?;
+                if file_type.is_dir() {
+                    directories.push(path);
+                } else if file_type.is_file() {
+                    paths.push(relative_provider_path(&self.root, &path)?);
+                }
+            }
+        }
+        paths.sort();
+        Ok(paths)
+    }
+
+    async fn delete_prefix(&self, prefix: String) -> Result<(), RocketMQError> {
+        let full_path = self.resolve(&prefix);
+        let metadata = match tokio::fs::metadata(&full_path).await {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(error::storage_write_failed(path_to_string(&full_path), err.to_string())),
+        };
+        let result = if metadata.is_dir() {
+            tokio::fs::remove_dir_all(&full_path).await
+        } else {
+            tokio::fs::remove_file(&full_path).await
+        };
+        result.map_err(|err| error::storage_write_failed(path_to_string(&full_path), err.to_string()))
+    }
+
+    async fn atomic_write(&self, path: String, data: Bytes) -> Result<(), RocketMQError> {
+        let destination = self.resolve(&path);
+        let temporary = destination.with_extension("atomic.tmp");
+        if let Some(parent) = destination.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|err| error::storage_write_failed(path_to_string(parent), err.to_string()))?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)
+            .await
+            .map_err(|err| error::storage_write_failed(path_to_string(&temporary), err.to_string()))?;
+        file.write_all(&data)
+            .await
+            .map_err(|err| error::storage_write_failed(path_to_string(&temporary), err.to_string()))?;
+        file.sync_all()
+            .await
+            .map_err(|err| error::storage_write_failed(path_to_string(&temporary), err.to_string()))?;
+        drop(file);
+
+        replace_file(&temporary, &destination)
+            .await
+            .map_err(|err| error::storage_write_failed(path_to_string(&destination), err.to_string()))?;
+        if let Some(parent) = destination.parent() {
+            sync_directory(parent).await?;
+        }
+        Ok(())
+    }
 }
 
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+fn relative_provider_path(root: &Path, path: &Path) -> Result<String, RocketMQError> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|err| error::storage_read_failed(path_to_string(path), err.to_string()))?;
+    Ok(relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/"))
+}
+
+#[cfg(unix)]
+async fn sync_directory(path: &Path) -> Result<(), RocketMQError> {
+    let directory = OpenOptions::new()
+        .read(true)
+        .open(path)
+        .await
+        .map_err(|err| error::storage_write_failed(path_to_string(path), err.to_string()))?;
+    directory
+        .sync_all()
+        .await
+        .map_err(|err| error::storage_write_failed(path_to_string(path), err.to_string()))
+}
+
+#[cfg(windows)]
+async fn sync_directory(_path: &Path) -> Result<(), RocketMQError> {
+    // MoveFileExW/ReplaceFileW with WRITE_THROUGH provide the Windows metadata durability boundary.
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn sync_directory(_path: &Path) -> Result<(), RocketMQError> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+async fn rename_path(source: &Path, destination: &Path) -> std::io::Result<()> {
+    tokio::fs::rename(source, destination).await
+}
+
+#[cfg(windows)]
+async fn rename_path(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let destination = wide_path(destination);
+    let source = wide_path(source);
+    // SAFETY: Both UTF-16 buffers are NUL-terminated and remain alive for the duration of MoveFileExW.
+    let renamed = unsafe {
+        windows_sys::Win32::Storage::FileSystem::MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if renamed == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+async fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    tokio::fs::rename(source, destination).await
+}
+
+#[cfg(windows)]
+async fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    if !tokio::fs::try_exists(destination).await? {
+        return tokio::fs::rename(source, destination).await;
+    }
+    let destination = wide_path(destination);
+    let source = wide_path(source);
+    // SAFETY: Both UTF-16 buffers are NUL-terminated and remain alive for the duration of the call;
+    // backup/exclude/reserved pointers are intentionally null as allowed by ReplaceFileW.
+    let replaced = unsafe {
+        windows_sys::Win32::Storage::FileSystem::ReplaceFileW(
+            destination.as_ptr(),
+            source.as_ptr(),
+            std::ptr::null(),
+            windows_sys::Win32::Storage::FileSystem::REPLACEFILE_WRITE_THROUGH,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn wide_path(path: &Path) -> Vec<u16> {
+    OsStr::new(path).encode_wide().chain(iter::once(0)).collect()
 }
 
 #[cfg(test)]

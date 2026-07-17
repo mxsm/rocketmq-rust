@@ -480,15 +480,22 @@ impl LocalFileMessageStore {
         );
         commit_log.set_store_health_recorder(store_health_recorder.clone());
         let commit_log = ArcMut::new(commit_log);
-        let compaction_store = Arc::new(CompactionStore::new());
+        let compaction_store = Arc::new(CompactionStore::with_root(
+            PathBuf::from(message_store_config.store_path_root_dir.as_str()).join("compaction"),
+        ));
         if message_store_config.enable_compaction {
             dispatcher.add_dispatcher(Arc::new(CommitLogDispatcherCompaction::new(
                 compaction_store.clone(),
-                commit_log.clone(),
                 message_store_config.clone(),
                 topic_config_table.clone(),
             )));
         }
+        let compaction_commit_log = commit_log.clone();
+        compaction_store.set_payload_resolver(move |physical_offset, size| {
+            compaction_commit_log
+                .get_message(physical_offset, size)
+                .and_then(|result| result.get_bytes())
+        });
         #[cfg(feature = "tieredstore")]
         let tiered_store = Self::build_tiered_store(message_store_config.clone(), commit_log.clone(), &mut dispatcher)?;
         #[cfg(feature = "tieredstore")]
@@ -1642,11 +1649,12 @@ impl MessageStore for LocalFileMessageStore {
         result &= self.consume_queue_store.load();
 
         if self.message_store_config.enable_compaction {
+            let required_wal_position = self.commit_log.get_max_offset();
             let Some(compaction_service) = self.compaction_service.as_mut() else {
                 error!("compaction is enabled but compaction service is not initialized");
                 return false;
             };
-            result &= compaction_service.load(last_exit_ok);
+            result &= compaction_service.load(last_exit_ok, required_wal_position).await;
             if !result {
                 return result;
             }
@@ -1672,6 +1680,9 @@ impl MessageStore for LocalFileMessageStore {
 
             //recover commit log and consume queue
             self.recover(last_exit_ok).await;
+            if self.message_store_config.enable_compaction {
+                self.compaction_store.finish_recovery(self.get_max_phy_offset());
+            }
             info!(
                 "message store recover end, and the max phy offset = {}",
                 self.get_max_phy_offset()
@@ -2110,9 +2121,10 @@ impl MessageStore for LocalFileMessageStore {
         let topic_config = self.get_topic_config(topic);
         let policy = get_delete_policy_arc_mut(topic_config.as_ref());
         if policy == CleanupPolicy::COMPACTION && self.message_store_config.enable_compaction {
-            if let Some(result) =
-                self.compaction_store
-                    .get_message(group, topic, queue_id, offset, max_msg_nums, max_total_msg_size)
+            if let Some(result) = self
+                .compaction_store
+                .get_message(group, topic, queue_id, offset, max_msg_nums, max_total_msg_size)
+                .await
             {
                 return Some(result);
             }

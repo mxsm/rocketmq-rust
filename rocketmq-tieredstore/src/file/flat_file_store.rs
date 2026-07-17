@@ -199,7 +199,11 @@ where
 
     async fn compact_index_file(&self, retain_from_timestamp_millis: i64) -> Result<(), RocketMQError> {
         let mut entries = self.index_entries_for_compaction().await?;
+        let original_len = entries.len();
         entries.retain(|entry| entry.store_timestamp >= retain_from_timestamp_millis);
+        if entries.len() == original_len {
+            return Ok(());
+        }
         self.index_file.compact_entries(&entries).await
     }
 
