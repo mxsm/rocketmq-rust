@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M10-04 已完成，下一工作包 PR-M10-05） |
+| 状态 | 待验收（PR-M10-05 工作包已完成；真实固定硬件采样与 HUMAN M10 Gate 待完成） |
 | 预计周期 | 5–8 周 |
 | 工作包 | WP14 `tiered-cursor`；延续 WP02、WP11–WP13 |
 | 前置条件 | 32-package Gate 通过；CommitLog/receipt/progress 和 Local/Rocks golden 稳定 |
@@ -102,11 +102,16 @@ reader lease、validated rollback 和五故障点恢复；Compaction generation 
 
 ### PR-M10-05：Benchmark、soak 与性能 Gate
 
-- [ ] `[TEST]` 固定 Local append/SyncFlush/Local pull/Rocks pull/Tiered append/pull/connection soak/overload profile。
-- [ ] `[DEV]` 实现计划中的 `architecture_performance_guard.py`，比较吞吐、p99、RSS、allocation、I/O amplification并保存元数据。
-- [ ] `[TEST]` 重复采样并计算噪声；通用 Gate 为关键指标不恶化超过 5%，提升数字作为 hypothesis 单独报告。
-- [ ] `[REV]` 检查报告含硬件、内核、文件系统、profile、feature、message size、TLS/活跃度和原始数据 hash。
+- [x] `[TEST]` 固定 Local append/SyncFlush/Local pull/Rocks pull/Tiered append/pull/connection soak/overload profile。
+- [x] `[DEV]` 实现计划中的 `architecture_performance_guard.py`，比较吞吐、p99、RSS、allocation、I/O amplification并保存元数据。
+- [x] `[TEST]` 用明确标记为非 benchmark 证据的 deterministic fixture 验证重复采样、噪声和 5% 双方向门禁；真实固定硬件采样仍待执行。
+- [x] `[REV]` 报告 schema 强制记录硬件、内核、文件系统、profile、feature、message size、TLS/活跃度和原始数据 hash。
 - [ ] `[HUMAN]` 仅在正确性先通过后批准性能例外；例外有 owner/期限/回退配置。
+
+完成证据：[`10-performance-gate-evidence.md`](10-performance-gate-evidence.md)。冻结代码候选
+`0fac2bfb85c0fc90f1a8cb42dfd4b39b4b077990` 固化 8 个 profile、11 个变体、5% 回归门槛、噪声判定、
+correctness-first 与限期例外流程，CI 校验 profile 漂移。未执行真实目标硬件 baseline/candidate，不记录为
+性能通过；64/82 工作包完成，剩余 18 个，下一工作包为 PR-M11-01，M10 继续等待真实性能报告与 HUMAN Gate。
 
 ## 公共兼容面
 
@@ -141,11 +146,12 @@ cargo test -p rocketmq-store-local
 cargo test -p rocketmq-store-rocksdb
 cargo test -p rocketmq-tieredstore tiered_cursor
 cargo test -p rocketmq-tieredstore retry_ledger
+python scripts/architecture_performance_guard.py --validate-profiles
 python scripts/architecture_performance_guard.py --baseline <baseline.json> --candidate <candidate.json>
 python scripts/architecture_dependency_guard.py --mode target
 ```
 
-性能 guard 与命名测试仅在实际落地后执行；kind/cloud guard属于 M11。
+性能 profile guard 已落地并接入 CI；baseline/candidate 比较只能消费真实目标硬件报告。kind/cloud guard属于 M11。
 
 ## 回滚触发器
 

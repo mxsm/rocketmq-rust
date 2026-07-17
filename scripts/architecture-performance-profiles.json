@@ -1,0 +1,522 @@
+{
+  "schema_version": 1,
+  "milestone": "M10-05",
+  "default_max_regression_percent": 5.0,
+  "minimum_samples": 5,
+  "max_relative_mad_percent": 5.0,
+  "max_sample_deviation_percent": 15.0,
+  "required_environment_fields": [
+    "hardware_id",
+    "os",
+    "kernel",
+    "architecture",
+    "cpu_model",
+    "logical_cpus",
+    "memory_bytes",
+    "filesystem",
+    "rustc",
+    "cargo",
+    "build_profile",
+    "features",
+    "measurement_method"
+  ],
+  "required_correctness_checks": [
+    "sync_flush_crash_recovery",
+    "derived_replay_no_holes",
+    "bounded_overload",
+    "no_raw_commitlog_fallback"
+  ],
+  "metric_sets": {
+    "core": [
+      {
+        "id": "throughput_per_second",
+        "unit": "operations/second",
+        "direction": "higher",
+        "comparison": "relative",
+        "max_regression_percent": 5.0
+      },
+      {
+        "id": "p99_latency_us",
+        "unit": "microseconds",
+        "direction": "lower",
+        "comparison": "relative",
+        "max_regression_percent": 5.0
+      },
+      {
+        "id": "peak_rss_bytes",
+        "unit": "bytes",
+        "direction": "lower",
+        "comparison": "relative",
+        "max_regression_percent": 5.0
+      },
+      {
+        "id": "allocations_per_operation",
+        "unit": "allocations/operation",
+        "direction": "lower",
+        "comparison": "relative",
+        "max_regression_percent": 5.0
+      },
+      {
+        "id": "io_amplification_ratio",
+        "unit": "bytes-read-written/payload-byte",
+        "direction": "lower",
+        "comparison": "relative",
+        "max_regression_percent": 5.0
+      }
+    ]
+  },
+  "profiles": [
+    {
+      "id": "local-append",
+      "description": "Local CommitLog append of 1 KiB messages at fixed producer concurrency.",
+      "collection": {
+        "driver": "target-hardware-sidecar",
+        "status": "requires-target-hardware-run",
+        "reference_commands": [
+          "cargo bench -p rocketmq-store --bench commit_log_performance -- phase5/async_flush_multi_queue"
+        ],
+        "required_outputs": [
+          "environment_metadata",
+          "correctness_evidence",
+          "raw_samples",
+          "profile_report"
+        ]
+      },
+      "metric_sets": ["core"],
+      "metrics": [],
+      "variants": [
+        {
+          "id": "producers-1",
+          "parameters": {
+            "message_size_bytes": 1024,
+            "producers": 1,
+            "flush_mode": "async",
+            "tls_ratio": 0.0,
+            "connection_activity": "steady"
+          }
+        },
+        {
+          "id": "producers-8",
+          "parameters": {
+            "message_size_bytes": 1024,
+            "producers": 8,
+            "flush_mode": "async",
+            "tls_ratio": 0.0,
+            "connection_activity": "steady"
+          }
+        },
+        {
+          "id": "producers-32",
+          "parameters": {
+            "message_size_bytes": 1024,
+            "producers": 32,
+            "flush_mode": "async",
+            "tls_ratio": 0.0,
+            "connection_activity": "steady"
+          }
+        }
+      ],
+      "hypotheses": [
+        {
+          "metric": "throughput_per_second",
+          "operator": "min_improvement_percent",
+          "value": 20.0,
+          "gate": false
+        },
+        {
+          "metric": "p99_latency_us",
+          "operator": "min_improvement_percent",
+          "value": 15.0,
+          "gate": false
+        }
+      ]
+    },
+    {
+      "id": "sync-flush",
+      "description": "SyncFlush acknowledgement under 64 concurrent producers.",
+      "collection": {
+        "driver": "target-hardware-sidecar",
+        "status": "requires-target-hardware-run",
+        "reference_commands": [
+          "cargo bench -p rocketmq-store --bench commit_log_performance -- phase6/sync_flush_tail_latency_baseline"
+        ],
+        "required_outputs": [
+          "environment_metadata",
+          "correctness_evidence",
+          "raw_samples",
+          "profile_report"
+        ]
+      },
+      "metric_sets": ["core"],
+      "metrics": [
+        {
+          "id": "fsync_per_ack",
+          "unit": "fsync/ack",
+          "direction": "lower",
+          "comparison": "absolute-observation"
+        }
+      ],
+      "variants": [
+        {
+          "id": "concurrency-64",
+          "parameters": {
+            "message_size_bytes": 1024,
+            "producers": 64,
+            "flush_mode": "sync",
+            "tls_ratio": 0.0,
+            "connection_activity": "steady"
+          }
+        }
+      ],
+      "hypotheses": [
+        {
+          "metric": "fsync_per_ack",
+          "operator": "max",
+          "value": 0.015625,
+          "gate": false
+        }
+      ]
+    },
+    {
+      "id": "local-pull",
+      "description": "Local pull of 32 messages from a hot ConsumeQueue and CommitLog.",
+      "collection": {
+        "driver": "target-hardware-sidecar",
+        "status": "requires-target-hardware-run",
+        "reference_commands": [],
+        "required_outputs": [
+          "environment_metadata",
+          "correctness_evidence",
+          "raw_samples",
+          "profile_report"
+        ]
+      },
+      "metric_sets": ["core"],
+      "metrics": [
+        {
+          "id": "cq_unit_allocations_per_message",
+          "unit": "allocations/message",
+          "direction": "lower",
+          "comparison": "absolute-observation"
+        },
+        {
+          "id": "body_copies_per_message",
+          "unit": "copies/message",
+          "direction": "lower",
+          "comparison": "absolute-observation"
+        }
+      ],
+      "variants": [
+        {
+          "id": "batch-32",
+          "parameters": {
+            "message_size_bytes": 1024,
+            "batch_messages": 32,
+            "cache_state": "hot",
+            "tls_ratio": 0.0,
+            "connection_activity": "steady"
+          }
+        }
+      ],
+      "hypotheses": [
+        {
+          "metric": "cq_unit_allocations_per_message",
+          "operator": "max",
+          "value": 0.0,
+          "gate": false
+        },
+        {
+          "metric": "body_copies_per_message",
+          "operator": "max",
+          "value": 0.0,
+          "gate": false
+        },
+        {
+          "metric": "p99_latency_us",
+          "operator": "min_improvement_percent",
+          "value": 20.0,
+          "gate": false
+        }
+      ]
+    },
+    {
+      "id": "rocks-pull",
+      "description": "RocksDB pull of 32 messages using typed range reads.",
+      "collection": {
+        "driver": "target-hardware-sidecar",
+        "status": "requires-target-hardware-run",
+        "reference_commands": [
+          "cargo bench -p rocketmq-store --features rocksdb_store --bench rocksdb_store -- rocksdb/prefix_scan_100"
+        ],
+        "required_outputs": [
+          "environment_metadata",
+          "correctness_evidence",
+          "raw_samples",
+          "profile_report"
+        ]
+      },
+      "metric_sets": ["core"],
+      "metrics": [
+        {
+          "id": "native_read_calls_per_batch",
+          "unit": "calls/batch",
+          "direction": "lower",
+          "comparison": "absolute-observation"
+        }
+      ],
+      "variants": [
+        {
+          "id": "batch-32",
+          "parameters": {
+            "message_size_bytes": 1024,
+            "batch_messages": 32,
+            "cache_state": "hot",
+            "tls_ratio": 0.0,
+            "connection_activity": "steady"
+          }
+        }
+      ],
+      "hypotheses": [
+        {
+          "metric": "native_read_calls_per_batch",
+          "operator": "max",
+          "value": 3.0,
+          "gate": false
+        }
+      ]
+    },
+    {
+      "id": "tiered-append",
+      "description": "Tiered append of 64 records with provider commit accounting.",
+      "collection": {
+        "driver": "target-hardware-sidecar",
+        "status": "requires-target-hardware-run",
+        "reference_commands": [
+          "cargo bench -p rocketmq-tieredstore --bench tieredstore_bench -- tieredstore_memory_flat_file_append_commit_1kb"
+        ],
+        "required_outputs": [
+          "environment_metadata",
+          "correctness_evidence",
+          "raw_samples",
+          "profile_report"
+        ]
+      },
+      "metric_sets": ["core"],
+      "metrics": [
+        {
+          "id": "provider_writes_per_batch",
+          "unit": "writes/batch",
+          "direction": "lower",
+          "comparison": "absolute-observation"
+        },
+        {
+          "id": "metadata_commits_per_batch",
+          "unit": "commits/batch",
+          "direction": "lower",
+          "comparison": "absolute-observation"
+        }
+      ],
+      "variants": [
+        {
+          "id": "batch-64",
+          "parameters": {
+            "message_size_bytes": 1024,
+            "batch_messages": 64,
+            "provider": "posix",
+            "tls_ratio": 0.0,
+            "connection_activity": "steady"
+          }
+        }
+      ],
+      "hypotheses": [
+        {
+          "metric": "provider_writes_per_batch",
+          "operator": "max",
+          "value": 6.0,
+          "gate": false
+        },
+        {
+          "metric": "metadata_commits_per_batch",
+          "operator": "max",
+          "value": 1.0,
+          "gate": false
+        }
+      ]
+    },
+    {
+      "id": "tiered-pull",
+      "description": "Tiered pull of 32 messages in cold and warm cache states.",
+      "collection": {
+        "driver": "target-hardware-sidecar",
+        "status": "requires-target-hardware-run",
+        "reference_commands": [],
+        "required_outputs": [
+          "environment_metadata",
+          "correctness_evidence",
+          "raw_samples",
+          "profile_report"
+        ]
+      },
+      "metric_sets": ["core"],
+      "metrics": [
+        {
+          "id": "provider_reads_per_batch",
+          "unit": "reads/batch",
+          "direction": "lower",
+          "comparison": "absolute-observation"
+        }
+      ],
+      "variants": [
+        {
+          "id": "cold-32",
+          "parameters": {
+            "message_size_bytes": 1024,
+            "batch_messages": 32,
+            "cache_state": "cold",
+            "tls_ratio": 0.0,
+            "connection_activity": "steady"
+          }
+        },
+        {
+          "id": "warm-32",
+          "parameters": {
+            "message_size_bytes": 1024,
+            "batch_messages": 32,
+            "cache_state": "warm",
+            "tls_ratio": 0.0,
+            "connection_activity": "steady"
+          }
+        }
+      ],
+      "hypotheses": [
+        {
+          "metric": "provider_reads_per_batch",
+          "operator": "max",
+          "value": 4.0,
+          "variants": [
+            "cold-32"
+          ],
+          "gate": false
+        },
+        {
+          "metric": "provider_reads_per_batch",
+          "operator": "max",
+          "value": 0.0,
+          "variants": [
+            "warm-32"
+          ],
+          "gate": false
+        },
+        {
+          "metric": "io_amplification_ratio",
+          "operator": "max",
+          "value": 1.5,
+          "gate": false
+        }
+      ]
+    },
+    {
+      "id": "connection-soak",
+      "description": "Connection churn soak followed by a fixed cooldown and resource convergence check.",
+      "collection": {
+        "driver": "target-hardware-sidecar",
+        "status": "requires-target-hardware-run",
+        "reference_commands": [
+          "cargo bench -p rocketmq-remoting --bench remoting_connection_lifecycle_bench -- remoting_connection_lifecycle"
+        ],
+        "required_outputs": [
+          "environment_metadata",
+          "correctness_evidence",
+          "raw_samples",
+          "profile_report"
+        ]
+      },
+      "metric_sets": ["core"],
+      "metrics": [
+        {
+          "id": "live_tasks_after_cooldown",
+          "unit": "tasks",
+          "direction": "lower",
+          "comparison": "absolute-observation"
+        },
+        {
+          "id": "pending_requests_after_cooldown",
+          "unit": "requests",
+          "direction": "lower",
+          "comparison": "absolute-observation"
+        }
+      ],
+      "variants": [
+        {
+          "id": "mixed-tls-churn",
+          "parameters": {
+            "message_size_bytes": 1024,
+            "connections": 10000,
+            "duration_seconds": 900,
+            "cooldown_seconds": 60,
+            "tls_ratio": 0.5,
+            "connection_activity": "churn"
+          }
+        }
+      ],
+      "hypotheses": [
+        {
+          "metric": "live_tasks_after_cooldown",
+          "operator": "max",
+          "value": 0.0,
+          "gate": false
+        },
+        {
+          "metric": "pending_requests_after_cooldown",
+          "operator": "max",
+          "value": 0.0,
+          "gate": false
+        }
+      ]
+    },
+    {
+      "id": "overload",
+      "description": "Sustained overload with explicit rejection and control-plane availability checks.",
+      "collection": {
+        "driver": "target-hardware-sidecar",
+        "status": "requires-target-hardware-run",
+        "reference_commands": [],
+        "required_outputs": [
+          "environment_metadata",
+          "correctness_evidence",
+          "raw_samples",
+          "profile_report"
+        ]
+      },
+      "metric_sets": ["core"],
+      "metrics": [
+        {
+          "id": "control_plane_success_ratio",
+          "unit": "ratio",
+          "direction": "higher",
+          "comparison": "absolute-observation"
+        }
+      ],
+      "variants": [
+        {
+          "id": "bounded-rejection",
+          "parameters": {
+            "message_size_bytes": 1024,
+            "offered_load_ratio": 2.0,
+            "duration_seconds": 300,
+            "tls_ratio": 0.5,
+            "connection_activity": "overload"
+          }
+        }
+      ],
+      "hypotheses": [
+        {
+          "metric": "control_plane_success_ratio",
+          "operator": "min",
+          "value": 1.0,
+          "gate": false
+        }
+      ]
+    }
+  ]
+}

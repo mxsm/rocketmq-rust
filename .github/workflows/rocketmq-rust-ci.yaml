@@ -80,6 +80,9 @@ jobs:
       - name: Check architecture release package
         run: python scripts/architecture_release_guard.py
 
+      - name: Check architecture performance profiles
+        run: python scripts/architecture_performance_guard.py --validate-profiles
+
       - name: Check shared-mutation fixtures
         run: python scripts/arc_mut_guard.py --fixtures
 
