@@ -119,6 +119,26 @@ impl TieredStoreProvider for ControlledPosixProvider {
     async fn delete(&self, path: String) -> Result<(), RocketMQError> {
         self.inner.delete(path).await
     }
+
+    async fn sync(&self, path: String) -> Result<(), RocketMQError> {
+        self.inner.sync(path).await
+    }
+
+    async fn rename(&self, source: String, destination: String) -> Result<(), RocketMQError> {
+        self.inner.rename(source, destination).await
+    }
+
+    async fn list(&self, prefix: String) -> Result<Vec<String>, RocketMQError> {
+        self.inner.list(prefix).await
+    }
+
+    async fn delete_prefix(&self, prefix: String) -> Result<(), RocketMQError> {
+        self.inner.delete_prefix(prefix).await
+    }
+
+    async fn atomic_write(&self, path: String, data: Bytes) -> Result<(), RocketMQError> {
+        self.inner.atomic_write(path, data).await
+    }
 }
 
 fn test_config(root: std::path::PathBuf) -> TieredStoreConfig {
@@ -483,6 +503,9 @@ async fn corrupted_progress_snapshot_fails_restart_closed() -> Result<(), Rocket
         .load()
         .await
         .expect_err("corrupted progress must fail readiness");
-    assert!(error.to_string().contains("tieredDispatchProgress.bin"));
+    assert!(
+        error.to_string().contains("tieredDispatchProgress.bin"),
+        "unexpected restart error: {error}"
+    );
     Ok(())
 }

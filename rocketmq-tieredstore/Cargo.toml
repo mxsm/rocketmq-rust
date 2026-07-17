@@ -56,6 +56,9 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 trait-variant = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 tempfile  = "3.27.0"

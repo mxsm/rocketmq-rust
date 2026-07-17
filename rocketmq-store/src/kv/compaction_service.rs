@@ -46,9 +46,17 @@ impl CompactionService {
         }
     }
 
-    pub fn load(&mut self, exit_ok: bool) -> bool {
+    pub async fn load(&mut self, exit_ok: bool, required_wal_position: i64) -> bool {
+        if let Err(error) = self.compaction_store.load().await {
+            error!("failed to load compaction generations: {error}");
+            return false;
+        }
+        self.compaction_store.begin_recovery(required_wal_position);
         self.loaded = true;
-        info!("load compaction service, exit ok: {}", exit_ok);
+        info!(
+            "load compaction service, exit ok: {}, required WAL position: {}",
+            exit_ok, required_wal_position
+        );
         true
     }
 
@@ -74,9 +82,14 @@ impl CompactionService {
         if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(config, move || {
             let compaction_store = compaction_store.clone();
             async move {
-                let removed = compaction_store.compact_once();
-                if removed > 0 {
-                    info!("compaction service removed {} obsolete messages", removed);
+                match compaction_store.compact_once().await {
+                    Ok(removed) if removed > 0 => {
+                        info!("compaction service removed {} obsolete messages", removed);
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        error!("compaction generation failed: {error}");
+                    }
                 }
             }
         }) {
@@ -158,7 +171,8 @@ mod tests {
         compaction_store.put_message_with_key(&topic, 0, 1, 1, Some(key), Bytes::from_static(b"latest-message"));
 
         let mut service = CompactionService::new(compaction_store.clone(), 1);
-        assert!(service.load(true));
+        assert!(service.load(true, 0).await);
+        compaction_store.finish_recovery(0);
         service.start();
         assert!(service.has_worker_handle());
 

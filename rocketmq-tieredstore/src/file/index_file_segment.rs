@@ -12,13 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use rocketmq_error::ErrorKind;
 use rocketmq_error::RocketMQError;
 
 use crate::error;
+use crate::file::index_generation::crc32;
+use crate::file::index_generation::encode_generation_metadata;
+use crate::file::index_generation::IndexGenerationLease;
+use crate::file::index_generation::IndexGenerationManager;
+use crate::file::index_generation::IndexGenerationMetadata;
 use crate::provider::TieredStoreProvider;
 
 pub const DEFAULT_INDEX_FILE_PATH: &str = "index/tiered_index_file";
@@ -58,6 +66,10 @@ where
     provider: P,
     hash_slot_count: usize,
     max_index_items: usize,
+    generation_manager: Arc<IndexGenerationManager<P>>,
+    generation_lock: Arc<tokio::sync::RwLock<()>>,
+    validated_generation: Arc<parking_lot::RwLock<Option<u64>>>,
+    raw: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -105,11 +117,16 @@ where
     }
 
     pub fn with_limits(directory: String, provider: P, hash_slot_count: usize, max_index_items: usize) -> Self {
+        let generation_manager = Arc::new(IndexGenerationManager::new(directory.clone(), provider.clone()));
         Self {
             directory,
             provider,
             hash_slot_count: hash_slot_count.max(1),
             max_index_items: max_index_items.max(1),
+            generation_manager,
+            generation_lock: Arc::new(tokio::sync::RwLock::new(())),
+            validated_generation: Arc::new(parking_lot::RwLock::new(None)),
+            raw: false,
         }
     }
 
@@ -146,6 +163,20 @@ where
     }
 
     pub async fn append_entry(&self, entry: &TieredIndexEntry) -> Result<(), RocketMQError> {
+        if self.raw {
+            return self.append_entry_raw(entry).await;
+        }
+        let _guard = self.generation_lock.write().await;
+        let current = self.validated_current().await?;
+        let target = if current.id() == 0 {
+            self.raw_segment(current.path().to_owned())
+        } else {
+            self.raw_segment(self.delta_path())
+        };
+        target.append_entry_raw(entry).await
+    }
+
+    async fn append_entry_raw(&self, entry: &TieredIndexEntry) -> Result<(), RocketMQError> {
         let mut segment_timestamps = self.load_manifest().await?;
         if segment_timestamps.is_empty() {
             let timestamp = entry.store_timestamp.max(0);
@@ -175,6 +206,22 @@ where
     }
 
     pub async fn load_entries(&self) -> Result<Vec<TieredIndexEntry>, RocketMQError> {
+        if self.raw {
+            return self.load_entries_raw().await;
+        }
+        let _guard = self.generation_lock.read().await;
+        let current = self.validated_current().await?;
+        let mut entries = self.raw_segment(current.path().to_owned()).load_entries_raw().await?;
+        if current.id() > 0 {
+            entries.extend(self.raw_segment(self.delta_path()).load_entries_raw().await?);
+        }
+        normalize_entries(&mut entries);
+        drop(current);
+        self.generation_manager.cleanup_retired().await?;
+        Ok(entries)
+    }
+
+    async fn load_entries_raw(&self) -> Result<Vec<TieredIndexEntry>, RocketMQError> {
         let mut entries = Vec::new();
         for timestamp in self.load_manifest().await? {
             let path = self.segment_path(timestamp);
@@ -191,6 +238,43 @@ where
     }
 
     pub async fn query_entries(
+        &self,
+        topic: &str,
+        key: &str,
+        max_count: usize,
+        begin_time: i64,
+        end_time: i64,
+    ) -> Result<Vec<TieredIndexEntry>, RocketMQError> {
+        if self.raw {
+            return self
+                .query_entries_raw(topic, key, max_count, begin_time, end_time)
+                .await;
+        }
+        if max_count == 0 || topic.is_empty() || key.is_empty() || begin_time > end_time {
+            return Ok(Vec::new());
+        }
+
+        let _guard = self.generation_lock.read().await;
+        let current = self.validated_current().await?;
+        let mut result = self
+            .raw_segment(current.path().to_owned())
+            .query_entries_raw(topic, key, max_count, begin_time, end_time)
+            .await?;
+        if current.id() > 0 && result.len() < max_count {
+            result.extend(
+                self.raw_segment(self.delta_path())
+                    .query_entries_raw(topic, key, max_count - result.len(), begin_time, end_time)
+                    .await?,
+            );
+        }
+        normalize_entries(&mut result);
+        result.truncate(max_count);
+        drop(current);
+        self.generation_manager.cleanup_retired().await?;
+        Ok(result)
+    }
+
+    async fn query_entries_raw(
         &self,
         topic: &str,
         key: &str,
@@ -239,23 +323,77 @@ where
     }
 
     pub async fn compact_entries(&self, entries: &[TieredIndexEntry]) -> Result<(), RocketMQError> {
+        if self.raw {
+            return self.replace_entries_raw(entries).await;
+        }
+        let _guard = self.generation_lock.write().await;
+        let _current = self.validated_current().await?;
+        let generation = self.generation_manager.next_generation().await?;
+        let temporary_path = self.generation_manager.temporary_path(generation);
+        let generation_path = self.generation_manager.generation_path(generation);
+        self.provider.delete_prefix(temporary_path.clone()).await?;
+
+        let builder = self.raw_segment(temporary_path.clone());
+        let mut normalized = entries.to_vec();
+        normalize_entries(&mut normalized);
+        for entry in &normalized {
+            builder.append_entry_raw(entry).await?;
+        }
+        // The legacy index format stores timestamps as second deltas from the segment boundary.
+        // Derive generation bounds and CRC from the persisted representation so validation does
+        // not compare sub-second source timestamps with their compatible on-disk projection.
+        let persisted_entries = builder.load_entries_raw().await?;
+        let metadata = generation_metadata(generation, &persisted_entries);
+        let metadata_path = self.generation_manager.metadata_path(&temporary_path);
+        let encoded_metadata = encode_generation_metadata(metadata);
+        let written = self
+            .provider_write(metadata_path.clone(), 0, encoded_metadata.clone())
+            .await?;
+        if written != encoded_metadata.len() {
+            return Err(error::storage_write_failed(
+                metadata_path,
+                "partial index generation metadata write",
+            ));
+        }
+        self.sync_generation(&temporary_path).await?;
+        self.validate_generation_path(&temporary_path, metadata).await?;
+
+        self.provider.rename(temporary_path, generation_path).await?;
+        self.generation_manager.publish(metadata).await?;
+        *self.validated_generation.write() = Some(generation);
+        self.provider.delete_prefix(self.delta_path()).await?;
+        self.generation_manager.cleanup_retired().await
+    }
+
+    pub async fn segment_count(&self) -> Result<usize, RocketMQError> {
+        if self.raw {
+            return self.segment_count_raw().await;
+        }
+        let _guard = self.generation_lock.read().await;
+        let current = self.validated_current().await?;
+        let mut count = self.raw_segment(current.path().to_owned()).segment_count_raw().await?;
+        if current.id() > 0 {
+            count = count.saturating_add(self.raw_segment(self.delta_path()).segment_count_raw().await?);
+        }
+        Ok(count)
+    }
+
+    async fn segment_count_raw(&self) -> Result<usize, RocketMQError> {
+        Ok(self.load_manifest().await?.len())
+    }
+
+    async fn replace_entries_raw(&self, entries: &[TieredIndexEntry]) -> Result<(), RocketMQError> {
         let old_segments = self.load_manifest().await?;
         for timestamp in old_segments {
             self.provider.delete(self.segment_path(timestamp)).await?;
         }
         self.provider.delete(self.manifest_path()).await?;
-
         let mut sorted = entries.to_vec();
-        sorted.sort_by_key(|entry| (entry.store_timestamp, entry.queue_id, entry.queue_offset));
-        sorted.dedup();
+        normalize_entries(&mut sorted);
         for entry in sorted {
-            self.append_entry(&entry).await?;
+            self.append_entry_raw(&entry).await?;
         }
         Ok(())
-    }
-
-    pub async fn segment_count(&self) -> Result<usize, RocketMQError> {
-        Ok(self.load_manifest().await?.len())
     }
 
     async fn try_append_to_segment(
@@ -408,8 +546,7 @@ where
             return Ok(Vec::new());
         }
         let bytes = self.provider_read(path.clone(), 0, size as usize).await?;
-        let text =
-            std::str::from_utf8(&bytes).map_err(|err| error::storage_read_failed(path.clone(), err.to_string()))?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| error::storage_corrupted(path.clone()))?;
         let mut timestamps = Vec::new();
         for line in text.lines() {
             if line.trim().is_empty() {
@@ -418,7 +555,7 @@ where
             let timestamp = line
                 .trim()
                 .parse::<i64>()
-                .map_err(|err| error::storage_read_failed(path.clone(), err.to_string()))?;
+                .map_err(|_| error::storage_corrupted(path.clone()))?;
             timestamps.push(timestamp);
         }
         timestamps.sort_unstable();
@@ -440,12 +577,161 @@ where
         Ok(())
     }
 
+    /// Atomically selects the previously validated generation.
+    ///
+    /// The current delta remains readable so records appended after the previous generation are not
+    /// lost.
+    pub async fn rollback_to_previous_generation(&self) -> Result<bool, RocketMQError> {
+        if self.raw {
+            return Ok(false);
+        }
+        let _guard = self.generation_lock.write().await;
+        let Some(previous) = self.generation_manager.previous().await? else {
+            return Ok(false);
+        };
+        self.validate_generation_lease(&previous).await?;
+        if !self.generation_manager.rollback_to_previous().await? {
+            return Ok(false);
+        }
+        *self.validated_generation.write() = Some(previous.id());
+        Ok(true)
+    }
+
+    pub async fn current_generation_id(&self) -> Result<u64, RocketMQError> {
+        Ok(self.generation_manager.current().await?.id())
+    }
+
+    async fn validated_current(&self) -> Result<IndexGenerationLease, RocketMQError> {
+        let current = self.generation_manager.current().await?;
+        if *self.validated_generation.read() == Some(current.id()) {
+            return Ok(current);
+        }
+        match self.validate_generation_lease(&current).await {
+            Ok(()) => {
+                *self.validated_generation.write() = Some(current.id());
+                Ok(current)
+            }
+            Err(current_error) => {
+                if current_error.kind() != ErrorKind::StorageCorrupted {
+                    return Err(current_error);
+                }
+                let Some(previous) = self.generation_manager.previous().await? else {
+                    return Err(current_error);
+                };
+                self.validate_generation_lease(&previous).await?;
+                if !self.generation_manager.rollback_to_validated_previous().await? {
+                    return Err(current_error);
+                }
+                *self.validated_generation.write() = Some(previous.id());
+                Ok(previous)
+            }
+        }
+    }
+
+    async fn validate_generation_lease(&self, generation: &IndexGenerationLease) -> Result<(), RocketMQError> {
+        let Some(metadata) = generation.metadata() else {
+            self.raw_segment(generation.path().to_owned())
+                .load_entries_raw()
+                .await?;
+            return Ok(());
+        };
+        self.validate_generation_path(generation.path(), metadata).await
+    }
+
+    async fn validate_generation_path(
+        &self,
+        generation_path: &str,
+        expected: IndexGenerationMetadata,
+    ) -> Result<(), RocketMQError> {
+        let entries = self.raw_segment(generation_path.to_owned()).load_entries_raw().await?;
+        let actual = generation_metadata(expected.generation, &entries);
+        if actual != expected {
+            return Err(error::storage_corrupted(
+                self.generation_manager.metadata_path(generation_path),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn sync_generation(&self, generation_path: &str) -> Result<(), RocketMQError> {
+        for path in self.provider.list(generation_path.to_owned()).await? {
+            self.provider.sync(path).await?;
+        }
+        self.provider.sync(generation_path.to_owned()).await
+    }
+
+    fn raw_segment(&self, directory: String) -> Self {
+        Self {
+            generation_manager: Arc::new(IndexGenerationManager::new(directory.clone(), self.provider.clone())),
+            directory,
+            provider: self.provider.clone(),
+            hash_slot_count: self.hash_slot_count,
+            max_index_items: self.max_index_items,
+            generation_lock: Arc::new(tokio::sync::RwLock::new(())),
+            validated_generation: Arc::new(parking_lot::RwLock::new(None)),
+            raw: true,
+        }
+    }
+
+    fn delta_path(&self) -> String {
+        format!("{}/delta", self.directory)
+    }
+
     fn manifest_path(&self) -> String {
         format!("{}/manifest", self.directory)
     }
 
     fn segment_path(&self, timestamp: i64) -> String {
         format!("{}/{timestamp}", self.directory)
+    }
+}
+
+fn normalize_entries(entries: &mut Vec<TieredIndexEntry>) {
+    entries.sort_by(|left, right| {
+        left.topic
+            .cmp(&right.topic)
+            .then(left.key.cmp(&right.key))
+            .then(left.store_timestamp.cmp(&right.store_timestamp))
+            .then(left.queue_id.cmp(&right.queue_id))
+            .then(left.queue_offset.cmp(&right.queue_offset))
+            .then(left.commit_log_offset.cmp(&right.commit_log_offset))
+            .then(left.message_size.cmp(&right.message_size))
+    });
+    entries.dedup();
+}
+
+fn generation_metadata(generation: u64, entries: &[TieredIndexEntry]) -> IndexGenerationMetadata {
+    if entries.is_empty() {
+        return IndexGenerationMetadata::empty(generation);
+    }
+    let mut canonical = BytesMut::new();
+    let mut min_timestamp = i64::MAX;
+    let mut max_timestamp = i64::MIN;
+    let mut min_commit_log_offset = u64::MAX;
+    let mut max_commit_log_offset = 0_u64;
+    for entry in entries {
+        canonical.put_u16(entry.topic.len() as u16);
+        canonical.put_slice(entry.topic.as_bytes());
+        canonical.put_u16(entry.key.len() as u16);
+        canonical.put_slice(entry.key.as_bytes());
+        canonical.put_i32(entry.queue_id);
+        canonical.put_i64(entry.queue_offset);
+        canonical.put_u64(entry.commit_log_offset);
+        canonical.put_u64(entry.message_size as u64);
+        canonical.put_i64(entry.store_timestamp);
+        min_timestamp = min_timestamp.min(entry.store_timestamp);
+        max_timestamp = max_timestamp.max(entry.store_timestamp);
+        min_commit_log_offset = min_commit_log_offset.min(entry.commit_log_offset);
+        max_commit_log_offset = max_commit_log_offset.max(entry.commit_log_offset);
+    }
+    IndexGenerationMetadata {
+        generation,
+        entry_count: entries.len() as u64,
+        min_timestamp,
+        max_timestamp,
+        min_commit_log_offset,
+        max_commit_log_offset,
+        content_crc: crc32(&canonical),
     }
 }
 
@@ -464,18 +750,12 @@ fn encode_header(header: &IndexSegmentHeader) -> Bytes {
 
 fn decode_header(bytes: &Bytes) -> Result<IndexSegmentHeader, RocketMQError> {
     if bytes.len() < HEADER_SIZE {
-        return Err(error::storage_read_failed(
-            DEFAULT_INDEX_FILE_PATH,
-            "tiered index segment header is incomplete",
-        ));
+        return Err(error::storage_corrupted(DEFAULT_INDEX_FILE_PATH));
     }
     let mut bytes = bytes.clone();
     let magic = bytes.get_u32();
     if magic != BEGIN_MAGIC_CODE {
-        return Err(error::storage_read_failed(
-            DEFAULT_INDEX_FILE_PATH,
-            "tiered index segment magic code mismatch",
-        ));
+        return Err(error::storage_corrupted(DEFAULT_INDEX_FILE_PATH));
     }
     let begin_timestamp = bytes.get_i64();
     let end_timestamp = bytes.get_i64();
@@ -529,20 +809,14 @@ fn decode_segment_entries(bytes: &Bytes) -> Result<Vec<IndexRecord>, RocketMQErr
     let mut records = Vec::with_capacity(header.item_count as usize);
     while records.len() < header.item_count as usize && position < bytes.len() {
         if bytes.len().saturating_sub(position) < ITEM_HEADER_SIZE {
-            return Err(error::storage_read_failed(
-                DEFAULT_INDEX_FILE_PATH,
-                "tiered index item header is incomplete",
-            ));
+            return Err(error::storage_corrupted(DEFAULT_INDEX_FILE_PATH));
         }
         let decoded_header = decode_record_header(&bytes.slice(position..position + ITEM_HEADER_SIZE))?;
         position += ITEM_HEADER_SIZE;
 
         let string_len = decoded_header.topic_len.saturating_add(decoded_header.key_len);
         if bytes.len().saturating_sub(position) < string_len {
-            return Err(error::storage_read_failed(
-                DEFAULT_INDEX_FILE_PATH,
-                "tiered index item key payload is incomplete",
-            ));
+            return Err(error::storage_corrupted(DEFAULT_INDEX_FILE_PATH));
         }
         let payload = bytes.slice(position..position + string_len);
         position += string_len;
@@ -553,10 +827,7 @@ fn decode_segment_entries(bytes: &Bytes) -> Result<Vec<IndexRecord>, RocketMQErr
 
 fn decode_record_header(bytes: &Bytes) -> Result<IndexRecordHeader, RocketMQError> {
     if bytes.len() < ITEM_HEADER_SIZE {
-        return Err(error::storage_read_failed(
-            DEFAULT_INDEX_FILE_PATH,
-            "tiered index item header is incomplete",
-        ));
+        return Err(error::storage_corrupted(DEFAULT_INDEX_FILE_PATH));
     }
     let mut bytes = bytes.clone();
     let hash_code = bytes.get_u32();
@@ -589,16 +860,13 @@ fn decode_record_payload(
 ) -> Result<IndexRecord, RocketMQError> {
     let string_len = header.topic_len.saturating_add(header.key_len);
     if payload.len() < string_len {
-        return Err(error::storage_read_failed(
-            DEFAULT_INDEX_FILE_PATH,
-            "tiered index item key payload is incomplete",
-        ));
+        return Err(error::storage_corrupted(DEFAULT_INDEX_FILE_PATH));
     }
     let topic = std::str::from_utf8(&payload[..header.topic_len])
-        .map_err(|err| error::storage_read_failed(DEFAULT_INDEX_FILE_PATH, err.to_string()))?
+        .map_err(|_| error::storage_corrupted(DEFAULT_INDEX_FILE_PATH))?
         .to_owned();
     let key = std::str::from_utf8(&payload[header.topic_len..string_len])
-        .map_err(|err| error::storage_read_failed(DEFAULT_INDEX_FILE_PATH, err.to_string()))?
+        .map_err(|_| error::storage_corrupted(DEFAULT_INDEX_FILE_PATH))?
         .to_owned();
 
     Ok(IndexRecord {
@@ -644,10 +912,136 @@ fn java_positive_hash(key: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicU8;
+    use std::sync::atomic::Ordering;
+
+    use bytes::Bytes;
+    use rocketmq_error::ErrorKind;
     use rocketmq_error::RocketMQError;
 
     use super::*;
+    use crate::file::FileSegmentType;
+    use crate::file::TieredFileSegment;
+    use crate::metadata::FileSegmentMetadata;
     use crate::provider::MemoryProvider;
+
+    #[derive(Clone, Copy, Debug)]
+    #[repr(u8)]
+    enum FaultStage {
+        Build = 1,
+        Sync = 2,
+        Rename = 3,
+        Current = 4,
+        Cleanup = 5,
+        Read = 6,
+    }
+
+    #[derive(Clone)]
+    struct FaultProvider {
+        inner: MemoryProvider,
+        fault: Arc<AtomicU8>,
+    }
+
+    impl Default for FaultProvider {
+        fn default() -> Self {
+            Self {
+                inner: MemoryProvider::default(),
+                fault: Arc::new(AtomicU8::new(0)),
+            }
+        }
+    }
+
+    impl FaultProvider {
+        fn set_fault(&self, stage: FaultStage) {
+            self.fault.store(stage as u8, Ordering::Release);
+        }
+
+        fn take_fault(&self, stage: FaultStage) -> bool {
+            self.fault
+                .compare_exchange(stage as u8, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        }
+
+        fn injected(path: String, stage: FaultStage) -> RocketMQError {
+            RocketMQError::storage_write_failed(path, format!("injected index {stage:?} failure"))
+        }
+    }
+
+    impl TieredStoreProvider for FaultProvider {
+        async fn create_segment(
+            &self,
+            path: String,
+            segment_type: FileSegmentType,
+            base_offset: u64,
+            max_size: u64,
+        ) -> Result<TieredFileSegment<Self>, RocketMQError> {
+            let metadata = FileSegmentMetadata::new(path.clone(), segment_type, base_offset);
+            Ok(TieredFileSegment::new(
+                path,
+                segment_type,
+                base_offset,
+                max_size,
+                metadata,
+                self.clone(),
+            ))
+        }
+
+        async fn segment_size(&self, path: String) -> Result<u64, RocketMQError> {
+            self.inner.segment_size(path).await
+        }
+
+        async fn read(&self, path: String, position: u64, length: usize) -> Result<Bytes, RocketMQError> {
+            let generation_data = path.contains("/generations/gen-") && !path.ends_with("/GENERATION");
+            if generation_data && self.take_fault(FaultStage::Read) {
+                return Err(RocketMQError::storage_read_failed(path, "injected provider timeout"));
+            }
+            self.inner.read(path, position, length).await
+        }
+
+        async fn write(&self, path: String, position: u64, data: Bytes) -> Result<usize, RocketMQError> {
+            if path.contains(".tmp/") && self.take_fault(FaultStage::Build) {
+                return Err(Self::injected(path, FaultStage::Build));
+            }
+            self.inner.write(path, position, data).await
+        }
+
+        async fn delete(&self, path: String) -> Result<(), RocketMQError> {
+            self.inner.delete(path).await
+        }
+
+        async fn sync(&self, path: String) -> Result<(), RocketMQError> {
+            if path.contains(".tmp") && self.take_fault(FaultStage::Sync) {
+                return Err(Self::injected(path, FaultStage::Sync));
+            }
+            self.inner.sync(path).await
+        }
+
+        async fn rename(&self, source: String, destination: String) -> Result<(), RocketMQError> {
+            if source.contains(".tmp") && self.take_fault(FaultStage::Rename) {
+                return Err(Self::injected(source, FaultStage::Rename));
+            }
+            self.inner.rename(source, destination).await
+        }
+
+        async fn list(&self, prefix: String) -> Result<Vec<String>, RocketMQError> {
+            self.inner.list(prefix).await
+        }
+
+        async fn delete_prefix(&self, prefix: String) -> Result<(), RocketMQError> {
+            let retired_generation = prefix.contains("/generations/gen-") && !prefix.contains(".tmp");
+            if retired_generation && self.take_fault(FaultStage::Cleanup) {
+                return Err(Self::injected(prefix, FaultStage::Cleanup));
+            }
+            self.inner.delete_prefix(prefix).await
+        }
+
+        async fn atomic_write(&self, path: String, data: Bytes) -> Result<(), RocketMQError> {
+            if path.ends_with("/CURRENT") && self.take_fault(FaultStage::Current) {
+                return Err(Self::injected(path, FaultStage::Current));
+            }
+            self.inner.atomic_write(path, data).await
+        }
+    }
 
     fn entry(key: &str, timestamp: i64) -> TieredIndexEntry {
         TieredIndexEntry {
@@ -710,5 +1104,122 @@ mod tests {
     #[test]
     fn java_hash_matches_known_string_hash() {
         assert_eq!(java_positive_hash("TopicA#keyA"), 641_858_195);
+    }
+
+    #[tokio::test]
+    async fn index_generation_kill_points_recover_without_partial_publication() -> Result<(), RocketMQError> {
+        for stage in [
+            FaultStage::Build,
+            FaultStage::Sync,
+            FaultStage::Rename,
+            FaultStage::Current,
+        ] {
+            let provider = FaultProvider::default();
+            let index = IndexFileSegment::with_limits(DEFAULT_INDEX_FILE_PATH.to_owned(), provider.clone(), 8, 8);
+            index.append_entry(&entry("old", 100)).await?;
+            compact_current(&index).await?;
+            assert_eq!(index.current_generation_id().await?, 1);
+
+            index.append_entry(&entry("new", 200)).await?;
+            let entries = index.load_entries().await?;
+            provider.set_fault(stage);
+            assert!(index.compact_entries(&entries).await.is_err());
+            drop(index);
+
+            let restarted = IndexFileSegment::with_limits(DEFAULT_INDEX_FILE_PATH.to_owned(), provider.clone(), 8, 8);
+            assert_eq!(restarted.load_entries().await?.len(), 2, "stage {stage:?}");
+            assert_eq!(restarted.current_generation_id().await?, 1, "stage {stage:?}");
+            let orphan = format!("{DEFAULT_INDEX_FILE_PATH}/generations/gen-2");
+            assert!(
+                provider
+                    .list(orphan.clone())
+                    .await?
+                    .into_iter()
+                    .all(|path| !path.starts_with(&orphan)),
+                "stage {stage:?} left orphan generation"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn index_cleanup_failure_keeps_published_generation_and_restart_cleans_orphan() -> Result<(), RocketMQError> {
+        let provider = FaultProvider::default();
+        let index = IndexFileSegment::with_limits(DEFAULT_INDEX_FILE_PATH.to_owned(), provider.clone(), 8, 8);
+        index.append_entry(&entry("one", 100)).await?;
+        compact_current(&index).await?;
+        index.append_entry(&entry("two", 200)).await?;
+        compact_current(&index).await?;
+        index.append_entry(&entry("three", 300)).await?;
+        let entries = index.load_entries().await?;
+        provider.set_fault(FaultStage::Cleanup);
+        assert!(index.compact_entries(&entries).await.is_err());
+        assert_eq!(index.current_generation_id().await?, 3);
+        let generation_one = format!("{DEFAULT_INDEX_FILE_PATH}/generations/gen-1");
+        assert!(!provider.list(generation_one.clone()).await?.is_empty());
+        drop(index);
+
+        let restarted = IndexFileSegment::with_limits(DEFAULT_INDEX_FILE_PATH.to_owned(), provider.clone(), 8, 8);
+        assert_eq!(restarted.load_entries().await?.len(), 3);
+        assert!(provider.list(generation_one.clone()).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn index_reader_lease_delays_retired_generation_deletion() -> Result<(), RocketMQError> {
+        let provider = FaultProvider::default();
+        let index = IndexFileSegment::with_limits(DEFAULT_INDEX_FILE_PATH.to_owned(), provider.clone(), 8, 8);
+        index.append_entry(&entry("one", 100)).await?;
+        compact_current(&index).await?;
+        let generation_one_lease = index.generation_manager.current().await?;
+        index.append_entry(&entry("two", 200)).await?;
+        compact_current(&index).await?;
+        index.append_entry(&entry("three", 300)).await?;
+        compact_current(&index).await?;
+
+        let generation_one = format!("{DEFAULT_INDEX_FILE_PATH}/generations/gen-1");
+        assert!(!provider.list(generation_one.clone()).await?.is_empty());
+        drop(generation_one_lease);
+        index.generation_manager.cleanup_retired().await?;
+        assert!(provider.list(generation_one).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn index_corruption_rolls_back_but_transient_read_failure_does_not() -> Result<(), RocketMQError> {
+        let provider = FaultProvider::default();
+        let index = IndexFileSegment::with_limits(DEFAULT_INDEX_FILE_PATH.to_owned(), provider.clone(), 8, 8);
+        index.append_entry(&entry("old", 100)).await?;
+        compact_current(&index).await?;
+        index.append_entry(&entry("new", 200)).await?;
+        compact_current(&index).await?;
+        drop(index);
+
+        let transient = IndexFileSegment::with_limits(DEFAULT_INDEX_FILE_PATH.to_owned(), provider.clone(), 8, 8);
+        assert_eq!(transient.current_generation_id().await?, 2);
+        provider.set_fault(FaultStage::Read);
+        let error = transient.load_entries().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::StorageReadFailed);
+        assert_eq!(transient.current_generation_id().await?, 2);
+        drop(transient);
+
+        let generation_two = format!("{DEFAULT_INDEX_FILE_PATH}/generations/gen-2");
+        let segment = provider
+            .list(generation_two)
+            .await?
+            .into_iter()
+            .find(|path| path.rsplit('/').next().is_some_and(|name| name.parse::<i64>().is_ok()))
+            .ok_or_else(|| RocketMQError::Internal("generation segment not found".to_owned()))?;
+        provider.write(segment, 0, Bytes::from_static(&[0, 0, 0, 0])).await?;
+
+        let corrupt = IndexFileSegment::with_limits(DEFAULT_INDEX_FILE_PATH.to_owned(), provider, 8, 8);
+        assert_eq!(corrupt.load_entries().await?, vec![entry("old", 100)]);
+        assert_eq!(corrupt.current_generation_id().await?, 1);
+        Ok(())
+    }
+
+    async fn compact_current(index: &IndexFileSegment<FaultProvider>) -> Result<(), RocketMQError> {
+        let entries = index.load_entries().await?;
+        index.compact_entries(&entries).await
     }
 }

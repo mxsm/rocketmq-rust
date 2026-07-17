@@ -18,6 +18,7 @@ pub mod file_segment;
 pub mod flat_file;
 pub mod flat_file_store;
 pub mod index_file_segment;
+pub(crate) mod index_generation;
 
 pub use commit_log_segment::CommitLogSegment;
 pub use consume_queue_segment::ConsumeQueueSegment;
