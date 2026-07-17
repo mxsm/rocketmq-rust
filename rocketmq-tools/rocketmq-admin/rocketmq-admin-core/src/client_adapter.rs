@@ -16,8 +16,10 @@
 
 mod broker;
 mod consumer;
+mod dashboard;
 pub mod lifecycle;
 mod lite;
+mod message;
 mod security;
 mod static_topic;
 mod topic;

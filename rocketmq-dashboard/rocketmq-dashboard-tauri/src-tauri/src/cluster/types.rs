@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::AdminError;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -24,7 +24,7 @@ pub(crate) type ClusterResult<T> = Result<T, ClusterError>;
 pub(crate) enum ClusterError {
     Configuration(String),
     Validation(String),
-    RocketMQ(RocketMQError),
+    Admin(AdminError),
 }
 
 impl fmt::Display for ClusterError {
@@ -32,12 +32,18 @@ impl fmt::Display for ClusterError {
         match self {
             Self::Configuration(message) => write!(f, "Configuration error: {message}"),
             Self::Validation(message) => write!(f, "Validation error: {message}"),
-            Self::RocketMQ(message) => write!(f, "RocketMQ error: {message}"),
+            Self::Admin(message) => write!(f, "RocketMQ error: {message}"),
         }
     }
 }
 
 impl std::error::Error for ClusterError {}
+
+impl From<AdminError> for ClusterError {
+    fn from(error: AdminError) -> Self {
+        Self::Admin(error)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

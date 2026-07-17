@@ -93,12 +93,12 @@
 
 ### PR-M07-06：Web/Tauri Dashboard 迁移
 
-- [ ] `[DEV]` Dashboard 后端显式使用 admin-core `default-features = false, features = ["client-adapter"]`。
-- [ ] `[DEV]` 管理查询、普通/事务测试发送、message/trace、NameServer 环境变更下沉 admin Session/facade。
-- [ ] `[DEV]` page cache 使用 dashboard-owned QueueKey/admin QueueRef，不直接引入 model/protocol 以逃避 owner。
-- [ ] `[TEST]` 对 Web/Tauri 逐项目执行最近 `AGENTS.md` 的 Rust/Node 构建；只有实际修改 dashboard-common 时，同时验证根 workspace 并条件验证 GPUI。
-- [ ] `[REV]` 检查 UI/BFF 无完整 Client、MQAdminExt lifecycle、自建 producer/runtime，HTTP/API 行为保持。
-- [ ] 回滚点：各 standalone 项目独立回滚；不能通过重新添加 Client 直接边恢复功能。
+- [x] `[DEV]` Dashboard 后端显式使用 admin-core `default-features = false, features = ["client-adapter"]`。
+- [x] `[DEV]` 管理查询、普通/事务测试发送、message/trace、NameServer/VIP/TLS 配置变更下沉 admin Session/facade，不修改进程级环境变量。
+- [x] `[DEV]` page cache 使用 dashboard-owned QueueKey/admin QueueRef，不直接引入 model/protocol 以逃避 owner。
+- [x] `[TEST]` 对 Web/Tauri 逐项目执行最近 `AGENTS.md` 的 Rust/Node 构建；只有实际修改 dashboard-common 时，同时验证根 workspace 并条件验证 GPUI。
+- [x] `[REV]` 检查 UI/BFF 无完整 Client、MQAdminExt lifecycle、自建 producer/runtime，HTTP/API 行为保持。
+- [x] 回滚点：各 standalone 项目独立回滚；不能通过重新添加 Client 直接边恢复功能。
 
 ### PR-M07-07：Allowlist 与 consumer closeout
 
@@ -342,3 +342,28 @@ python scripts/arc_mut_guard.py
   Client manifest 3、目标 DAG 直接边 49、传递闭包 2；Admin Core 与 Broker 均退出 Client source/违规 DAG 清单。父项关闭后
   82 个顶层工作包为 45 已完成、0 阻塞、37 未开始；剩余 M07 2、M08 6、M09 6、M10 5、M11 12、M12 6，唯一下一工作包
   为 PR-M07-06 Dashboard 迁移。
+
+## PR-M07-06 Web/Tauri Dashboard 迁移 evidence
+
+- [x] `[DEPENDENCY/OWNER]` Tauri 与 Web backend 均显式使用
+  `rocketmq-admin-core = { default-features = false, features = ["client-adapter"] }`；两项目 manifest、lockfile 与源码中的
+  Client/common/remoting 直接边全部删除。`cargo tree -e normal -i rocketmq-client-rust` 证明 Client 只经 Admin Core 间接进入。
+- [x] `[CAPABILITY/SESSION]` Admin Core 新增 dashboard、consumer、message、topic 与 queue owned contract/DTO；Broker、Topic、
+  Consumer、Producer、ACL、消息分页/详情/轨迹/DLQ、普通及事务测试发送均由共享 `AdminSession` 执行。NameServer、VIP 与 TLS
+  配置显式传入 session builder，不再修改进程级环境变量；旧 session 按 generation 关闭并重建。Web 与 Tauri desktop 退出路径均在
+  10 秒绝对 deadline 内显式关闭 session；有副作用的 direct-consume/DLQ resend 在传输结果不确定时只重连、不自动重放。
+- [x] `[CACHE/COMPAT]` Tauri page cache 使用 dashboard-owned `QueueKey` 与 admin-owned `QueueRef`，不借 model/protocol 绕过 owner；
+  Web HTTP DTO、Tauri command payload 与成功响应字段保持原契约。新 Admin 删除 topic 请求使用独立的 `DeleteTopicAdminRequest`，
+  避免遮蔽 R0 CLI/TUI 的 `DeleteTopicRequest` 兼容面。
+- [x] `[TEST/STANDALONE]` Tauri backend 76 tests、topic 5 tests、fmt 与 all-target/all-feature strict Clippy 通过；Web backend
+  23 tests、all-target/all-feature build、fmt 与 strict Clippy 通过。Tauri/Web frontend 均完成 `npm ci` 与 production build；
+  dashboard-common 未变化，因此未宣称或触发 GPUI 迁移验证。
+- [x] `[TEST/COMPAT]` Admin Core no-default 6 tests、client-adapter 20 tests、default legacy 119 tests及边界集成测试通过；
+  其中 dashboard adapter 6 项专项测试覆盖消息扫描边界、TPS fallback、ACL selector、topic message type 与空 cluster 删除；
+  Client transaction future `Send` 测试、CLI 218 tests、TUI 83 tests和 root workspace strict Clippy 通过。
+- [x] `[GOVERNANCE/ERROR]` architecture baseline、8 项 M07-06 contract、architecture/ArcMut 合计 98 tests、24 ArcMut fixtures、
+  runtime enforcing audit 与 AGENTS routing guard 通过。Error architecture guard 仅复现 main 既有 11 项（Broker 1、MCP 8、
+  缺失治理文档 2），未计为通过，本工作包未新增 finding。
+- [x] `[TARGET GAP/INVENTORY]` target guard 差距由 115 降至 87：Client source 35、Client manifest 1、目标 DAG 直接边 49、
+  传递闭包 2；Client source/manifest 均只剩 Proxy。父项关闭后 82 个顶层工作包为 46 已完成、0 阻塞、36 未开始；剩余 M07 1、
+  M08 6、M09 6、M10 5、M11 12、M12 6，唯一下一工作包为 PR-M07-07 allowlist 与 consumer closeout。

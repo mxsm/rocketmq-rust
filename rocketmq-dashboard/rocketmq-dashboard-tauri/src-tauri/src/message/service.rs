@@ -37,19 +37,24 @@ use crate::message::types::MessageTraceNodeView;
 use crate::nameserver::NameServerRuntimeState;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use cheetah_string::CheetahString;
 use chrono::Local;
 use chrono::TimeZone;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_client_rust::TraceDataEncoder;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::consumer::pull_status::PullStatus;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::mix_all;
-#[allow(deprecated)]
-use rocketmq_common::common::tools::message_track::MessageTrack;
-use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_admin_core::client_adapter::AdminSession;
+use rocketmq_admin_core::core::message::DirectConsumeRequest;
+use rocketmq_admin_core::core::message::DirectConsumeResult;
+use rocketmq_admin_core::core::message::DlqMessageLookupRequest;
+use rocketmq_admin_core::core::message::MessageAdmin;
+use rocketmq_admin_core::core::message::MessageDetailRecord;
+use rocketmq_admin_core::core::message::MessageLookupRequest;
+use rocketmq_admin_core::core::message::MessagePullStatus;
+use rocketmq_admin_core::core::message::MessageQueuePlan;
+use rocketmq_admin_core::core::message::MessageQueuePlanRequest;
+use rocketmq_admin_core::core::message::MessageRecord;
+use rocketmq_admin_core::core::message::MessageTrackRecord;
+use rocketmq_admin_core::core::message::PullMessagesRequest;
+use rocketmq_admin_core::core::message::QueryMessagesByKeyRequest;
+use rocketmq_admin_core::core::message::TraceQueryRequest;
+use rocketmq_admin_core::core::message::TraceSeed;
 use rocketmq_dashboard_common::DlqBatchExportMessageRequest;
 use rocketmq_dashboard_common::DlqBatchResendMessageRequest;
 use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
@@ -61,17 +66,13 @@ use rocketmq_dashboard_common::MessageKeyQueryRequest;
 use rocketmq_dashboard_common::MessagePageQueryRequest;
 use rocketmq_dashboard_common::MessageTraceQueryRequest;
 use rocketmq_dashboard_common::ViewMessageRequest;
-use rocketmq_error::ErrorKind;
-use rocketmq_error::RocketMQError;
-use rocketmq_remoting::protocol::body::cm_result::CMResult;
-use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 const PULL_BATCH_SIZE: i32 = 32;
-const PULL_TIMEOUT_MILLIS: u64 = 3000;
+const DLQ_GROUP_TOPIC_PREFIX: &str = "%DLQ%";
 
 #[derive(Clone)]
 pub(crate) struct MessageManager {
@@ -86,6 +87,13 @@ impl MessageManager {
             runtime,
             admin_session: Arc::new(Mutex::new(None)),
             page_cache: MessagePageCache::new(),
+        }
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        let mut session = self.admin_session.lock().await;
+        if let Some(mut admin) = session.take() {
+            admin.shutdown().await;
         }
     }
 
@@ -240,35 +248,23 @@ impl MessageManager {
         &self,
         request: DlqResendMessageRequest,
     ) -> MessageResult<MessageResendResult> {
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
-            let mut session_guard = self.admin_session.lock().await;
-            self.ensure_admin_session(&mut session_guard).await?;
+        let mut session_guard = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session_guard).await?;
 
-            let result = {
-                let session = session_guard
-                    .as_mut()
-                    .expect("message admin session should be initialized before use");
-                self.resend_dlq_message_with_admin(&mut session.admin, request.clone())
-                    .await
-            };
+        let result = {
+            let session = session_guard
+                .as_mut()
+                .expect("message admin session should be initialized before use");
+            self.resend_dlq_message_with_admin(&mut session.admin, request).await
+        };
 
-            let should_reset = Self::should_reset_session(&result);
-            if should_reset {
-                self.reset_admin_session(&mut session_guard, "resend_dlq_message failed")
-                    .await;
-            }
-            drop(session_guard);
-
-            match result {
-                Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `resend_dlq_message` after reconnect: {}", error);
-                }
-                Err(error) => return Err(error),
-            }
+        if Self::should_reset_session(&result) {
+            // The broker may have completed this mutation before the transport failed. Reconnect
+            // for the next request, but never replay a potentially successful resend.
+            self.reset_admin_session(&mut session_guard, "resend_dlq_message failed")
+                .await;
         }
+        result
     }
 
     pub(crate) async fn batch_resend_dlq_message(
@@ -374,35 +370,24 @@ impl MessageManager {
         request: MessageDirectConsumeRequest,
     ) -> MessageResult<MessageResendResult> {
         let request = normalize_direct_consume_request(request)?;
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
-            let mut session_guard = self.admin_session.lock().await;
-            self.ensure_admin_session(&mut session_guard).await?;
+        let mut session_guard = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session_guard).await?;
 
-            let result = {
-                let session = session_guard
-                    .as_mut()
-                    .expect("message admin session should be initialized before use");
-                self.consume_message_directly_with_admin(&mut session.admin, request.clone())
-                    .await
-            };
+        let result = {
+            let session = session_guard
+                .as_mut()
+                .expect("message admin session should be initialized before use");
+            self.consume_message_directly_with_admin(&mut session.admin, request)
+                .await
+        };
 
-            let should_reset = Self::should_reset_session(&result);
-            if should_reset {
-                self.reset_admin_session(&mut session_guard, "consume_message_directly failed")
-                    .await;
-            }
-            drop(session_guard);
-
-            match result {
-                Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `consume_message_directly` after reconnect: {}", error);
-                }
-                Err(error) => return Err(error),
-            }
+        if Self::should_reset_session(&result) {
+            // Direct consume is not idempotent. Reset the broken session without replaying the
+            // request because the broker may already have performed the consume operation.
+            self.reset_admin_session(&mut session_guard, "consume_message_directly failed")
+                .await;
         }
+        result
     }
 
     pub(crate) async fn query_message_trace_by_id(
@@ -508,10 +493,11 @@ impl MessageManager {
     }
 
     fn should_reset_session<T>(result: &MessageResult<T>) -> bool {
-        match result {
-            Err(MessageError::RocketMQ(error)) => is_reconnect_worthy_error(error),
-            _ => false,
-        }
+        matches!(
+            result,
+            Err(MessageError::Admin(error)) if error.is_retryable()
+                || matches!(error, rocketmq_admin_core::core::AdminError::SessionClosed)
+        )
     }
 
     async fn query_first_message_page(
@@ -624,12 +610,22 @@ impl MessageManager {
 
     async fn query_first_message_page_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         query: &NormalizedMessagePageQuery,
         generation: u64,
     ) -> MessageResult<MessagePageResponse> {
-        let mut queue_states = self.build_topic_queue_states(admin, query).await?;
+        let queue_states = self.build_topic_queue_states(admin, query).await?;
+        self.finish_first_message_page(admin, query, generation, queue_states)
+            .await
+    }
 
+    async fn finish_first_message_page(
+        &self,
+        admin: &mut AdminSession,
+        query: &NormalizedMessagePageQuery,
+        generation: u64,
+        mut queue_states: Vec<QueueScanState>,
+    ) -> MessageResult<MessagePageResponse> {
         for queue_state in &mut queue_states {
             self.align_queue_start(admin, query, queue_state).await?;
         }
@@ -658,20 +654,30 @@ impl MessageManager {
 
     async fn query_first_dlq_message_page_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         query: &NormalizedMessagePageQuery,
         generation: u64,
     ) -> MessageResult<MessagePageResponse> {
-        if !dlq_topic_exists_with_admin(admin, &query.topic).await? {
+        let plan = admin
+            .message_queue_plan(&MessageQueuePlanRequest {
+                topic: query.topic.clone(),
+                begin: query.begin,
+                end: query.end,
+            })
+            .await
+            .map_err(MessageError::Admin)?;
+        if !plan.topic_exists {
             return Ok(build_empty_message_page_response(query));
         }
 
-        self.query_first_message_page_with_admin(admin, query, generation).await
+        let queue_states = queue_states_from_plan(query, plan)?;
+        self.finish_first_message_page(admin, query, generation, queue_states)
+            .await
     }
 
     async fn query_message_page_from_cache_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         query: &NormalizedMessagePageQuery,
         entry: &MessagePageCacheEntry,
     ) -> MessageResult<MessagePageResponse> {
@@ -683,81 +689,23 @@ impl MessageManager {
 
     async fn build_topic_queue_states(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         query: &NormalizedMessagePageQuery,
     ) -> MessageResult<Vec<QueueScanState>> {
-        let route = admin
-            .examine_topic_route_info(CheetahString::from(query.topic.clone()))
+        let plan = admin
+            .message_queue_plan(&MessageQueuePlanRequest {
+                topic: query.topic.clone(),
+                begin: query.begin,
+                end: query.end,
+            })
             .await
-            .map_err(MessageError::RocketMQ)?
-            .unwrap_or_default();
-
-        let mut broker_addr_map = HashMap::new();
-        for broker_data in &route.broker_datas {
-            if let Some(addr) = broker_data.select_broker_addr() {
-                broker_addr_map.insert(broker_data.broker_name().to_string(), addr.to_string());
-            }
-        }
-
-        let mut queue_states = Vec::new();
-        let mut idx = 0usize;
-        for queue_data in &route.queue_datas {
-            let broker_name = queue_data.broker_name().to_string();
-            let Some(broker_addr) = broker_addr_map.get(&broker_name) else {
-                continue;
-            };
-
-            for queue_id in 0..queue_data.read_queue_nums() {
-                let queue_id = i32::try_from(queue_id).expect("queue id should fit within i32");
-                let start = admin
-                    .search_offset(
-                        CheetahString::from(broker_addr.clone()),
-                        CheetahString::from(query.topic.clone()),
-                        queue_id,
-                        query.begin as u64,
-                        PULL_TIMEOUT_MILLIS,
-                    )
-                    .await
-                    .map_err(MessageError::RocketMQ)? as i64;
-                let end = admin
-                    .search_offset(
-                        CheetahString::from(broker_addr.clone()),
-                        CheetahString::from(query.topic.clone()),
-                        queue_id,
-                        query.end as u64,
-                        PULL_TIMEOUT_MILLIS,
-                    )
-                    .await
-                    .map_err(MessageError::RocketMQ)? as i64;
-
-                queue_states.push(QueueScanState::new(
-                    idx,
-                    broker_addr.clone(),
-                    rocketmq_common::common::message::message_queue::MessageQueue::from_parts(
-                        query.topic.as_str(),
-                        broker_name.as_str(),
-                        queue_id,
-                    ),
-                    start,
-                    end,
-                ));
-                idx += 1;
-            }
-        }
-
-        if queue_states.is_empty() {
-            return Err(MessageError::Validation(format!(
-                "No readable message queue was found for topic `{}`.",
-                query.topic
-            )));
-        }
-
-        Ok(queue_states)
+            .map_err(MessageError::Admin)?;
+        queue_states_from_plan(query, plan)
     }
 
     async fn align_queue_start(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         query: &NormalizedMessagePageQuery,
         queue_state: &mut QueueScanState,
     ) -> MessageResult<()> {
@@ -767,22 +715,18 @@ impl MessageManager {
         while start < queue_state.end {
             let batch_size = ((queue_state.end - start).min(PULL_BATCH_SIZE as i64)).max(1) as i32;
             let result = admin
-                .pull_message_from_queue(
-                    queue_state.broker_addr.as_str(),
-                    &queue_state.message_queue,
-                    "*",
-                    start,
-                    batch_size,
-                    PULL_TIMEOUT_MILLIS,
-                )
+                .pull_messages(&PullMessagesRequest {
+                    broker_addr: queue_state.broker_addr.clone(),
+                    queue: queue_state.queue_ref(),
+                    offset: start,
+                    max_messages: batch_size,
+                })
                 .await
-                .map_err(MessageError::RocketMQ)?;
+                .map_err(MessageError::Admin)?;
 
-            match result.pull_status() {
-                PullStatus::Found => {
-                    let Some(messages) = result.msg_found_list() else {
-                        break;
-                    };
+            match result.status {
+                MessagePullStatus::Found => {
+                    let messages = result.messages;
                     if messages.is_empty() {
                         break;
                     }
@@ -790,8 +734,7 @@ impl MessageManager {
                     has_data = true;
                     let mut advanced = false;
                     for message in messages {
-                        let message_ref: &MessageExt = message;
-                        if message_ref.store_timestamp() < query.begin {
+                        if message.store_timestamp < query.begin {
                             start += 1;
                             advanced = true;
                         } else {
@@ -804,7 +747,9 @@ impl MessageManager {
                         break;
                     }
                 }
-                PullStatus::NoMatchedMsg | PullStatus::NoNewMsg | PullStatus::OffsetIllegal => break,
+                MessagePullStatus::NoMatchedMsg | MessagePullStatus::NoNewMsg | MessagePullStatus::OffsetIllegal => {
+                    break;
+                }
             }
         }
 
@@ -819,7 +764,7 @@ impl MessageManager {
 
     async fn align_queue_end(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         query: &NormalizedMessagePageQuery,
         queue_state: &mut QueueScanState,
     ) -> MessageResult<()> {
@@ -847,34 +792,27 @@ impl MessageManager {
             }
 
             let result = admin
-                .pull_message_from_queue(
-                    queue_state.broker_addr.as_str(),
-                    &queue_state.message_queue,
-                    "*",
-                    pull_offset,
-                    pull_size as i32,
-                    PULL_TIMEOUT_MILLIS,
-                )
+                .pull_messages(&PullMessagesRequest {
+                    broker_addr: queue_state.broker_addr.clone(),
+                    queue: queue_state.queue_ref(),
+                    offset: pull_offset,
+                    max_messages: pull_size as i32,
+                })
                 .await
-                .map_err(MessageError::RocketMQ)?;
+                .map_err(MessageError::Admin)?;
 
-            match result.pull_status() {
-                PullStatus::Found => {
-                    if let Some(messages) = result.msg_found_list() {
-                        for message in messages.iter().rev() {
-                            let message_ref: &MessageExt = message;
-                            if message_ref.store_timestamp() > query.end {
-                                end -= 1;
-                            } else {
-                                has_illegal_offset = false;
-                                break;
-                            }
+            match result.status {
+                MessagePullStatus::Found => {
+                    for message in result.messages.iter().rev() {
+                        if message.store_timestamp > query.end {
+                            end -= 1;
+                        } else {
+                            has_illegal_offset = false;
+                            break;
                         }
-                    } else {
-                        has_illegal_offset = false;
                     }
                 }
-                PullStatus::NoMatchedMsg | PullStatus::NoNewMsg | PullStatus::OffsetIllegal => {
+                MessagePullStatus::NoMatchedMsg | MessagePullStatus::NoNewMsg | MessagePullStatus::OffsetIllegal => {
                     has_illegal_offset = false;
                 }
             }
@@ -892,7 +830,7 @@ impl MessageManager {
 
     async fn load_page_messages(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         query: &NormalizedMessagePageQuery,
         queue_states: &[QueueScanState],
     ) -> MessageResult<Vec<MessageSummaryView>> {
@@ -905,22 +843,18 @@ impl MessageManager {
             while remaining > 0 && pull_offset < queue_state.end_offset {
                 let batch_size = ((queue_state.end_offset - pull_offset).min(PULL_BATCH_SIZE as i64)).max(1) as i32;
                 let result = admin
-                    .pull_message_from_queue(
-                        queue_state.broker_addr.as_str(),
-                        &queue_state.message_queue,
-                        "*",
-                        pull_offset,
-                        batch_size,
-                        PULL_TIMEOUT_MILLIS,
-                    )
+                    .pull_messages(&PullMessagesRequest {
+                        broker_addr: queue_state.broker_addr.clone(),
+                        queue: queue_state.queue_ref(),
+                        offset: pull_offset,
+                        max_messages: batch_size,
+                    })
                     .await
-                    .map_err(MessageError::RocketMQ)?;
+                    .map_err(MessageError::Admin)?;
 
-                match result.pull_status() {
-                    PullStatus::Found => {
-                        let Some(messages) = result.msg_found_list() else {
-                            break;
-                        };
+                match result.status {
+                    MessagePullStatus::Found => {
+                        let messages = result.messages;
                         if messages.is_empty() {
                             break;
                         }
@@ -929,23 +863,23 @@ impl MessageManager {
                             if remaining == 0 {
                                 break;
                             }
-                            let message_ref: &MessageExt = message;
-                            if message_ref.store_timestamp() < query.begin || message_ref.store_timestamp() > query.end
-                            {
+                            if message.store_timestamp < query.begin || message.store_timestamp > query.end {
                                 continue;
                             }
 
-                            items.push(map_message_summary(message_ref.clone()));
+                            items.push(map_message_summary(message));
                             remaining -= 1;
                         }
 
-                        let next_begin_offset = result.next_begin_offset() as i64;
+                        let next_begin_offset = result.next_begin_offset;
                         if next_begin_offset <= pull_offset {
                             break;
                         }
                         pull_offset = next_begin_offset;
                     }
-                    PullStatus::NoMatchedMsg | PullStatus::NoNewMsg | PullStatus::OffsetIllegal => break,
+                    MessagePullStatus::NoMatchedMsg
+                    | MessagePullStatus::NoNewMsg
+                    | MessagePullStatus::OffsetIllegal => break,
                 }
             }
         }
@@ -956,28 +890,24 @@ impl MessageManager {
 
     async fn query_message_by_topic_key_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: MessageKeyQueryRequest,
     ) -> MessageResult<MessageSummaryListResponse> {
         let topic = normalize_required_field("topic", request.topic)?;
         let key = normalize_required_field("key", request.key)?;
 
         let result = admin
-            .query_message_by_key(
-                None,
-                CheetahString::from(topic.clone()),
-                CheetahString::from(key),
-                64,
-                0,
-                i64::MAX,
-                CheetahString::from_static_str("K"),
-                None,
-            )
+            .query_messages_by_key(&QueryMessagesByKeyRequest {
+                topic,
+                key,
+                max_messages: 64,
+                begin: 0,
+                end: i64::MAX,
+            })
             .await
-            .map_err(MessageError::RocketMQ)?;
+            .map_err(MessageError::Admin)?;
 
-        let mut items: Vec<MessageSummaryView> =
-            result.message_list().iter().cloned().map(map_message_summary).collect();
+        let mut items: Vec<MessageSummaryView> = result.messages.into_iter().map(map_message_summary).collect();
         sort_message_summaries_desc(&mut items);
 
         Ok(MessageSummaryListResponse {
@@ -988,7 +918,7 @@ impl MessageManager {
 
     async fn query_message_by_id_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: MessageIdQueryRequest,
     ) -> MessageResult<MessageSummaryListResponse> {
         let message = self
@@ -1003,62 +933,62 @@ impl MessageManager {
 
     async fn view_message_detail_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: ViewMessageRequest,
     ) -> MessageResult<MessageDetailView> {
-        let message = self
-            .find_message_by_id_with_admin(admin, request.topic, request.message_id)
-            .await?;
-        let message_tracks = admin
-            .message_track_detail(message.clone())
+        let detail = admin
+            .message_detail(&MessageLookupRequest {
+                topic: normalize_required_field("topic", request.topic)?,
+                message_id: normalize_required_field("messageId", request.message_id)?,
+            })
             .await
-            .unwrap_or_else(|error| {
-                log::warn!("Failed to load message track detail: {}", error);
-                Vec::new()
-            });
+            .map_err(MessageError::Admin)?;
 
-        Ok(map_message_detail(message, message_tracks))
+        Ok(map_message_detail(detail))
     }
 
     async fn resend_dlq_message_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: DlqResendMessageRequest,
     ) -> MessageResult<MessageResendResult> {
         let consumer_group = normalize_required_field("consumerGroup", request.consumer_group)?;
-        let dlq_topic = build_dlq_topic(&consumer_group)?;
         let message_id = normalize_required_field("messageId", request.message_id)?;
-        let dlq_message = self.find_message_by_id_with_admin(admin, dlq_topic, message_id).await?;
-        let resend_target = build_dlq_resend_target(&dlq_message)?;
-        self.consume_message_directly_with_admin(
-            admin,
-            NormalizedDirectConsumeRequest {
-                topic: resend_target.topic,
-                consumer_group,
-                message_id: resend_target.msg_id,
-                client_id: None,
-            },
-        )
-        .await
+        let result = admin
+            .resend_dlq_message(&DlqMessageLookupRequest {
+                consumer_group: consumer_group.clone(),
+                message_id,
+            })
+            .await
+            .map_err(MessageError::Admin)?;
+        Ok(build_message_resend_result(
+            consumer_group,
+            result.topic,
+            result.message_id,
+            result.consume,
+        ))
     }
 
     async fn export_dlq_message_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: DlqViewMessageRequest,
     ) -> MessageResult<DlqMessageExportView> {
         let consumer_group = normalize_required_field("consumerGroup", request.consumer_group)?;
         let topic = build_dlq_topic(&consumer_group)?;
         let message_id = normalize_required_field("messageId", request.message_id)?;
-        let message = self
-            .find_message_by_id_with_admin(admin, topic.clone(), message_id)
+        let message = admin
+            .find_dlq_message(&DlqMessageLookupRequest {
+                consumer_group,
+                message_id,
+            })
             .await?;
         Ok(build_dlq_export_view(topic, message))
     }
 
     async fn batch_export_dlq_message_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: DlqBatchExportMessageRequest,
     ) -> MessageResult<DlqBatchMessageExportView> {
         let requests = normalize_batch_export_requests(request.messages)?;
@@ -1070,8 +1000,11 @@ impl MessageManager {
             let consumer_group = request.consumer_group.clone();
             let message_id = request.message_id.clone();
             let topic = build_dlq_topic(&consumer_group)?;
-            match self
-                .find_message_by_id_with_admin(admin, topic.clone(), message_id.clone())
+            match admin
+                .find_dlq_message(&DlqMessageLookupRequest {
+                    consumer_group,
+                    message_id: message_id.clone(),
+                })
                 .await
             {
                 Ok(message) => {
@@ -1079,7 +1012,11 @@ impl MessageManager {
                     success_count += 1;
                 }
                 Err(error) => {
-                    rows.push(build_failed_dlq_export_row(topic, message_id, error));
+                    rows.push(build_failed_dlq_export_row(
+                        topic,
+                        message_id,
+                        MessageError::Admin(error),
+                    ));
                     failure_count += 1;
                 }
             }
@@ -1090,19 +1027,18 @@ impl MessageManager {
 
     async fn consume_message_directly_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: NormalizedDirectConsumeRequest,
     ) -> MessageResult<MessageResendResult> {
-        let client_id = request.client_id.clone().unwrap_or_default();
         let consume_result = admin
-            .consume_message_directly(
-                CheetahString::from(request.consumer_group.clone()),
-                CheetahString::from(client_id),
-                CheetahString::from(request.topic.clone()),
-                CheetahString::from(request.message_id.clone()),
-            )
+            .consume_message_directly(&DirectConsumeRequest {
+                topic: request.topic.clone(),
+                consumer_group: request.consumer_group.clone(),
+                message_id: request.message_id.clone(),
+                client_id: request.client_id,
+            })
             .await
-            .map_err(MessageError::RocketMQ)?;
+            .map_err(MessageError::Admin)?;
 
         Ok(build_message_resend_result(
             request.consumer_group,
@@ -1114,59 +1050,21 @@ impl MessageManager {
 
     async fn find_message_by_id_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         topic: String,
         message_id: String,
-    ) -> MessageResult<MessageExt> {
+    ) -> MessageResult<MessageRecord> {
         let topic = normalize_required_field("topic", topic)?;
         let message_id = normalize_required_field("messageId", message_id)?;
-
-        match admin
-            .query_message_by_unique_key(
-                None,
-                CheetahString::from(topic.clone()),
-                CheetahString::from(message_id.clone()),
-                32,
-                0,
-                i64::MAX,
-            )
-            .await
-        {
-            Ok(result) if !result.message_list().is_empty() => {
-                return first_message_or_validation_error(result.message_list().to_vec());
-            }
-            Ok(_) => {
-                log::warn!(
-                    "query_message_by_unique_key returned no match for topic `{}` and messageId `{}`, falling back to \
-                     direct query_message",
-                    topic,
-                    message_id
-                );
-            }
-            Err(error) => {
-                log::warn!(
-                    "query_message_by_unique_key failed for topic `{}` and messageId `{}`: {}. Falling back to direct \
-                     query_message",
-                    topic,
-                    message_id,
-                    error
-                );
-            }
-        }
-
         admin
-            .query_message(
-                CheetahString::default(),
-                CheetahString::from(topic),
-                CheetahString::from(message_id),
-            )
+            .find_message(&MessageLookupRequest { topic, message_id })
             .await
-            .map_err(MessageError::RocketMQ)
+            .map_err(MessageError::Admin)
     }
 
     async fn query_message_trace_by_id_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: MessageTraceQueryRequest,
     ) -> MessageResult<MessageSummaryListResponse> {
         let (_, message_id, seeds) = self.query_trace_seeds_with_admin(admin, request).await?;
@@ -1180,7 +1078,7 @@ impl MessageManager {
 
     async fn view_message_trace_detail_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: MessageTraceQueryRequest,
     ) -> MessageResult<MessageTraceDetailView> {
         let (trace_topic, message_id, seeds) = self.query_trace_seeds_with_admin(admin, request).await?;
@@ -1189,95 +1087,42 @@ impl MessageManager {
 
     async fn query_trace_seeds_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: MessageTraceQueryRequest,
     ) -> MessageResult<(String, String, Vec<TraceSeed>)> {
-        let trace_topic = normalize_trace_topic(request.trace_topic);
         let message_id = normalize_required_field("messageId", request.message_id)?;
-
-        let result = admin
-            .query_message_by_key(
-                None,
-                CheetahString::from(trace_topic.clone()),
-                CheetahString::from(message_id.clone()),
-                64,
-                0,
-                i64::MAX,
-                CheetahString::from_static_str(""),
-                None,
-            )
+        let trace_topic = request.trace_topic.as_str().trim();
+        let trace = admin
+            .query_trace_data(&TraceQueryRequest {
+                message_id,
+                trace_topic: (!trace_topic.is_empty()).then(|| trace_topic.to_string()),
+            })
             .await
-            .map_err(MessageError::RocketMQ)?;
+            .map_err(MessageError::Admin)?;
 
-        let mut seeds = Vec::new();
-
-        for trace_message in result.message_list() {
-            let Some(body) = trace_message.body() else {
-                continue;
-            };
-            let body_text = String::from_utf8_lossy(body.as_ref());
-            if body_text.trim().is_empty() {
-                continue;
-            }
-
-            for context in TraceDataEncoder::decoder_from_trace_data_string(&body_text) {
-                let trace_type = context
-                    .trace_type
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "Unknown".to_string());
-                let group_name = context.group_name.to_string();
-                let cost_time = context.cost_time;
-                let status = if context.is_success {
-                    "success".to_string()
-                } else {
-                    "failed".to_string()
-                };
-
-                if let Some(trace_beans) = context.trace_beans {
-                    for bean in trace_beans {
-                        if bean.msg_id.as_str() != message_id {
-                            continue;
-                        }
-
-                        seeds.push(TraceSeed {
-                            trace_type: trace_type.clone(),
-                            group_name: group_name.clone(),
-                            client_host: if bean.client_host.is_empty() {
-                                trace_message.born_host().to_string()
-                            } else {
-                                bean.client_host.to_string()
-                            },
-                            store_host: if bean.store_host.is_empty() {
-                                trace_message.store_host().to_string()
-                            } else {
-                                bean.store_host.to_string()
-                            },
-                            timestamp: if bean.store_time > 0 {
-                                bean.store_time
-                            } else {
-                                context.time_stamp as i64
-                            },
-                            cost_time,
-                            status: status.clone(),
-                            topic: non_empty(bean.topic.as_str()),
-                            tags: non_empty(bean.tags.as_str()),
-                            keys: non_empty(bean.keys.as_str()),
-                            retry_times: bean.retry_times,
-                            from_transaction_check: bean.from_transaction_check,
-                        });
-                    }
-                }
-            }
-        }
-
-        if seeds.is_empty() {
-            return Err(MessageError::Validation(
-                "No trace information matched the current message.".to_string(),
-            ));
-        }
-
-        Ok((trace_topic, message_id, seeds))
+        Ok((trace.trace_topic, trace.message_id, trace.seeds))
     }
+}
+
+fn queue_states_from_plan(
+    query: &NormalizedMessagePageQuery,
+    plan: MessageQueuePlan,
+) -> MessageResult<Vec<QueueScanState>> {
+    let queue_states = plan
+        .queues
+        .into_iter()
+        .enumerate()
+        .map(|(idx, range)| QueueScanState::new(idx, range.broker_addr, range.queue, range.start, range.end))
+        .collect::<Vec<_>>();
+
+    if queue_states.is_empty() {
+        return Err(MessageError::Validation(format!(
+            "No readable message queue was found for topic `{}`.",
+            query.topic
+        )));
+    }
+
+    Ok(queue_states)
 }
 
 fn normalize_required_field(field_name: &str, value: String) -> MessageResult<String> {
@@ -1328,15 +1173,6 @@ fn normalize_batch_export_requests(requests: Vec<DlqViewMessageRequest>) -> Mess
         .collect()
 }
 
-fn normalize_trace_topic(value: String) -> String {
-    let normalized = value.trim();
-    if normalized.is_empty() {
-        TopicValidator::RMQ_SYS_TRACE_TOPIC.to_string()
-    } else {
-        normalized.to_string()
-    }
-}
-
 fn sort_message_summaries_desc(items: &mut [MessageSummaryView]) {
     items.sort_by(|left, right| {
         right
@@ -1346,46 +1182,32 @@ fn sort_message_summaries_desc(items: &mut [MessageSummaryView]) {
     });
 }
 
-fn is_reconnect_worthy_error(error: &RocketMQError) -> bool {
-    matches!(error.kind(), ErrorKind::Network | ErrorKind::Timeout) || is_reconnect_worthy_message(&error.to_string())
-}
-
-fn is_reconnect_worthy_message(message: &str) -> bool {
-    let normalized = message.to_ascii_lowercase();
-    normalized.contains("connection refused")
-        || normalized.contains("connection reset")
-        || normalized.contains("timed out")
-        || normalized.contains("timeout")
-        || normalized.contains("channel inactive")
-        || normalized.contains("broken pipe")
-}
-
-fn extract_keys(message: &MessageExt) -> Option<String> {
+fn extract_keys(message: &MessageRecord) -> Option<String> {
     message
-        .message_inner()
-        .keys()
-        .map(|keys| keys.join(" "))
+        .keys
+        .as_deref()
+        .map(str::trim)
         .filter(|keys| !keys.is_empty())
+        .map(|keys| keys.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-fn resolve_message_summary_id(message: &MessageExt) -> String {
+fn resolve_message_summary_id(message: &MessageRecord) -> String {
     message
-        .property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-        ))
-        .map(|value| value.to_string())
-        .and_then(|value| non_empty(&value))
-        .unwrap_or_else(|| message.msg_id().to_string())
+        .unique_message_id
+        .as_deref()
+        .and_then(non_empty)
+        .unwrap_or_else(|| message.message_id.clone())
 }
 
-fn map_message_summary(message: MessageExt) -> MessageSummaryView {
+fn map_message_summary(message: MessageRecord) -> MessageSummaryView {
+    let keys = extract_keys(&message);
     MessageSummaryView {
-        topic: message.topic().to_string(),
+        topic: message.topic.clone(),
         msg_id: resolve_message_summary_id(&message),
-        query_msg_id: message.msg_id().to_string(),
-        tags: message.get_tags().map(|value| value.to_string()),
-        keys: extract_keys(&message),
-        store_timestamp: message.store_timestamp(),
+        query_msg_id: message.message_id.clone(),
+        tags: message.tags,
+        keys,
+        store_timestamp: message.store_timestamp,
     }
 }
 
@@ -1405,7 +1227,7 @@ fn dlq_page_query_to_message_page_request(
 fn build_dlq_topic(consumer_group: &str) -> MessageResult<String> {
     let group = consumer_group
         .trim()
-        .strip_prefix(mix_all::DLQ_GROUP_TOPIC_PREFIX)
+        .strip_prefix(DLQ_GROUP_TOPIC_PREFIX)
         .unwrap_or(consumer_group.trim())
         .trim();
     if group.is_empty() {
@@ -1414,13 +1236,7 @@ fn build_dlq_topic(consumer_group: &str) -> MessageResult<String> {
         ));
     }
 
-    Ok(format!("{}{}", mix_all::DLQ_GROUP_TOPIC_PREFIX, group))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DlqResendTarget {
-    topic: String,
-    msg_id: String,
+    Ok(format!("{DLQ_GROUP_TOPIC_PREFIX}{group}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1429,39 +1245,6 @@ struct NormalizedDirectConsumeRequest {
     consumer_group: String,
     message_id: String,
     client_id: Option<String>,
-}
-
-fn build_dlq_resend_target(message: &MessageExt) -> MessageResult<DlqResendTarget> {
-    let retry_topic = message
-        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC))
-        .map(|value| value.to_string())
-        .and_then(|value| non_empty(&value))
-        .ok_or_else(|| {
-            MessageError::Validation("DLQ message is missing `RETRY_TOPIC`, so it cannot be resent safely.".to_string())
-        })?;
-    let origin_message_id = message
-        .property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_ORIGIN_MESSAGE_ID,
-        ))
-        .map(|value| value.to_string())
-        .or_else(|| {
-            message
-                .property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_DLQ_ORIGIN_MESSAGE_ID,
-                ))
-                .map(|value| value.to_string())
-        })
-        .and_then(|value| non_empty(&value))
-        .ok_or_else(|| {
-            MessageError::Validation(
-                "DLQ message is missing `ORIGIN_MESSAGE_ID`, so it cannot be resent safely.".to_string(),
-            )
-        })?;
-
-    Ok(DlqResendTarget {
-        topic: retry_topic,
-        msg_id: origin_message_id,
-    })
 }
 
 fn normalize_direct_consume_request(
@@ -1473,12 +1256,6 @@ fn normalize_direct_consume_request(
         message_id: normalize_required_field("messageId", request.message_id)?,
         client_id: request.client_id.as_deref().and_then(non_empty),
     })
-}
-
-async fn dlq_topic_exists_with_admin(admin: &mut DefaultMQAdminExt, topic: &str) -> MessageResult<bool> {
-    let topic_list = admin.fetch_all_topic_list().await.map_err(MessageError::RocketMQ)?;
-
-    Ok(topic_list.topic_list.iter().any(|item| item.as_str() == topic))
 }
 
 fn build_empty_message_page_response(query: &NormalizedMessagePageQuery) -> MessagePageResponse {
@@ -1519,14 +1296,13 @@ fn build_message_resend_result(
     consumer_group: String,
     topic: String,
     msg_id: String,
-    consume_result: rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult,
+    consume_result: DirectConsumeResult,
 ) -> MessageResendResult {
-    let consume_result_text = consume_result.consume_result().map(|value| value.to_string());
-    let remark = consume_result.remark().map(|value| value.to_string());
-    let success = matches!(
-        consume_result.consume_result(),
-        Some(result) if *result == CMResult::CRSuccess
-    );
+    let DirectConsumeResult {
+        success,
+        consume_result: consume_result_text,
+        remark,
+    } = consume_result;
     let mut message = if success {
         format!("Direct consume succeeded for `{msg_id}` on `{topic}` in consumer group `{consumer_group}`.")
     } else {
@@ -1564,14 +1340,14 @@ fn build_failed_message_resend_result(
     }
 }
 
-fn build_dlq_export_view(request_topic: String, message: MessageExt) -> DlqMessageExportView {
-    let msg_id = message.msg_id().to_string();
+fn build_dlq_export_view(request_topic: String, message: MessageRecord) -> DlqMessageExportView {
+    let msg_id = message.message_id.clone();
     let row = build_dlq_export_row(request_topic.clone(), message, String::new());
 
     DlqMessageExportView {
         file_name: format!(
             "dlq-{}-{}.csv",
-            sanitize_export_file_fragment(request_topic.trim_start_matches(mix_all::DLQ_GROUP_TOPIC_PREFIX)),
+            sanitize_export_file_fragment(request_topic.trim_start_matches(DLQ_GROUP_TOPIC_PREFIX)),
             sanitize_export_file_fragment(&msg_id),
         ),
         mime_type: "text/csv;charset=utf-8".to_string(),
@@ -1619,17 +1395,17 @@ fn build_dlq_export_csv(rows: Vec<[String; 10]>) -> String {
     format!("{}\n", csv_rows.join("\n"))
 }
 
-fn build_dlq_export_row(request_topic: String, message: MessageExt, exception: String) -> [String; 10] {
+fn build_dlq_export_row(request_topic: String, message: MessageRecord, exception: String) -> [String; 10] {
     [
         request_topic,
-        message.msg_id().to_string(),
-        message.born_host().to_string(),
-        format_export_timestamp(message.born_timestamp()),
-        format_export_timestamp(message.store_timestamp()),
-        message.reconsume_times().to_string(),
+        message.message_id.clone(),
+        message.born_host.clone(),
+        format_export_timestamp(message.born_timestamp),
+        format_export_timestamp(message.store_timestamp),
+        message.reconsume_times.to_string(),
         format_java_properties_string(&message),
         decode_export_message_body(&message),
-        message.body_crc().to_string(),
+        message.body_crc.to_string(),
         exception,
     ]
 }
@@ -1661,9 +1437,9 @@ fn format_export_timestamp(value: i64) -> String {
         .unwrap_or_default()
 }
 
-fn format_java_properties_string(message: &MessageExt) -> String {
+fn format_java_properties_string(message: &MessageRecord) -> String {
     let mut entries = message
-        .properties()
+        .properties
         .iter()
         .filter(|(key, _)| is_dashboard_property(key.as_str()))
         .map(|(key, value)| format!("{key}={value}"))
@@ -1673,11 +1449,11 @@ fn format_java_properties_string(message: &MessageExt) -> String {
 }
 
 fn is_dashboard_property(key: &str) -> bool {
-    key != MessageConst::PROPERTY_WAIT_STORE_MSG_OK
+    key != "WAIT"
 }
 
-fn decode_export_message_body(message: &MessageExt) -> String {
-    let body = message.body().map(|body| body.to_vec()).unwrap_or_default();
+fn decode_export_message_body(message: &MessageRecord) -> String {
+    let body = message.body.clone();
 
     match String::from_utf8(body.clone()) {
         Ok(text) => text,
@@ -1709,22 +1485,6 @@ fn csv_escape(value: impl AsRef<str>) -> String {
     format!("\"{escaped}\"")
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TraceSeed {
-    trace_type: String,
-    group_name: String,
-    client_host: String,
-    store_host: String,
-    timestamp: i64,
-    cost_time: i32,
-    status: String,
-    topic: Option<String>,
-    tags: Option<String>,
-    keys: Option<String>,
-    retry_times: i32,
-    from_transaction_check: bool,
-}
-
 fn build_trace_summary(message_id: &str, mut seeds: Vec<TraceSeed>) -> MessageResult<MessageSummaryView> {
     if seeds.is_empty() {
         return Err(MessageError::Validation(
@@ -1737,7 +1497,7 @@ fn build_trace_summary(message_id: &str, mut seeds: Vec<TraceSeed>) -> MessageRe
         .iter()
         .find(|seed| seed.trace_type == "Pub")
         .or_else(|| seeds.first())
-        .expect("trace seeds should not be empty");
+        .ok_or_else(|| MessageError::Validation("No trace information matched the current message.".to_string()))?;
 
     Ok(MessageSummaryView {
         topic: selected.topic.clone().unwrap_or_default(),
@@ -1860,51 +1620,47 @@ fn non_empty(value: &str) -> Option<String> {
     }
 }
 
-#[allow(deprecated)]
-fn map_message_track_list(tracks: Vec<MessageTrack>) -> Vec<crate::message::types::MessageTrackView> {
+fn map_message_track_list(tracks: Vec<MessageTrackRecord>) -> Vec<crate::message::types::MessageTrackView> {
     tracks
         .into_iter()
         .map(|track| crate::message::types::MessageTrackView {
             consumer_group: track.consumer_group,
-            track_type: track
-                .track_type
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "UNKNOWN".to_string()),
-            exception_desc: non_empty(&track.exception_desc),
+            track_type: track.track_type,
+            exception_desc: track.exception_desc,
         })
         .collect()
 }
 
-#[allow(deprecated)]
-fn map_message_detail(message: MessageExt, message_tracks: Vec<MessageTrack>) -> MessageDetailView {
+fn map_message_detail(detail: MessageDetailRecord) -> MessageDetailView {
+    let message = detail.message;
     let properties = message
-        .properties()
+        .properties
         .iter()
         .filter(|(key, _)| is_dashboard_property(key.as_str()))
         .map(|(key, value)| (key.to_string(), value.to_string()))
         .collect::<BTreeMap<_, _>>();
-    let body = message.body().map(|body| body.to_vec()).unwrap_or_default();
+    let body = message.body;
     let (body_text, body_base64) = decode_body_fields(&body);
 
     MessageDetailView {
-        topic: message.topic().to_string(),
-        msg_id: message.msg_id().to_string(),
-        born_host: Some(message.born_host().to_string()),
-        store_host: Some(message.store_host().to_string()),
-        born_timestamp: Some(message.born_timestamp()),
-        store_timestamp: Some(message.store_timestamp()),
-        queue_id: Some(message.queue_id()),
-        queue_offset: Some(message.queue_offset()),
-        store_size: Some(message.store_size()),
-        reconsume_times: Some(message.reconsume_times()),
-        body_crc: Some(message.body_crc()),
-        sys_flag: Some(message.sys_flag()),
-        flag: Some(message.flag()),
-        prepared_transaction_offset: Some(message.prepared_transaction_offset()),
+        topic: message.topic,
+        msg_id: message.message_id,
+        born_host: Some(message.born_host),
+        store_host: Some(message.store_host),
+        born_timestamp: Some(message.born_timestamp),
+        store_timestamp: Some(message.store_timestamp),
+        queue_id: Some(message.queue_id),
+        queue_offset: Some(message.queue_offset),
+        store_size: Some(message.store_size),
+        reconsume_times: Some(message.reconsume_times),
+        body_crc: Some(message.body_crc),
+        sys_flag: Some(message.sys_flag),
+        flag: Some(message.flag),
+        prepared_transaction_offset: Some(message.prepared_transaction_offset),
         properties,
         body_text,
         body_base64,
-        message_track_list: Some(map_message_track_list(message_tracks)),
+        message_track_list: Some(map_message_track_list(detail.tracks)),
     }
 }
 
@@ -1919,45 +1675,42 @@ fn decode_body_fields(body: &[u8]) -> (Option<String>, Option<String>) {
     }
 }
 
-fn first_message_or_validation_error(mut messages: Vec<MessageExt>) -> MessageResult<MessageExt> {
-    messages.sort_by(|left, right| {
-        right
-            .store_timestamp()
-            .cmp(&left.store_timestamp())
-            .then_with(|| left.msg_id().cmp(right.msg_id()))
-    });
-
-    messages
-        .into_iter()
-        .next()
-        .ok_or_else(|| MessageError::Validation("No message matched the current query.".to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_common::common::message::MessageTrait;
-    use rocketmq_common::common::message::message_builder::MessageBuilder;
-    #[allow(deprecated)]
-    use rocketmq_common::common::tools::message_track::MessageTrack;
-    #[allow(deprecated)]
-    use rocketmq_common::common::tools::track_type::TrackType;
+
+    fn message_record(topic: &str, message_id: &str, body: &[u8]) -> MessageRecord {
+        MessageRecord {
+            topic: topic.to_string(),
+            message_id: message_id.to_string(),
+            unique_message_id: None,
+            keys: None,
+            tags: None,
+            born_timestamp: 0,
+            store_timestamp: 0,
+            born_host: String::new(),
+            store_host: String::new(),
+            queue_id: 0,
+            queue_offset: 0,
+            store_size: 0,
+            reconsume_times: 0,
+            body_crc: 0,
+            sys_flag: 0,
+            flag: 0,
+            prepared_transaction_offset: 0,
+            body: body.to_vec(),
+            properties: BTreeMap::new(),
+        }
+    }
 
     #[test]
     fn map_message_summary_extracts_topic_tags_keys_and_store_timestamp() {
-        let message = MessageBuilder::new()
-            .topic("TopicTest")
-            .body_slice(b"payload")
-            .tags("TagA")
-            .keys(vec!["KeyA".to_string(), "KeyB".to_string()])
-            .build_unchecked();
+        let mut message = message_record("TopicTest", "msg-1", b"payload");
+        message.tags = Some("TagA".to_string());
+        message.keys = Some("KeyA KeyB".to_string());
+        message.store_timestamp = 1_700_000_000_123;
 
-        let mut message_ext = MessageExt::default();
-        message_ext.set_message_inner(message);
-        message_ext.set_msg_id(CheetahString::from("msg-1"));
-        message_ext.set_store_timestamp(1_700_000_000_123);
-
-        let summary = map_message_summary(message_ext);
+        let summary = map_message_summary(message);
 
         assert_eq!(summary.topic, "TopicTest");
         assert_eq!(summary.msg_id, "msg-1");
@@ -1969,20 +1722,10 @@ mod tests {
 
     #[test]
     fn map_message_summary_prefers_uniq_key_property_over_offset_msg_id() {
-        let message = MessageBuilder::new()
-            .topic("TopicTest")
-            .body_slice(b"payload")
-            .build_unchecked();
+        let mut message = message_record("TopicTest", "offset-msg-id", b"payload");
+        message.unique_message_id = Some("uniq-msg-id".to_string());
 
-        let mut message_ext = MessageExt::default();
-        message_ext.set_message_inner(message);
-        message_ext.set_msg_id(CheetahString::from("offset-msg-id"));
-        message_ext.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from("uniq-msg-id"),
-        );
-
-        let summary = map_message_summary(message_ext);
+        let summary = map_message_summary(message);
 
         assert_eq!(summary.msg_id, "uniq-msg-id");
         assert_eq!(summary.query_msg_id, "offset-msg-id");
@@ -1990,108 +1733,25 @@ mod tests {
 
     #[test]
     fn map_message_summary_falls_back_to_offset_msg_id_when_uniq_key_is_blank() {
-        let message = MessageBuilder::new()
-            .topic("TopicTest")
-            .body_slice(b"payload")
-            .build_unchecked();
+        let mut message = message_record("TopicTest", "offset-msg-id", b"payload");
+        message.unique_message_id = Some("   ".to_string());
 
-        let mut message_ext = MessageExt::default();
-        message_ext.set_message_inner(message);
-        message_ext.set_msg_id(CheetahString::from("offset-msg-id"));
-        message_ext.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from("   "),
-        );
-
-        let summary = map_message_summary(message_ext);
+        let summary = map_message_summary(message);
 
         assert_eq!(summary.msg_id, "offset-msg-id");
         assert_eq!(summary.query_msg_id, "offset-msg-id");
     }
 
     #[test]
-    fn first_message_or_validation_error_prefers_latest_store_timestamp() {
-        let first = MessageBuilder::new()
-            .topic("TopicTest")
-            .body_slice(b"one")
-            .build_unchecked();
-        let second = MessageBuilder::new()
-            .topic("TopicTest")
-            .body_slice(b"two")
-            .build_unchecked();
-
-        let mut first_ext = MessageExt::default();
-        first_ext.set_message_inner(first);
-        first_ext.set_msg_id(CheetahString::from("msg-1"));
-        first_ext.set_store_timestamp(100);
-
-        let mut second_ext = MessageExt::default();
-        second_ext.set_message_inner(second);
-        second_ext.set_msg_id(CheetahString::from("msg-2"));
-        second_ext.set_store_timestamp(200);
-
-        let selected =
-            first_message_or_validation_error(vec![first_ext, second_ext]).expect("latest message should be selected");
-
-        assert_eq!(selected.msg_id(), "msg-2");
-    }
-
-    #[test]
     fn build_dlq_topic_uses_rocketmq_prefix() {
         assert_eq!(
             build_dlq_topic("group-a").expect("plain group should map to dlq topic"),
-            format!("{}group-a", mix_all::DLQ_GROUP_TOPIC_PREFIX)
+            format!("{DLQ_GROUP_TOPIC_PREFIX}group-a")
         );
         assert_eq!(
             build_dlq_topic("%DLQ%group-a").expect("prefixed group should normalize"),
-            format!("{}group-a", mix_all::DLQ_GROUP_TOPIC_PREFIX)
+            format!("{DLQ_GROUP_TOPIC_PREFIX}group-a")
         );
-    }
-
-    #[test]
-    fn build_dlq_resend_target_uses_retry_topic_and_origin_message_id() {
-        let message = MessageBuilder::new()
-            .topic("%DLQ%group-a")
-            .body_slice(b"payload")
-            .build_unchecked();
-        let mut message_ext = MessageExt::default();
-        message_ext.set_message_inner(message);
-        message_ext.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC),
-            CheetahString::from("%RETRY%group-a"),
-        );
-        message_ext.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_ORIGIN_MESSAGE_ID),
-            CheetahString::from("origin-msg-1"),
-        );
-
-        let target = build_dlq_resend_target(&message_ext).expect("dlq resend target should map");
-
-        assert_eq!(
-            target,
-            DlqResendTarget {
-                topic: "%RETRY%group-a".to_string(),
-                msg_id: "origin-msg-1".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn build_dlq_resend_target_rejects_missing_origin_message_id() {
-        let message = MessageBuilder::new()
-            .topic("%DLQ%group-a")
-            .body_slice(b"payload")
-            .build_unchecked();
-        let mut message_ext = MessageExt::default();
-        message_ext.set_message_inner(message);
-        message_ext.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC),
-            CheetahString::from("%RETRY%group-a"),
-        );
-
-        let error = build_dlq_resend_target(&message_ext).expect_err("missing origin id should fail");
-
-        assert!(error.to_string().contains("ORIGIN_MESSAGE_ID"));
     }
 
     #[test]
@@ -2118,31 +1778,28 @@ mod tests {
 
     #[test]
     fn map_message_detail_maps_hosts_properties_and_utf8_body() {
-        let message = MessageBuilder::new()
-            .topic("TopicTest")
-            .body_slice(br#"{"ok":true}"#)
-            .tags("TagA")
-            .keys(vec!["KeyA".to_string()])
-            .trace_switch(true)
-            .raw_property("order_source", "mobile")
-            .expect("custom property should be accepted")
-            .build_unchecked();
+        let mut message = message_record("TopicTest", "msg-2", br#"{"ok":true}"#);
+        message.tags = Some("TagA".to_string());
+        message.keys = Some("KeyA".to_string());
+        message.store_timestamp = 1_700_000_000_123;
+        message.born_timestamp = 1_700_000_000_000;
+        message.queue_id = 3;
+        message.queue_offset = 288;
+        message.store_size = 264;
+        message.body_crc = 613_185_359;
+        message.sys_flag = 7;
+        message.store_host = "172.20.48.1:10911".to_string();
+        message.born_host = "172.20.48.1:61266".to_string();
+        message.properties.insert("TAGS".to_string(), "TagA".to_string());
+        message.properties.insert("KEYS".to_string(), "KeyA".to_string());
+        message
+            .properties
+            .insert("order_source".to_string(), "mobile".to_string());
 
-        let mut message_ext = MessageExt::default();
-        message_ext.set_message_inner(message);
-        message_ext.set_msg_id(CheetahString::from("msg-2"));
-        message_ext.set_store_timestamp(1_700_000_000_123);
-        message_ext.set_born_timestamp(1_700_000_000_000);
-        message_ext.set_queue_id(3);
-        message_ext.set_queue_offset(288);
-        message_ext.set_store_size(264);
-        message_ext.set_reconsume_times(0);
-        message_ext.set_body_crc(613_185_359);
-        message_ext.set_sys_flag(7);
-        message_ext.set_store_host("172.20.48.1:10911".parse().expect("store host"));
-        message_ext.set_born_host("172.20.48.1:61266".parse().expect("born host"));
-
-        let detail = map_message_detail(message_ext, Vec::new());
+        let detail = map_message_detail(MessageDetailRecord {
+            message,
+            tracks: Vec::new(),
+        });
 
         assert_eq!(detail.topic, "TopicTest");
         assert_eq!(detail.msg_id, "msg-2");
@@ -2159,54 +1816,40 @@ mod tests {
             detail.properties.get("order_source").map(String::as_str),
             Some("mobile")
         );
-        assert!(!detail.properties.contains_key(MessageConst::PROPERTY_WAIT_STORE_MSG_OK));
+        assert!(!detail.properties.contains_key("WAIT"));
         assert_eq!(detail.message_track_list, Some(Vec::new()));
     }
 
     #[test]
     fn map_message_detail_uses_offset_msg_id_instead_of_uniq_key_property() {
-        let message = MessageBuilder::new()
-            .topic("TopicTest")
-            .body_slice(b"payload")
-            .build_unchecked();
+        let mut message = message_record("TopicTest", "offset-msg-id", b"payload");
+        message.unique_message_id = Some("uniq-msg-id".to_string());
 
-        let mut message_ext = MessageExt::default();
-        message_ext.set_message_inner(message);
-        message_ext.set_msg_id(CheetahString::from("offset-msg-id"));
-        message_ext.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from("uniq-msg-id"),
-        );
-
-        let detail = map_message_detail(message_ext, Vec::new());
+        let detail = map_message_detail(MessageDetailRecord {
+            message,
+            tracks: Vec::new(),
+        });
 
         assert_eq!(detail.msg_id, "offset-msg-id");
     }
 
     #[test]
     fn map_message_detail_falls_back_to_base64_for_binary_body() {
-        let message = MessageBuilder::new()
-            .topic("TopicTest")
-            .body(vec![0xff, 0x00, 0x41])
-            .build_unchecked();
-
-        let mut message_ext = MessageExt::default();
-        message_ext.set_message_inner(message);
-        message_ext.set_msg_id(CheetahString::from("msg-bin"));
-
-        let detail = map_message_detail(message_ext, Vec::new());
+        let detail = map_message_detail(MessageDetailRecord {
+            message: message_record("TopicTest", "msg-bin", &[0xff, 0x00, 0x41]),
+            tracks: Vec::new(),
+        });
 
         assert_eq!(detail.body_text, None);
         assert_eq!(detail.body_base64.as_deref(), Some("/wBB"));
     }
 
     #[test]
-    #[allow(deprecated)]
     fn map_message_track_list_serializes_track_types_and_exceptions() {
-        let tracks = map_message_track_list(vec![MessageTrack {
+        let tracks = map_message_track_list(vec![MessageTrackRecord {
             consumer_group: "group-a".to_string(),
-            track_type: Some(TrackType::ConsumedButFiltered),
-            exception_desc: "CODE:213 DESC:broadcast".to_string(),
+            track_type: "CONSUMED_BUT_FILTERED".to_string(),
+            exception_desc: Some("CODE:213 DESC:broadcast".to_string()),
         }]);
 
         assert_eq!(tracks.len(), 1);
@@ -2217,16 +1860,15 @@ mod tests {
 
     #[test]
     fn build_message_resend_result_marks_non_success_as_failure() {
-        let mut consume_result =
-            rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult::default();
-        consume_result.set_consume_result(CMResult::CRLater);
-        consume_result.set_remark(CheetahString::from("retry later"));
-
         let result = build_message_resend_result(
             "group-a".to_string(),
             "%RETRY%group-a".to_string(),
             "origin-msg-1".to_string(),
-            consume_result,
+            DirectConsumeResult {
+                success: false,
+                consume_result: Some("CR_LATER".to_string()),
+                remark: Some("retry later".to_string()),
+            },
         );
 
         assert!(!result.success);
@@ -2307,21 +1949,15 @@ mod tests {
 
     #[test]
     fn build_dlq_export_view_maps_java_dashboard_columns() {
-        let message = MessageBuilder::new()
-            .topic("%DLQ%group-a")
-            .body_slice(b"payload")
-            .build_unchecked();
-        let mut message_ext = MessageExt::default();
-        message_ext.set_message_inner(message);
-        message_ext.set_msg_id(CheetahString::from("msg-1"));
-        message_ext.set_born_timestamp(1_700_000_000_000);
-        message_ext.set_store_timestamp(1_700_000_100_000);
-        message_ext.set_reconsume_times(2);
-        message_ext.set_body_crc(613_185_359);
-        message_ext.set_born_host("172.20.48.1:61266".parse().expect("born host"));
-        message_ext.put_property(CheetahString::from("KEYS"), CheetahString::from("order-1"));
+        let mut message = message_record("%DLQ%group-a", "msg-1", b"payload");
+        message.born_timestamp = 1_700_000_000_000;
+        message.store_timestamp = 1_700_000_100_000;
+        message.reconsume_times = 2;
+        message.body_crc = 613_185_359;
+        message.born_host = "172.20.48.1:61266".to_string();
+        message.properties.insert("KEYS".to_string(), "order-1".to_string());
 
-        let export = build_dlq_export_view("%DLQ%group-a".to_string(), message_ext);
+        let export = build_dlq_export_view("%DLQ%group-a".to_string(), message);
 
         assert_eq!(export.file_name, "dlq-group-a-msg-1.csv");
         assert_eq!(export.mime_type, "text/csv;charset=utf-8");
@@ -2338,15 +1974,10 @@ mod tests {
 
     #[test]
     fn build_dlq_export_view_falls_back_to_base64_for_binary_body() {
-        let message = MessageBuilder::new()
-            .topic("%DLQ%group-a")
-            .body(vec![0xff, 0x00, 0x41])
-            .build_unchecked();
-        let mut message_ext = MessageExt::default();
-        message_ext.set_message_inner(message);
-        message_ext.set_msg_id(CheetahString::from("msg-bin"));
-
-        let export = build_dlq_export_view("%DLQ%group-a".to_string(), message_ext);
+        let export = build_dlq_export_view(
+            "%DLQ%group-a".to_string(),
+            message_record("%DLQ%group-a", "msg-bin", &[0xff, 0x00, 0x41]),
+        );
 
         assert!(export.content.contains("\"base64:/wBB\""));
     }

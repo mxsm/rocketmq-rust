@@ -18,8 +18,22 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdminError {
-    InvalidArgument { field: &'static str, reason: String },
-    Backend { operation: &'static str, reason: String },
+    InvalidArgument {
+        field: &'static str,
+        reason: String,
+    },
+    NotFound {
+        resource: &'static str,
+        name: String,
+    },
+    Backend {
+        operation: &'static str,
+        reason: String,
+        code: Option<String>,
+        context: Option<String>,
+        http_status: Option<u16>,
+        retryable: bool,
+    },
     SessionClosed,
 }
 
@@ -35,7 +49,61 @@ impl AdminError {
         Self::Backend {
             operation,
             reason: reason.into(),
+            code: None,
+            context: None,
+            http_status: None,
+            retryable: false,
         }
+    }
+
+    pub fn not_found(resource: &'static str, name: impl Into<String>) -> Self {
+        Self::NotFound {
+            resource,
+            name: name.into(),
+        }
+    }
+
+    pub fn backend_view(
+        operation: &'static str,
+        code: impl Into<String>,
+        reason: impl Into<String>,
+        context: Option<String>,
+        http_status: u16,
+        retryable: bool,
+    ) -> Self {
+        Self::Backend {
+            operation,
+            reason: reason.into(),
+            code: Some(code.into()),
+            context,
+            http_status: Some(http_status),
+            retryable,
+        }
+    }
+
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            Self::Backend { code, .. } => code.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn context(&self) -> Option<&str> {
+        match self {
+            Self::Backend { context, .. } => context.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn http_status(&self) -> Option<u16> {
+        match self {
+            Self::Backend { http_status, .. } => *http_status,
+            _ => None,
+        }
+    }
+
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::Backend { retryable: true, .. })
     }
 }
 
@@ -43,7 +111,8 @@ impl fmt::Display for AdminError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidArgument { field, reason } => write!(formatter, "invalid {field}: {reason}"),
-            Self::Backend { operation, reason } => write!(formatter, "{operation} failed: {reason}"),
+            Self::NotFound { resource, name } => write!(formatter, "{resource} `{name}` was not found"),
+            Self::Backend { operation, reason, .. } => write!(formatter, "{operation} failed: {reason}"),
             Self::SessionClosed => formatter.write_str("admin session is closed"),
         }
     }

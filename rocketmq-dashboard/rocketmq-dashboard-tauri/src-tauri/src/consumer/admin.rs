@@ -15,15 +15,14 @@
 use crate::consumer::types::ConsumerError;
 use crate::consumer::types::ConsumerResult;
 use crate::nameserver::NameServerRuntimeState;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_admin_core::client_adapter::AdminSession;
+use rocketmq_admin_core::client_adapter::ClientAdminBuilder;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use std::sync::Arc;
-use std::time::Duration;
 use uuid::Uuid;
 
 pub(crate) struct ManagedConsumerAdmin {
-    pub(crate) admin: DefaultMQAdminExt,
+    pub(crate) admin: AdminSession,
     pub(crate) snapshot: NameServerConfigSnapshot,
     pub(crate) generation: u64,
 }
@@ -37,18 +36,15 @@ impl ManagedConsumerAdmin {
             )
         })?;
 
-        let mut admin = DefaultMQAdminExt::with_admin_ext_group_and_timeout(
-            format!("dashboard-consumer-admin-{}", Uuid::new_v4()),
-            Duration::from_millis(5_000),
-        );
-        admin
-            .client_config_mut()
-            .set_namesrv_addr(current_namesrv.clone().into());
-        admin
-            .client_config_mut()
-            .set_vip_channel_enabled(snapshot.use_vip_channel);
-        admin.client_config_mut().set_use_tls(snapshot.use_tls);
-        admin.start().await.map_err(ConsumerError::RocketMQ)?;
+        let admin = ClientAdminBuilder::new()
+            .admin_group(format!("dashboard-consumer-admin-{}", Uuid::new_v4()))
+            .namesrv_addr(current_namesrv)
+            .timeout_millis(5_000)
+            .vip_channel_enabled(snapshot.use_vip_channel)
+            .use_tls(snapshot.use_tls)
+            .build_and_start()
+            .await
+            .map_err(ConsumerError::from)?;
 
         Ok(Self {
             admin,

@@ -12,6 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
+use rocketmq_admin_core::client_adapter::AdminSession;
+use rocketmq_admin_core::core::AdminError;
+use rocketmq_admin_core::core::topic::DeleteTopicAdminRequest;
+use rocketmq_admin_core::core::topic::GetTopicConfigRequest as AdminGetTopicConfigRequest;
+use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
+use rocketmq_admin_core::core::topic::ResetTopicConsumerOffsetRequest;
+use rocketmq_admin_core::core::topic::TopicAdmin;
+use rocketmq_admin_core::core::topic::TopicCatalogRequest;
+use rocketmq_admin_core::core::topic::TopicRoute;
+use rocketmq_admin_core::core::topic::TopicSendRequest as AdminTopicSendRequest;
+use rocketmq_admin_core::core::topic::TopicSendResult as AdminTopicSendResult;
+use rocketmq_admin_core::core::topic::TopicStats;
+use rocketmq_admin_core::core::topic::UpsertTopicRequest;
+use rocketmq_dashboard_common::DeleteTopicByBrokerRequest;
+use rocketmq_dashboard_common::DeleteTopicRequest;
+use rocketmq_dashboard_common::NameServerConfigSnapshot;
+use rocketmq_dashboard_common::ResetOffsetRequest;
+use rocketmq_dashboard_common::SendTopicMessageRequest;
+use rocketmq_dashboard_common::TopicConfigQueryRequest;
+use rocketmq_dashboard_common::TopicConfigRequest;
+use rocketmq_dashboard_common::TopicListRequest;
+use rocketmq_dashboard_common::TopicQueryRequest;
+use tokio::sync::Mutex;
+
 use crate::nameserver::NameServerRuntimeState;
 use crate::topic::admin::ManagedTopicAdmin;
 use crate::topic::types::TopicBrokerAddressView;
@@ -34,84 +60,11 @@ use crate::topic::types::TopicSendMessageResult;
 use crate::topic::types::TopicStatusOffsetView;
 use crate::topic::types::TopicStatusView;
 use crate::topic::types::TopicTargetOption;
-use cheetah_string::CheetahString;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_admin_core::core::stats::StatsAllQueryRequest;
-use rocketmq_admin_core::core::stats::StatsAllRow;
-use rocketmq_admin_core::core::stats::StatsService;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::base::client_config::ClientConfig;
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
-use rocketmq_client_rust::producer::transaction_listener::TransactionListener;
-use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
-use rocketmq_common::common::attribute::Attribute;
-use rocketmq_common::common::attribute::topic_attributes::TopicAttributes;
-use rocketmq_common::common::config::TopicConfig as RocketMqTopicConfig;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_dashboard_common::DeleteTopicByBrokerRequest;
-use rocketmq_dashboard_common::DeleteTopicRequest;
-use rocketmq_dashboard_common::NameServerConfigSnapshot;
-use rocketmq_dashboard_common::ResetOffsetRequest;
-use rocketmq_dashboard_common::SendTopicMessageRequest;
-use rocketmq_dashboard_common::TopicConfigQueryRequest;
-use rocketmq_dashboard_common::TopicConfigRequest;
-use rocketmq_dashboard_common::TopicListRequest;
-use rocketmq_dashboard_common::TopicQueryRequest;
-use rocketmq_error::ErrorKind;
-use rocketmq_error::RocketMQError;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
-use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_runtime::BlockingExecutor;
-use rocketmq_runtime::BlockingPoolPolicy;
-use rocketmq_runtime::RuntimeConfig;
-use rocketmq_runtime::RuntimeOwner;
-use std::any::Any;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::sync::OnceLock;
-use std::time::Duration;
-use tokio::sync::Mutex;
-use uuid::Uuid;
-
-static TRANSACTION_MESSAGE_RUNTIME: OnceLock<StdMutex<RuntimeOwner>> = OnceLock::new();
 
 #[derive(Clone)]
 pub(crate) struct TopicManager {
     runtime: Arc<NameServerRuntimeState>,
     admin_session: Arc<Mutex<Option<ManagedTopicAdmin>>>,
-}
-
-#[derive(Clone, Debug)]
-struct TopicBrokerConfigSnapshot {
-    broker_name: String,
-    cluster_name: Option<String>,
-    config: RocketMqTopicConfig,
-}
-
-struct DashboardTransactionListener;
-
-impl TransactionListener for DashboardTransactionListener {
-    fn execute_local_transaction(
-        &self,
-        _msg: &dyn rocketmq_common::common::message::MessageTrait,
-        _arg: Option<&(dyn Any + Send + Sync)>,
-    ) -> LocalTransactionState {
-        LocalTransactionState::CommitMessage
-    }
-
-    fn check_local_transaction(&self, _msg: &MessageExt) -> LocalTransactionState {
-        LocalTransactionState::CommitMessage
-    }
 }
 
 impl TopicManager {
@@ -122,13 +75,19 @@ impl TopicManager {
         }
     }
 
+    pub(crate) async fn shutdown(&self) {
+        let mut session = self.admin_session.lock().await;
+        if let Some(mut admin) = session.take() {
+            admin.shutdown().await;
+        }
+    }
+
     pub(crate) async fn get_topic_list(&self, request: TopicListRequest) -> TopicResult<TopicListResponse> {
         let mut attempt = 0;
         loop {
             attempt += 1;
             let mut session_guard = self.admin_session.lock().await;
             self.ensure_admin_session(&mut session_guard).await?;
-
             let snapshot = session_guard
                 .as_ref()
                 .expect("topic admin session should be initialized before use")
@@ -141,14 +100,12 @@ impl TopicManager {
                 self.get_topic_list_with_admin(&mut session.admin, &snapshot, request.clone())
                     .await
             };
-
             let should_reset = Self::should_reset_session(&result);
             if should_reset {
                 self.reset_admin_session(&mut session_guard, "get_topic_list failed")
                     .await;
             }
             drop(session_guard);
-
             match result {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
@@ -165,7 +122,6 @@ impl TopicManager {
             attempt += 1;
             let mut session_guard = self.admin_session.lock().await;
             self.ensure_admin_session(&mut session_guard).await?;
-
             let snapshot = session_guard
                 .as_ref()
                 .expect("topic admin session should be initialized before use")
@@ -173,18 +129,17 @@ impl TopicManager {
                 .clone();
             let result = {
                 let session = session_guard
-                    .as_ref()
+                    .as_mut()
                     .expect("topic admin session should be initialized before use");
-                self.get_topic_current_stats_with_admin(&session.admin, &snapshot).await
+                self.get_topic_current_stats_with_admin(&mut session.admin, &snapshot)
+                    .await
             };
-
             let should_reset = Self::should_reset_session(&result);
             if should_reset {
                 self.reset_admin_session(&mut session_guard, "get_topic_current_stats failed")
                     .await;
             }
             drop(session_guard);
-
             match result {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
@@ -201,7 +156,6 @@ impl TopicManager {
             attempt += 1;
             let mut session_guard = self.admin_session.lock().await;
             self.ensure_admin_session(&mut session_guard).await?;
-
             let result = {
                 let session = session_guard
                     .as_mut()
@@ -209,14 +163,12 @@ impl TopicManager {
                 self.get_topic_route_with_admin(&mut session.admin, request.clone())
                     .await
             };
-
             let should_reset = Self::should_reset_session(&result);
             if should_reset {
                 self.reset_admin_session(&mut session_guard, "get_topic_route failed")
                     .await;
             }
             drop(session_guard);
-
             match result {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
@@ -233,7 +185,6 @@ impl TopicManager {
             attempt += 1;
             let mut session_guard = self.admin_session.lock().await;
             self.ensure_admin_session(&mut session_guard).await?;
-
             let result = {
                 let session = session_guard
                     .as_mut()
@@ -241,14 +192,12 @@ impl TopicManager {
                 self.get_topic_stats_with_admin(&mut session.admin, request.clone())
                     .await
             };
-
             let should_reset = Self::should_reset_session(&result);
             if should_reset {
                 self.reset_admin_session(&mut session_guard, "get_topic_stats failed")
                     .await;
             }
             drop(session_guard);
-
             match result {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
@@ -265,7 +214,6 @@ impl TopicManager {
             attempt += 1;
             let mut session_guard = self.admin_session.lock().await;
             self.ensure_admin_session(&mut session_guard).await?;
-
             let result = {
                 let session = session_guard
                     .as_mut()
@@ -273,14 +221,12 @@ impl TopicManager {
                 self.get_topic_config_with_admin(&mut session.admin, request.clone())
                     .await
             };
-
             let should_reset = Self::should_reset_session(&result);
             if should_reset {
                 self.reset_admin_session(&mut session_guard, "get_topic_config failed")
                     .await;
             }
             drop(session_guard);
-
             match result {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
@@ -294,7 +240,6 @@ impl TopicManager {
     pub(crate) async fn create_or_update_topic(&self, request: TopicConfigRequest) -> TopicResult<TopicMutationResult> {
         let mut session_guard = self.admin_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
-
         let result = {
             let session = session_guard
                 .as_mut()
@@ -302,33 +247,28 @@ impl TopicManager {
             self.create_or_update_topic_with_admin(&mut session.admin, request)
                 .await
         };
-
         if Self::should_reset_session(&result) {
             self.reset_admin_session(&mut session_guard, "create_or_update_topic failed")
                 .await;
         }
         drop(session_guard);
-
         result
     }
 
     pub(crate) async fn delete_topic(&self, request: DeleteTopicRequest) -> TopicResult<TopicMutationResult> {
         let mut session_guard = self.admin_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
-
         let result = {
             let session = session_guard
                 .as_mut()
                 .expect("topic admin session should be initialized before use");
             self.delete_topic_with_admin(&mut session.admin, request).await
         };
-
         if Self::should_reset_session(&result) {
             self.reset_admin_session(&mut session_guard, "delete_topic failed")
                 .await;
         }
         drop(session_guard);
-
         result
     }
 
@@ -338,7 +278,6 @@ impl TopicManager {
     ) -> TopicResult<TopicMutationResult> {
         let mut session_guard = self.admin_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
-
         let result = {
             let session = session_guard
                 .as_mut()
@@ -346,13 +285,11 @@ impl TopicManager {
             self.delete_topic_by_broker_with_admin(&mut session.admin, request)
                 .await
         };
-
         if Self::should_reset_session(&result) {
             self.reset_admin_session(&mut session_guard, "delete_topic_by_broker failed")
                 .await;
         }
         drop(session_guard);
-
         result
     }
 
@@ -365,7 +302,6 @@ impl TopicManager {
             attempt += 1;
             let mut session_guard = self.admin_session.lock().await;
             self.ensure_admin_session(&mut session_guard).await?;
-
             let result = {
                 let session = session_guard
                     .as_mut()
@@ -373,14 +309,12 @@ impl TopicManager {
                 self.get_topic_consumer_groups_with_admin(&mut session.admin, request.clone())
                     .await
             };
-
             let should_reset = Self::should_reset_session(&result);
             if should_reset {
                 self.reset_admin_session(&mut session_guard, "get_topic_consumer_groups failed")
                     .await;
             }
             drop(session_guard);
-
             match result {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
@@ -400,7 +334,6 @@ impl TopicManager {
             attempt += 1;
             let mut session_guard = self.admin_session.lock().await;
             self.ensure_admin_session(&mut session_guard).await?;
-
             let result = {
                 let session = session_guard
                     .as_mut()
@@ -408,14 +341,12 @@ impl TopicManager {
                 self.get_topic_consumers_with_admin(&mut session.admin, request.clone())
                     .await
             };
-
             let should_reset = Self::should_reset_session(&result);
             if should_reset {
                 self.reset_admin_session(&mut session_guard, "get_topic_consumers failed")
                     .await;
             }
             drop(session_guard);
-
             match result {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
@@ -443,26 +374,17 @@ impl TopicManager {
     ) -> TopicResult<TopicSendMessageResult> {
         let mut session_guard = self.admin_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
-
-        let snapshot = session_guard
-            .as_ref()
-            .expect("topic admin session should be initialized before use")
-            .snapshot
-            .clone();
         let result = {
             let session = session_guard
                 .as_mut()
                 .expect("topic admin session should be initialized before use");
-            self.send_topic_message_with_admin(&mut session.admin, &snapshot, request)
-                .await
+            self.send_topic_message_with_admin(&mut session.admin, request).await
         };
-
         if Self::should_reset_session(&result) {
             self.reset_admin_session(&mut session_guard, "send_topic_message failed")
                 .await;
         }
         drop(session_guard);
-
         result
     }
 
@@ -471,7 +393,6 @@ impl TopicManager {
         let needs_reconnect = session_slot
             .as_ref()
             .is_none_or(|session| !session.matches_generation(generation));
-
         if needs_reconnect {
             self.reset_admin_session(session_slot, "refreshing topic admin session")
                 .await;
@@ -483,7 +404,6 @@ impl TopicManager {
             );
             *session_slot = Some(session);
         }
-
         Ok(())
     }
 
@@ -500,99 +420,82 @@ impl TopicManager {
 
     fn should_reset_session<T>(result: &TopicResult<T>) -> bool {
         match result {
-            Err(TopicError::RocketMQ(error)) => is_reconnect_worthy_error(error),
+            Err(TopicError::Admin(error)) => error.is_retryable() || matches!(error, AdminError::SessionClosed),
             _ => false,
         }
     }
 
     async fn get_topic_list_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         snapshot: &NameServerConfigSnapshot,
         request: TopicListRequest,
     ) -> TopicResult<TopicListResponse> {
-        let topic_list = admin.fetch_all_topic_list().await.map_err(TopicError::RocketMQ)?;
-        let cluster_info = admin
-            .examine_broker_cluster_info()
+        let catalog = admin
+            .get_topic_catalog(&TopicCatalogRequest {
+                skip_system_topics: request.skip_sys_process,
+                skip_retry_and_dlq_topics: request.skip_retry_and_dlq,
+            })
             .await
-            .map_err(TopicError::RocketMQ)?;
-        let targets = cluster_targets_from_cluster_info(&cluster_info);
-        let topic_configs = collect_topic_configs(admin, &cluster_info).await?;
-
-        let mut topics: Vec<String> = topic_list.topic_list.iter().map(|topic| topic.to_string()).collect();
-        topics.sort();
-
-        let mut items = Vec::new();
-        for topic in topics {
-            let config_snapshots = topic_configs.get(&topic).map(Vec::as_slice);
-            let (category, message_type, system_topic) = classify_topic(&topic, config_snapshots);
-            if request.skip_sys_process && system_topic {
-                continue;
-            }
-            if request.skip_retry_and_dlq && matches!(category.as_str(), "RETRY" | "DLQ") {
-                continue;
-            }
-
-            let route = admin
-                .examine_topic_route_info(topic.clone().into())
-                .await
-                .map_err(TopicError::RocketMQ)?
-                .unwrap_or_default();
-            let (clusters, brokers, read_queue_count, write_queue_count, perm) = summarize_route(&route);
-
-            items.push(TopicListItem {
-                topic,
-                category,
-                message_type,
-                clusters,
-                brokers,
-                read_queue_count,
-                write_queue_count,
-                perm,
-                order: summarize_order(config_snapshots),
-                system_topic,
-            });
-        }
-
-        let response = TopicListResponse {
+            .map_err(map_admin_error)?;
+        let items = catalog
+            .items
+            .into_iter()
+            .map(|item| TopicListItem {
+                topic: item.topic,
+                category: item.category,
+                message_type: item.message_type,
+                clusters: item.clusters,
+                brokers: item.brokers,
+                read_queue_count: item.read_queue_count,
+                write_queue_count: item.write_queue_count,
+                perm: item.perm,
+                order: item.order,
+                system_topic: item.system_topic,
+            })
+            .collect::<Vec<_>>();
+        Ok(TopicListResponse {
             total: items.len(),
             items,
-            targets,
+            targets: catalog
+                .targets
+                .into_iter()
+                .map(|target| TopicTargetOption {
+                    cluster_name: target.cluster_name,
+                    broker_names: target.broker_names,
+                })
+                .collect(),
             current_namesrv: snapshot.current_namesrv.clone().unwrap_or_default(),
             use_vip_channel: snapshot.use_vip_channel,
             use_tls: snapshot.use_tls,
-        };
-
-        //log::info!("get_topic_list_with_admin response: {:?}", response);
-        Ok(response)
-    }
-
-    async fn get_topic_route_with_admin(
-        &self,
-        admin: &mut DefaultMQAdminExt,
-        request: TopicQueryRequest,
-    ) -> TopicResult<TopicRouteView> {
-        let route = require_topic_route(admin, &request.topic).await?;
-        Ok(map_route_view(&request.topic, &route))
+        })
     }
 
     async fn get_topic_current_stats_with_admin(
         &self,
-        admin: &DefaultMQAdminExt,
+        admin: &mut AdminSession,
         snapshot: &NameServerConfigSnapshot,
     ) -> TopicResult<TopicCurrentStatsResponse> {
-        let request = StatsAllQueryRequest::new(false, None::<String>);
-        let stats_result = StatsService::query_stats_all_with_admin(admin, &request)
-            .await
-            .map_err(TopicError::RocketMQ)?;
-
+        let stats = admin.get_topic_current_stats().await.map_err(map_admin_error)?;
         Ok(TopicCurrentStatsResponse {
-            items: build_topic_current_stats_items(stats_result.rows),
-            failures: stats_result
+            items: stats
+                .items
+                .into_iter()
+                .map(|item| TopicCurrentStatsItem {
+                    topic: item.topic,
+                    total_msg: item.total_msg,
+                    produced_msg_count_24h: item.produced_msg_count_24h,
+                    consumed_msg_count_24h: item.consumed_msg_count_24h,
+                    in_tps: item.in_tps,
+                    out_tps: item.out_tps,
+                    consumer_group_count: item.consumer_group_count,
+                })
+                .collect(),
+            failures: stats
                 .failures
                 .into_iter()
                 .map(|failure| TopicCurrentStatsFailure {
-                    topic: failure.topic.to_string(),
+                    topic: failure.topic,
                     error: failure.error,
                 })
                 .collect(),
@@ -602,92 +505,59 @@ impl TopicManager {
         })
     }
 
+    async fn get_topic_route_with_admin(
+        &self,
+        admin: &mut AdminSession,
+        request: TopicQueryRequest,
+    ) -> TopicResult<TopicRouteView> {
+        let admin_request = GetTopicRouteRequest::try_new(request.topic.clone()).map_err(map_admin_error)?;
+        let route = admin
+            .get_topic_route(&admin_request)
+            .await
+            .map_err(map_admin_error)?
+            .ok_or_else(|| TopicError::Validation(format!("Topic `{}` was not found.", request.topic)))?;
+        Ok(map_route_view(request.topic, route))
+    }
+
     async fn get_topic_stats_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: TopicQueryRequest,
     ) -> TopicResult<TopicStatusView> {
-        let route = require_topic_route(admin, &request.topic).await?;
-        let mut stats = TopicStatsTable::new();
-        let mut successful_brokers = 0usize;
-        let mut last_error = None;
-
-        for broker_data in &route.broker_datas {
-            if let Some(master_addr) = broker_data.broker_addrs().get(&mix_all::MASTER_ID) {
-                match admin
-                    .examine_topic_stats(request.topic.clone().into(), Some(master_addr.clone()))
-                    .await
-                {
-                    Ok(broker_stats) => {
-                        stats.get_offset_table_mut().extend(broker_stats.into_offset_table());
-                        successful_brokers += 1;
-                    }
-                    Err(error) => {
-                        let error_message = error.to_string();
-                        log::warn!(
-                            "Failed to load topic stats for topic `{}` from broker `{}` at `{}`: {}",
-                            request.topic,
-                            broker_data.broker_name(),
-                            master_addr,
-                            error_message
-                        );
-                        last_error = Some(error);
-                    }
-                }
-            }
-        }
-
-        if successful_brokers == 0 {
-            return Err(TopicError::RocketMQ(last_error.unwrap_or_else(|| {
-                RocketMQError::response_process_failed(
-                    "examine_topic_stats",
-                    format!("Topic `{}` has no reachable master broker.", request.topic),
-                )
-            })));
-        }
-
-        if stats.get_offset_table().is_empty() {
-            return Err(TopicError::Validation(format!(
-                "Topic `{}` returned no queue offset data.",
-                request.topic
-            )));
-        }
-
-        Ok(map_status_view(&request.topic, &stats))
+        admin
+            .get_topic_stats(&request.topic)
+            .await
+            .map(map_status_view)
+            .map_err(map_admin_error)
     }
 
     async fn get_topic_config_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: TopicConfigQueryRequest,
     ) -> TopicResult<TopicConfigView> {
-        let cluster_info = admin
-            .examine_broker_cluster_info()
-            .await
-            .map_err(TopicError::RocketMQ)?;
-        let route = require_topic_route(admin, &request.topic).await?;
-        let broker_configs = collect_route_topic_configs(admin, &route, &request.topic).await?;
-        let selected_config = match request.broker_name.as_deref() {
-            Some(name) => broker_configs
-                .iter()
-                .find(|config| config.broker_name == name)
-                .ok_or_else(|| TopicError::Validation(format!("Broker `{name}` was not found.")))?,
-            None => broker_configs
-                .first()
-                .ok_or_else(|| TopicError::Validation(format!("Topic `{}` has no online broker.", request.topic)))?,
-        };
-
-        Ok(build_topic_config_view(
-            &request.topic,
-            &cluster_info,
-            selected_config,
-            &broker_configs,
-        ))
+        let request =
+            AdminGetTopicConfigRequest::try_new(request.topic, request.broker_name).map_err(map_admin_error)?;
+        let config = admin.get_topic_config(&request).await.map_err(map_admin_error)?;
+        Ok(TopicConfigView {
+            topic_name: config.topic_name,
+            broker_name: config.broker_name,
+            cluster_name: config.cluster_name,
+            broker_name_list: config.broker_name_list,
+            cluster_name_list: config.cluster_name_list,
+            read_queue_nums: config.read_queue_nums,
+            write_queue_nums: config.write_queue_nums,
+            perm: config.perm,
+            order: config.order,
+            message_type: config.message_type,
+            attributes: config.attributes.into_iter().collect(),
+            inconsistent_fields: config.inconsistent_fields,
+        })
     }
 
     async fn create_or_update_topic_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: TopicConfigRequest,
     ) -> TopicResult<TopicMutationResult> {
         if request.topic_name.trim().is_empty() {
@@ -698,137 +568,48 @@ impl TopicManager {
                 "Select at least one cluster or broker before saving the topic.".into(),
             ));
         }
-
-        let cluster_info = admin
-            .examine_broker_cluster_info()
+        let topic_name = request.topic_name.clone();
+        let outcome = admin
+            .upsert_topic(&UpsertTopicRequest {
+                cluster_names: request.cluster_name_list,
+                broker_names: request.broker_name_list,
+                topic: request.topic_name,
+                write_queue_nums: request.write_queue_nums.max(1) as u32,
+                read_queue_nums: request.read_queue_nums.max(1) as u32,
+                perm: request.perm.max(0) as u32,
+                order: request.order,
+                message_type: request.message_type,
+            })
             .await
-            .map_err(TopicError::RocketMQ)?;
-        let mut target_addrs = HashSet::new();
-        let mut target_broker_names = HashSet::new();
-        for cluster_name in &request.cluster_name_list {
-            for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, cluster_name)? {
-                target_broker_names.insert(broker_name);
-                target_addrs.insert(broker_addr);
-            }
-        }
-        for broker_name in &request.broker_name_list {
-            let addr = find_master_addr_by_broker_name(&cluster_info, broker_name).ok_or_else(|| {
-                TopicError::Validation(format!(
-                    "Broker `{broker_name}` was not found in the current cluster view."
-                ))
-            })?;
-            target_broker_names.insert(broker_name.clone());
-            target_addrs.insert(addr);
-        }
-
-        if target_addrs.is_empty() {
-            return Err(TopicError::Validation(
-                "No writable broker target could be resolved.".into(),
-            ));
-        }
-
-        let mut attributes = HashMap::new();
-        attributes.insert(
-            format!("+{}", TopicAttributes::topic_message_type_attribute().name()).into(),
-            normalize_message_type(request.message_type.as_deref()).into(),
-        );
-        let attributes_log = attributes
-            .iter()
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let topic_config = RocketMqTopicConfig {
-            topic_name: Some(request.topic_name.clone().into()),
-            read_queue_nums: request.read_queue_nums.max(1) as u32,
-            write_queue_nums: request.write_queue_nums.max(1) as u32,
-            perm: request.perm.max(0) as u32,
-            order: request.order,
-            attributes,
-            ..RocketMqTopicConfig::default()
-        };
-
-        let mut sorted_brokers: Vec<String> = target_broker_names.iter().cloned().collect();
-        sorted_brokers.sort();
-        let mut sorted_addrs: Vec<String> = target_addrs.iter().map(|addr| addr.to_string()).collect();
-        sorted_addrs.sort();
-        log::info!(
-            "create_or_update_topic topic=`{}` clusters={:?} brokers={:?} resolved_brokers={:?} resolved_addrs={:?} \
-             order={} message_type={} attributes={}",
-            request.topic_name,
-            request.cluster_name_list,
-            request.broker_name_list,
-            sorted_brokers,
-            sorted_addrs,
-            request.order,
-            normalize_message_type(request.message_type.as_deref()),
-            attributes_log
-        );
-
-        for broker_addr in &target_addrs {
-            admin
-                .create_and_update_topic_config(broker_addr.clone(), topic_config.clone())
-                .await
-                .map_err(TopicError::RocketMQ)?;
-        }
-
-        if request.order {
-            let order_conf = build_order_conf(&target_broker_names, topic_config.write_queue_nums);
-            admin
-                .create_or_update_order_conf(request.topic_name.clone().into(), order_conf.into(), true)
-                .await
-                .map_err(TopicError::RocketMQ)?;
-        }
-
+            .map_err(map_admin_error)?;
         Ok(TopicMutationResult {
             success: true,
-            message: format!("Topic `{}` was saved successfully.", request.topic_name),
-            topic_name: Some(request.topic_name),
+            message: outcome.message,
+            topic_name: Some(topic_name),
             affected_queues: None,
         })
     }
 
     async fn delete_topic_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: DeleteTopicRequest,
     ) -> TopicResult<TopicMutationResult> {
         let topic = request.topic.trim().to_string();
         if topic.is_empty() {
             return Err(TopicError::Validation("Topic name is required.".into()));
         }
-
-        let clusters = if let Some(cluster_name) = request.cluster_name {
-            vec![cluster_name]
-        } else {
-            let route = require_topic_route(admin, &topic).await?;
-            let mut unique_clusters: Vec<String> = route
-                .broker_datas
-                .iter()
-                .map(|broker| broker.cluster().to_string())
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect();
-            unique_clusters.sort();
-            unique_clusters
-        };
-
-        if clusters.is_empty() {
-            return Err(TopicError::Validation(format!(
-                "Topic `{topic}` has no cluster mapping to delete."
-            )));
-        }
-
-        for cluster_name in &clusters {
-            admin
-                .delete_topic(topic.clone().into(), cluster_name.clone().into())
-                .await
-                .map_err(TopicError::RocketMQ)?;
-        }
-
+        let outcome = admin
+            .delete_topic(&DeleteTopicAdminRequest {
+                topic: topic.clone(),
+                cluster_name: request.cluster_name,
+                broker_name: None,
+            })
+            .await
+            .map_err(map_admin_error)?;
         Ok(TopicMutationResult {
             success: true,
-            message: format!("Topic `{topic}` was deleted from {} cluster(s).", clusters.len()),
+            message: outcome.message,
             topic_name: Some(topic),
             affected_queues: None,
         })
@@ -836,43 +617,28 @@ impl TopicManager {
 
     async fn delete_topic_by_broker_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: DeleteTopicByBrokerRequest,
     ) -> TopicResult<TopicMutationResult> {
         let topic = request.topic.trim().to_string();
         if topic.is_empty() {
             return Err(TopicError::Validation("Topic name is required.".into()));
         }
-
         let broker_name = request.broker_name.trim().to_string();
         if broker_name.is_empty() {
             return Err(TopicError::Validation("Broker name is required.".into()));
         }
-
-        let cluster_info = admin
-            .examine_broker_cluster_info()
+        let outcome = admin
+            .delete_topic(&DeleteTopicAdminRequest {
+                topic: topic.clone(),
+                cluster_name: None,
+                broker_name: Some(broker_name),
+            })
             .await
-            .map_err(TopicError::RocketMQ)?;
-        let broker_addr = find_master_addr_by_broker_name(&cluster_info, &broker_name).ok_or_else(|| {
-            TopicError::Validation(format!(
-                "Broker `{broker_name}` was not found in the current cluster view."
-            ))
-        })?;
-        log::info!(
-            "delete_topic_by_broker topic=`{}` broker=`{}` addr=`{}`",
-            topic,
-            broker_name,
-            broker_addr
-        );
-
-        admin
-            .delete_topic_in_broker(HashSet::from([broker_addr]), topic.clone().into())
-            .await
-            .map_err(TopicError::RocketMQ)?;
-
+            .map_err(map_admin_error)?;
         Ok(TopicMutationResult {
             success: true,
-            message: format!("Topic `{topic}` was deleted from broker `{broker_name}`."),
+            message: outcome.message,
             topic_name: Some(topic),
             affected_queues: None,
         })
@@ -880,57 +646,40 @@ impl TopicManager {
 
     async fn get_topic_consumer_groups_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: TopicQueryRequest,
     ) -> TopicResult<TopicConsumerGroupListResponse> {
         let groups = admin
-            .query_topic_consume_by_who(request.topic.clone().into())
+            .get_topic_consumer_groups(&request.topic)
             .await
-            .map_err(TopicError::RocketMQ)?;
-        let mut consumer_groups: Vec<String> = groups.group_list.into_iter().map(|group| group.to_string()).collect();
-        consumer_groups.sort();
+            .map_err(map_admin_error)?;
         Ok(TopicConsumerGroupListResponse {
             topic: request.topic,
-            consumer_groups,
+            consumer_groups: groups.groups,
         })
     }
 
     async fn get_topic_consumers_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
+        admin: &mut AdminSession,
         request: TopicQueryRequest,
     ) -> TopicResult<TopicConsumerInfoResponse> {
-        let groups = self
-            .get_topic_consumer_groups_with_admin(
-                admin,
-                TopicQueryRequest {
-                    topic: request.topic.clone(),
-                },
-            )
-            .await?;
-        let mut items = Vec::new();
-        for consumer_group in groups.consumer_groups {
-            let stats = admin
-                .examine_consume_stats(
-                    consumer_group.clone().into(),
-                    Some(request.topic.clone().into()),
-                    None,
-                    None,
-                    None,
-                )
-                .await
-                .map_err(TopicError::RocketMQ)?;
-            items.push(TopicConsumerInfoView {
-                consumer_group,
-                total_diff: stats.compute_total_diff(),
-                inflight_diff: stats.compute_inflight_total_diff(),
-                consume_tps: stats.get_consume_tps(),
-            });
-        }
-
+        let consumers = admin
+            .get_topic_consumers(&request.topic)
+            .await
+            .map_err(map_admin_error)?;
         Ok(TopicConsumerInfoResponse {
             topic: request.topic,
-            items,
+            items: consumers
+                .items
+                .into_iter()
+                .map(|item| TopicConsumerInfoView {
+                    consumer_group: item.consumer_group,
+                    total_diff: item.total_diff,
+                    inflight_diff: item.inflight_diff,
+                    consume_tps: item.consume_tps,
+                })
+                .collect(),
         })
     }
 
@@ -947,48 +696,26 @@ impl TopicManager {
         } else {
             "reset_consumer_offset"
         };
-
         let mut session_guard = self.admin_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
-
         let result = {
             let session = session_guard
                 .as_mut()
                 .expect("topic admin session should be initialized before use");
             let mut affected_queues = 0usize;
             for consumer_group in &request.consumer_group_list {
-                let offsets = session
+                let outcome = session
                     .admin
-                    .reset_offset_by_timestamp(
-                        None,
-                        request.topic.clone().into(),
-                        consumer_group.clone().into(),
-                        request.reset_time as u64,
-                        request.force,
-                    )
-                    .await;
-                match offsets {
-                    Ok(offsets) => {
-                        affected_queues += offsets.len();
-                    }
-                    Err(error) if is_consumer_not_online_error(&error) => {
-                        let rollback_stats = session
-                            .admin
-                            .reset_offset_by_timestamp_old(
-                                None,
-                                consumer_group.clone().into(),
-                                request.topic.clone().into(),
-                                request.reset_time as u64,
-                                request.force,
-                            )
-                            .await
-                            .map_err(TopicError::RocketMQ)?;
-                        affected_queues += rollback_stats.len();
-                    }
-                    Err(error) => return Err(TopicError::RocketMQ(error)),
-                }
+                    .reset_topic_consumer_offset(&ResetTopicConsumerOffsetRequest {
+                        consumer_group: consumer_group.clone(),
+                        topic: request.topic.clone(),
+                        reset_timestamp: request.reset_time as u64,
+                        force: request.force,
+                    })
+                    .await
+                    .map_err(map_admin_error)?;
+                affected_queues += outcome.target_count;
             }
-
             Ok(TopicMutationResult {
                 success: true,
                 message: if skip_accumulate {
@@ -1006,1250 +733,37 @@ impl TopicManager {
                 affected_queues: Some(affected_queues),
             })
         };
-
         if Self::should_reset_session(&result) {
             self.reset_admin_session(&mut session_guard, &format!("{operation_name} failed"))
                 .await;
         }
         drop(session_guard);
-
         result
     }
 
     async fn send_topic_message_with_admin(
         &self,
-        admin: &mut DefaultMQAdminExt,
-        snapshot: &NameServerConfigSnapshot,
+        admin: &mut AdminSession,
         request: SendTopicMessageRequest,
     ) -> TopicResult<TopicSendMessageResult> {
-        let topic_config = self
-            .get_topic_config_with_admin(
-                admin,
-                TopicConfigQueryRequest {
-                    topic: request.topic.clone(),
-                    broker_name: None,
-                },
-            )
-            .await?;
-        log::info!(
-            "send_topic_message topic=`{}` message_type=`{}` trace_enabled={} key_present={} tag_present={}",
-            request.topic,
-            topic_config.message_type,
-            request.trace_enabled,
-            !request.key.trim().is_empty(),
-            !request.tag.trim().is_empty()
-        );
-
-        let normalized_message_body = normalize_topic_message_body(&request.message_body)?;
-
-        if topic_config.message_type == "TRANSACTION" {
-            return send_transaction_message_with_runtime(snapshot.clone(), request, normalized_message_body).await;
-        }
-
-        let current_namesrv = snapshot.current_namesrv.clone().ok_or_else(|| {
-            TopicError::Configuration("No active NameServer is configured. Add and select a NameServer first.".into())
-        })?;
-
-        let mut client_config = ClientConfig::new();
-        client_config.set_namesrv_addr(current_namesrv.into());
-        client_config.set_vip_channel_enabled(snapshot.use_vip_channel);
-        client_config.set_use_tls(snapshot.use_tls);
-
-        let mut producer = DefaultMQProducer::builder()
-            .producer_group(format!("dashboard-topic-sender-{}", Uuid::new_v4()))
-            .client_config(client_config)
-            .build();
-
-        producer.start().await.map_err(TopicError::RocketMQ)?;
-
-        let message = build_send_message(&request, &normalized_message_body);
-        let send_result = producer
-            .send_with_timeout(message, 5_000)
+        let message_body = normalize_topic_message_body(&request.message_body)?;
+        let result = admin
+            .send_topic_test_message(&AdminTopicSendRequest {
+                topic: request.topic,
+                key: request.key,
+                tag: request.tag,
+                message_body,
+                trace_enabled: request.trace_enabled,
+            })
             .await
-            .map_err(TopicError::RocketMQ);
-        producer.shutdown().await;
-        let send_result = send_result?.ok_or_else(|| {
-            TopicError::RocketMQ(RocketMQError::response_process_failed(
-                "send_message",
-                "Broker acknowledged send without returning a result.",
-            ))
-        })?;
-
-        Ok(map_send_result(request.topic, send_result))
+            .map_err(map_admin_error)?;
+        Ok(map_send_result(result))
     }
 }
 
-#[derive(Default)]
-struct TopicCurrentStatsAccumulator {
-    produced_msg_count_24h: u64,
-    consumed_msg_count_24h: u64,
-    in_tps: f64,
-    out_tps: f64,
-    consumer_group_count: usize,
-}
+mod mapping;
 
-fn build_topic_current_stats_items(rows: Vec<StatsAllRow>) -> Vec<TopicCurrentStatsItem> {
-    let mut by_topic = BTreeMap::<String, TopicCurrentStatsAccumulator>::new();
-
-    for row in rows {
-        let topic = row.topic.to_string();
-        let entry = by_topic.entry(topic).or_default();
-        entry.produced_msg_count_24h = entry.produced_msg_count_24h.max(row.in_msg_count_24h);
-        entry.in_tps = entry.in_tps.max(row.in_tps);
-
-        if let Some(out_msg_count_24h) = row.out_msg_count_24h {
-            entry.consumed_msg_count_24h += out_msg_count_24h;
-        }
-        if let Some(out_tps) = row.out_tps {
-            entry.out_tps += out_tps;
-        }
-        if row.consumer_group.is_some() {
-            entry.consumer_group_count += 1;
-        }
-    }
-
-    by_topic
-        .into_iter()
-        .map(|(topic, stats)| TopicCurrentStatsItem {
-            topic,
-            total_msg: stats.consumed_msg_count_24h,
-            produced_msg_count_24h: stats.produced_msg_count_24h,
-            consumed_msg_count_24h: stats.consumed_msg_count_24h,
-            in_tps: stats.in_tps,
-            out_tps: stats.out_tps,
-            consumer_group_count: stats.consumer_group_count,
-        })
-        .collect()
-}
-
-async fn send_transaction_message_with_runtime(
-    snapshot: NameServerConfigSnapshot,
-    request: SendTopicMessageRequest,
-    normalized_message_body: String,
-) -> TopicResult<TopicSendMessageResult> {
-    let blocking = transaction_message_blocking_executor()?;
-    blocking
-        .spawn_io(
-            "dashboard-topic-transaction-send",
-            move || -> TopicResult<TopicSendMessageResult> {
-                let runtime = transaction_message_runtime()?;
-                let runtime = runtime.lock().map_err(|error| {
-                    TopicError::RocketMQ(RocketMQError::response_process_failed(
-                        "transaction_message_runtime",
-                        format!("transaction message runtime lock poisoned: {error}"),
-                    ))
-                })?;
-
-                runtime.block_on(async move {
-                    let current_namesrv = snapshot.current_namesrv.clone().ok_or_else(|| {
-                        TopicError::Configuration(
-                            "No active NameServer is configured. Add and select a NameServer first.".into(),
-                        )
-                    })?;
-
-                    let mut client_config = ClientConfig::new();
-                    client_config.set_namesrv_addr(current_namesrv.into());
-                    client_config.set_vip_channel_enabled(snapshot.use_vip_channel);
-                    client_config.set_use_tls(snapshot.use_tls);
-
-                    let mut producer = TransactionMQProducer::builder()
-                        .producer_group(format!("dashboard-topic-tx-sender-{}", Uuid::new_v4()))
-                        .client_config(client_config)
-                        .transaction_listener(DashboardTransactionListener)
-                        .build();
-
-                    producer.start().await.map_err(TopicError::RocketMQ)?;
-
-                    let message = build_send_message(&request, &normalized_message_body);
-                    let tx_result = producer
-                        .send_message_in_transaction::<(), _>(message, None)
-                        .await
-                        .map_err(TopicError::RocketMQ);
-                    producer.shutdown().await;
-                    let tx_result = tx_result?;
-
-                    map_transaction_send_result(request.topic, tx_result)
-                })
-            },
-        )
-        .await
-        .map_err(|error| {
-            TopicError::RocketMQ(RocketMQError::response_process_failed(
-                "dashboard-topic-transaction-send",
-                error.to_string(),
-            ))
-        })?
-}
-
-fn transaction_message_blocking_executor() -> TopicResult<BlockingExecutor> {
-    let runtime = transaction_message_runtime()?;
-    let runtime = runtime.lock().map_err(|error| {
-        TopicError::RocketMQ(RocketMQError::response_process_failed(
-            "transaction_message_runtime",
-            format!("transaction message runtime lock poisoned: {error}"),
-        ))
-    })?;
-    Ok(runtime.context().blocking().clone())
-}
-
-fn transaction_message_runtime() -> TopicResult<&'static StdMutex<RuntimeOwner>> {
-    if let Some(runtime) = TRANSACTION_MESSAGE_RUNTIME.get() {
-        return Ok(runtime);
-    }
-
-    let runtime = RuntimeOwner::new(RuntimeConfig {
-        worker_threads: 1,
-        max_blocking_threads: 2,
-        thread_name: "rocketmq-dashboard-topic-tx".to_string(),
-        blocking_pool_policy: BlockingPoolPolicy {
-            name: "rocketmq-dashboard-topic-tx-blocking".to_string(),
-            max_concurrency: 1,
-            queue_timeout: Duration::from_secs(5),
-            task_timeout: Duration::from_secs(30),
-            warn_after: Duration::from_secs(5),
-        },
-        ..RuntimeConfig::default()
-    })
-    .map_err(|error| {
-        TopicError::RocketMQ(RocketMQError::response_process_failed(
-            "transaction_message_runtime",
-            format!("failed to start transaction message runtime: {error}"),
-        ))
-    })?;
-
-    let _ = TRANSACTION_MESSAGE_RUNTIME.set(StdMutex::new(runtime));
-    Ok(TRANSACTION_MESSAGE_RUNTIME
-        .get()
-        .expect("transaction message runtime should be initialized"))
-}
-
-fn build_send_message(request: &SendTopicMessageRequest, normalized_message_body: &str) -> Message {
-    let mut builder = Message::builder()
-        .topic(request.topic.clone())
-        .body_slice(normalized_message_body.as_bytes())
-        .trace_switch(request.trace_enabled);
-    if !request.tag.trim().is_empty() {
-        builder = builder.tags(request.tag.clone());
-    }
-    if !request.key.trim().is_empty() {
-        builder = builder.key(request.key.clone());
-    }
-    builder.build_unchecked()
-}
-
-fn map_send_result(
-    topic: String,
-    send_result: rocketmq_client_rust::producer::send_result::SendResult,
-) -> TopicSendMessageResult {
-    TopicSendMessageResult {
-        topic,
-        send_status: format!("{:?}", send_result.send_status),
-        message_id: send_result.msg_id.map(|message_id| message_id.to_string()),
-        broker_name: send_result
-            .message_queue
-            .as_ref()
-            .map(|queue| queue.broker_name().to_string()),
-        queue_id: send_result.message_queue.as_ref().map(|queue| queue.queue_id()),
-        queue_offset: send_result.queue_offset,
-        transaction_id: send_result.transaction_id,
-        region_id: send_result.region_id,
-        local_transaction_state: None,
-    }
-}
-
-fn map_transaction_send_result(
-    topic: String,
-    transaction_result: rocketmq_client_rust::producer::transaction_send_result::TransactionSendResult,
-) -> TopicResult<TopicSendMessageResult> {
-    let send_result = transaction_result.send_result.ok_or_else(|| {
-        TopicError::RocketMQ(RocketMQError::response_process_failed(
-            "send_message_in_transaction",
-            "Transaction producer completed without returning a send result.",
-        ))
-    })?;
-    let mut result = map_send_result(topic, send_result);
-    result.local_transaction_state = transaction_result
-        .local_transaction_state
-        .map(|state| state.to_string());
-    if let Some(local_state) = result.local_transaction_state.as_deref() {
-        result.send_status = format!("{} ({local_state})", result.send_status);
-    }
-    Ok(result)
-}
-
-fn classify_topic(topic: &str, configs: Option<&[TopicBrokerConfigSnapshot]>) -> (String, String, bool) {
-    if topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
-        return ("RETRY".into(), "RETRY".into(), false);
-    }
-    if topic.starts_with(mix_all::DLQ_GROUP_TOPIC_PREFIX) {
-        return ("DLQ".into(), "DLQ".into(), false);
-    }
-    if TopicValidator::is_system_topic(topic) {
-        return ("SYSTEM".into(), "SYSTEM".into(), true);
-    }
-
-    let message_type = configs
-        .and_then(summarize_message_type)
-        .unwrap_or_else(|| "UNSPECIFIED".into());
-    (message_type.clone(), message_type, false)
-}
-
-fn normalize_message_type(message_type: Option<&str>) -> String {
-    match message_type.unwrap_or("NORMAL").trim().to_uppercase().as_str() {
-        "FIFO" => "FIFO".into(),
-        "DELAY" => "DELAY".into(),
-        "TRANSACTION" => "TRANSACTION".into(),
-        "UNSPECIFIED" => "UNSPECIFIED".into(),
-        _ => "NORMAL".into(),
-    }
-}
-
-async fn require_topic_route(admin: &mut DefaultMQAdminExt, topic: &str) -> TopicResult<TopicRouteData> {
-    admin
-        .examine_topic_route_info(topic.to_string().into())
-        .await
-        .map_err(TopicError::RocketMQ)?
-        .ok_or_else(|| TopicError::Validation(format!("Topic `{topic}` was not found.")))
-}
-
-fn summarize_route(route: &TopicRouteData) -> (Vec<String>, Vec<String>, u32, u32, i32) {
-    let mut clusters: Vec<String> = route
-        .broker_datas
-        .iter()
-        .map(|broker| broker.cluster().to_string())
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    clusters.sort();
-
-    let mut brokers: Vec<String> = route
-        .broker_datas
-        .iter()
-        .map(|broker| broker.broker_name().to_string())
-        .collect();
-    brokers.sort();
-    brokers.dedup();
-
-    let read_queue_count = route.queue_datas.iter().map(|queue| queue.read_queue_nums()).sum();
-    let write_queue_count = route.queue_datas.iter().map(|queue| queue.write_queue_nums()).sum();
-    let perm = route
-        .queue_datas
-        .first()
-        .map(|queue| queue.perm() as i32)
-        .unwrap_or_default();
-
-    (clusters, brokers, read_queue_count, write_queue_count, perm)
-}
-
-fn summarize_message_type(configs: &[TopicBrokerConfigSnapshot]) -> Option<String> {
-    let message_types: HashSet<String> = configs
-        .iter()
-        .map(|item| item.config.get_topic_message_type().to_string())
-        .collect();
-    if message_types.len() == 1 {
-        message_types.into_iter().next()
-    } else {
-        Some("UNSPECIFIED".into())
-    }
-}
-
-fn summarize_order(configs: Option<&[TopicBrokerConfigSnapshot]>) -> bool {
-    configs
-        .map(|items| items.iter().all(|item| item.config.order))
-        .unwrap_or(false)
-}
-
-async fn collect_topic_configs(
-    admin: &mut DefaultMQAdminExt,
-    cluster_info: &ClusterInfo,
-) -> TopicResult<HashMap<String, Vec<TopicBrokerConfigSnapshot>>> {
-    let mut topic_configs = HashMap::new();
-    for (broker_name, broker_addr) in collect_master_broker_targets(cluster_info) {
-        let wrapper: TopicConfigSerializeWrapper = admin
-            .get_all_topic_config(broker_addr, 5_000)
-            .await
-            .map_err(TopicError::RocketMQ)?;
-        if let Some(config_table) = wrapper.topic_config_table() {
-            for (topic, config) in config_table {
-                topic_configs
-                    .entry(topic.to_string())
-                    .or_insert_with(Vec::new)
-                    .push(TopicBrokerConfigSnapshot {
-                        broker_name: broker_name.clone(),
-                        cluster_name: find_cluster_name_by_broker_name(cluster_info, &broker_name),
-                        config: config.clone(),
-                    });
-            }
-        }
-    }
-    for snapshots in topic_configs.values_mut() {
-        snapshots.sort_by(|left, right| left.broker_name.cmp(&right.broker_name));
-    }
-    Ok(topic_configs)
-}
-
-fn collect_master_broker_targets(cluster_info: &ClusterInfo) -> Vec<(String, CheetahString)> {
-    let mut targets = Vec::new();
-    if let Some(broker_addr_table) = cluster_info.broker_addr_table.as_ref() {
-        for (broker_name, broker_data) in broker_addr_table {
-            if let Some(master_addr) = broker_data.broker_addrs().get(&mix_all::MASTER_ID) {
-                targets.push((broker_name.to_string(), master_addr.clone()));
-            }
-        }
-    }
-    targets.sort_by(|left, right| left.0.cmp(&right.0));
-    targets
-}
-
-fn cluster_targets_from_cluster_info(cluster_info: &ClusterInfo) -> Vec<TopicTargetOption> {
-    let mut items = Vec::new();
-    if let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() {
-        for (cluster_name, broker_names) in cluster_addr_table {
-            let mut brokers: Vec<String> = broker_names.iter().map(|item| item.to_string()).collect();
-            brokers.sort();
-            items.push(TopicTargetOption {
-                cluster_name: cluster_name.to_string(),
-                broker_names: brokers,
-            });
-        }
-    }
-    items.sort_by(|left, right| left.cluster_name.cmp(&right.cluster_name));
-    items
-}
-
-fn find_master_addr_by_broker_name(cluster_info: &ClusterInfo, broker_name: &str) -> Option<CheetahString> {
-    cluster_info
-        .broker_addr_table
-        .as_ref()
-        .and_then(|table| table.get(broker_name))
-        .and_then(|broker_data| broker_data.broker_addrs().get(&mix_all::MASTER_ID).cloned())
-}
-
-fn find_cluster_name_by_broker_name(cluster_info: &ClusterInfo, broker_name: &str) -> Option<String> {
-    cluster_info.cluster_addr_table.as_ref().and_then(|table| {
-        table
-            .iter()
-            .find(|(_, broker_names)| broker_names.iter().any(|item| item.as_str() == broker_name))
-            .map(|(cluster_name, _)| cluster_name.to_string())
-    })
-}
-
-fn master_targets_by_cluster_name(
-    cluster_info: &ClusterInfo,
-    cluster_name: &str,
-) -> TopicResult<Vec<(String, CheetahString)>> {
-    let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
-        TopicError::RocketMQ(RocketMQError::response_process_failed(
-            "examine_broker_cluster_info",
-            "NameServer did not return cluster address data.",
-        ))
-    })?;
-    let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
-        TopicError::RocketMQ(RocketMQError::response_process_failed(
-            "examine_broker_cluster_info",
-            "NameServer did not return broker address data.",
-        ))
-    })?;
-    let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
-        TopicError::Validation(format!(
-            "Cluster `{cluster_name}` was not found in the current NameServer view."
-        ))
-    })?;
-    let mut addrs = Vec::new();
-    for broker_name in broker_names {
-        if let Some(master_addr) = broker_addr_table
-            .get(broker_name)
-            .and_then(|broker_data| broker_data.broker_addrs().get(&mix_all::MASTER_ID))
-        {
-            addrs.push((broker_name.to_string(), master_addr.clone()));
-        }
-    }
-    addrs.sort_by(|left, right| left.0.cmp(&right.0));
-    Ok(addrs)
-}
-
-async fn collect_route_topic_configs(
-    admin: &mut DefaultMQAdminExt,
-    route: &TopicRouteData,
-    topic: &str,
-) -> TopicResult<Vec<TopicBrokerConfigSnapshot>> {
-    let mut snapshots = Vec::new();
-    for broker in &route.broker_datas {
-        if let Some(master_addr) = broker.broker_addrs().get(&mix_all::MASTER_ID) {
-            let config = admin
-                .examine_topic_config(master_addr.clone(), topic.to_string().into())
-                .await
-                .map_err(TopicError::RocketMQ)?;
-            snapshots.push(TopicBrokerConfigSnapshot {
-                broker_name: broker.broker_name().to_string(),
-                cluster_name: Some(broker.cluster().to_string()),
-                config,
-            });
-        }
-    }
-    snapshots.sort_by(|left, right| left.broker_name.cmp(&right.broker_name));
-    Ok(snapshots)
-}
-
-fn build_topic_config_view(
-    topic: &str,
-    cluster_info: &ClusterInfo,
-    selected_config: &TopicBrokerConfigSnapshot,
-    all_configs: &[TopicBrokerConfigSnapshot],
-) -> TopicConfigView {
-    let mut broker_name_list: Vec<String> = all_configs.iter().map(|item| item.broker_name.clone()).collect();
-    broker_name_list.sort();
-    broker_name_list.dedup();
-
-    let mut cluster_name_list: Vec<String> = all_configs
-        .iter()
-        .filter_map(|item| {
-            item.cluster_name
-                .clone()
-                .or_else(|| find_cluster_name_by_broker_name(cluster_info, &item.broker_name))
-        })
-        .collect();
-    cluster_name_list.sort();
-    cluster_name_list.dedup();
-
-    TopicConfigView {
-        topic_name: topic.to_string(),
-        broker_name: selected_config.broker_name.clone(),
-        cluster_name: selected_config
-            .cluster_name
-            .clone()
-            .or_else(|| find_cluster_name_by_broker_name(cluster_info, &selected_config.broker_name)),
-        broker_name_list,
-        cluster_name_list,
-        read_queue_nums: selected_config.config.read_queue_nums as i32,
-        write_queue_nums: selected_config.config.write_queue_nums as i32,
-        perm: selected_config.config.perm as i32,
-        order: selected_config.config.order,
-        message_type: selected_config.config.get_topic_message_type().to_string(),
-        attributes: selected_config
-            .config
-            .attributes
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect(),
-        inconsistent_fields: detect_inconsistent_topic_fields(all_configs),
-    }
-}
-
-fn detect_inconsistent_topic_fields(configs: &[TopicBrokerConfigSnapshot]) -> Vec<String> {
-    if configs.len() <= 1 {
-        return Vec::new();
-    }
-
-    let baseline = &configs[0].config;
-    let baseline_attributes: HashMap<String, String> = baseline
-        .attributes
-        .iter()
-        .map(|(key, value)| (key.to_string(), value.to_string()))
-        .collect();
-    let baseline_message_type = baseline.get_topic_message_type().to_string();
-    let mut inconsistent_fields = Vec::new();
-
-    if configs
-        .iter()
-        .any(|item| item.config.read_queue_nums != baseline.read_queue_nums)
-    {
-        inconsistent_fields.push("readQueueNums".into());
-    }
-    if configs
-        .iter()
-        .any(|item| item.config.write_queue_nums != baseline.write_queue_nums)
-    {
-        inconsistent_fields.push("writeQueueNums".into());
-    }
-    if configs.iter().any(|item| item.config.perm != baseline.perm) {
-        inconsistent_fields.push("perm".into());
-    }
-    if configs.iter().any(|item| item.config.order != baseline.order) {
-        inconsistent_fields.push("order".into());
-    }
-    if configs
-        .iter()
-        .any(|item| item.config.get_topic_message_type().to_string() != baseline_message_type)
-    {
-        inconsistent_fields.push("messageType".into());
-    }
-    if configs.iter().any(|item| {
-        item.config
-            .attributes
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect::<HashMap<_, _>>()
-            != baseline_attributes
-    }) {
-        inconsistent_fields.push("attributes".into());
-    }
-
-    inconsistent_fields
-}
-
-fn build_order_conf(broker_names: &HashSet<String>, write_queue_nums: u32) -> String {
-    let mut ordered_brokers: Vec<String> = broker_names.iter().cloned().collect();
-    ordered_brokers.sort();
-    ordered_brokers
-        .into_iter()
-        .map(|broker_name| format!("{broker_name}:{write_queue_nums}"))
-        .collect::<Vec<_>>()
-        .join(";")
-}
-
-fn is_consumer_not_online_error(error: &RocketMQError) -> bool {
-    matches!(
-        error,
-        RocketMQError::BrokerOperationFailed { code, .. }
-            if ResponseCode::from(*code) == ResponseCode::ConsumerNotOnline
-    )
-}
+use mapping::*;
 
 #[cfg(test)]
-mod topic_config_tests {
-    use super::*;
-
-    fn snapshot(
-        broker_name: &str,
-        cluster_name: &str,
-        read_queue_nums: u32,
-        write_queue_nums: u32,
-        perm: u32,
-        order: bool,
-        message_type: &str,
-    ) -> TopicBrokerConfigSnapshot {
-        let mut config = RocketMqTopicConfig {
-            read_queue_nums,
-            write_queue_nums,
-            perm,
-            order,
-            ..RocketMqTopicConfig::default()
-        };
-        config.attributes.insert(
-            TopicAttributes::topic_message_type_attribute().name().clone(),
-            message_type.into(),
-        );
-        TopicBrokerConfigSnapshot {
-            broker_name: broker_name.to_string(),
-            cluster_name: Some(cluster_name.to_string()),
-            config,
-        }
-    }
-
-    #[test]
-    fn detect_inconsistent_topic_fields_reports_divergence() {
-        let snapshots = vec![
-            snapshot("broker-a", "DefaultCluster", 8, 8, 6, false, "NORMAL"),
-            snapshot("broker-b", "DefaultCluster", 16, 8, 6, true, "FIFO"),
-        ];
-
-        let fields = detect_inconsistent_topic_fields(&snapshots);
-
-        assert!(fields.contains(&"readQueueNums".to_string()));
-        assert!(fields.contains(&"order".to_string()));
-        assert!(fields.contains(&"messageType".to_string()));
-    }
-
-    #[test]
-    fn summarize_message_type_returns_unspecified_for_mixed_configs() {
-        let snapshots = vec![
-            snapshot("broker-a", "DefaultCluster", 8, 8, 6, false, "NORMAL"),
-            snapshot("broker-b", "DefaultCluster", 8, 8, 6, false, "FIFO"),
-        ];
-
-        assert_eq!(summarize_message_type(&snapshots), Some("UNSPECIFIED".to_string()));
-    }
-
-    #[test]
-    fn build_order_conf_is_sorted_and_stable() {
-        let broker_names = HashSet::from(["broker-b".to_string(), "broker-a".to_string()]);
-
-        assert_eq!(build_order_conf(&broker_names, 8), "broker-a:8;broker-b:8");
-    }
-
-    #[test]
-    fn create_or_update_uses_add_attribute_prefix_for_message_type() {
-        let mut attributes: HashMap<CheetahString, CheetahString> = HashMap::new();
-        let message_type_key: CheetahString =
-            format!("+{}", TopicAttributes::topic_message_type_attribute().name()).into();
-        attributes.insert(message_type_key.clone(), normalize_message_type(Some("NORMAL")).into());
-
-        assert!(attributes.contains_key(&message_type_key));
-        assert_eq!(
-            attributes.get(&message_type_key).map(|value| value.to_string()),
-            Some("NORMAL".to_string())
-        );
-    }
-}
-
-fn map_route_view(topic: &str, route: &TopicRouteData) -> TopicRouteView {
-    let mut brokers = route
-        .broker_datas
-        .iter()
-        .map(|broker| {
-            let mut addresses = broker
-                .broker_addrs()
-                .iter()
-                .map(|(broker_id, address)| TopicBrokerAddressView {
-                    broker_id: *broker_id as i64,
-                    address: address.to_string(),
-                })
-                .collect::<Vec<_>>();
-            addresses.sort_by_key(|left| left.broker_id);
-            TopicRouteBrokerView {
-                cluster_name: broker.cluster().to_string(),
-                broker_name: broker.broker_name().to_string(),
-                addresses,
-            }
-        })
-        .collect::<Vec<_>>();
-    brokers.sort_by(|left, right| left.broker_name.cmp(&right.broker_name));
-
-    let mut queues = route
-        .queue_datas
-        .iter()
-        .map(|queue| TopicRouteQueueView {
-            broker_name: queue.broker_name().to_string(),
-            read_queue_nums: queue.read_queue_nums(),
-            write_queue_nums: queue.write_queue_nums(),
-            perm: queue.perm() as i32,
-        })
-        .collect::<Vec<_>>();
-    queues.sort_by(|left, right| left.broker_name.cmp(&right.broker_name));
-
-    TopicRouteView {
-        topic: topic.to_string(),
-        brokers,
-        queues,
-    }
-}
-
-fn map_status_view(topic: &str, stats: &TopicStatsTable) -> TopicStatusView {
-    let mut offsets = stats
-        .get_offset_table()
-        .iter()
-        .map(|(queue, offset)| TopicStatusOffsetView {
-            broker_name: queue.broker_name().to_string(),
-            queue_id: queue.queue_id(),
-            min_offset: offset.get_min_offset(),
-            max_offset: offset.get_max_offset(),
-            last_update_timestamp: offset.get_last_update_timestamp(),
-        })
-        .collect::<Vec<_>>();
-    offsets.sort_by(|left, right| {
-        left.broker_name
-            .cmp(&right.broker_name)
-            .then(left.queue_id.cmp(&right.queue_id))
-    });
-
-    TopicStatusView {
-        topic: topic.to_string(),
-        total_message_count: offsets
-            .iter()
-            .map(|item| (item.max_offset - item.min_offset).max(0))
-            .sum(),
-        queue_count: offsets.len(),
-        offsets,
-    }
-}
-
-fn is_reconnect_worthy_error(error: &RocketMQError) -> bool {
-    matches!(error.kind(), ErrorKind::Network | ErrorKind::Timeout) || is_reconnect_worthy_message(&error.to_string())
-}
-
-fn is_reconnect_worthy_message(message: &str) -> bool {
-    let normalized = message.to_ascii_lowercase();
-    [
-        "connect",
-        "connection refused",
-        "timed out",
-        "timeout",
-        "channel inactive",
-        "broken pipe",
-        "connection reset",
-        "network is unreachable",
-        "name server",
-        "namesrv",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
-}
-
-fn normalize_topic_message_body(body: &str) -> TopicResult<String> {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return Err(TopicError::Validation(
-            "Message body is required before sending.".into(),
-        ));
-    }
-
-    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
-        return Ok(body.to_string());
-    }
-
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        return serde_json::to_string(&value)
-            .map_err(|error| TopicError::Validation(format!("Failed to serialize message JSON: {error}")));
-    }
-
-    if let Ok(value) = json5::from_str::<serde_json::Value>(trimmed) {
-        return serde_json::to_string(&value).map_err(|error| {
-            TopicError::Validation(format!("Failed to serialize relaxed JSON message body: {error}"))
-        });
-    }
-
-    let normalized_numeric_keys = quote_numeric_object_keys(trimmed);
-    if normalized_numeric_keys != trimmed
-        && let Ok(value) = json5::from_str::<serde_json::Value>(&normalized_numeric_keys)
-    {
-        return serde_json::to_string(&value).map_err(|error| {
-            TopicError::Validation(format!(
-                "Failed to serialize relaxed JSON message body after normalizing numeric keys: {error}"
-            ))
-        });
-    }
-
-    Err(TopicError::Validation(
-        "Message body looks like JSON but could not be parsed. Standard JSON and relaxed JSON syntax such as numeric \
-         keys are supported."
-            .into(),
-    ))
-}
-
-fn quote_numeric_object_keys(input: &str) -> String {
-    let chars = input.chars().collect::<Vec<_>>();
-    let mut output = String::with_capacity(input.len());
-    let mut index = 0;
-    let mut in_string = false;
-    let mut string_delimiter = '\0';
-    let mut escaped = false;
-    let mut expecting_key = false;
-
-    while index < chars.len() {
-        let current = chars[index];
-
-        if in_string {
-            output.push(current);
-            if escaped {
-                escaped = false;
-            } else if current == '\\' {
-                escaped = true;
-            } else if current == string_delimiter {
-                in_string = false;
-            }
-            index += 1;
-            continue;
-        }
-
-        if current == '"' || current == '\'' {
-            in_string = true;
-            string_delimiter = current;
-            output.push(current);
-            index += 1;
-            continue;
-        }
-
-        match current {
-            '{' | ',' => {
-                expecting_key = true;
-                output.push(current);
-                index += 1;
-            }
-            _ if expecting_key && current.is_whitespace() => {
-                output.push(current);
-                index += 1;
-            }
-            _ if expecting_key && (current.is_ascii_digit() || current == '-') => {
-                let start = index;
-                index += 1;
-                while index < chars.len() && chars[index].is_ascii_digit() {
-                    index += 1;
-                }
-
-                let token = chars[start..index].iter().collect::<String>();
-                let mut probe = index;
-                while probe < chars.len() && chars[probe].is_whitespace() {
-                    probe += 1;
-                }
-
-                if probe < chars.len() && chars[probe] == ':' && token.chars().any(|char| char.is_ascii_digit()) {
-                    output.push('"');
-                    output.push_str(&token);
-                    output.push('"');
-                } else {
-                    output.push_str(&token);
-                }
-                expecting_key = false;
-            }
-            _ => {
-                expecting_key = false;
-                output.push(current);
-                index += 1;
-            }
-        }
-    }
-
-    output
-}
-
-#[cfg(test)]
-mod tests {
-    use super::TopicBrokerConfigSnapshot;
-    use super::build_send_message;
-    use super::build_topic_current_stats_items;
-    use super::classify_topic;
-    use super::cluster_targets_from_cluster_info;
-    use super::find_master_addr_by_broker_name;
-    use super::is_reconnect_worthy_message;
-    use super::map_send_result;
-    use super::map_transaction_send_result;
-    use super::master_targets_by_cluster_name;
-    use super::normalize_message_type;
-    use super::normalize_topic_message_body;
-    use super::quote_numeric_object_keys;
-    use super::transaction_message_blocking_executor;
-    use super::transaction_message_runtime;
-    use cheetah_string::CheetahString;
-    use rocketmq_admin_core::core::stats::StatsAllRow;
-    use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
-    use rocketmq_client_rust::producer::send_result::SendResult;
-    use rocketmq_client_rust::producer::send_status::SendStatus;
-    use rocketmq_client_rust::producer::transaction_send_result::TransactionSendResult;
-    use rocketmq_common::common::config::TopicConfig as RocketMqTopicConfig;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use rocketmq_common::common::mix_all;
-    use rocketmq_dashboard_common::SendTopicMessageRequest;
-    use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
-    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
-    use std::collections::HashMap;
-    use std::collections::HashSet;
-
-    #[test]
-    fn transaction_message_runtime_is_shared() {
-        let first = transaction_message_runtime().expect("transaction runtime should start") as *const _;
-        let second = transaction_message_runtime().expect("transaction runtime should be reused") as *const _;
-
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn transaction_message_blocking_executor_uses_runtime_policy() {
-        let blocking = transaction_message_blocking_executor().expect("blocking executor should be available");
-
-        assert_eq!(blocking.policy().name, "rocketmq-dashboard-topic-tx-blocking");
-        assert_eq!(blocking.policy().max_concurrency, 1);
-    }
-
-    #[test]
-    fn classify_special_topics_matches_dashboard_rules() {
-        let retry = classify_topic("%RETRY%group-a", None);
-        let dlq = classify_topic("%DLQ%group-a", None);
-        let system = classify_topic("TBW102", None);
-
-        assert_eq!(retry.0, "RETRY");
-        assert_eq!(dlq.0, "DLQ");
-        assert_eq!(system.0, "SYSTEM");
-        assert!(system.2);
-    }
-
-    #[test]
-    fn classify_regular_topics_uses_message_type_attribute() {
-        let mut config = RocketMqTopicConfig::new("TopicTest");
-        config.attributes.insert("message.type".into(), "FIFO".into());
-        let snapshots = vec![TopicBrokerConfigSnapshot {
-            broker_name: "broker-a".to_string(),
-            cluster_name: Some("cluster-a".to_string()),
-            config,
-        }];
-
-        let (category, message_type, system_topic) = classify_topic("TopicTest", Some(&snapshots));
-
-        assert_eq!(category, "FIFO");
-        assert_eq!(message_type, "FIFO");
-        assert!(!system_topic);
-    }
-
-    #[test]
-    fn build_topic_current_stats_items_aggregates_java_topic_current_rows() {
-        let rows = vec![
-            StatsAllRow {
-                topic: CheetahString::from_static_str("TopicA"),
-                consumer_group: Some(CheetahString::from_static_str("GroupA")),
-                accumulation: 0,
-                in_tps: 12.0,
-                out_tps: Some(3.0),
-                in_msg_count_24h: 100,
-                out_msg_count_24h: Some(20),
-            },
-            StatsAllRow {
-                topic: CheetahString::from_static_str("TopicA"),
-                consumer_group: Some(CheetahString::from_static_str("GroupB")),
-                accumulation: 0,
-                in_tps: 12.0,
-                out_tps: Some(5.0),
-                in_msg_count_24h: 100,
-                out_msg_count_24h: Some(30),
-            },
-            StatsAllRow {
-                topic: CheetahString::from_static_str("TopicB"),
-                consumer_group: None,
-                accumulation: 0,
-                in_tps: 2.0,
-                out_tps: None,
-                in_msg_count_24h: 7,
-                out_msg_count_24h: None,
-            },
-        ];
-
-        let items = build_topic_current_stats_items(rows);
-        let topic_a = items
-            .iter()
-            .find(|item| item.topic == "TopicA")
-            .expect("TopicA should be present");
-        let topic_b = items
-            .iter()
-            .find(|item| item.topic == "TopicB")
-            .expect("TopicB should be present");
-
-        assert_eq!(topic_a.total_msg, 50);
-        assert_eq!(topic_a.produced_msg_count_24h, 100);
-        assert_eq!(topic_a.consumed_msg_count_24h, 50);
-        assert_eq!(topic_a.out_tps, 8.0);
-        assert_eq!(topic_a.consumer_group_count, 2);
-        assert_eq!(topic_b.total_msg, 0);
-        assert_eq!(topic_b.produced_msg_count_24h, 7);
-        assert_eq!(topic_b.consumer_group_count, 0);
-    }
-
-    #[test]
-    fn normalize_message_type_defaults_to_normal() {
-        assert_eq!(normalize_message_type(None), "NORMAL");
-        assert_eq!(normalize_message_type(Some("delay")), "DELAY");
-        assert_eq!(normalize_message_type(Some("unknown")), "NORMAL");
-    }
-
-    #[test]
-    fn cluster_targets_are_sorted_for_forms() {
-        let mut broker_addr_table = HashMap::new();
-        broker_addr_table.insert(
-            "broker-a".into(),
-            BrokerData::new("cluster-a".into(), "broker-a".into(), HashMap::new(), None),
-        );
-        let mut cluster_addr_table = HashMap::new();
-        cluster_addr_table.insert(
-            "cluster-a".into(),
-            HashSet::from_iter(["broker-b".into(), "broker-a".into()]),
-        );
-
-        let items =
-            cluster_targets_from_cluster_info(&ClusterInfo::new(Some(broker_addr_table), Some(cluster_addr_table)));
-
-        assert_eq!(items.len(), 1);
-        assert_eq!(
-            items[0].broker_names,
-            vec!["broker-a".to_string(), "broker-b".to_string()]
-        );
-    }
-
-    #[test]
-    fn find_master_addr_by_broker_name_returns_master_address() {
-        let mut broker_addrs = HashMap::new();
-        broker_addrs.insert(mix_all::MASTER_ID, CheetahString::from("10.0.0.1:10911"));
-
-        let mut broker_addr_table = HashMap::new();
-        broker_addr_table.insert(
-            "broker-a".into(),
-            BrokerData::new("cluster-a".into(), "broker-a".into(), broker_addrs, None),
-        );
-
-        let cluster_info = ClusterInfo::new(Some(broker_addr_table), Some(HashMap::new()));
-
-        assert_eq!(
-            find_master_addr_by_broker_name(&cluster_info, "broker-a"),
-            Some(CheetahString::from("10.0.0.1:10911"))
-        );
-    }
-
-    #[test]
-    fn find_master_addr_by_broker_name_returns_none_for_unknown_broker() {
-        let cluster_info = ClusterInfo::new(Some(HashMap::new()), Some(HashMap::new()));
-
-        assert_eq!(find_master_addr_by_broker_name(&cluster_info, "missing-broker"), None);
-    }
-
-    #[test]
-    fn master_targets_by_cluster_name_returns_sorted_master_targets() {
-        let mut broker_addr_table = HashMap::new();
-
-        let mut broker_b_addrs = HashMap::new();
-        broker_b_addrs.insert(mix_all::MASTER_ID, CheetahString::from("10.0.0.2:10911"));
-        broker_addr_table.insert(
-            "broker-b".into(),
-            BrokerData::new("cluster-a".into(), "broker-b".into(), broker_b_addrs, None),
-        );
-
-        let mut broker_a_addrs = HashMap::new();
-        broker_a_addrs.insert(mix_all::MASTER_ID, CheetahString::from("10.0.0.1:10911"));
-        broker_addr_table.insert(
-            "broker-a".into(),
-            BrokerData::new("cluster-a".into(), "broker-a".into(), broker_a_addrs, None),
-        );
-
-        let cluster_addr_table = HashMap::from([(
-            CheetahString::from("cluster-a"),
-            HashSet::from_iter([CheetahString::from("broker-b"), CheetahString::from("broker-a")]),
-        )]);
-        let cluster_info = ClusterInfo::new(Some(broker_addr_table), Some(cluster_addr_table));
-
-        let targets = master_targets_by_cluster_name(&cluster_info, "cluster-a").expect("cluster targets");
-
-        assert_eq!(
-            targets,
-            vec![
-                ("broker-a".to_string(), CheetahString::from("10.0.0.1:10911")),
-                ("broker-b".to_string(), CheetahString::from("10.0.0.2:10911")),
-            ]
-        );
-    }
-
-    #[test]
-    fn master_targets_by_cluster_name_skips_brokers_without_master_addr() {
-        let broker_addr_table = HashMap::from([(
-            CheetahString::from("broker-a"),
-            BrokerData::new("cluster-a".into(), "broker-a".into(), HashMap::new(), None),
-        )]);
-        let cluster_addr_table = HashMap::from([(
-            CheetahString::from("cluster-a"),
-            HashSet::from_iter([CheetahString::from("broker-a")]),
-        )]);
-        let cluster_info = ClusterInfo::new(Some(broker_addr_table), Some(cluster_addr_table));
-
-        let targets = master_targets_by_cluster_name(&cluster_info, "cluster-a").expect("cluster targets");
-
-        assert!(targets.is_empty());
-    }
-
-    #[test]
-    fn reconnect_error_detection_only_matches_transport_failures() {
-        assert!(is_reconnect_worthy_message("connection refused by broker"));
-        assert!(is_reconnect_worthy_message("request timeout while talking to namesrv"));
-        assert!(!is_reconnect_worthy_message("topic stats info not found"));
-        assert!(!is_reconnect_worthy_message("topic returned no queue offset data"));
-    }
-
-    #[test]
-    fn normalize_topic_message_body_accepts_standard_json() {
-        assert_eq!(
-            normalize_topic_message_body(r#"{"1":"value","name":"rocketmq"}"#).unwrap(),
-            r#"{"1":"value","name":"rocketmq"}"#
-        );
-    }
-
-    #[test]
-    fn normalize_topic_message_body_accepts_relaxed_json_with_numeric_keys() {
-        assert_eq!(
-            normalize_topic_message_body(r#"{1: 'value', nested: {2: true}}"#).unwrap(),
-            r#"{"1":"value","nested":{"2":true}}"#
-        );
-    }
-
-    #[test]
-    fn quote_numeric_object_keys_only_changes_object_keys() {
-        assert_eq!(
-            quote_numeric_object_keys(r#"{1: 'value', nested: {2: true}, list: [1, 2, 3]}"#),
-            r#"{"1": 'value', nested: {"2": true}, list: [1, 2, 3]}"#
-        );
-    }
-
-    #[test]
-    fn normalize_topic_message_body_preserves_plain_text() {
-        assert_eq!(
-            normalize_topic_message_body("plain text body").unwrap(),
-            "plain text body"
-        );
-    }
-
-    #[test]
-    fn build_send_message_carries_key_tag_and_trace_switch() {
-        let request = SendTopicMessageRequest {
-            topic: "TopicTest".to_string(),
-            key: "order-1".to_string(),
-            tag: "TagA".to_string(),
-            message_body: "payload".to_string(),
-            trace_enabled: true,
-        };
-
-        let message = build_send_message(&request, "payload");
-
-        assert_eq!(message.topic().to_string(), "TopicTest");
-        assert_eq!(message.tags(), Some("TagA"));
-        assert_eq!(message.keys(), Some(vec!["order-1".to_string()]));
-        assert!(message.properties().trace_switch());
-    }
-
-    #[test]
-    fn map_send_result_preserves_queue_and_transaction_metadata() {
-        let mut queue = MessageQueue::new();
-        queue.set_topic("TopicTest".into());
-        queue.set_broker_name("broker-a".into());
-        queue.set_queue_id(3);
-
-        let result = map_send_result(
-            "TopicTest".to_string(),
-            SendResult::new_with_additional_fields(
-                SendStatus::SendOk,
-                Some(CheetahString::from("msg-1")),
-                Some(queue),
-                42,
-                Some("tx-1".to_string()),
-                None,
-                Some("region-a".to_string()),
-            ),
-        );
-
-        assert_eq!(result.topic, "TopicTest");
-        assert_eq!(result.send_status, "SendOk");
-        assert_eq!(result.message_id.as_deref(), Some("msg-1"));
-        assert_eq!(result.broker_name.as_deref(), Some("broker-a"));
-        assert_eq!(result.queue_id, Some(3));
-        assert_eq!(result.queue_offset, 42);
-        assert_eq!(result.transaction_id.as_deref(), Some("tx-1"));
-        assert_eq!(result.region_id.as_deref(), Some("region-a"));
-        assert_eq!(result.local_transaction_state, None);
-    }
-
-    #[test]
-    fn map_transaction_send_result_includes_local_transaction_state() {
-        let result = map_transaction_send_result(
-            "TopicTest".to_string(),
-            TransactionSendResult {
-                local_transaction_state: Some(LocalTransactionState::CommitMessage),
-                send_result: Some(SendResult::default()),
-            },
-        )
-        .expect("transaction send result should map");
-
-        assert_eq!(result.topic, "TopicTest");
-        assert_eq!(result.send_status, "SendOk (COMMIT_MESSAGE)");
-        assert_eq!(result.local_transaction_state.as_deref(), Some("COMMIT_MESSAGE"));
-    }
-
-    #[test]
-    fn map_transaction_send_result_requires_nested_send_result() {
-        let error = map_transaction_send_result(
-            "TopicTest".to_string(),
-            TransactionSendResult {
-                local_transaction_state: Some(LocalTransactionState::CommitMessage),
-                send_result: None,
-            },
-        )
-        .expect_err("missing send result should fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("Transaction producer completed without returning a send result.")
-        );
-    }
-}
+mod tests;

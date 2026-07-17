@@ -2572,8 +2572,16 @@ impl DefaultMQProducerImpl {
                 (LocalTransactionState::RollbackMessage, None)
             }
         };
+        let transaction_topic = msg.topic().clone();
+        let transaction_message = msg.as_any().downcast_ref::<Message>().cloned();
         if let Err(e) = self
-            .end_transaction(&msg, &send_result, local_transaction_state, local_exception)
+            .end_transaction_owned(
+                transaction_topic,
+                transaction_message,
+                &send_result,
+                local_transaction_state,
+                local_exception,
+            )
             .await
         {
             warn!(
@@ -2644,6 +2652,20 @@ impl DefaultMQProducerImpl {
         local_transaction_state: LocalTransactionState,
         local_exception: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
+        let topic = msg.topic().clone();
+        let message = msg.as_any().downcast_ref::<Message>().cloned();
+        self.end_transaction_owned(topic, message, send_result, local_transaction_state, local_exception)
+            .await
+    }
+
+    async fn end_transaction_owned(
+        &mut self,
+        topic: CheetahString,
+        message: Option<Message>,
+        send_result: &SendResult,
+        local_transaction_state: LocalTransactionState,
+        local_exception: Option<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()> {
         let id = if let Some(ref offset_msg_id) = send_result.offset_msg_id {
             MessageDecoder::decode_message_id(offset_msg_id).map_err(|e| {
                 rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {}", e))
@@ -2672,7 +2694,7 @@ impl DefaultMQProducerImpl {
             .find_broker_address_in_publish(dest_broker_name.as_ref())
             .ok_or_else(|| mq_client_err!(format!("broker address not found for {}", dest_broker_name)))?;
         let request_header = EndTransactionRequestHeader {
-            topic: msg.topic().clone(),
+            topic,
             producer_group: self.producer_config.producer_group().clone(),
             tran_state_table_offset: Self::u64_to_java_long_field(
                 "endTransaction",
@@ -2693,7 +2715,7 @@ impl DefaultMQProducerImpl {
                 ..Default::default()
             },
         };
-        if let Some(message) = msg.as_any().downcast_ref::<Message>() {
+        if let Some(message) = message.as_ref() {
             self.do_execute_end_transaction_hook(
                 message,
                 &request_header.msg_id,
@@ -4478,6 +4500,16 @@ mod tests {
         assert!(result
             .err()
             .is_some_and(|error| error.to_string().contains("tranExecutor is null")));
+    }
+
+    #[test]
+    fn transaction_send_future_is_send() {
+        fn assert_send<T: Send>(_: T) {}
+
+        let mut producer = running_producer_without_client();
+        let msg = Message::builder().topic("TopicTest").empty_body().build_unchecked();
+
+        assert_send(producer.send_message_in_transaction(msg, None));
     }
 
     #[tokio::test]

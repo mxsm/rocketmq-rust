@@ -113,6 +113,12 @@ pub mod admin_adapter_compat {
     pub use rocketmq_error as error;
     pub use rocketmq_remoting as remoting;
     pub use rocketmq_rust as runtime;
+
+    pub mod message {
+        pub use rocketmq_common::common::message::message_ext::MessageExt;
+        pub use rocketmq_common::common::message::message_single::Message;
+        pub use rocketmq_common::common::message::MessageTrait;
+    }
 }
 #[doc(hidden)]
 pub use crate::consumer::consumer_impl::consume_message_concurrently_service::run_concurrent_clean_expire_lifecycle_probe;
