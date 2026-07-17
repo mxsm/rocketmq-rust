@@ -26,6 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CORE = ROOT / "rocketmq-proxy-core"
 CLUSTER = ROOT / "rocketmq-proxy-cluster"
+LOCAL = ROOT / "rocketmq-proxy-local"
 FACADE = ROOT / "rocketmq-proxy"
 POLICY = ROOT / "scripts" / "architecture-dependency-policy.json"
 PLAN_ROOT = ROOT / "docs" / "plans" / "architecture-refactor-migration"
@@ -84,6 +85,22 @@ FORBIDDEN_CLUSTER_PACKAGES = {
     "rocketmq-store-local",
     "rocketmq-store-rocksdb",
 }
+EXPECTED_LOCAL_INTERNAL_DEPENDENCIES = {
+    "rocketmq-broker",
+    "rocketmq-error",
+    "rocketmq-model",
+    "rocketmq-proxy-core",
+    "rocketmq-runtime",
+}
+FORBIDDEN_LOCAL_TOKENS = (
+    "rocketmq_auth",
+    "rocketmq_client_rust",
+    "rocketmq_common",
+    "rocketmq_proxy_cluster",
+    "rocketmq_remoting",
+    "rocketmq_rust",
+    "rocketmq_store",
+)
 
 
 def load_manifest(path: Path) -> dict:
@@ -91,23 +108,22 @@ def load_manifest(path: Path) -> dict:
 
 
 class ProxyCoreContractTests(unittest.TestCase):
-    def test_workspace_has_thirty_one_packages_and_only_local_is_missing(self) -> None:
+    def test_workspace_has_all_thirty_two_target_packages(self) -> None:
         root = load_manifest(ROOT / "Cargo.toml")
         members = root["workspace"]["members"]
         policy = json.loads(POLICY.read_text(encoding="utf-8"))
 
-        self.assertEqual(31, len(members))
+        self.assertEqual(32, len(members))
         self.assertIn("rocketmq-proxy-core", members)
         self.assertIn("rocketmq-proxy-cluster", members)
-        self.assertEqual(
-            {"rocketmq-proxy-local"},
-            set(policy["planned_packages"]) - set(members),
-        )
+        self.assertIn("rocketmq-proxy-local", members)
+        self.assertEqual(set(), set(policy["planned_packages"]) - set(members))
         self.assertEqual("./rocketmq-proxy-core", root["workspace"]["dependencies"]["rocketmq-proxy-core"]["path"])
         self.assertEqual(
             "./rocketmq-proxy-cluster",
             root["workspace"]["dependencies"]["rocketmq-proxy-cluster"]["path"],
         )
+        self.assertEqual("./rocketmq-proxy-local", root["workspace"]["dependencies"]["rocketmq-proxy-local"]["path"])
 
     def test_proto_schema_hashes_and_generation_owner_are_unique(self) -> None:
         for name, expected in EXPECTED_SCHEMA_HASHES.items():
@@ -161,7 +177,7 @@ class ProxyCoreContractTests(unittest.TestCase):
         packages = {line.split()[0] for line in cargo_tree.splitlines() if line.strip()}
         self.assertEqual(set(), FORBIDDEN_CORE_PACKAGES & packages)
 
-    def test_target_gap_ledger_stays_exact_and_core_has_no_findings(self) -> None:
+    def test_target_gap_ledger_stays_exact_and_proxy_adapters_have_no_findings(self) -> None:
         guard = subprocess.run(
             [
                 "python",
@@ -178,17 +194,15 @@ class ProxyCoreContractTests(unittest.TestCase):
         self.assertEqual(1, guard.returncode)
         output = guard.stdout + guard.stderr
         findings = [line for line in output.splitlines() if line.startswith("VIOLATION ")]
-        self.assertEqual(51, len(findings))
+        self.assertEqual(49, len(findings))
         self.assertEqual(0, sum("rule=client-manifest-allowlist" in line for line in findings))
         self.assertEqual(0, sum("rule=client-source-allowlist" in line for line in findings))
-        self.assertEqual(49, sum("rule=target-dag-direct-dependency" in line for line in findings))
+        self.assertEqual(47, sum("rule=target-dag-direct-dependency" in line for line in findings))
         self.assertEqual(2, sum("rule=transitive-forbidden-reachability" in line for line in findings))
         self.assertFalse(any("caller=rocketmq-proxy-core " in line for line in findings))
         self.assertFalse(any("caller=rocketmq-proxy-cluster " in line for line in findings))
-        self.assertIn(
-            "TARGET_INCOMPLETE missing_planned_packages=rocketmq-proxy-local",
-            output,
-        )
+        self.assertFalse(any("caller=rocketmq-proxy-local " in line for line in findings))
+        self.assertNotIn("TARGET_INCOMPLETE", output)
 
     def test_cluster_dependency_source_and_runtime_closure_is_owned(self) -> None:
         manifest = load_manifest(CLUSTER / "Cargo.toml")
@@ -272,7 +286,63 @@ class ProxyCoreContractTests(unittest.TestCase):
         self.assertNotIn("rocketmq_client_rust", facade_source)
 
         runtime_audit = (ROOT / "scripts" / "runtime-audit.ps1").read_text(encoding="utf-8-sig")
-        self.assertIn('^rocketmq-proxy(?:-core|-cluster)?/src/', runtime_audit)
+        self.assertIn('^rocketmq-proxy(?:-core|-cluster|-local)?/src/', runtime_audit)
+
+    def test_local_dependency_source_and_runtime_closure_is_owned(self) -> None:
+        manifest = load_manifest(LOCAL / "Cargo.toml")
+        internal = {name for name in manifest["dependencies"] if name.startswith("rocketmq-")}
+        self.assertEqual(EXPECTED_LOCAL_INTERNAL_DEPENDENCIES, internal)
+        self.assertEqual([], manifest["features"]["default"])
+        self.assertEqual(["rocketmq-broker/otel-metrics"], manifest["features"]["observability"])
+        self.assertEqual(["rocketmq-broker/tieredstore"], manifest["features"]["tieredstore"])
+
+        source = "\n".join(path.read_text(encoding="utf-8") for path in (LOCAL / "src").rglob("*.rs"))
+        for token in FORBIDDEN_LOCAL_TOKENS:
+            self.assertNotIn(token, source, token)
+        for token in (
+            "ActorRuntime",
+            "ArcMut",
+            "spawn_current_thread",
+            "mpsc::unbounded_channel",
+            "tokio::spawn",
+            "TaskGroup::root",
+        ):
+            self.assertNotIn(token, source, token)
+        for lifecycle_contract in (
+            "ServiceContext",
+            "ShutdownDeadline::after",
+            'service_context.child("proxy.local.adapter")',
+            "cancellation.cancelled()",
+            "facade.shutdown()",
+            "LOCAL_COMMAND_CAPACITY",
+        ):
+            self.assertIn(lifecycle_contract, source, lifecycle_contract)
+
+        cargo_tree = subprocess.run(
+            ["cargo", "tree", "--locked", "-p", "rocketmq-proxy-local", "-e", "normal", "--prefix", "none"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        packages = {line.split()[0] for line in cargo_tree.splitlines() if line.strip()}
+        self.assertNotIn("rocketmq-client-rust", packages)
+        self.assertNotIn("rocketmq-proxy-cluster", packages)
+
+        facade_manifest = load_manifest(FACADE / "Cargo.toml")
+        self.assertIn("rocketmq-proxy-local", facade_manifest["dependencies"])
+        self.assertNotIn("rocketmq-broker", facade_manifest["dependencies"])
+        self.assertNotIn("rocketmq-store", facade_manifest["dependencies"])
+
+        local_wrapper = (FACADE / "src" / "local.rs").read_text(encoding="utf-8")
+        self.assertIn("pub use rocketmq_proxy_local::local::*;", local_wrapper)
+        self.assertLess(len(local_wrapper.splitlines()), 30)
+        config = (FACADE / "src" / "config.rs").read_text(encoding="utf-8")
+        self.assertIn("pub use rocketmq_proxy_local::LocalConfig;", config)
+        self.assertNotIn("pub struct LocalConfig", config)
+        service = (FACADE / "src" / "service.rs").read_text(encoding="utf-8")
+        self.assertIn("pub use rocketmq_proxy_local::service::*;", service)
+        self.assertNotIn("pub struct LocalServiceManager", service)
 
     def test_facade_modules_are_reexports_of_the_canonical_owners(self) -> None:
         wrappers = {
@@ -424,27 +494,28 @@ class ProxyCoreContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         readme = (PLAN_ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertIn("| PR 级工作包 | 50 | 0 | 32 未开始；合计 32 尚未完成 | 82 |", checklist)
+        self.assertIn("| PR 级工作包 | 51 | 0 | 31 未开始；合计 31 尚未完成 | 82 |", checklist)
         self.assertIn("- [x] PR-M08-01：创建 `rocketmq-proxy-core` 与 proto owner", checklist)
         self.assertIn("- [x] PR-M08-02：迁移中立 plan、port、service 与 ingress", checklist)
         self.assertIn("- [x] PR-M08-03：创建 Cluster adapter", checklist)
-        self.assertIn("当前下一工作包为 PR-M08-04", checklist)
+        self.assertIn("- [x] PR-M08-04：创建 Local adapter", checklist)
+        self.assertIn("当前下一工作包为 PR-M08-05", checklist)
         work_packages = re.findall(r"^- \[([ x])\] (PR-M\d{2}-\d{2}[a-z]?)：", checklist, re.MULTILINE)
         self.assertEqual(82, len(work_packages))
-        self.assertEqual(50, sum(state == "x" for state, _ in work_packages))
-        self.assertEqual(32, sum(state == " " for state, _ in work_packages))
+        self.assertEqual(51, sum(state == "x" for state, _ in work_packages))
+        self.assertEqual(31, sum(state == " " for state, _ in work_packages))
         open_by_milestone: dict[str, int] = {}
         for state, package in work_packages:
             if state == " ":
                 milestone = package.split("-")[1]
                 open_by_milestone[milestone] = open_by_milestone.get(milestone, 0) + 1
-        self.assertEqual({"M08": 3, "M09": 6, "M10": 5, "M11": 12, "M12": 6}, open_by_milestone)
-        self.assertIn("Core 45 项 unit + 2 项 proto contract、Proxy 104 项", checklist)
-        self.assertIn("PR-M08-03 已完成，下一工作包为 PR-M08-04", task)
+        self.assertEqual({"M08": 2, "M09": 6, "M10": 5, "M11": 12, "M12": 6}, open_by_milestone)
+        self.assertIn("Local 8 项", checklist)
+        self.assertIn("PR-M08-04 已完成，下一工作包为 PR-M08-05", task)
         self.assertIn("- [x] `[DEV]` 按 send/pull/pop/ack/route/transaction 迁 plan 和 port", task)
-        self.assertIn("## 10. PR-M08-02 消费记录（2026-07-17）", handoff)
-        self.assertIn("根 workspace 31 个 package", readme)
-        self.assertIn("下一工作包为 PR-M08-04", readme)
+        self.assertIn("## 12. PR-M08-04 消费记录（2026-07-17）", handoff)
+        self.assertIn("根 workspace 已达到目标 32 个 package", readme)
+        self.assertIn("下一工作包为 PR-M08-05", readme)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 实施中；PR-M08-03 已完成，下一工作包为 PR-M08-04 |
+| 状态 | 实施中；PR-M08-04 已完成，下一工作包为 PR-M08-05 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP19 `proxy-three-way-split` |
 | 前置条件 | model/protocol/transport/security/store-api 边界稳定；除 Proxy 外 Client 清边完成 |
@@ -140,11 +140,35 @@ M07 已交付 [`Client 边界收口与 M08 交接清单`](07-client-edge-closeou
 
 ### PR-M08-04：创建 Local adapter
 
-- [ ] `[DEV]` 创建 `rocketmq-proxy-local`，迁 LocalBrokerFacade、LocalServiceManager 和 message/consumer/route/transaction。
-- [ ] `[DEV]` 使用 Broker 窄 facade、store-api 和 model result；tiered 只能从 local 路径启用。
-- [ ] `[TEST]` 覆盖 local send/pull/pop/ack/route/transaction、embedded lifecycle 和 tiered feature。
-- [ ] `[REV]` 检查 manifest/source/normal closure完全无 Client及其 re-export，local 类型不泄漏 cluster。
-- [ ] 回滚点：facade 临时选择旧 local adapter；禁止恢复 Client 依赖。
+- [x] `[DEV]` 创建 `rocketmq-proxy-local`，迁 LocalBrokerFacade、LocalServiceManager 和 message/consumer/route/transaction。
+- [x] `[DEV]` 使用 Broker 窄 facade、store-api 和 model result；tiered 只能从 local 路径启用。
+- [x] `[TEST]` 覆盖 local send/pull/pop/ack/route/transaction、embedded lifecycle 和 tiered feature。
+- [x] `[REV]` 检查 manifest/source/normal closure 完全无 Client 及其 re-export，local 类型不泄漏 cluster。
+- [x] 回滚点：facade 临时选择旧 local adapter；禁止恢复 Client 依赖。
+
+#### PR-M08-04 实施结果
+
+- **Owner**：`rocketmq-proxy-local` 已加入根 workspace，目标 package 首次达到 32/32；Local Broker facade
+  client、LocalServiceManager、message/consumer/route/transaction adapter 与 local lifecycle 由该 crate 唯一拥有。
+  旧 `rocketmq-proxy::local`、`config::LocalConfig` 和 `service::LocalServiceManager` 路径均为精确 re-export，
+  未复制第二份实现或状态 owner。
+- **Dependency boundary**：Local 的内部直接边精确为 Broker、Core、Model、Runtime、Error；Broker 通过隐藏的
+  `proxy_adapter_compat` 暴露 adapter 所需实现类型，Local 源码不直接 import Common、Remoting、Store、Client 或
+  Cluster。Local normal closure 不含完整 Client/Cluster，Proxy manifest 已删除 Broker/Store 直边，并由 Local
+  feature 唯一路由 `tieredstore` 与 Broker observability。
+- **Lifecycle**：旧 `ActorRuntime::spawn_current_thread`、构造期 `expect` 和无界 channel 已删除。Local worker 在
+  注入的 `ServiceContext` 下创建隔离子域，命令队列容量固定为 1024；取消可中断初始化、启动、活动命令与排队命令，
+  最后以一个 `ShutdownDeadline` 有界等待嵌入式 Broker shutdown。历史无 context 构造签名保留但 fail closed 为
+  typed startup error，Proxy bootstrap 始终注入其受管 context。
+- **Behavior/compatibility**：Local 8 项测试覆盖 send、pull、pop、ack、route、transaction、bounded queue 与
+  embedded lifecycle；Proxy 82 项 unit + 1 项 binary + 4 项 compatibility + 9 项 gRPC + 3 项 remoting，合计
+  99 项通过。Local no-default、tieredstore 与 all-target/all-feature strict Clippy 通过，Proxy no-default 保持通过，
+  LocalConfig 的公开字段、Serde/default 和 Proxy 旧路径保持兼容。
+- **Architecture evidence**：baseline guard 通过；target guard 从 51 降至 49，现为目标 DAG 直接边 47 与传递
+  闭包边 2，已无缺失计划 package，Core、Cluster、Local 均无 target finding。architecture contract 354、
+  ArcMut 实际 guard + fixture 24、runtime enforcing audit、32-package workspace fmt/strict Clippy 与 AGENTS routing
+  全绿；typed-error 仅复现 main 已登记的 11 项且本切片零新增。51/82 个工作包已完成、31 个未完成，下一串行
+  工作包为 PR-M08-05。
 
 ### PR-M08-05：现有 Proxy 降为 composition/facade
 

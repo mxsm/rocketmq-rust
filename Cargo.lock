@@ -4755,17 +4755,16 @@ dependencies = [
  "hmac",
  "prost-types",
  "rocketmq-auth",
- "rocketmq-broker",
  "rocketmq-common",
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-observability",
  "rocketmq-proxy-cluster",
  "rocketmq-proxy-core",
+ "rocketmq-proxy-local",
  "rocketmq-remoting",
  "rocketmq-runtime",
  "rocketmq-rust",
- "rocketmq-store",
  "serde",
  "serde_json",
  "sha1",
@@ -4819,6 +4818,25 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "uuid",
+]
+
+[[package]]
+name = "rocketmq-proxy-local"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cheetah-string",
+ "rocketmq-broker",
+ "rocketmq-error",
+ "rocketmq-model",
+ "rocketmq-proxy-core",
+ "rocketmq-runtime",
+ "serde",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

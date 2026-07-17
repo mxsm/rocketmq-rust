@@ -29,28 +29,7 @@ pub use rocketmq_proxy_core::config::ProxyMode;
 pub use rocketmq_proxy_core::config::RemotingConfig;
 pub use rocketmq_proxy_core::config::RuntimeConfig;
 pub use rocketmq_proxy_core::config::SessionConfig;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct LocalConfig {
-    pub broker_cluster_name: String,
-    pub broker_name: String,
-    pub broker_ip: String,
-    pub broker_listen_port: u16,
-    pub store_root_dir: String,
-}
-
-impl Default for LocalConfig {
-    fn default() -> Self {
-        Self {
-            broker_cluster_name: "DefaultCluster".to_owned(),
-            broker_name: "rocketmq-proxy-local".to_owned(),
-            broker_ip: "127.0.0.1".to_owned(),
-            broker_listen_port: 10911,
-            store_root_dir: "store/proxy/local-broker".to_owned(),
-        }
-    }
-}
+pub use rocketmq_proxy_local::LocalConfig;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]

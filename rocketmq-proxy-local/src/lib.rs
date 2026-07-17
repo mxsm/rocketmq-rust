@@ -12,9 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Backend service compatibility exports.
+#![warn(rust_2018_idioms)]
+#![warn(clippy::all)]
 
-pub use rocketmq_proxy_cluster::service::*;
-pub use rocketmq_proxy_core::service::*;
-pub use rocketmq_proxy_core::ResourceIdentity;
-pub use rocketmq_proxy_local::service::*;
+//! Embedded Broker-backed local adapter for RocketMQ Proxy Core ports.
+
+pub mod config;
+pub mod local;
+mod message;
+pub mod service;
+
+pub use config::LocalConfig;
+pub use local::LocalBrokerFacadeClient;
+pub use local::LocalRemotingBackend;
+pub use service::LocalServiceManager;

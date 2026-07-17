@@ -34,6 +34,68 @@ use crate::broker_runtime::BrokerRuntime;
 
 const LOCAL_PROXY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// Compatibility types required by the extracted local Proxy adapter.
+///
+/// The adapter depends on this Broker-owned surface instead of taking direct
+/// dependencies on Broker implementation crates and wire-protocol crates.
+#[doc(hidden)]
+pub mod proxy_adapter_compat {
+    pub use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
+    pub use rocketmq_common::common::boundary_type::BoundaryType;
+    pub use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    pub use rocketmq_common::common::filter::expression_type::ExpressionType;
+    pub use rocketmq_common::common::message::message_ext::MessageExt;
+    pub use rocketmq_common::common::message::message_id::MessageId;
+    pub use rocketmq_common::common::message::message_queue::MessageQueue;
+    pub use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
+    pub use rocketmq_common::common::message::message_single::Message;
+    pub use rocketmq_common::common::message::MessageConst;
+    pub use rocketmq_common::common::message::MessageTrait;
+    pub use rocketmq_common::common::mix_all;
+    pub use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+    pub use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
+    pub use rocketmq_common::common::topic::TopicValidator;
+    pub use rocketmq_common::MessageDecoder;
+    pub use rocketmq_common::TimeUtils::current_millis;
+    pub use rocketmq_remoting::code::request_code::RequestCode;
+    pub use rocketmq_remoting::code::response_code::ResponseCode;
+    pub use rocketmq_remoting::prelude::RemotingDeserializable;
+    pub use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
+    pub use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
+    pub use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
+    pub use rocketmq_remoting::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
+    pub use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
+    pub use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+    pub use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
+    pub use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
+    pub use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
+    pub use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+    pub use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+    pub use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
+    pub use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+    pub use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+    pub use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader as OperationTopicRequestHeader;
+    pub use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
+    pub use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
+    pub use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+    pub use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+    pub use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+    pub use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+    pub use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
+    pub use rocketmq_remoting::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
+    pub use rocketmq_remoting::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
+    pub use rocketmq_remoting::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
+    pub use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+    pub use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+    pub use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    pub use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+    pub use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+    pub use rocketmq_remoting::protocol::RemotingSerializable;
+    pub use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+    pub use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
+    pub use rocketmq_store::config::message_store_config::MessageStoreConfig;
+}
+
 pub struct ProxyBrokerFacade {
     runtime: BrokerRuntime,
 }

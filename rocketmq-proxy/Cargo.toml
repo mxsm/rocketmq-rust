@@ -31,20 +31,18 @@ rust-version.workspace = true
 default = []
 observability = [
   "rocketmq-observability/otel-metrics",
-  "rocketmq-broker/otel-metrics",
-  "rocketmq-store/observability",
+  "rocketmq-proxy-local/observability",
   "rocketmq-remoting/observability",
 ]
-tieredstore = ["rocketmq-broker/tieredstore", "rocketmq-store/tieredstore"]
+tieredstore = ["rocketmq-proxy-local/tieredstore"]
 
 [dependencies]
 rocketmq-common      = { workspace = true }
-rocketmq-broker      = { workspace = true }
-rocketmq-store       = { workspace = true }
 rocketmq-error       = { workspace = true }
 rocketmq-model       = { workspace = true }
 rocketmq-proxy-core  = { workspace = true }
 rocketmq-proxy-cluster = { workspace = true }
+rocketmq-proxy-local = { workspace = true }
 rocketmq-remoting    = { workspace = true }
 rocketmq-auth        = { workspace = true, features = ["grpc"] }
 rocketmq-rust        = { workspace = true }

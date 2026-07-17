@@ -99,16 +99,10 @@ class StorageCloseoutContractTests(unittest.TestCase):
         members = root["workspace"]["members"]
         policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(30, len(members))
+        self.assertEqual(32, len(members))
         self.assertTrue(STORAGE_PACKAGES.issubset(set(members)))
         self.assertEqual(32, policy["package_counts"]["target"])
-        self.assertEqual(
-            {
-                "rocketmq-proxy-cluster",
-                "rocketmq-proxy-local",
-            },
-            set(policy["planned_packages"]) - set(members),
-        )
+        self.assertEqual(set(), set(policy["planned_packages"]) - set(members))
 
         dependencies = root["workspace"]["dependencies"]
         for package in (
@@ -216,10 +210,7 @@ class StorageCloseoutContractTests(unittest.TestCase):
             },
             consumers["rocketmq-store-api"],
         )
-        self.assertEqual(
-            {"rocketmq-broker", "rocketmq-proxy", "rocketmq-store-inspect"},
-            consumers["rocketmq-store"],
-        )
+        self.assertEqual({"rocketmq-broker", "rocketmq-store-inspect"}, consumers["rocketmq-store"])
         self.assertEqual(
             {"rocketmq-store", "rocketmq-store-rocksdb"},
             consumers["rocketmq-store-local"],

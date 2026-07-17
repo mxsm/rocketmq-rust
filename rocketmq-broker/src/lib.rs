@@ -21,6 +21,8 @@
 pub use broker_bootstrap::BrokerBootstrap;
 pub use broker_bootstrap::Builder;
 pub use broker_runtime::build_broker_telemetry_bootstrap_config;
+#[doc(hidden)]
+pub use proxy_facade::proxy_adapter_compat;
 pub use proxy_facade::ProxyBrokerFacade;
 
 pub mod command;

@@ -38,26 +38,6 @@ pub(crate) fn message_to_core(message: &Message) -> ProxyMessage {
     core
 }
 
-pub(crate) fn message_ext_to_core(message: &MessageExt) -> ProxyMessageExt {
-    ProxyMessageExt {
-        message: message_to_core(message.message_inner()),
-        broker_name: message.broker_name().to_owned(),
-        queue_id: message.queue_id(),
-        store_size: message.store_size(),
-        queue_offset: message.queue_offset(),
-        sys_flag: message.sys_flag(),
-        born_timestamp: message.born_timestamp(),
-        born_host: message.born_host(),
-        store_timestamp: message.store_timestamp(),
-        store_host: message.store_host(),
-        msg_id: message.msg_id().to_string(),
-        commit_log_offset: message.commit_log_offset(),
-        body_crc: message.body_crc(),
-        reconsume_times: message.reconsume_times(),
-        prepared_transaction_offset: message.prepared_transaction_offset(),
-    }
-}
-
 pub(crate) fn message_ext_from_core(message: &ProxyMessageExt) -> MessageExt {
     MessageExt {
         message: message_from_core(&message.message),
@@ -92,12 +72,4 @@ pub(crate) fn message_from_core(message: &ProxyMessage) -> Message {
     facade.set_body(message.body().map(Bytes::copy_from_slice));
     *facade.transaction_id_mut() = message.transaction_id().map(CheetahString::from);
     facade
-}
-
-pub(crate) fn message_properties_from_core(message: &ProxyMessage) -> HashMap<CheetahString, CheetahString> {
-    message
-        .properties()
-        .iter()
-        .map(|(key, value)| (CheetahString::from(key.as_str()), CheetahString::from(value.as_str())))
-        .collect()
 }
