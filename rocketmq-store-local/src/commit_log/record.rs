@@ -91,6 +91,25 @@ pub struct CommitLogFrameCursor<S> {
     buffer: Bytes,
 }
 
+/// Invalid starting position for a bounded CommitLog frame cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameCursorStartError {
+    start_offset: usize,
+    source_len: usize,
+}
+
+impl std::fmt::Display for FrameCursorStartError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "CommitLog cursor {} exceeds fixed source length {}",
+            self.start_offset, self.source_len
+        )
+    }
+}
+
+impl std::error::Error for FrameCursorStartError {}
+
 impl<S: CommitLogFrameSource> CommitLogFrameCursor<S> {
     /// Creates a cursor at offset zero using the source's fixed length snapshot.
     pub fn new(source: S) -> Self {
@@ -101,6 +120,27 @@ impl<S: CommitLogFrameSource> CommitLogFrameCursor<S> {
             source_len,
             buffer: Bytes::new(),
         }
+    }
+
+    /// Creates a cursor at a previously committed frame boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FrameCursorStartError`] when the checkpoint is beyond the fixed source snapshot.
+    pub fn try_from_offset(source: S, start_offset: usize) -> Result<Self, FrameCursorStartError> {
+        let source_len = source.source_len();
+        if start_offset > source_len {
+            return Err(FrameCursorStartError {
+                start_offset,
+                source_len,
+            });
+        }
+        Ok(Self {
+            source,
+            current_offset: start_offset,
+            source_len,
+            buffer: Bytes::new(),
+        })
     }
 
     fn refill_buffer(&mut self) -> bool {
@@ -172,6 +212,16 @@ impl<S: CommitLogFrameSource> CommitLogFrameCursor<S> {
     /// Returns the absolute offset immediately after the last complete returned frame.
     pub fn current_offset(&self) -> usize {
         self.current_offset
+    }
+
+    /// Returns the fixed source length captured when this cursor was created.
+    pub const fn source_len(&self) -> usize {
+        self.source_len
+    }
+
+    /// Returns whether iteration stopped before consuming the fixed source snapshot.
+    pub const fn has_unconsumed_tail(&self) -> bool {
+        self.current_offset < self.source_len
     }
 }
 

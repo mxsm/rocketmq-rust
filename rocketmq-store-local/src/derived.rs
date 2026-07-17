@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod base;
-pub mod commit_log;
-pub mod config;
-pub mod consume_queue;
-pub mod derived;
-pub mod filter;
-pub mod flush;
-pub mod ha;
-pub mod hook;
-pub mod index;
-pub mod mapped_file;
-pub mod message_store;
-pub mod pop;
-pub mod services;
-pub mod stats;
-pub mod timer;
-pub mod transfer;
-pub mod utils;
+//! Owner and replay primitives for stores derived from the authoritative CommitLog.
+
+mod owner;
+mod replay;
+
+pub use owner::CheckpointPersistence;
+pub use owner::DerivedCommitOutcome;
+pub use owner::DerivedCursorOwner;
+pub use owner::DerivedCursorOwnerError;
+pub use replay::replay_derived;
+pub use replay::DerivedReplayApply;
+pub use replay::DerivedReplayError;
+pub use replay::DerivedReplayReport;
+pub use replay::DerivedReplaySink;
+pub use replay::DerivedReplayStop;

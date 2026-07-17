@@ -14,6 +14,21 @@
 
 //! Storage capability contracts.
 
+pub mod progress;
+
+pub use progress::CursorAdvance;
+pub use progress::CursorAdvanceDisposition;
+pub use progress::CursorAdvanceError;
+pub use progress::DerivedCheckpoint;
+pub use progress::DerivedCheckpointDecodeError;
+pub use progress::DerivedCursor;
+pub use progress::DerivedEngine;
+pub use progress::DerivedRecordId;
+pub use progress::DerivedRecordIdError;
+pub use progress::LegacyDerivedCursorV0;
+pub use progress::DERIVED_CHECKPOINT_ENCODED_LEN;
+pub use progress::DERIVED_CHECKPOINT_FORMAT_VERSION;
+
 use std::error::Error as StdError;
 use std::fmt;
 use std::future::Future;
