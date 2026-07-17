@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M10-01 已完成，下一工作包 PR-M10-02） |
+| 状态 | 实施中（PR-M10-02 已完成，下一工作包 PR-M10-03） |
 | 预计周期 | 5–8 周 |
 | 工作包 | WP14 `tiered-cursor`；延续 WP02、WP11–WP13 |
 | 前置条件 | 32-package Gate 通过；CommitLog/receipt/progress 和 Local/Rocks golden 稳定 |
@@ -59,13 +59,17 @@
 
 ### PR-M10-02：Tiered cursor、retry ledger 与背压
 
-- [ ] `[DEV]` 顺序读取 CommitLog；channel 满时暂停 reader，不丢事件。
-- [ ] `[DEV]` 失败项先原子持久 `(source_epoch, offset, length, topic, queue, retry_state)`，再允许全局 cursor 越过。
-- [ ] `[DEV]` ledger 不复制 payload，以 offset tuple 幂等；按 count/bytes/age 硬限制并 pin 最小 WAL segment。
-- [ ] `[DEV]` 到上限时停止 reader、readiness=false、告警并施加背压；分区 worker 隔离/退避。
-- [ ] `[TEST]` 覆盖 provider timeout/partial write/restart/重复提交/ledger 满/WAL pin 回收。
-- [ ] `[REV]` 检查 cursor/retry 不参与 Broker ack，无无界“完成但未提交”内存。
-- [ ] 回滚点：停止对应 topic/queue reader、设置 `readiness=false`，冻结已提交 cursor 与 retry ledger并保留/pin WAL；修复后从已验证 checkpoint 重放。不得切换任何未通过同一 cursor/retry/kill-restart corpus 的实现。
+- [x] `[DEV]` 顺序读取 CommitLog；channel 满时暂停 reader，不丢事件。
+- [x] `[DEV]` 失败项先原子持久 `(source_epoch, offset, length, topic, queue, retry_state)`，再允许全局 cursor 越过。
+- [x] `[DEV]` ledger 不复制 payload，以 offset tuple 幂等；按 count/bytes/age 硬限制并 pin 最小 WAL segment。
+- [x] `[DEV]` 到上限时停止 reader、readiness=false、告警并施加背压；分区 worker 隔离/退避。
+- [x] `[TEST]` 覆盖 provider timeout/partial write/restart/重复提交/ledger 满/WAL pin 回收。
+- [x] `[REV]` 检查 cursor/retry 不参与 Broker ack，无无界“完成但未提交”内存。
+- [x] 回滚点：停止对应 topic/queue reader、设置 `readiness=false`，冻结已提交 cursor 与 retry ledger并保留/pin WAL；修复后从已验证 checkpoint 重放。不得切换任何未通过同一 cursor/retry/kill-restart corpus 的实现。
+
+完成证据：[`10-tiered-cursor-retry-evidence.md`](10-tiered-cursor-retry-evidence.md)。候选提交
+`1a5463b143f33a8246d32d82abd05ddacf3b14c6` 将 payload-free retry ledger、原子 cursor、count/bytes/age
+硬上限、WAL pin、分条退避和上游背压接入真实 Tiered reput；61/82 已完成，下一工作包为 PR-M10-03。
 
 ### PR-M10-03：CQ、Rocks 与 Tiered 读取优化
 
