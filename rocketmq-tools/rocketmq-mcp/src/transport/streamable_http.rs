@@ -32,6 +32,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::app::McpApp;
 use crate::config::HttpConfig;
+use crate::error::McpError;
 use crate::guard::http_auth::http_auth_middleware;
 use crate::guard::http_auth::HttpAuthState;
 use crate::protocol::server::RocketmqMcpServer;
@@ -39,12 +40,14 @@ use crate::protocol::server::RocketmqMcpServer;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub async fn serve(app: McpApp) -> anyhow::Result<()> {
+pub async fn serve_typed(app: McpApp) -> Result<(), McpError> {
     let bind = parse_bind_addr(&app.config().server.http.bind)?;
-    let listener = tokio::net::TcpListener::bind(bind).await?;
+    let listener = tokio::net::TcpListener::bind(bind)
+        .await
+        .map_err(|source| McpError::infrastructure("bind MCP HTTP listener", source))?;
     let endpoint = app.config().server.http.endpoint.clone();
     let cancellation_token = CancellationToken::new();
-    let router = build_router(app, cancellation_token.clone())?;
+    let router = build_router_typed(app, cancellation_token.clone())?;
 
     tracing::info!(
         bind = %bind,
@@ -57,14 +60,21 @@ pub async fn serve(app: McpApp) -> anyhow::Result<()> {
             let _ = tokio::signal::ctrl_c().await;
             cancellation_token.cancel();
         })
-        .await?;
+        .await
+        .map_err(|source| McpError::infrastructure("serve MCP HTTP requests", source))?;
     Ok(())
 }
 
-pub fn build_router(app: McpApp, cancellation_token: CancellationToken) -> anyhow::Result<Router> {
+#[deprecated(since = "1.0.0", note = "use serve_typed")]
+pub async fn serve(app: McpApp) -> anyhow::Result<()> {
+    serve_typed(app).await.map_err(anyhow::Error::new)
+}
+
+pub fn build_router_typed(app: McpApp, cancellation_token: CancellationToken) -> Result<Router, McpError> {
     let endpoint = app.config().server.http.endpoint.clone();
     let service = streamable_service(app.clone(), cancellation_token);
-    let auth_state = HttpAuthState::from_config(&app.config().server.http.auth, app.guard().clone())?;
+    let auth_state = HttpAuthState::from_config(&app.config().server.http.auth, app.guard().clone())
+        .map_err(|source| McpError::infrastructure("configure MCP HTTP authentication", source))?;
     let metadata_path = app.config().server.http.auth.protected_resource_metadata_path.clone();
     let metadata = protected_resource_metadata(&app.config().server.http);
     let mcp_router = Router::new()
@@ -86,6 +96,11 @@ pub fn build_router(app: McpApp, cancellation_token: CancellationToken) -> anyho
             HTTP_REQUEST_TIMEOUT,
         ))
         .layer(RequestBodyLimitLayer::new(MAX_HTTP_BODY_BYTES)))
+}
+
+#[deprecated(since = "1.0.0", note = "use build_router_typed")]
+pub fn build_router(app: McpApp, cancellation_token: CancellationToken) -> anyhow::Result<Router> {
+    build_router_typed(app, cancellation_token).map_err(anyhow::Error::new)
 }
 
 fn protected_resource_metadata(http_config: &HttpConfig) -> serde_json::Value {
@@ -133,9 +148,9 @@ fn streamable_server_config(
     server_config
 }
 
-fn parse_bind_addr(bind: &str) -> anyhow::Result<SocketAddr> {
+fn parse_bind_addr(bind: &str) -> Result<SocketAddr, McpError> {
     bind.parse::<SocketAddr>()
-        .map_err(|error| anyhow::anyhow!("server.http.bind must be a socket address: {error}"))
+        .map_err(|source| McpError::infrastructure("parse server.http.bind socket address", source))
 }
 
 fn allowed_hosts(bind: &str) -> Vec<String> {
@@ -211,7 +226,7 @@ mod tests {
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.audit.enabled = false;
         let app = McpApp::new(config).unwrap();
-        let router = build_router(app, CancellationToken::new()).unwrap();
+        let router = build_router_typed(app, CancellationToken::new()).unwrap();
 
         let metadata = router
             .clone()

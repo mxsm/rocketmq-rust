@@ -18,12 +18,13 @@ use clap::Parser;
 use rocketmq_mcp::app::McpApp;
 use rocketmq_mcp::config::Args;
 use rocketmq_mcp::config::TransportKind;
+use rocketmq_mcp::error::McpError;
 use rocketmq_mcp::transport;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), McpError> {
     let args = Args::parse();
-    let app = McpApp::bootstrap(args).await?;
+    let app = McpApp::bootstrap_typed(args).await?;
 
     tracing::info!(
         server = %app.config().server.name,
@@ -34,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let result = match app.transport() {
-        TransportKind::Stdio => transport::stdio::serve(app.clone()).await,
+        TransportKind::Stdio => transport::stdio::serve_typed(app.clone()).await,
         TransportKind::StreamableHttp => serve_streamable_http(app.clone()).await,
     };
     app.shutdown().await;
@@ -43,15 +44,18 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn serve_streamable_http(app: McpApp) -> anyhow::Result<()> {
+async fn serve_streamable_http(app: McpApp) -> Result<(), McpError> {
     #[cfg(feature = "streamable-http")]
     {
-        transport::streamable_http::serve(app).await
+        transport::streamable_http::serve_typed(app).await
     }
 
     #[cfg(not(feature = "streamable-http"))]
     {
         let _ = app;
-        anyhow::bail!("streamable-http transport requires the streamable-http feature")
+        Err(McpError::FeatureDisabled {
+            transport: "streamable-http",
+            feature: "streamable-http",
+        })
     }
 }

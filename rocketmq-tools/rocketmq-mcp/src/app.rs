@@ -42,12 +42,17 @@ impl McpApp {
         })
     }
 
-    pub async fn bootstrap(args: Args) -> anyhow::Result<Self> {
+    pub async fn bootstrap_typed(args: Args) -> Result<Self, crate::error::McpError> {
         let config = McpConfig::load_with_overrides(&args)?;
-        init_tracing(&config)?;
+        init_tracing_typed(&config)?;
         let mut app = Self::new(config)?;
         app.start_background_services()?;
         Ok(app)
+    }
+
+    #[deprecated(since = "1.0.0", note = "use McpApp::bootstrap_typed")]
+    pub async fn bootstrap(args: Args) -> anyhow::Result<Self> {
+        Self::bootstrap_typed(args).await.map_err(anyhow::Error::new)
     }
 
     pub fn config(&self) -> &McpConfig {
@@ -109,10 +114,11 @@ impl McpApp {
     }
 }
 
-pub fn init_tracing(config: &McpConfig) -> anyhow::Result<()> {
+pub fn init_tracing_typed(config: &McpConfig) -> Result<(), crate::error::McpError> {
     use tracing_subscriber::EnvFilter;
 
-    let env_filter = EnvFilter::try_new(&config.server.log_level)?;
+    let env_filter = EnvFilter::try_new(&config.server.log_level)
+        .map_err(|source| crate::error::McpError::infrastructure("parse MCP tracing filter", source))?;
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_writer(std::io::stderr)
@@ -121,4 +127,9 @@ pub fn init_tracing(config: &McpConfig) -> anyhow::Result<()> {
     let _ = tracing::subscriber::set_global_default(subscriber);
 
     Ok(())
+}
+
+#[deprecated(since = "1.0.0", note = "use init_tracing_typed")]
+pub fn init_tracing(config: &McpConfig) -> anyhow::Result<()> {
+    init_tracing_typed(config).map_err(anyhow::Error::new)
 }

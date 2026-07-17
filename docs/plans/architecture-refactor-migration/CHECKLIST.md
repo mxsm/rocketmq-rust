@@ -19,24 +19,24 @@
 | Phase | 里程碑 | 状态 | 负责人 | 计划窗口 | 完成日期 | Evidence Index |
 |---|---|---|---|---|---|---|
 | Phase 1 | M01–M03 | 已完成 | Codex 多代理执行组 | 6–8 周 | 2026-07-11 | [`PHASE-1-DELIVERY.md`](phase-1-safety-foundation/PHASE-1-DELIVERY.md) |
-| Phase 2 | M04–M09 | 进行中 | Codex 多代理执行组 | 12–16 周 | — | [`phase-2-core-boundaries/`](phase-2-core-boundaries/) |
+| Phase 2 | M04–M09 | 已完成 | Codex 执行组 | 12–16 周 | 2026-07-18 | [`09-phase-2-gate-evidence.md`](phase-2-core-boundaries/09-phase-2-gate-evidence.md) |
 | Phase 3 | M10–M11 | 未开始 | 待分配 | 8–12 周 | — | — |
 | Phase 4 | M12 | 未开始 | 待分配 | 8–12 周 | — | — |
 
-### 2.1 剩余重构盘点（2026-07-17）
+### 2.1 剩余重构盘点（2026-07-18）
 
 > 统计口径：只统计 82 个顶层 `PR-Mxx-yy` 工作包；M06-03a～ah 等内部迁移证据不重复计数。
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 58 | 0 | 24 未开始；合计 24 尚未完成 | 82 |
-| 里程碑 | 8（M01–M08） | 1（M09） | 3（M10–M12） | 12 |
+| PR 级工作包 | 59 | 0 | 23 未开始；合计 23 尚未完成 | 82 |
+| 里程碑 | 9（M01–M09） | 0 | 3（M10–M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
-| Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
+| Phase Gate | 2 | 0 | 2（Phase 3、Phase 4） | 4 |
 
-剩余 24 个未开始工作包分布：M09 为 1 个、M10 为 5 个、M11 为 12 个、M12 为 6 个。
-PR-M09-05 已完成 R0/R1/next-major 发布包，当前下一工作包为 PR-M09-06。
+剩余 23 个未开始工作包分布：M10 为 5 个、M11 为 12 个、M12 为 6 个。
+PR-M09-06 与 Phase 2 Gate 已完成，当前下一工作包为 PR-M10-01。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -438,19 +438,25 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] 2 条长期 Store composition 边明确排除；破坏性删除仍须 next-major 独立证据 Gate
   - [x] [`M09-05 发布包证据`](phase-2-core-boundaries/09-r0-r1-next-major-release-package-evidence.md) 已记录机器合同、CI、验证与回滚边界
   - [x] 58/82 已完成、24 未完成，下一工作包 PR-M09-06
-- [ ] PR-M09-06：冻结快照并执行 Phase 2 Gate
-- [ ] 对应任务文档的 Exit Checklist 全部通过
+- [x] PR-M09-06：冻结快照并执行 Phase 2 Gate
+  - [x] 候选实现提交 `490c583e94b31dc7ae1b83c55ed811e2b90d4cce` 与 tree `e959367d3b4002653e4e25e5b0c19213de8766b5` 已冻结
+  - [x] 初始 typed-error 11 项阻塞全部修复；最终错误架构 14/14 类通过
+  - [x] public API 31/31 零差异；feature 24/24、wire 6/6、storage 10/10，总矩阵 40/40
+  - [x] MCP、RocksDB、根 workspace 与 Example/Tauri/Web routed consumer 门禁通过；GPUI 条件未触发
+  - [x] [`M09-06 Phase 2 Gate 证据`](phase-2-core-boundaries/09-phase-2-gate-evidence.md) 已绑定 DEV/REV/TEST/ARCH/HUMAN 结论
+  - [x] 59/82 已完成、23 未完成，下一工作包 PR-M10-01
+- [x] 对应任务文档的 Exit Checklist 全部通过
 
 ### Phase 2 Gate
 
-- [ ] 根 workspace 精确包含 32 个 package
-- [ ] 10 个新 crate 的禁止依赖边为零，目标 DAG 无环
-- [ ] 完整 Client 直接消费者收敛为 workspace 2 个、standalone 1 个
-- [ ] `proxy-core`/`proxy-local` 的传递闭包不含完整 Client
-- [ ] canonical/legacy API、wire、storage、Serde 与 feature 兼容 fixture 全部通过
-- [ ] facade/legacy ledger 只下降，所有剩余项有 owner 和退出里程碑
-- [ ] `[ARCH]`、`[REV]`、`[TEST]` 已签署
-- [ ] `[HUMAN]` 已批准进入 Phase 3
+- [x] 根 workspace 精确包含 32 个 package
+- [x] 10 个新 crate 的禁止依赖边为零，目标 DAG 无环
+- [x] 完整 Client 直接消费者收敛为 workspace 2 个、standalone 1 个
+- [x] `proxy-core`/`proxy-local` 的传递闭包不含完整 Client
+- [x] canonical/legacy API、wire、storage、Serde 与 feature 兼容 fixture 全部通过
+- [x] facade/legacy ledger 只下降，所有剩余项有 owner 和退出里程碑
+- [x] `[ARCH]`、`[REV]`、`[TEST]` 已签署
+- [x] `[HUMAN]` 已批准进入 Phase 3
 
 ## 5. Phase 3：生产就绪
 
