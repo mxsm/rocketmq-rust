@@ -38,7 +38,7 @@ use rocketmq_store_local::mapped_file::queue_io::load_mapped_file_queue_path;
 use rocketmq_store_local::mapped_file::queue_io::MappedFileQueueLoadOutcome;
 use rocketmq_store_local::mapped_file::queue_lifecycle::clean_swapped_mapped_file_queue;
 use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_offset;
-use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time;
+use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time_before;
 use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_last_mapped_file;
 use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_file_queue;
 use rocketmq_store_local::mapped_file::queue_lifecycle::mapped_files_after_removal;
@@ -375,16 +375,36 @@ impl MappedFileQueue {
         clean_immediately: bool,
         delete_file_batch_max: i32,
     ) -> i32 {
+        self.delete_expired_file_by_time_before(
+            expired_time,
+            delete_files_interval,
+            interval_forcibly,
+            clean_immediately,
+            delete_file_batch_max,
+            None,
+        )
+    }
+
+    pub fn delete_expired_file_by_time_before(
+        &mut self,
+        expired_time: i64,
+        delete_files_interval: i32,
+        interval_forcibly: i64,
+        clean_immediately: bool,
+        delete_file_batch_max: i32,
+        pinned_file_offset: Option<u64>,
+    ) -> i32 {
         let mfs = (**self.storage.mapped_files().load()).clone();
         // Check before deleting
         self.check_self();
-        let deletion = delete_expired_mapped_files_by_time(
+        let deletion = delete_expired_mapped_files_by_time_before(
             &mfs,
             expired_time,
             delete_files_interval,
             interval_forcibly,
             clean_immediately,
             delete_file_batch_max,
+            pinned_file_offset,
             || current_millis() as i64,
         );
         let delete_count = deletion.deleted_count();

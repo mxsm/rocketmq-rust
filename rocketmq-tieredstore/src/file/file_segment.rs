@@ -247,6 +247,7 @@ where
 
         let mut position = self.commit_position.load(Ordering::Acquire);
         for (index, buffer) in buffers.iter().cloned().enumerate() {
+            let buffer_len = buffer.len();
             let started = std::time::Instant::now();
             let result = self.provider.write(self.path.clone(), position, buffer).await;
             rocketmq_observability::metrics::tiered_store::record_provider_write(
@@ -256,9 +257,28 @@ where
                 started.elapsed().as_millis() as u64,
             );
             match result {
-                Ok(written) => {
+                Ok(written) if written == buffer_len => {
                     position = position.saturating_add(written as u64);
                     self.commit_position.store(position, Ordering::Release);
+                }
+                Ok(written) if written < buffer_len => {
+                    position = position.saturating_add(written as u64);
+                    self.commit_position.store(position, Ordering::Release);
+                    let mut pending = self.pending.lock();
+                    pending.push(buffers[index].slice(written..));
+                    pending.extend(buffers[index + 1..].iter().cloned());
+                    return Err(error::storage_write_failed(
+                        self.path.clone(),
+                        format!("partial provider write: expected {buffer_len}, wrote {written}"),
+                    ));
+                }
+                Ok(written) => {
+                    let mut pending = self.pending.lock();
+                    pending.extend(buffers[index..].iter().cloned());
+                    return Err(error::storage_write_failed(
+                        self.path.clone(),
+                        format!("invalid provider write length: expected {buffer_len}, wrote {written}"),
+                    ));
                 }
                 Err(error) => {
                     let mut pending = self.pending.lock();

@@ -13,8 +13,12 @@
 // limitations under the License.
 
 pub mod dispatch_request;
+mod progress;
+mod progress_persistence;
 pub mod tiered_dispatcher;
 
 pub use dispatch_request::TieredDispatchRequest;
 pub use tiered_dispatcher::DefaultTieredDispatcher;
+pub use tiered_dispatcher::TieredDispatchHealth;
+pub use tiered_dispatcher::TieredDispatchReadiness;
 pub use tiered_dispatcher::TieredDispatcher;

@@ -113,7 +113,8 @@ where
 {
     async fn load(&self) -> Result<(), RocketMQError> {
         let recover_service = CommitLogRecoverService::new(self.metadata_store.clone(), self.flat_file_store.clone());
-        recover_service.recover().await.map(|_| ())
+        recover_service.recover().await?;
+        self.dispatcher.load_progress().await
     }
 
     async fn start(&self) -> Result<(), RocketMQError> {
@@ -136,7 +137,8 @@ where
 
     async fn destroy(&self) -> Result<(), RocketMQError> {
         self.flat_file_store.destroy().await?;
-        self.metadata_store.destroy().await
+        self.metadata_store.destroy().await?;
+        self.dispatcher.destroy_progress().await
     }
 }
 

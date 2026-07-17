@@ -61,6 +61,22 @@ pub struct TieredStoreConfig {
     pub group_commit_size: usize,
     pub max_group_commit_count: usize,
     pub max_pending_tasks: usize,
+    /// CommitLog epoch used to distinguish reused physical offset namespaces.
+    pub source_epoch: u64,
+    /// Maximum encoded message bytes admitted to the bounded dispatch channel.
+    pub max_pending_bytes: usize,
+    /// Maximum failed records retained in the payload-free retry ledger.
+    pub retry_ledger_max_entries: usize,
+    /// Maximum source-WAL bytes represented by retry ledger records.
+    pub retry_ledger_max_bytes: u64,
+    /// Maximum age of the oldest retry before Tiered readiness fails closed.
+    pub retry_ledger_max_age: Duration,
+    /// Initial per-partition retry delay.
+    pub retry_backoff_initial: Duration,
+    /// Maximum per-partition retry delay.
+    pub retry_backoff_max: Duration,
+    /// Source CommitLog segment size used to expose the minimum WAL pin.
+    pub source_wal_segment_size: u64,
     pub read_ahead_cache_enable: bool,
     pub read_ahead_message_count: usize,
     pub read_ahead_message_size: usize,
@@ -91,6 +107,14 @@ impl Default for TieredStoreConfig {
             group_commit_size: 4 * 1024 * 1024,
             max_group_commit_count: 10_000,
             max_pending_tasks: 10_000,
+            source_epoch: 0,
+            max_pending_bytes: 64 * 1024 * 1024,
+            retry_ledger_max_entries: 10_000,
+            retry_ledger_max_bytes: 256 * 1024 * 1024,
+            retry_ledger_max_age: Duration::from_secs(24 * 60 * 60),
+            retry_backoff_initial: Duration::from_millis(100),
+            retry_backoff_max: Duration::from_secs(30),
+            source_wal_segment_size: 1024 * 1024 * 1024,
             read_ahead_cache_enable: true,
             read_ahead_message_count: 4096,
             read_ahead_message_size: 16 * 1024 * 1024,
@@ -133,6 +157,14 @@ mod tests {
         assert_eq!(config.group_commit_size, 4 * 1024 * 1024);
         assert_eq!(config.max_group_commit_count, 10_000);
         assert_eq!(config.max_pending_tasks, 10_000);
+        assert_eq!(config.source_epoch, 0);
+        assert_eq!(config.max_pending_bytes, 64 * 1024 * 1024);
+        assert_eq!(config.retry_ledger_max_entries, 10_000);
+        assert_eq!(config.retry_ledger_max_bytes, 256 * 1024 * 1024);
+        assert_eq!(config.retry_ledger_max_age, Duration::from_secs(24 * 60 * 60));
+        assert_eq!(config.retry_backoff_initial, Duration::from_millis(100));
+        assert_eq!(config.retry_backoff_max, Duration::from_secs(30));
+        assert_eq!(config.source_wal_segment_size, 1024 * 1024 * 1024);
         assert!(config.read_ahead_cache_enable);
         assert_eq!(config.read_ahead_message_count, 4096);
         assert_eq!(config.read_ahead_message_size, 16 * 1024 * 1024);

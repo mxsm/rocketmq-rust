@@ -27,6 +27,8 @@ pub mod store;
 pub use config::TieredStorageLevel;
 pub use config::TieredStoreConfig;
 pub use dispatcher::DefaultTieredDispatcher;
+pub use dispatcher::TieredDispatchHealth;
+pub use dispatcher::TieredDispatchReadiness;
 pub use dispatcher::TieredDispatchRequest;
 pub use dispatcher::TieredDispatcher;
 pub use fetcher::DefaultTieredMessageFetcher;

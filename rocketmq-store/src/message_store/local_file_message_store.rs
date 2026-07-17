@@ -491,6 +491,13 @@ impl LocalFileMessageStore {
         }
         #[cfg(feature = "tieredstore")]
         let tiered_store = Self::build_tiered_store(message_store_config.clone(), commit_log.clone(), &mut dispatcher)?;
+        #[cfg(feature = "tieredstore")]
+        let minimum_pinned_wal_segment = tiered_store.as_ref().map(|tiered_store| {
+            let tiered_store = tiered_store.clone();
+            Arc::new(move || tiered_store.minimum_pinned_wal_segment()) as Arc<CommitLogWalPin>
+        });
+        #[cfg(not(feature = "tieredstore"))]
+        let minimum_pinned_wal_segment: Option<Arc<CommitLogWalPin>> = None;
 
         ensure_dir_ok(message_store_config.store_path_root_dir.as_str());
         ensure_dir_ok(Self::get_store_path_physic(&message_store_config).as_str());
@@ -545,6 +552,7 @@ impl LocalFileMessageStore {
                 commit_log.clone(),
                 running_flags.clone(),
                 cleanup_policy,
+                minimum_pinned_wal_segment,
             )),
             correct_logic_offset_service: Arc::new(CorrectLogicOffsetService::new(
                 commit_log.clone(),
@@ -3831,6 +3839,28 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
             dispatcher.dispatch_batch(dispatch_requests);
         }
     }
+
+    fn dispatch_async<'a>(
+        &'a self,
+        dispatch_request: &'a mut DispatchRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            for dispatcher in &self.dispatcher_vec {
+                dispatcher.dispatch_async(dispatch_request).await;
+            }
+        })
+    }
+
+    fn dispatch_batch_async<'a>(
+        &'a self,
+        dispatch_requests: &'a mut [DispatchRequest],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            for dispatcher in &self.dispatcher_vec {
+                dispatcher.dispatch_batch_async(dispatch_requests).await;
+            }
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -4474,7 +4504,8 @@ impl ReputMessageService {
                             &message_store,
                             notify_message_arrive_in_batch,
                             &mut batch,
-                        );
+                        )
+                        .await;
                     }
                     _ = shutdown_dispatcher.cancelled() => {
                         // Process remaining messages in channel before shutdown
@@ -4484,7 +4515,8 @@ impl ReputMessageService {
                                 &message_store,
                                 notify_message_arrive_in_batch,
                                 &mut batch,
-                            );
+                            )
+                            .await;
                         }
                         break;
                     }
@@ -4607,7 +4639,7 @@ struct ReputMessageServiceInner {
     message_store: ArcMut<LocalFileMessageStore>,
 }
 
-fn dispatch_reput_batch(
+async fn dispatch_reput_batch(
     dispatcher: &ArcMut<CommitLogDispatcherDefault>,
     message_store: &ArcMut<LocalFileMessageStore>,
     notify_message_arrive_in_batch: bool,
@@ -4615,7 +4647,7 @@ fn dispatch_reput_batch(
 ) {
     let batch_size = dispatch_batch.len();
     let started = Instant::now();
-    dispatcher.dispatch_batch(dispatch_batch);
+    dispatcher.dispatch_batch_async(dispatch_batch).await;
     message_store
         .store_stats_service
         .record_reput_dispatch_batch(batch_size, started.elapsed());
@@ -4717,7 +4749,8 @@ impl ReputMessageServiceInner {
                                     &self.message_store,
                                     self.notify_message_arrive_in_batch,
                                     &mut dispatch_batch,
-                                );
+                                )
+                                .await;
                                 dispatch_batch.clear();
                             }
 
@@ -4756,7 +4789,8 @@ impl ReputMessageServiceInner {
                 &self.message_store,
                 self.notify_message_arrive_in_batch,
                 &mut dispatch_batch,
-            );
+            )
+            .await;
         }
         self.record_dispatch_behind_bytes();
     }
@@ -4960,12 +4994,15 @@ fn store_path_disk_used_ratio(path: &str) -> f64 {
     }
 }
 
+type CommitLogWalPin = dyn Fn() -> Option<u64> + Send + Sync;
+
 struct CleanCommitLogService {
     message_store_config: Arc<MessageStoreConfig>,
     commit_log: ArcMut<CommitLog>,
     running_flags: Arc<RunningFlags>,
     cleanup_policy: LocalCleanupPolicy,
     manual_delete_tracker: ManualDeleteTracker,
+    minimum_pinned_wal_segment: Option<Arc<CommitLogWalPin>>,
     #[cfg(test)]
     disk_clean_decision_override: StdMutex<Option<DiskCleanDecision>>,
 }
@@ -4978,6 +5015,7 @@ impl CleanCommitLogService {
         commit_log: ArcMut<CommitLog>,
         running_flags: Arc<RunningFlags>,
         cleanup_policy: LocalCleanupPolicy,
+        minimum_pinned_wal_segment: Option<Arc<CommitLogWalPin>>,
     ) -> Self {
         Self {
             message_store_config,
@@ -4985,6 +5023,7 @@ impl CleanCommitLogService {
             running_flags,
             cleanup_policy,
             manual_delete_tracker: ManualDeleteTracker::new(Self::MAX_MANUAL_DELETE_FILE_TIMES),
+            minimum_pinned_wal_segment,
             #[cfg(test)]
             disk_clean_decision_override: StdMutex::new(None),
         }
@@ -4999,13 +5038,18 @@ impl CleanCommitLogService {
         let disk_decision = self.is_space_to_delete();
         let is_manual_delete = self.consume_manual_delete_request();
         let clean_at_once = self.cleanup_policy.clean_file_forcibly_enabled() && disk_decision.clean_immediately;
+        let minimum_pinned_wal_segment = self
+            .minimum_pinned_wal_segment
+            .as_ref()
+            .and_then(|minimum_pinned_wal_segment| minimum_pinned_wal_segment());
         let delete_count = if is_time_up || disk_decision.should_delete || is_manual_delete {
-            self.commit_log.mut_from_ref().delete_expired_files_by_time(
+            self.commit_log.mut_from_ref().delete_expired_files_by_time_before(
                 expired_time,
                 self.message_store_config.delete_commit_log_files_interval as i32,
                 self.message_store_config.destroy_mapped_file_interval_forcibly as i64,
                 clean_at_once,
                 self.message_store_config.delete_file_batch_max as i32,
+                minimum_pinned_wal_segment,
             )
         } else {
             0
@@ -5020,10 +5064,14 @@ impl CleanCommitLogService {
             warn!("disk space will be full soon, but delete commitlog file failed");
         }
 
-        let _ = self
-            .commit_log
-            .mut_from_ref()
-            .retry_delete_first_file(self.message_store_config.redelete_hanged_file_interval as i64);
+        let first_file_is_before_pin = minimum_pinned_wal_segment
+            .is_none_or(|pinned| u64::try_from(self.commit_log.get_min_offset()).is_ok_and(|minimum| minimum < pinned));
+        if first_file_is_before_pin {
+            let _ = self
+                .commit_log
+                .mut_from_ref()
+                .retry_delete_first_file(self.message_store_config.redelete_hanged_file_interval as i64);
+        }
     }
 
     fn execute_delete_files_manually(&self) {
@@ -8543,6 +8591,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clean_commit_log_service_never_crosses_derived_wal_pin() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 32,
+                file_reserved_time: 0,
+                delete_commit_log_files_interval: 0,
+                destroy_mapped_file_interval_forcibly: 0,
+                redelete_hanged_file_interval: 0,
+                delete_file_batch_max: 10,
+                delete_when: "99".to_string(),
+                disk_max_used_space_ratio: 95,
+                clean_file_forcibly_enable: false,
+                ..MessageStoreConfig::default()
+            },
+        );
+        store.init().await.expect("init store");
+        for (offset, fill) in [(0_i64, b'A'), (32, b'B'), (64, b'C')] {
+            let data = vec![fill; 32];
+            assert!(store
+                .get_commit_log_mut()
+                .append_data(offset, &data, 0, data.len() as i32)
+                .await
+                .expect("append commitlog file"));
+        }
+        let cleanup_policy =
+            super::LocalCleanupPolicy::new(store.message_store_config.normalized_local_backend_config().cleanup);
+        store.clean_commit_log_service = Arc::new(CleanCommitLogService::new(
+            store.message_store_config.clone(),
+            store.commit_log.clone(),
+            store.running_flags.clone(),
+            cleanup_policy,
+            Some(Arc::new(|| Some(32))),
+        ));
+
+        store.clean_commit_log_service.execute_delete_files_manually();
+        store.clean_commit_log_service.run();
+
+        assert_eq!(store.get_min_phy_offset(), 32);
+        assert_eq!(store.get_last_file_from_offset(), 64);
+    }
+
+    #[tokio::test]
     async fn clean_commit_log_service_run_skips_expired_files_outside_delete_window() {
         let temp_dir = tempdir().unwrap();
         let mut store = new_configured_test_store(
@@ -8641,6 +8733,7 @@ mod tests {
             store.commit_log.clone(),
             store.running_flags.clone(),
             cleanup_policy,
+            None,
         );
 
         let (ratio, selected_path) = service.min_physic_disk_ratio();

@@ -12,10 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
+use std::pin::Pin;
+
 use crate::base::dispatch_request::DispatchRequest;
 
 pub trait CommitLogDispatcher: Send + Sync + 'static {
     fn dispatch(&self, dispatch_request: &mut DispatchRequest);
+
+    /// Dispatches one request while allowing bounded derived sinks to apply backpressure.
+    fn dispatch_async<'a>(
+        &'a self,
+        dispatch_request: &'a mut DispatchRequest,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move { self.dispatch(dispatch_request) })
+    }
 
     /// Dispatch a batch of requests. Default implementation calls dispatch for each request.
     /// Implementers can override this for batch optimizations.
@@ -23,6 +34,14 @@ pub trait CommitLogDispatcher: Send + Sync + 'static {
         for request in dispatch_requests.iter_mut() {
             self.dispatch(request);
         }
+    }
+
+    /// Dispatches a batch without letting a full derived-sink channel drop records.
+    fn dispatch_batch_async<'a>(
+        &'a self,
+        dispatch_requests: &'a mut [DispatchRequest],
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move { self.dispatch_batch(dispatch_requests) })
     }
 
     /// Returns the highest persisted CommitLog offset this dispatcher has already processed.

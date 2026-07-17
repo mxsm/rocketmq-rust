@@ -173,14 +173,14 @@
       "crate_version": "1.0.0",
       "public_path_count": 382,
       "public_path_sha256": "93a543b1cf785538c6ddedc51c70f705824d9a6f425c6169cb7382b48b60b78a",
-      "rustdoc_json_sha256": "daab98aa70c1f566ffd60466347abb57b0d5dbeca3d5ac16e698bbdd3dd57e13",
+      "rustdoc_json_sha256": "07ea0e5ef9e47fc9c813dfaf7362e8b8f8ea7a70a5566991c2506006c93a502b",
       "target": "rocketmq_store"
     },
     "rocketmq-store-api": {
       "crate_version": "1.0.0",
       "public_path_count": 118,
       "public_path_sha256": "d5995bfd455676de80c97a080ab24ea62700a517c8bb2d9f1e5d221975046d67",
-      "rustdoc_json_sha256": "a6eb390148277653210131c930bd4e1de09c9d241a6053f31316a154df0f17d8",
+      "rustdoc_json_sha256": "be9d53c8c035381815a61f651cec5ea8bd70c14258ff81eb8da7cabfca19484a",
       "target": "rocketmq_store_api"
     },
     "rocketmq-store-inspect": {
@@ -206,9 +206,9 @@
     },
     "rocketmq-tieredstore": {
       "crate_version": "1.0.0",
-      "public_path_count": 105,
-      "public_path_sha256": "d081e4002cc88eded04a07ff75116dc5e626b8519d76858bcf2d871003f3399c",
-      "rustdoc_json_sha256": "abc9b3469f7eec82de0e46b04a68ba8418de494c2e0a02b7becc183de2973482",
+      "public_path_count": 116,
+      "public_path_sha256": "30e3f19ea359f6f43f2369f0d45ed5cb4a7ed0d6a5fc46ed34b8ea69f02708f3",
+      "rustdoc_json_sha256": "b9d9230034c1413d5a2cb14870f1fab100ab913fcfa0de342c17af6e1092b25c",
       "target": "rocketmq_tieredstore"
     },
     "rocketmq-transport": {
@@ -220,7 +220,7 @@
     }
   },
   "schema_version": 1,
-  "source_commit": "1f2a7bb4ae5d6adf271fc34e63c60c956c22606e",
+  "source_commit": "0577c36cec4f5d66483e0af97e8ac1fe16a88160",
   "toolchain": {
     "cargo": "cargo 1.99.0-nightly (2f0e7011e 2026-07-05)",
     "rustc": "rustc 1.99.0-nightly (3659db0d3 2026-07-05)",
