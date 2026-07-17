@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 进行中；PR-M07-01、PR-M07-02、PR-M07-03、PR-M07-04 已完成 |
+| 状态 | 进行中；PR-M07-01、PR-M07-02、PR-M07-03、PR-M07-04、PR-M07-05 已完成 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP15 `rocketmq-rust-drain`、WP18 `client-edge-burn-down`；完成 WP17 的 consumer 迁移 |
 | 前置条件 | model/protocol/transport/store-api canonical 边界稳定；Client allowlist/source guard 可用 |
@@ -83,13 +83,13 @@
 
 ### PR-M07-05：Admin contract 与 Client adapter 收口
 
-- [ ] `[ARCH]` 按 Topic/Broker/Consumer/Security/Lite 拆 admin-owned capability/request/result，冻结 R0 legacy surface。
-- [ ] `[DEV]` 建 `core/` 与 `client_adapter/` 同领域模块；所有 MQAdminExt/producer 调用只存在于 adapter。
-- [ ] `[DEV]` 注入 admin-owned Clock 替代 TimeUtils；static-topic 纯 planner 留 core，SDK 调用进 adapter，文件 I/O 留 CLI。
-- [ ] `[DEV]` 实现 `client-adapter` optional feature；`legacy-common-compat` 显式蕴含前者和 common，R0 default 保旧签名。
-- [ ] `[TEST]` 验证 no-default 只编 admin contract，client-adapter 可用，legacy default 全部旧 API 可编译。
-- [ ] `[REV]` 源码 guard 证明 `core/` 无 client/common import，只有 `src/client_adapter/` 在 allowlist。
-- [ ] 回滚点：旧 DefaultMQAdminExt facade 始终存在；feature optional 化若破坏 R0 即撤销并重新审计。
+- [x] `[ARCH]` 按 Topic/Broker/Consumer/Security/Lite 拆 admin-owned capability/request/result，冻结 R0 legacy surface。
+- [x] `[DEV]` 建 `core/` 与 `client_adapter/` 同领域模块；业务 MQAdminExt/producer 编排进入 adapter，路径稳定的旧 Default facade 仅作 R0 compatibility seam。
+- [x] `[DEV]` 注入 admin-owned Clock 替代 TimeUtils；static-topic 纯 planner 留 core，SDK 调用进 adapter，文件 I/O 留 CLI。
+- [x] `[DEV]` 实现 `client-adapter` optional feature；`legacy-common-compat` 显式蕴含前者和 common，R0 default 保旧签名。
+- [x] `[TEST]` 验证 no-default 只编 admin contract，client-adapter 可用，legacy default 全部旧 API 可编译。
+- [x] `[REV]` 源码 guard 证明 `core/` 无 client/common import，只有 `src/client_adapter/` 在 allowlist。
+- [x] 回滚点：旧 DefaultMQAdminExt facade 始终存在；feature optional 化若破坏 R0 即撤销并重新审计。
 
 ### PR-M07-06：Web/Tauri Dashboard 迁移
 
@@ -316,3 +316,29 @@ python scripts/arc_mut_guard.py
 - [x] `[ROLLBACK/INVENTORY]` 回滚必须按 read outcome、out-api adapter、route、assignment 四个投影切片执行，保留 model/store-api
   owner，且不得恢复 Broker Client 边或新增 client-api/admin-core 绕行。父项关闭后 82 个顶层工作包为 44 已完成、0 阻塞、
   38 未开始；剩余分布为 M07 3、M08 6、M09 6、M10 5、M11 12、M12 6，唯一下一工作包为 PR-M07-05。
+
+## PR-M07-05 Admin contract 与 Client adapter 收口 evidence
+
+- [x] `[CONTRACT/OWNER]` Topic、Broker、Consumer、Security、Lite 五组 capability/request/result、`AdminError`、`AdminResult`
+  与 object-safe `Clock` 归 `core/`；`--no-default-features` 的 direct normal tree 只含 model/protocol/security-api 与通用库，
+  不含 Client/common/remoting/rocketmq-rust/rocketmq-error。
+- [x] `[FEATURE/ADAPTER]` `default = ["legacy-common-compat"]`；`client-adapter` 只激活 Client；legacy 显式蕴含
+  client-adapter 与 common。旧领域 service、MQAdminExt/producer 编排和 SDK 类型迁入 `src/client_adapter/legacy/`，现代五组
+  capability 由 `AdminSession` 实现；路径稳定的 `src/admin/default_mq_admin_ext.rs` 保留为 R0 facade，并只通过 adapter alias
+  接触 Client。
+- [x] `[CLOCK/STATIC-TOPIC/CLI]` 新 planner 对 broker 排序去重、按队列 round-robin，单次采样 Clock；新建映射 epoch 为
+  `now/now+1000`，扩容为 `max(max_existing+1000, now)`，队列缩减和 epoch 溢出返回 typed error。static-topic JSON 文件读写、
+  临时目录、`.before/.after` 文件名与 `.bak` 兼容语义已归 CLI 并由聚焦测试冻结。
+- [x] `[TEST/CONSUMER]` Admin Core no-default、client-adapter 与 legacy default 三套 test/strict Clippy 通过；default 105 unit
+  及全部 integration 通过。MCP 显式使用 `default-features = false, features = ["client-adapter"]`，default 72 unit + 2
+  integration、all-feature 89 unit + 2 integration、streamable-http strict Clippy 与 no-deps Rustdoc 通过；CLI 文件测试与
+  TUI check 通过。
+- [x] `[STANDALONE]` Example、Tauri backend、Web backend 按最近 AGENTS 完成 fmt/strict Clippy；Web backend 额外完成
+  all-target/all-feature build。定向清理独立 target 的旧 Client/Admin rmeta 后重建通过；未修改 dashboard-common，未触发 GPUI。
+- [x] `[GOVERNANCE/ERROR]` architecture baseline、119 项相关治理测试、runtime enforcing audit、ArcMut guard 与 24 fixtures
+  通过。Default facade 的既有 ArcMut import 按 ADR-013 一对一 relocation；message/CLI/TUI 删除 8 identities/9 occurrences，
+  台账由 1,163/3,216 降至 1,155/3,207。Error guard 只保留 main 既有 11 项（Broker 1、MCP 8、治理文档 2），未计为通过。
+- [x] `[TARGET GAP/INVENTORY]` target guard 差距由 153 降至 115：Client source 61（Proxy 35、Tauri 24、Web 2）、
+  Client manifest 3、目标 DAG 直接边 49、传递闭包 2；Admin Core 与 Broker 均退出 Client source/违规 DAG 清单。父项关闭后
+  82 个顶层工作包为 45 已完成、0 阻塞、37 未开始；剩余 M07 2、M08 6、M09 6、M10 5、M11 12、M12 6，唯一下一工作包
+  为 PR-M07-06 Dashboard 迁移。

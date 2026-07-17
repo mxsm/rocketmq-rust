@@ -21,41 +21,27 @@
 //! interactive prompts belong in `rocketmq-admin-cli`; future terminal UI state
 //! belongs in `rocketmq-admin-tui`.
 
-pub mod core {
-    //! Presentation-independent admin services and supporting utilities.
+#[cfg(feature = "legacy-common-compat")]
+#[doc(hidden)]
+pub extern crate self as rocketmq_error;
+#[cfg(feature = "legacy-common-compat")]
+#[doc(hidden)]
+pub extern crate self as rocketmq_remoting;
+#[cfg(feature = "legacy-common-compat")]
+#[doc(hidden)]
+pub extern crate self as rocketmq_rust;
 
-    pub mod admin;
-    pub mod auth;
-    pub mod broker;
-    pub mod cache;
-    pub mod cluster;
-    pub mod concurrent;
-    pub mod connection;
-    pub mod consumer;
-    pub mod container;
-    pub mod controller;
-    pub mod error_view;
-    pub(crate) mod errors;
-    pub mod export_data;
-    pub mod ha;
-    pub mod lite;
-    pub mod message;
-    pub mod namesrv;
-    pub mod offset;
-    pub mod producer;
-    pub mod queue;
-    pub mod resolver;
-    pub mod static_topic;
-    pub mod stats;
-    pub mod topic;
+#[cfg(feature = "legacy-common-compat")]
+#[doc(hidden)]
+pub use crate::client_adapter::legacy::error_compat::*;
+#[cfg(feature = "legacy-common-compat")]
+#[doc(hidden)]
+pub use crate::client_adapter::legacy::remoting_compat::*;
 
-    pub use rocketmq_error::RocketMQError;
-    pub use rocketmq_error::RocketMQResult;
-    pub use rocketmq_error::ToolsError;
+pub mod core;
 
-    pub use self::error_view::stable_error_code;
-    pub use self::error_view::stable_error_message;
-    pub use self::error_view::AdminErrorView;
-}
+#[cfg(feature = "client-adapter")]
+pub mod client_adapter;
 
+#[cfg(feature = "legacy-common-compat")]
 pub mod admin;

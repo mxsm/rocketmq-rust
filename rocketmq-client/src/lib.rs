@@ -104,6 +104,16 @@ pub use crate::common::admin_tool_result::AdminToolResult;
 pub use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
 pub use crate::common::nameserver_access_config::NameserverAccessConfig;
 pub use crate::common::session_credentials::SessionCredentials;
+
+/// Compatibility exports used by the admin adapter while legacy public
+/// signatures are retired. New consumers should depend on the canonical owner
+/// crates directly.
+#[doc(hidden)]
+pub mod admin_adapter_compat {
+    pub use rocketmq_error as error;
+    pub use rocketmq_remoting as remoting;
+    pub use rocketmq_rust as runtime;
+}
 #[doc(hidden)]
 pub use crate::consumer::consumer_impl::consume_message_concurrently_service::run_concurrent_clean_expire_lifecycle_probe;
 #[doc(hidden)]

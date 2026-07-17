@@ -21,11 +21,11 @@
 //! - RAII automatic resource cleanup
 //! - Error handling with new patterns
 
+use rocketmq_admin_core::admin::LegacyMQAdminExt;
 use rocketmq_admin_core::core::admin::create_admin_with_guard;
 use rocketmq_admin_core::core::admin::AdminBuilder;
 use rocketmq_admin_core::core::topic::TopicService;
 use rocketmq_admin_core::core::RocketMQResult;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 
 /// Example 1: Simple usage with helper function
 async fn example_simple() -> RocketMQResult<()> {

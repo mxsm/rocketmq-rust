@@ -98,7 +98,7 @@ fn timestamp_format(value: &str) -> u64 {
     0
 }
 
-fn print_message(msgs: &[rocketmq_rust::ArcMut<MessageExt>], _charset_name: &str, print_body: bool) {
+fn print_message(msgs: &[MessageExt], _charset_name: &str, print_body: bool) {
     for msg in msgs {
         let body = if print_body {
             match msg.body() {

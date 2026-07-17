@@ -16,3 +16,5 @@ mod api;
 pub mod common;
 pub mod default_mq_admin_ext;
 pub mod mq_admin_utils;
+
+pub use crate::client_adapter::legacy::LegacyMQAdminExt;

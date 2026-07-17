@@ -585,7 +585,7 @@ impl CommandResultViewModel {
         let rows = result
             .message
             .as_ref()
-            .map(|message| vec![message_detail_row(&status, message.as_ref(), "")])
+            .map(|message| vec![message_detail_row(&status, message, "")])
             .unwrap_or_else(|| vec![empty_message_detail_row("", &status, "no message returned")]);
 
         Self::table(title, &MESSAGE_DETAIL_HEADERS, rows)

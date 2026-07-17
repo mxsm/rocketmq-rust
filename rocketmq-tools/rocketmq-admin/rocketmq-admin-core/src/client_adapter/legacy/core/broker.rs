@@ -1,0 +1,61 @@
+// Copyright 2026 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Broker management core logic.
+
+pub mod operations;
+mod types;
+
+pub use self::operations::BrokerService;
+pub use self::types::BrokerBooleanOperationResult;
+pub use self::types::BrokerConfigEntry;
+pub use self::types::BrokerConfigQueryRequest;
+pub use self::types::BrokerConfigQueryResult;
+pub use self::types::BrokerConfigSection;
+pub use self::types::BrokerConfigSectionTarget;
+pub use self::types::BrokerConfigUpdateApplyResult;
+pub use self::types::BrokerConfigUpdatePlan;
+pub use self::types::BrokerConfigUpdatePlanResult;
+pub use self::types::BrokerConfigUpdateRequest;
+pub use self::types::BrokerConsumeStatsQueryRequest;
+pub use self::types::BrokerConsumeStatsResult;
+pub use self::types::BrokerConsumeStatsRow;
+pub use self::types::BrokerEpochEntry;
+pub use self::types::BrokerEpochQueryRequest;
+pub use self::types::BrokerEpochQueryResult;
+pub use self::types::BrokerEpochQueryTarget;
+pub use self::types::BrokerEpochSection;
+pub use self::types::BrokerOperationFailure;
+pub use self::types::BrokerOperationResult;
+pub use self::types::BrokerOptionalTarget;
+pub use self::types::BrokerRuntimeStatsEntry;
+pub use self::types::BrokerRuntimeStatsFailure;
+pub use self::types::BrokerRuntimeStatsQueryRequest;
+pub use self::types::BrokerRuntimeStatsResult;
+pub use self::types::BrokerRuntimeStatsSection;
+pub use self::types::BrokerTarget;
+pub use self::types::CleanExpiredConsumeQueueReport;
+pub use self::types::CleanExpiredConsumeQueueRequest;
+pub use self::types::CleanExpiredConsumeQueueTargetResult;
+pub use self::types::ColdDataFlowCtrGroupConfigRemoveRequest;
+pub use self::types::ColdDataFlowCtrGroupConfigUpdateRequest;
+pub use self::types::ColdDataFlowCtrInfoQueryRequest;
+pub use self::types::ColdDataFlowCtrInfoQueryResult;
+pub use self::types::ColdDataFlowCtrInfoSection;
+pub use self::types::CommitLogReadAheadMode;
+pub use self::types::CommitLogReadAheadRequest;
+pub use self::types::CommitLogReadAheadResult;
+pub use self::types::CommitLogReadAheadSection;
+pub use self::types::ResetMasterFlushOffsetRequest;
+pub use self::types::SwitchTimerEngineRequest;

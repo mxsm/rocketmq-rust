@@ -41,7 +41,6 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -506,7 +505,7 @@ impl QueryMessageByOffsetRequest {
 #[derive(Debug, Clone)]
 pub struct QueryMessageByOffsetResult {
     pub pull_status: PullStatus,
-    pub message: Option<ArcMut<MessageExt>>,
+    pub message: Option<MessageExt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1017,7 +1016,7 @@ pub enum MessagePullEvent {
         max_offset: i64,
     },
     Messages {
-        messages: Vec<ArcMut<MessageExt>>,
+        messages: Vec<MessageExt>,
     },
     ConsumeOk,
     CountLimit {
@@ -1291,7 +1290,7 @@ impl MessageService {
         let message = if pull_status == PullStatus::Found {
             pull_result
                 .msg_found_list()
-                .and_then(|messages| messages.first().cloned())
+                .and_then(|messages| messages.first().map(|message| message.as_ref().clone()))
         } else {
             None
         };
@@ -1672,7 +1671,7 @@ impl MessageService {
                             PullStatus::Found => {
                                 if let Some(messages) = result.msg_found_list() {
                                     sink(MessagePullEvent::Messages {
-                                        messages: messages.clone(),
+                                        messages: messages.iter().map(|message| message.as_ref().clone()).collect(),
                                     })?;
                                 }
                             }
@@ -1803,7 +1802,7 @@ impl MessageService {
                                 }
                                 if request.print_messages {
                                     sink(MessagePullEvent::Messages {
-                                        messages: messages.clone(),
+                                        messages: messages.iter().map(|message| message.as_ref().clone()).collect(),
                                     })?;
                                 }
                             }
@@ -2042,7 +2041,7 @@ impl MessageService {
                             sink(MessagePullEvent::ConsumeOk)?;
                             if let Some(messages) = result.msg_found_list() {
                                 sink(MessagePullEvent::Messages {
-                                    messages: messages.clone(),
+                                    messages: messages.iter().map(|message| message.as_ref().clone()).collect(),
                                 })?;
                             }
                         }

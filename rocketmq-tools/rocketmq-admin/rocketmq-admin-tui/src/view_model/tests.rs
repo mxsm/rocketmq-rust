@@ -92,7 +92,6 @@ use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::LanguageCode;
-use rocketmq_rust::ArcMut;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -459,7 +458,7 @@ fn phase_two_message_detail_results_render_as_tables() {
         "Query Message By Offset",
         &QueryMessageByOffsetResult {
             pull_status: Default::default(),
-            message: Some(ArcMut::new(message.clone())),
+            message: Some(message.clone()),
         },
     );
     assert_table(

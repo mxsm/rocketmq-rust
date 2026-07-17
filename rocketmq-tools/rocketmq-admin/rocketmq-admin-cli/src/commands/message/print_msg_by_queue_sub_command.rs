@@ -146,7 +146,7 @@ fn print_calculate_by_tag(tag_counts: Vec<(String, i64)>) {
     }
 }
 
-fn print_messages(msgs: &[rocketmq_rust::ArcMut<MessageExt>], _charset_name: &str, print_body: bool) {
+fn print_messages(msgs: &[MessageExt], _charset_name: &str, print_body: bool) {
     for msg in msgs {
         let body_str = if print_body {
             if let Some(body) = msg.body() {

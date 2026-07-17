@@ -38,7 +38,7 @@ streamable-http = ["rmcp/transport-streamable-http-server", "dep:axum", "dep:tow
 change-planning = []
 
 [dependencies]
-rocketmq-admin-core   = { version = "1.0.0", path = "../rocketmq-admin/rocketmq-admin-core" }
+rocketmq-admin-core   = { version = "1.0.0", path = "../rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
 rocketmq-auth         = { workspace = true, optional = true }
 rocketmq-error        = { workspace = true }
 rocketmq-observability = { workspace = true, optional = true }

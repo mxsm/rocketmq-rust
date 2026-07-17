@@ -23,24 +23,24 @@
 | Phase 3 | M10–M11 | 未开始 | 待分配 | 8–12 周 | — | — |
 | Phase 4 | M12 | 未开始 | 待分配 | 8–12 周 | — | — |
 
-### 2.1 剩余重构盘点（2026-07-16）
+### 2.1 剩余重构盘点（2026-07-17）
 
 > 统计口径：只统计 82 个顶层 `PR-Mxx-yy` 工作包；M06-03a～ah 等内部迁移证据不重复计数。
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 44 | 0 | 38 未开始；合计 38 尚未完成 | 82 |
+| PR 级工作包 | 45 | 0 | 37 未开始；合计 37 尚未完成 | 82 |
 | 里程碑 | 6（M01–M06） | 1（M07） | 5（M08–M12） | 12 |
 | 新增边界 crate | 7 | 0 | 3（proxy-core/cluster/local） | 10 |
 | 根 workspace package | 29 | — | 还差 3 | 32 |
 | Phase Gate | 1 | 1（Phase 2） | 2（Phase 3、Phase 4） | 4 |
 
-剩余 38 个未开始工作包分布：M07 为 3 个、M08 为 6 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、
-M12 为 6 个。PR-M07-04 已完成 Broker Client 边清零；M07 继续进行，当前下一工作包为 PR-M07-05。
+剩余 37 个未开始工作包分布：M07 为 2 个、M08 为 6 个、M09 为 6 个、M10 为 5 个、M11 为 12 个、
+M12 为 6 个。PR-M07-05 已完成 Admin contract 与 Client adapter 收口；M07 继续进行，当前下一工作包为 PR-M07-06。
 
 目标态差距快照不能与工作包计数混用：`architecture_dependency_guard.py --mode target --allow-missing-planned-crates`
-仍报告 3 个计划 Proxy crate 缺失和 153 项差距，其中 Client source 96、Client manifest 3、目标 DAG 直接边 52、传递闭包边 2。
-Client source 差距位于 Proxy 36、Admin Core 35、Tauri backend 25、Web backend 3；Broker 已从该差距清单退出。
+仍报告 3 个计划 Proxy crate 缺失和 115 项差距，其中 Client source 61、Client manifest 3、目标 DAG 直接边 49、传递闭包边 2。
+Client source 差距位于 Proxy 35、Tauri backend 24、Web backend 2；Admin Core 与 Broker 已从该差距清单退出。
 
 ## 3. Phase 1：安全性与基础治理
 
@@ -280,7 +280,15 @@ Client source 差距位于 Proxy 36、Admin Core 35、Tauri backend 25、Web bac
   - [x] 聚焦行为测试、all-targets、all-feature/RocksDB Clippy、workspace fmt/Clippy 与 architecture/ArcMut/routing guard 通过
   - [x] 全量 Broker 测试的既有 25 项失败已如实记录，未计为通过；error guard 的既有 11 项 finding 同样未计为通过
   - [x] ArcMut 台账由 1,167/3,226 降至 1,163 identities/3,216 occurrences，零新增债务
-- [ ] PR-M07-05：收敛 Admin contract 与 Client adapter
+- [x] PR-M07-05：收敛 Admin contract 与 Client adapter
+  - [x] Topic/Broker/Consumer/Security/Lite capability、request、result 与 admin-owned `AdminError`/`Clock` 已进入纯 `core/`
+  - [x] Client 实现与旧业务编排已集中到 `src/client_adapter/`；R0 `DefaultMQAdminExt` 路径和旧签名继续编译
+  - [x] static-topic 纯 planner 使用单次 Clock 采样、确定性 broker 分配和 checked epoch；文件读写及 `.bak` 语义归 CLI
+  - [x] no-default、client-adapter、legacy default 三套 feature 测试与严格 Clippy 通过，MCP 改为显式 client-adapter
+  - [x] MCP default/all-feature test、streamable-http strict Clippy、Rustdoc，CLI 文件测试与 TUI check 通过
+  - [x] Example、Tauri backend、Web backend 按最近 AGENTS 完成 fmt/Clippy；Web backend all-target/all-feature build 通过
+  - [x] architecture baseline、119 项治理测试、runtime audit、ArcMut guard/24 fixtures 通过；ArcMut 降至 1,155/3,207
+  - [x] 目标态差距由 153 降至 115，Admin Core 完全退出 Client source 与违规 DAG 清单
 - [ ] PR-M07-06：迁移 Web/Tauri Dashboard
 - [ ] PR-M07-07：完成 allowlist 与 consumer closeout
 - [ ] 对应任务文档的 Exit Checklist 全部通过

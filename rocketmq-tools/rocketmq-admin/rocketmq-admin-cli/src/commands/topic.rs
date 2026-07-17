@@ -15,6 +15,7 @@
 mod allocate_mq_sub_command;
 mod delete_topic_sub_command;
 mod remapping_static_topic_sub_command;
+mod static_topic_file;
 mod topic_cluster_sub_command;
 mod topic_list_sub_command;
 mod topic_route_sub_command;
