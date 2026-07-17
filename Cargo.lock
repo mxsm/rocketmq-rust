@@ -4628,8 +4628,6 @@ dependencies = [
  "regex",
  "rmcp",
  "rocketmq-admin-core",
- "rocketmq-auth",
- "rocketmq-error",
  "rocketmq-observability",
  "rocketmq-runtime",
  "schemars",

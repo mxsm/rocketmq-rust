@@ -346,7 +346,12 @@
       "rocketmq-client-rust",
       "rocketmq-common"
     ],
-    "rocketmq-mcp": ["rocketmq-admin-core", "rocketmq-security-api", "rocketmq-observability"],
+    "rocketmq-mcp": [
+      "rocketmq-admin-core",
+      "rocketmq-security-api",
+      "rocketmq-observability",
+      "rocketmq-runtime"
+    ],
     "rocketmq-rust": ["rocketmq-runtime", "rocketmq-error"],
     "rocketmq-broker": [
       "rocketmq-model",

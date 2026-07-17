@@ -84,11 +84,16 @@ Proxy 下一 major mode feature 未提前启用。
 
 ### PR-M09-04：Client allowlist 与跨项目验证
 
-- [ ] `[DEV]` strict guard 断言完整 Client 只在 proxy-cluster、admin-core/client_adapter 和 standalone example。
-- [ ] `[TEST]` 根 workspace 和受影响 Example、Tauri、Web backend/frontend 按最近 AGENTS 执行验证；只有 dashboard-common 实际变化时才条件验证 GPUI。
-- [ ] `[REV]` 检查 MCP/Dashboard 只经 admin-core，Broker/NameServer/core/local 的 normal closure清零。
-- [ ] `[TEST]` MCP deny-by-default、planning no-mutation、streamable HTTP auth/stdout/redaction contract 不变。
-- [ ] 回滚点：跨项目失败返回 M07/M08 修复；不通过扩大 allowlist解决。
+- [x] `[DEV]` strict guard 断言完整 Client 只在 proxy-cluster、admin-core/client_adapter 和 standalone example。
+- [x] `[TEST]` 根 workspace 和受影响 Example、Tauri、Web backend/frontend 按最近 AGENTS 执行验证；只有 dashboard-common 实际变化时才条件验证 GPUI。
+- [x] `[REV]` 检查 MCP/Dashboard 只经 admin-core，Broker/NameServer/core/local 的 normal closure清零。
+- [x] `[TEST]` MCP deny-by-default、planning no-mutation、streamable HTTP auth/stdout/redaction contract 不变。
+- [x] 回滚点：跨项目失败返回 M07/M08 修复；不通过扩大 allowlist解决。
+
+完成证据：[`09-client-allowlist-cross-project-evidence.md`](09-client-allowlist-cross-project-evidence.md)。Client
+manifest/source allowlist 精确为 workspace 2 + standalone 1；MCP 的 Auth/Error 零使用边删除，Runtime owned
+lifecycle 边纳入目标 DAG，M09-04 ledger 3 → 0、总 ledger 38 → 35。MCP 安全门禁以及 Example、Tauri、Web
+跨项目矩阵通过，GPUI 因 dashboard-common 无变化未触发。
 
 ### PR-M09-05：R0/R1/下一 major 发布包
 

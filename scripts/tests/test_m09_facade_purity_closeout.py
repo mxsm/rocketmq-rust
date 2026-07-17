@@ -67,7 +67,7 @@ class FacadePurityCloseoutTests(unittest.TestCase):
         self.assertFalse(
             any(item["remove_by"] == "M09-02" for item in baseline["compatibility_manifest_exceptions"])
         )
-        self.assertEqual(38, len(baseline["compatibility_manifest_exceptions"]))
+        self.assertEqual(35, len(baseline["compatibility_manifest_exceptions"]))
 
     def test_filter_and_remoting_remove_non_owner_dependencies(self) -> None:
         filter_manifest = manifest("rocketmq-filter")
