@@ -1,0 +1,49 @@
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+schema_version = 1
+activation_window = "next-major"
+
+[features]
+default = ["compat-all-modes"]
+cluster-mode = ["dep:rocketmq-proxy-cluster"]
+local-mode = ["dep:rocketmq-proxy-local"]
+compat-all-modes = ["cluster-mode", "local-mode"]
+tieredstore = ["local-mode", "rocketmq-proxy-local/tieredstore"]
+
+[dependencies.rocketmq-proxy-cluster]
+optional = true
+
+[dependencies.rocketmq-proxy-local]
+optional = true
+
+[closure.no-default]
+required = ["rocketmq-proxy-core"]
+forbidden = ["rocketmq-proxy-cluster", "rocketmq-proxy-local", "rocketmq-client-rust", "rocketmq-broker"]
+
+[closure.cluster-mode]
+required = ["rocketmq-proxy-core", "rocketmq-proxy-cluster", "rocketmq-client-rust"]
+forbidden = ["rocketmq-proxy-local", "rocketmq-broker", "rocketmq-store"]
+
+[closure.local-mode]
+required = ["rocketmq-proxy-core", "rocketmq-proxy-local", "rocketmq-broker"]
+forbidden = ["rocketmq-proxy-cluster", "rocketmq-client-rust"]
+
+[closure.compat-all-modes]
+required = ["rocketmq-proxy-core", "rocketmq-proxy-cluster", "rocketmq-proxy-local"]
+forbidden = []
+
+[closure.tieredstore]
+required = ["rocketmq-proxy-core", "rocketmq-proxy-local", "rocketmq-tieredstore"]
+forbidden = ["rocketmq-proxy-cluster", "rocketmq-client-rust"]

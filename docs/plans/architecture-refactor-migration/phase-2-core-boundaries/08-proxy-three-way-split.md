@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 2：核心边界与 API 收敛 |
-| 状态 | 实施中；PR-M08-05 已完成，下一工作包为 PR-M08-06 |
+| 状态 | 已完成；PR-M08-06 与 M08 Gate 已签署，下一工作包为 PR-M09-01 |
 | 预计周期 | 3–4 周 |
 | 工作包 | WP19 `proxy-three-way-split` |
 | 前置条件 | model/protocol/transport/security/store-api 边界稳定；除 Proxy 外 Client 清边完成 |
@@ -202,12 +202,32 @@ M07 已交付 [`Client 边界收口与 M08 交接清单`](07-client-edge-closeou
 
 ### PR-M08-06：Feature closure 与下一 major fixture
 
-- [ ] `[TEST]` R0 实际验证 proxy-core、cluster、local、local+tiered、facade default/no-default、observability。
-- [ ] `[ARCH]` 为下一 major 固化 `cluster-mode`、`local-mode`、`compat-all-modes` 和 default 的预期，不在 R0 manifest 启用。
-- [ ] `[DEV]` 复核 dependency guard 已移除 Proxy Client 临时例外，并保持目标 Client allowlist 正式达标。
-- [ ] `[REV]` 使用 `cargo tree -e normal` 检查完整传递闭包，test/dev edge单独报告。
-- [ ] `[TEST]` canonical/legacy path、gRPC/remoting integration 与 shutdown/fault 全绿。
-- [ ] `[HUMAN]` 批准 R0 功能等价和下一 major feature 迁移公告。
+- [x] `[TEST]` R0 实际验证 proxy-core、cluster、local、local+tiered、facade default/no-default、observability。
+- [x] `[ARCH]` 为下一 major 固化 `cluster-mode`、`local-mode`、`compat-all-modes` 和 default 的预期，不在 R0 manifest 启用。
+- [x] `[DEV]` 复核 dependency guard 已移除 Proxy Client 临时例外，并保持目标 Client allowlist 正式达标。
+- [x] `[REV]` 使用 `cargo tree -e normal` 检查完整传递闭包，test/dev edge单独报告。
+- [x] `[TEST]` canonical/legacy path、gRPC/remoting integration 与 shutdown/fault 全绿。
+- [x] `[HUMAN]` 批准 R0 功能等价和下一 major feature 迁移公告。
+
+#### PR-M08-06 实施结果
+
+- **Executable evidence**：新增 [`08-proxy-feature-closure-evidence.md`](08-proxy-feature-closure-evidence.md)、
+  `scripts/fixtures/proxy-next-major-features.toml` 与 7 项静态/metadata/tree contract；R0 actual 与下一 major
+  expected 分离，fixture 不会被 Cargo 当作当前 feature 启用。
+- **R0 matrix**：Core 47 项、Cluster 19 项、Local default/tiered 各 8 项、Facade 99 项测试通过；Core、Cluster、
+  Local no-default 与 Facade no-default/observability/tiered check 通过。Facade default/no-default closure 相同并继续
+  同时包含 Cluster/Local；Local+Tiered 仍无 Client/Cluster，Cluster 仍无 Broker/Store/Local。
+- **Closure/client evidence**：四个 package 的 normal tree 与 dev tree 分开验证；内部 dev-only 绕行数为 0。
+  Client manifest/source allowlist 精确为 Admin Core adapter、Proxy Cluster、standalone Example，Proxy facade 临时
+  例外为 0，target guard Client 分类为 0。
+- **Next-major boundary**：fixture 冻结 `default = [compat-all-modes]`、两个 mode feature、Tiered 对 Local 的蕴含
+  以及两个 optional adapter；当前 manifest 继续 `default = []` 且 adapter 非 optional，未提前改变 R0 公开语义。
+- **Final validation**：architecture contract 362 项、根 workspace fmt 与 32-package all-target/all-feature strict
+  Clippy、baseline guard、ArcMut 实际扫描、runtime enforcing audit、AGENTS routing 和 diff check 全绿。target
+  仍按计划精确报告 48 项（46 direct + 2 transitive）；typed-error 只复现 main 既有 11 项且本切片零新增。
+- **Gate**：canonical/legacy、ProxyConfig/Serde、gRPC/Remoting、shutdown/fault 与 auth watcher lifecycle 全绿；
+  用户批准的总体目标覆盖本次 R0 等价与下一 major 公告边界，M08 Gate 签署完成。53/82 个工作包完成，剩余
+  29 个，下一串行工作包为 PR-M09-01。
 
 ## 公共兼容面
 
@@ -260,14 +280,14 @@ python scripts/architecture_dependency_guard.py --mode target --allow-missing-pl
 
 ## Exit Checklist
 
-- [ ] `[REV]` core 任何 feature closure 无 Client/Broker/store/auth provider。
-- [ ] `[REV]` local normal closure无 Client，cluster normal closure无 Broker/store。
-- [ ] `[TEST]` send/pull/pop/ack/route/transaction 与 gRPC/remoting 差分全绿。
-- [ ] `[DEV]` 现有 proxy 只 composition/re-export，R0 default/no-default 语义不变。
-- [ ] `[TEST]` local+tiered、observability、canonical/legacy fixture通过。
-- [ ] `[DEV]` Client allowlist无需临时例外即可通过。
-- [ ] `[ARCH]` 下一 major mode feature 迁移公告和 fixture 已冻结。
-- [ ] `[HUMAN]` R0 Proxy 兼容与 M08 Gate 已签署。
+- [x] `[REV]` core 任何 feature closure 无 Client/Broker/store/auth provider。
+- [x] `[REV]` local normal closure无 Client，cluster normal closure无 Broker/store。
+- [x] `[TEST]` send/pull/pop/ack/route/transaction 与 gRPC/remoting 差分全绿。
+- [x] `[DEV]` 现有 proxy 只 composition/re-export，R0 default/no-default 语义不变。
+- [x] `[TEST]` local+tiered、observability、canonical/legacy fixture通过。
+- [x] `[DEV]` Client allowlist无需临时例外即可通过。
+- [x] `[ARCH]` 下一 major mode feature 迁移公告和 fixture 已冻结。
+- [x] `[HUMAN]` R0 Proxy 兼容与 M08 Gate 已签署。
 
 ## 交接物
 
