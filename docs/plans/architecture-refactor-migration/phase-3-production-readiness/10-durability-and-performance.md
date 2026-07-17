@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 已批准，等待 M09 |
+| 状态 | 实施中（PR-M10-01 已完成，下一工作包 PR-M10-02） |
 | 预计周期 | 5–8 周 |
 | 工作包 | WP14 `tiered-cursor`；延续 WP02、WP11–WP13 |
 | 前置条件 | 32-package Gate 通过；CommitLog/receipt/progress 和 Local/Rocks golden 稳定 |
@@ -27,10 +27,10 @@
 
 ## 入口条件
 
-- [ ] `[ARCH]` 冻结 source_epoch、physical_offset、cursor、retry ledger、generation lease 和 Recovering 语义。
-- [ ] `[TEST]` 固定硬件/profile、golden log、kill/restart、磁盘/Provider 故障和统计方法。
-- [ ] `[DEV]` 确认 store-local/rocks/tiered 目标文件无用户修改重叠。
-- [ ] `[HUMAN]` 批准新增持久 metadata 的 version、原子切换和上一 generation 回滚策略。
+- [x] `[ARCH]` 冻结 source_epoch、physical_offset、cursor、retry ledger、generation lease 和 Recovering 语义。
+- [x] `[TEST]` 固定硬件/profile、golden log、kill/restart、磁盘/Provider 故障和统计方法。
+- [x] `[DEV]` 确认 store-local/rocks/tiered 目标文件无用户修改重叠。
+- [x] `[HUMAN]` 批准新增持久 metadata 的 version、原子切换和上一 generation 回滚策略。
 
 ## 交付物
 
@@ -47,11 +47,15 @@
 
 ### PR-M10-01：派生 cursor 合同和 replay harness
 
-- [ ] `[ARCH]` 定义 per-engine cursor 的连续推进、durable commit、source epoch 和幂等键。
-- [ ] `[DEV]` 在 store-api/owner 中增加 versioned progress，不改变 AppendReceipt 主写语义。
-- [ ] `[TEST]` 用 golden CommitLog 重放，覆盖崩溃点、重复事件、尾部损坏、cursor 损坏和升级。
-- [ ] `[REV]` 检查每个派生引擎只写自己的 metadata，不写 payload/WAL。
-- [ ] 回滚点：停止派生 reader、设置 `readiness=false`，冻结最后已提交 cursor/ledger并 pin 所需 WAL；修复后从该 checkpoint 幂等重放。只有上一实现先通过同一 durability corpus，才允许受控切换。
+- [x] `[ARCH]` 定义 per-engine cursor 的连续推进、durable commit、source epoch 和幂等键。
+- [x] `[DEV]` 在 store-api/owner 中增加 versioned progress，不改变 AppendReceipt 主写语义。
+- [x] `[TEST]` 用 golden CommitLog 重放，覆盖崩溃点、重复事件、尾部损坏、cursor 损坏和升级。
+- [x] `[REV]` 检查每个派生引擎只写自己的 metadata，不写 payload/WAL。
+- [x] 回滚点：停止派生 reader、设置 `readiness=false`，冻结最后已提交 cursor/ledger并 pin 所需 WAL；修复后从该 checkpoint 幂等重放。只有上一实现先通过同一 durability corpus，才允许受控切换。
+
+完成证据：[`10-derived-cursor-replay-evidence.md`](10-derived-cursor-replay-evidence.md)。候选提交
+`1f2a7bb4ae5d6adf271fc34e63c60c956c22606e` 固化 32-byte versioned checkpoint、连续 cursor、幂等 replay
+与崩溃/脏尾/损坏/升级 corpus；真实 Tiered persistence 与 retry/backpressure 继续由 PR-M10-02 实现。
 
 ### PR-M10-02：Tiered cursor、retry ledger 与背压
 

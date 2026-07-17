@@ -20,7 +20,7 @@
 |---|---|---|---|---|---|---|
 | Phase 1 | M01–M03 | 已完成 | Codex 多代理执行组 | 6–8 周 | 2026-07-11 | [`PHASE-1-DELIVERY.md`](phase-1-safety-foundation/PHASE-1-DELIVERY.md) |
 | Phase 2 | M04–M09 | 已完成 | Codex 执行组 | 12–16 周 | 2026-07-18 | [`09-phase-2-gate-evidence.md`](phase-2-core-boundaries/09-phase-2-gate-evidence.md) |
-| Phase 3 | M10–M11 | 未开始 | 待分配 | 8–12 周 | — | — |
+| Phase 3 | M10–M11 | 进行中 | Codex 执行组 | 8–12 周 | — | [`phase-3-production-readiness/`](phase-3-production-readiness/) |
 | Phase 4 | M12 | 未开始 | 待分配 | 8–12 周 | — | — |
 
 ### 2.1 剩余重构盘点（2026-07-18）
@@ -29,14 +29,14 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 59 | 0 | 23 未开始；合计 23 尚未完成 | 82 |
-| 里程碑 | 9（M01–M09） | 0 | 3（M10–M12） | 12 |
+| PR 级工作包 | 60 | 0 | 22 未开始；合计 22 尚未完成 | 82 |
+| 里程碑 | 9（M01–M09） | 1（M10） | 2（M11–M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
-| Phase Gate | 2 | 0 | 2（Phase 3、Phase 4） | 4 |
+| Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 23 个未开始工作包分布：M10 为 5 个、M11 为 12 个、M12 为 6 个。
-PR-M09-06 与 Phase 2 Gate 已完成，当前下一工作包为 PR-M10-01。
+剩余 22 个未开始工作包分布：M10 为 4 个、M11 为 12 个、M12 为 6 个。
+PR-M10-01 已完成派生 cursor 合同和 replay harness，当前下一工作包为 PR-M10-02。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -464,7 +464,14 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
 
 任务文档：[`10-durability-and-performance.md`](phase-3-production-readiness/10-durability-and-performance.md)
 
-- [ ] PR-M10-01：建立派生 cursor 合同和 replay harness
+- [x] PR-M10-01：建立派生 cursor 合同和 replay harness
+  - [x] per-engine cursor 只连续推进，使用 `(source_epoch, physical_offset, length)` 幂等键
+  - [x] version 1 checkpoint 固定 32 bytes、带 CRC32 且不含 payload/第二 WAL
+  - [x] owner 仅在 durable persistence 成功后发布 cursor；不改变 AppendReceipt/主写 ack
+  - [x] Store API 7/7 与 replay 7/7 覆盖崩溃、重复、脏尾、损坏、升级和 engine 隔离
+  - [x] public API additive diff 已审核并最终 31/31 零差异；ArcMut/依赖/runtime/error guard 通过
+  - [x] [`M10-01 证据`](phase-3-production-readiness/10-derived-cursor-replay-evidence.md) 记录基线失败、验证与回滚
+  - [x] 60/82 已完成、22 未完成，下一工作包 PR-M10-02
 - [ ] PR-M10-02：实现 Tiered cursor、retry ledger 与背压
 - [ ] PR-M10-03：优化 CQ、Rocks 与 Tiered 读取
 - [ ] PR-M10-04：实现 Index/Compaction generation
