@@ -133,7 +133,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   podSelector:
     matchLabels:
@@ -162,7 +162,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   podSelector:
     matchLabels:
@@ -192,7 +192,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   podSelector:
     matchLabels:
@@ -221,7 +221,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   podSelector:
     matchLabels:
@@ -250,7 +250,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   minAvailable: 1
   selector:
@@ -272,7 +272,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   minAvailable: 2
   selector:
@@ -294,7 +294,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   minAvailable: 1
   selector:
@@ -316,7 +316,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   minAvailable: 2
   selector:
@@ -338,7 +338,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   minAvailable: 1
   selector:
@@ -372,7 +372,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 data:
   broker.toml: |-
     listenPort = 10911
@@ -405,7 +405,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 data:
   namesrv.toml: |-
     rocketmqHome = "/var/lib/rocketmq/namesrv"
@@ -427,7 +427,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 data:
   controller-0.toml: |-
     rocketmqHome = "/var/lib/rocketmq/controller"
@@ -614,7 +614,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 data:
   proxy.toml: |-
     mode = "cluster"
@@ -650,7 +650,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 data:
   mcp.toml: |-
     [server]
@@ -754,7 +754,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
   annotations:
     helm.sh/resource-policy: keep
     rocketmq.apache.org/persisted-format: mcp-audit-v1
@@ -778,7 +778,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
@@ -809,7 +809,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   type: ClusterIP
   selector:
@@ -839,7 +839,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
@@ -870,7 +870,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   type: ClusterIP
   selector:
@@ -900,7 +900,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
@@ -927,7 +927,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   type: ClusterIP
   selector:
@@ -953,7 +953,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
     rocketmq.apache.org/controller-ordinal: "0"
 spec:
   type: ClusterIP
@@ -977,7 +977,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
     rocketmq.apache.org/controller-ordinal: "1"
 spec:
   type: ClusterIP
@@ -1001,7 +1001,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
     rocketmq.apache.org/controller-ordinal: "2"
 spec:
   type: ClusterIP
@@ -1025,7 +1025,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   type: ClusterIP
   selector:
@@ -1051,7 +1051,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   type: ClusterIP
   selector:
@@ -1081,7 +1081,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   replicas: 2
   strategy:
@@ -1101,10 +1101,11 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
         rocketmq.apache.org/service: proxy
-        rocketmq.apache.org/architecture-milestone: M11-09
+        rocketmq.apache.org/architecture-milestone: M11-10
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -1128,13 +1129,40 @@ spec:
           imagePullPolicy: IfNotPresent
           args: ["--config", "/etc/rocketmq/proxy.toml"]
           env:
+            - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+            - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
+            - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
+            - {name: health, containerPort: 8088, protocol: TCP}
             - {name: remoting, containerPort: 8080, protocol: TCP}
             - {name: grpc, containerPort: 8081, protocol: TCP}
+          lifecycle:
+            preStop:
+              httpGet:
+                path: /drainz
+                port: health
+                scheme: HTTP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+              scheme: HTTP
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 3
           resources:
             limits:
               cpu: 2000m
@@ -1187,7 +1215,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   replicas: 1
   strategy:
@@ -1206,10 +1234,11 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
         rocketmq.apache.org/service: mcp
-        rocketmq.apache.org/architecture-milestone: M11-09
+        rocketmq.apache.org/architecture-milestone: M11-10
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -1233,12 +1262,39 @@ spec:
           imagePullPolicy: IfNotPresent
           args: ["--config", "/etc/rocketmq/mcp.toml", "--transport", "streamable-http"]
           env:
+            - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+            - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
+            - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/mcp}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-mcp}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
+            - {name: health, containerPort: 8088, protocol: TCP}
             - {name: https-mcp, containerPort: 8089, protocol: TCP}
+          lifecycle:
+            preStop:
+              httpGet:
+                path: /drainz
+                port: health
+                scheme: HTTP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+              scheme: HTTP
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 3
           resources:
             limits:
               cpu: 1000m
@@ -1293,7 +1349,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   serviceName: rocketmq-broker-headless
   replicas: 1
@@ -1317,10 +1373,11 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
         rocketmq.apache.org/service: broker
-        rocketmq.apache.org/architecture-milestone: M11-09
+        rocketmq.apache.org/architecture-milestone: M11-10
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -1344,13 +1401,40 @@ spec:
           imagePullPolicy: IfNotPresent
           args: ["--configFile", "/etc/rocketmq/broker.toml"]
           env:
+            - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+            - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
+            - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/broker}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-broker}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
+            - {name: health, containerPort: 8088, protocol: TCP}
             - {name: remoting, containerPort: 10911, protocol: TCP}
             - {name: ha, containerPort: 10912, protocol: TCP}
+          lifecycle:
+            preStop:
+              httpGet:
+                path: /drainz
+                port: health
+                scheme: HTTP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+              scheme: HTTP
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 3
           resources:
             limits:
               cpu: 4000m
@@ -1396,7 +1480,7 @@ spec:
           app.kubernetes.io/managed-by: Helm
           app.kubernetes.io/version: "0.1.0"
           rocketmq.apache.org/service: broker
-          rocketmq.apache.org/architecture-milestone: M11-09
+          rocketmq.apache.org/architecture-milestone: M11-10
       spec:
         accessModes: [ReadWriteOnce]
         storageClassName: "rocketmq-retain"
@@ -1417,7 +1501,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   serviceName: rocketmq-namesrv-headless
   replicas: 3
@@ -1441,10 +1525,11 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
         rocketmq.apache.org/service: namesrv
-        rocketmq.apache.org/architecture-milestone: M11-09
+        rocketmq.apache.org/architecture-milestone: M11-10
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -1468,12 +1553,39 @@ spec:
           imagePullPolicy: IfNotPresent
           args: ["--configFile", "/etc/rocketmq/namesrv.toml"]
           env:
+            - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+            - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
+            - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
+            - {name: health, containerPort: 8088, protocol: TCP}
             - {name: remoting, containerPort: 9876, protocol: TCP}
+          lifecycle:
+            preStop:
+              httpGet:
+                path: /drainz
+                port: health
+                scheme: HTTP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+              scheme: HTTP
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 3
           resources:
             limits:
               cpu: 1000m
@@ -1519,7 +1631,7 @@ spec:
           app.kubernetes.io/managed-by: Helm
           app.kubernetes.io/version: "0.1.0"
           rocketmq.apache.org/service: namesrv
-          rocketmq.apache.org/architecture-milestone: M11-09
+          rocketmq.apache.org/architecture-milestone: M11-10
       spec:
         accessModes: [ReadWriteOnce]
         storageClassName: "rocketmq-retain"
@@ -1540,7 +1652,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/architecture-milestone: M11-10
 spec:
   serviceName: rocketmq-controller-headless
   replicas: 3
@@ -1564,10 +1676,11 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
         rocketmq.apache.org/service: controller
-        rocketmq.apache.org/architecture-milestone: M11-09
+        rocketmq.apache.org/architecture-milestone: M11-10
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -1599,6 +1712,9 @@ spec:
           imagePullPolicy: IfNotPresent
           args: ["--config-file", "/etc/rocketmq/controller.toml"]
           env:
+            - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+            - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
+            - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -1610,8 +1726,32 @@ spec:
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
+            - {name: health, containerPort: 8088, protocol: TCP}
             - {name: remoting, containerPort: 60109, protocol: TCP}
             - {name: raft, containerPort: 60110, protocol: TCP}
+          lifecycle:
+            preStop:
+              httpGet:
+                path: /drainz
+                port: health
+                scheme: HTTP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+              scheme: HTTP
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 3
           resources:
             limits:
               cpu: 2000m
@@ -1660,7 +1800,7 @@ spec:
           app.kubernetes.io/managed-by: Helm
           app.kubernetes.io/version: "0.1.0"
           rocketmq.apache.org/service: controller
-          rocketmq.apache.org/architecture-milestone: M11-09
+          rocketmq.apache.org/architecture-milestone: M11-10
       spec:
         accessModes: [ReadWriteOnce]
         storageClassName: "rocketmq-retain"

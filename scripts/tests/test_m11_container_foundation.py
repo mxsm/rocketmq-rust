@@ -182,7 +182,7 @@ class ContainerFoundationTests(unittest.TestCase):
     def test_ctrl_c_only_signal_or_weakened_service_smoke_is_rejected(self) -> None:
         signal_sources = dict(self.signal_sources)
         signal_sources["proxy"] = signal_sources["proxy"].replace(
-            "wait_for_signal_result().await",
+            "wait_for_shutdown_signal().await",
             "tokio::signal::ctrl_c().await",
             1,
         )

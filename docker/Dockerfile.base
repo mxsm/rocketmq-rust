@@ -180,7 +180,10 @@ install -d -o 10001 -g 10001 \
 EOF
 
 ENV HOME=/var/lib/rocketmq \
-    ROCKETMQ_HOME=/var/lib/rocketmq
+    ROCKETMQ_HOME=/var/lib/rocketmq \
+    ROCKETMQ_HEALTH_BIND_ADDR=0.0.0.0:8088 \
+    ROCKETMQ_LIVENESS_STALE_SECONDS=30 \
+    ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS=45
 
 VOLUME ["/var/lib/rocketmq"]
 USER 10001:10001
@@ -194,10 +197,10 @@ LABEL org.opencontainers.image.title="RocketMQ Rust Broker" \
     io.rocketmq.service.binary="rocketmq-broker-rust" \
     io.rocketmq.service.config-path="/etc/rocketmq/broker.toml" \
     io.rocketmq.service.data-path="/var/lib/rocketmq/broker" \
-    io.rocketmq.service.ports="10911,10912" \
+    io.rocketmq.service.ports="8088,10911,10912" \
     io.rocketmq.service.signal="SIGTERM"
 
-EXPOSE 10911 10912
+EXPOSE 8088 10911 10912
 ENTRYPOINT ["/usr/local/bin/rocketmq-broker-rust"]
 CMD ["--configFile", "/etc/rocketmq/broker.toml"]
 
@@ -210,10 +213,10 @@ LABEL org.opencontainers.image.title="RocketMQ Rust NameServer" \
     io.rocketmq.service.binary="rocketmq-namesrv-rust" \
     io.rocketmq.service.config-path="/etc/rocketmq/namesrv.toml" \
     io.rocketmq.service.data-path="/var/lib/rocketmq/namesrv" \
-    io.rocketmq.service.ports="9876" \
+    io.rocketmq.service.ports="8088,9876" \
     io.rocketmq.service.signal="SIGTERM"
 
-EXPOSE 9876
+EXPOSE 8088 9876
 ENTRYPOINT ["/usr/local/bin/rocketmq-namesrv-rust"]
 CMD ["--configFile", "/etc/rocketmq/namesrv.toml"]
 
@@ -226,12 +229,12 @@ LABEL org.opencontainers.image.title="RocketMQ Rust Controller" \
     io.rocketmq.service.binary="rocketmq-controller-rust" \
     io.rocketmq.service.config-path="/etc/rocketmq/controller.toml" \
     io.rocketmq.service.data-path="/var/lib/rocketmq/controller" \
-    io.rocketmq.service.ports="60109,60110" \
+    io.rocketmq.service.ports="8088,60109,60110" \
     io.rocketmq.service.signal="SIGTERM"
 
 ENV ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR=0.0.0.0:60110
 
-EXPOSE 60109 60110
+EXPOSE 8088 60109 60110
 ENTRYPOINT ["/usr/local/bin/rocketmq-controller-rust"]
 CMD ["--config-file", "/etc/rocketmq/controller.toml"]
 
@@ -244,10 +247,10 @@ LABEL org.opencontainers.image.title="RocketMQ Rust Proxy" \
     io.rocketmq.service.binary="rocketmq-proxy-rust" \
     io.rocketmq.service.config-path="/etc/rocketmq/proxy.toml" \
     io.rocketmq.service.data-path="/var/lib/rocketmq/proxy" \
-    io.rocketmq.service.ports="8080,8081" \
+    io.rocketmq.service.ports="8080,8081,8088" \
     io.rocketmq.service.signal="SIGTERM"
 
-EXPOSE 8080 8081
+EXPOSE 8080 8081 8088
 ENTRYPOINT ["/usr/local/bin/rocketmq-proxy-rust"]
 CMD ["--config", "/etc/rocketmq/proxy.toml"]
 
@@ -260,10 +263,10 @@ LABEL org.opencontainers.image.title="RocketMQ Rust MCP" \
     io.rocketmq.service.binary="rocketmq-mcp" \
     io.rocketmq.service.config-path="/etc/rocketmq/mcp.toml" \
     io.rocketmq.service.data-path="/var/lib/rocketmq/mcp" \
-    io.rocketmq.service.ports="8089" \
+    io.rocketmq.service.ports="8088,8089" \
     io.rocketmq.service.signal="SIGTERM"
 
-EXPOSE 8089
+EXPOSE 8088 8089
 ENTRYPOINT ["/usr/local/bin/rocketmq-mcp"]
 CMD ["--config", "/etc/rocketmq/mcp.toml", "--transport", "stdio"]
 

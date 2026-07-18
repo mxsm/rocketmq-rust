@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M11-01～09 已完成；下一工作包 PR-M11-10；部分依赖 M10 SLI） |
+| 状态 | 实施中（PR-M11-01～10 已完成；下一工作包 PR-M11-11；部分依赖 M10 SLI） |
 | 预计周期 | 4–6 周 |
 | 工作包 | 延续 WP01、WP03、WP05、WP07、WP14–WP16 |
 | 前置条件 | 32-package Gate；secure dry-run、ServiceContext、semantic owner、durability SLI 可用 |
@@ -182,11 +182,18 @@ M11/Phase 3/HUMAN/ARCH 与集群 fault Gate 均未完成。
 
 ### PR-M11-10：Probe、PreStop 与统一 Drain
 
-- [ ] 入口：`[ARCH]` readiness/liveness语义、ShutdownCoordinator阶段和Kubernetes grace预算已冻结。
-- [ ] `[DEV]` readiness仅表示可接受新工作；liveness只检测失去进展；preStop/SIGTERM进入readiness→drain→flush/replicate→telemetry。
-- [ ] `[TEST]` focused test：挂起依赖/processor/telemetry、重复SIGTERM、grace边界、ShutdownReport和已确认消息。
-- [ ] `[REV]` 检查grace period大于内部绝对deadline，各层不重新分配完整超时。
-- [ ] 回滚点：单独回滚probe阈值/manifest接线到上一已验证配置；不得恢复端口存活假readiness或跳过drain。
+- [x] 入口：`[ARCH]` readiness/liveness语义、ShutdownCoordinator阶段和Kubernetes grace预算已冻结。
+- [x] `[DEV]` readiness仅表示可接受新工作；liveness只检测失去进展；preStop/SIGTERM进入readiness→drain→flush/replicate→telemetry。
+- [x] `[TEST]` focused test：挂起 shutdown hook、重复终止请求、grace/deadline边界、ShutdownReport和CommitLog final flush；真实集群已确认消息恢复由M11-11取证。
+- [x] `[REV]` 检查grace period大于内部绝对deadline，各层不重新分配完整超时。
+- [x] 回滚点：单独回滚probe阈值/manifest接线到上一已验证配置；不得恢复端口存活假readiness或跳过drain。
+
+完成证据：[`11-probe-prestop-drain-evidence.md`](11-probe-prestop-drain-evidence.md)。五服务共享
+`Starting/Ready/Draining/Stopped/Failed`，独立 health port 提供 `/readyz`、`/livez`、`/drainz`；首次终止请求冻结
+45 秒绝对 deadline，Pod grace 为 60 秒，服务 shutdown、telemetry 与 RuntimeOwner 只消费剩余预算。Helm/Kustomize
+双 render 37/37 schema、12 组 Kubernetes 正负测试、9 组容器 guard、五服务 focused Rust test、MCP required
+profile 与根 workspace strict Clippy 通过。74/82 工作包完成，剩余 M11 2 个、M12 6 个，下一工作包为
+PR-M11-11；M10 真实性能、容器动态套件、Kind/K3d fault/已确认消息恢复、M11/Phase 3/HUMAN Gate 保持开放。
 
 ### PR-M11-11：Kind/K3d Fault Matrix Gate
 

@@ -1579,7 +1579,7 @@ impl BrokerRuntime {
         if let Some(guard) = self.inner.observability_guard.take() {
             let telemetry_result = if let Some(service_context) = self.inner.service_context.as_ref() {
                 run_shutdown_blocking_operation(service_context, deadline, "broker.telemetry-shutdown", move || {
-                    guard.shutdown()
+                    guard.shutdown_with_timeout(deadline.remaining())
                 })
                 .await
             } else {

@@ -31,7 +31,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-broker-rust",
         "config_path": "/etc/rocketmq/broker.toml",
         "data_path": "/var/lib/rocketmq/broker",
-        "ports": [10911, 10912],
+        "ports": [8088, 10911, 10912],
         "command": ["--configFile", "/etc/rocketmq/broker.toml"],
     },
     "namesrv": {
@@ -40,7 +40,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-namesrv-rust",
         "config_path": "/etc/rocketmq/namesrv.toml",
         "data_path": "/var/lib/rocketmq/namesrv",
-        "ports": [9876],
+        "ports": [8088, 9876],
         "command": ["--configFile", "/etc/rocketmq/namesrv.toml"],
     },
     "controller": {
@@ -49,7 +49,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-controller-rust",
         "config_path": "/etc/rocketmq/controller.toml",
         "data_path": "/var/lib/rocketmq/controller",
-        "ports": [60109, 60110],
+        "ports": [8088, 60109, 60110],
         "command": ["--config-file", "/etc/rocketmq/controller.toml"],
     },
     "proxy": {
@@ -58,7 +58,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-proxy-rust",
         "config_path": "/etc/rocketmq/proxy.toml",
         "data_path": "/var/lib/rocketmq/proxy",
-        "ports": [8080, 8081],
+        "ports": [8080, 8081, 8088],
         "command": ["--config", "/etc/rocketmq/proxy.toml"],
     },
     "mcp": {
@@ -67,7 +67,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-mcp",
         "config_path": "/etc/rocketmq/mcp.toml",
         "data_path": "/var/lib/rocketmq/mcp",
-        "ports": [8089],
+        "ports": [8088, 8089],
         "command": ["--config", "/etc/rocketmq/mcp.toml", "--transport", "stdio"],
     },
 }
@@ -89,14 +89,14 @@ def audit_foundation(
     findings: list[str] = []
     if policy.get("schema_version") != 1:
         findings.append("container policy schema_version must be 1")
-    if policy.get("milestone") != "M11-08":
-        findings.append("container policy milestone must be M11-08")
+    if policy.get("milestone") != "M11-10":
+        findings.append("container policy milestone must be M11-10")
 
     foundation = policy.get("foundation_dockerfile")
     exceptions = policy.get("compatibility_exceptions", [])
     registered = {foundation}
     if exceptions:
-        findings.append("M11-08 must retire all legacy Dockerfile compatibility exceptions")
+        findings.append("M11-10 must retire all legacy Dockerfile compatibility exceptions")
     for exception in exceptions:
         registered.add(exception.get("path"))
     for path in sorted(dockerfiles - registered):
@@ -227,16 +227,18 @@ def audit_foundation(
             findings.append(f"service builder missing owner pair: {contract['package']}/{binary}")
 
     expected_signal_sources = {
+        "broker": "rocketmq-broker/src/broker_bootstrap.rs",
+        "namesrv": "rocketmq-namesrv/src/bootstrap.rs",
         "controller": "rocketmq-controller/src/bin/controller_bootstrap.rs",
-        "proxy": "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+        "proxy": "rocketmq-proxy/src/bootstrap.rs",
         "mcp_stdio": "rocketmq-tools/rocketmq-mcp/src/main.rs",
         "mcp_http": "rocketmq-tools/rocketmq-mcp/src/transport/streamable_http.rs",
     }
     if policy.get("signal_sources") != expected_signal_sources:
         findings.append("service signal source registry drifted")
     for name, source in (signal_sources or {}).items():
-        if "wait_for_signal_result" not in source:
-            findings.append(f"{name} entrypoint must use the shared SIGINT/SIGTERM waiter")
+        if "wait_for_shutdown_signal" not in source and "wait_for_signal_result" not in source:
+            findings.append(f"{name} entrypoint must use the shared lifecycle SIGINT/SIGTERM waiter")
         if "tokio::signal::ctrl_c" in source:
             findings.append(f"{name} entrypoint must not use a Ctrl-C-only signal boundary")
 

@@ -37,6 +37,8 @@ use crate::error::McpError;
 use crate::guard::http_auth::http_auth_middleware;
 use crate::guard::http_auth::HttpAuthState;
 use crate::protocol::server::RocketmqMcpServer;
+use rocketmq_runtime::ServiceLifecycle;
+use rocketmq_runtime::ShutdownReason;
 use rocketmq_transport::config::TlsConfig;
 use rocketmq_transport::config::TlsMode;
 use rocketmq_transport::config::TlsServerConfig;
@@ -46,6 +48,42 @@ const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub async fn serve_typed(app: McpApp) -> Result<(), McpError> {
+    serve_typed_with_shutdown(
+        app,
+        async {
+            if let Err(error) = rocketmq_runtime::wait_for_signal_result().await {
+                tracing::warn!(error = %error, "failed to listen for MCP process termination signal");
+            }
+        },
+        None,
+    )
+    .await
+}
+
+pub async fn serve_typed_with_lifecycle(app: McpApp, lifecycle: ServiceLifecycle) -> Result<(), McpError> {
+    let shutdown_lifecycle = lifecycle.clone();
+    serve_typed_with_shutdown(
+        app,
+        async move {
+            if let Err(error) = shutdown_lifecycle.wait_for_shutdown_signal().await {
+                tracing::warn!(error = %error, "MCP signal observation failed");
+                shutdown_lifecycle.mark_failed();
+                shutdown_lifecycle.request_shutdown(ShutdownReason::Internal);
+            }
+        },
+        Some(lifecycle),
+    )
+    .await
+}
+
+async fn serve_typed_with_shutdown<F>(
+    app: McpApp,
+    shutdown: F,
+    lifecycle: Option<ServiceLifecycle>,
+) -> Result<(), McpError>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
     let bind = parse_bind_addr(&app.config().server.http.bind)?;
     let tcp_listener = tokio::net::TcpListener::bind(bind)
         .await
@@ -79,12 +117,15 @@ pub async fn serve_typed(app: McpApp) -> Result<(), McpError> {
         tls_generation = listener.tls.active_generation(),
         "rocketmq-mcp streamable HTTPS transport listening"
     );
+    if let Some(lifecycle) = lifecycle.as_ref() {
+        lifecycle
+            .mark_ready()
+            .map_err(|error| McpError::InvalidConfig(format!("failed to publish MCP readiness: {error}")))?;
+    }
 
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
-            if let Err(error) = rocketmq_runtime::wait_for_signal_result().await {
-                tracing::warn!(error = %error, "failed to listen for MCP process termination signal");
-            }
+            shutdown.await;
             cancellation_token.cancel();
         })
         .await

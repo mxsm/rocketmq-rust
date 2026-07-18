@@ -1284,6 +1284,8 @@ flowchart LR
 - Broker、NameServer、Controller、Proxy、MCP 分离镜像与入口；多阶段构建、最小 runtime、非 root、read-only rootfs、SBOM、签名和漏洞扫描。
 - readiness 表示“可接受新工作且关键依赖满足策略”，liveness 只表示进程失去进展，不用端口存活冒充健康。
 - preStop/SIGTERM 触发统一 ShutdownCoordinator：先摘 readiness，再 drain，再 flush/replicate，最后 telemetry；Kubernetes grace period 必须大于内部 deadline。
+- 五服务共享 `Starting → Ready → Draining → Stopped/Failed` 状态机；`/readyz`、`/livez`、`/drainz` 使用独立的 kubelet-only HTTP health port。第一次 preStop、SIGINT、SIGTERM 或内部失败冻结唯一绝对 deadline，后续请求不得重置预算。
+- 默认内部 shutdown deadline 为 45 秒、Pod termination grace 为 60 秒；关闭顺序固定为拒绝准入、drain session/in-flight、flush/replicate、停止后台任务、telemetry、生成健康报告。不健康或超时报告必须进入 `Failed` 并以失败退出，不能只记录日志后宣称成功。
 - Stateful service 使用 PVC、反亲和/topology spread、PDB、滚动升级和明确 storage class；Controller quorum 有拓扑约束。
 - Helm/Kustomize 提供 secure profile、资源 requests/limits、OTel Collector/ServiceMonitor、NetworkPolicy、PodSecurity 和 secret 引用。
 - CI 在 kind/k3d 执行滚动升级、节点驱逐、collector 中断、磁盘压力和 leader 故障场景。

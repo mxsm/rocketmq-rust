@@ -100,15 +100,24 @@ impl RuntimeOwner {
         report
     }
 
-    pub fn shutdown_runtime_blocking_with_timeout(
-        mut self,
-        timeout: std::time::Duration,
-    ) -> RuntimeResult<ShutdownReport> {
+    pub fn shutdown_runtime_blocking_with_timeout(self, timeout: std::time::Duration) -> RuntimeResult<ShutdownReport> {
+        self.shutdown_runtime_blocking_until(ShutdownDeadline::after(timeout))
+    }
+
+    /// Shuts down tracked work and the Tokio runtime using an existing absolute deadline.
+    ///
+    /// This is the process-entrypoint boundary for a deadline already frozen by
+    /// [`crate::ServiceLifecycle`]. It never grants a new timeout to the runtime layer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::InsideTokioRuntime`] when called from an asynchronous
+    /// Tokio context.
+    pub fn shutdown_runtime_blocking_until(mut self, deadline: ShutdownDeadline) -> RuntimeResult<ShutdownReport> {
         if tokio::runtime::Handle::try_current().is_ok() {
             return Err(RuntimeError::InsideTokioRuntime("shutdown_runtime_blocking"));
         }
 
-        let deadline = ShutdownDeadline::after(timeout);
         let runtime = self.runtime.take().expect("runtime owner must still own the runtime");
         let report = runtime.block_on(self.context.shutdown_tasks_until(deadline));
         report.log_if_unhealthy();

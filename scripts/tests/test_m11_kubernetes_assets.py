@@ -95,14 +95,14 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
         result = self.run_guard(expect_success=False)
         self.assertIn(":latest", result.stderr)
 
-    def test_readiness_probe_before_m11_10_is_rejected(self) -> None:
+    def test_tcp_readiness_probe_is_rejected(self) -> None:
         self.mutate_text(
             "distribution/helm/rocketmq-rust/templates/workloads.yaml",
             "          resources:\n",
             "          readinessProbe: {tcpSocket: {port: 10911}}\n          resources:\n",
         )
         result = self.run_guard(expect_success=False)
-        self.assertIn("M11-10", result.stderr)
+        self.assertIn("tcpSocket:", result.stderr)
 
     def test_capability_drop_weakening_is_rejected(self) -> None:
         self.mutate_text(

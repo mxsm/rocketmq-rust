@@ -199,6 +199,7 @@ where
         auth_runtime,
         remoting_backend,
         shutdown,
+        None,
     )
     .await
     .map(|_| ())
@@ -226,6 +227,64 @@ where
         auth_runtime,
         remoting_backend,
         shutdown,
+        None,
+    )
+    .await
+}
+
+#[doc(hidden)]
+pub async fn serve_with_ready<P, F, R>(
+    config: Arc<ProxyConfig>,
+    processor: Arc<P>,
+    sessions: ClientSessionRegistry,
+    auth_runtime: Option<ProxyAuthRuntime>,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+    shutdown: F,
+    ready: R,
+) -> ProxyResult<Option<ShutdownReport>>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ()> + Send + 'static,
+    R: FnOnce() -> ProxyResult<()> + Send + 'static,
+{
+    serve_with_optional_service_context(
+        None,
+        config,
+        processor,
+        sessions,
+        auth_runtime,
+        remoting_backend,
+        shutdown,
+        Some(Box::new(ready)),
+    )
+    .await
+}
+
+#[doc(hidden)]
+pub async fn serve_with_service_context_and_ready<P, F, R>(
+    service_context: ServiceContext,
+    config: Arc<ProxyConfig>,
+    processor: Arc<P>,
+    sessions: ClientSessionRegistry,
+    auth_runtime: Option<ProxyAuthRuntime>,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+    shutdown: F,
+    ready: R,
+) -> ProxyResult<Option<ShutdownReport>>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ()> + Send + 'static,
+    R: FnOnce() -> ProxyResult<()> + Send + 'static,
+{
+    serve_with_optional_service_context(
+        Some(service_context),
+        config,
+        processor,
+        sessions,
+        auth_runtime,
+        remoting_backend,
+        shutdown,
+        Some(Box::new(ready)),
     )
     .await
 }
@@ -238,6 +297,7 @@ async fn serve_with_optional_service_context<P, F>(
     auth_runtime: Option<ProxyAuthRuntime>,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
     shutdown: F,
+    ready: Option<Box<dyn FnOnce() -> ProxyResult<()> + Send>>,
 ) -> ProxyResult<Option<ShutdownReport>>
 where
     P: MessagingProcessor + 'static,
@@ -247,6 +307,9 @@ where
     let listener = TcpListener::bind(addr).await.map_err(|error| ProxyError::Transport {
         message: format!("proxy remoting server failed to bind {addr}: {error}"),
     })?;
+    if let Some(ready) = ready {
+        ready()?;
+    }
     let request_processor =
         ProxyRemotingRequestProcessor::new(config, processor, sessions, auth_runtime, remoting_backend);
     let report = match service_context {

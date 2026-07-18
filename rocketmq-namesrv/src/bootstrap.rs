@@ -51,6 +51,9 @@ use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ServiceLifecycle;
+use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_runtime::ShutdownReason;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
@@ -185,9 +188,12 @@ impl NameServerInFlightDrainReport {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct NameServerShutdownReport {
     pub elapsed_ms: u64,
+    pub deadline_expired: bool,
     pub in_flight: NameServerInFlightDrainReport,
     pub scheduled: Option<ShutdownReport>,
+    pub embedded_controller_healthy: Option<bool>,
     pub route_unregistration: Option<ShutdownReport>,
+    pub cluster_test_route_lookup_healthy: Option<bool>,
     pub server: Option<ShutdownReport>,
     pub remoting_server: Option<ShutdownReport>,
     pub remoting_client: Option<RemotingClientShutdownReport>,
@@ -197,12 +203,15 @@ pub struct NameServerShutdownReport {
 impl NameServerShutdownReport {
     #[doc(hidden)]
     pub fn is_healthy(&self) -> bool {
-        self.in_flight.is_healthy()
+        !self.deadline_expired
+            && self.in_flight.is_healthy()
             && self.scheduled.as_ref().is_none_or(ShutdownReport::is_healthy)
+            && self.embedded_controller_healthy.unwrap_or(true)
             && self
                 .route_unregistration
                 .as_ref()
                 .is_none_or(ShutdownReport::is_healthy)
+            && self.cluster_test_route_lookup_healthy.unwrap_or(true)
             && self.server.as_ref().is_none_or(ShutdownReport::is_healthy)
             && self.remoting_server.as_ref().is_none_or(ShutdownReport::is_healthy)
             && self
@@ -326,7 +335,39 @@ impl NameServerBootstrap {
 
     #[doc(hidden)]
     #[instrument(skip(self, shutdown_signal), name = "nameserver_boot_with_shutdown_report")]
-    pub async fn boot_with_shutdown_report<F>(mut self, shutdown_signal: F) -> RocketMQResult<NameServerShutdownReport>
+    pub async fn boot_with_shutdown_report<F>(self, shutdown_signal: F) -> RocketMQResult<NameServerShutdownReport>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.boot_with_shutdown_report_and_lifecycle(shutdown_signal, None)
+            .await
+    }
+
+    /// Boots the NameServer under the shared process lifecycle and shutdown deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns the NameServer startup error or a typed runtime lifecycle error.
+    pub async fn boot_with_lifecycle(self, lifecycle: ServiceLifecycle) -> RocketMQResult<NameServerShutdownReport> {
+        let shutdown_lifecycle = lifecycle.clone();
+        self.boot_with_shutdown_report_and_lifecycle(
+            async move {
+                if let Err(error) = shutdown_lifecycle.wait_for_shutdown_signal().await {
+                    warn!(error = %error, "NameServer signal observation failed");
+                    shutdown_lifecycle.mark_failed();
+                    shutdown_lifecycle.request_shutdown(ShutdownReason::Internal);
+                }
+            },
+            Some(lifecycle),
+        )
+        .await
+    }
+
+    async fn boot_with_shutdown_report_and_lifecycle<F>(
+        mut self,
+        shutdown_signal: F,
+        lifecycle: Option<ServiceLifecycle>,
+    ) -> RocketMQResult<NameServerShutdownReport>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -349,12 +390,37 @@ impl NameServerBootstrap {
                 relay_shutdown_signal(shutdown_tx, shutdown_signal),
             )
             .map_err(|error| namesrv_startup_failed("spawn shutdown relay", error))?;
-        let start_result = self.name_server_runtime.start_with_shutdown_report().await;
-        let report = relay_group.shutdown(Duration::from_secs(5)).await;
+        let start_result = self
+            .name_server_runtime
+            .start_with_shutdown_report(lifecycle.as_ref())
+            .await;
+        if start_result.is_err() {
+            if let Some(lifecycle) = lifecycle.as_ref() {
+                lifecycle.mark_failed();
+                lifecycle.request_shutdown(ShutdownReason::Internal);
+            }
+        }
+        let relay_timeout = lifecycle
+            .as_ref()
+            .and_then(ServiceLifecycle::shutdown_request)
+            .map(|request| request.deadline.remaining())
+            .unwrap_or(Duration::from_secs(5));
+        let report = relay_group.shutdown(relay_timeout).await;
         if let Err(error) = report.assert_no_task_leak() {
             warn!("NameServer shutdown relay task group stopped with report: {error}");
+            if let Some(lifecycle) = lifecycle.as_ref() {
+                lifecycle.mark_failed();
+                lifecycle.request_shutdown(ShutdownReason::Internal);
+            }
         }
         let shutdown_report = start_result?;
+        if let Some(lifecycle) = lifecycle {
+            if shutdown_report.is_healthy() {
+                lifecycle.mark_stopped();
+            } else {
+                lifecycle.mark_failed();
+            }
+        }
 
         info!("NameServer shutdown completed");
         Ok(shutdown_report)
@@ -627,11 +693,14 @@ impl NameServerRuntime {
     /// 5. Performs graceful shutdown
     #[instrument(skip(self), name = "runtime_start")]
     pub async fn start(&mut self) -> RocketMQResult<()> {
-        self.start_with_shutdown_report().await.map(|_| ())
+        self.start_with_shutdown_report(None).await.map(|_| ())
     }
 
     #[instrument(skip(self), name = "runtime_start_with_shutdown_report")]
-    async fn start_with_shutdown_report(&mut self) -> RocketMQResult<NameServerShutdownReport> {
+    async fn start_with_shutdown_report(
+        &mut self,
+        lifecycle: Option<&ServiceLifecycle>,
+    ) -> RocketMQResult<NameServerShutdownReport> {
         // Validate we're in Initialized state
         if let Err(e) = self.validate_state(&[RuntimeState::Initialized], "start") {
             error!("Cannot start: {}", e);
@@ -722,6 +791,11 @@ impl NameServerRuntime {
         }
 
         info!("NameServer is now running and accepting requests");
+        if let Some(lifecycle) = lifecycle {
+            if let Err(error) = lifecycle.mark_ready() {
+                warn!(error = %error, "NameServer entered drain before readiness publication");
+            }
+        }
 
         // Wait for shutdown signal
         let shutdown_report = tokio::select! {
@@ -732,7 +806,11 @@ impl NameServerRuntime {
                     Ok(_) => info!("Shutdown signal received, initiating graceful shutdown..."),
                     Err(e) => error!("Error receiving shutdown signal: {}", e),
                 }
-                self.shutdown().await
+                let deadline = lifecycle
+                    .and_then(ServiceLifecycle::shutdown_request)
+                    .map(|request| request.deadline)
+                    .unwrap_or_else(|| ShutdownDeadline::after(Duration::from_secs(30)));
+                self.shutdown_until(deadline).await
             }
         };
 
@@ -749,6 +827,11 @@ impl NameServerRuntime {
     /// 5. Release all resources
     #[instrument(skip(self), name = "runtime_shutdown")]
     async fn shutdown(&mut self) -> NameServerShutdownReport {
+        self.shutdown_until(ShutdownDeadline::after(Duration::from_secs(30)))
+            .await
+    }
+
+    async fn shutdown_until(&mut self, deadline: ShutdownDeadline) -> NameServerShutdownReport {
         let started_at = Instant::now();
         let mut shutdown_report = NameServerShutdownReport::default();
         // Validate we're in Running state and transition to ShuttingDown
@@ -761,14 +844,14 @@ impl NameServerRuntime {
             error!("Failed to transition to ShuttingDown state: {}", e);
         }
 
-        const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
         const TASK_JOIN_TIMEOUT: Duration = Duration::from_secs(10);
+        let in_flight_timeout = deadline.remaining().min(Duration::from_secs(30));
 
         info!(
-            "Phase 1/5: Waiting for in-flight requests (timeout: {}s)...",
-            SHUTDOWN_TIMEOUT.as_secs()
+            "Phase 1/5: Waiting for in-flight requests (remaining: {}ms)...",
+            in_flight_timeout.as_millis()
         );
-        shutdown_report.in_flight = self.wait_for_inflight_requests(SHUTDOWN_TIMEOUT).await;
+        shutdown_report.in_flight = self.wait_for_inflight_requests(in_flight_timeout).await;
         if !shutdown_report.in_flight.is_healthy() {
             warn!(
                 "In-flight request drain report is unhealthy: {:?}",
@@ -778,7 +861,7 @@ impl NameServerRuntime {
 
         info!("Phase 2/5: Stopping scheduled tasks...");
         if let Some(scheduled_tasks) = self.scheduled_tasks.take() {
-            let scheduled_report = scheduled_tasks.shutdown(TASK_JOIN_TIMEOUT).await;
+            let scheduled_report = scheduled_tasks.shutdown(deadline.remaining()).await;
             if let Err(error) = scheduled_report.assert_no_task_leak() {
                 warn!("NameServer scheduled task shutdown report is unhealthy: {error}");
             }
@@ -787,31 +870,61 @@ impl NameServerRuntime {
 
         info!("Phase 3/5: Shutting down embedded controller...");
         if let Some(controller_manager) = self.inner.controller_manager() {
-            if let Err(error) = controller_manager.shutdown().await {
-                warn!("Embedded controller shutdown failed: {}", error);
-            }
+            shutdown_report.embedded_controller_healthy =
+                Some(match controller_manager.shutdown_until(deadline).await {
+                    Ok(()) => true,
+                    Err(error) => {
+                        warn!("Embedded controller shutdown failed: {}", error);
+                        false
+                    }
+                });
         }
 
         info!("Phase 4/5: Shutting down route info manager...");
-        shutdown_report.route_unregistration = self.inner.route_info_manager_mut().shutdown_unregister_service().await;
+        shutdown_report.route_unregistration = match tokio::time::timeout(
+            deadline.remaining(),
+            self.inner.route_info_manager_mut().shutdown_unregister_service(),
+        )
+        .await
+        {
+            Ok(report) => report,
+            Err(_) => {
+                warn!("NameServer route unregistration exhausted the shutdown deadline");
+                None
+            }
+        };
 
         if let Some(cluster_test_route_lookup) = self.inner.cluster_test_route_lookup() {
-            if let Err(error) = cluster_test_route_lookup.shutdown().await {
-                warn!("Cluster test route lookup shutdown failed: {error}");
-            }
+            shutdown_report.cluster_test_route_lookup_healthy = Some(
+                match tokio::time::timeout(deadline.remaining(), cluster_test_route_lookup.shutdown()).await {
+                    Ok(Ok(())) => true,
+                    Ok(Err(error)) => {
+                        warn!("Cluster test route lookup shutdown failed: {error}");
+                        false
+                    }
+                    Err(_) => {
+                        warn!("Cluster test route lookup exhausted the NameServer deadline");
+                        false
+                    }
+                },
+            );
         }
 
         info!(
             "Phase 5/5: Waiting for server task (timeout: {}s)...",
             TASK_JOIN_TIMEOUT.as_secs()
         );
-        shutdown_report.server = self.wait_for_server_task(TASK_JOIN_TIMEOUT).await;
-        shutdown_report.remoting_server = self.wait_for_remoting_server_report(TASK_JOIN_TIMEOUT).await;
+        shutdown_report.server = self
+            .wait_for_server_task(deadline.remaining().min(TASK_JOIN_TIMEOUT))
+            .await;
+        shutdown_report.remoting_server = self
+            .wait_for_remoting_server_report(deadline.remaining().min(TASK_JOIN_TIMEOUT))
+            .await;
         let remoting_client_report = self
             .inner
             .remoting_client
             .mut_from_ref()
-            .shutdown_with_report(TASK_JOIN_TIMEOUT)
+            .shutdown_with_report(deadline.remaining().min(TASK_JOIN_TIMEOUT))
             .await;
         if !remoting_client_report.is_healthy() {
             warn!("NameServer remoting client shutdown report is unhealthy: {remoting_client_report:?}");
@@ -819,7 +932,7 @@ impl NameServerRuntime {
         shutdown_report.remoting_client = Some(remoting_client_report);
 
         if let Some(task_group) = self.inner.task_group.get().cloned() {
-            let report = task_group.shutdown(TASK_JOIN_TIMEOUT).await;
+            let report = task_group.shutdown_until(deadline).await;
             if let Err(error) = report.assert_no_task_leak() {
                 warn!("NameServer task group shutdown report is unhealthy: {error}");
             }
@@ -831,6 +944,7 @@ impl NameServerRuntime {
             error!("Failed to transition to Stopped state: {}", e);
         }
 
+        shutdown_report.deadline_expired = deadline.is_expired();
         shutdown_report.elapsed_ms = started_at.elapsed().as_millis() as u64;
         info!("Graceful shutdown completed");
         shutdown_report

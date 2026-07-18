@@ -42,6 +42,21 @@ where
 }
 
 #[doc(hidden)]
+pub async fn serve_with_ready<P, F, R>(
+    config: Arc<ProxyConfig>,
+    service: ProxyGrpcService<P>,
+    shutdown: F,
+    ready: R,
+) -> ProxyResult<ProxyGrpcServerShutdownReport>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ()> + Send + 'static,
+    R: FnOnce() -> ProxyResult<()> + Send + 'static,
+{
+    serve_with_report_with_optional_task_group(config, service, shutdown, None, Some(Box::new(ready))).await
+}
+
+#[doc(hidden)]
 pub async fn serve_with_report<P, F>(
     config: Arc<ProxyConfig>,
     service: ProxyGrpcService<P>,
@@ -51,7 +66,7 @@ where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
-    serve_with_report_with_optional_task_group(config, service, shutdown, None).await
+    serve_with_report_with_optional_task_group(config, service, shutdown, None, None).await
 }
 
 #[doc(hidden)]
@@ -65,7 +80,30 @@ where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
-    serve_with_report_with_optional_task_group(config, service, shutdown, Some(parent_task_group)).await
+    serve_with_report_with_optional_task_group(config, service, shutdown, Some(parent_task_group), None).await
+}
+
+#[doc(hidden)]
+pub async fn serve_with_report_with_task_group_and_ready<P, F, R>(
+    config: Arc<ProxyConfig>,
+    service: ProxyGrpcService<P>,
+    shutdown: F,
+    parent_task_group: TaskGroup,
+    ready: R,
+) -> ProxyResult<ProxyGrpcServerShutdownReport>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ()> + Send + 'static,
+    R: FnOnce() -> ProxyResult<()> + Send + 'static,
+{
+    serve_with_report_with_optional_task_group(
+        config,
+        service,
+        shutdown,
+        Some(parent_task_group),
+        Some(Box::new(ready)),
+    )
+    .await
 }
 
 async fn serve_with_report_with_optional_task_group<P, F>(
@@ -73,6 +111,7 @@ async fn serve_with_report_with_optional_task_group<P, F>(
     service: ProxyGrpcService<P>,
     shutdown: F,
     parent_task_group: Option<TaskGroup>,
+    ready: Option<Box<dyn FnOnce() -> ProxyResult<()> + Send>>,
 ) -> ProxyResult<ProxyGrpcServerShutdownReport>
 where
     P: MessagingProcessor + 'static,
@@ -91,10 +130,14 @@ where
     let max_decoding_message_size = grpc_config.max_decoding_message_size;
     let max_encoding_message_size = grpc_config.max_encoding_message_size;
     let concurrency_limit_per_connection = grpc_config.concurrency_limit_per_connection;
-    let shutdown_report = rocketmq_proxy_core::grpc::server::serve_with_lifecycle(
+    let shutdown_report = rocketmq_proxy_core::grpc::server::serve_with_lifecycle_and_ready(
         &grpc_config,
         shutdown,
         task_group,
+        move || match ready {
+            Some(ready) => ready(),
+            None => Ok(()),
+        },
         move |mut shutdown_rx, housekeeping_task_group| async move {
             housekeeping_service
                 .run_housekeeping_until_with_task_group(

@@ -91,6 +91,30 @@ impl McpApp {
         &self.query
     }
 
+    /// Starts the process lifecycle boundary under the application's owned runtime context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-configuration error when the runtime context is unavailable or the
+    /// lifecycle health boundary cannot be started.
+    pub async fn start_lifecycle(
+        &self,
+        lifecycle: &rocketmq_runtime::ServiceLifecycle,
+    ) -> Result<(), crate::error::McpError> {
+        let service_context = self
+            .runtime_context
+            .as_ref()
+            .map(|runtime| runtime.service_context("rocketmq-mcp-lifecycle"))
+            .ok_or_else(|| {
+                crate::error::McpError::InvalidConfig(
+                    "MCP lifecycle requires an initialized runtime context".to_string(),
+                )
+            })?;
+        lifecycle.start(&service_context).await.map_err(|error| {
+            crate::error::McpError::InvalidConfig(format!("failed to start MCP lifecycle boundary: {error}"))
+        })
+    }
+
     #[cfg(feature = "streamable-http")]
     pub(crate) fn service_context(
         &self,

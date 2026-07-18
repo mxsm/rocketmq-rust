@@ -364,6 +364,13 @@ impl TelemetryRuntimeGuard {
     }
 
     pub fn shutdown(self) -> TelemetryShutdownReport {
+        self.shutdown_with_timeout(std::time::Duration::from_millis(
+            crate::exporter::outage::DEFAULT_SHUTDOWN_TIMEOUT_MILLIS,
+        ))
+    }
+
+    /// Flushes logging and telemetry providers without exceeding one shared timeout budget.
+    pub fn shutdown_with_timeout(self, timeout: std::time::Duration) -> TelemetryShutdownReport {
         let Self {
             telemetry_guard,
             logging_guard,
@@ -382,7 +389,7 @@ impl TelemetryRuntimeGuard {
         // Drop local file logging guards before shutting down OpenTelemetry providers so
         // non-blocking file writers are flushed and joined under explicit runtime ownership.
         drop(logging_guard);
-        let provider_report = telemetry_guard.shutdown_with_report();
+        let provider_report = telemetry_guard.shutdown_with_report_timeout(timeout);
         let provider_shutdown_healthy = provider_report.is_healthy();
         let report = TelemetryShutdownReport::new(
             subscriber_install_status,
@@ -611,6 +618,13 @@ mod tests {
         report
             .into_result()
             .expect("noop runtime guard shutdown should succeed");
+    }
+
+    #[test]
+    fn noop_runtime_guard_honors_caller_shutdown_budget() {
+        let report = TelemetryRuntimeGuard::noop().shutdown_with_timeout(std::time::Duration::ZERO);
+
+        assert!(report.is_healthy());
     }
 
     #[test]

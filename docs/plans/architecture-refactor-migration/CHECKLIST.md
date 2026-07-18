@@ -29,15 +29,15 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 73 | 0 | 9 未开始；合计 9 尚未完成 | 82 |
+| PR 级工作包 | 74 | 0 | 8 未开始；合计 8 尚未完成 | 82 |
 | 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 1（M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 9 个未开始工作包分布：M10 为 0 个、M11 为 3 个、M12 为 6 个。
+剩余 8 个未开始工作包分布：M10 为 0 个、M11 为 2 个、M12 为 6 个。
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
-`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-10。
+`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-11。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -598,7 +598,14 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] M11-09 禁止 probe/preStop/lifecycle/grace，避免提前伪造 M11-10 readiness/drain 语义；五份 rendered 配置经真实二进制解析
   - [x] [`M11-09 证据`](phase-3-production-readiness/11-helm-kustomize-assets-evidence.md) 记录部署边界、Controller/MCP 修正、工具链、未签署 Gate 与不降级 PVC 的回滚策略
   - [x] 73/82 已完成、9 未完成，下一工作包 PR-M11-10；M10/M11/Phase 3/HUMAN/ARCH、容器动态 `[TEST]` 与集群 fault Gate 均未提前宣称完成
-- [ ] PR-M11-10：统一 Probe、PreStop 与 Drain
+- [x] PR-M11-10：统一 Probe、PreStop 与 Drain
+  - [x] 共享 `rocketmq-runtime::ServiceLifecycle` 固定 `Starting/Ready/Draining/Stopped/Failed`；Broker、NameServer、Controller、Proxy、MCP 只在真实依赖和监听器就绪后发布 Ready
+  - [x] 独立 HTTP health boundary 提供 `/readyz`、`/livez`、`/drainz`；TCP/startup probe 被 guard 禁止，health 8088 不通过 Kubernetes Service 暴露
+  - [x] 第一次 preStop/SIGINT/SIGTERM/internal 请求冻结 45 秒绝对 deadline；RuntimeOwner、服务 drain、后台任务与 telemetry 只消费剩余预算，重复请求不延长
+  - [x] Helm/Kustomize 五工作负载统一 60 秒 grace、HTTP readiness/liveness/preStop 与 lifecycle env；双 render 37/37 schema 和 12 组 Kubernetes 正负测试通过
+  - [x] runtime 状态机、Proxy 双监听 barrier、Broker deadline/final flush、NameServer drain、Controller shutdown、observability budget 与 MCP 83-test/HTTP Clippy/Rustdoc 门禁通过
+  - [x] [`M11-10 证据`](phase-3-production-readiness/11-probe-prestop-drain-evidence.md) 记录状态语义、阶段顺序、验证矩阵、未签署动态 Gate 与不恢复假 readiness 的回滚边界
+  - [x] 74/82 已完成、8 未完成，下一工作包 PR-M11-11；M10/M11/Phase 3/HUMAN、容器动态 `[TEST]` 与 Kind/K3d fault/已确认消息恢复 Gate 均未提前宣称完成
 - [ ] PR-M11-11：完成 Kind/K3d fault matrix Gate
 - [ ] PR-M11-12：完成 ArcMut、stable 与 SLO Phase 3 收口
 - [ ] 对应任务文档的 Exit Checklist 全部通过

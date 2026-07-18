@@ -30,6 +30,8 @@ use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ServiceLifecycle;
+use rocketmq_runtime::ShutdownReason;
 #[cfg(feature = "tieredstore")]
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -50,10 +52,17 @@ const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 fn main() -> Result<()> {
     let owner = RuntimeOwner::new(broker_runtime_config()).context("failed to build broker runtime")?;
     let service_context = owner.context().service_context("rocketmq-broker-runtime");
+    let lifecycle = ServiceLifecycle::from_env("rocketmq-broker").context("invalid broker lifecycle configuration")?;
 
-    let run_result = owner.block_on(run(service_context));
+    let run_result = owner.block_on(run(service_context, lifecycle.clone()));
+    if run_result.is_err() {
+        lifecycle.mark_failed();
+    }
+    let shutdown_request = lifecycle
+        .shutdown_request()
+        .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
     let shutdown_result = owner
-        .shutdown_runtime_blocking()
+        .shutdown_runtime_blocking_until(shutdown_request.deadline)
         .context("failed to shutdown broker runtime");
 
     match (run_result, shutdown_result) {
@@ -61,10 +70,12 @@ fn main() -> Result<()> {
         (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(report)) => {
             if !report.is_healthy() {
+                lifecycle.mark_failed();
                 tracing::warn!(
                     report = %report.to_json(),
                     "broker runtime shutdown report is unhealthy"
                 );
+                anyhow::bail!("broker runtime shutdown report is unhealthy");
             }
             Ok(())
         }
@@ -77,7 +88,7 @@ fn broker_runtime_config() -> RuntimeConfig {
     config
 }
 
-async fn run(service_context: ServiceContext) -> Result<()> {
+async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
     // Set remoting version
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
@@ -109,8 +120,10 @@ async fn run(service_context: ServiceContext) -> Result<()> {
 
     // Check ROCKETMQ_HOME environment variable
     if let Err(error) = verify_rocketmq_home() {
+        lifecycle.mark_failed();
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         telemetry_guard
-            .shutdown()
+            .shutdown_with_timeout(request.deadline.remaining())
             .into_result()
             .context("failed to shutdown broker telemetry bootstrap after ROCKETMQ_HOME validation failed")?;
         return Err(error);
@@ -131,6 +144,17 @@ async fn run(service_context: ServiceContext) -> Result<()> {
 
     // Print startup info
     print_startup_info(&broker_config, &message_store_config);
+    if let Err(error) = lifecycle.start(&service_context).await {
+        lifecycle.mark_failed();
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+        if let Err(shutdown_error) = telemetry_guard
+            .shutdown_with_timeout(request.deadline.remaining())
+            .into_result()
+        {
+            tracing::warn!(error = %shutdown_error, "broker telemetry cleanup after lifecycle startup failure was unhealthy");
+        }
+        return Err(error).context("failed to start broker lifecycle boundary");
+    }
 
     // Start broker
     Builder::new()
@@ -139,8 +163,9 @@ async fn run(service_context: ServiceContext) -> Result<()> {
         .set_service_context(service_context)
         .set_telemetry_runtime_guard(telemetry_guard)
         .build()
-        .boot()
-        .await;
+        .boot_with_lifecycle(lifecycle)
+        .await
+        .context("broker lifecycle failed")?;
 
     Ok(())
 }
