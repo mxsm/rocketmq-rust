@@ -14,10 +14,10 @@
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_rust::ArcMut;
 
 use crate::base::client_config::ClientConfig;
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
@@ -28,7 +28,7 @@ use crate::producer::producer_impl::queue_filter::QueueFilter;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 
 pub struct MQFaultStrategy {
-    latency_fault_tolerance: ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+    latency_fault_tolerance: Arc<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
     send_latency_fault_enable: AtomicBool,
     start_detector_enable: AtomicBool,
     latency_max: Vec<u64>,
@@ -44,19 +44,19 @@ impl MQFaultStrategy {
     const ISOLATION_LATENCY_MS: u64 = 10_000;
 
     pub fn new(client_config: &ClientConfig) -> Self {
-        let mut tolerance_impl = LatencyFaultToleranceImpl::new();
+        let tolerance_impl = LatencyFaultToleranceImpl::new();
         tolerance_impl.set_detect_interval(client_config.detect_interval);
         tolerance_impl.set_detect_timeout(client_config.detect_timeout);
         tolerance_impl.set_start_detector_enable(client_config.start_detector_enable);
-        let latency_fault_tolerance = ArcMut::new(tolerance_impl);
+        let latency_fault_tolerance = Arc::new(tolerance_impl);
         Self {
-            latency_fault_tolerance: ArcMut::clone(&latency_fault_tolerance),
+            latency_fault_tolerance: Arc::clone(&latency_fault_tolerance),
             send_latency_fault_enable: AtomicBool::new(client_config.send_latency_enable),
             start_detector_enable: AtomicBool::new(client_config.start_detector_enable),
             latency_max: Self::DEFAULT_LATENCY_MAX.to_vec(),
             not_available_duration: Self::DEFAULT_NOT_AVAILABLE_DURATION.to_vec(),
             reachable_filter: Box::new(ReachableFilter {
-                latency_fault_tolerance: ArcMut::clone(&latency_fault_tolerance),
+                latency_fault_tolerance: Arc::clone(&latency_fault_tolerance),
             }),
             available_filter: Box::new(AvailableFilter {
                 latency_fault_tolerance,
@@ -64,23 +64,23 @@ impl MQFaultStrategy {
         }
     }
 
-    pub fn start_detector(&mut self) {
+    pub fn start_detector(&self) {
         LatencyFaultTolerance::start_detector(self.latency_fault_tolerance.clone());
     }
 
-    pub(crate) fn set_resolve(&mut self, resolver: DefaultResolver) {
+    pub(crate) fn set_resolve(&self, resolver: DefaultResolver) {
         self.latency_fault_tolerance.set_resolver(resolver);
     }
 
-    pub(crate) fn set_service_detector(&mut self, service_detector: DefaultServiceDetector) {
+    pub(crate) fn set_service_detector(&self, service_detector: DefaultServiceDetector) {
         self.latency_fault_tolerance.set_service_detector(service_detector);
     }
 
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         self.latency_fault_tolerance.shutdown();
     }
 
-    pub async fn shutdown_async(&mut self) -> bool {
+    pub async fn shutdown_async(&self) -> bool {
         self.latency_fault_tolerance.shutdown_detector().await
     }
 
@@ -88,7 +88,7 @@ impl MQFaultStrategy {
         self.start_detector_enable.load(Ordering::Relaxed)
     }
 
-    pub fn set_start_detector_enable(&mut self, start_detector_enable: bool) {
+    pub fn set_start_detector_enable(&self, start_detector_enable: bool) {
         self.start_detector_enable
             .store(start_detector_enable, Ordering::Relaxed);
         self.latency_fault_tolerance
@@ -226,7 +226,7 @@ impl QueueFilter for BrokerFilter {
 }
 
 struct ReachableFilter {
-    latency_fault_tolerance: ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+    latency_fault_tolerance: Arc<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
 }
 
 impl QueueFilter for ReachableFilter {
@@ -236,7 +236,7 @@ impl QueueFilter for ReachableFilter {
 }
 
 struct AvailableFilter {
-    latency_fault_tolerance: ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+    latency_fault_tolerance: Arc<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
 }
 
 impl QueueFilter for AvailableFilter {

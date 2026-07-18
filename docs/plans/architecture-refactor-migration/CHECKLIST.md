@@ -627,7 +627,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] M11-12i NameServer V1 tables：六张 `ArcMut<HashMap>` 改为 manager 独占普通 `HashMap`，由既有 `Mutex<RouteInfoManager>` wrapper 提供唯一写边界；所有变更入口恢复 `&mut self`，删除冗余内部锁与全部可变逃逸
   - [x] M11-12j Remoting protocol compatibility：删除固定 `ArcMut` header/mapping-detail facade，topic-config wire DTO 直接 re-export Protocol canonical `HashMap` owner；Broker/NameServer 构造端发布 owned protocol value
   - [x] M11-12k Client ProduceAccumulator owner：Manager/Producer 改用安全 `Arc`；批大小/延时配置使用原子状态，sync/async guard task handle 与 schedule sender 收入显式 lifecycle mutex；异步关闭先取出 handle 再 await
-  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315 与每次真实下降
+  - [x] M11-12l Client latency fault detector：trait/strategy/filter/task capture 改用安全 `Arc`；detector 配置原子发布，resolver/service detector 使用短 `RwLock` 的 `Arc` 快照，单一 lifecycle mutex 串行 task 发布/关闭并排除 shutdown 期间 restart
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317 与每次真实下降
   - [x] Issue #8295 后累计降至 711 production/2,029 occurrence；Controller 配置债务清零但其他 Controller owner 仍有 31 条 production 债务
   - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
   - [x] Issue #8299 后实际快照降至 690 production/1,961 occurrence；Controller 降至 10 条/26 occurrence，Raft/OpenRaft owner 与 Manager Raft `mut_from_ref` 已清零
@@ -639,7 +640,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8311 后实际快照降至 472 production/1,515 occurrence；NameServer production 债务清零，reviewed baseline 仅删除 V1 tables 的 16 条/44 occurrence，无 relocation
   - [x] Issue #8313 后实际快照降至 466 production/1,505 occurrence；Remoting production 债务清零，Broker wire-wrapper occurrence 同步减少 1 次
   - [x] Issue #8315 后实际快照降至 463 production/1,495 occurrence；Client 降至 143/589，ProduceAccumulator 共享 owner 退出 `ArcMut`
-  - [ ] M11-12l 及后续：Client MQClientInstance/Producer/Admin/Push/Lite owner、Broker、Store/HA、Tools/compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8317 后实际快照降至 454 production/1,481 occurrence；Client 降至 134/575，latency fault detector production 债务清零
+  - [ ] M11-12m 及后续：Client MQClientInstance/Producer/Admin/Push/Lite owner、Broker、Store/HA、Tools/compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

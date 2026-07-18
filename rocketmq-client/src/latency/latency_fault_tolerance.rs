@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_rust::ArcMut;
+use std::sync::Arc;
 
 /// Broker-level fault tolerance abstraction for latency-based routing decisions.
 ///
@@ -68,7 +68,7 @@ pub trait LatencyFaultTolerance<T>: Send + Sync + 'static {
     async fn pick_one_at_least(&self) -> Option<T>;
 
     /// Starts a background task to periodically detect broker reachability.
-    fn start_detector(this: ArcMut<Self>);
+    fn start_detector(this: Arc<Self>);
 
     /// Shuts down the background detector task.
     fn shutdown(&self);
@@ -77,13 +77,13 @@ pub trait LatencyFaultTolerance<T>: Send + Sync + 'static {
     async fn detect_by_one_round(&self);
 
     /// Sets the detect timeout bound in milliseconds.
-    fn set_detect_timeout(&mut self, detect_timeout: u32);
+    fn set_detect_timeout(&self, detect_timeout: u32);
 
     /// Sets the detector's interval for each broker in milliseconds.
-    fn set_detect_interval(&mut self, detect_interval: u32);
+    fn set_detect_interval(&self, detect_interval: u32);
 
     /// Enables or disables the background detector.
-    fn set_start_detector_enable(&mut self, start_detector_enable: bool);
+    fn set_start_detector_enable(&self, start_detector_enable: bool);
 
     /// Returns whether the background detector is enabled.
     fn is_start_detector_enable(&self) -> bool;
