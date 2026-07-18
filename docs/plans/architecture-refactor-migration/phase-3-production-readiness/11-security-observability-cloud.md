@@ -270,6 +270,11 @@ canonical owned `HashMap` 类型；Broker/NameServer 构造端只发布 owned pr
 production/1,505 occurrences，Remoting production 债务清零；Broker/Client/Store、Tools/compatibility 与完整候选
 快照 Gate 仍开放。
 
+M11-12k 已把 Client ProduceAccumulator 的 Manager/Producer 共享 owner 从 `ArcMut` 改为安全 `Arc`；批大小和延时
+配置以原子状态发布，sync/async guard task handle 与 schedule sender 收入显式 lifecycle mutex，异步 shutdown 在
+await 前取出 owned handle。实际快照累计降至 463 production/1,495 occurrences，Client 降至 143/589；其余
+Client owner、Broker/Store、Tools/compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

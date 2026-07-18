@@ -15095,44 +15095,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "116d7f5c8051915e3e9c7743",
-      "path": "rocketmq-client/src/implementation/mq_client_manager.rs",
-      "symbol": "AccumulatorHashMap",
-      "kind": "alias",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "acd42c8d377e62d8f769c2bb",
-          "fingerprint": "5b67337ceffd8782a81ed131",
-          "item": "<module>",
-          "line": 31
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "b3031cbf206ec1d18a5790ef",
-      "path": "rocketmq-client/src/implementation/mq_client_manager.rs",
-      "symbol": "AccumulatorHashMap",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d488d6184d1c756fe003f346",
-          "fingerprint": "ec80913ac4b4b283a70d3b16",
-          "item": "struct MQClientManager",
-          "line": 36
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "548dcb317e2ddbad3570958a",
       "path": "rocketmq-client/src/implementation/mq_client_manager.rs",
       "symbol": "ArcMut",
@@ -15144,31 +15106,6 @@
           "fingerprint": "985077b8f7b7dd91546699a6",
           "item": "<module>",
           "line": 30
-        },
-        {
-          "id": "8dbe2d47ac98a2b4bde9ec1e",
-          "fingerprint": "6eff615fcf76f73321a896d0",
-          "item": "<module>",
-          "line": 31
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "1287ac234e98127980d11c9e",
-      "path": "rocketmq-client/src/implementation/mq_client_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "ef7c4bf7684a17bcfc29e72d",
-          "fingerprint": "1413499e9c31e6640d18d53f",
-          "item": "fn get_or_create_produce_accumulator",
-          "line": 81
         }
       ],
       "owner": "client",
@@ -15207,12 +15144,6 @@
           "fingerprint": "0f073d9c5665b00be5f46c2a",
           "item": "fn get_or_create_mq_client_instance",
           "line": 59
-        },
-        {
-          "id": "db1a68af01df560960e75c40",
-          "fingerprint": "49c3af9bd1bf5754745c5cca",
-          "item": "fn get_or_create_produce_accumulator",
-          "line": 74
         }
       ],
       "owner": "client",
@@ -15552,7 +15483,7 @@
           "id": "ca9921d4ee3005b530534cb4",
           "fingerprint": "ec86d15cd2a566da2b615866",
           "item": "mod tests",
-          "line": 2474
+          "line": 2473
         }
       ],
       "owner": "client",
@@ -15572,12 +15503,6 @@
           "fingerprint": "da8100f955a05f98d5b3f5c2",
           "item": "fn set_default_mqproducer_impl",
           "line": 1113
-        },
-        {
-          "id": "f465b3c42a959f6f53faaaed",
-          "fingerprint": "b9e78f66c6d2afb972d81426",
-          "item": "fn set_produce_accumulator",
-          "line": 1211
         }
       ],
       "owner": "client",
@@ -15612,18 +15537,6 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "b21414b49e1e18906065d7cf",
-          "fingerprint": "dcb9e176840dfec6e732335d",
-          "item": "struct ProducerConfig",
-          "line": 112
-        },
-        {
-          "id": "27d25a5cdccb181c5da8c0ed",
-          "fingerprint": "b39150fc8c10c6277437945f",
-          "item": "fn produce_accumulator",
-          "line": 257
-        },
-        {
           "id": "e205b475c5dcdb1871ac552d",
           "fingerprint": "bb893e247dc2124216e9149f",
           "item": "struct DefaultMQProducer",
@@ -15642,12 +15555,6 @@
           "line": 841
         },
         {
-          "id": "52ee9acac28ccfe7e9d19b81",
-          "fingerprint": "ab81e85ab7d4a8e286e9e713",
-          "item": "fn produce_accumulator",
-          "line": 980
-        },
-        {
           "id": "cab8f94c249998a3f4702f17",
           "fingerprint": "dec910098356cf13f4081828",
           "item": "fn set_default_mqproducer_impl",
@@ -15657,19 +15564,13 @@
           "id": "9b7a91372440fc77bd32c70a",
           "fingerprint": "70a2b2c2842baaa732249b90",
           "item": "fn get_impl_mut",
-          "line": 1478
-        },
-        {
-          "id": "adc06a87281e50c2a11f5df5",
-          "fingerprint": "78d5c5fceb39d4282c7a4fcd",
-          "item": "fn get_accumulator_mut",
-          "line": 1485
+          "line": 1477
         },
         {
           "id": "308693bf2e2195a8212371d5",
           "fingerprint": "d95e007294e84b72ec3d2d9c",
           "item": "fn prepare_trace_dispatcher",
-          "line": 1586
+          "line": 1585
         }
       ],
       "owner": "client",
@@ -15688,7 +15589,7 @@
           "id": "73bb2e72e745e6a2cc767322",
           "fingerprint": "aa682f424d5a28672b55f4aa",
           "item": "mod tests",
-          "line": 780
+          "line": 788
         }
       ],
       "owner": "client",
@@ -15707,13 +15608,13 @@
           "id": "f8d0a78f89aea45513e0e0b6",
           "fingerprint": "02f8e0e910010c48dde9a746",
           "item": "fn get_or_create_sync_send_batch",
-          "line": 423
+          "line": 431
         },
         {
           "id": "1f97eed7451595d264de9699",
           "fingerprint": "02f8e0e910010c48dde9a746",
           "item": "fn get_or_create_async_send_batch",
-          "line": 444
+          "line": 452
         }
       ],
       "owner": "client",
@@ -15732,37 +15633,37 @@
           "id": "7741d349c190499cd9308af9",
           "fingerprint": "e091b6428abb1164534614fa",
           "item": "fn message_accumulation_ready_to_send_requires_size_over_hold_size_like_java",
-          "line": 867
+          "line": 875
         },
         {
           "id": "346b8c7614655eab0799a325",
           "fingerprint": "5fdb8284d4b2c31bd8a1fea2",
           "item": "fn message_accumulation_add_returns_index_and_flush_decision",
-          "line": 883
+          "line": 891
         },
         {
           "id": "9f273799df3b86249aa1beb0",
           "fingerprint": "6fe2af802fdbd5400286c1f3",
           "item": "fn message_accumulation_closing_state_is_claimed_once",
-          "line": 912
+          "line": 920
         },
         {
           "id": "12b4677ecd533d3f37dc6220",
           "fingerprint": "e091b6428abb1164534614fa",
           "item": "fn close_pending_batch_does_not_release_batch_already_claimed_for_send",
-          "line": 926
+          "line": 934
         },
         {
           "id": "5127636530fb8841003b2e05",
           "fingerprint": "5fdb8284d4b2c31bd8a1fea2",
           "item": "fn message_accumulation_batch_sets_java_accumulator_keys_and_tags",
-          "line": 955
+          "line": 963
         },
         {
           "id": "6eef4ae336ac267fbf52d3da",
           "fingerprint": "c822c3b790cd1a82b8520e32",
           "item": "fn shutdown_async_releases_pending_async_batch_hold_size_and_callbacks",
-          "line": 1032
+          "line": 1059
         }
       ],
       "owner": "client",
@@ -15800,13 +15701,13 @@
           "id": "512c1ca0134ca3002f60f08a",
           "fingerprint": "d80ae723530ed68c55e18ca1",
           "item": "struct MessageAccumulation",
-          "line": 1310
+          "line": 1339
         },
         {
           "id": "0ec63b578f90517708a9c9cb",
           "fingerprint": "01972957344812f94cf1103e",
           "item": "fn new",
-          "line": 1388
+          "line": 1417
         }
       ],
       "owner": "client",

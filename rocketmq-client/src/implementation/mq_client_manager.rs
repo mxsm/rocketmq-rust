@@ -28,7 +28,7 @@ use crate::factory::mq_client_instance::MQClientInstance;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 
 type ClientInstanceHashMap = DashMap<CheetahString /* clientId */, ArcMut<MQClientInstance>>;
-type AccumulatorHashMap = DashMap<CheetahString /* clientId */, ArcMut<ProduceAccumulator>>;
+type AccumulatorHashMap = DashMap<CheetahString /* clientId */, Arc<ProduceAccumulator>>;
 
 #[derive(Default)]
 pub struct MQClientManager {
@@ -71,14 +71,14 @@ impl MQClientManager {
             .clone()
     }
 
-    pub fn get_or_create_produce_accumulator(&self, client_config: ClientConfig) -> ArcMut<ProduceAccumulator> {
+    pub fn get_or_create_produce_accumulator(&self, client_config: ClientConfig) -> Arc<ProduceAccumulator> {
         let client_id = CheetahString::from_string(client_config.build_mq_client_id());
 
         self.accumulator_table
             .entry(client_id.clone())
             .or_insert_with(|| {
                 info!("Created new ProduceAccumulator for clientId:[{}]", client_id);
-                ArcMut::new(ProduceAccumulator::new(client_id.as_str()))
+                Arc::new(ProduceAccumulator::new(client_id.as_str()))
             })
             .clone()
     }

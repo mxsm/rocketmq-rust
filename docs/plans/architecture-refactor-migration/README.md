@@ -278,6 +278,10 @@ Remoting protocol compatibility 6/9 与 Tools 3/14；总进度仍为 75/82。
 Remoting protocol compatibility 随 Issue #8313 删除固定 `ArcMut` header/mapping-detail facade，并直接 re-export
 Protocol canonical owned wire DTO；实际快照降至 466 production/1,505 occurrence，Remoting production 债务
 清零。剩余为 Broker 190/568、Client 146/599、Store 127/324 与 Tools 3/14；总进度仍为 75/82。
+Client ProduceAccumulator owner 随 Issue #8315 从 Manager/Producer 传播的 `ArcMut` 改为安全 `Arc`，运行时配置由
+原子状态发布，guard task handle/schedule sender 由显式 lifecycle mutex 串行且异步关闭不跨同步锁 await；实际快照
+降至 463 production/1,495 occurrence，Client 降至 143/589。剩余为 Broker 190/568、Client 143/589、Store
+127/324 与 Tools 3/14；总进度仍为 75/82，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

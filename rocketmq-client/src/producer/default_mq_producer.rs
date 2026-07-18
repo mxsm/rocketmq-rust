@@ -109,7 +109,7 @@ pub struct ProducerConfig {
     /// None means no limit.
     total_batch_max_bytes: Option<u64>,
     /// Instance for batching message automatically
-    produce_accumulator: Option<ArcMut<ProduceAccumulator>>,
+    produce_accumulator: Option<Arc<ProduceAccumulator>>,
     /// Indicate whether to block message when asynchronous sending traffic is too heavy.
     enable_backpressure_for_async_mode: bool,
     /// on BackpressureForAsyncMode, limit maximum number of on-going sending async messages
@@ -254,7 +254,7 @@ impl ProducerConfig {
         self.total_batch_max_bytes
     }
 
-    pub fn produce_accumulator(&self) -> Option<&ArcMut<ProduceAccumulator>> {
+    pub fn produce_accumulator(&self) -> Option<&Arc<ProduceAccumulator>> {
         self.produce_accumulator.as_ref()
     }
 
@@ -977,7 +977,7 @@ impl DefaultMQProducer {
         self.producer_config.auto_batch
     }
 
-    pub fn produce_accumulator(&self) -> Option<&ArcMut<ProduceAccumulator>> {
+    pub fn produce_accumulator(&self) -> Option<&Arc<ProduceAccumulator>> {
         self.producer_config.produce_accumulator()
     }
 
@@ -1206,9 +1206,8 @@ impl DefaultMQProducer {
     }
 
     pub fn set_produce_accumulator(&mut self, produce_accumulator: ProduceAccumulator) {
-        let mut produce_accumulator = produce_accumulator;
-        self.apply_batch_config_to_accumulator(&mut produce_accumulator);
-        self.producer_config.produce_accumulator = Some(ArcMut::new(produce_accumulator));
+        self.apply_batch_config_to_accumulator(&produce_accumulator);
+        self.producer_config.produce_accumulator = Some(Arc::new(produce_accumulator));
         self.sync_producer_config_to_impl();
     }
 
@@ -1285,7 +1284,7 @@ impl DefaultMQProducer {
     #[inline]
     pub fn set_batch_max_delay_ms(&mut self, delay_ms: u32) {
         self.producer_config.batch_max_delay_ms = Some(delay_ms);
-        if let Some(produce_accumulator) = self.producer_config.produce_accumulator.as_mut() {
+        if let Some(produce_accumulator) = self.producer_config.produce_accumulator.as_ref() {
             if let Err(error) = produce_accumulator.set_batch_max_delay_ms(delay_ms) {
                 tracing::warn!("ignore invalid batchMaxDelayMs for ProduceAccumulator: {error}");
             }
@@ -1302,7 +1301,7 @@ impl DefaultMQProducer {
     #[inline]
     pub fn set_batch_max_bytes(&mut self, bytes: u64) {
         self.producer_config.batch_max_bytes = Some(bytes);
-        if let Some(produce_accumulator) = self.producer_config.produce_accumulator.as_mut() {
+        if let Some(produce_accumulator) = self.producer_config.produce_accumulator.as_ref() {
             if let Err(error) = produce_accumulator.set_batch_max_bytes(bytes) {
                 tracing::warn!("ignore invalid batchMaxBytes for ProduceAccumulator: {error}");
             }
@@ -1319,7 +1318,7 @@ impl DefaultMQProducer {
     #[inline]
     pub fn set_total_batch_max_bytes(&mut self, bytes: u64) {
         self.producer_config.total_batch_max_bytes = Some(bytes);
-        if let Some(produce_accumulator) = self.producer_config.produce_accumulator.as_mut() {
+        if let Some(produce_accumulator) = self.producer_config.produce_accumulator.as_ref() {
             if let Err(error) = produce_accumulator.set_total_batch_max_bytes(bytes) {
                 tracing::warn!("ignore invalid totalBatchMaxBytes for ProduceAccumulator: {error}");
             }
@@ -1337,7 +1336,7 @@ impl DefaultMQProducer {
         &self.producer_config
     }
 
-    fn apply_batch_config_to_accumulator(&self, produce_accumulator: &mut ProduceAccumulator) {
+    fn apply_batch_config_to_accumulator(&self, produce_accumulator: &ProduceAccumulator) {
         if let Some(delay_ms) = self.producer_config.batch_max_delay_ms {
             if let Err(error) = produce_accumulator.set_batch_max_delay_ms(delay_ms) {
                 tracing::warn!("ignore invalid batchMaxDelayMs for ProduceAccumulator: {error}");
@@ -1424,9 +1423,9 @@ impl DefaultMQProducer {
     }
 
     pub fn init_produce_accumulator(&mut self) {
-        let mut produce_accumulator =
+        let produce_accumulator =
             MQClientManager::get_instance().get_or_create_produce_accumulator(self.client_config.clone());
-        self.apply_batch_config_to_accumulator(&mut produce_accumulator);
+        self.apply_batch_config_to_accumulator(&produce_accumulator);
         self.producer_config.produce_accumulator = Some(produce_accumulator);
         self.sync_producer_config_to_impl();
     }
@@ -1482,10 +1481,10 @@ impl DefaultMQProducer {
     }
 
     #[inline]
-    fn get_accumulator_mut(&mut self) -> rocketmq_error::RocketMQResult<&mut ArcMut<ProduceAccumulator>> {
+    fn get_accumulator(&self) -> rocketmq_error::RocketMQResult<&Arc<ProduceAccumulator>> {
         self.producer_config
             .produce_accumulator
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| mq_client_err!("ProduceAccumulator is not initialized, auto-batch is enabled"))
     }
     pub async fn send_direct<M>(
@@ -1532,10 +1531,10 @@ impl DefaultMQProducer {
             MessageClientIDSetter::set_uniq_id(&mut msg);
             if send_callback.is_none() {
                 let mq_producer = self.clone();
-                self.get_accumulator_mut()?.send(msg, mq, mq_producer).await
+                self.get_accumulator()?.send(msg, mq, mq_producer).await
             } else {
                 let mq_producer = self.clone();
-                self.get_accumulator_mut()?
+                self.get_accumulator()?
                     .send_callback(msg, mq, send_callback, mq_producer)
                     .await?;
                 Ok(None)
@@ -1642,7 +1641,7 @@ impl MQProducer for DefaultMQProducer {
             Self::prepare_trace_dispatcher(&self.client_config, &mut self.producer_config, default_mqproducer_impl);
 
         default_mqproducer_impl.start().await?;
-        if let Some(ref mut produce_accumulator) = self.producer_config.produce_accumulator {
+        if let Some(ref produce_accumulator) = self.producer_config.produce_accumulator {
             produce_accumulator.start();
         }
         if let Some(dispatcher) = trace_dispatcher_to_start {
@@ -1666,7 +1665,7 @@ impl MQProducer for DefaultMQProducer {
             }
         }
 
-        if let Some(ref mut produce_accumulator) = self.producer_config.produce_accumulator {
+        if let Some(ref produce_accumulator) = self.producer_config.produce_accumulator {
             produce_accumulator.shutdown_async().await;
         }
 
