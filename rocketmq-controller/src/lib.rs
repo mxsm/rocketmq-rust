@@ -47,14 +47,17 @@
 //! ## Usage
 //!
 //! ```rust,ignore
+//! use std::sync::Arc;
+//!
 //! use rocketmq_controller::ControllerConfig;
 //! use rocketmq_controller::ControllerManager;
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
 //!     let config = ControllerConfig::default();
-//!     let mut controller = ControllerManager::new(config)?;
+//!     let controller = Arc::new(ControllerManager::new(config).await?);
 //!
+//!     controller.initialize().await?;
 //!     controller.start().await?;
 //!
 //!     // Controller is now running...
@@ -120,13 +123,13 @@ pub mod bench_support {
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::net::TcpListener as StdTcpListener;
+    use std::sync::Arc;
     use std::time::Duration;
     use std::time::Instant;
     use std::time::SystemTime;
 
     use rocketmq_common::common::controller::controller_config::RaftPeer;
     use rocketmq_runtime::ShutdownReport;
-    use rocketmq_rust::ArcMut;
     use serde::Serialize;
 
     use crate::config::ControllerConfig;
@@ -327,18 +330,16 @@ pub mod bench_support {
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300);
 
-        let manager = ArcMut::new(
+        let manager = Arc::new(
             ControllerManager::new(config)
                 .await
                 .expect("benchmark controller manager should create"),
         );
         manager
-            .clone()
             .initialize()
             .await
             .expect("benchmark controller manager should initialize");
         manager
-            .clone()
             .start()
             .await
             .expect("benchmark controller manager should start");

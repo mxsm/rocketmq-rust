@@ -609,8 +609,8 @@ impl NameServerRuntime {
                 .controller_config()
                 .cloned()
                 .expect("controller config should exist when embedded controller is enabled");
-            let controller_manager = ArcMut::new(ControllerManager::new(controller_config).await?);
-            let initialized = ControllerManager::initialize(controller_manager.clone()).await?;
+            let controller_manager = Arc::new(ControllerManager::new(controller_config).await?);
+            let initialized = controller_manager.initialize().await?;
             if !initialized {
                 return Err(namesrv_startup_failed(
                     "initialize embedded controller",
@@ -775,7 +775,7 @@ impl NameServerRuntime {
         self.inner.remoting_client.start(weak_arc_mut).await;
 
         if let Some(controller_manager) = self.inner.controller_manager().cloned() {
-            if let Err(error) = ControllerManager::start(controller_manager).await {
+            if let Err(error) = controller_manager.start().await {
                 if let Some(shutdown_tx) = self.shutdown_tx.as_ref() {
                     let _ = shutdown_tx.send(());
                 }
@@ -1238,7 +1238,7 @@ pub(crate) struct NameServerRuntimeInner {
     kvconfig_manager: Option<KVConfigManager>,
     remoting_client: ArcMut<RocketmqDefaultClient>,
     broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
-    controller_manager: Option<ArcMut<ControllerManager>>,
+    controller_manager: Option<Arc<ControllerManager>>,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
     service_context: Option<ServiceContext>,
     task_group: OnceLock<TaskGroup>,
@@ -1700,7 +1700,7 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
-    pub fn controller_manager(&self) -> Option<&ArcMut<ControllerManager>> {
+    pub fn controller_manager(&self) -> Option<&Arc<ControllerManager>> {
         self.controller_manager.as_ref()
     }
 

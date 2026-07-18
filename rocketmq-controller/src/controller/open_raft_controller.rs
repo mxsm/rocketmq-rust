@@ -78,7 +78,6 @@ use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -119,7 +118,7 @@ pub struct OpenRaftController {
     /// Shutdown signal sender for gRPC server
     shutdown_tx: Option<oneshot::Sender<()>>,
 
-    heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
+    heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
     lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn BrokerLifecycleListener>>>>,
     scheduling: Arc<AtomicBool>,
     first_received_heartbeat_time: Arc<AtomicU64>,
@@ -128,12 +127,12 @@ pub struct OpenRaftController {
 
 impl OpenRaftController {
     pub fn new(config: ControllerConfigReader) -> Self {
-        let heartbeat_manager = ArcMut::new(DefaultBrokerHeartbeatManager::new(config.clone()));
+        let heartbeat_manager = Arc::new(DefaultBrokerHeartbeatManager::new(config.clone()));
         Self::new_with_heartbeat(config, heartbeat_manager)
     }
 
     pub fn new_with_task_group(config: ControllerConfigReader, parent_task_group: TaskGroup) -> Self {
-        let heartbeat_manager = ArcMut::new(DefaultBrokerHeartbeatManager::new_with_task_group(
+        let heartbeat_manager = Arc::new(DefaultBrokerHeartbeatManager::new_with_task_group(
             config.clone(),
             parent_task_group.clone(),
         ));
@@ -142,14 +141,14 @@ impl OpenRaftController {
 
     pub fn new_with_heartbeat(
         config: ControllerConfigReader,
-        heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
     ) -> Self {
         Self::new_with_heartbeat_and_optional_task_group(config, heartbeat_manager, None)
     }
 
     pub fn new_with_heartbeat_and_task_group(
         config: ControllerConfigReader,
-        heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
         parent_task_group: TaskGroup,
     ) -> Self {
         Self::new_with_heartbeat_and_optional_task_group(config, heartbeat_manager, Some(parent_task_group))
@@ -157,7 +156,7 @@ impl OpenRaftController {
 
     fn new_with_heartbeat_and_optional_task_group(
         config: ControllerConfigReader,
-        heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
         parent_task_group: Option<TaskGroup>,
     ) -> Self {
         Self {

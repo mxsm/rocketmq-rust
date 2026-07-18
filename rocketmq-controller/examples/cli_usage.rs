@@ -91,13 +91,14 @@ async fn main() -> Result<()> {
     println!("\nExample code:");
     println!(
         r#"
+    use std::sync::Arc;
     use rocketmq_controller::{{startup::parse_command_line, ControllerManager}};
     
     #[tokio::main]
     async fn main() -> Result<()> {{
         let (_cli, config) = parse_command_line()?;
         
-        let mut controller = ControllerManager::new(config).await?;
+        let controller = Arc::new(ControllerManager::new(config).await?);
         controller.initialize().await?;
         controller.start().await?;
         

@@ -25,6 +25,7 @@
 //! cargo run --example controller_manager_cluster
 //! ```
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_controller::config::ControllerConfig;
@@ -32,7 +33,6 @@ use rocketmq_controller::config::RaftPeer;
 use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::error::Result;
 use rocketmq_controller::manager::ControllerManager;
-use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
 }
 
 /// Start a 3-node controller cluster
-async fn start_cluster() -> Result<Vec<ArcMut<ControllerManager>>> {
+async fn start_cluster() -> Result<Vec<Arc<ControllerManager>>> {
     let mut managers = Vec::new();
 
     // Define node configurations
@@ -98,17 +98,17 @@ async fn start_cluster() -> Result<Vec<ArcMut<ControllerManager>>> {
         // Create manager
         let manager = ControllerManager::new(config).await?;
 
-        // Wrap in ArcMut for initialization and start
-        let manager = ArcMut::new(manager);
+        // Share the manager through a read-only ownership handle.
+        let manager = Arc::new(manager);
 
         // Initialize
-        if !manager.clone().initialize().await? {
+        if !manager.initialize().await? {
             error!("Failed to initialize node {}", node_id);
             return Err(rocketmq_controller::error::ControllerError::InitializationFailed);
         }
 
         // Start
-        manager.clone().start().await?;
+        manager.start().await?;
         info!("✓ Node {} started successfully", node_id);
 
         managers.push(manager);
@@ -139,7 +139,7 @@ fn create_cluster_config(node_id: u64, port: u16, peers: Vec<RaftPeer>) -> Resul
 }
 
 /// Check and display cluster state
-async fn check_cluster_state(managers: &[ArcMut<ControllerManager>]) {
+async fn check_cluster_state(managers: &[Arc<ControllerManager>]) {
     let mut leader_count = 0;
     let mut follower_count = 0;
     let mut leader_node_id = None;
@@ -174,7 +174,7 @@ async fn check_cluster_state(managers: &[ArcMut<ControllerManager>]) {
 }
 
 /// Shutdown all nodes in the cluster
-async fn shutdown_cluster(managers: Vec<ArcMut<ControllerManager>>) -> Result<()> {
+async fn shutdown_cluster(managers: Vec<Arc<ControllerManager>>) -> Result<()> {
     info!("Shutting down cluster...");
 
     for (i, manager) in managers.iter().enumerate() {

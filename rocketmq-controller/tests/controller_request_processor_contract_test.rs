@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -53,7 +54,7 @@ const BROKER_ADDR_1: &str = "127.0.0.1:10911";
 const BROKER_ADDR_2: &str = "127.0.0.1:10912";
 
 struct ProcessorHarness {
-    manager: ArcMut<ControllerManager>,
+    manager: Arc<ControllerManager>,
     processor: ControllerRequestProcessor,
     channel: Channel,
     ctx: ConnectionHandlerContext,
@@ -75,13 +76,9 @@ impl ProcessorHarness {
             .with_storage_backend(StorageBackendType::Memory)
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300);
-        let manager = ArcMut::new(ControllerManager::new(config).await.expect("create controller manager"));
-        manager
-            .clone()
-            .initialize()
-            .await
-            .expect("initialize controller manager");
-        manager.clone().start().await.expect("start controller manager");
+        let manager = Arc::new(ControllerManager::new(config).await.expect("create controller manager"));
+        manager.initialize().await.expect("initialize controller manager");
+        manager.start().await.expect("start controller manager");
 
         let mut nodes = BTreeMap::new();
         nodes.insert(
@@ -305,7 +302,7 @@ async fn create_test_channel() -> Channel {
     Channel::new(inner, local_addr, local_addr)
 }
 
-async fn wait_for_leader(manager: &ArcMut<ControllerManager>) {
+async fn wait_for_leader(manager: &Arc<ControllerManager>) {
     wait_until(
         Duration::from_secs(5),
         || manager.is_leader(),

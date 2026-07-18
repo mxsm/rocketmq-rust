@@ -618,9 +618,11 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
 - [ ] PR-M11-12：完成 ArcMut、stable 与 SLO Phase 3 收口
   - [x] M11-12a owned-value leaf：Common 只读 TopicConfig helper 解除 ArcMut 类型绑定并移除本 crate `sync_unsafe_cell`；Remoting `RpcResponse` header 改为独占 `Box`，删除无效 shared-ref mutation facade
   - [x] M11-12b Controller config owner：`ArcSwap` 不可变快照与串行 copy/validate/publish 写入替代全部 `ArcMut<ControllerConfig>`；失败保持 last-known-good，旧 reader 保持旧快照
-  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录 Issue #8292/#8293、初始 760 production/2,125 occurrence 与本切片后 733/2,082 的真实下降
+  - [x] M11-12c Controller manager/heartbeat lifecycle owner：Manager 根对象改为 `Arc`，initialize/start/shutdown 串行；heartbeat 生命周期内部同步；request processor 与 housekeeping 使用 `Weak` 断开服务图强引用环
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297 与每次真实下降
   - [x] Issue #8295 后累计降至 711 production/2,029 occurrence；Controller 配置债务清零但其他 Controller owner 仍有 31 条 production 债务
-  - [ ] M11-12c～i：Remoting Channel/Context owner、Controller/NameServer 其余 owner、Client、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
+  - [ ] M11-12d～i：Remoting Channel/Context owner、Controller Raft/remoting-client 与 NameServer 其余 owner、Client、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 
