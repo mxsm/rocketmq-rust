@@ -29,15 +29,15 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 71 | 0 | 11 未开始；合计 11 尚未完成 | 82 |
+| PR 级工作包 | 72 | 0 | 10 未开始；合计 10 尚未完成 | 82 |
 | 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 1（M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 11 个未开始工作包分布：M10 为 0 个、M11 为 5 个、M12 为 6 个。
+剩余 10 个未开始工作包分布：M10 为 0 个、M11 为 4 个、M12 为 6 个。
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
-`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-08。
+`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-09。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -579,7 +579,15 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Ubuntu workflow 已交付 build、non-root/read-only smoke、CycloneDX SBOM、Trivy、Cosign bundle 与 provenance artifact；本机/WSL 缺少容器和供应链工具，未把远端 workflow 写成已执行
   - [x] [`M11-07 证据`](phase-3-production-readiness/11-container-foundation-evidence.md) 记录 immutable 输入、策略、验证边界、兼容例外与回滚
   - [x] 71/82 已完成、11 未完成，下一工作包 PR-M11-08；M10/M11/Phase 3/HUMAN/ARCH 及容器动态 `[TEST]` Gate 均未提前宣称完成
-- [ ] PR-M11-08：交付五个服务镜像入口
+- [x] PR-M11-08：交付五个服务镜像入口
+  - [x] 删除到期的组合 `docker/Dockerfile` 与兼容例外；`Dockerfile.base` 只通过五个显式 target 生成 Broker/NameServer/Controller/Proxy/MCP 镜像，每个 runtime 仅含 owner binary
+  - [x] 五服务均使用直接 JSON entrypoint、必需 config mount、`/var/lib/rocketmq/<service>` 数据路径、显式端口、UID/GID 10001、read-only rootfs/tmpfs 与 SIGTERM 标签合同，不含 secret 命令行参数
+  - [x] Controller、Proxy、MCP stdio/HTTPS 改用 `rocketmq-runtime::wait_for_signal_result`；Broker/NameServer 已有的跨平台 SIGINT/SIGTERM 行为保持一致
+  - [x] policy/guard 与 9 组正向/故意违规测试通过，覆盖五 target/owner/entrypoint/config/data/port/signal、遗留镜像复活、shell dispatch、secret 参数和弱化动态 smoke
+  - [x] 五份 smoke 配置由真实服务二进制解析；workflow 已交付逐镜像 build、配置缺失 fail-closed、只读/volume、真实 SIGTERM、CycloneDX、Trivy 与 Cosign/provenance
+  - [ ] Docker/Syft/Trivy/Cosign 本机不可用；M11-07 远端 build 已暴露 slim runtime 缺 CA bundle，M11-08 增加“签名 snapshot HTTP 引导 CA→HTTPS”修复，但未观察修复后五镜像动态套件成功，容器 `[TEST]` Gate 保持开放
+  - [x] [`M11-08 证据`](phase-3-production-readiness/11-service-image-entrypoints-evidence.md) 记录 owner 合同、signal 接线、验证边界和逐服务 digest 回滚
+  - [x] 72/82 已完成、10 未完成，下一工作包 PR-M11-09；M10/M11/Phase 3/HUMAN/ARCH 及容器动态 `[TEST]` Gate 均未提前宣称完成
 - [ ] PR-M11-09：交付 Helm 与 Kustomize 资产
 - [ ] PR-M11-10：统一 Probe、PreStop 与 Drain
 - [ ] PR-M11-11：完成 Kind/K3d fault matrix Gate

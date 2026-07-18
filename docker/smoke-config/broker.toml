@@ -1,0 +1,19 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+listenPort = 10911
+brokerIp1 = "127.0.0.1"
+storePathRootDir = "/var/lib/rocketmq/broker"
+namesrvAddr = "127.0.0.1:9876"
+autoCreateTopicEnable = false
+mappedFileSizeCommitLog = 1048576
+mappedFileSizeConsumeQueue = 6000
+mappedFileSizeConsumeQueueExt = 65536
+maxHashSlotNum = 1000
+maxIndexNum = 4000
+timerWheelEnable = false
+
+[brokerIdentity]
+brokerName = "container-smoke-broker"
+brokerClusterName = "ContainerSmoke"
+brokerId = 0

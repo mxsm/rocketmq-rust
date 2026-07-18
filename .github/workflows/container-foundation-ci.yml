@@ -8,6 +8,7 @@ on:
       - "docker/**"
       - "scripts/container_image_guard.py"
       - "scripts/container-supply-chain.ps1"
+      - "scripts/service-image-contract.ps1"
       - "scripts/tests/test_m11_container_foundation.py"
       - ".github/workflows/container-foundation-ci.yml"
   push:
@@ -17,6 +18,7 @@ on:
       - "docker/**"
       - "scripts/container_image_guard.py"
       - "scripts/container-supply-chain.ps1"
+      - "scripts/service-image-contract.ps1"
       - "scripts/tests/test_m11_container_foundation.py"
       - ".github/workflows/container-foundation-ci.yml"
   workflow_dispatch:
@@ -31,7 +33,7 @@ concurrency:
 jobs:
   verify-foundation:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -65,10 +67,17 @@ jobs:
         run: |
           ./scripts/container-supply-chain.ps1 -OutputDirectory target/container-foundation
 
+      - name: Build and verify five service images
+        shell: pwsh
+        run: |
+          ./scripts/service-image-contract.ps1 -OutputDirectory target/service-images
+
       - name: Upload supply-chain evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: container-foundation
-          path: target/container-foundation/
+          path: |
+            target/container-foundation/
+            target/service-images/
           if-no-files-found: error
           retention-days: 14

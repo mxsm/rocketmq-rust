@@ -1,0 +1,68 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+[server]
+name = "rocketmq-mcp"
+version = "1.0.0"
+transport = "stdio"
+log_level = "info"
+
+[server.stdio]
+log_to_stderr = true
+
+[server.http]
+bind = "127.0.0.1:8089"
+endpoint = "/mcp"
+public_base_url = "https://127.0.0.1:8089"
+validate_origin = true
+allowed_origins = ["https://127.0.0.1"]
+
+[server.http.tls]
+cert_path = "/etc/rocketmq/tls/server-cert.pem"
+key_path = "/etc/rocketmq/tls/server-key.pem"
+
+[server.http.auth]
+mode = "development-token"
+development_token_env = "ROCKETMQ_MCP_HTTP_TOKEN"
+issuer = ""
+audience = ""
+required_scopes = ["rocketmq:read"]
+jwt_algorithm = "rs256"
+jwt_key_env = ""
+jwks_url = "https://issuer.example.test/.well-known/jwks.json"
+jwks_refresh_seconds = 300
+jwks_max_stale_seconds = 900
+protected_resource_metadata_path = "/.well-known/oauth-protected-resource"
+
+[[clusters]]
+name = "container-smoke"
+namesrv_addr = "127.0.0.1:9876"
+default = true
+
+[security]
+profile = "diagnose"
+allow_change_planning = false
+sanitize_output = true
+rate_limit_per_minute = 60
+permissions_file = "permissions.toml"
+max_concurrent_requests_per_cluster = 2
+
+[audit]
+enabled = true
+sink = "memory"
+path = "/var/lib/rocketmq/mcp/audit.log"
+queue_capacity = 16
+max_record_bytes = 4096
+queue_max_bytes = 65536
+
+[cache]
+enabled = true
+max_entries = 16
+cluster_overview_ttl_ms = 1000
+topic_list_ttl_ms = 1000
+broker_metrics_ttl_ms = 1000
+consumer_lag_ttl_ms = 1000
+
+[diagnosis]
+consumer_lag_policy_profile = "production-default"
+consumer_lag_threshold = 1000

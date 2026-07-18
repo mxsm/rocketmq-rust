@@ -31,19 +31,24 @@ set -eux
 rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources
 cat > /etc/apt/sources.list.d/rocketmq-snapshot.sources <<SOURCES
 Types: deb
-URIs: https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/
+URIs: http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/
 Suites: bookworm bookworm-updates
 Components: main
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 Check-Valid-Until: no
 
 Types: deb
-URIs: https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/
+URIs: http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/
 Suites: bookworm-security
 Components: main
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 Check-Valid-Until: no
 SOURCES
+# The slim image has no CA bundle. The bootstrap fetch is still authenticated by the pinned
+# Debian Release signature and package hashes; all remaining packages switch back to HTTPS.
+apt-get -o Acquire::Check-Valid-Until=false update
+apt-get install -y --no-install-recommends ca-certificates
+sed -i 's#URIs: http://#URIs: https://#' /etc/apt/sources.list.d/rocketmq-snapshot.sources
 apt-get -o Acquire::Check-Valid-Until=false update
 apt-get install -y --no-install-recommends \
     build-essential \
@@ -83,19 +88,24 @@ set -eux
 rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources
 cat > /etc/apt/sources.list.d/rocketmq-snapshot.sources <<SOURCES
 Types: deb
-URIs: https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/
+URIs: http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/
 Suites: bookworm bookworm-updates
 Components: main
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 Check-Valid-Until: no
 
 Types: deb
-URIs: https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/
+URIs: http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/
 Suites: bookworm-security
 Components: main
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 Check-Valid-Until: no
 SOURCES
+# The slim image has no CA bundle. The bootstrap fetch is still authenticated by the pinned
+# Debian Release signature and package hashes; all remaining packages switch back to HTTPS.
+apt-get -o Acquire::Check-Valid-Until=false update
+apt-get install -y --no-install-recommends ca-certificates
+sed -i 's#URIs: http://#URIs: https://#' /etc/apt/sources.list.d/rocketmq-snapshot.sources
 apt-get -o Acquire::Check-Valid-Until=false update
 apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -129,3 +139,130 @@ WORKDIR /opt/rocketmq
 FROM runtime-base AS runtime-base-smoke
 
 CMD ["/bin/true"]
+
+FROM builder-base AS service-builder
+
+COPY . .
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked <<EOF
+set -eux
+cargo build --locked --release --package rocketmq-broker --bin rocketmq-broker-rust
+cargo build --locked --release --package rocketmq-namesrv --bin rocketmq-namesrv-rust
+cargo build --locked --release --package rocketmq-controller --bin rocketmq-controller-rust
+cargo build --locked --release --package rocketmq-proxy --bin rocketmq-proxy-rust
+cargo build --locked --release --package rocketmq-mcp --features streamable-http --bin rocketmq-mcp
+install -d /opt/rocketmq-binaries
+for binary in \
+    rocketmq-broker-rust \
+    rocketmq-namesrv-rust \
+    rocketmq-controller-rust \
+    rocketmq-proxy-rust \
+    rocketmq-mcp
+do
+    install -m 0555 "/workspace/target/release/${binary}" "/opt/rocketmq-binaries/${binary}"
+done
+EOF
+
+FROM runtime-base AS service-runtime
+
+USER 0:0
+RUN <<EOF
+set -eux
+install -d -m 0555 /etc/rocketmq
+install -d -o 10001 -g 10001 \
+    /var/lib/rocketmq/broker \
+    /var/lib/rocketmq/namesrv \
+    /var/lib/rocketmq/controller \
+    /var/lib/rocketmq/proxy \
+    /var/lib/rocketmq/mcp
+EOF
+
+ENV HOME=/var/lib/rocketmq \
+    ROCKETMQ_HOME=/var/lib/rocketmq
+
+VOLUME ["/var/lib/rocketmq"]
+USER 10001:10001
+
+FROM service-runtime AS broker
+
+COPY --from=service-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-broker-rust /usr/local/bin/rocketmq-broker-rust
+
+LABEL org.opencontainers.image.title="RocketMQ Rust Broker" \
+    io.rocketmq.image.role="broker" \
+    io.rocketmq.service.binary="rocketmq-broker-rust" \
+    io.rocketmq.service.config-path="/etc/rocketmq/broker.toml" \
+    io.rocketmq.service.data-path="/var/lib/rocketmq/broker" \
+    io.rocketmq.service.ports="10911,10912" \
+    io.rocketmq.service.signal="SIGTERM"
+
+EXPOSE 10911 10912
+ENTRYPOINT ["/usr/local/bin/rocketmq-broker-rust"]
+CMD ["--configFile", "/etc/rocketmq/broker.toml"]
+
+FROM service-runtime AS namesrv
+
+COPY --from=service-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-namesrv-rust /usr/local/bin/rocketmq-namesrv-rust
+
+LABEL org.opencontainers.image.title="RocketMQ Rust NameServer" \
+    io.rocketmq.image.role="namesrv" \
+    io.rocketmq.service.binary="rocketmq-namesrv-rust" \
+    io.rocketmq.service.config-path="/etc/rocketmq/namesrv.toml" \
+    io.rocketmq.service.data-path="/var/lib/rocketmq/namesrv" \
+    io.rocketmq.service.ports="9876" \
+    io.rocketmq.service.signal="SIGTERM"
+
+EXPOSE 9876
+ENTRYPOINT ["/usr/local/bin/rocketmq-namesrv-rust"]
+CMD ["--configFile", "/etc/rocketmq/namesrv.toml"]
+
+FROM service-runtime AS controller
+
+COPY --from=service-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-controller-rust /usr/local/bin/rocketmq-controller-rust
+
+LABEL org.opencontainers.image.title="RocketMQ Rust Controller" \
+    io.rocketmq.image.role="controller" \
+    io.rocketmq.service.binary="rocketmq-controller-rust" \
+    io.rocketmq.service.config-path="/etc/rocketmq/controller.toml" \
+    io.rocketmq.service.data-path="/var/lib/rocketmq/controller" \
+    io.rocketmq.service.ports="60109" \
+    io.rocketmq.service.signal="SIGTERM"
+
+EXPOSE 60109
+ENTRYPOINT ["/usr/local/bin/rocketmq-controller-rust"]
+CMD ["--config-file", "/etc/rocketmq/controller.toml"]
+
+FROM service-runtime AS proxy
+
+COPY --from=service-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-proxy-rust /usr/local/bin/rocketmq-proxy-rust
+
+LABEL org.opencontainers.image.title="RocketMQ Rust Proxy" \
+    io.rocketmq.image.role="proxy" \
+    io.rocketmq.service.binary="rocketmq-proxy-rust" \
+    io.rocketmq.service.config-path="/etc/rocketmq/proxy.toml" \
+    io.rocketmq.service.data-path="/var/lib/rocketmq/proxy" \
+    io.rocketmq.service.ports="8080,8081" \
+    io.rocketmq.service.signal="SIGTERM"
+
+EXPOSE 8080 8081
+ENTRYPOINT ["/usr/local/bin/rocketmq-proxy-rust"]
+CMD ["--config", "/etc/rocketmq/proxy.toml"]
+
+FROM service-runtime AS mcp
+
+COPY --from=service-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-mcp /usr/local/bin/rocketmq-mcp
+
+LABEL org.opencontainers.image.title="RocketMQ Rust MCP" \
+    io.rocketmq.image.role="mcp" \
+    io.rocketmq.service.binary="rocketmq-mcp" \
+    io.rocketmq.service.config-path="/etc/rocketmq/mcp.toml" \
+    io.rocketmq.service.data-path="/var/lib/rocketmq/mcp" \
+    io.rocketmq.service.ports="8089" \
+    io.rocketmq.service.signal="SIGTERM"
+
+EXPOSE 8089
+ENTRYPOINT ["/usr/local/bin/rocketmq-mcp"]
+CMD ["--config", "/etc/rocketmq/mcp.toml", "--transport", "stdio"]
+
+FROM runtime-base-smoke AS container-contract-default

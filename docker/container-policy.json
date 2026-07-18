@@ -1,7 +1,9 @@
 {
   "schema_version": 1,
-  "milestone": "M11-07",
+  "milestone": "M11-08",
   "foundation_dockerfile": "docker/Dockerfile.base",
+  "service_contract_script": "scripts/service-image-contract.ps1",
+  "smoke_config_directory": "docker/smoke-config",
   "base_images": {
     "builder": {
       "reference": "docker.io/library/rust:slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777",
@@ -15,6 +17,7 @@
   "build": {
     "rust_toolchain": "nightly-2026-07-05",
     "debian_snapshot": "20260717T000000Z",
+    "snapshot_bootstrap_transport": "http-with-signed-release-then-https",
     "builder_packages": [
       "build-essential",
       "ca-certificates",
@@ -35,7 +38,10 @@
     ],
     "builder_target": "builder-base",
     "runtime_target": "runtime-base",
-    "smoke_target": "runtime-base-smoke"
+    "smoke_target": "runtime-base-smoke",
+    "default_target": "container-contract-default",
+    "service_builder_target": "service-builder",
+    "service_runtime_target": "service-runtime"
   },
   "runtime": {
     "uid": 10001,
@@ -71,6 +77,59 @@
       "master"
     ]
   },
+  "services": {
+    "broker": {
+      "target": "broker",
+      "package": "rocketmq-broker",
+      "binary": "rocketmq-broker-rust",
+      "config_path": "/etc/rocketmq/broker.toml",
+      "data_path": "/var/lib/rocketmq/broker",
+      "ports": [10911, 10912],
+      "command": ["--configFile", "/etc/rocketmq/broker.toml"]
+    },
+    "namesrv": {
+      "target": "namesrv",
+      "package": "rocketmq-namesrv",
+      "binary": "rocketmq-namesrv-rust",
+      "config_path": "/etc/rocketmq/namesrv.toml",
+      "data_path": "/var/lib/rocketmq/namesrv",
+      "ports": [9876],
+      "command": ["--configFile", "/etc/rocketmq/namesrv.toml"]
+    },
+    "controller": {
+      "target": "controller",
+      "package": "rocketmq-controller",
+      "binary": "rocketmq-controller-rust",
+      "config_path": "/etc/rocketmq/controller.toml",
+      "data_path": "/var/lib/rocketmq/controller",
+      "ports": [60109],
+      "command": ["--config-file", "/etc/rocketmq/controller.toml"]
+    },
+    "proxy": {
+      "target": "proxy",
+      "package": "rocketmq-proxy",
+      "binary": "rocketmq-proxy-rust",
+      "config_path": "/etc/rocketmq/proxy.toml",
+      "data_path": "/var/lib/rocketmq/proxy",
+      "ports": [8080, 8081],
+      "command": ["--config", "/etc/rocketmq/proxy.toml"]
+    },
+    "mcp": {
+      "target": "mcp",
+      "package": "rocketmq-mcp",
+      "binary": "rocketmq-mcp",
+      "config_path": "/etc/rocketmq/mcp.toml",
+      "data_path": "/var/lib/rocketmq/mcp",
+      "ports": [8089],
+      "command": ["--config", "/etc/rocketmq/mcp.toml", "--transport", "stdio"]
+    }
+  },
+  "signal_sources": {
+    "controller": "rocketmq-controller/src/bin/controller_bootstrap.rs",
+    "proxy": "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+    "mcp_stdio": "rocketmq-tools/rocketmq-mcp/src/main.rs",
+    "mcp_http": "rocketmq-tools/rocketmq-mcp/src/transport/streamable_http.rs"
+  },
   "supply_chain": {
     "syft_version": "v1.48.0",
     "trivy_version": "v0.72.0",
@@ -101,11 +160,5 @@
       "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
     }
   },
-  "compatibility_exceptions": [
-    {
-      "path": "docker/Dockerfile",
-      "expires_at": "M11-08",
-      "reason": "Existing combined service image remains unchanged until five independent service entrypoints are delivered."
-    }
-  ]
+  "compatibility_exceptions": []
 }

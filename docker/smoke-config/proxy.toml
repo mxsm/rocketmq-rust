@@ -1,0 +1,14 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+mode = "cluster"
+
+[grpc]
+listenAddr = "0.0.0.0:8081"
+
+[remoting]
+enabled = false
+listenAddr = "0.0.0.0:8080"
+
+[cluster]
+namesrvAddr = "127.0.0.1:9876"
