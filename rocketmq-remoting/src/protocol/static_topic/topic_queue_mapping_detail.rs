@@ -13,16 +13,3 @@
 // limitations under the License.
 
 pub use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::*;
-
-use rocketmq_rust::ArcMut;
-
-use super::logic_queue_mapping_item::LogicQueueMappingItem;
-
-#[deprecated(note = "use TopicQueueMappingDetail::put_mapping_info with an exclusive mutable reference")]
-pub fn put_mapping_info(
-    mut mapping_detail: ArcMut<TopicQueueMappingDetail>,
-    global_id: i32,
-    mapping_info: Vec<LogicQueueMappingItem>,
-) {
-    TopicQueueMappingDetail::put_mapping_info(&mut mapping_detail, global_id, mapping_info);
-}

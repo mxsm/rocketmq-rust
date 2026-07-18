@@ -300,9 +300,7 @@ impl RouteInfoManager {
                 self.create_and_update_queue_data(&broker_name, config);
             }
             if self.is_broker_topic_config_changed(&cluster_name, &broker_addr, data_version) || register_first {
-                for entry in topic_queue_mapping_info_map {
-                    let topic = entry.key();
-                    let vtq_info = entry.value();
+                for (topic, vtq_info) in topic_queue_mapping_info_map {
                     if !self.topic_queue_mapping_info_table.contains_key(topic) {
                         self.topic_queue_mapping_info_table
                             .insert(topic.clone(), HashMap::new());
@@ -310,7 +308,7 @@ impl RouteInfoManager {
                     self.topic_queue_mapping_info_table
                         .get_mut(topic)
                         .unwrap()
-                        .insert(vtq_info.bname.as_ref().unwrap().clone(), (**vtq_info).clone());
+                        .insert(vtq_info.bname.as_ref().unwrap().clone(), vtq_info.clone());
                 }
             }
         }

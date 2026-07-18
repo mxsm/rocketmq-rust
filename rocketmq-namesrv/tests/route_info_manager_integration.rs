@@ -297,7 +297,7 @@ fn register_broker_request_with_options(
             );
     }
 
-    let body = RegisterBrokerBody::new((&topic_config_wrapper).into(), filter_server_list).encode(false);
+    let body = RegisterBrokerBody::new(topic_config_wrapper.clone(), filter_server_list).encode(false);
     let mut request = RemotingCommand::create_request_command(
         RequestCode::RegisterBroker,
         RegisterBrokerRequestHeader::new(

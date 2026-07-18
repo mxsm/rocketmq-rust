@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::any::Any;
-use std::sync::Arc;
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -56,9 +55,7 @@ impl RpcClientUtils {
     pub fn create_command_for_rpc_response(mut rpc_response: RpcResponse) -> RemotingCommand {
         let mut cmd = match rpc_response.header.take() {
             None => RemotingCommand::create_response_command_with_code(rpc_response.code),
-            Some(value) => {
-                RemotingCommand::create_response_command().set_command_custom_header_origin(Some(Arc::new(value)))
-            }
+            Some(value) => RemotingCommand::create_response_command().set_command_custom_header_boxed(value),
         };
         match rpc_response.exception {
             None => {}
@@ -92,9 +89,11 @@ impl RpcClientUtils {
 
 #[cfg(test)]
 mod tests {
+    use cheetah_string::CheetahString;
     use rocketmq_error::RocketMQError;
 
     use super::*;
+    use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 
     struct FailingSerializable;
 
@@ -145,5 +144,32 @@ mod tests {
         let bytes = Bytes::from_static(b"payload");
 
         assert_eq!(RpcClientUtils::try_encode_body(&bytes).unwrap(), Some(bytes));
+    }
+
+    #[test]
+    fn rpc_response_command_preserves_owned_boxed_header() {
+        let response = RpcResponse::new(
+            17,
+            Box::new(GetRouteInfoRequestHeader::new("owned-topic", Some(true))),
+            None,
+        );
+
+        let mut command = RpcClientUtils::create_command_for_rpc_response(response);
+        assert_eq!(
+            command
+                .read_custom_header_ref::<GetRouteInfoRequestHeader>()
+                .expect("owned response header should remain attached")
+                .topic,
+            CheetahString::from_static_str("owned-topic")
+        );
+
+        command.make_custom_header_to_net();
+        assert_eq!(
+            command
+                .decode_command_custom_header::<GetRouteInfoRequestHeader>()
+                .expect("materialized response header should decode")
+                .topic,
+            CheetahString::from_static_str("owned-topic")
+        );
     }
 }

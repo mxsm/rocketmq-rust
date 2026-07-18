@@ -2251,7 +2251,7 @@ mod tests {
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
         filter_server_list: Vec<CheetahString>,
     ) -> RemotingCommand {
-        let body = RegisterBrokerBody::new((&topic_config_wrapper).into(), filter_server_list).encode(false);
+        let body = RegisterBrokerBody::new(topic_config_wrapper.clone(), filter_server_list).encode(false);
         let body_crc32 = CRC32Utils::crc32(&body);
         let mut request = RemotingCommand::create_request_command(
             RequestCode::RegisterBroker,

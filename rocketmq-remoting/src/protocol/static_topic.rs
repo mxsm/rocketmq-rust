@@ -20,6 +20,3 @@ pub use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info;
 pub use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_one;
 pub use rocketmq_protocol::protocol::static_topic::topic_remapping_detail_wrapper;
 pub mod topic_queue_mapping_utils;
-
-#[allow(deprecated)]
-pub use topic_queue_mapping_detail::put_mapping_info;

@@ -15,8 +15,8 @@
 //! Remoting-owned construction and source-compatibility helpers.
 //!
 //! `RemotingCommand` itself is always the canonical protocol type. Process
-//! environment defaults and the historical `ArcMut` setter remain here so the
-//! protocol owner does not acquire environment or synchronization dependencies.
+//! environment defaults remain here so the protocol owner does not acquire an
+//! environment dependency.
 
 use std::sync::LazyLock;
 
@@ -74,6 +74,3 @@ pub fn create_response_command() -> RemotingCommand {
     create_remoting_command(rocketmq_protocol::code::response_code::RemotingSysResponseCode::Success)
         .mark_response_type()
 }
-
-#[allow(deprecated)]
-pub use super::remoting_command::set_command_custom_header_origin;
