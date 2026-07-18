@@ -627,7 +627,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
   - [x] Issue #8299 后实际快照降至 690 production/1,961 occurrence；Controller 降至 10 条/26 occurrence，Raft/OpenRaft owner 与 Manager Raft `mut_from_ref` 已清零
   - [x] Issue #8301 后实际快照降至 688 production/1,959 occurrence；Controller 降至 8 条/24 occurrence，request processor wrapper 已退出 `ArcMut`
-  - [x] Issue #8303 后实际快照降至 669 production/1,918 occurrence；NameServer 降至 28 条/58 occurrence，runtime/KV/V2 route/batch/housekeeping/request-processor owner 已退出 `ArcMut`
+  - [x] Issue #8303 后实际快照降至 669 production/1,918 occurrence；NameServer 降至 28 条/58 occurrence（V1 tables 16/44、remoting client 4/5、Context 8/9），runtime/KV/V2 route/batch/housekeeping/request-processor owner 已退出 `ArcMut`
+  - [x] Issue #8305 按实际快照校正 NameServer 子类别分配；28 条/58 occurrence 总量与 reviewed baseline 不变
   - [ ] M11-12g～i：Remoting Channel/Context owner、Controller/NameServer remoting-client 与 NameServer V1 tables、Client、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
