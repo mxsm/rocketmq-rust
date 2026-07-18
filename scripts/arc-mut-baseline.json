@@ -20282,12 +20282,6 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "ea19abbb66b7e6c7d9f85ede",
-          "fingerprint": "23c7ad901013bc5b23335943",
-          "item": "fn new_with_optional_runtime_context",
-          "line": 477
-        },
-        {
           "id": "c0c5343f06da625d6f0c9421",
           "fingerprint": "d6c41095f32b0f508ac1a909",
           "item": "fn new_with_optional_runtime_context",
@@ -20357,12 +20351,6 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "6ca4a88236aa76dded99b7f8",
-          "fingerprint": "6146d925c1a30a2d49ee5c05",
-          "item": "struct ControllerManager",
-          "line": 379
-        },
-        {
           "id": "f4bf22a1fb9b9be808789e6e",
           "fingerprint": "7d57199cee4536c4096d11c5",
           "item": "struct ControllerManager",
@@ -20379,12 +20367,6 @@
           "fingerprint": "473bd4323bca66bc956b48d5",
           "item": "fn remoting_client",
           "line": 1114
-        },
-        {
-          "id": "df1fe2a1ed575c25457f9555",
-          "fingerprint": "9692b7feb34be9b3711b1da5",
-          "item": "fn controller",
-          "line": 1118
         }
       ],
       "owner": "controller",
@@ -20430,69 +20412,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "a2c82979bea79b7a08c52294",
-      "path": "rocketmq-controller/src/controller/raft_controller.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "a4db124866af9233ab767277",
-          "fingerprint": "3a7bed6b1d4b6936c70b29a1",
-          "item": "fn new_open_raft",
-          "line": 56
-        },
-        {
-          "id": "53cb86775313b21c02ed03c9",
-          "fingerprint": "8afaaa428df0c46bf990dbbf",
-          "item": "fn new_open_raft_with_heartbeat",
-          "line": 66
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "8af8d8b47550487af976b3d9",
-      "path": "rocketmq-controller/src/controller/raft_controller.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "578cadd28eac5db9616d006e",
-          "fingerprint": "b087d17105a042b75f737f0f",
-          "item": "<module>",
-          "line": 33
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "6e235dc2b29b1757edd83ca9",
-      "path": "rocketmq-controller/src/controller/raft_controller.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "09fb7e498c3c8cebeffdc774",
-          "fingerprint": "85908e0c562cf3384cc30089",
-          "item": "struct RaftController",
-          "line": 49
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "e6ffa41541ab5a2f5e7b067a",
       "path": "rocketmq-controller/src/heartbeat/broker_live_info.rs",
       "symbol": "ArcMut",
@@ -20533,74 +20452,6 @@
       ],
       "owner": "controller",
       "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "0f2fa6d2a1f916eb1cc498b6",
-      "path": "rocketmq-controller/src/processor/broker_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "2a6cf4dbdf38c1e9a50a626a",
-          "fingerprint": "3cf5efc6f80680de160bb23a",
-          "item": "<module>",
-          "line": 18
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "257fd4486a5d6c9f1ef1f2b5",
-      "path": "rocketmq-controller/src/processor/broker_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "2c26f6dd5451c1ad3f6b253e",
-          "fingerprint": "731e239791db3df2c60c307c",
-          "item": "struct RegisterBrokerProcessor",
-          "line": 45
-        },
-        {
-          "id": "6b516aae3fe96e115aff8a4a",
-          "fingerprint": "c3ba6a46ef7c5e8ddea6302c",
-          "item": "fn new",
-          "line": 50
-        },
-        {
-          "id": "48e3c27e09f0d8b6be7a0d8b",
-          "fingerprint": "0002c7f444d38f62aea72550",
-          "item": "struct UnregisterBrokerProcessor",
-          "line": 124
-        },
-        {
-          "id": "8c756e0e647eb40b73ae4beb",
-          "fingerprint": "c3ba6a46ef7c5e8ddea6302c",
-          "item": "fn new",
-          "line": 129
-        },
-        {
-          "id": "d00e74ed9e6369365c5ee6d3",
-          "fingerprint": "5048337a1145c36c087e07fe",
-          "item": "struct ElectMasterProcessor",
-          "line": 233
-        },
-        {
-          "id": "553024a8d8fd3f6d2070bdd6",
-          "fingerprint": "c3ba6a46ef7c5e8ddea6302c",
-          "item": "fn new",
-          "line": 238
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
       "remove_by": "M06",
       "adr": "ADR-002"
     },
@@ -20740,74 +20591,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "88397dd08af4c70b072668ea",
-      "path": "rocketmq-controller/src/processor/topic_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "b9bb95eca2f662aac6b452c1",
-          "fingerprint": "a427d5e9c229f573925d441c",
-          "item": "<module>",
-          "line": 17
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "d5aa99811a2cc0c57f0283ad",
-      "path": "rocketmq-controller/src/processor/topic_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "9f9943ce2ab9caa0f6af9f61",
-          "fingerprint": "ccf8ae0c13c7ca87ccd9f5c6",
-          "item": "struct CreateTopicProcessor",
-          "line": 41
-        },
-        {
-          "id": "7812e3f687965f6282720171",
-          "fingerprint": "c3ba6a46ef7c5e8ddea6302c",
-          "item": "fn new",
-          "line": 46
-        },
-        {
-          "id": "3fefc3a49c797eeb036c3fe0",
-          "fingerprint": "1d8c0c08e8564954a8d48d4d",
-          "item": "struct UpdateTopicProcessor",
-          "line": 122
-        },
-        {
-          "id": "58450e4573916df7c6a589cd",
-          "fingerprint": "c3ba6a46ef7c5e8ddea6302c",
-          "item": "fn new",
-          "line": 127
-        },
-        {
-          "id": "d799d4e784929df4e3b41274",
-          "fingerprint": "ee3571887d0c04c69c614081",
-          "item": "struct DeleteTopicProcessor",
-          "line": 194
-        },
-        {
-          "id": "061ac66b3570b0d41fe5bf77",
-          "fingerprint": "c3ba6a46ef7c5e8ddea6302c",
-          "item": "fn new",
-          "line": 199
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "ef3653865ec8ee969cdef2b7",
       "path": "rocketmq-controller/src/processor.rs",
       "symbol": "ArcMut",
@@ -20833,18 +20616,6 @@
       "kind": "type_reference",
       "category": "production",
       "occurrences": [
-        {
-          "id": "ad3114e56de26d514b081bc6",
-          "fingerprint": "a1d655cde355e5b5d2016894",
-          "item": "struct ProcessorManager",
-          "line": 62
-        },
-        {
-          "id": "1532089ed6551ae19d393f67",
-          "fingerprint": "eee8f1db1b6d878245eb9ad6",
-          "item": "fn new",
-          "line": 73
-        },
         {
           "id": "cc93b0b15498ba2ab546eaa3",
           "fingerprint": "c557195b13068a12dbd8468a",

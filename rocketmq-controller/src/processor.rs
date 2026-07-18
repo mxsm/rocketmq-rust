@@ -59,7 +59,7 @@ pub trait RequestProcessor: Send + Sync {
 /// RPC requests from brokers and clients.
 pub struct ProcessorManager {
     /// Raft controller
-    raft: ArcMut<RaftController>,
+    raft: Arc<RaftController>,
 
     /// Metadata store
     metadata: Arc<MetadataStore>,
@@ -70,7 +70,7 @@ pub struct ProcessorManager {
 
 impl ProcessorManager {
     /// Create a new processor manager
-    pub fn new(_config: ControllerConfigReader, raft: ArcMut<RaftController>, metadata: Arc<MetadataStore>) -> Self {
+    pub fn new(_config: ControllerConfigReader, raft: Arc<RaftController>, metadata: Arc<MetadataStore>) -> Self {
         // Initialize processors
         let mut processors: HashMap<RequestType, Arc<dyn RequestProcessor>> = HashMap::new();
 

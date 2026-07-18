@@ -374,9 +374,9 @@ pub struct ControllerManager {
     /// Configuration
     config: ControllerConfigHandle,
 
-    /// Raft controller for consensus and leader election
-    /// Note: Uses ArcMut to allow mutable access via &self
-    raft_controller: ArcMut<RaftController>,
+    /// Raft controller for consensus and leader election.
+    /// Lifecycle mutation is synchronized inside the controller.
+    raft_controller: Arc<RaftController>,
 
     /// Metadata store for broker and topic information
     metadata: Arc<MetadataStore>,
@@ -474,7 +474,7 @@ impl ControllerManager {
         // Initialize Raft controller for leader election.
         // The controller and request processor must share the same heartbeat manager so that
         // liveness-aware paths observe the broker heartbeats recorded by RPC handlers.
-        let raft_arc = ArcMut::new(RaftController::new_open_raft_with_heartbeat(
+        let raft_arc = Arc::new(RaftController::new_open_raft_with_heartbeat(
             config.reader(),
             heartbeat_manager.clone(),
         ));
@@ -761,7 +761,7 @@ impl ControllerManager {
         info!("Starting controller manager...");
 
         // Start Raft controller first (critical for leader election)
-        if let Err(e) = self.raft_controller.mut_from_ref().startup().await {
+        if let Err(e) = self.raft_controller.startup_shared().await {
             self.running.store(false, Ordering::SeqCst);
             return Err(self
                 .cleanup_after_start_failure(ControllerError::runtime_error(format!(
@@ -972,7 +972,7 @@ impl ControllerManager {
         // Shutdown Raft controller last (it coordinates distributed operations)
         match tokio::time::timeout(
             deadline.remaining().min(Duration::from_secs(10)),
-            self.raft_controller.mut_from_ref().shutdown(),
+            self.raft_controller.shutdown_shared(),
         )
         .await
         {
@@ -1115,7 +1115,7 @@ impl ControllerManager {
         self.remoting_client.clone()
     }
 
-    pub fn controller(&self) -> &ArcMut<RaftController> {
+    pub fn controller(&self) -> &Arc<RaftController> {
         &self.raft_controller
     }
 
