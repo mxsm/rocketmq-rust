@@ -181,6 +181,18 @@ pub mod labels {
     pub const DLEDGER_OPERATION: &str = "dledger_operation";
     pub const DLEDGER_OPERATION_STATUS: &str = "dLedger_operation_status";
     pub const ELECTION_RESULT: &str = "election_result";
+    pub const LABEL_KEY: &str = "label_key";
+}
+
+/// Stable event identifiers consumed by structured-log exporters and guards.
+pub mod events {
+    pub const AUTH_DECISION: &str = "rocketmq.auth.decision";
+    pub const AUTH_RELOAD: &str = "rocketmq.auth.reload";
+    pub const MCP_ACTION: &str = "rocketmq.mcp.action";
+    pub const TASK_LIFECYCLE: &str = "rocketmq.task.lifecycle";
+    pub const RECOVERY_STATE: &str = "rocketmq.recovery.state";
+    pub const EXPORTER_DROP: &str = "rocketmq.exporter.drop";
+    pub const EXPORTER_SHUTDOWN: &str = "rocketmq.exporter.shutdown";
 }
 
 pub mod trace {

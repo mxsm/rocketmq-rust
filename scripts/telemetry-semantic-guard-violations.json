@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "registry_version": "1.0.0",
+  "fixtures": [
+    {
+      "id": "unknown-signal",
+      "operation": "set",
+      "path": [
+        "signals",
+        0,
+        "id"
+      ],
+      "value": "rocketmq_unknown_metric",
+      "expected": "unknown registry signal"
+    },
+    {
+      "id": "undeclared-attribute",
+      "operation": "set",
+      "path": [
+        "signals",
+        0,
+        "attributes"
+      ],
+      "value": [
+        "undeclared.attribute"
+      ],
+      "expected": "undeclared attributes"
+    },
+    {
+      "id": "high-cardinality-default",
+      "operation": "set",
+      "path": [
+        "attributes",
+        29,
+        "default_enabled"
+      ],
+      "value": true,
+      "expected": "high-cardinality attribute must be disabled by default"
+    },
+    {
+      "id": "unbounded-event-rate",
+      "operation": "delete",
+      "path": [
+        "signals",
+        123,
+        "sampling",
+        "max_per_second"
+      ],
+      "expected": "rate-limited event requires max_per_second"
+    },
+    {
+      "id": "invalid-deprecation-window",
+      "operation": "set",
+      "path": [
+        "signals",
+        123,
+        "deprecation"
+      ],
+      "value": {
+        "status": "deprecated",
+        "since": "1.0.0",
+        "replacement": "rocketmq.auth.replacement",
+        "remove_after": "1.1.0"
+      },
+      "expected": "deprecation window must span at least two minor versions"
+    },
+    {
+      "id": "blocking-outage-enqueue",
+      "operation": "set",
+      "path": [
+        "outage_policy",
+        "data_plane_blocking"
+      ],
+      "value": true,
+      "expected": "outage_policy.data_plane_blocking must remain False"
+    },
+    {
+      "id": "weakened-byte-bound",
+      "operation": "set",
+      "path": [
+        "outage_policy",
+        "max_queue_bytes"
+      ],
+      "value": 0,
+      "expected": "outage_policy.max_queue_bytes must match Rust constant"
+    }
+  ]
+}

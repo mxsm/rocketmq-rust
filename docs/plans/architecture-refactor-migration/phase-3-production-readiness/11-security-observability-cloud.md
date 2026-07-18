@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 已批准，等待 M09；部分依赖 M10 SLI |
+| 状态 | 实施中（PR-M11-01 已完成；下一工作包 PR-M11-02；部分依赖 M10 SLI） |
 | 预计周期 | 4–6 周 |
 | 工作包 | 延续 WP01、WP03、WP05、WP07、WP14–WP16 |
 | 前置条件 | 32-package Gate；secure dry-run、ServiceContext、semantic owner、durability SLI 可用 |
@@ -48,12 +48,16 @@
 
 ### PR-M11-01：Telemetry semantic registry
 
-- [ ] `[ARCH]` 为每个 metric/span/log 声明 owner、unit、stability、attributes、cardinality、privacy、deprecation。
-- [ ] `[DEV]` 实现计划中的 `telemetry_semantic_guard.py` 和违规 fixture，未登记/超预算字段拒绝。
-- [ ] `[DEV]` 登记 request、watermark/lag、connection/bytes、task、recovery/cache、auth/MCP、exporter 信号。
-- [ ] `[TEST]` 覆盖 collector outage：有界队列、可计量 drop、shutdown timeout，数据面不阻塞。
-- [ ] `[REV]` 检查字段低基数、采样明确、无敏感数据和每消息无限 span/event。
-- [ ] 回滚点：registry 可回到上一 version；不得关闭 privacy/cardinality 失败。
+- [x] `[ARCH]` 为每个 metric/span/log 声明 owner、unit、stability、attributes、cardinality、privacy、deprecation。
+- [x] `[DEV]` 实现计划中的 `telemetry_semantic_guard.py` 和违规 fixture，未登记/超预算字段拒绝。
+- [x] `[DEV]` 登记 request、watermark/lag、connection/bytes、task、recovery/cache、auth/MCP、exporter 信号。
+- [x] `[TEST]` 覆盖 collector outage：有界队列、可计量 drop、shutdown timeout，数据面不阻塞。
+- [x] `[REV]` 检查字段低基数、采样明确、无敏感数据和每消息无限 span/event。
+- [x] 回滚点：registry 可回到上一 version；不得关闭 privacy/cardinality 失败。
+
+完成证据：[`11-telemetry-semantic-registry-evidence.md`](11-telemetry-semantic-registry-evidence.md)。注册表覆盖
+119 metric、4 span、7 stable log event 和 66 attribute；65/82 工作包完成，剩余 M11 11 个、M12 6 个，
+下一工作包为 PR-M11-02。本工作包不提前宣称 M10、M11 或 Phase 3 Gate 完成。
 
 ### PR-M11-02：SecretProvider 基础合同与本地 Adapter
 
@@ -184,7 +188,7 @@ python scripts/architecture_dependency_guard.py --mode target
 .\scripts\kind-architecture-refactor-e2e.ps1
 ```
 
-kind E2E、semantic guard只在脚本和fixture实际交付后执行。
+Telemetry semantic guard 已由 PR-M11-01 交付并接入 CI；kind E2E 仍只在后续脚本和 fixture 实际交付后执行。
 
 ## 回滚触发器
 
@@ -197,7 +201,7 @@ kind E2E、semantic guard只在脚本和fixture实际交付后执行。
 
 ## Exit Checklist
 
-- [ ] `[TEST]` semantic/cardinality/privacy guard正负fixture全绿。
+- [x] `[TEST]` semantic/cardinality/privacy guard正负fixture全绿。
 - [ ] `[TEST]` collector/audit outage有界且不阻塞数据面。
 - [ ] `[REV]` secure缺失/过期/unknown均fail closed，secret全链路脱敏。
 - [ ] `[TEST]` MCP HTTP认证、rotation、audit、Plan无副作用合同通过。

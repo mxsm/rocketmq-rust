@@ -13,5 +13,6 @@
 // limitations under the License.
 
 pub mod otlp;
+pub mod outage;
 pub mod prometheus;
 pub mod stdout;
