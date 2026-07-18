@@ -128,9 +128,9 @@ pub struct DefaultMQPushConsumerImpl {
     message_listener: Option<ArcMut<MessageListener>>,
     pub(crate) offset_store: Option<ArcMut<OffsetStore>>,
     pub(crate) consume_message_service:
-        Option<ArcMut<ConsumeMessageServiceGeneral<ConsumeMessageConcurrentlyService, ConsumeMessageOrderlyService>>>,
+        Option<Arc<ConsumeMessageServiceGeneral<ConsumeMessageConcurrentlyService, ConsumeMessageOrderlyService>>>,
     pub(crate) consume_message_pop_service: Option<
-        ArcMut<ConsumeMessagePopServiceGeneral<ConsumeMessagePopConcurrentlyService, ConsumeMessagePopOrderlyService>>,
+        Arc<ConsumeMessagePopServiceGeneral<ConsumeMessagePopConcurrentlyService, ConsumeMessagePopOrderlyService>>,
     >,
     queue_flow_control_times: u64,
     queue_max_span_flow_control_times: u64,
@@ -183,15 +183,9 @@ impl DefaultMQPushConsumerImpl {
         self.rebalance_impl
             .set_default_mqpush_consumer_impl(default_mqpush_consumer_impl.clone());
         self.default_mqpush_consumer_impl = Some(default_mqpush_consumer_impl.clone());
-        if let Some(ref mut consume_message_concurrently_service) = self.consume_message_service {
-            if let Some(mut service) = consume_message_concurrently_service.get_consume_message_concurrently_service() {
-                service.default_mqpush_consumer_impl = Some(default_mqpush_consumer_impl);
-            } else {
-                warn!(
-                    "DefaultMQPushConsumerImpl self reference not propagated: concurrent consume service is not \
-                     initialized, group={}",
-                    self.consumer_config.consumer_group
-                );
+        if let Some(consume_message_service) = self.consume_message_service.as_ref() {
+            if let Some(service) = consume_message_service.get_consume_message_concurrently_service() {
+                *service.default_mqpush_consumer_impl.write() = Some(default_mqpush_consumer_impl);
             }
         }
     }
@@ -303,19 +297,19 @@ impl DefaultMQPushConsumerImpl {
                 if let Some(message_listener) = self.message_listener.as_ref() {
                     if let Some(listener) = message_listener.message_listener_concurrently.clone() {
                         self.consume_orderly = false;
-                        let consume_message_concurrently_service = ArcMut::new(ConsumeMessageConcurrentlyService::new(
+                        let consume_message_concurrently_service = Arc::new(ConsumeMessageConcurrentlyService::new(
                             self.client_config.clone(),
                             self.consumer_config.clone(),
                             self.consumer_config.consumer_group.clone(),
                             listener.clone(),
                             self.default_mqpush_consumer_impl.clone(),
                         ));
-                        self.consume_message_service = Some(ArcMut::new(ConsumeMessageServiceGeneral::new(
+                        self.consume_message_service = Some(Arc::new(ConsumeMessageServiceGeneral::new(
                             Some(consume_message_concurrently_service),
                             None,
                         )));
                         let consume_message_pop_concurrently_service =
-                            ArcMut::new(ConsumeMessagePopConcurrentlyService::new(
+                            Arc::new(ConsumeMessagePopConcurrentlyService::new(
                                 self.client_config.clone(),
                                 self.consumer_config.clone(),
                                 self.consumer_config.consumer_group.clone(),
@@ -323,43 +317,43 @@ impl DefaultMQPushConsumerImpl {
                                 self.default_mqpush_consumer_impl.clone(),
                             ));
 
-                        self.consume_message_pop_service = Some(ArcMut::new(ConsumeMessagePopServiceGeneral::new(
+                        self.consume_message_pop_service = Some(Arc::new(ConsumeMessagePopServiceGeneral::new(
                             Some(consume_message_pop_concurrently_service),
                             None,
                         )));
                     } else if let Some(listener) = message_listener.message_listener_orderly.clone() {
                         self.consume_orderly = true;
-                        let consume_message_orderly_service = ArcMut::new(ConsumeMessageOrderlyService::new(
+                        let consume_message_orderly_service = Arc::new(ConsumeMessageOrderlyService::new(
                             self.client_config.clone(),
                             self.consumer_config.clone(),
                             self.consumer_config.consumer_group.clone(),
                             listener.clone(),
                             self.default_mqpush_consumer_impl.clone(),
                         ));
-                        self.consume_message_service = Some(ArcMut::new(ConsumeMessageServiceGeneral::new(
+                        self.consume_message_service = Some(Arc::new(ConsumeMessageServiceGeneral::new(
                             None,
                             Some(consume_message_orderly_service),
                         )));
 
-                        let consume_message_pop_orderly_service = ArcMut::new(ConsumeMessagePopOrderlyService::new(
+                        let consume_message_pop_orderly_service = Arc::new(ConsumeMessagePopOrderlyService::new(
                             self.client_config.clone(),
                             self.consumer_config.clone(),
                             self.consumer_config.consumer_group.clone(),
                             listener,
                             self.default_mqpush_consumer_impl.clone(),
                         ));
-                        self.consume_message_pop_service = Some(ArcMut::new(ConsumeMessagePopServiceGeneral::new(
+                        self.consume_message_pop_service = Some(Arc::new(ConsumeMessagePopServiceGeneral::new(
                             None,
                             Some(consume_message_pop_orderly_service),
                         )));
                     }
                 }
 
-                if let Some(consume_message_concurrently_service) = self.consume_message_service.as_mut() {
+                if let Some(consume_message_concurrently_service) = self.consume_message_service.as_ref() {
                     consume_message_concurrently_service.start();
                 }
 
-                if let Some(consume_message_orderly_service) = self.consume_message_pop_service.as_mut() {
+                if let Some(consume_message_orderly_service) = self.consume_message_pop_service.as_ref() {
                     consume_message_orderly_service.start();
                 }
                 let default_mqpush_consumer_impl = self
@@ -374,12 +368,12 @@ impl DefaultMQPushConsumerImpl {
                     .await;
                 if !register_ok {
                     *self.service_state = ServiceState::CreateJust;
-                    if let Some(consume_message_service) = self.consume_message_service.as_mut() {
+                    if let Some(consume_message_service) = self.consume_message_service.as_ref() {
                         consume_message_service
                             .shutdown(self.consumer_config.await_termination_millis_when_shutdown)
                             .await;
                     }
-                    if let Some(consume_message_pop_service) = self.consume_message_pop_service.as_mut() {
+                    if let Some(consume_message_pop_service) = self.consume_message_pop_service.as_ref() {
                         consume_message_pop_service
                             .shutdown(self.consumer_config.await_termination_millis_when_shutdown)
                             .await;
@@ -453,7 +447,7 @@ impl DefaultMQPushConsumerImpl {
                 );
             }
             ServiceState::Running => {
-                if let Some(consume_message_concurrently_service) = self.consume_message_service.as_mut() {
+                if let Some(consume_message_concurrently_service) = self.consume_message_service.as_ref() {
                     consume_message_concurrently_service
                         .shutdown(await_terminate_millis)
                         .await;

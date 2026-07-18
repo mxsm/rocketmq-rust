@@ -13,27 +13,26 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
-use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 
 pub struct ConsumeMessageServiceGeneral<T, K> {
-    consume_message_concurrently_service: Option<ArcMut<T>>,
-    consume_message_orderly_service: Option<ArcMut<K>>,
+    consume_message_concurrently_service: Option<Arc<T>>,
+    consume_message_orderly_service: Option<Arc<K>>,
 }
 impl<T, K> ConsumeMessageServiceGeneral<T, K> {
     pub fn new(
-        consume_message_concurrently_service: Option<ArcMut<T>>,
-        consume_message_orderly_service: Option<ArcMut<K>>,
+        consume_message_concurrently_service: Option<Arc<T>>,
+        consume_message_orderly_service: Option<Arc<K>>,
     ) -> Self {
         Self {
             consume_message_concurrently_service,
@@ -41,10 +40,8 @@ impl<T, K> ConsumeMessageServiceGeneral<T, K> {
         }
     }
 
-    pub fn get_consume_message_concurrently_service_weak(&self) -> Option<WeakArcMut<T>> {
-        self.consume_message_concurrently_service
-            .as_ref()
-            .map(ArcMut::downgrade)
+    pub fn get_consume_message_concurrently_service_weak(&self) -> Option<Weak<T>> {
+        self.consume_message_concurrently_service.as_ref().map(Arc::downgrade)
     }
 }
 
@@ -53,26 +50,26 @@ where
     T: ConsumeMessageServiceTrait,
     K: ConsumeMessageServiceTrait,
 {
-    pub fn start(&mut self) {
-        if let Some(consume_message_concurrently_service) = &mut self.consume_message_concurrently_service {
+    pub fn start(&self) {
+        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
             let this = consume_message_concurrently_service.clone();
             consume_message_concurrently_service.start(this);
         }
 
-        if let Some(consume_message_orderly_service) = &mut self.consume_message_orderly_service {
+        if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
             let this = consume_message_orderly_service.clone();
             consume_message_orderly_service.start(this);
         }
     }
 
-    pub async fn shutdown(&mut self, await_terminate_millis: u64) {
-        if let Some(consume_message_concurrently_service) = &mut self.consume_message_concurrently_service {
+    pub async fn shutdown(&self, await_terminate_millis: u64) {
+        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
             consume_message_concurrently_service
                 .shutdown(await_terminate_millis)
                 .await;
         }
 
-        if let Some(consume_message_orderly_service) = &mut self.consume_message_orderly_service {
+        if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
             consume_message_orderly_service.shutdown(await_terminate_millis).await;
         }
     }
@@ -125,12 +122,10 @@ where
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
         if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
-            let this = consume_message_concurrently_service.clone();
             consume_message_concurrently_service
                 .consume_message_directly(msg, broker_name)
                 .await
         } else if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
-            let this = consume_message_orderly_service.clone();
             consume_message_orderly_service
                 .consume_message_directly(msg, broker_name)
                 .await
@@ -174,20 +169,20 @@ where
         let _ = (msgs, process_queue, message_queue);
     }
 
-    pub fn get_consume_message_concurrently_service(&self) -> Option<ArcMut<T>> {
+    pub fn get_consume_message_concurrently_service(&self) -> Option<Arc<T>> {
         self.consume_message_concurrently_service.as_ref().cloned()
     }
 }
 
 pub struct ConsumeMessagePopServiceGeneral<T, K> {
-    consume_message_pop_concurrently_service: Option<ArcMut<T>>,
-    consume_message_pop_orderly_service: Option<ArcMut<K>>,
+    consume_message_pop_concurrently_service: Option<Arc<T>>,
+    consume_message_pop_orderly_service: Option<Arc<K>>,
 }
 
 impl<T, K> ConsumeMessagePopServiceGeneral<T, K> {
     pub fn new(
-        consume_message_pop_concurrently_service: Option<ArcMut<T>>,
-        consume_message_pop_orderly_service: Option<ArcMut<K>>,
+        consume_message_pop_concurrently_service: Option<Arc<T>>,
+        consume_message_pop_orderly_service: Option<Arc<K>>,
     ) -> Self {
         Self {
             consume_message_pop_concurrently_service,
@@ -201,26 +196,26 @@ where
     T: ConsumeMessageServiceTrait,
     K: ConsumeMessageServiceTrait,
 {
-    pub fn start(&mut self) {
-        if let Some(consume_message_pop_concurrently_service) = &mut self.consume_message_pop_concurrently_service {
+    pub fn start(&self) {
+        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
             let this = consume_message_pop_concurrently_service.clone();
             consume_message_pop_concurrently_service.start(this);
         }
 
-        if let Some(consume_message_pop_orderly_service) = &mut self.consume_message_pop_orderly_service {
+        if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
             let this = consume_message_pop_orderly_service.clone();
             consume_message_pop_orderly_service.start(this);
         }
     }
 
-    pub async fn shutdown(&mut self, await_terminate_millis: u64) {
-        if let Some(consume_message_pop_concurrently_service) = &mut self.consume_message_pop_concurrently_service {
+    pub async fn shutdown(&self, await_terminate_millis: u64) {
+        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
             consume_message_pop_concurrently_service
                 .shutdown(await_terminate_millis)
                 .await;
         }
 
-        if let Some(consume_message_pop_orderly_service) = &mut self.consume_message_pop_orderly_service {
+        if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
             consume_message_pop_orderly_service
                 .shutdown(await_terminate_millis)
                 .await;
@@ -275,12 +270,10 @@ where
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
         if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
-            let this = consume_message_pop_concurrently_service.clone();
             consume_message_pop_concurrently_service
                 .consume_message_directly(msg, broker_name)
                 .await
         } else if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
-            let this = consume_message_pop_orderly_service.clone();
             consume_message_pop_orderly_service
                 .consume_message_directly(msg, broker_name)
                 .await
@@ -297,7 +290,7 @@ where
 
     pub async fn submit_consume_request(
         &self,
-        msgs: Vec<ArcMut<MessageClientExt>>,
+        msgs: Vec<Arc<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -332,15 +325,15 @@ pub trait ConsumeMessageServiceTrait {
     ///
     /// # Arguments
     ///
-    /// * `this` - An `ArcMut` reference to the service instance.
-    fn start(&mut self, this: ArcMut<Self>);
+    /// * `this` - A shared owner for service background tasks.
+    fn start(&self, this: Arc<Self>);
 
     /// Shuts down the message consumption service.
     ///
     /// # Arguments
     ///
     /// * `await_terminate_millis` - The number of milliseconds to wait for termination.
-    async fn shutdown(&mut self, await_terminate_millis: u64);
+    async fn shutdown(&self, await_terminate_millis: u64);
 
     /// Updates the core pool size of the service.
     ///
@@ -384,14 +377,14 @@ pub trait ConsumeMessageServiceTrait {
     ///
     /// # Arguments
     ///
-    /// * `this` - An `ArcMut` reference to the service instance.
+    /// * `this` - A shared owner for deferred consume tasks.
     /// * `msgs` - A vector of messages to be consumed.
     /// * `process_queue` - The process queue.
     /// * `message_queue` - The message queue.
     /// * `dispatch_to_consume` - A boolean indicating whether to dispatch to consume.
     async fn submit_consume_request(
         &self,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
@@ -407,7 +400,7 @@ pub trait ConsumeMessageServiceTrait {
     /// * `message_queue` - The message queue.
     async fn submit_pop_consume_request(
         &self,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         msgs: Vec<MessageExt>,
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
@@ -430,9 +423,9 @@ mod tests {
     struct NoopConsumeMessageService;
 
     impl ConsumeMessageServiceTrait for NoopConsumeMessageService {
-        fn start(&mut self, _this: ArcMut<Self>) {}
+        fn start(&self, _this: Arc<Self>) {}
 
-        async fn shutdown(&mut self, _await_terminate_millis: u64) {}
+        async fn shutdown(&self, _await_terminate_millis: u64) {}
 
         async fn consume_message_directly(
             &self,
@@ -444,7 +437,7 @@ mod tests {
 
         async fn submit_consume_request(
             &self,
-            _this: ArcMut<Self>,
+            _this: Arc<Self>,
             _msgs: Vec<Arc<MessageExt>>,
             _process_queue: Arc<ProcessQueue>,
             _message_queue: MessageQueue,
@@ -454,7 +447,7 @@ mod tests {
 
         async fn submit_pop_consume_request(
             &self,
-            _this: ArcMut<Self>,
+            _this: Arc<Self>,
             _msgs: Vec<MessageExt>,
             _process_queue: &PopProcessQueue,
             _message_queue: &MessageQueue,

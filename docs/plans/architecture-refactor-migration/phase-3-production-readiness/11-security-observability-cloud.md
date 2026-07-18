@@ -286,6 +286,12 @@ hook、trace 与 Lite zero-copy 只共享不可变句柄；retry/namespace mutat
 别名写入迁到 ProcessQueue 受锁 lifecycle map。实际快照累计降至 440 production/1,397 occurrences，Client 降至
 120/491；Client lifecycle owner、Broker/Store、Tools/compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12n 已把 Client consume service lifecycle owner 从 `ArcMut<Self>` 改为标准 `Arc<Self>`：通用分发器发布
+`Arc`/`Weak`，concurrent/orderly 与 Push/Pop service 的 start/shutdown/request task 只共享不可变 service owner；
+Pop orderly lock-refresh handle 收入显式 mutex，并在 shutdown await 前取出。实际快照累计降至 436
+production/1,337 occurrences，Client 降至 116/431；其余 Client owner、Broker/Store、Tools/compatibility 与完整
+候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
