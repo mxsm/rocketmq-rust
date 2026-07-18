@@ -10580,7 +10580,7 @@
           "id": "2e1a28fe9c0918e52bdf56a5",
           "fingerprint": "d715357faf1d89e33d16251a",
           "item": "mod tests",
-          "line": 2163
+          "line": 2170
         }
       ],
       "owner": "client",
@@ -10617,19 +10617,19 @@
           "id": "60e54309a0be89837d0388fa",
           "fingerprint": "3c2ca93faa0420a6ea14d4ec",
           "item": "fn start",
-          "line": 261
+          "line": 268
         },
         {
           "id": "4307c87bc7c6333a2effdf1d",
           "fingerprint": "e0f6103d3739ea52453001a0",
           "item": "fn start",
-          "line": 276
+          "line": 283
         },
         {
           "id": "5085fb773d1d71e85dfb95ae",
           "fingerprint": "f63b73e9c6ccb88cd52e8196",
           "item": "fn start",
-          "line": 283
+          "line": 290
         }
       ],
       "owner": "client",
@@ -10648,61 +10648,61 @@
           "id": "94dc438e686953c42c2f194c",
           "fingerprint": "1c06f98cf22dbf5b11ff652d",
           "item": "fn new_unstarted_impl",
-          "line": 2171
+          "line": 2178
         },
         {
           "id": "9029403838ad9ee36b96ba5e",
           "fingerprint": "dbec1f2ff53b3c4d1f5978e8",
           "item": "fn new_check_config_consumer",
-          "line": 2198
+          "line": 2205
         },
         {
           "id": "bed96c1972704abacbb50d54",
           "fingerprint": "f2c8ab11b61d8b619ad064f2",
           "item": "fn new_check_config_consumer",
-          "line": 2202
+          "line": 2209
         },
         {
           "id": "4c264cbb71beaa4bf4c605e3",
           "fingerprint": "dbec1f2ff53b3c4d1f5978e8",
           "item": "fn new_startable_push_consumer",
-          "line": 2213
+          "line": 2220
         },
         {
           "id": "c68059f4dfcdd96ba79265bc",
           "fingerprint": "12958be49d7ef666805e01b4",
           "item": "fn new_startable_push_consumer",
-          "line": 2217
+          "line": 2224
         },
         {
           "id": "636e2f5a281e1663e32dd1bd",
           "fingerprint": "6f3d48a79817be1c040a073a",
           "item": "fn new_startable_push_consumer",
-          "line": 2219
+          "line": 2226
         },
         {
           "id": "6ce2a74fbdc815d3daa5e333",
           "fingerprint": "75cd163ada2c71fc9e1b44b3",
           "item": "fn send_message_back_restores_topic_when_retry_fallback_errors_like_java_finally",
-          "line": 2530
+          "line": 2537
         },
         {
           "id": "3b7754c0715f31ce69f43972",
           "fingerprint": "7e868a3beeee278a476a26c6",
           "item": "fn fetch_subscribe_message_queues_prefers_cached_route_like_java",
-          "line": 2575
+          "line": 2582
         },
         {
           "id": "cbb4cac982e2146c24ee895d",
           "fingerprint": "bed922d3f405df26ffbe730e",
           "item": "fn reset_offsets_drops_clears_persists_and_removes_assigned_queue_like_java",
-          "line": 2664
+          "line": 2671
         },
         {
           "id": "27df30743a70f4558d557585",
           "fingerprint": "e57c2b45f66197f0f560c904",
           "item": "fn reset_offsets_drops_clears_persists_and_removes_assigned_queue_like_java",
-          "line": 2670
+          "line": 2677
         }
       ],
       "owner": "client",
@@ -10818,25 +10818,25 @@
           "id": "e8f37285186cca9c332a73da",
           "fingerprint": "6ea020e77dd8adced283cd03",
           "item": "fn set_mq_client_factory",
-          "line": 197
+          "line": 204
         },
         {
           "id": "bd84e87323ba57ce455dd011",
           "fingerprint": "164e8f66f39819c285a91bd1",
           "item": "fn offset_store",
-          "line": 217
+          "line": 224
         },
         {
           "id": "660fbe9e1bd20593ca91891a",
           "fingerprint": "1f1d2475d7f232130466f37b",
           "item": "fn set_offset_store",
-          "line": 221
+          "line": 228
         },
         {
           "id": "1a5e1ca13cbdb70c79cde622",
           "fingerprint": "ae2aac844ddedbc42eb8a817",
           "item": "fn register_message_listener",
-          "line": 732
+          "line": 739
         }
       ],
       "owner": "client",
@@ -10855,7 +10855,7 @@
           "id": "0f0d044708edfca1ae1d4c67",
           "fingerprint": "86496c78cf33892adc754a67",
           "item": "fn new_startable_push_consumer",
-          "line": 2208
+          "line": 2215
         }
       ],
       "owner": "client",
@@ -10874,31 +10874,31 @@
           "id": "8b505c106be1b650e05ca854",
           "fingerprint": "5c54aa834977ad27225401b9",
           "item": "fn shutdown",
-          "line": 458
+          "line": 465
         },
         {
           "id": "9d26f62019a525168341ca45",
           "fingerprint": "e3987d672ac08e83a36ffd11",
           "item": "fn do_rebalance",
-          "line": 1900
+          "line": 1907
         },
         {
           "id": "5b17b28d8bdeb32d3de2e6df",
           "fingerprint": "6a81898545cbdf5fae40e0b7",
           "item": "fn try_rebalance",
-          "line": 1914
+          "line": 1921
         },
         {
           "id": "9ef9938dd3300d8ce2d25420",
           "fingerprint": "425add945b14e37d86674915",
           "item": "fn persist_consumer_offset",
-          "line": 1942
+          "line": 1949
         },
         {
           "id": "394cfb5961273a9eb01c2a2e",
           "fingerprint": "8aa3de4d8cec698b3866a14b",
           "item": "fn reset_offsets",
-          "line": 2020
+          "line": 2027
         }
       ],
       "owner": "client",
@@ -10917,43 +10917,43 @@
           "id": "1b636421d5ecbfe9f697118b",
           "fingerprint": "ed934938abbd94ebf3ebbef8",
           "item": "fn start_duplicate_consumer_group_rolls_back_like_java",
-          "line": 2282
+          "line": 2289
         },
         {
           "id": "4366210318539c2a7edb2dad",
           "fingerprint": "69343b618ff42492b938e65c",
           "item": "fn start_duplicate_consumer_group_rolls_back_like_java",
-          "line": 2300
+          "line": 2307
         },
         {
           "id": "1c3107c6e26e46a083528afa",
           "fingerprint": "330c5301f067e7c751d78eae",
           "item": "fn startup_after_running_failure_shutdowns_and_unregisters_like_java",
-          "line": 2330
+          "line": 2337
         },
         {
           "id": "860b3bf5713fe264936bc6d1",
           "fingerprint": "dfd6ebf478835de6e623371d",
           "item": "fn startup_after_running_failure_shutdowns_and_unregisters_like_java",
-          "line": 2337
+          "line": 2344
         },
         {
           "id": "70f393815241dacc87e7422f",
           "fingerprint": "ef56c22737c574751b2011fe",
           "item": "fn startup_after_running_failure_shutdowns_and_unregisters_like_java",
-          "line": 2349
+          "line": 2356
         },
         {
           "id": "3a80af2c5eb310032f5e64a4",
           "fingerprint": "ed934938abbd94ebf3ebbef8",
           "item": "fn startup_after_running_failure_shutdowns_and_unregisters_like_java",
-          "line": 2363
+          "line": 2370
         },
         {
           "id": "616daffd00e6d2e9b21ad31d",
           "fingerprint": "ea89c3fc97c837d10c858c78",
           "item": "fn startup_after_running_failure_shutdowns_and_unregisters_like_java",
-          "line": 2368
+          "line": 2375
         }
       ],
       "owner": "client",
@@ -13182,44 +13182,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "dbfd417b246c72fca41189ae",
-      "path": "rocketmq-client/src/hook/send_message_context.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "232f210a5b4b5ea948060322",
-          "fingerprint": "cef5e3756e9d72cc6805c2b6",
-          "item": "<module>",
-          "line": 23
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "5b01032da2f2d38fcfab704b",
-      "path": "rocketmq-client/src/hook/send_message_context.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "836c5c6ac0be280b45203247",
-          "fingerprint": "b8fc9b7748b52f52a939ad3c",
-          "item": "struct SendMessageContext",
-          "line": 62
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "19bef71e1e633bbb60cd2aaa",
       "path": "rocketmq-client/src/implementation/client_remoting_processor.rs",
       "symbol": "*",
@@ -13524,7 +13486,7 @@
           "id": "8dd0c94e325297b656b173f0",
           "fingerprint": "972c41753edd899738867f9d",
           "item": "mod tests",
-          "line": 6549
+          "line": 6548
         }
       ],
       "owner": "client",
@@ -13543,7 +13505,7 @@
           "id": "a740b999d605505e292ba650",
           "fingerprint": "b49969bc172bd82ae03dab80",
           "item": "<module>",
-          "line": 251
+          "line": 252
         }
       ],
       "owner": "client",
@@ -13559,22 +13521,16 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "73a48e24d5e572d09a26a524",
-          "fingerprint": "3dc129f12816c697607083bc",
-          "item": "struct AsyncSendHookContext",
-          "line": 298
-        },
-        {
           "id": "436e5e4e43c43c52593d2f2d",
           "fingerprint": "ad720cf5d09f13cd08bb1e20",
           "item": "fn send_message",
-          "line": 2311
+          "line": 2312
         },
         {
           "id": "938da9511e6d99ecfe836972",
           "fingerprint": "ad720cf5d09f13cd08bb1e20",
           "item": "fn send_message_async",
-          "line": 2495
+          "line": 2496
         },
         {
           "id": "6fdc2ff50a2b8e9051cc8da9",
@@ -13598,19 +13554,19 @@
           "id": "6074144a9b590d32d044cff0",
           "fingerprint": "40dc5b96b47ff465d6f09212",
           "item": "fn prepare_retry",
-          "line": 2984
+          "line": 2982
         },
         {
           "id": "df27cb64d10db4409ddb1f36",
           "fingerprint": "00b171d7639490dec8a50391",
           "item": "fn query_message",
-          "line": 3527
+          "line": 3525
         },
         {
           "id": "89711f779f800d933a3e2bb4",
           "fingerprint": "0cf022187d5515c349ebe9ed",
           "item": "fn pull_message",
-          "line": 3562
+          "line": 3560
         }
       ],
       "owner": "client",
@@ -13743,7 +13699,7 @@
           "id": "ca9921d4ee3005b530534cb4",
           "fingerprint": "ec86d15cd2a566da2b615866",
           "item": "mod tests",
-          "line": 2473
+          "line": 2477
         }
       ],
       "owner": "client",
@@ -13986,7 +13942,7 @@
           "id": "b1a22a9e0fa5d9ecfa852526",
           "fingerprint": "d140ff4ac2a0ea79a857088b",
           "item": "mod tests",
-          "line": 3656
+          "line": 3657
         }
       ],
       "owner": "client",
@@ -14024,7 +13980,7 @@
           "id": "67b0046e6072159c90695c24",
           "fingerprint": "356398455444fa281e36bc8b",
           "item": "fn running_producer_arc_with_self_inner",
-          "line": 3687
+          "line": 3688
         }
       ],
       "owner": "client",
@@ -14086,13 +14042,13 @@
           "id": "f4f791ad0cc15215ab5f9f9a",
           "fingerprint": "f0e256b31aba61aae79c3c48",
           "item": "struct DefaultServiceDetector",
-          "line": 3551
+          "line": 3552
         },
         {
           "id": "b1f91ffc3439d3410d7dee6b",
           "fingerprint": "2d53d4eadb152009da2a1127",
           "item": "struct DefaultResolver",
-          "line": 3640
+          "line": 3641
         }
       ],
       "owner": "client",
@@ -14111,13 +14067,13 @@
           "id": "d9a05be2d5e4ad25924e45a9",
           "fingerprint": "e921f953fdb474ebfdf78609",
           "item": "fn running_producer_arc_with_self_inner",
-          "line": 3686
+          "line": 3687
         },
         {
           "id": "47d45638c009526c0a6964ce",
           "fingerprint": "c4ea98db295aea5d035405e0",
           "item": "fn running_producer_arc_with_self_inner",
-          "line": 3690
+          "line": 3691
         }
       ],
       "owner": "client",
@@ -14161,7 +14117,7 @@
           "id": "2b08b75b29fdd51394ca3fd3",
           "fingerprint": "1b66359c3d04ea9077d40cac",
           "item": "fn set_default_mqproducer_impl_inner",
-          "line": 2806
+          "line": 2807
         }
       ],
       "owner": "client",
@@ -14186,91 +14142,91 @@
           "id": "3cff4888c4640403a0fee7ec",
           "fingerprint": "2b7c30d8bbe12eb6809a2d75",
           "item": "fn try_to_find_topic_publish_info",
-          "line": 1880
+          "line": 1881
         },
         {
           "id": "c526ad1082ac83aada1c800a",
           "fingerprint": "b1be7272ed4bd3328b970745",
           "item": "fn try_to_find_topic_publish_info",
-          "line": 1902
+          "line": 1903
         },
         {
           "id": "00bef45502634254add689e9",
           "fingerprint": "96ce007370550f34657c884c",
           "item": "fn invoke_message_queue_selector",
-          "line": 1979
+          "line": 1980
         },
         {
           "id": "3fe46093814e7ecb890b0f14",
           "fingerprint": "0b7c17d3055d0795db5610a6",
           "item": "fn fetch_publish_message_queues",
-          "line": 2033
+          "line": 2034
         },
         {
           "id": "fc308c71b85086dce61bf3a4",
           "fingerprint": "94acd6797b324e6876b2dc1a",
           "item": "fn create_topic",
-          "line": 2049
+          "line": 2050
         },
         {
           "id": "f1bb285075e11bc8ed1ef8a8",
           "fingerprint": "1cc39da18b783350bb94a354",
           "item": "fn search_offset",
-          "line": 2059
+          "line": 2060
         },
         {
           "id": "f7c70c5556c754eacb9efd93",
           "fingerprint": "93a4e7baafb7cae95e1ad36d",
           "item": "fn max_offset",
-          "line": 2069
+          "line": 2070
         },
         {
           "id": "d7781fbd83bf57cf8fa2b91f",
           "fingerprint": "c63822401d6d5c7b78bb3791",
           "item": "fn min_offset",
-          "line": 2079
+          "line": 2080
         },
         {
           "id": "1288bea9fa1b929bf55f183e",
           "fingerprint": "d307728355c7aebd320f0e96",
           "item": "fn earliest_msg_store_time",
-          "line": 2089
+          "line": 2090
         },
         {
           "id": "b9ed515f327d91f30bed3340",
           "fingerprint": "52e1020dee15373a66ee1612",
           "item": "fn query_message",
-          "line": 2105
+          "line": 2106
         },
         {
           "id": "544bb1bc8052efaedef94d49",
           "fingerprint": "de7c5d6e3358dfe803697d6d",
           "item": "fn query_message_by_uniq_key",
-          "line": 2120
+          "line": 2121
         },
         {
           "id": "1036e4943c3cf871f6d6f694",
           "fingerprint": "b6fbc3eef62e813d95f0f9c9",
           "item": "fn view_message",
-          "line": 2134
+          "line": 2135
         },
         {
           "id": "6fa89a5860674430e632cdf0",
           "fingerprint": "16265dad82edd69e3b6450a5",
           "item": "fn prepare_send_request",
-          "line": 2503
+          "line": 2504
         },
         {
           "id": "b17f8bc05dd80e8b5fecfcaf",
           "fingerprint": "9398f31e10e6c08979639c4f",
           "item": "fn start_with_factory",
-          "line": 3050
+          "line": 3051
         },
         {
           "id": "bd3c6e3b22f6359b735d4be8",
           "fingerprint": "4b07739b374c6b168ee272b5",
           "item": "fn start_with_factory",
-          "line": 3068
+          "line": 3069
         }
       ],
       "owner": "client",
@@ -14289,25 +14245,25 @@
           "id": "aba9ca5334cb9554b5016b9b",
           "fingerprint": "a51632360baadbb0bc486192",
           "item": "fn running_producer_arc_with_self_inner",
-          "line": 3689
+          "line": 3690
         },
         {
           "id": "16e189d4577b6391b57c80e4",
           "fingerprint": "8b150fb7bba37b260fdd92e9",
           "item": "fn async_send_to_queue_validates_message_before_kernel_like_java",
-          "line": 4181
+          "line": 4182
         },
         {
           "id": "e443a78aa00d5c904edc6f25",
           "fingerprint": "8b150fb7bba37b260fdd92e9",
           "item": "fn async_send_to_queue_topic_mismatch_uses_java_callback_error_message",
-          "line": 4217
+          "line": 4218
         },
         {
           "id": "8d72eb9eab5bdfe75d28666f",
           "fingerprint": "683fb6d123596cb2a5c150af",
           "item": "fn async_send_with_callback_reports_kernel_error_to_callback",
-          "line": 4258
+          "line": 4259
         }
       ],
       "owner": "client",
@@ -14365,81 +14321,6 @@
           "fingerprint": "45b338c1cc0a7539839c0635",
           "item": "struct MQProducerInnerImpl",
           "line": 47
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "28f00f879228415a9d2138b2",
-      "path": "rocketmq-client/src/trace/async_trace_dispatcher.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "7ef5e6a3729eec94db3bf888",
-          "fingerprint": "a1f01e8b894735b3ec56e195",
-          "item": "mod tests",
-          "line": 1086
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "c45f02a9053219c3735660bd",
-      "path": "rocketmq-client/src/trace/async_trace_dispatcher.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "98411679b72b097529fa7004",
-          "fingerprint": "4be027a20ddafc4104ece16f",
-          "item": "<module>",
-          "line": 42
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "13573019e465f05693b8c989",
-      "path": "rocketmq-client/src/trace/async_trace_dispatcher.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "dc317d5db74e338259748960",
-          "fingerprint": "784a37cd772d5c7686d6e88c",
-          "item": "struct DispatcherState",
-          "line": 89
-        },
-        {
-          "id": "9724aeaab94d3304af337e42",
-          "fingerprint": "fdc42f7d83fcf109ed907adc",
-          "item": "struct DispatcherState",
-          "line": 90
-        },
-        {
-          "id": "758dbe994e0abf8d5ec0482e",
-          "fingerprint": "efb332c314c01f53bd7541e6",
-          "item": "fn set_host_producer",
-          "line": 324
-        },
-        {
-          "id": "3229f2eacc9dd5e64902bd5e",
-          "fingerprint": "a7dcd8a3be99f505ba768b75",
-          "item": "fn set_host_consumer",
-          "line": 331
         }
       ],
       "owner": "client",

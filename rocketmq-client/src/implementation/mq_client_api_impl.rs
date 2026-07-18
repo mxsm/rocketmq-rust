@@ -37,6 +37,7 @@ use crate::consumer::pull_status::PullStatus;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::send_message_context::SendMessageContext;
 use crate::hook::send_message_context::SendMessageTraceSnapshot;
+use crate::hook::send_message_hook::SendMessageHook;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::latency::mq_fault_strategy::MQFaultStrategy;
@@ -286,7 +287,7 @@ fn duration_millis_to_u64(operation: &'static str, duration: Duration) -> rocket
         .map_err(|_| RocketMQError::illegal_argument(format!("{operation} timeout exceeds Rust u64 millisecond range")))
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct AsyncSendHookContext {
     producer_group: Option<CheetahString>,
     broker_addr: Option<CheetahString>,
@@ -295,7 +296,7 @@ struct AsyncSendHookContext {
     msg_type: Option<MessageType>,
     namespace: Option<CheetahString>,
     mq_trace_context: Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
-    producer: Option<ArcMut<DefaultMQProducerImpl>>,
+    hooks: Arc<[Arc<dyn SendMessageHook>]>,
     mq: Option<MessageQueue>,
     message_trace_snapshot: Option<SendMessageTraceSnapshot>,
     trace_start_time: Option<u64>,
@@ -2536,8 +2537,7 @@ impl MQClientAPIImpl {
         let mq_fault_strategy = producer.mq_fault_strategy.clone();
         let callback_executor = producer.producer_config().callback_executor().cloned();
 
-        // Clone the context data that we need for hook execution
-        // We'll use the execute_send_message_hook_after method which requires a context
+        // Snapshot only the immutable hook capability and context data needed by the callback.
         let context_data = context.as_ref().map(|c| AsyncSendHookContext {
             producer_group: c.producer_group.as_ref().cloned(),
             broker_addr: c.broker_addr.as_ref().cloned(),
@@ -2546,7 +2546,7 @@ impl MQClientAPIImpl {
             msg_type: c.msg_type,
             namespace: c.namespace.as_ref().cloned(),
             mq_trace_context: c.mq_trace_context.clone(),
-            producer: c.producer.clone(),
+            hooks: producer.send_message_hooks(),
             mq: c.mq.cloned(),
             message_trace_snapshot: c.message_trace_snapshot.clone(),
             trace_start_time: c.trace_start_time,
@@ -2806,9 +2806,6 @@ impl MQClientAPIImpl {
         let Some(context_data) = context_data.as_ref() else {
             return;
         };
-        let Some(producer) = context_data.producer.as_ref() else {
-            return;
-        };
 
         let context = Some(SendMessageContext {
             producer_group: context_data.producer_group.clone(),
@@ -2818,7 +2815,6 @@ impl MQClientAPIImpl {
             send_result,
             exception,
             mq_trace_context: context_data.mq_trace_context.clone(),
-            producer: Some(producer.clone()),
             msg_type: context_data.msg_type,
             namespace: context_data.namespace.clone(),
             mq: context_data.mq.as_ref(),
@@ -2826,7 +2822,9 @@ impl MQClientAPIImpl {
             trace_start_time: context_data.trace_start_time,
             ..Default::default()
         });
-        producer.execute_send_message_hook_after(&context);
+        for hook in context_data.hooks.iter() {
+            hook.send_message_after(&context);
+        }
     }
 
     fn context_error(message: String) -> Arc<RocketMQError> {
@@ -3241,7 +3239,7 @@ impl MQClientAPIImpl {
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
                     addr.to_string()
-                ));
+                ))
             }
         }
         Err(client_broker_err!(
@@ -3282,7 +3280,7 @@ impl MQClientAPIImpl {
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
                     addr.to_string()
-                ));
+                ))
             }
         }
         Err(client_broker_err!(
@@ -3503,7 +3501,7 @@ impl MQClientAPIImpl {
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
                     addr.to_string()
-                ))
+                ));
             }
             _ => {}
         }
@@ -3659,7 +3657,7 @@ impl MQClientAPIImpl {
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
                     addr.to_string()
-                ))
+                ));
             }
         };
         let response_header = response.decode_command_custom_header::<PullMessageResponseHeader>()?;
@@ -6539,6 +6537,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
 mod tests {
     use std::future::pending;
     use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering as AtomicOrdering;
 
     use rocketmq_common::common::lite::LiteSubscriptionAction;
@@ -6594,6 +6593,41 @@ mod tests {
         fn drop(&mut self) {
             self.0.store(true, AtomicOrdering::Release);
         }
+    }
+
+    struct CountingAfterSendHook {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl SendMessageHook for CountingAfterSendHook {
+        fn hook_name(&self) -> &'static str {
+            "CountingAfterSendHook"
+        }
+
+        fn send_message_before(&self, _context: &Option<SendMessageContext<'_>>) {}
+
+        fn send_message_after(&self, context: &Option<SendMessageContext<'_>>) {
+            assert_eq!(
+                context.as_ref().and_then(|context| context.producer_group.as_deref()),
+                Some("async-hook-group")
+            );
+            self.calls.fetch_add(1, AtomicOrdering::AcqRel);
+        }
+    }
+
+    #[test]
+    fn async_send_after_hook_uses_immutable_hook_snapshot_without_producer_owner() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hook: Arc<dyn SendMessageHook> = Arc::new(CountingAfterSendHook { calls: calls.clone() });
+        let context_data = Some(AsyncSendHookContext {
+            producer_group: Some(CheetahString::from_static_str("async-hook-group")),
+            hooks: vec![hook].into(),
+            ..Default::default()
+        });
+
+        MQClientAPIImpl::execute_async_send_hook_after(&context_data, None, None);
+
+        assert_eq!(calls.load(AtomicOrdering::Acquire), 1);
     }
 
     #[test]

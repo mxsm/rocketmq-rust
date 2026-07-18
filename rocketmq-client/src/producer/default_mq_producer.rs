@@ -1605,7 +1605,6 @@ impl DefaultMQProducer {
         };
 
         if let Some(async_dispatcher) = dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
-            async_dispatcher.set_host_producer(default_mqproducer_impl.clone());
             async_dispatcher.set_namespace_v2(client_config.namespace_v2.clone());
             async_dispatcher.set_use_tls(client_config.use_tls);
         }
@@ -1641,6 +1640,11 @@ impl MQProducer for DefaultMQProducer {
             Self::prepare_trace_dispatcher(&self.client_config, &mut self.producer_config, default_mqproducer_impl);
 
         default_mqproducer_impl.start().await?;
+        if let Some(dispatcher) = trace_dispatcher_to_start.as_ref() {
+            if let Some(async_dispatcher) = dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
+                async_dispatcher.set_client_host(default_mqproducer_impl.client_id());
+            }
+        }
         if let Some(ref produce_accumulator) = self.producer_config.produce_accumulator {
             produce_accumulator.start();
         }

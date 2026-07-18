@@ -1629,10 +1629,6 @@ impl DefaultMQProducerImpl {
                             .is_some();
 
                     let mut send_message_context = SendMessageContext {
-                        producer: self
-                            .default_mqproducer_impl_inner
-                            .as_ref()
-                            .and_then(|weak| weak.upgrade()),
                         producer_group: Some(producer_group.clone()),
                         communication_mode: Some(communication_mode),
                         born_host,
@@ -1760,6 +1756,11 @@ impl DefaultMQProducerImpl {
                 hook.send_message_after(context);
             }
         }
+    }
+
+    #[inline]
+    pub(crate) fn send_message_hooks(&self) -> Arc<[Arc<dyn SendMessageHook>]> {
+        Arc::clone(&self.send_message_hook_list)
     }
 
     #[inline]

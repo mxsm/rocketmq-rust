@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～n 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～o 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -48,6 +48,9 @@ M11-12m 的 Client message ownership 由 Issue #8319 跟踪，分支为
 
 M11-12n 的 Client consume service lifecycle 由 Issue #8321 跟踪，分支为
 `mxsm/architecture-refactor-client-consume-service-lifecycle`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12o 的 Client send hook/trace context owner 由 Issue #8323 跟踪，分支为
+`mxsm/architecture-refactor-client-hook-trace-boundary`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -394,6 +397,33 @@ reviewed baseline 从 709→703、occurrences 从 2,157→2,074。6 个 identity
 occurrence 消失，其中 83 个形成净下降，另有 7 个同 item、同参数的一对一 fingerprint 更新，仅因相邻 service
 owner 从 `ArcMut` 改为 `Arc`、引用槽增加安全短锁或行号位移，未增加或移动共享可变 occurrence。
 
+## M11-12o Client send hook/trace context owner
+
+| 目标 | 实现与证据 |
+|---|---|
+| 异步 hook capability | 异步发送回调只快照不可变 `Arc<[Arc<dyn SendMessageHook>]>`，after-hook 不再通过 `DefaultMQProducerImpl` owner 间接执行 |
+| hook context 收窄 | `SendMessageContext` 删除无业务用途的 Producer owner；公开 hook 数据只保留消息、队列、结果、错误与 trace 元数据 |
+| 公开 API 迁移 | 外部 hook 不再能通过 context 取得可变 Producer lifecycle owner；需要的数据继续由既有 group/message/queue/result/exception/trace 字段提供，不引入替代 mutable facade |
+| trace enrichment 收窄 | `AsyncTraceDispatcher` 只保存启动后解析出的 `client_id` 字符串，不再持有 host Producer/Consumer 实现；Consumer 不再保留从未读取的 host owner |
+| 启动时序 | Producer 在 client instance 启动并确定真实 instance name 后发布 trace client host；Consumer 从已启动实现读取同一 client id，避免从 facade 配置推测 |
+| 行为合同 | 定向测试验证 owner 被移除后异步 after-hook 仍执行一次，并验证 trace dispatcher 返回发布的 client host |
+
+M11-12o 后实际快照为 698 个条目：production 432、test 252、compatibility 14；occurrence 精确为
+production 1,329、test 696、compatibility 40。相对 M11-12n 删除 4 个 production 条目/8 个 production
+occurrence，以及 1 个 test 条目/1 个 test occurrence；相对初始快照累计删除 328 个 production 条目和
+796 个 production occurrence。`rocketmq-client` production 债务从 116/431 降至 112/423。剩余 production
+债务为：
+
+| crate | 条目 | occurrence |
+|---|---:|---:|
+| `rocketmq-broker` | 190 | 568 |
+| `rocketmq-client` | 112 | 423 |
+| `rocketmq-store` | 127 | 324 |
+| `rocketmq-tools` | 3 | 14 |
+
+reviewed baseline 从 703→698、occurrences 从 2,074→2,065。5 个 identity 和同一 Client API item 中的 1 个
+occurrence 均因源码真实删除而下降；没有新增、relocation approval 或 shared-mutation 替代包装。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -693,9 +723,28 @@ M11-12n 追加验证：
 | `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
 | `git diff --check` | 通过 |
 
+M11-12o 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过 |
+| `cargo test -p rocketmq-client-rust async_send_after_hook_uses_immutable_hook_snapshot_without_producer_owner --lib` | 1/1 通过；after-hook 仅经不可变 hook 快照执行 |
+| `cargo test -p rocketmq-client-rust test_set_client_host --lib` | 1/1 通过；trace client host 只保存值快照 |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 全部通过；library 962/962，其余 integration targets 全部通过（35 项既有外部环境测试忽略） |
+| reviewed baseline reduction | 无 relocation approval；删除 5 个 identity 和 9 个真实 occurrence，baseline 703→698、occurrences 2,074→2,065 |
+| `python scripts/arc_mut_guard.py` | 通过；发送 hook/trace context owner 定向扫描为零，Client production 降至 112/423 |
+| `python -m unittest scripts.tests.test_arc_mut_guard` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| `rocketmq-example`: `cargo fmt --all -- --check` / `cargo clippy --all-targets -- -D warnings` | standalone consumer 通过收窄后的 hook/trace API |
+| `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；异步回调只捕获不可变 hook 快照，未新增 detached task 或跨 await 同步 guard |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
-1. Client MQClientInstance、Producer/Admin、Push/Lite Consumer owner（116/431）。
+1. Client MQClientInstance、Producer/Admin、Push/Lite Consumer owner（112/423）。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 4. Tools 3/14、compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
