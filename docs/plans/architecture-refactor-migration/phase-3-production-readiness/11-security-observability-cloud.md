@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M11-01～10 已完成；下一工作包 PR-M11-11；部分依赖 M10 SLI） |
+| 状态 | 实施中（PR-M11-01～11 工程工作包已完成；真实 fault Gate 待验收；下一工作包 PR-M11-12；部分依赖 M10 SLI） |
 | 预计周期 | 4–6 周 |
 | 工作包 | 延续 WP01、WP03、WP05、WP07、WP14–WP16 |
 | 前置条件 | 32-package Gate；secure dry-run、ServiceContext、semantic owner、durability SLI 可用 |
@@ -192,16 +192,22 @@ M11/Phase 3/HUMAN/ARCH 与集群 fault Gate 均未完成。
 `Starting/Ready/Draining/Stopped/Failed`，独立 health port 提供 `/readyz`、`/livez`、`/drainz`；首次终止请求冻结
 45 秒绝对 deadline，Pod grace 为 60 秒，服务 shutdown、telemetry 与 RuntimeOwner 只消费剩余预算。Helm/Kustomize
 双 render 37/37 schema、12 组 Kubernetes 正负测试、9 组容器 guard、五服务 focused Rust test、MCP required
-profile 与根 workspace strict Clippy 通过。74/82 工作包完成，剩余 M11 2 个、M12 6 个，下一工作包为
-PR-M11-11；M10 真实性能、容器动态套件、Kind/K3d fault/已确认消息恢复、M11/Phase 3/HUMAN Gate 保持开放。
+profile 与根 workspace strict Clippy 通过。该段是 PR-M11-10 的历史完成记录；其后的 PR-M11-11 已交付真实执行器和
+证据门禁，当前总进度由下节记录为 75/82。M10 真实性能、容器动态套件、Kind/K3d fault/已确认消息恢复、
+M11/Phase 3/HUMAN Gate 保持开放。
 
 ### PR-M11-11：Kind/K3d Fault Matrix Gate
 
-- [ ] 入口：`[TEST]` 五镜像、Helm/Kustomize和probe/drain focused test全部通过，测试集群profile已记录。
-- [ ] `[TEST]` 执行滚动升级、节点驱逐、collector中断、磁盘压力、Controller leader故障、secret rotation和已确认消息恢复。
-- [ ] `[DEV]` 实现计划中的`kind-architecture-refactor-e2e.ps1`，保存镜像digest、chart/overlay hash、事件和watermark证据。
-- [ ] `[REV]` 检查故障断言不是仅看Pod ready，而是覆盖durability、drain、SLO和回滚。
-- [ ] 回滚点：停止rollout并回到上一签名镜像/chart；保留PVC、WAL和故障证据，验证恢复后再继续。
+- [x] 入口实现：五镜像、Helm/Kustomize、probe/drain focused gate 和 Kind/K3d 集群 profile 已版本化；真实签名 digest/Secret 仍由动态运行注入。
+- [ ] `[TEST]` 真实执行滚动升级、节点驱逐、collector 中断、磁盘压力、Controller leader 故障、secret rotation 和已确认消息恢复；本机缺少动态前置条件，未伪造 PASS。
+- [x] `[DEV]` 实现 `kind-architecture-refactor-e2e.ps1`，保存镜像 digest、chart/overlay hash、事件、PVC UID、message ID 和 Queue/CommitLog watermark 证据。
+- [x] `[REV]` versioned policy/guard 强制 durability、drain、SLO、quorum、cleanup 和回滚断言，拒绝仅以 Pod Ready 成功。
+- [x] 回滚点：恢复五个 baseline 签名镜像和上一 chart/secret，恢复 collector/节点/Controller，保留 PVC、WAL 和故障证据。
+
+完成证据：[`11-kind-k3d-fault-matrix-evidence.md`](11-kind-k3d-fault-matrix-evidence.md)。Runner 的 Validate/Run
+模式严格分离，production evidence 必须来自 `dynamic_execution=true`；11 组正负证据测试、12 组
+Kubernetes 既有负向测试、37/37 双 render schema 和管理 CLI ACL 定向测试通过。75/82 工作包完成，剩余 M11 1 个、
+M12 6 个，下一工作包为 PR-M11-12；真实 Kind/K3d、M10、M11/Phase 3/HUMAN Gate 保持开放。
 
 ### PR-M11-12：ArcMut、Stable 与 SLO Phase 3 收口
 

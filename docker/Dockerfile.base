@@ -188,6 +188,28 @@ ENV HOME=/var/lib/rocketmq \
 VOLUME ["/var/lib/rocketmq"]
 USER 10001:10001
 
+FROM builder-base AS fault-driver-builder
+
+COPY . .
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked <<EOF
+set -eux
+cargo build --locked --release --package rocketmq-admin-cli --bin rocketmq-admin-cli
+install -D -m 0555 /workspace/target/release/rocketmq-admin-cli /opt/rocketmq-binaries/rocketmq-admin-cli
+EOF
+
+FROM runtime-base AS fault-driver
+
+COPY --from=fault-driver-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-admin-cli /usr/local/bin/rocketmq-admin-cli
+
+LABEL org.opencontainers.image.title="RocketMQ Rust architecture fault driver" \
+    io.rocketmq.image.role="fault-driver-test-only" \
+    io.rocketmq.image.production="forbidden"
+
+ENTRYPOINT ["/usr/local/bin/rocketmq-admin-cli"]
+
 FROM service-runtime AS broker
 
 COPY --from=service-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-broker-rust /usr/local/bin/rocketmq-broker-rust

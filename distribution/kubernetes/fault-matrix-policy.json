@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "milestone": "M11-11",
+  "evidence_schema_version": 1,
+  "backends": [
+    "kind",
+    "k3d"
+  ],
+  "kubernetes_version": "1.32.2",
+  "cluster": {
+    "control_plane_nodes": 1,
+    "worker_nodes": 3,
+    "controller_replicas": 3,
+    "controller_quorum": 2,
+    "kind_node_image": "kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f",
+    "kind_service_cidr": "10.96.0.0/16",
+    "k3d_service_cidr": "10.43.0.0/16",
+    "storage_classes": {
+      "kind": "standard",
+      "k3d": "local-path"
+    }
+  },
+  "tools": {
+    "kind": "v0.27.0",
+    "k3d": "v5.9.0",
+    "kubectl": "v1.32.2",
+    "helm": "v4.2.3"
+  },
+  "images": {
+    "required_services": [
+      "broker",
+      "namesrv",
+      "controller",
+      "proxy",
+      "mcp"
+    ],
+    "digest_pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$",
+    "placeholder_digest_forbidden": true,
+    "fault_driver_target": "fault-driver",
+    "fault_driver_test_only": true
+  },
+  "global_assertions": [
+    "all_workloads_ready",
+    "all_faults_reverted",
+    "controller_quorum_restored",
+    "pvc_uid_set_preserved",
+    "acknowledged_message_recovered",
+    "queue_offset_preserved",
+    "commitlog_offset_preserved",
+    "drain_completed_within_deadline",
+    "slo_budget_satisfied",
+    "rollback_verified",
+    "unresolved_faults_empty"
+  ],
+  "scenarios": [
+    {
+      "id": "rolling_upgrade",
+      "timeout_seconds": 600,
+      "injection": "replace the five baseline image digests with candidate digests one workload at a time",
+      "recovery": "rollback every changed workload to its baseline digest",
+      "required_assertions": [
+        "rollout_completed",
+        "acknowledged_message_visible",
+        "queue_offset_preserved",
+        "commitlog_offset_preserved",
+        "drain_completed_within_deadline",
+        "rollback_completed",
+        "pvc_uid_set_preserved"
+      ],
+      "required_evidence": [
+        "rollout_status",
+        "message_before",
+        "message_after",
+        "shutdown_report",
+        "rollback_status",
+        "pvc_uids"
+      ]
+    },
+    {
+      "id": "node_eviction",
+      "timeout_seconds": 300,
+      "injection": "cordon and drain one worker with eviction API while respecting PodDisruptionBudgets",
+      "recovery": "uncordon the worker and wait for the stateless workload to recover",
+      "required_assertions": [
+        "eviction_api_used",
+        "pdb_respected",
+        "acknowledged_message_visible",
+        "pvc_uid_set_preserved",
+        "node_uncordoned"
+      ],
+      "required_evidence": [
+        "drain_output",
+        "pdb_status",
+        "message_after",
+        "pvc_uids",
+        "node_status"
+      ]
+    },
+    {
+      "id": "collector_outage",
+      "timeout_seconds": 300,
+      "injection": "scale the OpenTelemetry collector to zero",
+      "recovery": "restore the collector replica count and wait for exporter recovery",
+      "required_assertions": [
+        "data_plane_remained_available",
+        "telemetry_queue_bounded",
+        "collector_recovered",
+        "slo_budget_satisfied"
+      ],
+      "required_evidence": [
+        "collector_scale",
+        "message_during_outage",
+        "telemetry_metrics",
+        "collector_recovery",
+        "slo_report"
+      ]
+    },
+    {
+      "id": "disk_pressure",
+      "timeout_seconds": 300,
+      "injection": "taint one worker with node.kubernetes.io/disk-pressure:NoSchedule and evict a stateless Pod",
+      "recovery": "remove the taint and verify scheduling and durability",
+      "required_assertions": [
+        "disk_pressure_taint_observed",
+        "stateless_pod_rescheduled",
+        "acknowledged_message_visible",
+        "pvc_uid_set_preserved",
+        "taint_removed"
+      ],
+      "required_evidence": [
+        "taint_status",
+        "pod_reschedule",
+        "message_after",
+        "pvc_uids",
+        "node_status"
+      ]
+    },
+    {
+      "id": "controller_leader_failure",
+      "timeout_seconds": 300,
+      "injection": "delete the current Controller leader Pod",
+      "recovery": "wait for a different elected leader and three ready Controller replicas",
+      "required_assertions": [
+        "leader_changed",
+        "controller_quorum_preserved",
+        "acknowledged_message_visible",
+        "controller_replicas_restored"
+      ],
+      "required_evidence": [
+        "leader_before",
+        "leader_after",
+        "quorum_status",
+        "message_after",
+        "controller_status"
+      ]
+    },
+    {
+      "id": "secret_rotation",
+      "timeout_seconds": 300,
+      "injection": "atomically replace runtime ACL material and restart the affected workload",
+      "recovery": "restore the baseline secret and verify baseline credentials after rollback",
+      "required_assertions": [
+        "old_credentials_worked_before_rotation",
+        "old_credentials_rejected_after_rotation",
+        "new_credentials_worked_after_rotation",
+        "baseline_credentials_restored",
+        "secret_values_redacted"
+      ],
+      "required_evidence": [
+        "pre_rotation_access",
+        "old_access_denied",
+        "new_access_allowed",
+        "rollback_access",
+        "redaction_scan"
+      ]
+    },
+    {
+      "id": "acknowledged_message_recovery",
+      "timeout_seconds": 300,
+      "injection": "restart the Broker after recording a successful send acknowledgement",
+      "recovery": "wait for Broker readiness and query the same unique key",
+      "required_assertions": [
+        "send_acknowledged",
+        "message_visible_before_restart",
+        "message_visible_after_restart",
+        "message_id_preserved",
+        "queue_offset_preserved",
+        "commitlog_offset_preserved",
+        "pvc_uid_set_preserved"
+      ],
+      "required_evidence": [
+        "send_ack",
+        "message_before",
+        "broker_restart",
+        "message_after",
+        "watermark",
+        "pvc_uids"
+      ]
+    }
+  ],
+  "evidence": {
+    "run_file": "run.json",
+    "scenario_directory": "scenarios",
+    "artifact_directory": "artifacts",
+    "production_requires_dynamic_execution": true,
+    "fixture_requires_explicit_opt_in": true,
+    "required_run_fields": [
+      "schema_version",
+      "milestone",
+      "policy_sha256",
+      "run_id",
+      "started_at",
+      "finished_at",
+      "backend",
+      "dynamic_execution",
+      "fixture",
+      "cluster_profile",
+      "tool_versions",
+      "chart_sha256",
+      "overlay_sha256",
+      "baseline_images",
+      "candidate_images",
+      "global_assertions",
+      "unresolved_faults",
+      "scenarios",
+      "artifacts"
+    ],
+    "artifact_hash_algorithm": "sha256"
+  },
+  "rollback": {
+    "restore_baseline_digests": true,
+    "restore_baseline_chart": true,
+    "delete_pvcs": false,
+    "delete_wal": false,
+    "preserve_evidence": true
+  }
+}

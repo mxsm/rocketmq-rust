@@ -1,0 +1,1 @@
+fixture: collector outage retained bounded telemetry behavior and data-plane availability within the SLO budget

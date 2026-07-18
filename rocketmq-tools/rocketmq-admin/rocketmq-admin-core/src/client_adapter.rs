@@ -27,6 +27,7 @@ mod topic;
 pub use self::lifecycle::AdminGuard;
 pub use self::lifecycle::AdminSession;
 pub use self::lifecycle::ClientAdminBuilder;
+pub use self::security::admin_acl_rpc_hook;
 
 #[cfg(feature = "legacy-common-compat")]
 #[doc(hidden)]

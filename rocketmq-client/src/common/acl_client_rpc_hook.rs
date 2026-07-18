@@ -16,7 +16,8 @@ use std::fmt;
 use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
-use rocketmq_auth::authentication::acl_signer::cal_signature_segments;
+use rocketmq_auth::authentication::acl_signer::cal_signature_segments_with_algorithm;
+use rocketmq_auth::SignatureAlgorithm;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::REDACTED;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -37,6 +38,7 @@ use crate::common::session_credentials::SIGNATURE;
 #[derive(Clone)]
 pub struct AclClientRPCHook {
     session_credentials: SessionCredentials,
+    signature_algorithm: SignatureAlgorithm,
 }
 
 impl fmt::Debug for AclClientRPCHook {
@@ -44,13 +46,24 @@ impl fmt::Debug for AclClientRPCHook {
         formatter
             .debug_struct("AclClientRPCHook")
             .field("session_credentials", &REDACTED)
+            .field("signature_algorithm", &self.signature_algorithm)
             .finish()
     }
 }
 
 impl AclClientRPCHook {
     pub fn new(session_credentials: SessionCredentials) -> Self {
-        Self { session_credentials }
+        Self::with_signature_algorithm(session_credentials, SignatureAlgorithm::default())
+    }
+
+    pub fn with_signature_algorithm(
+        session_credentials: SessionCredentials,
+        signature_algorithm: SignatureAlgorithm,
+    ) -> Self {
+        Self {
+            session_credentials,
+            signature_algorithm,
+        }
     }
 
     pub fn session_credentials(&self) -> &SessionCredentials {
@@ -101,9 +114,12 @@ impl RPCHook for AclClientRPCHook {
                 .map(|(_, value)| value.as_bytes());
             let body_segments = request.body().into_iter().map(|body| body.as_ref());
 
-            cal_signature_segments(field_segments.chain(body_segments), secret_key.as_str()).map_err(|error| {
-                RocketMQError::illegal_argument(format!("Failed to calculate ACL signature: {error}"))
-            })?
+            cal_signature_segments_with_algorithm(
+                field_segments.chain(body_segments),
+                secret_key.as_str(),
+                self.signature_algorithm,
+            )
+            .map_err(|error| RocketMQError::illegal_argument(format!("Failed to calculate ACL signature: {error}")))?
         };
         request.add_ext_field(SIGNATURE, signature);
 
@@ -170,6 +186,30 @@ mod tests {
         assert_eq!(
             ext_fields.get(&CheetahString::from_static_str(SIGNATURE)).unwrap(),
             "wuJkFDNRMKY6aFXTDwT/vg0UC8M="
+        );
+    }
+
+    #[test]
+    fn acl_hook_supports_hmac_sha256_for_secure_profiles() {
+        let hook = AclClientRPCHook::with_signature_algorithm(
+            SessionCredentials::with_token("ak", "secret", "token"),
+            SignatureAlgorithm::HmacSha256,
+        );
+        let mut request = RemotingCommand::create_remoting_command(10).set_body(Bytes::from_static(b"body"));
+        request.ensure_ext_fields_initialized();
+        request.add_ext_field("z", "last");
+        request.add_ext_field("a", "first");
+
+        hook.do_before_request("127.0.0.1:9876".parse().unwrap(), &mut request)
+            .unwrap();
+
+        assert_eq!(
+            request
+                .ext_fields()
+                .unwrap()
+                .get(&CheetahString::from_static_str(SIGNATURE))
+                .unwrap(),
+            "mBwsFNM/fUVM2NmLpnXIS+x+x7EZXmyuboG/4ZGmwa0="
         );
     }
 

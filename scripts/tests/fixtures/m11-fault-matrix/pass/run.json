@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "milestone": "M11-11",
+  "policy_sha256": "72dd08e26ca0d5454cfe9ff79465de53dca8155ab7bf967dddc8683663c7f22f",
+  "run_id": "fixture-m11-11-positive",
+  "started_at": "2026-07-17T01:00:00Z",
+  "finished_at": "2026-07-17T01:07:00Z",
+  "backend": "kind",
+  "dynamic_execution": false,
+  "fixture": true,
+  "cluster_profile": {
+    "control_plane_nodes": 1,
+    "worker_nodes": 3,
+    "controller_replicas": 3,
+    "storage_class": "fixture-standard",
+    "nodes": [
+      "fixture-control-plane",
+      "fixture-worker-a",
+      "fixture-worker-b",
+      "fixture-worker-c"
+    ]
+  },
+  "tool_versions": {
+    "docker": "fixture",
+    "kind": "v0.27.0-fixture",
+    "k3d": "not-used-fixture",
+    "kubectl": "v1.32.2-fixture",
+    "helm": "v4.2.3-fixture"
+  },
+  "chart_sha256": "e9b88b4ee95b18c706839c28d3a0220e5bc470e9cd9262410c90793c45ff8b7c",
+  "overlay_sha256": "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d",
+  "baseline_images": {
+    "broker": "example.invalid/broker@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777",
+    "namesrv": "example.invalid/namesrv@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+    "controller": "example.invalid/controller@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f",
+    "proxy": "example.invalid/proxy@sha256:a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b",
+    "mcp": "example.invalid/mcp@sha256:06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0"
+  },
+  "candidate_images": {
+    "broker": "example.invalid/broker@sha256:3a88693bc57dd4c3d5f37e2acb1dc7e35daa0e578ca6c8538ed3fc4534de4373",
+    "namesrv": "example.invalid/namesrv@sha256:536532dedeeed56d3f086f49bfb898babf09e36f7d5ac1ee5efc374e59ff7688",
+    "controller": "example.invalid/controller@sha256:d7ac38651c788f9e8745b1a183b894aa4f5acd428ea4a2cebdf31c5c18352e5d",
+    "proxy": "example.invalid/proxy@sha256:9e29c84a61a63655bff5c10fd9ff3153336b16caa0ed5c149950c06a349d72c1",
+    "mcp": "example.invalid/mcp@sha256:4df393a882f7367f20eb8e91411e9f31df2aecef2b57e4748b2879ea4f1fd9c7"
+  },
+  "global_assertions": {
+    "all_workloads_ready": true,
+    "all_faults_reverted": true,
+    "controller_quorum_restored": true,
+    "pvc_uid_set_preserved": true,
+    "acknowledged_message_recovered": true,
+    "queue_offset_preserved": true,
+    "commitlog_offset_preserved": true,
+    "drain_completed_within_deadline": true,
+    "slo_budget_satisfied": true,
+    "rollback_verified": true,
+    "unresolved_faults_empty": true
+  },
+  "unresolved_faults": [],
+  "scenarios": [
+    {
+      "id": "rolling_upgrade",
+      "status": "passed",
+      "assertions": {
+        "rollout_completed": true,
+        "acknowledged_message_visible": true,
+        "queue_offset_preserved": true,
+        "commitlog_offset_preserved": true,
+        "drain_completed_within_deadline": true,
+        "rollback_completed": true,
+        "pvc_uid_set_preserved": true
+      },
+      "evidence": {
+        "rollout_status": "artifacts/rolling_upgrade.txt",
+        "message_before": "artifacts/rolling_upgrade.txt",
+        "message_after": "artifacts/rolling_upgrade.txt",
+        "shutdown_report": "artifacts/rolling_upgrade.txt",
+        "rollback_status": "artifacts/rolling_upgrade.txt",
+        "pvc_uids": "artifacts/rolling_upgrade.txt"
+      }
+    },
+    {
+      "id": "node_eviction",
+      "status": "passed",
+      "assertions": {
+        "eviction_api_used": true,
+        "pdb_respected": true,
+        "acknowledged_message_visible": true,
+        "pvc_uid_set_preserved": true,
+        "node_uncordoned": true
+      },
+      "evidence": {
+        "drain_output": "artifacts/node_eviction.txt",
+        "pdb_status": "artifacts/node_eviction.txt",
+        "message_after": "artifacts/node_eviction.txt",
+        "pvc_uids": "artifacts/node_eviction.txt",
+        "node_status": "artifacts/node_eviction.txt"
+      }
+    },
+    {
+      "id": "collector_outage",
+      "status": "passed",
+      "assertions": {
+        "data_plane_remained_available": true,
+        "telemetry_queue_bounded": true,
+        "collector_recovered": true,
+        "slo_budget_satisfied": true
+      },
+      "evidence": {
+        "collector_scale": "artifacts/collector_outage.txt",
+        "message_during_outage": "artifacts/collector_outage.txt",
+        "telemetry_metrics": "artifacts/collector_outage.txt",
+        "collector_recovery": "artifacts/collector_outage.txt",
+        "slo_report": "artifacts/collector_outage.txt"
+      }
+    },
+    {
+      "id": "disk_pressure",
+      "status": "passed",
+      "assertions": {
+        "disk_pressure_taint_observed": true,
+        "stateless_pod_rescheduled": true,
+        "acknowledged_message_visible": true,
+        "pvc_uid_set_preserved": true,
+        "taint_removed": true
+      },
+      "evidence": {
+        "taint_status": "artifacts/disk_pressure.txt",
+        "pod_reschedule": "artifacts/disk_pressure.txt",
+        "message_after": "artifacts/disk_pressure.txt",
+        "pvc_uids": "artifacts/disk_pressure.txt",
+        "node_status": "artifacts/disk_pressure.txt"
+      }
+    },
+    {
+      "id": "controller_leader_failure",
+      "status": "passed",
+      "assertions": {
+        "leader_changed": true,
+        "controller_quorum_preserved": true,
+        "acknowledged_message_visible": true,
+        "controller_replicas_restored": true
+      },
+      "evidence": {
+        "leader_before": "artifacts/controller_leader_failure.txt",
+        "leader_after": "artifacts/controller_leader_failure.txt",
+        "quorum_status": "artifacts/controller_leader_failure.txt",
+        "message_after": "artifacts/controller_leader_failure.txt",
+        "controller_status": "artifacts/controller_leader_failure.txt"
+      }
+    },
+    {
+      "id": "secret_rotation",
+      "status": "passed",
+      "assertions": {
+        "old_credentials_worked_before_rotation": true,
+        "old_credentials_rejected_after_rotation": true,
+        "new_credentials_worked_after_rotation": true,
+        "baseline_credentials_restored": true,
+        "secret_values_redacted": true
+      },
+      "evidence": {
+        "pre_rotation_access": "artifacts/secret_rotation.txt",
+        "old_access_denied": "artifacts/secret_rotation.txt",
+        "new_access_allowed": "artifacts/secret_rotation.txt",
+        "rollback_access": "artifacts/secret_rotation.txt",
+        "redaction_scan": "artifacts/secret_rotation.txt"
+      }
+    },
+    {
+      "id": "acknowledged_message_recovery",
+      "status": "passed",
+      "assertions": {
+        "send_acknowledged": true,
+        "message_visible_before_restart": true,
+        "message_visible_after_restart": true,
+        "message_id_preserved": true,
+        "queue_offset_preserved": true,
+        "commitlog_offset_preserved": true,
+        "pvc_uid_set_preserved": true
+      },
+      "evidence": {
+        "send_ack": "artifacts/acknowledged_message_recovery.txt",
+        "message_before": "artifacts/acknowledged_message_recovery.txt",
+        "broker_restart": "artifacts/acknowledged_message_recovery.txt",
+        "message_after": "artifacts/acknowledged_message_recovery.txt",
+        "watermark": "artifacts/acknowledged_message_recovery.txt",
+        "pvc_uids": "artifacts/acknowledged_message_recovery.txt"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "artifacts/rolling_upgrade.txt",
+      "sha256": "3a88693bc57dd4c3d5f37e2acb1dc7e35daa0e578ca6c8538ed3fc4534de4373"
+    },
+    {
+      "path": "artifacts/node_eviction.txt",
+      "sha256": "536532dedeeed56d3f086f49bfb898babf09e36f7d5ac1ee5efc374e59ff7688"
+    },
+    {
+      "path": "artifacts/collector_outage.txt",
+      "sha256": "bd82089b896f1cb98c14954d293c5a761b88bfca7ea8341ab8739c1d2c4db1c6"
+    },
+    {
+      "path": "artifacts/disk_pressure.txt",
+      "sha256": "9e29c84a61a63655bff5c10fd9ff3153336b16caa0ed5c149950c06a349d72c1"
+    },
+    {
+      "path": "artifacts/controller_leader_failure.txt",
+      "sha256": "d7ac38651c788f9e8745b1a183b894aa4f5acd428ea4a2cebdf31c5c18352e5d"
+    },
+    {
+      "path": "artifacts/secret_rotation.txt",
+      "sha256": "4df393a882f7367f20eb8e91411e9f31df2aecef2b57e4748b2879ea4f1fd9c7"
+    },
+    {
+      "path": "artifacts/acknowledged_message_recovery.txt",
+      "sha256": "b4874c779023eedf707a81589cb97e3cf5d481f2b6aac39ac6bbbc6972a89b12"
+    }
+  ]
+}

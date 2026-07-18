@@ -1,0 +1,1 @@
+fixture: broker restart retained message ID, queue offset, commitlog offset, and PVC identity

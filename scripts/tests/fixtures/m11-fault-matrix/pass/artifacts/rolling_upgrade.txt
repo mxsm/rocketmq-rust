@@ -1,0 +1,1 @@
+fixture: rolling upgrade preserved acknowledgement, offsets, PVCs, drain deadline, and rollback

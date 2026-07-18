@@ -1,0 +1,1 @@
+fixture: Controller leader changed while quorum, replicas, and acknowledged-message visibility were preserved

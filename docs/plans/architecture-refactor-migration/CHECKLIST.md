@@ -29,15 +29,15 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 74 | 0 | 8 未开始；合计 8 尚未完成 | 82 |
+| PR 级工作包 | 75 | 0 | 7 未开始；合计 7 尚未完成 | 82 |
 | 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 1（M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 8 个未开始工作包分布：M10 为 0 个、M11 为 2 个、M12 为 6 个。
+剩余 7 个未开始工作包分布：M10 为 0 个、M11 为 1 个、M12 为 6 个。
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
-`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-11。
+`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-12。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -606,7 +606,15 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] runtime 状态机、Proxy 双监听 barrier、Broker deadline/final flush、NameServer drain、Controller shutdown、observability budget 与 MCP 83-test/HTTP Clippy/Rustdoc 门禁通过
   - [x] [`M11-10 证据`](phase-3-production-readiness/11-probe-prestop-drain-evidence.md) 记录状态语义、阶段顺序、验证矩阵、未签署动态 Gate 与不恢复假 readiness 的回滚边界
   - [x] 74/82 已完成、8 未完成，下一工作包 PR-M11-11；M10/M11/Phase 3/HUMAN、容器动态 `[TEST]` 与 Kind/K3d fault/已确认消息恢复 Gate 均未提前宣称完成
-- [ ] PR-M11-11：完成 Kind/K3d fault matrix Gate
+- [x] PR-M11-11：完成 Kind/K3d fault matrix 实现与证据门禁
+  - [x] Kind v0.27.0/Kubernetes 1.32.2、K3d v5.9.0、1 control-plane + 3 workers、Controller 3/2 quorum 和 storage class profile 已版本化
+  - [x] `kind-architecture-refactor-e2e.ps1` 实现 rolling upgrade、node eviction、collector outage、disk-pressure taint、Controller leader failure、secret rotation 与 acknowledged recovery
+  - [x] 断言覆盖 message ID、Queue/CommitLog offset、PVC UID、quorum、preStop、SLO、五镜像回滚和 fault cleanup，不以 Pod Ready 单独判定成功
+  - [x] production evidence 强制 `dynamic_execution=true`/`fixture=false`，并校验 policy/chart/overlay/image/artifact SHA-256；fixture 必须显式 opt-in
+  - [x] test-only fault-driver、管理 CLI 环境 ACL HMAC-SHA256、manual dynamic workflow 与 11 组正负证据测试落地
+  - [ ] 本机无 Docker/Kind/K3d/Kubectl/Helm、目标签名镜像和 Secret，七场景真实动态执行未运行，Kind/K3d Gate 保持待验收
+  - [x] [`M11-11 证据`](phase-3-production-readiness/11-kind-k3d-fault-matrix-evidence.md) 记录完成边界、验证结果、未签署动态 Gate 与不删除 PVC/WAL 的回滚策略
+  - [x] 75/82 已完成、7 未完成，下一工作包 PR-M11-12；M10/M11/Phase 3/HUMAN 与真实 fault Gate 均未提前宣称完成
 - [ ] PR-M11-12：完成 ArcMut、stable 与 SLO Phase 3 收口
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

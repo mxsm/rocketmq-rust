@@ -11,7 +11,7 @@ data:
     brokerIp1 = "rocketmq-broker-0.rocketmq-broker-headless.{{ .Release.Namespace }}.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/broker"
     namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876"
-    autoCreateTopicEnable = false
+    autoCreateTopicEnable = {{ .Values.services.broker.autoCreateTopicEnable }}
     authConfigPath = "/var/lib/rocketmq/broker/auth"
     aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
     aclFileWatchEnabled = true
