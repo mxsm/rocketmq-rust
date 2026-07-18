@@ -10,8 +10,13 @@ log_to_stderr = true
 [server.http]
 bind = "127.0.0.1:8089"
 endpoint = "/mcp"
+public_base_url = "https://127.0.0.1:8089"
 validate_origin = true
-allowed_origins = ["http://127.0.0.1", "http://localhost"]
+allowed_origins = ["https://127.0.0.1", "https://localhost"]
+
+[server.http.tls]
+cert_path = "./conf/tls/server-cert.pem"
+key_path = "./conf/tls/server-key.pem"
 
 [server.http.auth]
 # `development-token` is only for loopback development. Production deployments
@@ -22,7 +27,10 @@ issuer = ""
 audience = ""
 required_scopes = ["rocketmq:read"]
 jwt_algorithm = "rs256"
-jwt_key_env = "ROCKETMQ_MCP_OAUTH_PUBLIC_KEY_PEM"
+jwt_key_env = ""
+jwks_url = "https://issuer.example.test/.well-known/jwks.json"
+jwks_refresh_seconds = 300
+jwks_max_stale_seconds = 900
 protected_resource_metadata_path = "/.well-known/oauth-protected-resource"
 
 [[clusters]]

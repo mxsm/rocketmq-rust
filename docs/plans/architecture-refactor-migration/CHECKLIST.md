@@ -29,15 +29,15 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 68 | 0 | 14 未开始；合计 14 尚未完成 | 82 |
+| PR 级工作包 | 69 | 0 | 13 未开始；合计 13 尚未完成 | 82 |
 | 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 1（M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 14 个未开始工作包分布：M10 为 0 个、M11 为 8 个、M12 为 6 个。
+剩余 13 个未开始工作包分布：M10 为 0 个、M11 为 7 个、M12 为 6 个。
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
-`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-05。
+`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-06。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -552,7 +552,15 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Windows 与 WSL/Linux 覆盖 6 项 credential contract、真实证书不匹配/无效 PEM/LKG，以及 8 路并发 TLS reload
   - [x] [`M11-04 证据`](phase-3-production-readiness/11-credential-rotation-evidence.md) 记录状态机、API 增量、验证矩阵与回滚边界
   - [x] 68/82 已完成、14 未完成，下一工作包 PR-M11-05；M10/M11/Phase 3/HUMAN Gate 均未提前宣称完成
-- [ ] PR-M11-05：完成 MCP HTTPS、JWKS 与 Principal 传播
+- [x] PR-M11-05：完成 MCP HTTPS、JWKS 与 Principal 传播
+  - [x] Streamable HTTP listener 改为 TLS enforcing，复用 M11-04 原子 certificate generation/reload/LKG；真实 HTTPS 成功且同端口明文失败
+  - [x] 公共 resource metadata 与 `WWW-Authenticate resource_metadata` 使用绝对 HTTPS URI，Host/Origin/body/timeout 边界保持生效
+  - [x] OAuth 仅接受带 `kid` 的 RS256；HTTPS-only/无重定向/有界 JWKS fetch，完整校验后原子发布不可变 generation
+  - [x] TTL/unknown-kid refresh、duplicate/symmetric/alg/use/key_ops 拒绝、fetch/parse 失败保持 bounded last-known-good 均有测试
+  - [x] verified principal/client/roles/scopes/allowed_clusters 经真实 MCP `tools/call` 进入 RBAC、rate-limit 与 audit，HTTP 上下文缺失不回退 `local-stdio`
+  - [x] 默认 stdio 与 `--all-features` 均通过；`change-planning` 仍只产生 `mutates_cluster: false` 计划，没有 Apply/`dangerous-tools`
+  - [x] [`M11-05 证据`](phase-3-production-readiness/11-mcp-https-jwks-evidence.md) 记录 TLS/JWKS/principal、公共 API、验证矩阵和回滚边界
+  - [x] 69/82 已完成、13 未完成，下一工作包 PR-M11-06；M10/M11/Phase 3/HUMAN Gate 均未提前宣称完成
 - [ ] PR-M11-06：完成 MCP Audit Writer 与 Shutdown Drain
 - [ ] PR-M11-07：建立容器镜像基础
 - [ ] PR-M11-08：交付五个服务镜像入口

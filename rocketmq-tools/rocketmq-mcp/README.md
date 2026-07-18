@@ -84,11 +84,15 @@ rocketmq-tools/rocketmq-mcp/conf/mcp.example.toml
 Important fields:
 
 - `server.transport`: `stdio` or `streamable-http`.
-- `server.http.bind`: socket address for HTTP transport, default `127.0.0.1:8089`.
+- `server.http.bind`: socket address for the HTTPS transport, default `127.0.0.1:8089`.
 - `server.http.endpoint`: MCP endpoint path, default `/mcp`.
+- `server.http.public_base_url`: absolute public HTTPS origin used in protected-resource metadata and authentication challenges.
+- `server.http.tls.cert_path` and `key_path`: server certificate chain and private key. The complete pair is verified before an atomic generation is published; failed reloads keep the last-known-good generation.
 - `server.http.allowed_origins`: allowed browser origins when origin validation is enabled.
 - `server.http.auth.mode`: `development-token` for loopback development or `oauth-jwt` for production JWT access tokens.
-- `server.http.auth.issuer`, `audience`, `required_scopes`, `jwt_algorithm`, and `jwt_key_env`: OAuth resource-server validation settings. `rs256` expects a PEM public key.
+- `server.http.auth.issuer`, `audience`, `required_scopes`, `jwt_algorithm`, and `jwks_url`: OAuth resource-server validation settings. OAuth accepts only RS256 tokens carrying a `kid`, and the JWKS endpoint must use HTTPS.
+- `server.http.auth.jwks_refresh_seconds` and `jwks_max_stale_seconds`: bounded refresh and last-known-good windows. A fetch or parse failure never clears an already verified key generation.
+- `server.http.auth.jwt_key_env`: retained only for configuration compatibility; OAuth does not use a static key fallback.
 - `server.http.auth.protected_resource_metadata_path`: unauthenticated OAuth protected-resource metadata endpoint.
 - `clusters[].name`: logical cluster name used by tools, resources, and prompts.
 - `clusters[].namesrv_addr`: RocketMQ namesrv address for admin queries.
@@ -130,9 +134,9 @@ target/release/rocketmq-mcp \
   --transport stdio
 ```
 
-## Streamable HTTP Usage
+## Streamable HTTPS Usage
 
-Streamable HTTP requires the `streamable-http` feature. Use a static token only for reviewed loopback development; use OAuth JWT validation in production.
+Streamable HTTPS requires the `streamable-http` feature and a valid certificate/key pair. Use a static token only for reviewed loopback development; use OAuth JWT validation in production.
 
 PowerShell:
 
@@ -156,16 +160,16 @@ cargo run -p rocketmq-mcp --features streamable-http -- \
   --endpoint /mcp
 ```
 
-Clients connect to `http://127.0.0.1:8089/mcp` and send:
+Clients connect to `https://127.0.0.1:8089/mcp` and send:
 
 ```text
 Authorization: Bearer replace-with-a-long-random-token
 Accept: application/json, text/event-stream
 ```
 
-For production, set `mode = "oauth-jwt"`, configure `issuer`, `audience`, `required_scopes`, and `jwt_key_env`, then provide the configured PEM public key through that environment variable. Clients must send an access token whose signature, issuer, audience, expiry, and required scope are valid. The server publishes OAuth protected-resource metadata at the configured `protected_resource_metadata_path`; this endpoint remains available without a bearer token for client discovery.
+For production, set `mode = "oauth-jwt"` and configure `issuer`, `audience`, `required_scopes`, `jwks_url`, and the JWKS refresh windows. Clients must send an RS256 access token with a known `kid` and valid signature, issuer, audience, expiry, and required scope. The server publishes OAuth protected-resource metadata at the configured `protected_resource_metadata_path`; this endpoint remains available without a bearer token for client discovery and its absolute HTTPS URI is included in bearer challenges.
 
-`permissions.example.toml` is loaded at startup. A principal needs a configured role, the scope appropriate to the requested risk level, and access to the requested cluster. Tool, Resource, and Prompt discovery are filtered by this policy; Resource reads and Tool calls are enforced again at execution time. Audit records contain the verified principal and client identifier but never store the bearer token.
+`permissions.example.toml` is loaded at startup. Verified principal, client, roles, scopes, and `rocketmq_clusters` claims propagate through the real MCP handler to RBAC, cluster allow-list, rate-limit, and audit decisions; an HTTP request cannot substitute the local stdio identity. Tool, Resource, and Prompt discovery are filtered by this policy, and Resource reads and Tool calls are enforced again at execution time. Audit records contain the verified principal and client identifier but never store the bearer token.
 
 ## Claude Desktop
 

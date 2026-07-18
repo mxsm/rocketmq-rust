@@ -16,6 +16,8 @@ pub mod audit;
 pub mod context;
 #[cfg(feature = "streamable-http")]
 pub mod http_auth;
+#[cfg(feature = "streamable-http")]
+pub mod jwks;
 pub mod policy;
 pub mod rate_limit;
 pub mod sanitizer;
