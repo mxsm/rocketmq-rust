@@ -81,7 +81,6 @@ use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -94,13 +93,13 @@ use crate::route_info::broker_addr_info::BrokerStatusChangeInfo;
 
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: i64 = 1000 * 60 * 2;
 
-type TopicQueueTable = ArcMut<HashMap<CheetahString /* topic */, HashMap<CheetahString /* broker name */, QueueData>>>;
-type BrokerAddrTable = ArcMut<HashMap<CheetahString /* brokerName */, BrokerData>>;
-type ClusterAddrTable = ArcMut<HashMap<CheetahString /* clusterName */, HashSet<CheetahString /* brokerName */>>>;
-type BrokerLiveTable = ArcMut<HashMap<BrokerAddrInfo /* brokerAddr */, BrokerLiveInfo>>;
-type FilterServerTable = ArcMut<HashMap<BrokerAddrInfo /* brokerAddr */, Vec<CheetahString> /* Filter Server */>>;
+type TopicQueueTable = HashMap<CheetahString /* topic */, HashMap<CheetahString /* broker name */, QueueData>>;
+type BrokerAddrTable = HashMap<CheetahString /* brokerName */, BrokerData>;
+type ClusterAddrTable = HashMap<CheetahString /* clusterName */, HashSet<CheetahString /* brokerName */>>;
+type BrokerLiveTable = HashMap<BrokerAddrInfo /* brokerAddr */, BrokerLiveInfo>;
+type FilterServerTable = HashMap<BrokerAddrInfo /* brokerAddr */, Vec<CheetahString> /* Filter Server */>;
 type TopicQueueMappingInfoTable =
-    ArcMut<HashMap<CheetahString /* topic */, HashMap<CheetahString /* brokerName */, TopicQueueMappingInfo>>>;
+    HashMap<CheetahString /* topic */, HashMap<CheetahString /* brokerName */, TopicQueueMappingInfo>>;
 
 pub struct RouteInfoManager {
     pub(crate) topic_queue_table: TopicQueueTable,
@@ -111,7 +110,6 @@ pub struct RouteInfoManager {
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
     pub(crate) name_server_runtime_inner: NameServerRuntimeHandle,
     pub(crate) un_register_service: Arc<BatchUnregistrationService>,
-    lock: Arc<parking_lot::RwLock<()>>,
 }
 
 #[allow(private_interfaces)]
@@ -122,13 +120,12 @@ impl RouteInfoManager {
             queue_capacity,
         ));
         RouteInfoManager {
-            topic_queue_table: ArcMut::new(HashMap::new()),
-            broker_addr_table: ArcMut::new(HashMap::new()),
-            cluster_addr_table: ArcMut::new(HashMap::new()),
-            broker_live_table: ArcMut::new(HashMap::new()),
-            filter_server_table: ArcMut::new(HashMap::new()),
-            topic_queue_mapping_info_table: ArcMut::new(HashMap::new()),
-            lock: Arc::new(Default::default()),
+            topic_queue_table: HashMap::new(),
+            broker_addr_table: HashMap::new(),
+            cluster_addr_table: HashMap::new(),
+            broker_live_table: HashMap::new(),
+            filter_server_table: HashMap::new(),
+            topic_queue_mapping_info_table: HashMap::new(),
             name_server_runtime_inner,
             un_register_service,
         }
@@ -142,7 +139,7 @@ impl RouteInfoManager {
     }
 
     pub fn register_broker(
-        &self,
+        &mut self,
         cluster_name: CheetahString,
         broker_addr: CheetahString,
         broker_name: CheetahString,
@@ -156,29 +153,24 @@ impl RouteInfoManager {
         channel: Channel,
     ) -> Option<RegisterBrokerResult> {
         let mut result = RegisterBrokerResult::default();
-        let _write = self.lock.write();
         //init or update cluster information
         self.cluster_addr_table
-            .mut_from_ref()
             .entry(cluster_name.clone())
             .or_default()
             .insert(broker_name.clone());
 
         let enable_acting_master_inner = enable_acting_master.unwrap_or_default();
-        let mut register_first = if let Some(broker_data) = self.broker_addr_table.mut_from_ref().get_mut(&broker_name)
-        {
+        let mut register_first = if let Some(broker_data) = self.broker_addr_table.get_mut(&broker_name) {
             broker_data.set_enable_acting_master(enable_acting_master_inner);
             broker_data.set_zone_name(zone_name);
             false
         } else {
             let mut broker_data = BrokerData::new(cluster_name.clone(), broker_name.clone(), HashMap::new(), zone_name);
             broker_data.set_enable_acting_master(enable_acting_master_inner);
-            self.broker_addr_table
-                .mut_from_ref()
-                .insert(broker_name.clone(), broker_data);
+            self.broker_addr_table.insert(broker_name.clone(), broker_data);
             true
         };
-        let broker_data = self.broker_addr_table.mut_from_ref().get_mut(&broker_name).unwrap();
+        let broker_data = self.broker_addr_table.get_mut(&broker_name).unwrap();
         let mut prev_min_broker_id = 0;
         if !broker_data.broker_addrs().is_empty() {
             prev_min_broker_id = broker_data.broker_addrs().keys().min().copied().unwrap();
@@ -216,7 +208,6 @@ impl RouteInfoManager {
                             new_state_version
                         );
                         self.broker_live_table
-                            .mut_from_ref()
                             .remove(BrokerAddrInfo::new(cluster_name, broker_addr.clone()).as_ref());
                         return Some(result);
                     }
@@ -273,7 +264,7 @@ impl RouteInfoManager {
                     .map(|item| item.to_string())
                     .collect::<HashSet<String>>();
                 for to_delete_topic in to_delete_topics {
-                    let queue_data_map = self.topic_queue_table.mut_from_ref().get_mut(to_delete_topic.as_str());
+                    let queue_data_map = self.topic_queue_table.get_mut(to_delete_topic.as_str());
                     if let Some(queue_data) = queue_data_map {
                         let removed_qd = queue_data.remove(&broker_name);
                         if let Some(ref removed_qd_inner) = removed_qd {
@@ -283,7 +274,7 @@ impl RouteInfoManager {
                             );
                         }
                         if queue_data.is_empty() {
-                            self.topic_queue_table.mut_from_ref().remove(to_delete_topic.as_str());
+                            self.topic_queue_table.remove(to_delete_topic.as_str());
                         }
                     }
                 }
@@ -314,11 +305,9 @@ impl RouteInfoManager {
                     let vtq_info = entry.value();
                     if !self.topic_queue_mapping_info_table.contains_key(topic) {
                         self.topic_queue_mapping_info_table
-                            .mut_from_ref()
                             .insert(topic.clone(), HashMap::new());
                     }
                     self.topic_queue_mapping_info_table
-                        .mut_from_ref()
                         .get_mut(topic)
                         .unwrap()
                         .insert(vtq_info.bname.as_ref().unwrap().clone(), (**vtq_info).clone());
@@ -328,7 +317,7 @@ impl RouteInfoManager {
 
         let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
 
-        self.broker_live_table.mut_from_ref().insert(
+        self.broker_live_table.insert(
             broker_addr_info.clone(),
             BrokerLiveInfo::new(
                 current_millis() as i64,
@@ -343,10 +332,9 @@ impl RouteInfoManager {
             ),
         );
         if filter_server_list.is_empty() {
-            self.filter_server_table.mut_from_ref().remove(&broker_addr_info);
+            self.filter_server_table.remove(&broker_addr_info);
         } else {
             self.filter_server_table
-                .mut_from_ref()
                 .insert(broker_addr_info.clone(), filter_server_list);
         }
 
@@ -380,7 +368,6 @@ impl RouteInfoManager {
                 ),
             )
         }
-        drop(_write);
         Some(result)
     }
 }
@@ -388,8 +375,8 @@ impl RouteInfoManager {
 impl RouteInfoManager {
     pub(crate) fn get_all_cluster_info(&self) -> ClusterInfo {
         ClusterInfo::new(
-            Some(self.broker_addr_table.as_ref().clone()),
-            Some(self.cluster_addr_table.as_ref().clone()),
+            Some(self.broker_addr_table.clone()),
+            Some(self.cluster_addr_table.clone()),
         )
     }
 
@@ -405,8 +392,6 @@ impl RouteInfoManager {
         let mut found_queue_data = false;
         let mut found_broker_data = false;
 
-        // Acquire read lock
-        let lock = self.lock.read();
         if let Some(queue_data_map) = self.topic_queue_table.get(topic) {
             topic_route_data
                 .queue_datas
@@ -433,7 +418,6 @@ impl RouteInfoManager {
                 }
             }
         }
-        drop(lock);
         debug!("pickup_topic_route_data {:?} {:?}", topic, topic_route_data);
 
         if found_broker_data && found_queue_data {
@@ -559,7 +543,7 @@ impl RouteInfoManager {
         None
     }
 
-    fn create_and_update_queue_data(&self, broker_name: &CheetahString, topic_config: TopicConfig) {
+    fn create_and_update_queue_data(&mut self, broker_name: &CheetahString, topic_config: TopicConfig) {
         let queue_data = QueueData::new(
             broker_name.clone(),
             topic_config.write_queue_nums,
@@ -570,7 +554,6 @@ impl RouteInfoManager {
 
         let queue_data_map = self
             .topic_queue_table
-            .mut_from_ref()
             .get_mut(topic_config.topic_name.as_ref().unwrap().as_str());
         if let Some(queue_data_map_inner) = queue_data_map {
             let existed_qd = queue_data_map_inner.get(broker_name);
@@ -597,7 +580,6 @@ impl RouteInfoManager {
             );
             queue_data_map_inner.insert(broker_name.clone(), queue_data);
             self.topic_queue_table
-                .mut_from_ref()
                 .insert(topic_config.topic_name.as_ref().unwrap().clone(), queue_data_map_inner);
         }
     }
@@ -685,33 +667,25 @@ impl RouteInfoManager {
         broker_name: CheetahString,
     ) -> Option<BrokerMemberGroup> {
         let mut group_member = BrokerMemberGroup::new(cluster_name, broker_name.clone());
-        let lock_ = self.lock.read();
         if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
             group_member.broker_addrs = broker_data.broker_addrs().clone();
         }
-        drop(lock_);
         Some(group_member)
     }
 
     #[inline]
-    pub(crate) fn wipe_write_perm_of_broker_by_lock(&self, broker_name: &CheetahString) -> i32 {
-        let lock = self.lock.write();
-        let cnt = self.operate_write_perm_of_broker(broker_name, RequestCode::WipeWritePermOfBroker);
-        drop(lock);
-        cnt
+    pub(crate) fn wipe_write_perm_of_broker_by_lock(&mut self, broker_name: &CheetahString) -> i32 {
+        self.operate_write_perm_of_broker(broker_name, RequestCode::WipeWritePermOfBroker)
     }
 
     #[inline]
-    pub(crate) fn add_write_perm_of_broker_by_lock(&self, broker_name: &CheetahString) -> i32 {
-        let lock = self.lock.write();
-        let cnt = self.operate_write_perm_of_broker(broker_name, RequestCode::AddWritePermOfBroker);
-        drop(lock);
-        cnt
+    pub(crate) fn add_write_perm_of_broker_by_lock(&mut self, broker_name: &CheetahString) -> i32 {
+        self.operate_write_perm_of_broker(broker_name, RequestCode::AddWritePermOfBroker)
     }
 
-    fn operate_write_perm_of_broker(&self, broker_name: &CheetahString, request_code: RequestCode) -> i32 {
+    fn operate_write_perm_of_broker(&mut self, broker_name: &CheetahString, request_code: RequestCode) -> i32 {
         let mut topic_cnt = 0;
-        for qd_map in self.topic_queue_table.mut_from_ref().values_mut() {
+        for qd_map in self.topic_queue_table.values_mut() {
             let qd = qd_map.get_mut(broker_name);
             if qd.is_none() {
                 continue;
@@ -734,9 +708,7 @@ impl RouteInfoManager {
     }
 
     pub(crate) fn get_all_topic_list(&self) -> TopicList {
-        let lock = self.lock.read();
         let topics = self.topic_queue_table.keys().cloned().collect::<Vec<CheetahString>>();
-        drop(lock);
         TopicList {
             topic_list: topics,
             broker_addr: None,
@@ -744,14 +716,13 @@ impl RouteInfoManager {
     }
 
     pub(crate) fn delete_topic(&mut self, topic: CheetahString, cluster_name: Option<CheetahString>) {
-        let lock = self.lock.write();
         if cluster_name.as_ref().is_some_and(|inner| !inner.is_empty()) {
             let cluster_name_inner = cluster_name.unwrap();
             let broker_names = self.cluster_addr_table.get(&cluster_name_inner);
             if broker_names.is_none() || broker_names.unwrap().is_empty() {
                 return;
             }
-            let topic_queue_table_ = self.topic_queue_table.mut_from_ref();
+            let topic_queue_table_ = &mut self.topic_queue_table;
             if let Some(queue_data_map) = topic_queue_table_.get_mut(&topic) {
                 for broker_name in broker_names.unwrap() {
                     if let Some(remove_qd) = queue_data_map.remove(broker_name) {
@@ -766,22 +737,18 @@ impl RouteInfoManager {
                 }
             }
         } else {
-            self.topic_queue_table.mut_from_ref().remove(&topic);
+            self.topic_queue_table.remove(&topic);
         }
-        drop(lock)
     }
 
-    pub(crate) fn register_topic(&self, topic: CheetahString, queue_data_vec: Vec<QueueData>) {
+    pub(crate) fn register_topic(&mut self, topic: CheetahString, queue_data_vec: Vec<QueueData>) {
         if queue_data_vec.is_empty() {
             return;
         }
-        let lock = self.lock.write();
         if !self.topic_queue_table.contains_key(&topic) {
-            self.topic_queue_table
-                .mut_from_ref()
-                .insert(topic.clone(), HashMap::new());
+            self.topic_queue_table.insert(topic.clone(), HashMap::new());
         }
-        let queue_data_map = self.topic_queue_table.mut_from_ref().get_mut(&topic).unwrap();
+        let queue_data_map = self.topic_queue_table.get_mut(&topic).unwrap();
         let vec_length = queue_data_vec.len();
         for queue_data in queue_data_vec {
             if !self.broker_addr_table.contains_key(queue_data.broker_name()) {
@@ -790,8 +757,6 @@ impl RouteInfoManager {
             }
             queue_data_map.insert(queue_data.broker_name().clone(), queue_data);
         }
-        drop(lock);
-
         if queue_data_map.len() > vec_length {
             info!("Topic route already exist.{}, {:?}", topic, queue_data_map)
         } else {
@@ -801,7 +766,6 @@ impl RouteInfoManager {
 
     pub(crate) fn get_topics_by_cluster(&self, cluster: &CheetahString) -> TopicList {
         let mut topic_list = Vec::new();
-        let lock = self.lock.read();
         if let Some(broker_name_set) = self.cluster_addr_table.get(cluster) {
             for broker_name in broker_name_set {
                 for (topic, queue_data_map) in self.topic_queue_table.iter() {
@@ -811,7 +775,6 @@ impl RouteInfoManager {
                 }
             }
         }
-        drop(lock);
         TopicList {
             topic_list,
             broker_addr: None,
@@ -1082,7 +1045,7 @@ impl RouteInfoManager {
 
     pub fn connection_disconnected(&mut self, socket_addr: SocketAddr) {
         let mut broker_addr_info = None;
-        for (bai, bli) in self.broker_live_table.as_ref() {
+        for (bai, bli) in &self.broker_live_table {
             if bli.remote_addr == socket_addr {
                 broker_addr_info = Some(bai.clone());
                 break;
@@ -1098,11 +1061,10 @@ impl RouteInfoManager {
     }
 
     pub fn on_channel_destroy(&self, channel: &Channel) {
-        let lock = self.lock.read();
         let mut un_register_request = UnRegisterBrokerRequestHeader::default();
         let mut broker_addr_found = None;
         let mut need_un_register = false;
-        for (broker_addr_info, broker_live_info) in self.broker_live_table.as_ref() {
+        for (broker_addr_info, broker_live_info) in &self.broker_live_table {
             if broker_live_info.channel_id.as_str() == channel.channel_id() {
                 broker_addr_found = Some(broker_addr_info.clone());
                 break;
@@ -1111,7 +1073,6 @@ impl RouteInfoManager {
         if let Some(broker_addr_info) = &mut broker_addr_found {
             need_un_register = self.setup_un_register_request(&mut un_register_request, broker_addr_info);
         }
-        drop(lock);
         if need_un_register {
             let result = self.submit_unregister_broker_request(un_register_request.clone());
             info!(

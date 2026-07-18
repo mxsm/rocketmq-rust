@@ -80,10 +80,8 @@ fn test_struct_sizes() {
     println!("  - Stack allocation: {} → {} bytes", without_box_size, wrapper_size);
     println!();
 
-    // Performance implications
-    println!("Performance Implications:");
-    println!("  - Pointer dereference overhead: ~0.3-0.5 ns");
-    println!("  - Cache efficiency gain: ~6x (1 vs 6+ cache lines)");
+    println!("Layout Implications:");
+    println!("  - Wrapper size is independent of either manager's table layout");
     println!(
         "  - Stack frame size reduction: {:.1}x",
         without_box_size as f64 / wrapper_size as f64
@@ -99,16 +97,21 @@ fn test_struct_sizes() {
     );
     println!("========================================\n");
 
-    // Assertions to ensure Box optimization is working
-    assert!(box_v1_size == 8, "Box<V1> should be 8 bytes (pointer size)");
-    assert!(box_v2_size == 8, "Box<V2> should be 8 bytes (pointer size)");
+    // Assert the stable layout contract instead of a transient size difference between V1 and V2.
+    let pointer_size = size_of::<usize>();
+    assert_eq!(box_v1_size, pointer_size, "Box<V1> should occupy one pointer");
+    assert_eq!(box_v2_size, pointer_size, "Box<V2> should occupy one pointer");
     assert!(
-        wrapper_size <= 16,
-        "Wrapper should be ≤ 16 bytes (8 byte pointer + 8 byte discriminant)"
+        wrapper_size <= pointer_size * 2,
+        "Wrapper should occupy at most one pointer plus its discriminant"
     );
     assert!(
-        diff > 200,
-        "Size difference should exceed 200 bytes to justify Box optimization"
+        wrapper_size < v1_size,
+        "Wrapper should remain smaller than the V1 manager"
+    );
+    assert!(
+        wrapper_size < v2_size,
+        "Wrapper should remain smaller than the V2 manager"
     );
 }
 
@@ -121,11 +124,10 @@ fn test_component_sizes() {
     use std::sync::Arc;
 
     use dashmap::DashMap;
-    use rocketmq_rust::ArcMut;
 
     println!("Basic Types:");
     println!("  - Arc: {} bytes", size_of::<Arc<()>>());
-    println!("  - ArcMut: {} bytes", size_of::<ArcMut<()>>());
+    println!("  - Mutex: {} bytes", size_of::<parking_lot::Mutex<()>>());
     println!("  - DashMap (empty): {} bytes", size_of::<DashMap<String, String>>());
     println!(
         "  - HashMap (empty): {} bytes",

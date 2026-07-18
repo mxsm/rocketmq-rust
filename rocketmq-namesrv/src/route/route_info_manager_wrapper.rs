@@ -15,7 +15,7 @@
 //! RouteInfoManager wrapper to support both v1 and v2 implementations
 //!
 //! This module provides a unified enum wrapper that allows the nameserver to use
-//! either the legacy v1 implementation (with RwLock) or the new v2 implementation
+//! either the legacy v1 implementation (with mutex-owned tables) or the new v2 implementation
 //! (with DashMap tables) based on configuration.
 //!
 //! The wrapper provides direct access to the underlying implementations through
@@ -45,13 +45,9 @@ use crate::route::route_info_manager_v2::RouteInfoManagerV2;
 /// This enum allows the nameserver to use either implementation transparently.
 /// All public methods from both implementations are available through forwarding.
 ///
-/// Both variants are boxed to avoid large enum variant size issues:
-/// - V1: ~72 bytes → Box<V1> = 8 bytes
-/// - V2: ~352 bytes → Box<V2> = 8 bytes
-///
-/// This reduces stack allocation from 352 bytes to 16 bytes (8 byte pointer + 8 byte discriminant)
+/// Both variants are boxed to keep the enum independent of either implementation's table storage.
 pub enum RouteInfoManagerWrapper {
-    /// Legacy implementation using RwLock-based tables
+    /// Legacy implementation whose plain tables are exclusively owned through this mutex
     V1(Box<parking_lot::Mutex<RouteInfoManager>>),
     /// New implementation using DashMap-based concurrent tables
     V2(Box<RouteInfoManagerV2>),
