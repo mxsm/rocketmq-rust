@@ -30,7 +30,6 @@ use rocketmq_remoting::protocol::header::controller::get_replica_info_request_he
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_rust::ArcMut;
 
 use crate::config::ControllerConfigReader;
 use crate::controller::open_raft_controller::OpenRaftController;
@@ -46,14 +45,14 @@ use crate::typ::NodeId;
 /// The controller mode is backed exclusively by OpenRaft.
 #[derive(Clone)]
 pub struct RaftController {
-    inner: ArcMut<OpenRaftController>,
+    inner: Arc<OpenRaftController>,
 }
 
 impl RaftController {
     /// Create a new OpenRaft-based controller
     pub fn new_open_raft(config: ControllerConfigReader) -> Self {
         Self {
-            inner: ArcMut::new(OpenRaftController::new(config)),
+            inner: Arc::new(OpenRaftController::new(config)),
         }
     }
 
@@ -63,8 +62,16 @@ impl RaftController {
         heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
     ) -> Self {
         Self {
-            inner: ArcMut::new(OpenRaftController::new_with_heartbeat(config, heartbeat_manager)),
+            inner: Arc::new(OpenRaftController::new_with_heartbeat(config, heartbeat_manager)),
         }
+    }
+
+    pub(crate) async fn startup_shared(&self) -> RocketMQResult<()> {
+        self.inner.startup_shared().await
+    }
+
+    pub(crate) async fn shutdown_shared(&self) -> RocketMQResult<()> {
+        self.inner.shutdown_shared().await
     }
 
     pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
@@ -124,11 +131,11 @@ impl RaftController {
 
 impl Controller for RaftController {
     async fn startup(&mut self) -> RocketMQResult<()> {
-        self.inner.startup().await
+        self.startup_shared().await
     }
 
     async fn shutdown(&mut self) -> RocketMQResult<()> {
-        self.inner.shutdown().await
+        self.shutdown_shared().await
     }
 
     async fn start_scheduling(&self) -> RocketMQResult<()> {

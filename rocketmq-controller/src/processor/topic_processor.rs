@@ -14,7 +14,6 @@
 
 use std::sync::Arc;
 
-use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 
@@ -38,12 +37,12 @@ pub struct CreateTopicProcessor {
     metadata: Arc<MetadataStore>,
 
     /// Raft controller
-    raft: ArcMut<RaftController>,
+    raft: Arc<RaftController>,
 }
 
 impl CreateTopicProcessor {
     /// Create a new create topic processor
-    pub fn new(metadata: Arc<MetadataStore>, raft: ArcMut<RaftController>) -> Self {
+    pub fn new(metadata: Arc<MetadataStore>, raft: Arc<RaftController>) -> Self {
         Self { metadata, raft }
     }
 
@@ -119,12 +118,12 @@ pub struct UpdateTopicProcessor {
     metadata: Arc<MetadataStore>,
 
     /// Raft controller
-    raft: ArcMut<RaftController>,
+    raft: Arc<RaftController>,
 }
 
 impl UpdateTopicProcessor {
     /// Create a new update topic processor
-    pub fn new(metadata: Arc<MetadataStore>, raft: ArcMut<RaftController>) -> Self {
+    pub fn new(metadata: Arc<MetadataStore>, raft: Arc<RaftController>) -> Self {
         Self { metadata, raft }
     }
 
@@ -191,12 +190,12 @@ pub struct DeleteTopicProcessor {
     metadata: Arc<MetadataStore>,
 
     /// Raft controller
-    raft: ArcMut<RaftController>,
+    raft: Arc<RaftController>,
 }
 
 impl DeleteTopicProcessor {
     /// Create a new delete topic processor
-    pub fn new(metadata: Arc<MetadataStore>, raft: ArcMut<RaftController>) -> Self {
+    pub fn new(metadata: Arc<MetadataStore>, raft: Arc<RaftController>) -> Self {
         Self { metadata, raft }
     }
 

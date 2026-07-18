@@ -233,6 +233,11 @@ M11-12c 已将 Controller manager/heartbeat lifecycle owner 改为安全 `Arc`/`
 request processor/housekeeping 不形成强引用环，embedded NameServer 复用相同 owner。实际快照累计降至 697 production/
 1,986 occurrences，Controller 降至 17 条/51 occurrences；Raft/remoting-client、NameServer 其余 owner 与总 Gate 仍开放。
 
+M11-12d 已将 OpenRaft node/gRPC shutdown handle 收入内部同步生命周期，以 Tokio async mutex 串行完整启停转换，并只在
+短临界区读写状态；`RaftController`、Manager 与 Processor 改用 `Arc`。实际快照累计降至 690 production/1,961
+occurrences，Controller 降至 10 条/26 occurrences，Raft/OpenRaft owner 已退出 `ArcMut`；remoting-client、NameServer
+其余 owner 与总 Gate 仍开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

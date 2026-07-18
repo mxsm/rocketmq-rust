@@ -80,6 +80,7 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::TaskGroup;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tracing::info;
@@ -99,6 +100,12 @@ fn openraft_response_decode_failed(error: serde_json::Error) -> RocketMQError {
     ))
 }
 
+#[derive(Default)]
+struct OpenRaftLifecycle {
+    node: Option<Arc<RaftNodeManager>>,
+    shutdown_tx: Option<oneshot::Sender<()>>,
+}
+
 /// OpenRaft-based controller implementation
 ///
 /// # Graceful Shutdown
@@ -109,15 +116,14 @@ fn openraft_response_decode_failed(error: serde_json::Error) -> RocketMQError {
 /// 3. Waits for gRPC server task to complete (with 10s timeout)
 pub struct OpenRaftController {
     config: ControllerConfigReader,
-    /// Raft node manager
-    node: Option<Arc<RaftNodeManager>>,
+    /// Serializes startup and shutdown transitions.
+    lifecycle_lock: AsyncMutex<()>,
+    /// Raft node and gRPC shutdown handle owned by the lifecycle transition.
+    lifecycle: Mutex<OpenRaftLifecycle>,
     /// gRPC server and scheduling task groups
     task_group: Arc<Mutex<Option<TaskGroup>>>,
     scan_task_group: Arc<Mutex<Option<TaskGroup>>>,
     scan_scheduled_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
-    /// Shutdown signal sender for gRPC server
-    shutdown_tx: Option<oneshot::Sender<()>>,
-
     heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
     lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn BrokerLifecycleListener>>>>,
     scheduling: Arc<AtomicBool>,
@@ -161,11 +167,11 @@ impl OpenRaftController {
     ) -> Self {
         Self {
             config,
-            node: None,
+            lifecycle_lock: AsyncMutex::new(()),
+            lifecycle: Mutex::new(OpenRaftLifecycle::default()),
             task_group: Arc::new(Mutex::new(None)),
             scan_task_group: Arc::new(Mutex::new(None)),
             scan_scheduled_tasks: Arc::new(Mutex::new(None)),
-            shutdown_tx: None,
             heartbeat_manager,
             lifecycle_listeners: Arc::new(RwLock::new(Vec::new())),
             scheduling: Arc::new(AtomicBool::new(false)),
@@ -275,8 +281,12 @@ impl OpenRaftController {
         }
     }
 
+    fn node(&self) -> Option<Arc<RaftNodeManager>> {
+        self.lifecycle.lock().node.clone()
+    }
+
     fn is_current_leader(&self) -> bool {
-        let Some(node) = &self.node else {
+        let Some(node) = self.node() else {
             return false;
         };
 
@@ -330,8 +340,7 @@ impl OpenRaftController {
     }
 
     fn replicas_info_manager(&self) -> Option<Arc<ReplicasInfoManager>> {
-        self.node
-            .as_ref()
+        self.node()
             .map(|node| node.store().state_machine.replicas_info_manager())
     }
 
@@ -362,7 +371,7 @@ impl OpenRaftController {
             return Ok(self.not_leader_response());
         }
 
-        let Some(node) = &self.node else {
+        let Some(node) = self.node() else {
             return Ok(self.not_started_response());
         };
 
@@ -375,7 +384,7 @@ impl OpenRaftController {
             return Ok(None);
         }
 
-        let Some(node) = &self.node else {
+        let Some(node) = self.node() else {
             return Ok(None);
         };
 
@@ -483,40 +492,35 @@ impl OpenRaftController {
 
     pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
         let node = self
-            .node
-            .as_ref()
+            .node()
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         node.initialize_cluster(nodes).await
     }
 
     pub async fn add_learner(&self, node_id: NodeId, node_info: Node, blocking: bool) -> Result<()> {
         let node = self
-            .node
-            .as_ref()
+            .node()
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         node.add_learner(node_id, node_info, blocking).await
     }
 
     pub async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
         let node = self
-            .node
-            .as_ref()
+            .node()
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         node.change_membership(members, retain).await
     }
 
     pub async fn allow_next_revert(&self, node_id: NodeId, allow: bool) -> Result<()> {
         let node = self
-            .node
-            .as_ref()
+            .node()
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         node.allow_next_revert(node_id, allow).await
     }
 
     pub fn set_runtime_tick_enabled(&self, enabled: bool) -> Result<()> {
         let node = self
-            .node
-            .as_ref()
+            .node()
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         node.raft().runtime_config().tick(enabled);
         Ok(())
@@ -524,8 +528,7 @@ impl OpenRaftController {
 
     pub fn set_runtime_heartbeat_enabled(&self, enabled: bool) -> Result<()> {
         let node = self
-            .node
-            .as_ref()
+            .node()
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         node.raft().runtime_config().heartbeat(enabled);
         Ok(())
@@ -533,8 +536,7 @@ impl OpenRaftController {
 
     pub fn set_runtime_elect_enabled(&self, enabled: bool) -> Result<()> {
         let node = self
-            .node
-            .as_ref()
+            .node()
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         node.raft().runtime_config().elect(enabled);
         Ok(())
@@ -542,19 +544,18 @@ impl OpenRaftController {
 
     pub fn has_committed_log(&self) -> Result<bool> {
         let node = self
-            .node
-            .as_ref()
+            .node()
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         Ok(node.has_committed_log())
     }
 
-    pub fn scheduling_enabled(&self) -> bool {
-        self.scheduling.load(Ordering::Acquire)
-    }
-}
+    pub(crate) async fn startup_shared(&self) -> RocketMQResult<()> {
+        let _lifecycle_guard = self.lifecycle_lock.lock().await;
+        if self.node().is_some() {
+            info!("OpenRaft controller is already started");
+            return Ok(());
+        }
 
-impl Controller for OpenRaftController {
-    async fn startup(&mut self) -> RocketMQResult<()> {
         let startup_config = self.config.snapshot();
         let advertised_raft_addr = startup_config.local_raft_addr();
         let raft_bind_addr = controller_raft_bind_addr(advertised_raft_addr)?;
@@ -562,11 +563,6 @@ impl Controller for OpenRaftController {
             "Starting OpenRaft controller, remoting_addr={}, raft_bind_addr={}, advertised_raft_addr={}",
             startup_config.listen_addr, raft_bind_addr, advertised_raft_addr
         );
-
-        let node = Arc::new(RaftNodeManager::new(self.config.clone()).await?);
-        let service = GrpcRaftService::new(node.raft());
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let addr = raft_bind_addr;
         let node_id = startup_config.node_id;
@@ -577,46 +573,61 @@ impl Controller for OpenRaftController {
             )
         })?;
         let task_group = self.ensure_task_group()?;
+        let node = Arc::new(RaftNodeManager::new(self.config.clone()).await?);
+        let service = GrpcRaftService::new(node.raft());
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let shutdown_token = task_group.cancellation_token();
 
-        task_group
-            .spawn_service("controller.openraft.grpc-server", async move {
-                info!("gRPC server starting for node {} on {}", node_id, addr);
+        if let Err(error) = task_group.spawn_service("controller.openraft.grpc-server", async move {
+            info!("gRPC server starting for node {} on {}", node_id, addr);
 
-                let result = Server::builder()
-                    .add_service(OpenRaftServiceServer::new(service))
-                    .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
-                        tokio::select! {
-                            _ = shutdown_rx => {}
-                            _ = shutdown_token.cancelled() => {}
-                        }
-                        info!("Shutdown signal received for node {}, stopping gRPC server", node_id);
-                    })
-                    .await;
+            let result = Server::builder()
+                .add_service(OpenRaftServiceServer::new(service))
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                    tokio::select! {
+                        _ = shutdown_rx => {}
+                        _ = shutdown_token.cancelled() => {}
+                    }
+                    info!("Shutdown signal received for node {}, stopping gRPC server", node_id);
+                })
+                .await;
 
-                if let Err(e) = result {
-                    eprintln!("gRPC server error for node {}: {}", node_id, e);
-                } else {
-                    info!("gRPC server for node {} stopped gracefully", node_id);
-                }
-            })
-            .map_err(|error| openraft_startup_failed("spawn gRPC server task", format!("node {node_id}: {error}")))?;
+            if let Err(e) = result {
+                eprintln!("gRPC server error for node {}: {}", node_id, e);
+            } else {
+                info!("gRPC server for node {} stopped gracefully", node_id);
+            }
+        }) {
+            let _ = tokio::time::timeout(Duration::from_secs(10), node.shutdown()).await;
+            self.shutdown_task_group().await;
+            return Err(openraft_startup_failed(
+                "spawn gRPC server task",
+                format!("node {node_id}: {error}"),
+            ));
+        }
 
-        self.node = Some(node);
-        self.shutdown_tx = Some(shutdown_tx);
+        let mut lifecycle = self.lifecycle.lock();
+        lifecycle.node = Some(node);
+        lifecycle.shutdown_tx = Some(shutdown_tx);
+        drop(lifecycle);
 
         info!("OpenRaft controller started successfully");
         Ok(())
     }
 
-    async fn shutdown(&mut self) -> RocketMQResult<()> {
+    pub(crate) async fn shutdown_shared(&self) -> RocketMQResult<()> {
+        let _lifecycle_guard = self.lifecycle_lock.lock().await;
         info!("Shutting down OpenRaft controller");
 
         self.scheduling.store(false, Ordering::Release);
         self.stop_scan_task_group().await;
 
-        // Take and send shutdown signal to gRPC server
-        if let Some(tx) = self.shutdown_tx.take() {
+        let (shutdown_tx, node) = {
+            let mut lifecycle = self.lifecycle.lock();
+            (lifecycle.shutdown_tx.take(), lifecycle.node.take())
+        };
+
+        if let Some(tx) = shutdown_tx {
             if tx.send(()).is_err() {
                 eprintln!("Failed to send shutdown signal to gRPC server (receiver dropped)");
             } else {
@@ -624,8 +635,7 @@ impl Controller for OpenRaftController {
             }
         }
 
-        // Shutdown Raft node
-        if let Some(node) = self.node.take() {
+        if let Some(node) = node {
             match tokio::time::timeout(tokio::time::Duration::from_secs(10), node.shutdown()).await {
                 Ok(Ok(())) => info!("Raft node shutdown successfully"),
                 Ok(Err(e)) => eprintln!("Error shutting down Raft node: {}", e),
@@ -639,12 +649,26 @@ impl Controller for OpenRaftController {
         Ok(())
     }
 
+    pub fn scheduling_enabled(&self) -> bool {
+        self.scheduling.load(Ordering::Acquire)
+    }
+}
+
+impl Controller for OpenRaftController {
+    async fn startup(&mut self) -> RocketMQResult<()> {
+        self.startup_shared().await
+    }
+
+    async fn shutdown(&mut self) -> RocketMQResult<()> {
+        self.shutdown_shared().await
+    }
+
     async fn start_scheduling(&self) -> RocketMQResult<()> {
         if self.scheduling.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
 
-        let Some(node) = self.node.clone() else {
+        let Some(node) = self.node() else {
             return Ok(());
         };
 
@@ -916,7 +940,7 @@ impl Controller for OpenRaftController {
                 (!joined.is_empty()).then_some(joined.as_str().into())
             };
 
-            let raft_node_manager = self.node.as_ref();
+            let raft_node_manager = self.node();
             let controller_leader_id: Option<u64> = if let Some(raft_node_manager) = raft_node_manager {
                 raft_node_manager.get_leader().await.ok().flatten()
             } else {
@@ -983,6 +1007,7 @@ fn parse_controller_raft_bind_addr(raw: &str) -> std::result::Result<SocketAddr,
 #[cfg(test)]
 mod tests {
     use std::net::TcpListener as StdTcpListener;
+    use std::sync::Arc;
 
     use rocketmq_common::common::controller::controller_config::RaftPeer;
     use rocketmq_common::common::controller::ControllerConfig;
@@ -993,7 +1018,6 @@ mod tests {
     use super::parse_controller_raft_bind_addr;
     use super::OpenRaftController;
     use crate::config::ControllerConfigReader;
-    use crate::controller::Controller;
     use std::net::SocketAddr;
 
     #[test]
@@ -1023,7 +1047,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_binds_grpc_listener_before_returning() {
+    async fn shared_lifecycle_serializes_startup_and_shutdown() {
         let probe = StdTcpListener::bind("127.0.0.1:0").expect("bind probe listener");
         let addr = probe.local_addr().expect("read probe address");
         drop(probe);
@@ -1031,14 +1055,23 @@ mod tests {
         let config = ControllerConfig::default()
             .with_node_info(1, addr)
             .with_raft_peers(vec![RaftPeer { id: 1, addr }]);
-        let mut controller = OpenRaftController::new(ControllerConfigReader::new(config));
+        let controller = Arc::new(OpenRaftController::new(ControllerConfigReader::new(config)));
 
-        controller.startup().await.expect("start OpenRaft controller");
+        let (first_start, second_start) = tokio::join!(controller.startup_shared(), controller.startup_shared());
+        first_start.expect("start OpenRaft controller");
+        second_start.expect("repeat OpenRaft controller startup");
+        assert!(controller.node().is_some(), "startup should publish the Raft node");
         assert!(
             StdTcpListener::bind(addr).is_err(),
             "OpenRaft controller startup should return only after binding the gRPC listener"
         );
 
-        controller.shutdown().await.expect("shutdown OpenRaft controller");
+        let (first_shutdown, second_shutdown) =
+            tokio::join!(controller.shutdown_shared(), controller.shutdown_shared());
+        first_shutdown.expect("shutdown OpenRaft controller");
+        second_shutdown.expect("repeat OpenRaft controller shutdown");
+        assert!(controller.node().is_none(), "shutdown should clear the Raft node");
+        let rebound = StdTcpListener::bind(addr).expect("shutdown should release the gRPC listener");
+        drop(rebound);
     }
 }

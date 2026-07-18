@@ -15,7 +15,6 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -42,12 +41,12 @@ pub struct RegisterBrokerProcessor {
     metadata: Arc<MetadataStore>,
 
     /// Raft controller
-    raft: ArcMut<RaftController>,
+    raft: Arc<RaftController>,
 }
 
 impl RegisterBrokerProcessor {
     /// Create a new register broker processor
-    pub fn new(metadata: Arc<MetadataStore>, raft: ArcMut<RaftController>) -> Self {
+    pub fn new(metadata: Arc<MetadataStore>, raft: Arc<RaftController>) -> Self {
         Self { metadata, raft }
     }
 
@@ -121,12 +120,12 @@ pub struct UnregisterBrokerProcessor {
     metadata: Arc<MetadataStore>,
 
     /// Raft controller
-    raft: ArcMut<RaftController>,
+    raft: Arc<RaftController>,
 }
 
 impl UnregisterBrokerProcessor {
     /// Create a new unregister broker processor
-    pub fn new(metadata: Arc<MetadataStore>, raft: ArcMut<RaftController>) -> Self {
+    pub fn new(metadata: Arc<MetadataStore>, raft: Arc<RaftController>) -> Self {
         Self { metadata, raft }
     }
 
@@ -230,12 +229,12 @@ pub struct ElectMasterProcessor {
     metadata: Arc<MetadataStore>,
 
     /// Raft controller
-    raft: ArcMut<RaftController>,
+    raft: Arc<RaftController>,
 }
 
 impl ElectMasterProcessor {
     /// Create a new elect master processor
-    pub fn new(metadata: Arc<MetadataStore>, raft: ArcMut<RaftController>) -> Self {
+    pub fn new(metadata: Arc<MetadataStore>, raft: Arc<RaftController>) -> Self {
         Self { metadata, raft }
     }
 
