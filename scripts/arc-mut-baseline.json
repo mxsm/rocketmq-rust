@@ -20316,7 +20316,7 @@
           "id": "cbc96784b3e5103d9b67fc87",
           "fingerprint": "ff9e54c943e4b542ca1b5706",
           "item": "fn processor_successful_manual_election_records_role_change_notification",
-          "line": 2184
+          "line": 2190
         }
       ],
       "owner": "controller",
@@ -20466,7 +20466,7 @@
           "id": "9e6cf07d28e42700dc6f2a6f",
           "fingerprint": "e2eaa3bb5b29dd62d3459255",
           "item": "mod tests",
-          "line": 960
+          "line": 970
         }
       ],
       "owner": "controller",
@@ -20485,7 +20485,7 @@
           "id": "0c2101519dd765fd86dc9ba1",
           "fingerprint": "a8a377641149065265dff4c0",
           "item": "<module>",
-          "line": 113
+          "line": 114
         }
       ],
       "owner": "controller",
@@ -20501,126 +20501,88 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "ba673373b55b3969e312d14a",
-          "fingerprint": "5f0d53dda78923dd1691a10a",
+          "id": "b5a1aeb744b916e962114bb3",
+          "fingerprint": "bc5f4085751f4208d4af12e9",
           "item": "fn handle_request",
-          "line": 222
+          "line": 223
         },
         {
-          "id": "30dfff8fa501ad68d0ccdc17",
-          "fingerprint": "dc8db71e75846c79651da26b",
+          "id": "6edb8d8a6b376d3de6750f77",
+          "fingerprint": "ad8588563e3c3d85c706941f",
           "item": "fn handle_alter_sync_state_set",
-          "line": 294
+          "line": 295
         },
         {
-          "id": "57b461ac97ba493d803dc102",
-          "fingerprint": "e942544914453f587f4c4b4d",
+          "id": "1e71619a180a52e8306b8709",
+          "fingerprint": "caada1c21cf85c987040b0c5",
           "item": "fn handle_elect_master",
-          "line": 341
+          "line": 342
         },
         {
-          "id": "6fd78b3a15fed8d4cc42908b",
-          "fingerprint": "77c22c4d5d2024e21f78d333",
+          "id": "2fa99e0ae8eebc7611ada385",
+          "fingerprint": "30b83081dd714bf1b476626c",
           "item": "fn handle_get_replica_info",
-          "line": 387
+          "line": 388
         },
         {
-          "id": "4169af266bae870ffd71ae60",
-          "fingerprint": "d65b56959ce38ac9e880a2db",
+          "id": "f3120170c5cb17afad8f3ec7",
+          "fingerprint": "432bbe6e60f1f86971d68972",
           "item": "fn handle_get_metadata_info",
-          "line": 418
+          "line": 419
         },
         {
-          "id": "36dd03fa63221c71a86c150b",
-          "fingerprint": "5beaa8ea1b3273a1be43af52",
+          "id": "7ef0a0103bb35fd8eee314ec",
+          "fingerprint": "7b530c9a89c4a8911d70d895",
           "item": "fn handle_broker_heartbeat",
-          "line": 441
+          "line": 442
         },
         {
-          "id": "6c0b97147031be20e705acef",
-          "fingerprint": "7ac54c298ac609a62c973d49",
+          "id": "5af32d6ae69ff0ef6ca74e65",
+          "fingerprint": "91373cd73d296b52e59df415",
           "item": "fn handle_get_sync_state_data",
-          "line": 491
+          "line": 492
         },
         {
-          "id": "983d165ce9cc0492ecb7d71d",
-          "fingerprint": "c359f3b15eeb0827231bdae0",
+          "id": "498aea61af772b5a47555b08",
+          "fingerprint": "1fc50676f289bf4f20425d52",
           "item": "fn handle_update_controller_config",
-          "line": 520
+          "line": 521
         },
         {
-          "id": "18bc418a306ea114c11c8c53",
-          "fingerprint": "3cb332afd614635dc6d0154f",
+          "id": "552258d317584c7306d1c9f4",
+          "fingerprint": "7c05e0f7482f82b7d03ef5dc",
           "item": "fn handle_get_controller_config",
-          "line": 589
+          "line": 590
         },
         {
-          "id": "44262cbb4fb56a9a12521478",
-          "fingerprint": "f8e0302172fb6063b79cb441",
+          "id": "c690b49863edf4d352f56bc6",
+          "fingerprint": "1695ca955881962e0d92c1a7",
           "item": "fn handle_clean_broker_data",
-          "line": 615
+          "line": 616
         },
         {
-          "id": "2ab4e3416856a39ba9f377a8",
-          "fingerprint": "c1336075963b20b2d7706b54",
+          "id": "297e3eeebc717f5402849574",
+          "fingerprint": "1ddbbaeeed64a6b3eeb4357b",
           "item": "fn handle_get_next_broker_id",
-          "line": 652
+          "line": 653
         },
         {
-          "id": "1d59566b84bdb99711672754",
-          "fingerprint": "8b61c5cddfd81d7c03a1fd8f",
+          "id": "354fc849170bc92b5901c49e",
+          "fingerprint": "cd4b349b5cbacf0bc2239755",
           "item": "fn handle_apply_broker_id",
-          "line": 752
+          "line": 753
         },
         {
-          "id": "886579d4ed0118c0f3a77cfb",
-          "fingerprint": "c466d0a271240775b39fefdb",
+          "id": "bb73a17bddd001abf844408d",
+          "fingerprint": "a07d361da9dee54493e28fec",
           "item": "fn handle_register_broker",
-          "line": 852
+          "line": 853
         },
         {
           "id": "64a3413aa3cf6bb7a8be3e06",
           "fingerprint": "b9f038530693f3961bf0ab85",
           "item": "fn process_request",
-          "line": 907
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "ef3653865ec8ee969cdef2b7",
-      "path": "rocketmq-controller/src/processor.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "4a405968b5a90af98f219122",
-          "fingerprint": "7090a9cefd7af3728747e1ac",
-          "item": "mod topic_processor",
-          "line": 43
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "3d550911186c6b15a97c69c4",
-      "path": "rocketmq-controller/src/processor.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "cc93b0b15498ba2ab546eaa3",
-          "fingerprint": "c557195b13068a12dbd8468a",
-          "item": "enum ControllerRequestProcessorWrapper",
-          "line": 153
+          "line": 959
         }
       ],
       "owner": "controller",
@@ -20636,10 +20598,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "54e0ae71eb3b274d9bd088b8",
-          "fingerprint": "8117aff7788c56697262dc82",
+          "id": "98273693ce539443fe6e5537",
+          "fingerprint": "777402409239abd0bcc6b74c",
           "item": "mod topic_processor",
-          "line": 41
+          "line": 43
         }
       ],
       "owner": "controller",
@@ -20658,13 +20620,13 @@
           "id": "d36ecc937fd4c96de3883634",
           "fingerprint": "f20c4029acdc5537be4b952b",
           "item": "fn process_request",
-          "line": 160
+          "line": 161
         },
         {
           "id": "6e4e6b2d7e13f602561389bc",
           "fingerprint": "f20c4029acdc5537be4b952b",
           "item": "fn process_request",
-          "line": 200
+          "line": 203
         }
       ],
       "owner": "controller",

@@ -27,6 +27,7 @@ use crate::controller::raft_controller::RaftController;
 use crate::error::ControllerError;
 use crate::error::Result;
 use crate::metadata::MetadataStore;
+use crate::metrics::RequestType as MetricsRequestType;
 use crate::processor::controller_request_processor::ControllerRequestProcessor;
 pub use broker_processor::BrokerHeartbeatProcessor;
 pub use broker_processor::ElectMasterProcessor;
@@ -35,12 +36,12 @@ pub use broker_processor::UnregisterBrokerProcessor;
 pub use metadata_processor::GetMetadataProcessor;
 pub use request::RequestType;
 pub use request::*;
+use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RejectRequestResponse;
-use rocketmq_rust::ArcMut;
 pub use topic_processor::CreateTopicProcessor;
 pub use topic_processor::DeleteTopicProcessor;
 pub use topic_processor::UpdateTopicProcessor;
@@ -150,7 +151,7 @@ pub(crate) type RequestCodeType = i32;
 
 #[derive(Clone)]
 pub enum ControllerRequestProcessorWrapper {
-    ControllerRequestProcessor(ArcMut<ControllerRequestProcessor>),
+    ControllerRequestProcessor(Arc<ControllerRequestProcessor>),
 }
 
 impl rocketmq_remoting::runtime::processor::RequestProcessor for ControllerRequestProcessorWrapper {
@@ -162,7 +163,9 @@ impl rocketmq_remoting::runtime::processor::RequestProcessor for ControllerReque
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match self {
             ControllerRequestProcessorWrapper::ControllerRequestProcessor(processor) => {
-                processor.process_request(channel, ctx, request).await
+                let request_name = RequestCode::from(request.code()).get_controller_request_name();
+                let dispatch = processor.handle_request(channel, ctx, request);
+                processor.complete_request(request_name, dispatch).await
             }
         }
     }

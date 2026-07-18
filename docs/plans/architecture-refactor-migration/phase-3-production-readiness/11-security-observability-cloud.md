@@ -238,6 +238,11 @@ M11-12d 已将 OpenRaft node/gRPC shutdown handle 收入内部同步生命周期
 occurrences，Controller 降至 10 条/26 occurrences，Raft/OpenRaft owner 已退出 `ArcMut`；remoting-client、NameServer
 其余 owner 与总 Gate 仍开放。
 
+M11-12e 已将 Controller request processor 的 13 个业务 handler 从 `&mut self` 收窄为 `&self`，wrapper payload 改用
+`Arc<ControllerRequestProcessor>`，remoting trait 的 mutable receiver 只负责调用共享 dispatch。实际快照累计降至
+688 production/1,959 occurrences，Controller 降至 8 条/24 occurrences；remoting-client、`ConnectionHandlerContext`、
+NameServer 其余 owner 与总 Gate 仍开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
