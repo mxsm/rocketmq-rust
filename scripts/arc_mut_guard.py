@@ -1112,6 +1112,32 @@ def promote_findings(
     return promoted
 
 
+def prune_resolved_findings(findings: list[Finding], baseline: dict) -> dict:
+    """Remove only baseline identities that no longer exist in the source tree.
+
+    Retained entries stay byte-for-byte equivalent at the data-model level, so
+    source moves, fingerprint drift, and occurrence expansion remain visible to
+    the normal comparison instead of being accepted as part of debt reduction.
+    """
+    validate_baseline(baseline)
+    observed_identities = {finding.identity for finding in findings}
+    pruned = {
+        "schema_version": baseline["schema_version"],
+        "current_milestone": baseline["current_milestone"],
+        "entries": [
+            entry
+            for entry in baseline["entries"]
+            if entry["identity"] in observed_identities
+        ],
+    }
+    validate_baseline(pruned)
+    issues = compare_baselines(baseline, pruned)
+    if issues:
+        details = "; ".join(f"{issue.code}: {issue.detail}" for issue in issues)
+        raise BaselineError(f"resolved baseline pruning is not monotonic: {details}")
+    return pruned
+
+
 def _write_below_target(data: dict, output: Path, root: Path, option: str) -> None:
     target = (root / "target").resolve()
     try:
@@ -1234,6 +1260,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--current-milestone")
     parser.add_argument("--bootstrap", type=Path)
     parser.add_argument("--promote-baseline", type=Path)
+    parser.add_argument("--prune-resolved", type=Path)
     parser.add_argument("--compare-baseline", type=Path)
     parser.add_argument("--relocation-approvals", type=Path)
     parser.add_argument("--fixtures", action="store_true")
@@ -1253,6 +1280,18 @@ def main(argv: list[str] | None = None) -> int:
             if args.bootstrap:
                 _bootstrap(findings, args.bootstrap, args.root.resolve())
                 print(f"BOOTSTRAP_WRITTEN {args.bootstrap} entries={len(findings)}"); return 0
+            if args.prune_resolved:
+                baseline = _load(args.baseline)
+                pruned = prune_resolved_findings(findings, baseline)
+                _write_below_target(pruned, args.prune_resolved, args.root.resolve(), "--prune-resolved")
+                old_occurrences = sum(len(entry["occurrences"]) for entry in baseline["entries"])
+                new_occurrences = sum(len(entry["occurrences"]) for entry in pruned["entries"])
+                print(
+                    f"BASELINE_PRUNED {args.prune_resolved} "
+                    f"entries={len(baseline['entries'])}->{len(pruned['entries'])} "
+                    f"occurrences={old_occurrences}->{new_occurrences}"
+                )
+                return 0
             if args.promote_baseline:
                 baseline = _load(args.baseline)
                 milestone = resolve_current_milestone(args.current_milestone, baseline)

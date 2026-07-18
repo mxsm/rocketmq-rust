@@ -450,6 +450,29 @@ class ArcMutBaselineTests(unittest.TestCase):
         )
         self.assertEqual(findings[0].occurrences, tuple(promoted["entries"][0]["occurrences"]))
 
+    def test_prune_resolved_removes_only_absent_identities_and_preserves_drift(self):
+        guard = load_guard()
+        retained = self.entry("retained", "M04")
+        resolved = self.entry("resolved", "M04")
+        baseline = self.baseline([retained, resolved])
+        findings = [guard.Finding(
+            "retained",
+            "a/src/lib.rs",
+            "ArcMut",
+            "type_reference",
+            "production",
+            ({"id": "moved", "fingerprint": "new", "item": "fn f", "line": 40},),
+        )]
+
+        pruned = guard.prune_resolved_findings(findings, baseline)
+
+        self.assertEqual([retained], pruned["entries"])
+        self.assertEqual([], guard.compare_baselines(baseline, pruned))
+        self.assertEqual(
+            {"NEW", "STALE"},
+            {issue.code for issue in guard.compare_findings(findings, pruned, "M01")},
+        )
+
     def test_promote_rejects_identity_or_occurrence_expansion(self):
         guard = load_guard()
         old = self.baseline([self.entry("a", "M04")])

@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use rocketmq_rust::ArcMut;
-
 use crate::common::attribute::cq_type::CQType;
 use crate::common::attribute::Attribute;
 use crate::common::config::TopicConfig;
@@ -34,28 +32,18 @@ impl QueueTypeUtils {
         }
     }
 
-    pub fn is_batch_cq_arc_mut(topic_config: Option<&ArcMut<TopicConfig>>) -> bool {
+    pub fn is_batch_cq_arc_mut<T>(topic_config: Option<&T>) -> bool
+    where
+        T: AsRef<TopicConfig>,
+    {
         Self::get_cq_type_arc_mut(topic_config) == CQType::BatchCQ
     }
 
-    pub fn get_cq_type_arc_mut(topic_config: Option<&ArcMut<TopicConfig>>) -> CQType {
-        match topic_config {
-            Some(config) => {
-                let default_value = TopicAttributes::queue_type_attribute().default_value();
-
-                let attribute_name = TopicAttributes::queue_type_attribute().name();
-                match config.attributes.get(attribute_name) {
-                    Some(value) => value
-                        .parse()
-                        .unwrap_or(default_value.parse().unwrap_or(CQType::SimpleCQ)),
-                    None => default_value.parse().unwrap_or(CQType::SimpleCQ),
-                }
-            }
-            None => TopicAttributes::queue_type_attribute()
-                .default_value()
-                .parse()
-                .unwrap_or(CQType::SimpleCQ),
-        }
+    pub fn get_cq_type_arc_mut<T>(topic_config: Option<&T>) -> CQType
+    where
+        T: AsRef<TopicConfig>,
+    {
+        Self::get_cq_type(topic_config.map(AsRef::as_ref))
     }
 }
 

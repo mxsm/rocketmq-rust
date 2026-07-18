@@ -22,7 +22,6 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_rust::ArcMut;
 
 use crate::common::hasher::string_hasher::JavaStringHasher;
 use crate::common::message::message_decoder::message_properties_to_string;

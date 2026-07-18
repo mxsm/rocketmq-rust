@@ -14,8 +14,6 @@
 
 use std::str::FromStr;
 
-use rocketmq_rust::ArcMut;
-
 use crate::common::attribute::cleanup_policy::CleanupPolicy;
 use crate::common::attribute::Attribute;
 use crate::common::config::TopicConfig;
@@ -48,18 +46,17 @@ pub fn get_delete_policy(topic_config: Option<&TopicConfig>) -> CleanupPolicy {
     }
 }
 
-pub fn get_delete_policy_arc_mut(topic_config: Option<&ArcMut<TopicConfig>>) -> CleanupPolicy {
-    match topic_config {
-        Some(config) => {
-            let attribute_name = TopicAttributes::cleanup_policy_attribute().name();
-            parse_cleanup_policy_or_default(config.attributes.get(attribute_name))
-        }
-        None => default_cleanup_policy(),
-    }
+pub fn get_delete_policy_arc_mut<T>(topic_config: Option<&T>) -> CleanupPolicy
+where
+    T: AsRef<TopicConfig>,
+{
+    get_delete_policy(topic_config.map(AsRef::as_ref))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::common::attribute::cleanup_policy::CleanupPolicy;
     use crate::common::config::TopicConfig;
@@ -127,7 +124,7 @@ mod tests {
             TopicAttributes::cleanup_policy_attribute().name().to_string().into(),
             "invalid-cleanup-policy".into(),
         );
-        let topic_config = ArcMut::new(topic_config);
+        let topic_config = Arc::new(topic_config);
         assert_eq!(get_delete_policy_arc_mut(Some(&topic_config)), CleanupPolicy::DELETE);
     }
 }
