@@ -294,6 +294,10 @@ Client consume service lifecycle 随 Issue #8321 将通用分发器、concurrent
 改为标准 `Arc`/`Weak`；lifecycle 与 request API 只经 `&self`，Pop orderly lock-refresh handle 在 mutex 内发布并在
 await 前取出。实际快照降至 436 production/1,337 occurrence，Client 降至 116/431；剩余为 Broker 190/568、
 Client 116/431、Store 127/324 与 Tools 3/14，总进度仍为 75/82。
+Client send hook/trace context owner 随 Issue #8323 将异步 after-hook 改为不可变 hook 列表快照，删除
+`SendMessageContext` 中仅用于反向调用的 Producer owner；trace dispatcher 只保存启动后解析出的 client id，不再
+持有 host Producer/Consumer 实现。实际快照降至 432 production/1,329 occurrence，Client 降至 112/423；剩余为
+Broker 190/568、Client 112/423、Store 127/324 与 Tools 3/14，总进度仍为 75/82。
 
 ### 9.3 证据目录
 

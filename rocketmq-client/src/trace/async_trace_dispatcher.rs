@@ -39,7 +39,6 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_runtime::ShutdownReport;
-use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -50,9 +49,7 @@ use tracing::warn;
 
 use crate::base::access_channel::AccessChannel;
 use crate::base::client_config::ClientConfig;
-use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::producer::default_mq_producer::DefaultMQProducer;
-use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::runtime::spawn_client_tracked_task;
 use crate::runtime::ClientTrackedTaskHandle;
 use crate::trace::trace_constants::TraceConstants;
@@ -86,8 +83,7 @@ struct DispatcherState {
     last_flush_time: AtomicU64,
     send_which_queue: AtomicUsize,
     access_channel: RwLock<AccessChannel>,
-    host_producer: RwLock<Option<ArcMut<DefaultMQProducerImpl>>>,
-    host_consumer: RwLock<Option<ArcMut<DefaultMQPushConsumerImpl>>>,
+    client_host: RwLock<Option<CheetahString>>,
     namespace_v2: RwLock<Option<CheetahString>>,
 }
 
@@ -101,8 +97,7 @@ impl DispatcherState {
             last_flush_time: AtomicU64::new(0),
             send_which_queue: AtomicUsize::new(0),
             access_channel: RwLock::new(AccessChannel::Local),
-            host_producer: RwLock::new(None),
-            host_consumer: RwLock::new(None),
+            client_host: RwLock::new(None),
             namespace_v2: RwLock::new(None),
         }
     }
@@ -318,18 +313,9 @@ impl AsyncTraceDispatcher {
         self.config.batch_num
     }
 
-    /// Associates the dispatcher with a host producer implementation.
-    ///
-    /// The host producer reference is stored for potential future use in trace context enrichment.
-    pub fn set_host_producer(&self, host_producer: ArcMut<DefaultMQProducerImpl>) {
-        *self.state.host_producer.write() = Some(host_producer);
-    }
-
-    /// Associates the dispatcher with a host consumer implementation.
-    ///
-    /// The host consumer reference is stored for potential future use in trace context enrichment.
-    pub fn set_host_consumer(&self, host_consumer: ArcMut<DefaultMQPushConsumerImpl>) {
-        *self.state.host_consumer.write() = Some(host_consumer);
+    /// Sets the resolved client identifier used to enrich generated trace records.
+    pub fn set_client_host(&self, client_host: Option<CheetahString>) {
+        *self.state.client_host.write() = client_host;
     }
 
     /// Sets the namespace v2 configuration for the dispatcher.
@@ -657,11 +643,7 @@ impl TraceDispatcher for AsyncTraceDispatcher {
     }
 
     fn trace_client_host(&self) -> Option<CheetahString> {
-        self.state
-            .host_producer
-            .read()
-            .as_ref()
-            .and_then(|producer| producer.client_id())
+        self.state.client_host.read().clone()
     }
 }
 
@@ -1297,10 +1279,17 @@ mod tests {
     }
 
     #[test]
-    fn test_set_host_producer() {
+    fn test_set_client_host() {
         let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
 
-        assert!(dispatcher.state.host_producer.read().is_none());
+        assert!(dispatcher.trace_client_host().is_none());
+
+        dispatcher.set_client_host(Some(CheetahString::from_static_str("127.0.0.1@trace-client")));
+
+        assert_eq!(
+            dispatcher.trace_client_host().as_deref(),
+            Some("127.0.0.1@trace-client")
+        );
     }
 
     #[test]

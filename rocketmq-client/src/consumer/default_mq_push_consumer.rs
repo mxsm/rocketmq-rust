@@ -866,7 +866,7 @@ impl DefaultMQPushConsumer {
         };
 
         if let Some(async_dispatcher) = dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
-            async_dispatcher.set_host_consumer(consumer_impl.clone());
+            async_dispatcher.set_client_host(consumer_impl.client_id());
             async_dispatcher.set_namespace_v2(client_config.namespace_v2.clone());
             async_dispatcher.set_use_tls(client_config.use_tls);
         }

@@ -20,10 +20,8 @@ use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_error::RocketMQError;
-use rocketmq_rust::ArcMut;
 
 use crate::implementation::communication_mode::CommunicationMode;
-use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::send_result::SendResult;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -59,7 +57,6 @@ pub struct SendMessageContext<'a> {
     pub mq_trace_context: Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
     pub trace_start_time: Option<u64>,
     pub props: HashMap<CheetahString, CheetahString>,
-    pub producer: Option<ArcMut<DefaultMQProducerImpl>>,
     pub msg_type: Option<MessageType>,
     pub namespace: Option<CheetahString>,
 }

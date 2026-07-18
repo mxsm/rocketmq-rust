@@ -194,6 +194,13 @@ impl DefaultMQPushConsumerImpl {
         self.client_instance.clone()
     }
 
+    #[inline]
+    pub(crate) fn client_id(&self) -> Option<CheetahString> {
+        self.client_instance
+            .as_ref()
+            .map(|client_instance| client_instance.client_id.clone())
+    }
+
     pub fn set_mq_client_factory(&mut self, client_instance: ArcMut<MQClientInstance>) {
         self.rebalance_impl.set_mq_client_factory(client_instance.clone());
         self.client_instance = Some(client_instance);
