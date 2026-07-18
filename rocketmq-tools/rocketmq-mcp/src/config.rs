@@ -150,6 +150,9 @@ impl McpConfig {
         }
 
         self.server.http.auth.validate()?;
+        if self.server.transport == TransportKind::StreamableHttp {
+            self.server.http.validate_streamable_http()?;
+        }
 
         if self.cache.enabled && self.cache.max_entries == 0 {
             return Err(McpError::InvalidConfig(
@@ -250,9 +253,62 @@ pub struct StdioConfig {
 pub struct HttpConfig {
     pub bind: String,
     pub endpoint: String,
+    #[serde(default)]
+    pub public_base_url: String,
     pub validate_origin: bool,
     pub allowed_origins: Vec<String>,
+    #[serde(default)]
+    pub tls: HttpTlsConfig,
     pub auth: HttpAuthConfig,
+}
+
+impl HttpConfig {
+    fn validate_streamable_http(&self) -> Result<(), McpError> {
+        let bind = self
+            .bind
+            .parse::<std::net::SocketAddr>()
+            .map_err(|_| McpError::InvalidConfig("server.http.bind must be a socket address".to_string()))?;
+        let public_base_url = url::Url::parse(&self.public_base_url).map_err(|_| {
+            McpError::InvalidConfig("server.http.public_base_url must be an absolute HTTPS URL".to_string())
+        })?;
+        if public_base_url.scheme() != "https" || public_base_url.cannot_be_a_base() {
+            return Err(McpError::InvalidConfig(
+                "server.http.public_base_url must be an absolute HTTPS URL".to_string(),
+            ));
+        }
+        if public_base_url.path() != "/"
+            || public_base_url.query().is_some()
+            || public_base_url.fragment().is_some()
+            || !public_base_url.username().is_empty()
+            || public_base_url.password().is_some()
+        {
+            return Err(McpError::InvalidConfig(
+                "server.http.public_base_url must contain only an HTTPS origin".to_string(),
+            ));
+        }
+        self.tls.validate()?;
+        if self.auth.mode == HttpAuthMode::DevelopmentToken && !bind.ip().is_loopback() {
+            return Err(McpError::InvalidConfig(
+                "development-token authentication is restricted to loopback HTTP listeners".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct HttpTlsConfig {
+    #[serde(default)]
+    pub cert_path: String,
+    #[serde(default)]
+    pub key_path: String,
+}
+
+impl HttpTlsConfig {
+    fn validate(&self) -> Result<(), McpError> {
+        validate_non_empty("server.http.tls.cert_path", &self.cert_path)?;
+        validate_non_empty("server.http.tls.key_path", &self.key_path)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -263,7 +319,14 @@ pub struct HttpAuthConfig {
     pub audience: String,
     pub required_scopes: Vec<String>,
     pub jwt_algorithm: JwtAlgorithm,
+    #[serde(default)]
     pub jwt_key_env: String,
+    #[serde(default)]
+    pub jwks_url: String,
+    #[serde(default = "default_jwks_refresh_seconds")]
+    pub jwks_refresh_seconds: u64,
+    #[serde(default = "default_jwks_max_stale_seconds")]
+    pub jwks_max_stale_seconds: u64,
     pub protected_resource_metadata_path: String,
 }
 
@@ -287,10 +350,65 @@ impl HttpAuthConfig {
         if self.mode == HttpAuthMode::OAuthJwt {
             validate_non_empty("server.http.auth.issuer", &self.issuer)?;
             validate_non_empty("server.http.auth.audience", &self.audience)?;
-            validate_non_empty("server.http.auth.jwt_key_env", &self.jwt_key_env)?;
+            if self.required_scopes.is_empty() {
+                return Err(McpError::InvalidConfig(
+                    "server.http.auth.required_scopes must not be empty for OAuth".to_string(),
+                ));
+            }
+            let issuer = url::Url::parse(&self.issuer).map_err(|_| {
+                McpError::InvalidConfig("server.http.auth.issuer must be an absolute HTTPS URL".to_string())
+            })?;
+            if issuer.scheme() != "https"
+                || issuer.cannot_be_a_base()
+                || issuer.host_str().is_none()
+                || !issuer.username().is_empty()
+                || issuer.password().is_some()
+                || issuer.fragment().is_some()
+            {
+                return Err(McpError::InvalidConfig(
+                    "server.http.auth.issuer must be an absolute HTTPS URL".to_string(),
+                ));
+            }
+            if self.jwt_algorithm != JwtAlgorithm::Rs256 {
+                return Err(McpError::InvalidConfig(
+                    "server.http.auth.jwt_algorithm must be rs256 for OAuth".to_string(),
+                ));
+            }
+            let jwks_url = url::Url::parse(&self.jwks_url).map_err(|_| {
+                McpError::InvalidConfig("server.http.auth.jwks_url must be an absolute HTTPS URL".to_string())
+            })?;
+            if jwks_url.scheme() != "https"
+                || jwks_url.cannot_be_a_base()
+                || jwks_url.host_str().is_none()
+                || !jwks_url.username().is_empty()
+                || jwks_url.password().is_some()
+                || jwks_url.fragment().is_some()
+            {
+                return Err(McpError::InvalidConfig(
+                    "server.http.auth.jwks_url must be an absolute HTTPS URL".to_string(),
+                ));
+            }
+            if self.jwks_refresh_seconds == 0 {
+                return Err(McpError::InvalidConfig(
+                    "server.http.auth.jwks_refresh_seconds must be greater than zero".to_string(),
+                ));
+            }
+            if self.jwks_max_stale_seconds < self.jwks_refresh_seconds {
+                return Err(McpError::InvalidConfig(
+                    "server.http.auth.jwks_max_stale_seconds must be at least jwks_refresh_seconds".to_string(),
+                ));
+            }
         }
         Ok(())
     }
+}
+
+const fn default_jwks_refresh_seconds() -> u64 {
+    300
+}
+
+const fn default_jwks_max_stale_seconds() -> u64 {
+    900
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -462,6 +580,42 @@ mod tests {
         let error = config.validate().unwrap_err();
 
         assert!(error.to_string().contains("cache.max_entries"));
+    }
+
+    #[cfg(feature = "streamable-http")]
+    #[test]
+    fn streamable_http_requires_https_origin_tls_material_and_loopback_development_auth() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.server.transport = TransportKind::StreamableHttp;
+        config.server.http.public_base_url = "http://mcp.example.test".to_string();
+        assert!(config.validate().unwrap_err().to_string().contains("absolute HTTPS"));
+
+        config.server.http.public_base_url = "https://mcp.example.test".to_string();
+        config.server.http.tls.cert_path.clear();
+        assert!(config.validate().unwrap_err().to_string().contains("tls.cert_path"));
+
+        config.server.http.tls.cert_path = "server-cert.pem".to_string();
+        config.server.http.bind = "0.0.0.0:8089".to_string();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("restricted to loopback"));
+    }
+
+    #[test]
+    fn oauth_requires_rs256_and_https_jwks_without_static_key_fallback() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.server.http.auth.mode = HttpAuthMode::OAuthJwt;
+        config.server.http.auth.issuer = "https://issuer.example.test".to_string();
+        config.server.http.auth.audience = "rocketmq-mcp".to_string();
+        config.server.http.auth.jwt_algorithm = JwtAlgorithm::Hs256;
+        config.server.http.auth.jwt_key_env = "LEGACY_STATIC_KEY".to_string();
+        assert!(config.validate().unwrap_err().to_string().contains("must be rs256"));
+
+        config.server.http.auth.jwt_algorithm = JwtAlgorithm::Rs256;
+        config.server.http.auth.jwks_url = "http://issuer.example.test/jwks".to_string();
+        assert!(config.validate().unwrap_err().to_string().contains("absolute HTTPS"));
     }
 
     fn example_config_path() -> std::path::PathBuf {

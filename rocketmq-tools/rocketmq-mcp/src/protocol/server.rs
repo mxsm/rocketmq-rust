@@ -101,7 +101,7 @@ impl ServerHandler for RocketmqMcpServer {
         request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        let access = self.access_context(&context);
+        let access = self.access_context(&context)?;
         resources::registry::list_resources_for(self.app.config(), request.as_ref(), |cluster| {
             self.app.guard().authorize_resource(&access, cluster).is_ok()
         })
@@ -112,7 +112,7 @@ impl ServerHandler for RocketmqMcpServer {
         request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
-        if !self.app.guard().allows_resources(&self.access_context(&context)) {
+        if !self.app.guard().allows_resources(&self.access_context(&context)?) {
             return Ok(ListResourceTemplatesResult::with_all_items(Vec::new()));
         }
         resources::registry::list_resource_templates(request.as_ref())
@@ -123,7 +123,7 @@ impl ServerHandler for RocketmqMcpServer {
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
-        let access = self.access_context(&context);
+        let access = self.access_context(&context)?;
         let resource = crate::resources::uri::RocketmqResourceUri::parse(&request.uri)
             .ok_or_else(|| ErrorData::invalid_params("invalid RocketMQ resource URI", None))?;
         let _guarded_resource = self
@@ -142,7 +142,7 @@ impl ServerHandler for RocketmqMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
-        if !self.app.guard().allows_resources(&self.access_context(&context)) {
+        if !self.app.guard().allows_resources(&self.access_context(&context)?) {
             return Ok(ListPromptsResult::with_all_items(Vec::new()));
         }
         prompts::registry::list_prompts().map_err(|error| ErrorData::internal_error(error.to_string(), None))
@@ -153,7 +153,7 @@ impl ServerHandler for RocketmqMcpServer {
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResult, ErrorData> {
-        if !self.app.guard().allows_resources(&self.access_context(&context)) {
+        if !self.app.guard().allows_resources(&self.access_context(&context)?) {
             return Err(ErrorData::invalid_params("prompt access is denied", None));
         }
         prompts::renderer::get_prompt(request)
@@ -164,7 +164,7 @@ impl ServerHandler for RocketmqMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let access = self.access_context(&context);
+        let access = self.access_context(&context)?;
         Ok(tools::catalog::list_tools_for(|descriptor| {
             self.app
                 .guard()
@@ -178,7 +178,7 @@ impl ServerHandler for RocketmqMcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let query = self.app.query().as_ref().clone().with_cancellation(context.ct.clone());
-        let access = self.access_context(&context);
+        let access = self.access_context(&context)?;
         let result = ToolExecutor::new(query, self.app.guard().clone())
             .with_request_context(access)
             .call_with_request_id(request, &request_id_string(&context.id))
@@ -193,18 +193,18 @@ impl ServerHandler for RocketmqMcpServer {
 }
 
 impl RocketmqMcpServer {
-    fn access_context(&self, context: &RequestContext<RoleServer>) -> AccessContext {
+    fn access_context(&self, context: &RequestContext<RoleServer>) -> Result<AccessContext, ErrorData> {
         #[cfg(feature = "streamable-http")]
-        if let Some(access) = context
-            .extensions
-            .get::<axum::http::request::Parts>()
-            .and_then(|parts| parts.extensions.get::<AccessContext>())
-        {
-            return access.clone();
+        if let Some(parts) = context.extensions.get::<axum::http::request::Parts>() {
+            return parts
+                .extensions
+                .get::<AccessContext>()
+                .cloned()
+                .ok_or_else(|| ErrorData::invalid_request("authenticated HTTP context is unavailable", None));
         }
         #[cfg(not(feature = "streamable-http"))]
         let _ = context;
-        self.app.guard().local_request_context()
+        Ok(self.app.guard().local_request_context())
     }
 }
 

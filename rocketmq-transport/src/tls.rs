@@ -437,13 +437,28 @@ impl TlsServerRuntime {
 
     #[cfg(feature = "tls")]
     async fn accept_tls(&self, stream: TcpStream, remote_addr: SocketAddr) -> Option<Connection> {
+        self.accept_stream(stream, remote_addr)
+            .await
+            .map(Connection::new_with_stream)
+    }
+
+    /// Performs a server-side TLS handshake with the atomically published acceptor generation.
+    ///
+    /// Returns `None` when no verified generation is active or the handshake fails. Callers that
+    /// expose an HTTPS listener can use this method without duplicating certificate reload state.
+    #[cfg(feature = "tls")]
+    pub async fn accept_stream(
+        &self,
+        stream: TcpStream,
+        remote_addr: SocketAddr,
+    ) -> Option<tokio_rustls::server::TlsStream<TcpStream>> {
         let Some(acceptor) = self.acceptor.load_full() else {
             warn!("client {remote_addr} attempted TLS but no TLS server acceptor is configured");
             return None;
         };
 
         match acceptor.acceptor.accept(stream).await {
-            Ok(tls_stream) => Some(Connection::new_with_stream(tls_stream)),
+            Ok(tls_stream) => Some(tls_stream),
             Err(error) => {
                 warn!("TLS handshake from {remote_addr} failed: {error}");
                 None

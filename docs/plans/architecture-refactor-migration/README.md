@@ -1,10 +1,10 @@
 # RocketMQ Rust 架构重构迁移执行手册
 
-> 状态：实施中（Phase 3；M10 真实性能/HUMAN Gate 待验收，M11 已完成安全 profile/bootstrap/rotation 合同，下一工作包为 PR-M11-05）
+> 状态：实施中（Phase 3；M10 真实性能/HUMAN Gate 待验收，M11 已完成安全 profile/bootstrap/rotation 与 MCP HTTPS/JWKS/principal，下一工作包为 PR-M11-06）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
-> 当前复核状态：根 workspace 已达到目标 32 个 package；68/82 工作包完成，剩余 14 个
+> 当前复核状态：根 workspace 已达到目标 32 个 package；69/82 工作包完成，剩余 13 个
 
 ## 1. 使用方式
 

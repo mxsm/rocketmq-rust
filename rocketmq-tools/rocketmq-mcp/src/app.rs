@@ -67,6 +67,21 @@ impl McpApp {
         &self.query
     }
 
+    #[cfg(feature = "streamable-http")]
+    pub(crate) fn service_context(
+        &self,
+        name: &'static str,
+    ) -> Result<rocketmq_runtime::ServiceContext, crate::error::McpError> {
+        self.runtime_context
+            .as_ref()
+            .map(|runtime| runtime.service_context(name))
+            .ok_or_else(|| {
+                crate::error::McpError::InvalidConfig(
+                    "MCP transport requires an initialized runtime context".to_string(),
+                )
+            })
+    }
+
     pub(crate) fn trace_cache_metrics(&self) {
         let metrics = self.query.cache_metrics();
         let audit = self.guard.audit_metrics();
