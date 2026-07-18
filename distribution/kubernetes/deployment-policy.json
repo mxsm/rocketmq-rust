@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "milestone": "M11-09",
+  "milestone": "M11-10",
   "kubernetes_version": "1.32.0",
   "helm_chart": "distribution/helm/rocketmq-rust",
   "helm_secure_values": "distribution/helm/rocketmq-rust/ci/secure-values.yaml",
@@ -49,6 +49,26 @@
       "topology.kubernetes.io/zone"
     ]
   },
+  "lifecycle": {
+    "milestone": "M11-10",
+    "health_port": 8088,
+    "readiness_path": "/readyz",
+    "liveness_path": "/livez",
+    "pre_stop_path": "/drainz",
+    "shutdown_timeout_seconds": 45,
+    "termination_grace_period_seconds": 60,
+    "liveness_stale_seconds": 30,
+    "phase_order": [
+      "reject_admission",
+      "drain_sessions",
+      "flush_replicate",
+      "stop_background",
+      "telemetry",
+      "report"
+    ],
+    "tcp_probe_forbidden": true,
+    "duplicate_shutdown_extends_deadline": false
+  },
   "services": {
     "broker": {
       "repository": "ghcr.io/mxsm/rocketmq-rust/broker",
@@ -57,6 +77,7 @@
       "config_path": "/etc/rocketmq/broker.toml",
       "data_path": "/var/lib/rocketmq/broker",
       "ports": [
+        8088,
         10911,
         10912
       ],
@@ -87,6 +108,7 @@
       "config_path": "/etc/rocketmq/namesrv.toml",
       "data_path": "/var/lib/rocketmq/namesrv",
       "ports": [
+        8088,
         9876
       ],
       "persistence": {
@@ -117,6 +139,7 @@
       "config_path": "/etc/rocketmq/controller.toml",
       "data_path": "/var/lib/rocketmq/controller",
       "ports": [
+        8088,
         60109,
         60110
       ],
@@ -156,7 +179,8 @@
       "data_path": "/var/lib/rocketmq/proxy",
       "ports": [
         8080,
-        8081
+        8081,
+        8088
       ],
       "persistence": {
         "required": false
@@ -183,6 +207,7 @@
       "config_path": "/etc/rocketmq/mcp.toml",
       "data_path": "/var/lib/rocketmq/mcp",
       "ports": [
+        8088,
         8089
       ],
       "persistence": {

@@ -14,7 +14,40 @@ app.kubernetes.io/part-of: {{ include "rocketmq.partOf" . }}
 app.kubernetes.io/managed-by: {{ .root.Release.Service }}
 app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
 rocketmq.apache.org/service: {{ .service }}
-rocketmq.apache.org/architecture-milestone: M11-09
+rocketmq.apache.org/architecture-milestone: M11-10
+{{- end -}}
+
+{{/* Shared process lifecycle contract. The health port is kubelet-only and is not exposed by Services. */}}
+{{- define "rocketmq.lifecycleEnv" -}}
+- {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+- {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
+- {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
+{{- end -}}
+
+{{- define "rocketmq.lifecycleProbes" -}}
+lifecycle:
+  preStop:
+    httpGet:
+      path: /drainz
+      port: health
+      scheme: HTTP
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: health
+    scheme: HTTP
+  periodSeconds: 5
+  timeoutSeconds: 1
+  failureThreshold: 1
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: health
+    scheme: HTTP
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 1
+  failureThreshold: 3
 {{- end -}}
 
 {{- define "rocketmq.selectorLabels" -}}

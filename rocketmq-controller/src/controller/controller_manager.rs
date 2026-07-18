@@ -64,6 +64,7 @@ use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
@@ -569,20 +570,21 @@ impl ControllerManager {
         self.manager_task_group.lock().clone()
     }
 
-    async fn shutdown_manager_tasks(&self) {
+    async fn shutdown_manager_tasks(&self, deadline: ShutdownDeadline) -> bool {
         self.leadership_watch_tasks.lock().take();
         let task_group = self.manager_task_group.lock().take();
         let Some(task_group) = task_group else {
-            return;
+            return true;
         };
 
-        let report = task_group.shutdown(Duration::from_secs(10)).await;
+        let report = task_group.shutdown_until(deadline).await;
         if !report.is_healthy() {
             warn!(
                 report = %report.to_json(),
                 "Controller manager task shutdown report is unhealthy"
             );
         }
+        report.is_healthy()
     }
 
     /// Initialize the controller manager
@@ -856,6 +858,25 @@ impl ControllerManager {
     ///
     /// This method is idempotent - calling it multiple times is safe
     pub async fn shutdown(&self) -> Result<()> {
+        self.shutdown_until(ShutdownDeadline::after(Duration::from_secs(30)))
+            .await
+    }
+
+    /// Shuts down the Controller without extending the process-level absolute deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed runtime error when the deadline expires or a shutdown phase fails.
+    pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> Result<()> {
+        match tokio::time::timeout(deadline.remaining(), self.shutdown_inner(deadline)).await {
+            Ok(result) => result,
+            Err(_) => Err(ControllerError::runtime_error(
+                "Controller shutdown exhausted its absolute deadline",
+            )),
+        }
+    }
+
+    async fn shutdown_inner(&self, deadline: ShutdownDeadline) -> Result<()> {
         // Check if already stopped using atomic operation
         if self
             .running
@@ -867,6 +888,7 @@ impl ControllerManager {
         }
 
         info!("Shutting down controller manager...");
+        let mut failures = Vec::new();
 
         if let Some(tx) = self.notify_dispatch_tx.lock().take() {
             drop(tx);
@@ -876,13 +898,17 @@ impl ControllerManager {
         }
         if let Err(error) = self.apply_leadership_state(false).await {
             warn!("Failed to stop leader-only scheduling during shutdown: {}", error);
+            failures.push(format!("leadership scheduling: {error}"));
         }
-        self.shutdown_manager_tasks().await;
+        if !self.shutdown_manager_tasks(deadline).await {
+            failures.push("manager tasks did not stop cleanly".to_string());
+        }
 
         // Shutdown processor first to stop accepting requests
         // Errors are logged but don't stop the shutdown process
         if let Err(e) = self.processor.shutdown().await {
             error!("Failed to shutdown processor: {}", e);
+            failures.push(format!("processor: {e}"));
         } else {
             info!("Processor manager shut down");
         }
@@ -896,6 +922,7 @@ impl ControllerManager {
         // Shutdown metadata store
         if let Err(e) = self.metadata.shutdown().await {
             error!("Failed to shutdown metadata: {}", e);
+            failures.push(format!("metadata: {e}"));
         } else {
             info!("Metadata store shut down");
         }
@@ -907,18 +934,36 @@ impl ControllerManager {
         }
 
         // Shutdown Raft controller last (it coordinates distributed operations)
-        match tokio::time::timeout(Duration::from_secs(10), self.raft_controller.mut_from_ref().shutdown()).await {
+        match tokio::time::timeout(
+            deadline.remaining().min(Duration::from_secs(10)),
+            self.raft_controller.mut_from_ref().shutdown(),
+        )
+        .await
+        {
             Ok(Ok(())) => info!("Raft controller shut down"),
-            Ok(Err(e)) => error!("Failed to shutdown Raft: {}", e),
-            Err(_) => warn!("Timed out waiting for Raft controller shutdown"),
+            Ok(Err(e)) => {
+                error!("Failed to shutdown Raft: {}", e);
+                failures.push(format!("Raft: {e}"));
+            }
+            Err(_) => {
+                warn!("Timed out waiting for Raft controller shutdown");
+                failures.push("Raft shutdown timed out".to_string());
+            }
         }
 
         // Metrics manager cleanup is automatic via Drop
         #[cfg(feature = "metrics")]
         info!("Metrics manager will be cleaned up automatically");
 
-        info!("Controller manager shut down successfully");
-        Ok(())
+        if failures.is_empty() {
+            info!("Controller manager shut down successfully");
+            Ok(())
+        } else {
+            Err(ControllerError::runtime_error(format!(
+                "Controller shutdown completed with unhealthy phases: {}",
+                failures.join("; ")
+            )))
+        }
     }
 
     /// Check if this node is the leader

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "milestone": "M11-08",
+  "milestone": "M11-10",
   "foundation_dockerfile": "docker/Dockerfile.base",
   "service_contract_script": "scripts/service-image-contract.ps1",
   "smoke_config_directory": "docker/smoke-config",
@@ -84,7 +84,7 @@
       "binary": "rocketmq-broker-rust",
       "config_path": "/etc/rocketmq/broker.toml",
       "data_path": "/var/lib/rocketmq/broker",
-      "ports": [10911, 10912],
+      "ports": [8088, 10911, 10912],
       "command": ["--configFile", "/etc/rocketmq/broker.toml"]
     },
     "namesrv": {
@@ -93,7 +93,7 @@
       "binary": "rocketmq-namesrv-rust",
       "config_path": "/etc/rocketmq/namesrv.toml",
       "data_path": "/var/lib/rocketmq/namesrv",
-      "ports": [9876],
+      "ports": [8088, 9876],
       "command": ["--configFile", "/etc/rocketmq/namesrv.toml"]
     },
     "controller": {
@@ -102,7 +102,7 @@
       "binary": "rocketmq-controller-rust",
       "config_path": "/etc/rocketmq/controller.toml",
       "data_path": "/var/lib/rocketmq/controller",
-      "ports": [60109, 60110],
+      "ports": [8088, 60109, 60110],
       "command": ["--config-file", "/etc/rocketmq/controller.toml"]
     },
     "proxy": {
@@ -111,7 +111,7 @@
       "binary": "rocketmq-proxy-rust",
       "config_path": "/etc/rocketmq/proxy.toml",
       "data_path": "/var/lib/rocketmq/proxy",
-      "ports": [8080, 8081],
+      "ports": [8080, 8081, 8088],
       "command": ["--config", "/etc/rocketmq/proxy.toml"]
     },
     "mcp": {
@@ -120,13 +120,15 @@
       "binary": "rocketmq-mcp",
       "config_path": "/etc/rocketmq/mcp.toml",
       "data_path": "/var/lib/rocketmq/mcp",
-      "ports": [8089],
+      "ports": [8088, 8089],
       "command": ["--config", "/etc/rocketmq/mcp.toml", "--transport", "stdio"]
     }
   },
   "signal_sources": {
+    "broker": "rocketmq-broker/src/broker_bootstrap.rs",
+    "namesrv": "rocketmq-namesrv/src/bootstrap.rs",
     "controller": "rocketmq-controller/src/bin/controller_bootstrap.rs",
-    "proxy": "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+    "proxy": "rocketmq-proxy/src/bootstrap.rs",
     "mcp_stdio": "rocketmq-tools/rocketmq-mcp/src/main.rs",
     "mcp_http": "rocketmq-tools/rocketmq-mcp/src/transport/streamable_http.rs"
   },

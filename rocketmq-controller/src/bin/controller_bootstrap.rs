@@ -27,10 +27,12 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
 use rocketmq_error::ControllerError;
 use rocketmq_remoting::protocol::remoting_command;
-use rocketmq_runtime::wait_for_signal_result;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ServiceLifecycle;
+use rocketmq_runtime::ServiceLifecycleState;
+use rocketmq_runtime::ShutdownReason;
 use rocketmq_rust::ArcMut;
 use tracing::info;
 
@@ -69,10 +71,19 @@ pub fn main() -> Result<()> {
     let owner = RuntimeOwner::new(controller_runtime_config())
         .map_err(|error| ControllerError::Internal(format!("failed to build controller runtime: {error}")))?;
     let service_context = owner.context().service_context("rocketmq-controller-runtime");
+    let lifecycle = ServiceLifecycle::from_env("rocketmq-controller").map_err(|error| {
+        ControllerError::ConfigError(format!("invalid Controller lifecycle configuration: {error}"))
+    })?;
 
-    let run_result = owner.block_on(run(service_context));
+    let run_result = owner.block_on(run(service_context, lifecycle.clone()));
+    if run_result.is_err() {
+        lifecycle.mark_failed();
+    }
+    let shutdown_request = lifecycle
+        .shutdown_request()
+        .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
     let shutdown_result = owner
-        .shutdown_runtime_blocking()
+        .shutdown_runtime_blocking_until(shutdown_request.deadline)
         .map_err(|error| ControllerError::Internal(format!("failed to shutdown controller runtime: {error}")));
 
     match (run_result, shutdown_result) {
@@ -80,10 +91,12 @@ pub fn main() -> Result<()> {
         (Ok(()), Err(error)) => Err(error.into()),
         (Ok(()), Ok(report)) => {
             if !report.is_healthy() {
+                lifecycle.mark_failed();
                 tracing::warn!(
                     report = %report.to_json(),
                     "controller runtime shutdown report is unhealthy"
                 );
+                return Err(ControllerError::runtime_error("Controller runtime shutdown report is unhealthy").into());
             }
             Ok(())
         }
@@ -96,7 +109,7 @@ fn controller_runtime_config() -> RuntimeConfig {
     config
 }
 
-async fn run(service_context: ServiceContext) -> Result<()> {
+async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
     // Set remoting version
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
@@ -116,6 +129,10 @@ async fn run(service_context: ServiceContext) -> Result<()> {
         bail!("Please set the ROCKETMQ_HOME environment variable. Example: export ROCKETMQ_HOME=/opt/rocketmq");
     }
 
+    lifecycle.start(&service_context).await.map_err(|error| {
+        ControllerError::ConfigError(format!("failed to start Controller lifecycle boundary: {error}"))
+    })?;
+
     let bootstrap_config = build_controller_telemetry_bootstrap_config(&config);
     let telemetry_guard = rocketmq_observability::logging::install_global(&bootstrap_config)
         .context("failed to initialize controller telemetry bootstrap")?;
@@ -127,9 +144,16 @@ async fn run(service_context: ServiceContext) -> Result<()> {
     info!("Node ID: {}, Listen Address: {}", config.node_id, config.listen_addr);
     info!("ROCKETMQ_HOME: {}", rocketmq_home);
 
-    let controller_result = run_controller(config, service_context).await;
-    let shutdown_result = telemetry_guard
-        .shutdown()
+    let controller_result = run_controller(config, service_context, lifecycle.clone()).await;
+    if controller_result.is_err() {
+        lifecycle.mark_failed();
+        lifecycle.request_shutdown(ShutdownReason::Internal);
+    }
+    let shutdown_request = lifecycle
+        .shutdown_request()
+        .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
+    let telemetry_report = telemetry_guard.shutdown_with_timeout(shutdown_request.deadline.remaining());
+    let shutdown_result = telemetry_report
         .into_result()
         .context("failed to shutdown controller telemetry bootstrap");
 
@@ -140,7 +164,11 @@ async fn run(service_context: ServiceContext) -> Result<()> {
     }
 }
 
-async fn run_controller(config: ControllerConfig, service_context: ServiceContext) -> Result<()> {
+async fn run_controller(
+    config: ControllerConfig,
+    service_context: ServiceContext,
+    lifecycle: ServiceLifecycle,
+) -> Result<()> {
     // Create controller manager
     info!("Creating Controller Manager...");
     let controller_manager = ControllerManager::new_with_service_context(config, service_context).await?;
@@ -148,35 +176,67 @@ async fn run_controller(config: ControllerConfig, service_context: ServiceContex
     // Initialize controller
     info!("Initializing Controller...");
 
-    let init_result = ControllerManager::initialize(ArcMut::clone(&controller_manager)).await?;
+    let init_result = match ControllerManager::initialize(ArcMut::clone(&controller_manager)).await {
+        Ok(result) => result,
+        Err(error) => {
+            shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
+            return Err(error.into());
+        }
+    };
     if !init_result {
-        controller_manager.shutdown().await?;
+        shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
         bail!("Controller initialization failed");
     }
 
-    ControllerManager::start(ArcMut::clone(&controller_manager)).await?;
-    initialize_cluster_if_configured(&controller_manager).await?;
+    if let Err(error) = ControllerManager::start(ArcMut::clone(&controller_manager)).await {
+        shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
+        return Err(error.into());
+    }
+    if let Err(error) = initialize_cluster_if_configured(&controller_manager).await {
+        shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
+        return Err(error);
+    }
+    if let Err(error) = lifecycle.mark_ready() {
+        shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
+        return Err(error.into());
+    }
 
     info!("Controller started successfully!");
     info!("  Node ID: {}", controller_manager.controller_config().node_id);
     info!("  Listen:  {}", controller_manager.controller_config().listen_addr);
     info!("Controller is running. Press Ctrl+C to stop.");
 
-    // Wait for shutdown signal
-    match wait_for_signal_result().await {
-        Ok(()) => {
-            info!("Received shutdown signal, shutting down controller...");
+    let shutdown_request = match lifecycle.wait_for_shutdown_signal().await {
+        Ok(request) => request,
+        Err(error) => {
+            shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
+            return Err(error.into());
         }
-        Err(err) => {
-            tracing::warn!(error = %err, "failed to listen for shutdown signal");
-        }
-    }
+    };
+    info!(
+        reason = shutdown_request.reason.as_str(),
+        remaining_ms = shutdown_request.deadline.remaining().as_millis(),
+        "Received Controller shutdown request"
+    );
 
     // Graceful shutdown
-    controller_manager.shutdown().await?;
+    controller_manager.shutdown_until(shutdown_request.deadline).await?;
+    lifecycle.mark_stopped();
 
     info!("Controller shutdown completed.");
     Ok(())
+}
+
+async fn shutdown_controller_after_startup_failure(
+    controller_manager: &ArcMut<ControllerManager>,
+    lifecycle: &ServiceLifecycle,
+) {
+    lifecycle.mark_failed();
+    let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+    if let Err(error) = controller_manager.shutdown_until(request.deadline).await {
+        tracing::warn!(error = %error, "Controller startup-failure cleanup was unhealthy");
+    }
+    debug_assert_eq!(lifecycle.state(), ServiceLifecycleState::Failed);
 }
 
 fn build_controller_telemetry_bootstrap_config(

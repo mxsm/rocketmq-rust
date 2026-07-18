@@ -37,6 +37,9 @@ use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ServiceLifecycle;
+use rocketmq_runtime::ServiceLifecycleState;
+use rocketmq_runtime::ShutdownReason;
 use serde::Deserialize;
 use tracing::info;
 
@@ -54,10 +57,18 @@ const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 fn main() -> Result<()> {
     let owner = RuntimeOwner::new(namesrv_runtime_config()).context("failed to build namesrv runtime")?;
     let service_context = owner.context().service_context("rocketmq-namesrv-runtime");
+    let lifecycle =
+        ServiceLifecycle::from_env("rocketmq-namesrv").context("invalid NameServer lifecycle configuration")?;
 
-    let run_result = owner.block_on(run(service_context));
+    let run_result = owner.block_on(run(service_context, lifecycle.clone()));
+    if run_result.is_err() {
+        lifecycle.mark_failed();
+    }
+    let shutdown_request = lifecycle
+        .shutdown_request()
+        .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
     let shutdown_result = owner
-        .shutdown_runtime_blocking()
+        .shutdown_runtime_blocking_until(shutdown_request.deadline)
         .context("failed to shutdown namesrv runtime");
 
     match (run_result, shutdown_result) {
@@ -65,10 +76,12 @@ fn main() -> Result<()> {
         (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(report)) => {
             if !report.is_healthy() {
+                lifecycle.mark_failed();
                 tracing::warn!(
                     report = %report.to_json(),
                     "namesrv runtime shutdown report is unhealthy"
                 );
+                bail!("NameServer runtime shutdown report is unhealthy");
             }
             Ok(())
         }
@@ -81,7 +94,7 @@ fn namesrv_runtime_config() -> RuntimeConfig {
     config
 }
 
-async fn run(service_context: ServiceContext) -> Result<()> {
+async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
     // Parse command line arguments first
     let args = Args::parse();
 
@@ -108,6 +121,11 @@ async fn run(service_context: ServiceContext) -> Result<()> {
         );
     }
 
+    lifecycle
+        .start(&service_context)
+        .await
+        .context("failed to start NameServer lifecycle boundary")?;
+
     let bootstrap_config = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
     let telemetry_guard = rocketmq_observability::logging::install_global(&bootstrap_config)
         .context("failed to initialize namesrv telemetry bootstrap")?;
@@ -125,7 +143,6 @@ async fn run(service_context: ServiceContext) -> Result<()> {
     info!("Config Store Path: {}", namesrv_config.config_store_path);
     info!("Use RouteInfoManager V2: {}", namesrv_config.use_route_info_manager_v2);
     info!("===============================================");
-
     // Start the name server
     let boot_result = Builder::new()
         .set_name_server_config(namesrv_config)
@@ -133,18 +150,31 @@ async fn run(service_context: ServiceContext) -> Result<()> {
         .set_controller_config_opt(controller_config)
         .set_service_context(service_context)
         .build()
-        .boot()
+        .boot_with_lifecycle(lifecycle.clone())
         .await
         .map_err(anyhow::Error::from);
-    let shutdown_result = telemetry_guard
-        .shutdown()
+    if boot_result.is_err() {
+        lifecycle.mark_failed();
+        lifecycle.request_shutdown(ShutdownReason::Internal);
+    }
+    let shutdown_request = lifecycle
+        .shutdown_request()
+        .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
+    let telemetry_report = telemetry_guard.shutdown_with_timeout(shutdown_request.deadline.remaining());
+    let shutdown_result = telemetry_report
         .into_result()
         .context("failed to shutdown namesrv telemetry bootstrap");
 
     match (boot_result, shutdown_result) {
         (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(_report)) => Ok(()),
+        (Ok(_report), Err(error)) => Err(error),
+        (Ok(report), Ok(_telemetry_report)) if !report.is_healthy() => {
+            bail!("NameServer shutdown did not complete within the shared lifecycle deadline")
+        }
+        (Ok(_report), Ok(_telemetry_report)) if lifecycle.state() == ServiceLifecycleState::Failed => {
+            bail!("NameServer lifecycle failed while observing or completing shutdown")
+        }
+        (Ok(_report), Ok(_telemetry_report)) => Ok(()),
     }
 }
 

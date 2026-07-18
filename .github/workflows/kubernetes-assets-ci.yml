@@ -10,6 +10,7 @@ on:
       - "scripts/kubernetes-assets-contract.ps1"
       - "scripts/kubernetes_assets_guard.py"
       - "scripts/tests/test_m11_kubernetes_assets.py"
+      - "scripts/tests/test_m11_service_lifecycle.py"
   push:
     branches: [main]
     paths:
@@ -20,6 +21,7 @@ on:
       - "scripts/kubernetes-assets-contract.ps1"
       - "scripts/kubernetes_assets_guard.py"
       - "scripts/tests/test_m11_kubernetes_assets.py"
+      - "scripts/tests/test_m11_service_lifecycle.py"
   workflow_dispatch:
 
 permissions:
@@ -39,6 +41,7 @@ jobs:
         run: |
           python scripts/kubernetes_assets_guard.py
           python -m unittest scripts.tests.test_m11_kubernetes_assets -v
+          python -m unittest scripts.tests.test_m11_service_lifecycle -v
 
       - name: Validate canonical and overlay renders
         shell: pwsh

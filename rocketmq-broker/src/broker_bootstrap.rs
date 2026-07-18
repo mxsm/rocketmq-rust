@@ -17,7 +17,11 @@ use std::sync::Arc;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_observability::TelemetryRuntimeGuard;
 use rocketmq_runtime::wait_for_signal;
+use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ServiceLifecycle;
+use rocketmq_runtime::ShutdownReason;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::error;
 use tracing::info;
@@ -45,6 +49,61 @@ impl BrokerBootstrap {
         // Graceful shutdown
         self.shutdown().await;
         info!("Broker shutdown completed");
+    }
+
+    /// Boots the broker under the shared process lifecycle and absolute shutdown deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns a lifecycle error when broker initialization, readiness publication, or
+    /// platform signal observation fails.
+    pub async fn boot_with_lifecycle(mut self, lifecycle: ServiceLifecycle) -> RuntimeResult<()> {
+        if !self.initialize().await {
+            lifecycle.mark_failed();
+            lifecycle.request_shutdown(ShutdownReason::Internal);
+            return Err(RuntimeError::LifecycleOperation {
+                operation: "initialize_broker",
+                message: "broker initialization returned false".to_string(),
+            });
+        }
+
+        self.start().await;
+        lifecycle.mark_ready()?;
+        let shutdown_request = match lifecycle.wait_for_shutdown_signal().await {
+            Ok(request) => request,
+            Err(error) => {
+                lifecycle.mark_failed();
+                lifecycle.request_shutdown(ShutdownReason::Internal);
+                return Err(error);
+            }
+        };
+        info!(
+            reason = shutdown_request.reason.as_str(),
+            remaining_ms = shutdown_request.deadline.remaining().as_millis(),
+            "Broker received shutdown request"
+        );
+
+        let report = self
+            .broker_runtime
+            .shutdown_basic_service_until(shutdown_request.deadline)
+            .await;
+        if !report.is_healthy() {
+            tracing::warn!(
+                unhealthy_components = ?report.unhealthy_component_names(),
+                "Broker lifecycle shutdown report is unhealthy"
+            );
+            lifecycle.mark_failed();
+            return Err(RuntimeError::LifecycleOperation {
+                operation: "shutdown_broker",
+                message: format!(
+                    "broker shutdown did not complete before the shared deadline; unhealthy components: {:?}",
+                    report.unhealthy_component_names()
+                ),
+            });
+        }
+        lifecycle.mark_stopped();
+        info!("Broker shutdown completed");
+        Ok(())
     }
 
     #[inline]

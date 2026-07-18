@@ -99,10 +99,8 @@ impl TelemetryGuard {
         self.shutdown_inner(timeout).into_result()
     }
 
-    pub(crate) fn shutdown_with_report(self) -> TelemetryProviderShutdownReport {
-        self.shutdown_inner(std::time::Duration::from_millis(
-            crate::exporter::outage::DEFAULT_SHUTDOWN_TIMEOUT_MILLIS,
-        ))
+    pub(crate) fn shutdown_with_report_timeout(self, timeout: std::time::Duration) -> TelemetryProviderShutdownReport {
+        self.shutdown_inner(timeout)
     }
 
     pub fn subscriber_install_status(&self) -> SubscriberInstallStatus {

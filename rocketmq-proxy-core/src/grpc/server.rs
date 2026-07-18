@@ -58,6 +58,27 @@ where
     S: FnOnce(TcpListener, SocketAddr, watch::Receiver<bool>) -> SFut,
     SFut: Future<Output = ProxyResult<()>> + Send,
 {
+    serve_with_lifecycle_and_ready(config, shutdown, task_group, || Ok(()), housekeeping, serve).await
+}
+
+/// Owns listener binding and publishes readiness only after the listener and housekeeping task
+/// have both been initialized.
+pub async fn serve_with_lifecycle_and_ready<F, R, H, HFut, S, SFut>(
+    config: &GrpcConfig,
+    shutdown: F,
+    task_group: TaskGroup,
+    ready: R,
+    housekeeping: H,
+    serve: S,
+) -> ProxyResult<GrpcServerShutdownReport>
+where
+    F: Future<Output = ()> + Send,
+    R: FnOnce() -> ProxyResult<()>,
+    H: FnOnce(watch::Receiver<bool>, TaskGroup) -> HFut + Send + 'static,
+    HFut: Future<Output = GrpcHousekeepingRunReport> + Send + 'static,
+    S: FnOnce(TcpListener, SocketAddr, watch::Receiver<bool>) -> SFut,
+    SFut: Future<Output = ProxyResult<()>> + Send,
+{
     let addr = config.socket_addr()?;
     let listener = TcpListener::bind(addr).await.map_err(|error| ProxyError::Transport {
         message: format!("proxy gRPC server failed to bind {addr}: {error}"),
@@ -78,6 +99,7 @@ where
         })?;
 
     let serve_future = serve(listener, local_addr, shutdown_tx.subscribe());
+    ready()?;
     tokio::pin!(serve_future);
     tokio::pin!(shutdown);
     let serve_result = tokio::select! {

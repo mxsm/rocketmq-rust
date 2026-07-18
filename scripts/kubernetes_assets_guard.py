@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Reject drift between the M11-09 Helm, Kustomize, and container contracts."""
+"""Reject drift between the M11-10 Helm, Kustomize, lifecycle, and container contracts."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
     "broker": {
         "kind": "StatefulSet",
         "replicas": 1,
-        "ports": [10911, 10912],
+        "ports": [8088, 10911, 10912],
         "config": "/etc/rocketmq/broker.toml",
         "data": "/var/lib/rocketmq/broker",
         "pdb": 1,
@@ -49,7 +49,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
     "namesrv": {
         "kind": "StatefulSet",
         "replicas": 3,
-        "ports": [9876],
+        "ports": [8088, 9876],
         "config": "/etc/rocketmq/namesrv.toml",
         "data": "/var/lib/rocketmq/namesrv",
         "pdb": 2,
@@ -59,7 +59,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
     "controller": {
         "kind": "StatefulSet",
         "replicas": 3,
-        "ports": [60109, 60110],
+        "ports": [8088, 60109, 60110],
         "config": "/etc/rocketmq/controller.toml",
         "data": "/var/lib/rocketmq/controller",
         "pdb": 2,
@@ -69,7 +69,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
     "proxy": {
         "kind": "Deployment",
         "replicas": 2,
-        "ports": [8080, 8081],
+        "ports": [8080, 8081, 8088],
         "config": "/etc/rocketmq/proxy.toml",
         "data": "/var/lib/rocketmq/proxy",
         "pdb": 1,
@@ -79,7 +79,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
     "mcp": {
         "kind": "Deployment",
         "replicas": 1,
-        "ports": [8089],
+        "ports": [8088, 8089],
         "config": "/etc/rocketmq/mcp.toml",
         "data": "/var/lib/rocketmq/mcp",
         "pdb": 1,
@@ -104,7 +104,7 @@ EXPECTED_TOOLS = {
         "e3f56102bcf4f50b034a567e2482a1c5330799983ddd655952310211aef73d93",
     ),
 }
-BANNED_LIFECYCLE_FIELDS = ("readinessProbe:", "livenessProbe:", "startupProbe:", "preStop:", "lifecycle:")
+FORBIDDEN_PROBE_FIELDS = ("tcpSocket:", "startupProbe:")
 
 
 @dataclass(frozen=True)
@@ -191,7 +191,7 @@ def require_valid_toml(guard: Guard, label: str, document: Document, key: str) -
 
 def validate_exact_policy(guard: Guard, policy: dict[str, Any], container_policy: dict[str, Any]) -> None:
     guard.require(policy.get("schema_version") == 1, "deployment policy schema_version must remain 1")
-    guard.require(policy.get("milestone") == "M11-09", "deployment policy milestone must remain M11-09")
+    guard.require(policy.get("milestone") == "M11-10", "deployment policy milestone must remain M11-10")
     guard.require(policy.get("kubernetes_version") == "1.32.0", "Kubernetes schema baseline must remain 1.32.0")
     image = policy.get("image", {})
     guard.require(
@@ -217,6 +217,33 @@ def validate_exact_policy(guard: Guard, policy: dict[str, Any], container_policy
     for key, expected in expected_security.items():
         guard.require(security.get(key) == expected, f"security policy {key} must remain {expected!r}")
     guard.require(security.get("drop_capabilities") == ["ALL"], "all Linux capabilities must be dropped")
+
+    lifecycle = policy.get("lifecycle", {})
+    expected_lifecycle = {
+        "milestone": "M11-10",
+        "health_port": 8088,
+        "readiness_path": "/readyz",
+        "liveness_path": "/livez",
+        "pre_stop_path": "/drainz",
+        "shutdown_timeout_seconds": 45,
+        "termination_grace_period_seconds": 60,
+        "liveness_stale_seconds": 30,
+        "phase_order": [
+            "reject_admission",
+            "drain_sessions",
+            "flush_replicate",
+            "stop_background",
+            "telemetry",
+            "report",
+        ],
+        "tcp_probe_forbidden": True,
+        "duplicate_shutdown_extends_deadline": False,
+    }
+    guard.require(lifecycle == expected_lifecycle, "service lifecycle policy drifted")
+    guard.require(
+        lifecycle.get("termination_grace_period_seconds", 0) > lifecycle.get("shutdown_timeout_seconds", 0),
+        "Pod termination grace must exceed the internal shutdown deadline",
+    )
 
     services = policy.get("services", {})
     container_services = container_policy.get("services", {})
@@ -335,8 +362,8 @@ def validate_source_assets(guard: Guard) -> None:
         )
     )
     all_yaml_sources = chart_sources + "\n" + guard.read("distribution/kubernetes/base/manifest.yaml")
-    for field in BANNED_LIFECYCLE_FIELDS:
-        guard.require(field not in all_yaml_sources, f"{field} belongs to M11-10 and is forbidden in M11-09 assets")
+    for field in FORBIDDEN_PROBE_FIELDS:
+        guard.require(field not in all_yaml_sources, f"forbidden lifecycle probe field found: {field}")
     for forbidden in ("kind: Secret", "stringData:", "hostPath:", "privileged: true", "allowPrivilegeEscalation: true"):
         guard.require(forbidden not in all_yaml_sources, f"forbidden deployment source found: {forbidden}")
     for mutable in (":latest", ":main", ":master"):
@@ -384,6 +411,7 @@ def validate_source_assets(guard: Guard) -> None:
     guard.require("permissions:\n  contents: read" in workflow, "workflow must retain contents:read least privilege")
     guard.require("kubernetes-assets-contract.ps1" in workflow, "workflow must execute the full asset contract")
     guard.require("test_m11_kubernetes_assets" in workflow, "workflow must execute deliberate-violation tests")
+    guard.require("test_m11_service_lifecycle" in workflow, "workflow must execute lifecycle violation tests")
 
 
 def validate_workload(guard: Guard, label: str, document: Document, service: str, expected: dict[str, Any], digest: str) -> None:
@@ -413,8 +441,34 @@ def validate_workload(guard: Guard, label: str, document: Document, service: str
         "topologyKey: kubernetes.io/hostname",
     ):
         guard.require(snippet in text, f"{label}: {service} missing security/topology contract {snippet}")
-    for field in BANNED_LIFECYCLE_FIELDS:
-        guard.require(field not in text, f"{label}: {service} contains premature M11-10 field {field}")
+    for field in FORBIDDEN_PROBE_FIELDS:
+        guard.require(field not in text, f"{label}: {service} contains forbidden probe field {field}")
+    for snippet in (
+        "terminationGracePeriodSeconds: 60",
+        "name: ROCKETMQ_HEALTH_BIND_ADDR",
+        "name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS",
+        "name: ROCKETMQ_LIVENESS_STALE_SECONDS",
+        "name: health",
+        "containerPort: 8088",
+        "lifecycle:",
+        "preStop:",
+        "path: /drainz",
+        "readinessProbe:",
+        "path: /readyz",
+        "livenessProbe:",
+        "path: /livez",
+    ):
+        guard.require(snippet in text, f"{label}: {service} missing lifecycle contract {snippet}")
+    for value in ("0.0.0.0:8088", "45", "30"):
+        guard.require(
+            re.search(rf"value:\s*[\"']?{re.escape(value)}[\"']?(?:[,}}\s]|$)", text) is not None,
+            f"{label}: {service} missing lifecycle environment value {value}",
+        )
+    guard.require(text.count("port: health") == 3, f"{label}: {service} probes must use the named health port")
+    guard.require(text.count("scheme: HTTP") == 3, f"{label}: {service} probes must use HTTP")
+    guard.require(text.count("path: /drainz") == 1, f"{label}: {service} must expose one idempotent preStop hook")
+    guard.require(text.count("path: /readyz") == 1, f"{label}: {service} must expose one readiness probe")
+    guard.require(text.count("path: /livez") == 1, f"{label}: {service} must expose one liveness probe")
     if expected["kind"] == "StatefulSet":
         guard.require("volumeClaimTemplates:" in text, f"{label}: {service} StatefulSet lacks PVC template")
         guard.require("storageClassName:" in text, f"{label}: {service} lacks explicit storage class")
@@ -443,8 +497,8 @@ def validate_render(guard: Guard, label: str, text: str, expected_digests: dict[
     guard.require(len(documents) == 37, f"{label}: expected 37 Kubernetes resources, found {len(documents)}")
     for forbidden in ("kind: Secret", "stringData:", "hostPath:", "privileged: true", "allowPrivilegeEscalation: true"):
         guard.require(forbidden not in text, f"{label}: forbidden field {forbidden}")
-    for field in BANNED_LIFECYCLE_FIELDS:
-        guard.require(field not in text, f"{label}: {field} belongs to M11-10")
+    for field in FORBIDDEN_PROBE_FIELDS:
+        guard.require(field not in text, f"{label}: forbidden lifecycle probe field {field}")
 
     image_matches = re.findall(
         r"(?m)^\s*image:\s*[\"']?(ghcr\.io/mxsm/rocketmq-rust/(broker|namesrv|controller|proxy|mcp)@"
@@ -483,6 +537,13 @@ def validate_render(guard: Guard, label: str, text: str, expected_digests: dict[
     guard.require(service_account is not None, f"{label}: runtime ServiceAccount missing")
     if service_account is not None:
         guard.require("automountServiceAccountToken: false" in service_account.text, f"{label}: ServiceAccount token enabled")
+
+    for service_document in (document for document in documents if document.kind == "Service"):
+        guard.require("name: health" not in service_document.text, f"{label}: health port must remain kubelet-only")
+        guard.require(
+            re.search(r"(?m)^\s+(?:port|targetPort):\s*8088\s*$", service_document.text) is None,
+            f"{label}: health port 8088 must not be exposed through a Service",
+        )
 
     controller_config = find_document(documents, "ConfigMap", "rocketmq-controller-config")
     guard.require(controller_config is not None, f"{label}: Controller config map missing")
@@ -595,7 +656,7 @@ def main() -> int:
         for error in guard.errors:
             print(f"KUBERNETES_ASSETS_GUARD_ERROR: {error}", file=sys.stderr)
         return 1
-    print("KUBERNETES_ASSETS_GUARD_OK services=5 helm=1 kustomize=1 milestone=M11-09")
+    print("KUBERNETES_ASSETS_GUARD_OK services=5 helm=1 kustomize=1 milestone=M11-10")
     return 0
 
 
