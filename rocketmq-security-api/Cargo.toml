@@ -30,3 +30,4 @@ default = []
 [dependencies]
 cheetah-string.workspace = true
 thiserror.workspace = true
+zeroize.workspace = true
