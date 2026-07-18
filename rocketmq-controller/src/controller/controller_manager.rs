@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::raft_controller::RaftController;
+use crate::config::ControllerConfigHandle;
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::controller::broker_housekeeping_service::BrokerHousekeepingService;
 use crate::controller::Controller;
@@ -237,7 +238,8 @@ impl BrokerLifecycleListener for BrokerInactiveListener {
                 current_millis(),
             );
 
-            let max_retry = controller_manager.controller_config().elect_master_max_retry_count;
+            let config = controller_manager.controller_config();
+            let max_retry = config.elect_master_max_retry_count;
             for attempt in 0..max_retry {
                 let elect_result = tokio::time::timeout(
                     Duration::from_secs(3),
@@ -256,7 +258,7 @@ impl BrokerLifecycleListener for BrokerInactiveListener {
                             attempt + 1
                         );
 
-                        if controller_manager.controller_config().notify_broker_role_changed {
+                        if config.notify_broker_role_changed {
                             if let Err(error) = controller_manager.notify_broker_role_changed(response).await {
                                 warn!(
                                     "Failed to notify brokers after role change, cluster={:?}, broker={}, error={}",
@@ -369,7 +371,7 @@ impl BrokerLifecycleListener for BrokerInactiveListener {
 /// Uses AtomicBool for state flags instead of RwLock to minimize lock contention.
 pub struct ControllerManager {
     /// Configuration
-    config: ArcMut<ControllerConfig>,
+    config: ControllerConfigHandle,
 
     /// Raft controller for consensus and leader election
     /// Note: Uses ArcMut to allow mutable access via &self
@@ -446,20 +448,20 @@ impl ControllerManager {
         service_context: Option<ServiceContext>,
         parent_task_group: Option<TaskGroup>,
     ) -> Result<Self> {
-        let config = ArcMut::new(config);
+        let config = ControllerConfigHandle::new(config);
         let parent_task_group = service_context
             .as_ref()
             .map(|context| context.task_group().clone())
             .or(parent_task_group);
 
-        info!("Creating controller manager with config: {:?}", config);
+        info!("Creating controller manager with config: {:?}", config.snapshot());
 
         // Initialize heartbeat manager
         let heartbeat_manager = ArcMut::new(match parent_task_group.as_ref() {
             Some(parent_task_group) => {
-                DefaultBrokerHeartbeatManager::new_with_task_group(config.clone(), parent_task_group.clone())
+                DefaultBrokerHeartbeatManager::new_with_task_group(config.reader(), parent_task_group.clone())
             }
-            None => DefaultBrokerHeartbeatManager::new(config.clone()),
+            None => DefaultBrokerHeartbeatManager::new(config.reader()),
         });
 
         // Initialize RocketMQ runtime for Raft controller
@@ -469,27 +471,27 @@ impl ControllerManager {
         // The controller and request processor must share the same heartbeat manager so that
         // liveness-aware paths observe the broker heartbeats recorded by RPC handlers.
         let raft_arc = ArcMut::new(RaftController::new_open_raft_with_heartbeat(
-            config.clone(),
+            config.reader(),
             heartbeat_manager.clone(),
         ));
 
         // Initialize metadata store
         // This MUST succeed before proceeding
         let metadata = Arc::new(
-            MetadataStore::new(config.clone())
+            MetadataStore::new(config.reader())
                 .await
                 .map_err(|e| ControllerError::storage_source("create metadata store", e))?,
         );
 
         // Initialize processor manager (needs Arc<RaftController>)
         let processor = Arc::new(ProcessorManager::new(
-            config.clone(),
+            config.reader(),
             raft_arc.clone(),
             metadata.clone(),
         ));
 
         // Initialize remoting server for inbound requests
-        let listen_port = config.listen_addr.port() as u32;
+        let listen_port = config.snapshot().listen_addr.port() as u32;
 
         let server_config = ServerConfig {
             listen_port,
@@ -517,7 +519,7 @@ impl ControllerManager {
         let metrics_manager = {
             info!("Initializing metrics manager");
             let active_broker_heartbeat_manager = heartbeat_manager.clone();
-            ControllerMetricsManager::get_instance_with_active_broker_source(config.clone(), move || {
+            ControllerMetricsManager::get_instance_with_active_broker_source(config.reader(), move || {
                 active_broker_count_from_snapshot(&active_broker_heartbeat_manager.get_active_brokers_num())
             })
         };
@@ -1029,8 +1031,15 @@ impl ControllerManager {
     /// # Returns
     ///
     /// A reference to the controller configuration
-    pub fn config(&self) -> ArcMut<ControllerConfig> {
-        self.config.clone()
+    pub fn config(&self) -> Arc<ControllerConfig> {
+        self.config.snapshot()
+    }
+
+    pub(crate) async fn update_config(
+        &self,
+        properties: HashMap<String, String>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.config.update(properties).await
     }
 
     /// Get the metrics manager (only available with "metrics" feature)
@@ -1050,8 +1059,8 @@ impl ControllerManager {
     /// A reference to the controller configuration
     ///
     /// This is an alias for `config()` for API compatibility
-    pub fn controller_config(&self) -> &ControllerConfig {
-        &self.config
+    pub fn controller_config(&self) -> Arc<ControllerConfig> {
+        self.config.snapshot()
     }
 
     /// Get the heartbeat manager
@@ -1112,7 +1121,7 @@ impl ControllerManager {
 
     fn start_leadership_watch_loop(self: &ArcMut<Self>) -> Result<()> {
         let weak_manager = ArcMut::downgrade(self);
-        let interval = Duration::from_millis(self.config.heartbeat_interval_ms.max(100));
+        let interval = Duration::from_millis(self.config.snapshot().heartbeat_interval_ms.max(100));
         let task_group = self.ensure_manager_task_group()?;
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("leadership-watch"));
         let was_leader = Arc::new(AtomicBool::new(false));
@@ -1156,7 +1165,10 @@ impl ControllerManager {
             self.raft_controller.start_scheduling().await.map_err(|error| {
                 ControllerError::runtime_error(format!("Failed to start controller scheduling: {error}"))
             })?;
-            info!("Leader-only scheduling enabled on controller {}", self.config.node_id);
+            info!(
+                "Leader-only scheduling enabled on controller {}",
+                self.config.snapshot().node_id
+            );
         } else {
             self.raft_controller.stop_scheduling().await.map_err(|error| {
                 ControllerError::runtime_error(format!("Failed to stop controller scheduling: {error}"))
@@ -1164,7 +1176,7 @@ impl ControllerManager {
             self.reset_notify_dispatch_state();
             info!(
                 "Leader-only scheduling disabled and notify dispatch state cleared on controller {}",
-                self.config.node_id
+                self.config.snapshot().node_id
             );
         }
         Ok(())
@@ -1241,7 +1253,7 @@ impl ControllerManager {
     }
 
     fn notify_retry_delay(&self, attempt: u32) -> Duration {
-        let base_delay = self.config.heartbeat_interval_ms.max(100);
+        let base_delay = self.config.snapshot().heartbeat_interval_ms.max(100);
         Duration::from_millis((base_delay * u64::from(attempt + 1)).min(2_000))
     }
 

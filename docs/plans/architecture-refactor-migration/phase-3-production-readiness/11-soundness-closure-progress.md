@@ -7,8 +7,11 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
 该目标尚未完成。本文件只记录 M11-12a owned-value leaf 的真实下降，不把子切片计为第 76 个工作包，也不刷新
-baseline 来掩盖剩余债务。父 Issue 为 #8292；本切片 Issue 为 #8293；分支为
+baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
+
+M11-12b 的 Controller config owner 由 Issue #8295 跟踪，分支为
+`mxsm/architecture-refactor-controller-config`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -39,6 +42,22 @@ production 条目主要集中在 Broker 299、Client 149、Store 127、Remoting 
 本切片后的实际快照为 1,123 个条目：production 733、test 376、compatibility 14；production occurrence 为
 2,082。相对初始快照真实删除 27 个 production 条目和 43 个 production occurrence。
 
+## M11-12b Controller config owner
+
+| 目标 | 实现与证据 |
+|---|---|
+| 单一发布 owner | `ControllerConfigHandle` 仅在 crate 内由 `ControllerManager` 持有；公开接口只返回只读 `Arc<ControllerConfig>` 快照 |
+| 原子更新 | `ArcSwap` 保存 immutable snapshot，异步 Mutex 串行 writer；每次在私有 clone 上应用全部属性并执行整体 `validate()`，成功后单次 publish |
+| 失败隔离 | 解析、未知属性或整体校验失败不替换 active pointer；已有 reader 继续持有原快照 |
+| coherent read | Controller/OpenRaft/metadata/metrics/storage 消费者改用 `ControllerConfigReader`，每个逻辑操作只固定一个快照；启动期派生资源不虚假宣称热重配 |
+| 无用 owner 删除 | Broker/Topic/Replica/Config metadata manager 与 ProcessorManager 不再保存未读取的配置 owner |
+| 并发合同 | 新增旧 reader 稳定、失败 pointer equality、并发 writer 不丢更新、并发 reader 仅观察完整 old/new 组合测试 |
+
+M11-12b 后实际快照为 1,060 个条目：production 711、test 335、compatibility 14；production occurrence 为
+2,029。相对 M11-12a 删除 22 个 production 条目和 53 个 production occurrence；相对初始快照累计删除
+49 个 production 条目和 96 个 production occurrence。`rocketmq-controller` 中不再存在
+`ArcMut<ControllerConfig>`，但其他 Controller owner 仍有 31 个 production 条目。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -61,10 +80,30 @@ production 条目主要集中在 Broker 299、Client 149、Store 127、Remoting 
 | `cargo +stable check -p rocketmq-common`（清除本机 nightly-only `RUSTFLAGS` 后） | 未通过：Common 自身的 `sync_unsafe_cell` 已消失，但依赖 `rocketmq-runtime` 仍有 `async_fn_traits` feature；stable workspace Gate 保持开放 |
 | `git diff --check` | 通过 |
 
+M11-12b 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-controller --all-targets --all-features` | 通过；library、integration targets、examples 与 benches 全部编译 |
+| `cargo test -p rocketmq-controller config::tests --lib --all-features` | 6/6 通过，其中 5 项为 snapshot owner 合同 |
+| `cargo test -p rocketmq-controller --all-features` | 全部通过；library 138 通过/3 忽略，bin、9 组 integration、multi-node、OpenRaft、snapshot 与 doc tests 均通过 |
+| `python -m unittest scripts.tests.test_arc_mut_guard -v` | 67/67 通过；新增 reviewed-reduction 负向合同 |
+| `python scripts/arc_mut_guard.py --bootstrap target/m11-12-controller-after.json` | 1,060 条目；production 711/2,029 occurrences |
+| reviewed baseline reduction（临时 ADR-013 approval） | `--apply-reviewed-reductions` 仅应用 14 条同 item 一对一 relocation，并删除真实消失 occurrence；临时 approval 不提交 |
+| `python scripts/arc_mut_guard.py` | 仍只失败切片前 19 项 Controller/NameServer drift；未把既存漂移写入 baseline |
+| `python scripts/arc_mut_guard.py --fixtures` | 24/24 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 通过；Windows linker message 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| `python scripts/architecture_dependency_guard.py --mode target` | 通过；35 条 target compatibility edge 与 3 条 test edge 对账 |
+| `python scripts/architecture_dependency_guard.py --mode baseline` | 通过 |
+| `python scripts/architecture_release_guard.py` | 通过；32/32 release topology、10/10 R0 crates |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
 1. Remoting Channel/ConnectionHandlerContext 单 writer owner 和有界发送 capability。
-2. Controller config/heartbeat/Raft/Manager 与 NameServer v1 tables/runtime 安全 owner。
+2. Controller heartbeat/Raft/Manager 其余 owner 与 NameServer v1 tables/runtime 安全 owner。
 3. Client owned-message、MQClientInstance、Producer/Admin、Push/Lite Consumer owner。
 4. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner。
 5. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor。

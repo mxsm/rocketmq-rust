@@ -22,6 +22,7 @@ use openraft::storage::RaftStateMachine;
 use openraft::RaftSnapshotBuilder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_controller::config::ControllerConfig;
+use rocketmq_controller::config::ControllerConfigReader;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::openraft::StateMachine;
 use rocketmq_controller::typ::BrokerIdentityInfoSnapshot;
@@ -31,10 +32,9 @@ use rocketmq_controller::typ::ControllerResponseHeader;
 use rocketmq_controller::typ::Node;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
-use rocketmq_rust::ArcMut;
 
-fn test_config(port: u16) -> ArcMut<ControllerConfig> {
-    ArcMut::new(
+fn test_config(port: u16) -> ControllerConfigReader {
+    ControllerConfigReader::new(
         ControllerConfig::default()
             .with_node_info(1, format!("127.0.0.1:{port}").parse().expect("valid socket addr"))
             .with_election_timeout_ms(1000)

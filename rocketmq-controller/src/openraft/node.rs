@@ -21,10 +21,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use openraft::Config;
-use rocketmq_rust::ArcMut;
 use tracing::info;
 
-use crate::config::ControllerConfig;
+use crate::config::ControllerConfigReader;
 use crate::error::ControllerError;
 use crate::error::Result;
 use crate::openraft::NetworkFactory;
@@ -52,8 +51,9 @@ pub struct RaftNodeManager {
 
 impl RaftNodeManager {
     /// Create a new Raft node manager
-    pub async fn new(config: ArcMut<ControllerConfig>) -> Result<Self> {
-        let node_id = config.node_id;
+    pub async fn new(config: ControllerConfigReader) -> Result<Self> {
+        let startup_config = config.snapshot();
+        let node_id = startup_config.node_id;
 
         // Create storage
         let store = Arc::new(Store::open(config.clone()).await?);
@@ -62,7 +62,7 @@ impl RaftNodeManager {
         let network = NetworkFactory::new();
 
         // Add peer addresses
-        for peer in &config.raft_peers {
+        for peer in &startup_config.raft_peers {
             if peer.id == node_id {
                 continue;
             }
@@ -71,9 +71,9 @@ impl RaftNodeManager {
 
         // Configure OpenRaft
         let raft_config = Config {
-            heartbeat_interval: config.heartbeat_interval_ms,
-            election_timeout_min: config.election_timeout_ms,
-            election_timeout_max: config.election_timeout_ms * 2,
+            heartbeat_interval: startup_config.heartbeat_interval_ms,
+            election_timeout_min: startup_config.election_timeout_ms,
+            election_timeout_max: startup_config.election_timeout_ms * 2,
             max_in_snapshot_log_to_keep: 1000,
             snapshot_policy: openraft::SnapshotPolicy::LogsSinceLast(5000),
             allow_log_reversion: Some(true),

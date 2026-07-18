@@ -19,7 +19,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
@@ -33,6 +32,7 @@ use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbea
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_rust::ArcMut;
 
+use crate::config::ControllerConfigReader;
 use crate::controller::open_raft_controller::OpenRaftController;
 use crate::controller::Controller;
 use crate::error::Result;
@@ -51,7 +51,7 @@ pub struct RaftController {
 
 impl RaftController {
     /// Create a new OpenRaft-based controller
-    pub fn new_open_raft(config: ArcMut<ControllerConfig>) -> Self {
+    pub fn new_open_raft(config: ControllerConfigReader) -> Self {
         Self {
             inner: ArcMut::new(OpenRaftController::new(config)),
         }
@@ -59,7 +59,7 @@ impl RaftController {
 
     /// Create a new OpenRaft-based controller that shares a heartbeat manager.
     pub fn new_open_raft_with_heartbeat(
-        config: ArcMut<ControllerConfig>,
+        config: ControllerConfigReader,
         heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
     ) -> Self {
         Self {

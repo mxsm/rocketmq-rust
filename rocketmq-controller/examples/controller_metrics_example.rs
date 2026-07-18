@@ -24,9 +24,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_controller::config::ControllerConfig;
+use rocketmq_controller::config::ControllerConfigReader;
 use rocketmq_controller::metrics::controller_metrics_manager::ControllerMetricsManager;
 use rocketmq_controller::metrics::*;
-use rocketmq_rust::ArcMut;
 use tokio::time::sleep;
 
 #[tokio::main]
@@ -38,7 +38,7 @@ async fn main() {
 
     // 1. Initialize controller configuration
     println!("1. Initializing controller configuration...");
-    let config = ArcMut::new(ControllerConfig::new_node(1, "127.0.0.1:60109".parse().unwrap()));
+    let config = ControllerConfigReader::new(ControllerConfig::new_node(1, "127.0.0.1:60109".parse().unwrap()));
 
     // 2. Initialize metrics manager (singleton)
     println!("2. Initializing metrics manager...");

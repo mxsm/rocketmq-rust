@@ -182,7 +182,8 @@ impl ControllerRequestProcessor {
         blacklist.insert("configStorePath".to_string());
         blacklist.insert("rocketmqHome".to_string());
 
-        let config_black_list = controller_manager.controller_config().config_black_list.as_str();
+        let config = controller_manager.controller_config();
+        let config_black_list = config.config_black_list.as_str();
         if !config_black_list.is_empty() {
             for item in config_black_list.split(';') {
                 let trimmed: &str = item.trim();
@@ -336,6 +337,8 @@ impl ControllerRequestProcessor {
                 RocketMQError::request_header_error(format!("Failed to decode ElectMasterRequestHeader: {:?}", e))
             })?;
 
+        let config = self.controller_manager.controller_config();
+
         // Forward to Controller
         let response = self
             .controller_manager
@@ -344,9 +347,7 @@ impl ControllerRequestProcessor {
             .await?;
 
         if let Some(response_command) = response.as_ref() {
-            if response_command.code() == ResponseCode::Success as i32
-                && self.controller_manager.controller_config().notify_broker_role_changed
-            {
+            if response_command.code() == ResponseCode::Success as i32 && config.notify_broker_role_changed {
                 if let Err(error) = self
                     .controller_manager
                     .notify_broker_role_changed(response_command.clone())
@@ -541,8 +542,7 @@ impl ControllerRequestProcessor {
         }
 
         // Apply configuration updates
-        let controller_config = &mut self.controller_manager.config();
-        controller_config.update(properties).await?;
+        self.controller_manager.update_config(properties).await?;
 
         // Return success
         Ok(Some(RemotingCommand::create_response_command()))

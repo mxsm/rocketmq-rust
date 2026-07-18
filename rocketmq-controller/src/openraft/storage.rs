@@ -19,9 +19,8 @@
 
 use std::path::PathBuf;
 
-use rocketmq_rust::ArcMut;
-
 use crate::config::ControllerConfig;
+use crate::config::ControllerConfigReader;
 use crate::config::StorageBackendType;
 use crate::error::Result;
 use crate::storage::create_storage;
@@ -42,15 +41,16 @@ pub struct Store {
 
 impl Store {
     /// Create a new store
-    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
+    pub fn new(config: ControllerConfigReader) -> Self {
         Self {
             log_store: LogStore::new(),
             state_machine: StateMachine::new(config),
         }
     }
 
-    pub async fn open(config: ArcMut<ControllerConfig>) -> Result<Self> {
-        let backend = create_storage(storage_config(config.as_ref())?).await?;
+    pub async fn open(config: ControllerConfigReader) -> Result<Self> {
+        let startup_config = config.snapshot();
+        let backend = create_storage(storage_config(&startup_config)?).await?;
         let log_store = LogStore::open(backend.clone()).await?;
         let state_machine = StateMachine::open(config, backend).await?;
 

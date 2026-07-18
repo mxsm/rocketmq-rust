@@ -4629,6 +4629,7 @@ name = "rocketmq-controller"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-trait",
  "bytes",
  "cheetah-string",

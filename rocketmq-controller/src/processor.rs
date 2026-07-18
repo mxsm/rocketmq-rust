@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 // Re-export processors
-use crate::config::ControllerConfig;
+use crate::config::ControllerConfigReader;
 use crate::controller::raft_controller::RaftController;
 use crate::error::ControllerError;
 use crate::error::Result;
@@ -58,9 +58,6 @@ pub trait RequestProcessor: Send + Sync {
 /// This component manages all request processors for handling
 /// RPC requests from brokers and clients.
 pub struct ProcessorManager {
-    /// Configuration
-    config: ArcMut<ControllerConfig>,
-
     /// Raft controller
     raft: ArcMut<RaftController>,
 
@@ -73,7 +70,7 @@ pub struct ProcessorManager {
 
 impl ProcessorManager {
     /// Create a new processor manager
-    pub fn new(config: ArcMut<ControllerConfig>, raft: ArcMut<RaftController>, metadata: Arc<MetadataStore>) -> Self {
+    pub fn new(_config: ControllerConfigReader, raft: ArcMut<RaftController>, metadata: Arc<MetadataStore>) -> Self {
         // Initialize processors
         let mut processors: HashMap<RequestType, Arc<dyn RequestProcessor>> = HashMap::new();
 
@@ -116,7 +113,6 @@ impl ProcessorManager {
         );
 
         Self {
-            config,
             raft,
             metadata,
             processors,

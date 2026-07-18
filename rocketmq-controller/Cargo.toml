@@ -66,6 +66,7 @@ config = { workspace = true }
 
 
 # Concurrent data structures
+arc-swap    = "1.9"
 dashmap     = { workspace = true }
 parking_lot = { workspace = true }
 anyhow      = { workspace = true }
