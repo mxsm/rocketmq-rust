@@ -75,7 +75,35 @@ impl NegotiatedConnection {
 }
 
 #[cfg(feature = "tls")]
-type TlsAcceptorSlot = arc_swap::ArcSwapOption<tokio_rustls::TlsAcceptor>;
+struct VersionedTlsAcceptor {
+    generation: u64,
+    acceptor: tokio_rustls::TlsAcceptor,
+}
+
+#[cfg(feature = "tls")]
+type TlsAcceptorSlot = arc_swap::ArcSwapOption<VersionedTlsAcceptor>;
+
+/// Result of publishing a completely validated TLS certificate/key/trust snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TlsReloadReport {
+    previous_generation: u64,
+    active_generation: u64,
+    changed: bool,
+}
+
+impl TlsReloadReport {
+    pub const fn previous_generation(self) -> u64 {
+        self.previous_generation
+    }
+
+    pub const fn active_generation(self) -> u64 {
+        self.active_generation
+    }
+
+    pub const fn changed(self) -> bool {
+        self.changed
+    }
+}
 
 #[cfg(feature = "tls")]
 #[derive(Clone)]
@@ -84,6 +112,7 @@ pub struct TlsServerRuntime {
     acceptor: StdArc<TlsAcceptorSlot>,
     base_config: StdArc<TlsConfig>,
     reload_task_group: StdArc<Mutex<Option<TaskGroup>>>,
+    reload_writer: StdArc<tokio::sync::Mutex<()>>,
     blocking: Option<BlockingExecutor>,
 }
 
@@ -110,6 +139,19 @@ impl TlsServerRuntime {
 
     pub fn mode(&self) -> TlsMode {
         self.mode
+    }
+
+    /// Generation of the atomically published TLS acceptor, or zero when none is available.
+    pub fn active_generation(&self) -> u64 {
+        #[cfg(feature = "tls")]
+        {
+            self.acceptor.load().as_ref().map_or(0, |acceptor| acceptor.generation)
+        }
+
+        #[cfg(not(feature = "tls"))]
+        {
+            0
+        }
     }
 
     pub fn new_with_service_context(base_config: TlsConfig, service_context: &ServiceContext) -> Self {
@@ -191,12 +233,15 @@ impl TlsServerRuntime {
             let initial = blocking
                 .spawn_io("transport.tls.initialize", move || {
                     let effective = effective_tls_config(&build_config);
-                    build_server_acceptor(&effective).map(StdArc::new)
+                    build_server_acceptor(&effective)
                 })
                 .await
                 .map_err(|error| RocketMQError::network_connection_failed("tls-initialize", error.to_string()))?;
             match initial {
-                Ok(initial) => acceptor.store(Some(initial)),
+                Ok(initial) => acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
+                    generation: 1,
+                    acceptor: initial,
+                }))),
                 Err(error) => warn!("failed to build initial TLS server acceptor: {error}"),
             }
         }
@@ -205,6 +250,7 @@ impl TlsServerRuntime {
             acceptor,
             base_config: StdArc::new(base_config),
             reload_task_group: StdArc::new(Mutex::new(None)),
+            reload_writer: StdArc::new(tokio::sync::Mutex::new(())),
             blocking: Some(blocking),
         };
         runtime.spawn_reload_task(Some(task_group));
@@ -224,7 +270,10 @@ impl TlsServerRuntime {
 
             if mode != TlsMode::Disabled {
                 match build_server_acceptor(&effective_config) {
-                    Ok(tls_acceptor) => acceptor.store(Some(StdArc::new(tls_acceptor))),
+                    Ok(tls_acceptor) => acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
+                        generation: 1,
+                        acceptor: tls_acceptor,
+                    }))),
                     Err(error) => {
                         warn!("failed to build initial TLS server acceptor: {error}");
                     }
@@ -236,6 +285,7 @@ impl TlsServerRuntime {
                 acceptor,
                 base_config: StdArc::new(base_config),
                 reload_task_group: StdArc::new(Mutex::new(None)),
+                reload_writer: StdArc::new(tokio::sync::Mutex::new(())),
                 blocking,
             };
             if reload_task_group.is_some() {
@@ -331,12 +381,24 @@ impl TlsServerRuntime {
 
     #[cfg(feature = "tls")]
     pub async fn reload_now(&self) -> RocketMQResult<()> {
+        self.reload_now_with_report().await.map(|_| ())
+    }
+
+    /// Builds the complete certificate/key/trust candidate before atomically publishing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without changing the active generation when blocking execution, parsing,
+    /// certificate/key validation, or generation advancement fails.
+    #[cfg(feature = "tls")]
+    pub async fn reload_now_with_report(&self) -> RocketMQResult<TlsReloadReport> {
         let Some(blocking) = self.blocking.as_ref() else {
             return Err(RocketMQError::network_connection_failed(
                 "tls-reload",
                 "TLS reload requires an injected BlockingExecutor",
             ));
         };
+        let _reload_writer = self.reload_writer.lock().await;
         let base_config = self.base_config.clone();
         let mode = self.mode;
         let acceptor = blocking
@@ -346,15 +408,31 @@ impl TlsServerRuntime {
                 if mode == TlsMode::Disabled {
                     Ok(None)
                 } else {
-                    build_server_acceptor(&effective).map(|acceptor| Some(StdArc::new(acceptor)))
+                    build_server_acceptor(&effective).map(Some)
                 }
             })
             .await
             .map_err(|error| RocketMQError::network_connection_failed("tls-reload", error.to_string()))??;
-        if let Some(acceptor) = acceptor {
-            self.acceptor.store(Some(acceptor));
-        }
-        Ok(())
+        let previous_generation = self.active_generation();
+        let Some(acceptor) = acceptor else {
+            return Ok(TlsReloadReport {
+                previous_generation,
+                active_generation: previous_generation,
+                changed: false,
+            });
+        };
+        let active_generation = previous_generation
+            .checked_add(1)
+            .ok_or_else(|| RocketMQError::network_connection_failed("tls-reload", "TLS generation is exhausted"))?;
+        self.acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
+            generation: active_generation,
+            acceptor,
+        })));
+        Ok(TlsReloadReport {
+            previous_generation,
+            active_generation,
+            changed: true,
+        })
     }
 
     #[cfg(feature = "tls")]
@@ -364,7 +442,7 @@ impl TlsServerRuntime {
             return None;
         };
 
-        match acceptor.accept(stream).await {
+        match acceptor.acceptor.accept(stream).await {
             Ok(tls_stream) => Some(Connection::new_with_stream(tls_stream)),
             Err(error) => {
                 warn!("TLS handshake from {remote_addr} failed: {error}");
@@ -387,6 +465,7 @@ impl TlsServerRuntime {
 
         let base_config = self.base_config.clone();
         let acceptor = self.acceptor.clone();
+        let reload_writer = self.reload_writer.clone();
         let Some(blocking) = self.blocking.clone() else {
             warn!("TLS reload task requires an injected BlockingExecutor");
             return;
@@ -417,6 +496,7 @@ impl TlsServerRuntime {
                     () = time::sleep(TLS_RELOAD_POLL_INTERVAL) => {}
                 }
 
+                let _reload_writer = reload_writer.lock().await;
                 let reload_config = base_config.clone();
                 let current_snapshot = match blocking
                     .spawn_io("transport.tls.reload", move || {
@@ -438,11 +518,19 @@ impl TlsServerRuntime {
                     continue;
                 }
 
-                previous_snapshot = current_snapshot.0;
                 match current_snapshot.1 {
                     Ok(tls_acceptor) => {
-                        acceptor.store(Some(StdArc::new(tls_acceptor)));
-                        debug!("TLS server acceptor reloaded after file change");
+                        let previous_generation = acceptor.load().as_ref().map_or(0, |active| active.generation);
+                        if let Some(generation) = previous_generation.checked_add(1) {
+                            acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
+                                generation,
+                                acceptor: tls_acceptor,
+                            })));
+                            previous_snapshot = current_snapshot.0;
+                            debug!(generation, "TLS server acceptor reloaded after file change");
+                        } else {
+                            warn!("failed to reload TLS server acceptor; generation is exhausted");
+                        }
                     }
                     Err(error) => {
                         warn!("failed to reload TLS server acceptor; keeping previous acceptor: {error}");
@@ -1151,6 +1239,80 @@ mod tests {
     }
 
     #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn tls_rotation_publishes_only_complete_generations_and_keeps_last_known_good() {
+        let old = TestCertificates::new();
+        let new = TestCertificates::new();
+        let context = rocketmq_runtime::RuntimeContext::from_current("tls-rotation-runtime-test");
+        let service = context.service_context("tls-rotation-service");
+        let runtime = TlsServerRuntime::new_with_reload_task_group(
+            old.server_tls_config(TlsMode::Enforcing),
+            None,
+            Some(service.blocking().clone()),
+        );
+        assert_eq!(runtime.active_generation(), 1);
+        assert!(tls_connects_to_runtime(&runtime, old.trusting_client_config()).await);
+        assert!(!tls_connects_to_runtime(&runtime, new.trusting_client_config()).await);
+
+        fs::copy(&new.server_cert_path, &old.server_cert_path).expect("publish partial certificate candidate");
+        assert!(runtime.reload_now_with_report().await.is_err());
+        assert_eq!(runtime.active_generation(), 1);
+        assert!(tls_connects_to_runtime(&runtime, old.trusting_client_config()).await);
+
+        fs::copy(&new.server_key_path, &old.server_key_path).expect("complete certificate candidate");
+        let report = runtime
+            .reload_now_with_report()
+            .await
+            .expect("publish complete candidate");
+        assert_eq!(report.previous_generation(), 1);
+        assert_eq!(report.active_generation(), 2);
+        assert!(report.changed());
+        assert_eq!(runtime.active_generation(), 2);
+        assert!(tls_connects_to_runtime(&runtime, new.trusting_client_config()).await);
+        assert!(!tls_connects_to_runtime(&runtime, old.trusting_client_config()).await);
+
+        fs::write(&old.server_cert_path, "not a certificate").expect("publish invalid PEM");
+        assert!(runtime.reload_now_with_report().await.is_err());
+        assert_eq!(runtime.active_generation(), 2);
+        assert!(tls_connects_to_runtime(&runtime, new.trusting_client_config()).await);
+    }
+
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn concurrent_tls_reloads_publish_unique_monotonic_generations() {
+        let certificates = TestCertificates::new();
+        let context = rocketmq_runtime::RuntimeContext::from_current("tls-concurrent-reload-test");
+        let service = context.service_context("tls-concurrent-reload-service");
+        let runtime = TlsServerRuntime::new_with_reload_task_group(
+            certificates.server_tls_config(TlsMode::Enforcing),
+            None,
+            Some(service.blocking().clone()),
+        );
+
+        let reloads = (0..8).map(|_| {
+            let runtime = runtime.clone();
+            async move {
+                runtime
+                    .reload_now_with_report()
+                    .await
+                    .expect("concurrent reload should publish")
+            }
+        });
+        let mut generations = futures_util::future::join_all(reloads)
+            .await
+            .into_iter()
+            .map(|report| {
+                assert_eq!(report.active_generation(), report.previous_generation() + 1);
+                report.active_generation()
+            })
+            .collect::<Vec<_>>();
+        generations.sort_unstable();
+
+        assert_eq!(generations, (2..=9).collect::<Vec<_>>());
+        assert_eq!(runtime.active_generation(), 9);
+    }
+
+    #[cfg(feature = "tls")]
     async fn plaintext_connects(mode: TlsMode) -> bool {
         use tokio::io::AsyncWriteExt;
         use tokio::net::TcpListener;
@@ -1231,6 +1393,32 @@ mod tests {
             .expect("server should complete")
             .expect("server task should not panic");
 
+        client_result && server_result
+    }
+
+    #[cfg(feature = "tls")]
+    async fn tls_connects_to_runtime(runtime: &TlsServerRuntime, client_config: TlsConfig) -> bool {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let runtime = runtime.clone();
+        let server = tokio::spawn(async move {
+            let (stream, remote_addr) = listener.accept().await.expect("accept client");
+            runtime.into_connection(stream, remote_addr).await.is_some()
+        });
+        let stream = TcpStream::connect(addr).await.expect("connect TLS client");
+        let client_result = time::timeout(
+            Duration::from_secs(3),
+            connect_tls_stream(stream, "localhost", &client_config),
+        )
+        .await
+        .expect("client handshake should complete")
+        .is_ok();
+        let server_result = time::timeout(Duration::from_secs(3), server)
+            .await
+            .expect("server should complete")
+            .expect("server task should not panic");
         client_result && server_result
     }
 
@@ -1316,6 +1504,18 @@ mod tests {
                 client: crate::config::TlsClientConfig {
                     cert_path: Some(self.client_cert_path.clone()),
                     key_path: Some(self.client_key_path.clone()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        }
+
+        fn trusting_client_config(&self) -> TlsConfig {
+            TlsConfig {
+                enable: true,
+                client: crate::config::TlsClientConfig {
+                    auth_server: true,
+                    trust_cert_path: Some(self.ca_cert_path.clone()),
                     ..Default::default()
                 },
                 ..Default::default()

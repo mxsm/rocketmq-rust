@@ -2302,6 +2302,7 @@ name = "rocketmq-auth"
 version = "1.0.0"
 dependencies = [
  "aes-gcm",
+ "arc-swap",
  "base64",
  "cheetah-string",
  "chrono",
