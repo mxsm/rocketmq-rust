@@ -61,6 +61,7 @@ hmac  = "0.13.0"
 md-5  = "0.11"
 sha1  = "0.11"
 sha2  = "0.11"
+subtle = "2.6"
 
 # Optional: gRPC support
 tonic = { version = "0.14.6", optional = true }
