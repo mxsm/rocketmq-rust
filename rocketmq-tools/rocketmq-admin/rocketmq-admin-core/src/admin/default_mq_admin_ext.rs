@@ -62,7 +62,6 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 
 use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
 
-use crate::client_adapter::legacy::client_sdk::admin_adapter_compat::runtime::ArcMut;
 use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
@@ -81,31 +80,23 @@ use rocketmq_remoting::runtime::RPCHook;
 const ADMIN_EXT_GROUP: &str = "admin_ext_group";
 
 pub struct DefaultMQAdminExt {
-    client_config: ArcMut<ClientConfig>,
     admin_ext_group: CheetahString,
     create_topic_key: CheetahString,
     timeout_millis: Duration,
-    default_mqadmin_ext_impl: ArcMut<DefaultMQAdminExtImpl>,
+    default_mqadmin_ext_impl: DefaultMQAdminExtImpl,
 }
 
 impl DefaultMQAdminExt {
     fn build(
-        client_config: ArcMut<ClientConfig>,
+        client_config: ClientConfig,
         admin_ext_group: CheetahString,
         timeout_millis: Duration,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
-        let mut default_mqadmin_ext_impl = ArcMut::new(DefaultMQAdminExtImpl::new(
-            rpc_hook,
-            timeout_millis,
-            client_config.clone(),
-            admin_ext_group.clone(),
-        ));
-        let inner = default_mqadmin_ext_impl.clone();
-        default_mqadmin_ext_impl.set_inner(inner);
+        let default_mqadmin_ext_impl =
+            DefaultMQAdminExtImpl::new(rpc_hook, timeout_millis, client_config, admin_ext_group.clone());
 
         Self {
-            client_config,
             default_mqadmin_ext_impl,
             admin_ext_group,
             create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
@@ -114,26 +105,28 @@ impl DefaultMQAdminExt {
     }
 
     pub fn set_namesrv_addr(&mut self, name_serv_addr: &str) {
-        self.client_config.set_namesrv_addr(name_serv_addr.into());
+        self.default_mqadmin_ext_impl
+            .client_config_mut()
+            .set_namesrv_addr(name_serv_addr.into());
     }
 }
 
 impl DefaultMQAdminExt {
     pub fn new() -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(client_config, admin_ext_group, Duration::from_millis(5000), None)
     }
 
     pub fn with_timeout(timeout_millis: Duration) -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(client_config, admin_ext_group, timeout_millis, None)
     }
 
     pub fn with_rpc_hook(rpc_hook: Arc<dyn RPCHook>) -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(
             client_config,
             admin_ext_group,
@@ -144,7 +137,7 @@ impl DefaultMQAdminExt {
 
     pub fn with_rpc_hook_and_timeout(rpc_hook: Arc<dyn RPCHook>, timeout_millis: Duration) -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(client_config, admin_ext_group, timeout_millis, Some(rpc_hook))
     }
 
@@ -153,7 +146,7 @@ impl DefaultMQAdminExt {
         rpc_hook: Arc<dyn RPCHook>,
     ) -> Self {
         let admin_ext_group = admin_ext_group.into();
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(
             client_config,
             admin_ext_group,
@@ -164,7 +157,7 @@ impl DefaultMQAdminExt {
 
     pub fn with_admin_ext_group(admin_ext_group: impl Into<CheetahString>) -> Self {
         let admin_ext_group = admin_ext_group.into();
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(client_config, admin_ext_group, Duration::from_millis(5000), None)
     }
 
@@ -173,18 +166,18 @@ impl DefaultMQAdminExt {
         timeout_millis: Duration,
     ) -> Self {
         let admin_ext_group = admin_ext_group.into();
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(client_config, admin_ext_group, timeout_millis, None)
     }
 
     #[inline]
-    pub fn client_config(&self) -> &ArcMut<ClientConfig> {
-        &self.client_config
+    pub fn client_config(&self) -> &ClientConfig {
+        self.default_mqadmin_ext_impl.client_config()
     }
 
     #[inline]
-    pub fn client_config_mut(&mut self) -> &mut ArcMut<ClientConfig> {
-        &mut self.client_config
+    pub fn client_config_mut(&mut self) -> &mut ClientConfig {
+        self.default_mqadmin_ext_impl.client_config_mut()
     }
 
     pub async fn create_acl_with_acl_info(
@@ -294,11 +287,11 @@ impl Default for DefaultMQAdminExt {
 #[allow(unused_mut)]
 impl MQAdminExt for DefaultMQAdminExt {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::start(self.default_mqadmin_ext_impl.as_mut()).await
+        MQAdminExt::start(&mut self.default_mqadmin_ext_impl).await
     }
 
     async fn shutdown(&mut self) {
-        MQAdminExt::shutdown(self.default_mqadmin_ext_impl.as_mut()).await
+        MQAdminExt::shutdown(&mut self.default_mqadmin_ext_impl).await
     }
 
     async fn add_broker_to_container(
@@ -844,7 +837,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminExt::set_message_request_mode(
-            self.default_mqadmin_ext_impl.as_ref(),
+            &self.default_mqadmin_ext_impl,
             broker_addr,
             topic,
             consumer_group,
@@ -1681,7 +1674,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn admin_ext_builders_initialize_inner_impl() {
+    fn admin_ext_builders_initialize_owned_impl() {
         let default_admin = DefaultMQAdminExt::new();
         assert!(default_admin.default_mqadmin_ext_impl.has_inner());
 

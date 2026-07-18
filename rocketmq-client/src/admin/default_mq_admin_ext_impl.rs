@@ -531,16 +531,15 @@ pub struct DefaultMQAdminExtImpl {
     rpc_hook: Option<Arc<dyn RPCHook>>,
     timeout_millis: Duration,
     kv_namespace_to_delete_list: Vec<CheetahString>,
-    client_config: ArcMut<ClientConfig>,
+    client_config: ClientConfig,
     admin_ext_group: CheetahString,
-    inner: Option<ArcMut<DefaultMQAdminExtImpl>>,
 }
 
 impl DefaultMQAdminExtImpl {
     pub fn new(
         rpc_hook: Option<Arc<dyn RPCHook>>,
         timeout_millis: Duration,
-        client_config: ArcMut<ClientConfig>,
+        client_config: ClientConfig,
         admin_ext_group: CheetahString,
     ) -> Self {
         DefaultMQAdminExtImpl {
@@ -551,16 +550,24 @@ impl DefaultMQAdminExtImpl {
             kv_namespace_to_delete_list: vec![CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG)],
             client_config,
             admin_ext_group,
-            inner: None,
         }
     }
 
-    pub fn set_inner(&mut self, inner: ArcMut<DefaultMQAdminExtImpl>) {
-        self.inner = Some(inner);
+    /// Returns whether the facade has a usable concrete implementation.
+    ///
+    /// The implementation is now owned directly, so this compatibility query is always true.
+    pub fn has_inner(&self) -> bool {
+        true
     }
 
-    pub fn has_inner(&self) -> bool {
-        self.inner.is_some()
+    #[inline]
+    pub fn client_config(&self) -> &ClientConfig {
+        &self.client_config
+    }
+
+    #[inline]
+    pub fn client_config_mut(&mut self) -> &mut ClientConfig {
+        &mut self.client_config
     }
 
     #[inline]
@@ -903,20 +910,15 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                 }
                 self.client_instance = Some(
                     MQClientManager::get_instance()
-                        .get_or_create_mq_client_instance(self.client_config.as_ref().clone(), self.rpc_hook.clone()),
+                        .get_or_create_mq_client_instance(self.client_config.clone(), self.rpc_hook.clone()),
                 );
 
                 let group = &self.admin_ext_group.clone();
-                let inner = self.inner.as_ref().ok_or_else(|| {
-                    rocketmq_error::RocketMQError::IllegalArgument(
-                        "DefaultMQAdminExtImpl inner is required before start".into(),
-                    )
-                })?;
                 let register_ok = self
                     .client_instance
                     .as_mut()
                     .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
-                    .register_admin_ext(group, MQAdminExtInnerImpl { inner: inner.clone() })
+                    .register_admin_ext(group, MQAdminExtInnerImpl)
                     .await;
                 if !register_ok {
                     self.service_state = ServiceState::StartFailed;
@@ -3931,6 +3933,7 @@ mod tests {
     use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
     use cheetah_string::CheetahString;
     use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
+    use rocketmq_common::common::base::service_state::ServiceState;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::constant::PermName;
     use rocketmq_common::common::message::message_builder::MessageBuilder;
@@ -3944,6 +3947,8 @@ mod tests {
     #[allow(deprecated)]
     use rocketmq_common::common::tools::track_type::TrackType;
     use rocketmq_common::common::topic::TopicValidator;
+    use rocketmq_error::ErrorKind;
+    use rocketmq_error::RocketMQError;
     use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
     use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
@@ -3957,7 +3962,6 @@ mod tests {
     use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
-    use rocketmq_rust::ArcMut;
 
     use super::admin_route_not_found;
     use super::broker_addrs_for_cluster;
@@ -3994,8 +3998,6 @@ mod tests {
     use super::update_group_forbidden_request_header;
     use super::validate_acl_file_path_for_global_white_addr_config;
     use super::DefaultMQAdminExtImpl;
-    use rocketmq_error::ErrorKind;
-    use rocketmq_error::RocketMQError;
 
     #[test]
     fn admin_route_not_found_uses_route_error_kind() {
@@ -4019,7 +4021,7 @@ mod tests {
         DefaultMQAdminExtImpl::new(
             None,
             Duration::from_secs(3),
-            ArcMut::new(ClientConfig::default()),
+            ClientConfig::default(),
             CheetahString::from("admin-group"),
         )
     }
@@ -5060,19 +5062,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_without_inner_returns_configuration_error_instead_of_panicking() {
+    async fn directly_owned_impl_starts_and_stops_without_self_reference() {
         let mut admin = new_unstarted_admin();
 
-        let error = admin
+        admin
             .start()
             .await
-            .expect_err("direct impl start without inner should return a typed error");
+            .expect("directly owned admin implementation should start without self wiring");
+        assert_eq!(admin.service_state, ServiceState::Running);
 
-        assert!(matches!(
-            error,
-            rocketmq_error::RocketMQError::IllegalArgument(message)
-                if message.contains("inner is required before start")
-        ));
+        admin.shutdown().await;
+
+        assert_eq!(admin.service_state, ServiceState::ShutdownAlready);
     }
 
     #[tokio::test]

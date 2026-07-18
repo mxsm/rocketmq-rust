@@ -19,7 +19,6 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 
 use crate::admin::default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
 use crate::admin::mq_admin_ext_async::MQAdminExt;
@@ -35,28 +34,20 @@ const DEFAULT_TIMEOUT_MILLIS: u64 = 5000;
 /// constructors and lifecycle methods while dereferencing to the implementation
 /// for advanced admin operations.
 pub struct DefaultMQAdminExt {
-    client_config: ArcMut<ClientConfig>,
-    default_mqadmin_ext_impl: ArcMut<DefaultMQAdminExtImpl>,
+    default_mqadmin_ext_impl: DefaultMQAdminExtImpl,
 }
 
 impl DefaultMQAdminExt {
     fn build(
-        client_config: ArcMut<ClientConfig>,
+        client_config: ClientConfig,
         admin_ext_group: CheetahString,
         timeout_millis: Duration,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
-        let mut default_mqadmin_ext_impl = ArcMut::new(DefaultMQAdminExtImpl::new(
-            rpc_hook,
-            timeout_millis,
-            client_config.clone(),
-            admin_ext_group,
-        ));
-        let inner = default_mqadmin_ext_impl.clone();
-        default_mqadmin_ext_impl.set_inner(inner);
+        let default_mqadmin_ext_impl =
+            DefaultMQAdminExtImpl::new(rpc_hook, timeout_millis, client_config, admin_ext_group);
 
         Self {
-            client_config,
             default_mqadmin_ext_impl,
         }
     }
@@ -66,7 +57,7 @@ impl DefaultMQAdminExt {
     }
 
     pub fn with_timeout(timeout_millis: Duration) -> Self {
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(
             client_config,
             CheetahString::from_static_str(ADMIN_EXT_GROUP),
@@ -80,7 +71,7 @@ impl DefaultMQAdminExt {
     }
 
     pub fn with_rpc_hook_and_timeout(rpc_hook: Arc<dyn RPCHook>, timeout_millis: Duration) -> Self {
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(
             client_config,
             CheetahString::from_static_str(ADMIN_EXT_GROUP),
@@ -90,7 +81,7 @@ impl DefaultMQAdminExt {
     }
 
     pub fn with_admin_ext_group(admin_ext_group: impl Into<CheetahString>) -> Self {
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(
             client_config,
             admin_ext_group.into(),
@@ -103,7 +94,7 @@ impl DefaultMQAdminExt {
         admin_ext_group: impl Into<CheetahString>,
         timeout_millis: Duration,
     ) -> Self {
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(client_config, admin_ext_group.into(), timeout_millis, None)
     }
 
@@ -111,7 +102,7 @@ impl DefaultMQAdminExt {
         admin_ext_group: impl Into<CheetahString>,
         rpc_hook: Arc<dyn RPCHook>,
     ) -> Self {
-        let client_config = ArcMut::new(ClientConfig::new());
+        let client_config = ClientConfig::new();
         Self::build(
             client_config,
             admin_ext_group.into(),
@@ -121,37 +112,38 @@ impl DefaultMQAdminExt {
     }
 
     pub fn set_namesrv_addr(&mut self, name_serv_addr: impl Into<CheetahString>) {
-        self.client_config.set_namesrv_addr(name_serv_addr.into());
+        self.default_mqadmin_ext_impl
+            .client_config_mut()
+            .set_namesrv_addr(name_serv_addr.into());
     }
 
     #[inline]
     pub fn is_use_tls(&self) -> bool {
-        self.client_config.is_use_tls()
+        self.default_mqadmin_ext_impl.is_use_tls()
     }
 
     #[inline]
     pub fn set_use_tls(&mut self, use_tls: bool) {
-        self.client_config.set_use_tls(use_tls);
         self.default_mqadmin_ext_impl.set_use_tls(use_tls);
     }
 
     #[inline]
-    pub fn client_config(&self) -> &ArcMut<ClientConfig> {
-        &self.client_config
+    pub fn client_config(&self) -> &ClientConfig {
+        self.default_mqadmin_ext_impl.client_config()
     }
 
     #[inline]
-    pub fn client_config_mut(&mut self) -> &mut ArcMut<ClientConfig> {
-        &mut self.client_config
+    pub fn client_config_mut(&mut self) -> &mut ClientConfig {
+        self.default_mqadmin_ext_impl.client_config_mut()
     }
 
     #[inline]
-    pub fn inner(&self) -> &ArcMut<DefaultMQAdminExtImpl> {
+    pub fn inner(&self) -> &DefaultMQAdminExtImpl {
         &self.default_mqadmin_ext_impl
     }
 
     #[inline]
-    pub fn inner_mut(&mut self) -> &mut ArcMut<DefaultMQAdminExtImpl> {
+    pub fn inner_mut(&mut self) -> &mut DefaultMQAdminExtImpl {
         &mut self.default_mqadmin_ext_impl
     }
 
@@ -161,11 +153,11 @@ impl DefaultMQAdminExt {
     }
 
     pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::start(self.default_mqadmin_ext_impl.as_mut()).await
+        MQAdminExt::start(&mut self.default_mqadmin_ext_impl).await
     }
 
     pub async fn shutdown(&mut self) {
-        MQAdminExt::shutdown(self.default_mqadmin_ext_impl.as_mut()).await;
+        MQAdminExt::shutdown(&mut self.default_mqadmin_ext_impl).await;
     }
 }
 
@@ -177,13 +169,13 @@ impl Default for DefaultMQAdminExt {
 
 impl AsRef<DefaultMQAdminExtImpl> for DefaultMQAdminExt {
     fn as_ref(&self) -> &DefaultMQAdminExtImpl {
-        self.default_mqadmin_ext_impl.as_ref()
+        &self.default_mqadmin_ext_impl
     }
 }
 
 impl AsMut<DefaultMQAdminExtImpl> for DefaultMQAdminExt {
     fn as_mut(&mut self) -> &mut DefaultMQAdminExtImpl {
-        self.default_mqadmin_ext_impl.as_mut()
+        &mut self.default_mqadmin_ext_impl
     }
 }
 
@@ -191,13 +183,13 @@ impl Deref for DefaultMQAdminExt {
     type Target = DefaultMQAdminExtImpl;
 
     fn deref(&self) -> &Self::Target {
-        self.default_mqadmin_ext_impl.as_ref()
+        &self.default_mqadmin_ext_impl
     }
 }
 
 impl DerefMut for DefaultMQAdminExt {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.default_mqadmin_ext_impl.as_mut()
+        &mut self.default_mqadmin_ext_impl
     }
 }
 
@@ -213,7 +205,7 @@ mod tests {
     use super::DefaultMQAdminExt;
 
     #[test]
-    fn constructors_initialize_self_wired_inner_impl() {
+    fn constructors_initialize_owned_inner_impl() {
         let default_admin = DefaultMQAdminExt::new();
         assert!(default_admin.has_inner());
         assert!(default_admin.inner().has_inner());

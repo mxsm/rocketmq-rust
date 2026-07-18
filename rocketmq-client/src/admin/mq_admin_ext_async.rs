@@ -928,11 +928,11 @@ pub trait MQAdminExt: Send {
 #[allow(deprecated)]
 impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::start(self.inner_mut().as_mut()).await
+        MQAdminExt::start(self.inner_mut()).await
     }
 
     async fn shutdown(&mut self) {
-        MQAdminExt::shutdown(self.inner_mut().as_mut()).await
+        MQAdminExt::shutdown(self.inner_mut()).await
     }
 
     async fn add_broker_to_container(
@@ -940,7 +940,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_container_addr: CheetahString,
         broker_config: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::add_broker_to_container(self.inner().as_ref(), broker_container_addr, broker_config).await
+        MQAdminExt::add_broker_to_container(self.inner(), broker_container_addr, broker_config).await
     }
 
     async fn remove_broker_from_container(
@@ -951,7 +951,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_id: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminExt::remove_broker_from_container(
-            self.inner().as_ref(),
+            self.inner(),
             broker_container_addr,
             cluster_name,
             broker_name,
@@ -965,14 +965,14 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::update_broker_config(self.inner().as_ref(), broker_addr, properties).await
+        MQAdminExt::update_broker_config(self.inner(), broker_addr, properties).await
     }
 
     async fn get_broker_config(
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, CheetahString>> {
-        MQAdminExt::get_broker_config(self.inner().as_ref(), broker_addr).await
+        MQAdminExt::get_broker_config(self.inner(), broker_addr).await
     }
 
     async fn create_and_update_topic_config(
@@ -980,7 +980,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         addr: CheetahString,
         config: TopicConfig,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::create_and_update_topic_config(self.inner().as_ref(), addr, config).await
+        MQAdminExt::create_and_update_topic_config(self.inner(), addr, config).await
     }
 
     async fn create_and_update_topic_config_list(
@@ -988,7 +988,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         addr: CheetahString,
         topic_config_list: Vec<TopicConfig>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::create_and_update_topic_config_list(self.inner().as_ref(), addr, topic_config_list).await
+        MQAdminExt::create_and_update_topic_config_list(self.inner(), addr, topic_config_list).await
     }
 
     async fn create_and_update_plain_access_config(
@@ -996,7 +996,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         addr: CheetahString,
         config: PlainAccessConfig,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::create_and_update_plain_access_config(self.inner().as_ref(), addr, config).await
+        MQAdminExt::create_and_update_plain_access_config(self.inner(), addr, config).await
     }
 
     async fn delete_plain_access_config(
@@ -1004,7 +1004,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         addr: CheetahString,
         access_key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::delete_plain_access_config(self.inner().as_ref(), addr, access_key).await
+        MQAdminExt::delete_plain_access_config(self.inner(), addr, access_key).await
     }
 
     async fn update_global_white_addr_config(
@@ -1013,15 +1013,14 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         global_white_addrs: CheetahString,
         acl_file_full_path: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::update_global_white_addr_config(self.inner().as_ref(), addr, global_white_addrs, acl_file_full_path)
-            .await
+        MQAdminExt::update_global_white_addr_config(self.inner(), addr, global_white_addrs, acl_file_full_path).await
     }
 
     async fn examine_broker_cluster_acl_version_info(
         &self,
         addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        MQAdminExt::examine_broker_cluster_acl_version_info(self.inner().as_ref(), addr).await
+        MQAdminExt::examine_broker_cluster_acl_version_info(self.inner(), addr).await
     }
 
     async fn create_and_update_subscription_group_config(
@@ -1029,7 +1028,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         addr: CheetahString,
         config: SubscriptionGroupConfig,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::create_and_update_subscription_group_config(self.inner().as_ref(), addr, config).await
+        MQAdminExt::create_and_update_subscription_group_config(self.inner(), addr, config).await
     }
 
     async fn create_and_update_subscription_group_config_list(
@@ -1037,7 +1036,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         configs: Vec<SubscriptionGroupConfig>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::create_and_update_subscription_group_config_list(self.inner().as_ref(), broker_addr, configs).await
+        MQAdminExt::create_and_update_subscription_group_config_list(self.inner(), broker_addr, configs).await
     }
 
     async fn examine_subscription_group_config(
@@ -1045,7 +1044,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         addr: CheetahString,
         group: CheetahString,
     ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfig> {
-        MQAdminExt::examine_subscription_group_config(self.inner().as_ref(), addr, group).await
+        MQAdminExt::examine_subscription_group_config(self.inner(), addr, group).await
     }
 
     async fn examine_topic_stats(
@@ -1053,23 +1052,23 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         broker_addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<TopicStatsTable> {
-        MQAdminExt::examine_topic_stats(self.inner().as_ref(), topic, broker_addr).await
+        MQAdminExt::examine_topic_stats(self.inner(), topic, broker_addr).await
     }
 
     async fn examine_topic_stats_concurrent(&self, topic: CheetahString) -> AdminToolResult<TopicStatsTable> {
-        MQAdminExt::examine_topic_stats_concurrent(self.inner().as_ref(), topic).await
+        MQAdminExt::examine_topic_stats_concurrent(self.inner(), topic).await
     }
 
     async fn fetch_all_topic_list(&self) -> rocketmq_error::RocketMQResult<TopicList> {
-        MQAdminExt::fetch_all_topic_list(self.inner().as_ref()).await
+        MQAdminExt::fetch_all_topic_list(self.inner()).await
     }
 
     async fn fetch_topics_by_cluster(&self, cluster_name: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
-        MQAdminExt::fetch_topics_by_cluster(self.inner().as_ref(), cluster_name).await
+        MQAdminExt::fetch_topics_by_cluster(self.inner(), cluster_name).await
     }
 
     async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
-        MQAdminExt::fetch_broker_runtime_stats(self.inner().as_ref(), broker_addr).await
+        MQAdminExt::fetch_broker_runtime_stats(self.inner(), broker_addr).await
     }
 
     async fn examine_consume_stats(
@@ -1081,7 +1080,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         timeout_millis: Option<u64>,
     ) -> rocketmq_error::RocketMQResult<ConsumeStats> {
         MQAdminExt::examine_consume_stats(
-            self.inner().as_ref(),
+            self.inner(),
             consumer_group,
             topic,
             cluster_name,
@@ -1097,18 +1096,18 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         check_store_time: i64,
     ) -> rocketmq_error::RocketMQResult<CheckRocksdbCqWriteResult> {
-        MQAdminExt::check_rocksdb_cq_write_progress(self.inner().as_ref(), broker_addr, topic, check_store_time).await
+        MQAdminExt::check_rocksdb_cq_write_progress(self.inner(), broker_addr, topic, check_store_time).await
     }
 
     async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo> {
-        MQAdminExt::examine_broker_cluster_info(self.inner().as_ref()).await
+        MQAdminExt::examine_broker_cluster_info(self.inner()).await
     }
 
     async fn examine_topic_route_info(
         &self,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
-        MQAdminExt::examine_topic_route_info(self.inner().as_ref(), topic).await
+        MQAdminExt::examine_topic_route_info(self.inner(), topic).await
     }
 
     async fn examine_consumer_connection_info(
@@ -1116,7 +1115,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         consumer_group: CheetahString,
         broker_addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<ConsumerConnection> {
-        MQAdminExt::examine_consumer_connection_info(self.inner().as_ref(), consumer_group, broker_addr).await
+        MQAdminExt::examine_consumer_connection_info(self.inner(), consumer_group, broker_addr).await
     }
 
     async fn examine_producer_connection_info(
@@ -1124,18 +1123,18 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         producer_group: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
-        MQAdminExt::examine_producer_connection_info(self.inner().as_ref(), producer_group, topic).await
+        MQAdminExt::examine_producer_connection_info(self.inner(), producer_group, topic).await
     }
 
     async fn get_all_producer_info(
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ProducerTableInfo> {
-        MQAdminExt::get_all_producer_info(self.inner().as_ref(), broker_addr).await
+        MQAdminExt::get_all_producer_info(self.inner(), broker_addr).await
     }
 
     async fn get_name_server_address_list(&self) -> Vec<CheetahString> {
-        MQAdminExt::get_name_server_address_list(self.inner().as_ref()).await
+        MQAdminExt::get_name_server_address_list(self.inner()).await
     }
 
     async fn wipe_write_perm_of_broker(
@@ -1143,7 +1142,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<i32> {
-        MQAdminExt::wipe_write_perm_of_broker(self.inner().as_ref(), namesrv_addr, broker_name).await
+        MQAdminExt::wipe_write_perm_of_broker(self.inner(), namesrv_addr, broker_name).await
     }
 
     async fn add_write_perm_of_broker(
@@ -1151,11 +1150,11 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<i32> {
-        MQAdminExt::add_write_perm_of_broker(self.inner().as_ref(), namesrv_addr, broker_name).await
+        MQAdminExt::add_write_perm_of_broker(self.inner(), namesrv_addr, broker_name).await
     }
 
     async fn put_kv_config(&self, namespace: CheetahString, key: CheetahString, value: CheetahString) {
-        MQAdminExt::put_kv_config(self.inner().as_ref(), namespace, key, value).await
+        MQAdminExt::put_kv_config(self.inner(), namespace, key, value).await
     }
 
     async fn get_kv_config(
@@ -1163,11 +1162,11 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         namespace: CheetahString,
         key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        MQAdminExt::get_kv_config(self.inner().as_ref(), namespace, key).await
+        MQAdminExt::get_kv_config(self.inner(), namespace, key).await
     }
 
     async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
-        MQAdminExt::get_kv_list_by_namespace(self.inner().as_ref(), namespace).await
+        MQAdminExt::get_kv_list_by_namespace(self.inner(), namespace).await
     }
 
     async fn delete_topic(
@@ -1175,7 +1174,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic_name: CheetahString,
         cluster_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::delete_topic(self.inner().as_ref(), topic_name, cluster_name).await
+        MQAdminExt::delete_topic(self.inner(), topic_name, cluster_name).await
     }
 
     async fn delete_topic_in_broker(
@@ -1183,7 +1182,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::delete_topic_in_broker(self.inner().as_ref(), addrs, topic).await
+        MQAdminExt::delete_topic_in_broker(self.inner(), addrs, topic).await
     }
 
     #[allow(deprecated)]
@@ -1192,7 +1191,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
     ) -> AdminToolResult<BrokerOperatorResult> {
-        MQAdminExt::delete_topic_in_broker_concurrent(self.inner().as_ref(), addrs, topic).await
+        MQAdminExt::delete_topic_in_broker_concurrent(self.inner(), addrs, topic).await
     }
 
     async fn delete_topic_in_name_server(
@@ -1201,7 +1200,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         cluster_name: Option<CheetahString>,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::delete_topic_in_name_server(self.inner().as_ref(), addrs, cluster_name, topic).await
+        MQAdminExt::delete_topic_in_name_server(self.inner(), addrs, cluster_name, topic).await
     }
 
     async fn delete_subscription_group(
@@ -1210,7 +1209,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         group_name: CheetahString,
         remove_offset: Option<bool>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::delete_subscription_group(self.inner().as_ref(), addr, group_name, remove_offset).await
+        MQAdminExt::delete_subscription_group(self.inner(), addr, group_name, remove_offset).await
     }
 
     async fn create_and_update_kv_config(
@@ -1219,7 +1218,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         key: CheetahString,
         value: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::create_and_update_kv_config(self.inner().as_ref(), namespace, key, value).await
+        MQAdminExt::create_and_update_kv_config(self.inner(), namespace, key, value).await
     }
 
     async fn delete_kv_config(
@@ -1227,7 +1226,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         namespace: CheetahString,
         key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::delete_kv_config(self.inner().as_ref(), namespace, key).await
+        MQAdminExt::delete_kv_config(self.inner(), namespace, key).await
     }
 
     async fn reset_offset_by_timestamp_old(
@@ -1238,15 +1237,8 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         timestamp: u64,
         force: bool,
     ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
-        MQAdminExt::reset_offset_by_timestamp_old(
-            self.inner().as_ref(),
-            cluster_name,
-            consumer_group,
-            topic,
-            timestamp,
-            force,
-        )
-        .await
+        MQAdminExt::reset_offset_by_timestamp_old(self.inner(), cluster_name, consumer_group, topic, timestamp, force)
+            .await
     }
 
     async fn reset_offset_by_timestamp(
@@ -1257,8 +1249,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         timestamp: u64,
         is_force: bool,
     ) -> rocketmq_error::RocketMQResult<HashMap<MessageQueue, u64>> {
-        MQAdminExt::reset_offset_by_timestamp(self.inner().as_ref(), cluster_name, topic, group, timestamp, is_force)
-            .await
+        MQAdminExt::reset_offset_by_timestamp(self.inner(), cluster_name, topic, group, timestamp, is_force).await
     }
 
     async fn reset_offset_new(
@@ -1267,7 +1258,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         timestamp: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::reset_offset_new(self.inner().as_ref(), consumer_group, topic, timestamp).await
+        MQAdminExt::reset_offset_new(self.inner(), consumer_group, topic, timestamp).await
     }
 
     #[allow(deprecated)]
@@ -1277,7 +1268,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         timestamp: u64,
     ) -> AdminToolResult<BrokerOperatorResult> {
-        MQAdminExt::reset_offset_new_concurrent(self.inner().as_ref(), group, topic, timestamp).await
+        MQAdminExt::reset_offset_new_concurrent(self.inner(), group, topic, timestamp).await
     }
 
     async fn get_consume_status(
@@ -1286,7 +1277,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         group: CheetahString,
         client_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<MessageQueue, u64>>> {
-        MQAdminExt::get_consume_status(self.inner().as_ref(), topic, group, client_addr).await
+        MQAdminExt::get_consume_status(self.inner(), topic, group, client_addr).await
     }
 
     async fn create_or_update_order_conf(
@@ -1295,19 +1286,19 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         value: CheetahString,
         is_cluster: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::create_or_update_order_conf(self.inner().as_ref(), key, value, is_cluster).await
+        MQAdminExt::create_or_update_order_conf(self.inner(), key, value, is_cluster).await
     }
 
     async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList> {
-        MQAdminExt::query_topic_consume_by_who(self.inner().as_ref(), topic).await
+        MQAdminExt::query_topic_consume_by_who(self.inner(), topic).await
     }
 
     async fn query_topics_by_consumer(&self, group: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
-        MQAdminExt::query_topics_by_consumer(self.inner().as_ref(), group).await
+        MQAdminExt::query_topics_by_consumer(self.inner(), group).await
     }
 
     async fn query_topics_by_consumer_concurrent(&self, group: CheetahString) -> AdminToolResult<TopicList> {
-        MQAdminExt::query_topics_by_consumer_concurrent(self.inner().as_ref(), group).await
+        MQAdminExt::query_topics_by_consumer_concurrent(self.inner(), group).await
     }
 
     async fn query_subscription(
@@ -1315,7 +1306,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         group: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<SubscriptionData> {
-        MQAdminExt::query_subscription(self.inner().as_ref(), group, topic).await
+        MQAdminExt::query_subscription(self.inner(), group, topic).await
     }
 
     async fn query_consume_time_span(
@@ -1323,7 +1314,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         group: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Vec<QueueTimeSpan>> {
-        MQAdminExt::query_consume_time_span(self.inner().as_ref(), topic, group).await
+        MQAdminExt::query_consume_time_span(self.inner(), topic, group).await
     }
 
     async fn query_consume_time_span_concurrent(
@@ -1331,7 +1322,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         group: CheetahString,
     ) -> AdminToolResult<Vec<QueueTimeSpan>> {
-        MQAdminExt::query_consume_time_span_concurrent(self.inner().as_ref(), topic, group).await
+        MQAdminExt::query_consume_time_span_concurrent(self.inner(), topic, group).await
     }
 
     async fn clean_expired_consumer_queue(
@@ -1339,11 +1330,11 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        MQAdminExt::clean_expired_consumer_queue(self.inner().as_ref(), cluster, addr).await
+        MQAdminExt::clean_expired_consumer_queue(self.inner(), cluster, addr).await
     }
 
     async fn clean_expired_consumer_queue_by_addr(&self, addr: CheetahString) -> rocketmq_error::RocketMQResult<bool> {
-        MQAdminExt::clean_expired_consumer_queue_by_addr(self.inner().as_ref(), addr).await
+        MQAdminExt::clean_expired_consumer_queue_by_addr(self.inner(), addr).await
     }
 
     async fn delete_expired_commit_log(
@@ -1351,11 +1342,11 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        MQAdminExt::delete_expired_commit_log(self.inner().as_ref(), cluster, addr).await
+        MQAdminExt::delete_expired_commit_log(self.inner(), cluster, addr).await
     }
 
     async fn delete_expired_commit_log_by_addr(&self, addr: CheetahString) -> rocketmq_error::RocketMQResult<bool> {
-        MQAdminExt::delete_expired_commit_log_by_addr(self.inner().as_ref(), addr).await
+        MQAdminExt::delete_expired_commit_log_by_addr(self.inner(), addr).await
     }
 
     async fn clean_unused_topic(
@@ -1363,11 +1354,11 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        MQAdminExt::clean_unused_topic(self.inner().as_ref(), cluster, addr).await
+        MQAdminExt::clean_unused_topic(self.inner(), cluster, addr).await
     }
 
     async fn clean_unused_topic_by_addr(&self, addr: CheetahString) -> rocketmq_error::RocketMQResult<bool> {
-        MQAdminExt::clean_unused_topic_by_addr(self.inner().as_ref(), addr).await
+        MQAdminExt::clean_unused_topic_by_addr(self.inner(), addr).await
     }
 
     async fn get_consumer_running_info(
@@ -1377,7 +1368,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         jstack: bool,
         metrics: Option<bool>,
     ) -> rocketmq_error::RocketMQResult<ConsumerRunningInfo> {
-        MQAdminExt::get_consumer_running_info(self.inner().as_ref(), consumer_group, client_id, jstack, metrics).await
+        MQAdminExt::get_consumer_running_info(self.inner(), consumer_group, client_id, jstack, metrics).await
     }
 
     async fn consume_message_directly(
@@ -1387,7 +1378,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult> {
-        MQAdminExt::consume_message_directly(self.inner().as_ref(), consumer_group, client_id, topic, msg_id).await
+        MQAdminExt::consume_message_directly(self.inner(), consumer_group, client_id, topic, msg_id).await
     }
 
     async fn consume_message_directly_ext(
@@ -1398,25 +1389,18 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult> {
-        MQAdminExt::consume_message_directly_ext(
-            self.inner().as_ref(),
-            cluster_name,
-            consumer_group,
-            client_id,
-            topic,
-            msg_id,
-        )
-        .await
+        MQAdminExt::consume_message_directly_ext(self.inner(), cluster_name, consumer_group, client_id, topic, msg_id)
+            .await
     }
 
     #[allow(deprecated)]
     async fn message_track_detail(&self, msg: MessageExt) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>> {
-        MQAdminExt::message_track_detail(self.inner().as_ref(), msg).await
+        MQAdminExt::message_track_detail(self.inner(), msg).await
     }
 
     #[allow(deprecated)]
     async fn message_track_detail_concurrent(&self, msg: MessageExt) -> AdminToolResult<Vec<MessageTrack>> {
-        MQAdminExt::message_track_detail_concurrent(self.inner().as_ref(), msg).await
+        MQAdminExt::message_track_detail_concurrent(self.inner(), msg).await
     }
 
     async fn clone_group_offset(
@@ -1426,7 +1410,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         is_offline: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::clone_group_offset(self.inner().as_ref(), src_group, dest_group, topic, is_offline).await
+        MQAdminExt::clone_group_offset(self.inner(), src_group, dest_group, topic, is_offline).await
     }
 
     async fn view_broker_stats_data(
@@ -1435,11 +1419,11 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         stats_name: CheetahString,
         stats_key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<BrokerStatsData> {
-        MQAdminExt::view_broker_stats_data(self.inner().as_ref(), broker_addr, stats_name, stats_key).await
+        MQAdminExt::view_broker_stats_data(self.inner(), broker_addr, stats_name, stats_key).await
     }
 
     async fn get_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
-        MQAdminExt::get_cluster_list(self.inner().as_ref(), topic).await
+        MQAdminExt::get_cluster_list(self.inner(), topic).await
     }
 
     async fn fetch_consume_stats_in_broker(
@@ -1448,11 +1432,11 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         is_order: bool,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<ConsumeStatsList> {
-        MQAdminExt::fetch_consume_stats_in_broker(self.inner().as_ref(), broker_addr, is_order, timeout_millis).await
+        MQAdminExt::fetch_consume_stats_in_broker(self.inner(), broker_addr, is_order, timeout_millis).await
     }
 
     async fn get_topic_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
-        MQAdminExt::get_topic_cluster_list(self.inner().as_ref(), topic).await
+        MQAdminExt::get_topic_cluster_list(self.inner(), topic).await
     }
 
     async fn get_all_subscription_group(
@@ -1460,7 +1444,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
-        MQAdminExt::get_all_subscription_group(self.inner().as_ref(), broker_addr, timeout_millis).await
+        MQAdminExt::get_all_subscription_group(self.inner(), broker_addr, timeout_millis).await
     }
 
     async fn get_user_subscription_group(
@@ -1468,7 +1452,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
-        MQAdminExt::get_user_subscription_group(self.inner().as_ref(), broker_addr, timeout_millis).await
+        MQAdminExt::get_user_subscription_group(self.inner(), broker_addr, timeout_millis).await
     }
 
     async fn get_all_topic_config(
@@ -1476,7 +1460,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<TopicConfigSerializeWrapper> {
-        MQAdminExt::get_all_topic_config(self.inner().as_ref(), broker_addr, timeout_millis).await
+        MQAdminExt::get_all_topic_config(self.inner(), broker_addr, timeout_millis).await
     }
 
     async fn get_user_topic_config(
@@ -1485,7 +1469,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         special_topic: bool,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<TopicConfigSerializeWrapper> {
-        MQAdminExt::get_user_topic_config(self.inner().as_ref(), broker_addr, special_topic, timeout_millis).await
+        MQAdminExt::get_user_topic_config(self.inner(), broker_addr, special_topic, timeout_millis).await
     }
 
     async fn update_consume_offset(
@@ -1495,7 +1479,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         mq: MessageQueue,
         offset: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::update_consume_offset(self.inner().as_ref(), broker_addr, consume_group, mq, offset).await
+        MQAdminExt::update_consume_offset(self.inner(), broker_addr, consume_group, mq, offset).await
     }
 
     async fn update_name_server_config(
@@ -1503,18 +1487,18 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         properties: HashMap<CheetahString, CheetahString>,
         name_servers: Option<Vec<CheetahString>>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::update_name_server_config(self.inner().as_ref(), properties, name_servers).await
+        MQAdminExt::update_name_server_config(self.inner(), properties, name_servers).await
     }
 
     async fn get_name_server_config(
         &self,
         name_servers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
-        MQAdminExt::get_name_server_config(self.inner().as_ref(), name_servers).await
+        MQAdminExt::get_name_server_config(self.inner(), name_servers).await
     }
 
     async fn probe_name_server(&self, name_server: CheetahString) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::probe_name_server(self.inner().as_ref(), name_server).await
+        MQAdminExt::probe_name_server(self.inner(), name_server).await
     }
 
     async fn query_consume_queue(
@@ -1526,16 +1510,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         count: i32,
         consumer_group: CheetahString,
     ) -> rocketmq_error::RocketMQResult<QueryConsumeQueueResponseBody> {
-        MQAdminExt::query_consume_queue(
-            self.inner().as_ref(),
-            broker_addr,
-            topic,
-            queue_id,
-            index,
-            count,
-            consumer_group,
-        )
-        .await
+        MQAdminExt::query_consume_queue(self.inner(), broker_addr, topic, queue_id, index, count, consumer_group).await
     }
 
     async fn resume_check_half_message(
@@ -1543,7 +1518,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        MQAdminExt::resume_check_half_message(self.inner().as_ref(), topic, msg_id).await
+        MQAdminExt::resume_check_half_message(self.inner(), topic, msg_id).await
     }
 
     async fn set_message_request_mode(
@@ -1556,7 +1531,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminExt::set_message_request_mode(
-            self.inner().as_ref(),
+            self.inner(),
             broker_addr,
             topic,
             consumer_group,
@@ -1576,7 +1551,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         reset_offset: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminExt::reset_offset_by_queue_id(
-            self.inner().as_ref(),
+            self.inner(),
             broker_addr,
             consumer_group,
             topic_name,
@@ -1591,7 +1566,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         addr: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicConfig> {
-        MQAdminExt::examine_topic_config(self.inner().as_ref(), addr, topic).await
+        MQAdminExt::examine_topic_config(self.inner(), addr, topic).await
     }
 
     async fn create_static_topic(
@@ -1602,15 +1577,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         mapping_detail: TopicQueueMappingDetail,
         force: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::create_static_topic(
-            self.inner().as_ref(),
-            addr,
-            default_topic,
-            topic_config,
-            mapping_detail,
-            force,
-        )
-        .await
+        MQAdminExt::create_static_topic(self.inner(), addr, default_topic, topic_config, mapping_detail, force).await
     }
 
     async fn update_and_get_group_read_forbidden(
@@ -1620,14 +1587,8 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic_name: CheetahString,
         readable: Option<bool>,
     ) -> rocketmq_error::RocketMQResult<GroupForbidden> {
-        MQAdminExt::update_and_get_group_read_forbidden(
-            self.inner().as_ref(),
-            broker_addr,
-            group_name,
-            topic_name,
-            readable,
-        )
-        .await
+        MQAdminExt::update_and_get_group_read_forbidden(self.inner(), broker_addr, group_name, topic_name, readable)
+            .await
     }
 
     async fn query_message(
@@ -1636,11 +1597,11 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<MessageExt> {
-        MQAdminExt::query_message(self.inner().as_ref(), cluster_name, topic, msg_id).await
+        MQAdminExt::query_message(self.inner(), cluster_name, topic, msg_id).await
     }
 
     async fn get_broker_ha_status(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<HARuntimeInfo> {
-        MQAdminExt::get_broker_ha_status(self.inner().as_ref(), broker_addr).await
+        MQAdminExt::get_broker_ha_status(self.inner(), broker_addr).await
     }
 
     async fn get_in_sync_state_data(
@@ -1648,21 +1609,21 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         controller_address: CheetahString,
         brokers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<BrokerReplicasInfo> {
-        MQAdminExt::get_in_sync_state_data(self.inner().as_ref(), controller_address, brokers).await
+        MQAdminExt::get_in_sync_state_data(self.inner(), controller_address, brokers).await
     }
 
     async fn get_broker_epoch_cache(
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<EpochEntryCache> {
-        MQAdminExt::get_broker_epoch_cache(self.inner().as_ref(), broker_addr).await
+        MQAdminExt::get_broker_epoch_cache(self.inner(), broker_addr).await
     }
 
     async fn get_controller_meta_data(
         &self,
         controller_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetMetaDataResponseHeader> {
-        MQAdminExt::get_controller_meta_data(self.inner().as_ref(), controller_addr).await
+        MQAdminExt::get_controller_meta_data(self.inner(), controller_addr).await
     }
 
     async fn reset_master_flush_offset(
@@ -1670,14 +1631,14 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         master_flush_offset: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::reset_master_flush_offset(self.inner().as_ref(), broker_addr, master_flush_offset).await
+        MQAdminExt::reset_master_flush_offset(self.inner(), broker_addr, master_flush_offset).await
     }
 
     async fn get_controller_config(
         &self,
         controller_servers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
-        MQAdminExt::get_controller_config(self.inner().as_ref(), controller_servers).await
+        MQAdminExt::get_controller_config(self.inner(), controller_servers).await
     }
 
     async fn update_controller_config(
@@ -1685,7 +1646,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         properties: HashMap<CheetahString, CheetahString>,
         controllers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::update_controller_config(self.inner().as_ref(), properties, controllers).await
+        MQAdminExt::update_controller_config(self.inner(), properties, controllers).await
     }
 
     async fn elect_master(
@@ -1695,14 +1656,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_name: CheetahString,
         broker_id: Option<u64>,
     ) -> rocketmq_error::RocketMQResult<(ElectMasterResponseHeader, BrokerMemberGroup)> {
-        MQAdminExt::elect_master(
-            self.inner().as_ref(),
-            controller_addr,
-            cluster_name,
-            broker_name,
-            broker_id,
-        )
-        .await
+        MQAdminExt::elect_master(self.inner(), controller_addr, cluster_name, broker_name, broker_id).await
     }
 
     async fn clean_controller_broker_data(
@@ -1714,7 +1668,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         is_clean_living_broker: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminExt::clean_controller_broker_data(
-            self.inner().as_ref(),
+            self.inner(),
             controller_addr,
             cluster_name,
             broker_name,
@@ -1729,7 +1683,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::update_cold_data_flow_ctr_group_config(self.inner().as_ref(), broker_addr, properties).await
+        MQAdminExt::update_cold_data_flow_ctr_group_config(self.inner(), broker_addr, properties).await
     }
 
     async fn remove_cold_data_flow_ctr_group_config(
@@ -1737,14 +1691,14 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         consumer_group: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::remove_cold_data_flow_ctr_group_config(self.inner().as_ref(), broker_addr, consumer_group).await
+        MQAdminExt::remove_cold_data_flow_ctr_group_config(self.inner(), broker_addr, consumer_group).await
     }
 
     async fn get_cold_data_flow_ctr_info(
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        MQAdminExt::get_cold_data_flow_ctr_info(self.inner().as_ref(), broker_addr).await
+        MQAdminExt::get_cold_data_flow_ctr_info(self.inner(), broker_addr).await
     }
 
     async fn set_commit_log_read_ahead_mode(
@@ -1752,7 +1706,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         mode: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        MQAdminExt::set_commit_log_read_ahead_mode(self.inner().as_ref(), broker_addr, mode).await
+        MQAdminExt::set_commit_log_read_ahead_mode(self.inner(), broker_addr, mode).await
     }
 
     async fn create_user(
@@ -1762,7 +1716,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         password: CheetahString,
         user_type: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::create_user(self.inner().as_ref(), broker_addr, username, password, user_type).await
+        MQAdminExt::create_user(self.inner(), broker_addr, username, password, user_type).await
     }
 
     async fn create_user_with_info(
@@ -1771,7 +1725,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         username: CheetahString,
         password: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::create_user_with_info(self.inner().as_ref(), broker_addr, username, password).await
+        MQAdminExt::create_user_with_info(self.inner(), broker_addr, username, password).await
     }
 
     async fn update_user(
@@ -1782,15 +1736,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         user_type: CheetahString,
         user_status: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::update_user(
-            self.inner().as_ref(),
-            broker_addr,
-            username,
-            password,
-            user_type,
-            user_status,
-        )
-        .await
+        MQAdminExt::update_user(self.inner(), broker_addr, username, password, user_type, user_status).await
     }
 
     async fn update_user_with_info(
@@ -1799,7 +1745,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         username: CheetahString,
         password: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::update_user_with_info(self.inner().as_ref(), broker_addr, username, password).await
+        MQAdminExt::update_user_with_info(self.inner(), broker_addr, username, password).await
     }
 
     async fn delete_user(
@@ -1807,7 +1753,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         username: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::delete_user(self.inner().as_ref(), broker_addr, username).await
+        MQAdminExt::delete_user(self.inner(), broker_addr, username).await
     }
 
     async fn get_user(
@@ -1815,7 +1761,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         username: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<UserInfo>> {
-        MQAdminExt::get_user(self.inner().as_ref(), broker_addr, username).await
+        MQAdminExt::get_user(self.inner(), broker_addr, username).await
     }
 
     async fn list_users(
@@ -1823,7 +1769,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         filter: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Vec<UserInfo>> {
-        MQAdminExt::list_users(self.inner().as_ref(), broker_addr, filter).await
+        MQAdminExt::list_users(self.inner(), broker_addr, filter).await
     }
 
     async fn create_acl(
@@ -1836,7 +1782,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         decision: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminExt::create_acl(
-            self.inner().as_ref(),
+            self.inner(),
             broker_addr,
             subject,
             resources,
@@ -1852,7 +1798,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         subject: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::create_acl_with_info(self.inner().as_ref(), broker_addr, subject).await
+        MQAdminExt::create_acl_with_info(self.inner(), broker_addr, subject).await
     }
 
     async fn update_acl(
@@ -1865,7 +1811,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         decision: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminExt::update_acl(
-            self.inner().as_ref(),
+            self.inner(),
             broker_addr,
             subject,
             resources,
@@ -1881,7 +1827,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         subject: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::update_acl_with_info(self.inner().as_ref(), broker_addr, subject).await
+        MQAdminExt::update_acl_with_info(self.inner(), broker_addr, subject).await
     }
 
     async fn delete_acl(
@@ -1890,7 +1836,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         subject: CheetahString,
         resource: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::delete_acl(self.inner().as_ref(), broker_addr, subject, resource).await
+        MQAdminExt::delete_acl(self.inner(), broker_addr, subject, resource).await
     }
 
     async fn get_acl(
@@ -1898,7 +1844,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         subject: CheetahString,
     ) -> rocketmq_error::RocketMQResult<AclInfo> {
-        MQAdminExt::get_acl(self.inner().as_ref(), broker_addr, subject).await
+        MQAdminExt::get_acl(self.inner(), broker_addr, subject).await
     }
 
     async fn list_acl(
@@ -1907,7 +1853,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         subject_filter: CheetahString,
         resource_filter: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Vec<AclInfo>> {
-        MQAdminExt::list_acl(self.inner().as_ref(), broker_addr, subject_filter, resource_filter).await
+        MQAdminExt::list_acl(self.inner(), broker_addr, subject_filter, resource_filter).await
     }
 
     async fn create_lite_pull_topic(
@@ -1920,7 +1866,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         write_queue_nums: i32,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminExt::create_lite_pull_topic(
-            self.inner().as_ref(),
+            self.inner(),
             addr,
             topic,
             queue_num,
@@ -1938,7 +1884,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         read_queue_nums: i32,
         write_queue_nums: i32,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::update_lite_pull_topic(self.inner().as_ref(), addr, topic, read_queue_nums, write_queue_nums).await
+        MQAdminExt::update_lite_pull_topic(self.inner(), addr, topic, read_queue_nums, write_queue_nums).await
     }
 
     async fn get_lite_pull_topic(
@@ -1946,7 +1892,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         addr: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicConfig> {
-        MQAdminExt::get_lite_pull_topic(self.inner().as_ref(), addr, topic).await
+        MQAdminExt::get_lite_pull_topic(self.inner(), addr, topic).await
     }
 
     async fn delete_lite_pull_topic(
@@ -1955,18 +1901,18 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         cluster_name: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::delete_lite_pull_topic(self.inner().as_ref(), addr, cluster_name, topic).await
+        MQAdminExt::delete_lite_pull_topic(self.inner(), addr, cluster_name, topic).await
     }
 
     async fn query_lite_pull_topic_list(&self, addr: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
-        MQAdminExt::query_lite_pull_topic_list(self.inner().as_ref(), addr).await
+        MQAdminExt::query_lite_pull_topic_list(self.inner(), addr).await
     }
 
     async fn query_lite_pull_topic_by_cluster(
         &self,
         cluster_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicList> {
-        MQAdminExt::query_lite_pull_topic_by_cluster(self.inner().as_ref(), cluster_name).await
+        MQAdminExt::query_lite_pull_topic_by_cluster(self.inner(), cluster_name).await
     }
 
     async fn query_lite_pull_subscription_list(
@@ -1974,7 +1920,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         addr: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GroupList> {
-        MQAdminExt::query_lite_pull_subscription_list(self.inner().as_ref(), addr, topic).await
+        MQAdminExt::query_lite_pull_subscription_list(self.inner(), addr, topic).await
     }
 
     async fn update_lite_pull_consumer_offset(
@@ -1985,7 +1931,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         queue_id: i32,
         offset: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::update_lite_pull_consumer_offset(self.inner().as_ref(), addr, topic, group, queue_id, offset).await
+        MQAdminExt::update_lite_pull_consumer_offset(self.inner(), addr, topic, group, queue_id, offset).await
     }
 
     async fn examine_consume_stats_with_queue(
@@ -1994,7 +1940,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: Option<CheetahString>,
         queue_id: Option<i32>,
     ) -> rocketmq_error::RocketMQResult<ConsumeStats> {
-        MQAdminExt::examine_consume_stats_with_queue(self.inner().as_ref(), consumer_group, topic, queue_id).await
+        MQAdminExt::examine_consume_stats_with_queue(self.inner(), consumer_group, topic, queue_id).await
     }
 
     async fn examine_consume_stats_concurrent(
@@ -2002,7 +1948,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         consumer_group: CheetahString,
         topic: Option<CheetahString>,
     ) -> AdminToolResult<ConsumeStats> {
-        MQAdminExt::examine_consume_stats_concurrent(self.inner().as_ref(), consumer_group, topic).await
+        MQAdminExt::examine_consume_stats_concurrent(self.inner(), consumer_group, topic).await
     }
 
     async fn examine_consume_stats_concurrent_with_cluster(
@@ -2011,13 +1957,8 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: Option<CheetahString>,
         cluster_name: Option<CheetahString>,
     ) -> AdminToolResult<ConsumeStats> {
-        MQAdminExt::examine_consume_stats_concurrent_with_cluster(
-            self.inner().as_ref(),
-            consumer_group,
-            topic,
-            cluster_name,
-        )
-        .await
+        MQAdminExt::examine_consume_stats_concurrent_with_cluster(self.inner(), consumer_group, topic, cluster_name)
+            .await
     }
 
     async fn export_rocksdb_consumer_offset_to_json(
@@ -2025,14 +1966,14 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         file_path: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::export_rocksdb_consumer_offset_to_json(self.inner().as_ref(), broker_addr, file_path).await
+        MQAdminExt::export_rocksdb_consumer_offset_to_json(self.inner(), broker_addr, file_path).await
     }
 
     async fn export_rocksdb_consumer_offset_from_memory(
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        MQAdminExt::export_rocksdb_consumer_offset_from_memory(self.inner().as_ref(), broker_addr).await
+        MQAdminExt::export_rocksdb_consumer_offset_from_memory(self.inner(), broker_addr).await
     }
 
     async fn sync_broker_member_group(
@@ -2041,7 +1982,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         cluster_name: CheetahString,
         broker_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::sync_broker_member_group(self.inner().as_ref(), controller_addr, cluster_name, broker_name).await
+        MQAdminExt::sync_broker_member_group(self.inner(), controller_addr, cluster_name, broker_name).await
     }
 
     async fn get_topic_config_by_topic_name(
@@ -2049,7 +1990,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         topic_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicConfig> {
-        MQAdminExt::get_topic_config_by_topic_name(self.inner().as_ref(), broker_addr, topic_name).await
+        MQAdminExt::get_topic_config_by_topic_name(self.inner(), broker_addr, topic_name).await
     }
 
     async fn notify_min_broker_id_changed(
@@ -2062,7 +2003,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         ha_broker_addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminExt::notify_min_broker_id_changed(
-            self.inner().as_ref(),
+            self.inner(),
             cluster_name,
             broker_name,
             min_broker_id,
@@ -2078,7 +2019,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicStatsTable> {
-        MQAdminExt::get_topic_stats_info(self.inner().as_ref(), broker_addr, topic).await
+        MQAdminExt::get_topic_stats_info(self.inner(), broker_addr, topic).await
     }
 
     async fn query_broker_has_topic(
@@ -2086,14 +2027,14 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        MQAdminExt::query_broker_has_topic(self.inner().as_ref(), broker_addr, topic).await
+        MQAdminExt::query_broker_has_topic(self.inner(), broker_addr, topic).await
     }
 
     async fn get_system_topic_list_from_broker(
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicList> {
-        MQAdminExt::get_system_topic_list_from_broker(self.inner().as_ref(), broker_addr).await
+        MQAdminExt::get_system_topic_list_from_broker(self.inner(), broker_addr).await
     }
 
     async fn examine_topic_route_info_with_timeout(
@@ -2101,11 +2042,11 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         topic: CheetahString,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
-        MQAdminExt::examine_topic_route_info_with_timeout(self.inner().as_ref(), topic, timeout_millis).await
+        MQAdminExt::examine_topic_route_info_with_timeout(self.inner(), topic, timeout_millis).await
     }
 
     async fn export_pop_records(&self, broker_addr: CheetahString, timeout: u64) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::export_pop_records(self.inner().as_ref(), broker_addr, timeout).await
+        MQAdminExt::export_pop_records(self.inner(), broker_addr, timeout).await
     }
 
     async fn switch_timer_engine(
@@ -2113,14 +2054,14 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         des_timer_engine: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::switch_timer_engine(self.inner().as_ref(), broker_addr, des_timer_engine).await
+        MQAdminExt::switch_timer_engine(self.inner(), broker_addr, des_timer_engine).await
     }
 
     async fn get_broker_lite_info(
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetBrokerLiteInfoResponseBody> {
-        MQAdminExt::get_broker_lite_info(self.inner().as_ref(), broker_addr).await
+        MQAdminExt::get_broker_lite_info(self.inner(), broker_addr).await
     }
 
     async fn get_parent_topic_info(
@@ -2128,7 +2069,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetParentTopicInfoResponseBody> {
-        MQAdminExt::get_parent_topic_info(self.inner().as_ref(), broker_addr, topic).await
+        MQAdminExt::get_parent_topic_info(self.inner(), broker_addr, topic).await
     }
 
     async fn get_lite_topic_info(
@@ -2137,7 +2078,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         parent_topic: CheetahString,
         lite_topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetLiteTopicInfoResponseBody> {
-        MQAdminExt::get_lite_topic_info(self.inner().as_ref(), broker_addr, parent_topic, lite_topic).await
+        MQAdminExt::get_lite_topic_info(self.inner(), broker_addr, parent_topic, lite_topic).await
     }
 
     async fn get_lite_client_info(
@@ -2147,7 +2088,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         group: CheetahString,
         client_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetLiteClientInfoResponseBody> {
-        MQAdminExt::get_lite_client_info(self.inner().as_ref(), broker_addr, parent_topic, group, client_id).await
+        MQAdminExt::get_lite_client_info(self.inner(), broker_addr, parent_topic, group, client_id).await
     }
 
     async fn get_lite_group_info(
@@ -2157,7 +2098,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         lite_topic: CheetahString,
         top_k: i32,
     ) -> rocketmq_error::RocketMQResult<GetLiteGroupInfoResponseBody> {
-        MQAdminExt::get_lite_group_info(self.inner().as_ref(), broker_addr, group, lite_topic, top_k).await
+        MQAdminExt::get_lite_group_info(self.inner(), broker_addr, group, lite_topic, top_k).await
     }
 
     async fn trigger_lite_dispatch(
@@ -2166,7 +2107,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         group: CheetahString,
         client_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::trigger_lite_dispatch(self.inner().as_ref(), broker_addr, group, client_id).await
+        MQAdminExt::trigger_lite_dispatch(self.inner(), broker_addr, group, client_id).await
     }
 
     async fn export_rocksdb_config_to_json(
@@ -2174,7 +2115,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         broker_addr: CheetahString,
         config_types: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::export_rocksdb_config_to_json(self.inner().as_ref(), broker_addr, config_types).await
+        MQAdminExt::export_rocksdb_config_to_json(self.inner(), broker_addr, config_types).await
     }
 
     async fn search_offset(
@@ -2186,7 +2127,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<u64> {
         MQAdminExt::search_offset(
-            self.inner().as_ref(),
+            self.inner(),
             broker_addr,
             topic_name,
             queue_id,
@@ -2202,7 +2143,7 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         message_queue: MessageQueue,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<i64> {
-        MQAdminExt::min_offset(self.inner().as_ref(), broker_addr, message_queue, timeout_millis).await
+        MQAdminExt::min_offset(self.inner(), broker_addr, message_queue, timeout_millis).await
     }
 
     async fn max_offset(
@@ -2211,6 +2152,6 @@ impl MQAdminExt for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         message_queue: MessageQueue,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<i64> {
-        MQAdminExt::max_offset(self.inner().as_ref(), broker_addr, message_queue, timeout_millis).await
+        MQAdminExt::max_offset(self.inner(), broker_addr, message_queue, timeout_millis).await
     }
 }

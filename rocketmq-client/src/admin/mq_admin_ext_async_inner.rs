@@ -12,14 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_rust::ArcMut;
-
-use crate::admin::default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
 use crate::admin::mq_admin_ext_inner::MQAdminExtInner;
 
-#[derive(Clone)]
-pub struct MQAdminExtInnerImpl {
-    pub(crate) inner: ArcMut<DefaultMQAdminExtImpl>,
-}
+#[derive(Clone, Copy, Default)]
+pub struct MQAdminExtInnerImpl;
 
 impl MQAdminExtInner for MQAdminExtInnerImpl {}

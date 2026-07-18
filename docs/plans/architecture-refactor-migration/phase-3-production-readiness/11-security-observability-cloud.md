@@ -297,6 +297,12 @@ M11-12o 已把 Client 异步发送 hook 与 trace enrichment 从完整 lifecycle
 client id，不再持有 host Producer/Consumer 实现。实际快照累计降至 432 production/1,329 occurrences，Client
 降至 112/423；其余 Client owner、Broker/Store、Tools/compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12p 已删除 Client Admin facade 的 self `ArcMut` owner：Client 与 admin-core facade 直接拥有实现和单一
+`ClientConfig`，批量 Admin 转发只传递普通引用；ClientInstance 的 Admin group 注册值收窄为
+owner-free marker，不再保活完整 Admin 实现。实际快照累计降至 424 production/1,295 occurrences，Client
+降至 107/403 且 Tools production 债务清零；其余 Client Instance/API/Producer/Consumer owner、Broker/Store、
+compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
