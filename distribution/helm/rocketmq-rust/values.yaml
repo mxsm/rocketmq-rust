@@ -21,6 +21,7 @@ networkPolicy:
 services:
   broker:
     replicas: 1
+    autoCreateTopicEnable: false
     image:
       digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
     persistence:

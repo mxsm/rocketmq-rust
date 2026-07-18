@@ -1,0 +1,1 @@
+fixture: eviction API respected the proxy PDB and PVC identity while the acknowledged message remained visible

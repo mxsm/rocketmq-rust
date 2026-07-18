@@ -1,0 +1,151 @@
+name: Kubernetes architecture fault matrix
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/kubernetes-fault-matrix.yml"
+      - "distribution/helm/**"
+      - "distribution/kubernetes/**"
+      - "docker/Dockerfile.base"
+      - "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/**"
+      - "scripts/fault_matrix_guard.py"
+      - "scripts/kind-architecture-refactor-e2e.ps1"
+      - "scripts/tests/test_m11_fault_matrix.py"
+      - "scripts/tests/fixtures/m11-fault-matrix/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/kubernetes-fault-matrix.yml"
+      - "distribution/helm/**"
+      - "distribution/kubernetes/**"
+      - "docker/Dockerfile.base"
+      - "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/**"
+      - "scripts/fault_matrix_guard.py"
+      - "scripts/kind-architecture-refactor-e2e.ps1"
+      - "scripts/tests/test_m11_fault_matrix.py"
+      - "scripts/tests/fixtures/m11-fault-matrix/**"
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: Dynamic cluster backend
+        required: true
+        type: choice
+        options: [kind, k3d]
+      baseline_images_json:
+        description: Five baseline service image@sha256 references
+        required: true
+        type: string
+      candidate_images_json:
+        description: Five candidate service image@sha256 references
+        required: true
+        type: string
+      collector_image:
+        description: OpenTelemetry Collector image@sha256 reference
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  static-contract:
+    name: Policy, fixture, and deliberate violations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Validate policy and fixture evidence
+        shell: bash
+        run: |
+          python scripts/fault_matrix_guard.py --policy-only
+          python scripts/fault_matrix_guard.py \
+            --evidence scripts/tests/fixtures/m11-fault-matrix/pass \
+            --allow-fixture
+          python -m unittest scripts.tests.test_m11_fault_matrix -v
+
+      - name: Validate PowerShell entrypoint without dynamic execution
+        shell: pwsh
+        run: ./scripts/kind-architecture-refactor-e2e.ps1 -Mode Validate
+
+  dynamic-fault-matrix:
+    name: Dynamic ${{ inputs.backend }} fault matrix
+    if: github.event_name == 'workflow_dispatch'
+    needs: static-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Install digest-verified cluster tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            --output /tmp/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.27.0/kind-linux-amd64
+          echo 'a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b  /tmp/kind' | sha256sum --check
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+
+          curl --fail --location --silent --show-error \
+            --output /tmp/k3d https://github.com/k3d-io/k3d/releases/download/v5.9.0/k3d-linux-amd64
+          echo '06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0  /tmp/k3d' | sha256sum --check
+          sudo install -m 0755 /tmp/k3d /usr/local/bin/k3d
+
+          curl --fail --location --silent --show-error \
+            --output /tmp/kubectl https://dl.k8s.io/release/v1.32.2/bin/linux/amd64/kubectl
+          echo '4f6a959dcc5b702135f8354cc7109b542a2933c46b808b248a214c1f69f817ea  /tmp/kubectl' | sha256sum --check
+          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+
+          curl --fail --location --silent --show-error \
+            --output /tmp/helm.tgz https://get.helm.sh/helm-v4.2.3-linux-amd64.tar.gz
+          echo 'e9b88b4ee95b18c706839c28d3a0220e5bc470e9cd9262410c90793c45ff8b7c  /tmp/helm.tgz' | sha256sum --check
+          tar -xzf /tmp/helm.tgz -C /tmp
+          sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+
+      - name: Materialize explicit dynamic inputs
+        shell: bash
+        env:
+          BASELINE_IMAGES: ${{ inputs.baseline_images_json }}
+          CANDIDATE_IMAGES: ${{ inputs.candidate_images_json }}
+          RUNTIME_SECRET_B64: ${{ secrets.M11_RUNTIME_SECRET_MANIFEST_B64 }}
+          ROTATED_RUNTIME_SECRET_B64: ${{ secrets.M11_ROTATED_RUNTIME_SECRET_MANIFEST_B64 }}
+          BASELINE_DRIVER_SECRET_B64: ${{ secrets.M11_BASELINE_DRIVER_SECRET_MANIFEST_B64 }}
+          ROTATED_DRIVER_SECRET_B64: ${{ secrets.M11_ROTATED_DRIVER_SECRET_MANIFEST_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$RUNTIME_SECRET_B64"
+          test -n "$ROTATED_RUNTIME_SECRET_B64"
+          test -n "$BASELINE_DRIVER_SECRET_B64"
+          test -n "$ROTATED_DRIVER_SECRET_B64"
+          mkdir -p target/fault-inputs
+          printf '%s' "$BASELINE_IMAGES" > target/fault-inputs/baseline-images.json
+          printf '%s' "$CANDIDATE_IMAGES" > target/fault-inputs/candidate-images.json
+          printf '%s' "$RUNTIME_SECRET_B64" | base64 --decode > target/fault-inputs/runtime-secret.yaml
+          printf '%s' "$ROTATED_RUNTIME_SECRET_B64" | base64 --decode > target/fault-inputs/rotated-runtime-secret.yaml
+          printf '%s' "$BASELINE_DRIVER_SECRET_B64" | base64 --decode > target/fault-inputs/baseline-driver-secret.yaml
+          printf '%s' "$ROTATED_DRIVER_SECRET_B64" | base64 --decode > target/fault-inputs/rotated-driver-secret.yaml
+
+      - name: Execute real fault matrix
+        shell: pwsh
+        run: >-
+          ./scripts/kind-architecture-refactor-e2e.ps1
+          -Mode Run
+          -Backend '${{ inputs.backend }}'
+          -BaselineImageMap target/fault-inputs/baseline-images.json
+          -CandidateImageMap target/fault-inputs/candidate-images.json
+          -RuntimeSecretManifest target/fault-inputs/runtime-secret.yaml
+          -RotatedRuntimeSecretManifest target/fault-inputs/rotated-runtime-secret.yaml
+          -BaselineDriverSecretManifest target/fault-inputs/baseline-driver-secret.yaml
+          -RotatedDriverSecretManifest target/fault-inputs/rotated-driver-secret.yaml
+          -CollectorImage '${{ inputs.collector_image }}'
+
+      - name: Upload immutable fault evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: m11-11-${{ inputs.backend }}-${{ github.sha }}
+          path: target/architecture-refactor/M11/fault-matrix
+          if-no-files-found: error
+          retention-days: 30
