@@ -810,8 +810,8 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
-        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -870,7 +870,7 @@ mod tests {
         let mut handler = BrokerConfigRequestHandler::new(inner.clone());
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
             RemotingCommand::create_remoting_command(RequestCode::SetCommitlogReadMode).set_ext_fields(HashMap::new());
         request.add_ext_field(CheetahString::from_static_str(READ_AHEAD_MODE), MADV_NORMAL.to_string());
@@ -891,7 +891,7 @@ mod tests {
         );
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
             RemotingCommand::create_remoting_command(RequestCode::SetCommitlogReadMode).set_ext_fields(HashMap::new());
         request.add_ext_field(CheetahString::from_static_str(READ_AHEAD_MODE), MADV_RANDOM.to_string());
@@ -921,7 +921,7 @@ mod tests {
         let mut handler = BrokerConfigRequestHandler::new(inner.clone());
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(concat!(
             "enableLiteEventMode=false\n",
             "maxLiteSubscriptionCount=5\n",
@@ -951,7 +951,7 @@ mod tests {
         let mut handler = BrokerConfigRequestHandler::new(inner.clone());
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig)
             .set_body("unknownKey=true\nmaxClientEventCount=0");
 
@@ -968,7 +968,7 @@ mod tests {
         assert_eq!(inner.broker_config().max_client_event_count, 100);
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
             RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body("unknownKey=true");
 
@@ -992,7 +992,7 @@ mod tests {
         let inner = runtime.inner_for_test().clone();
         let mut handler = BrokerConfigRequestHandler::new(inner);
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ExportRocksdbConfigToJson,
             ExportRocksdbConfigToJsonRequestHeader {
@@ -1065,7 +1065,7 @@ mod tests {
 
         let mut handler = BrokerConfigRequestHandler::new(inner);
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ExportRocksdbConfigToJson,
             ExportRocksdbConfigToJsonRequestHeader {
@@ -1107,7 +1107,7 @@ mod tests {
         let mut handler = BrokerConfigRequestHandler::new(inner.clone());
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut file_request =
             RemotingCommand::create_remoting_command(RequestCode::SwitchTimerEngine).set_ext_fields(HashMap::new());
         file_request.add_ext_field(
@@ -1128,7 +1128,7 @@ mod tests {
             .is_should_running_dequeue());
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut rocksdb_request =
             RemotingCommand::create_remoting_command(RequestCode::SwitchTimerEngine).set_ext_fields(HashMap::new());
         rocksdb_request.add_ext_field(

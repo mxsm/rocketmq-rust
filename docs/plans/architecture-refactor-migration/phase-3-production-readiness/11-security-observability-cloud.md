@@ -249,6 +249,12 @@ legacy V1 route wrapper 以显式 Mutex 串行可变入口且不跨 `.await` 持
 occurrences，NameServer 降至 28 条/58 occurrences；V1 tables、remoting-client、`ConnectionHandlerContext` 与总 Gate
 仍开放。
 
+M11-12g 已把 Remoting Channel/ConnectionHandlerContext 改为安全 `Arc` owner、只读 connection lifecycle handle
+和显式串行 writer；共享引用不能再取得 socket、encoder 或 Channel 的可变引用。实际快照累计降至 514 production/
+1,612 occurrences，Channel/Context 定向债务清零；剩余 514 条集中在 Broker、Client、Store、Remoting client/server/
+protocol/RPC、NameServer V1/remoting-client、Controller remoting-client 与 Tools。M11-12 总项、stable/SLO/HUMAN
+Gate 仍开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

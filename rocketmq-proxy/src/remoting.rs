@@ -595,14 +595,10 @@ where
         }
         let mut forwarded = 0usize;
         for client_id in client_ids {
-            let Some(mut client_channel) = self.sessions.remoting_channel(client_id.as_str()) else {
+            let Some(client_channel) = self.sessions.remoting_channel(client_id.as_str()) else {
                 continue;
             };
-            if let Err(error) = client_channel
-                .channel_inner_mut()
-                .send_oneway(request.clone(), 10)
-                .await
-            {
+            if let Err(error) = client_channel.send_oneway(request.clone(), 10).await {
                 return response_with_code(
                     request.opaque(),
                     ResponseCode::SystemError,
@@ -649,7 +645,7 @@ where
                 ),
             );
         }
-        let Some(mut client_channel) = self.sessions.remoting_channel(header.client_id.as_str()) else {
+        let Some(client_channel) = self.sessions.remoting_channel(header.client_id.as_str()) else {
             return response_with_code(
                 request.opaque(),
                 ResponseCode::ConsumerNotOnline,
@@ -659,11 +655,7 @@ where
                 ),
             );
         };
-        if let Err(error) = client_channel
-            .channel_inner_mut()
-            .send_oneway(request.clone(), 100)
-            .await
-        {
+        if let Err(error) = client_channel.send_oneway(request.clone(), 100).await {
             return response_with_code(
                 request.opaque(),
                 ResponseCode::SystemError,

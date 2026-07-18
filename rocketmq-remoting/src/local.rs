@@ -13,8 +13,8 @@
 //  limitations under the License.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
 
 use crate::base::pending_request_table::PendingRequestTable;
@@ -46,12 +46,12 @@ impl LocalRequestHarness {
         debug_assert_eq!(local_address, peer_remote_address);
         debug_assert_eq!(remote_address, peer_local_address);
 
-        let channel_inner = ArcMut::new(ChannelInner::try_new_with_pending_requests(
+        let channel_inner = Arc::new(ChannelInner::try_new_with_pending_requests(
             Connection::new(server_stream),
             PendingRequestTable::new(),
         )?);
         let channel = Channel::new(channel_inner, local_address, remote_address);
-        let context = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let context = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         Ok(Self {
             channel,

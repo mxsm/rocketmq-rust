@@ -13,20 +13,19 @@
 // limitations under the License.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-use rocketmq_rust::ArcMut;
 use tracing::error;
 
-use crate::connection::Connection;
+use crate::connection::ConnectionStateHandle;
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 
-/// Shared mutable context for request handlers.
+/// Shared immutable context for request handlers.
 ///
-/// This type alias wraps `ConnectionHandlerContextWrapper` in an `ArcMut` to allow
-/// efficient sharing and mutation across async tasks. Handlers receive this context
-/// and use it to access the channel and send responses.
-pub type ConnectionHandlerContext = ArcMut<ConnectionHandlerContextWrapper>;
+/// Clones share channel identity and a serialized response-writer capability without
+/// exposing mutable connection or channel references.
+pub type ConnectionHandlerContext = Arc<ConnectionHandlerContextWrapper>;
 
 /// Request handler context - provides access to the channel for a specific connection.
 ///
@@ -35,13 +34,13 @@ pub type ConnectionHandlerContext = ArcMut<ConnectionHandlerContextWrapper>;
 ///
 /// - **Send responses**: Via `write()` or `write_ref()`
 /// - **Access connection metadata**: Remote address, connection state
-/// - **Perform advanced operations**: Direct connection access if needed
+/// - **Observe lifecycle state**: Via a cloneable handle without socket mutation
 ///
 /// ## Design Rationale
 ///
 /// - **Thin wrapper**: Delegates most operations to the underlying `Channel`
 /// - **Hash/Eq based on channel**: Contexts for the same channel are equal
-/// - **Wrapped in ArcMut**: Shared across async tasks, enables interior mutability
+/// - **Wrapped in Arc**: Shared across async tasks without mutable capability propagation
 ///
 /// ## Naming Note
 ///
@@ -54,7 +53,7 @@ pub struct ConnectionHandlerContextWrapper {
     /// The channel associated with this request handler context.
     ///
     /// Provides access to:
-    /// - Underlying connection for I/O
+    /// - Serialized command writes
     /// - Address information (local/remote)
     /// - Channel identity (ID)
     pub(crate) channel: Channel,
@@ -76,30 +75,17 @@ impl ConnectionHandlerContextWrapper {
 
     // === Connection Access ===
 
-    /// Gets an immutable reference to the underlying connection.
+    /// Gets an immutable connection lifecycle handle.
     ///
     /// # Returns
     ///
-    /// Immutable reference to the `Connection` for inspection
+    /// Immutable handle for health checks and close signaling
     ///
     /// # Use Case
     ///
     /// Checking connection health, reading connection ID, etc.
-    pub fn connection_ref(&self) -> &Connection {
+    pub fn connection_ref(&self) -> &ConnectionStateHandle {
         self.channel.connection_ref()
-    }
-
-    /// Gets a mutable reference to the underlying connection.
-    ///
-    /// # Returns
-    ///
-    /// Mutable reference to the `Connection` for advanced I/O
-    ///
-    /// # Use Case
-    ///
-    /// Direct send/receive operations bypassing channel abstractions
-    pub fn connection_mut(&mut self) -> &mut Connection {
-        self.channel.connection_mut()
     }
 
     // === Response Writing ===
@@ -121,14 +107,14 @@ impl ConnectionHandlerContextWrapper {
     /// # Example
     ///
     /// ```ignore
-    /// async fn handle_request(ctx: &mut ConnectionHandlerContext, request: RemotingCommand) {
+    /// async fn handle_request(ctx: &ConnectionHandlerContext, request: RemotingCommand) {
     ///     let response = RemotingCommand::create_response_command()
     ///         .set_opaque(request.opaque());
     ///     ctx.write(response).await;
     /// }
     /// ```
-    pub async fn write_response(&mut self, cmd: RemotingCommand) {
-        match self.channel.connection_mut().send_command(cmd).await {
+    pub async fn write_response(&self, cmd: RemotingCommand) {
+        match self.channel.send_command(cmd).await {
             Ok(_) => {}
             Err(error) => {
                 error!("failed to send response: {}", error);
@@ -153,8 +139,8 @@ impl ConnectionHandlerContextWrapper {
     /// # Note
     ///
     /// The command's body may be consumed during sending (`take_body()`).
-    pub async fn write_response_ref(&mut self, cmd: &mut RemotingCommand) {
-        match self.channel.connection_mut().send_command_ref(cmd).await {
+    pub async fn write_response_ref(&self, cmd: &mut RemotingCommand) {
+        match self.channel.send_command_ref(cmd).await {
             Ok(_) => {}
             Err(error) => {
                 error!("failed to send response: {}", error);
@@ -168,7 +154,7 @@ impl ConnectionHandlerContextWrapper {
     ///
     /// Use `write_response()` for clearer semantics.
     #[deprecated(since = "0.6.0", note = "Use `write_response()` instead")]
-    pub async fn write(&mut self, cmd: RemotingCommand) {
+    pub async fn write(&self, cmd: RemotingCommand) {
         self.write_response(cmd).await;
     }
 
@@ -178,7 +164,7 @@ impl ConnectionHandlerContextWrapper {
     ///
     /// Use `write_response_ref()` for clearer semantics.
     #[deprecated(since = "0.6.0", note = "Use `write_response_ref()` instead")]
-    pub async fn write_ref(&mut self, cmd: &mut RemotingCommand) {
+    pub async fn write_ref(&self, cmd: &mut RemotingCommand) {
         self.write_response_ref(cmd).await;
     }
 
@@ -195,19 +181,6 @@ impl ConnectionHandlerContextWrapper {
     /// Accessing channel metadata (ID, addresses, etc.)
     pub fn channel(&self) -> &Channel {
         &self.channel
-    }
-
-    /// Gets a mutable reference to the channel.
-    ///
-    /// # Returns
-    ///
-    /// Mutable reference to the `Channel`
-    ///
-    /// # Use Case
-    ///
-    /// Advanced channel operations (modify addresses, access inner state)
-    pub fn channel_mut(&mut self) -> &mut Channel {
-        &mut self.channel
     }
 
     // === Convenience Accessors ===
@@ -232,8 +205,56 @@ impl AsRef<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper 
     }
 }
 
-impl AsMut<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper {
-    fn as_mut(&mut self) -> &mut ConnectionHandlerContextWrapper {
-        self
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    use tokio::net::TcpListener;
+    use tokio::net::TcpStream;
+
+    use super::*;
+    use crate::base::response_future::ResponseFuture;
+    use crate::connection::Connection;
+    use crate::net::channel::ChannelInner;
+
+    #[tokio::test]
+    async fn cloned_contexts_share_one_serialized_channel_writer() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let client_stream = TcpStream::connect(address).await.unwrap();
+        let (server_stream, _) = listener.accept().await.unwrap();
+        let local_address = server_stream.local_addr().unwrap();
+        let remote_address = server_stream.peer_addr().unwrap();
+        let response_table = Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = Arc::new(ChannelInner::new(Connection::new(server_stream), response_table));
+        let channel = Channel::new(inner, local_address, remote_address);
+        let context = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let context_clone = context.clone();
+
+        assert!(Arc::ptr_eq(&context, &context_clone));
+        let first = RemotingCommand::create_remoting_command(1).set_opaque(101);
+        let second = RemotingCommand::create_remoting_command(2).set_opaque(202);
+        tokio::join!(context.write_response(first), context_clone.write_response(second));
+
+        let mut peer = Connection::new(client_stream);
+        let first = tokio::time::timeout(Duration::from_secs(1), peer.receive_command())
+            .await
+            .expect("first complete frame should arrive")
+            .expect("peer should remain connected")
+            .expect("first frame should decode");
+        let second = tokio::time::timeout(Duration::from_secs(1), peer.receive_command())
+            .await
+            .expect("second complete frame should arrive")
+            .expect("peer should remain connected")
+            .expect("second frame should decode");
+        let mut opaque_ids = [first.opaque(), second.opaque()];
+        opaque_ids.sort_unstable();
+        assert_eq!(opaque_ids, [101, 202]);
+
+        context.connection_ref().close();
+        assert!(!context_clone.connection_ref().is_healthy());
+        let report = channel.close_with_report(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 }

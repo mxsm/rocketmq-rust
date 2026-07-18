@@ -98,7 +98,7 @@ pub(crate) mod inner {
     where
         RP: RequestProcessor + Sync + 'static,
     {
-        pub async fn process_message_received(&mut self, ctx: &mut ConnectionHandlerContext, cmd: RemotingCommand) {
+        pub async fn process_message_received(&mut self, ctx: &ConnectionHandlerContext, cmd: RemotingCommand) {
             match cmd.get_type() {
                 RemotingCommandType::REQUEST => match self.process_request_command(ctx, cmd).await {
                     Ok(_) => {}
@@ -123,7 +123,7 @@ pub(crate) mod inner {
         )]
         async fn process_request_command(
             &mut self,
-            ctx: &mut ConnectionHandlerContext,
+            ctx: &ConnectionHandlerContext,
             mut cmd: RemotingCommand,
         ) -> RocketMQResult<()> {
             let opaque = cmd.opaque();
@@ -145,11 +145,7 @@ pub(crate) mod inner {
                     )
                 };
                 let response_code = response.code();
-                let result = ctx
-                    .channel
-                    .connection_mut()
-                    .send_command(response.set_opaque(opaque))
-                    .await;
+                let result = ctx.channel().send_command(response.set_opaque(opaque)).await;
                 match result {
                     Ok(_) => {
                         #[cfg(feature = "observability")]
@@ -177,7 +173,7 @@ pub(crate) mod inner {
             }
 
             let mut response = {
-                let channel = ctx.channel.clone();
+                let channel = ctx.channel().clone();
                 let ctx = ctx.clone();
                 match self.request_processor.process_request(channel, ctx, &mut cmd).await {
                     Ok(result) => result,
@@ -212,11 +208,7 @@ pub(crate) mod inner {
                 return Ok(());
             };
             let response_code = response.code();
-            let result = ctx
-                .channel_mut()
-                .connection_mut()
-                .send_command(response.set_opaque(opaque))
-                .await;
+            let result = ctx.channel().send_command(response.set_opaque(opaque)).await;
             match result {
                 Ok(_) => {
                     #[cfg(feature = "observability")]
@@ -239,7 +231,7 @@ pub(crate) mod inner {
             Ok(())
         }
 
-        fn process_response_command(&mut self, ctx: &mut ConnectionHandlerContext, cmd: RemotingCommand) {
+        fn process_response_command(&mut self, ctx: &ConnectionHandlerContext, cmd: RemotingCommand) {
             let opaque = cmd.opaque();
             let code = cmd.code();
             let completed = match ctx.channel().pending_request_owner() {
@@ -328,7 +320,7 @@ pub(crate) mod inner {
     }
 
     async fn handle_error(
-        ctx: &mut ConnectionHandlerContext,
+        ctx: &ConnectionHandlerContext,
         oneway_rpc: bool,
         opaque: i32,
         exception: Option<RocketMQError>,
@@ -337,7 +329,7 @@ pub(crate) mod inner {
             if !oneway_rpc {
                 let response = crate::error_response::command_from_error(&exception_inner);
                 tokio::select! {
-                    result =ctx.connection_mut().send_command(response.set_opaque(opaque)) => match result{
+                    result =ctx.channel().send_command(response.set_opaque(opaque)) => match result{
                         Ok(_) =>{},
                         Err(err) => {
                             match err {

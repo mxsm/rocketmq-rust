@@ -531,8 +531,8 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
-        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -574,7 +574,7 @@ mod tests {
         );
         request.make_custom_header_to_net();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
             .get_earliest_msg_store_time(channel, ctx, RequestCode::GetEarliestMsgStoreTime, &mut request)
@@ -602,7 +602,7 @@ mod tests {
         let mut request =
             RemotingCommand::create_request_command(RequestCode::CleanExpiredConsumequeue, EmptyHeader {});
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
             .clean_expired_consumequeue(channel, ctx, RequestCode::CleanExpiredConsumequeue, &mut request)
@@ -630,7 +630,7 @@ mod tests {
         );
         request.make_custom_header_to_net();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
             .check_rocksdb_cq_write_progress(channel, ctx, RequestCode::CheckRocksdbCqWriteProgress, &mut request)

@@ -163,9 +163,9 @@ impl fmt::Debug for BrokerLiveInfo {
 mod tests {
     use std::collections::HashMap;
     use std::net::SocketAddr;
+    use std::sync::Arc;
 
     use rocketmq_remoting::connection::Connection;
-    use rocketmq_rust::ArcMut;
 
     use super::*;
 
@@ -178,8 +178,8 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).unwrap();
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(HashMap::new());
-        let inner = ArcMut::new(rocketmq_remoting::net::channel::ChannelInner::new(
+        let response_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let inner = Arc::new(rocketmq_remoting::net::channel::ChannelInner::new(
             connection,
             response_table,
         ));

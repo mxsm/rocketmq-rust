@@ -148,6 +148,41 @@ pub enum ConnectionState {
     Closed,
 }
 
+/// Cloneable connection lifecycle capability without access to socket I/O state.
+///
+/// The handle lets shared channel owners observe health, subscribe to lifecycle
+/// changes, and signal closure without sharing the connection encoder, buffers,
+/// or transport halves.
+#[derive(Clone)]
+pub struct ConnectionStateHandle {
+    state_tx: watch::Sender<ConnectionState>,
+    state_rx: watch::Receiver<ConnectionState>,
+}
+
+impl ConnectionStateHandle {
+    /// Returns the most recently published connection state.
+    #[inline]
+    pub fn state(&self) -> ConnectionState {
+        *self.state_rx.borrow()
+    }
+
+    /// Returns whether the connection is currently healthy.
+    #[inline]
+    pub fn is_healthy(&self) -> bool {
+        self.state() == ConnectionState::Healthy
+    }
+
+    /// Subscribes to subsequent connection state changes.
+    pub fn subscribe(&self) -> watch::Receiver<ConnectionState> {
+        self.state_tx.subscribe()
+    }
+
+    /// Signals that the connection must no longer accept new work.
+    pub fn close(&self) {
+        let _ = self.state_tx.send(ConnectionState::Closed);
+    }
+}
+
 /// Bidirectional TCP connection for RocketMQ protocol communication.
 ///
 /// `Connection` handles low-level frame encoding/decoding and provides high-level
@@ -801,6 +836,14 @@ impl Connection {
     /// ```
     pub fn subscribe(&self) -> watch::Receiver<ConnectionState> {
         self.state_tx.subscribe()
+    }
+
+    /// Returns a cloneable lifecycle capability that does not expose transport mutation.
+    pub fn state_handle(&self) -> ConnectionStateHandle {
+        ConnectionStateHandle {
+            state_tx: self.state_tx.clone(),
+            state_rx: self.state_rx.clone(),
+        }
     }
 
     /// Marks the connection as degraded (internal use).

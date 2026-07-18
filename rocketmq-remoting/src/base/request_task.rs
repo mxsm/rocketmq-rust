@@ -59,8 +59,8 @@ impl RequestTask {
     pub async fn return_response(&self, code: i32, remark: String) {
         let response =
             RemotingCommand::create_response_command_with_code_remark(code, remark).set_opaque(self.request.opaque());
-        let mut channel = self.channel.clone();
-        if let Err(err) = channel.connection_mut().send_command(response).await {
+        let channel = self.channel.clone();
+        if let Err(err) = channel.send_command(response).await {
             warn!("return response to {} failed: {}", channel.remote_address(), err);
         }
     }

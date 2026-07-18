@@ -311,10 +311,10 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
         let Ok(channel_inner) = channel_inner else {
             return;
         };
-        let mut channel = Channel::new(ArcMut::new(channel_inner), session.local_addr(), session.remote_addr());
+        let mut channel = Channel::new(Arc::new(channel_inner), session.local_addr(), session.remote_addr());
         channel.set_channel_id(channel_id);
-        let mut remoting_session = RemotingSession {
-            context: ArcMut::new(ConnectionHandlerContextWrapper::new(channel)),
+        let remoting_session = RemotingSession {
+            context: Arc::new(ConnectionHandlerContextWrapper::new(channel)),
             _shutdown_complete: self.shutdown_complete_tx.clone(),
         };
         match action {
@@ -322,7 +322,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 let _ = self.event_tx.try_send(TokioEvent::new(
                     ConnectionNetEvent::CONNECTED(session.remote_addr()),
                     session.remote_addr(),
-                    remoting_session.context.channel.clone(),
+                    remoting_session.context.channel().clone(),
                 ));
                 self.sessions.insert(session.session_id(), remoting_session);
             }
@@ -339,7 +339,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 }
                 let mut cmd_handler = self.cmd_handler.clone();
                 cmd_handler
-                    .process_message_received(&mut remoting_session.context, command)
+                    .process_message_received(&remoting_session.context, command)
                     .await;
             }
         }
@@ -373,13 +373,12 @@ impl<RP: RequestProcessor + Sync + 'static> TransportConnectionHandler for Conne
         let event_tx = self.event_tx.clone();
         let conn_disconnect_notify = self.conn_disconnect_notify.clone();
         Box::pin(async move {
-            let Some((_, mut remoting_session)) = self.sessions.remove(&session.session_id()) else {
+            let Some((_, remoting_session)) = self.sessions.remove(&session.session_id()) else {
                 return;
             };
             let channel_report = remoting_session
                 .context
-                .channel_mut()
-                .channel_inner_mut()
+                .channel()
                 .close_with_report(Duration::from_secs(3))
                 .await;
             channel_report.log_if_unhealthy();
@@ -389,7 +388,7 @@ impl<RP: RequestProcessor + Sync + 'static> TransportConnectionHandler for Conne
             let _ = event_tx.try_send(TokioEvent::new(
                 ConnectionNetEvent::DISCONNECTED,
                 session.remote_addr(),
-                remoting_session.context.channel.clone(),
+                remoting_session.context.channel().clone(),
             ));
         })
     }
@@ -886,13 +885,10 @@ mod tests {
             let Some(hook) = self.as_ref() else {
                 return false;
             };
-            let mut response_channel = channel.clone();
+            let response_channel = channel.clone();
             let deferred_response: TestDeferredResponse = Box::new(move |response| {
                 Box::pin(async move {
-                    let _ = response_channel
-                        .connection_mut()
-                        .send_command(response.set_opaque(opaque))
-                        .await;
+                    let _ = response_channel.send_command(response.set_opaque(opaque)).await;
                 })
             });
             matches!(

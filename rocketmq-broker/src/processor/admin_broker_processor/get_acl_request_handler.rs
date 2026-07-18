@@ -111,7 +111,6 @@ mod tests {
     use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::protocol::RemotingSerializable;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_rust::ArcMut;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::*;
@@ -157,8 +156,8 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
-        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -207,7 +206,7 @@ mod tests {
         let mut update_handler = UpdateAclRequestHandler::new(inner.clone(), auth_admin_service.clone());
         let mut get_handler = GetAclRequestHandler::new(inner.clone(), auth_admin_service.clone());
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut create_request = RemotingCommand::create_request_command(
             RequestCode::AuthCreateAcl,
@@ -308,7 +307,7 @@ mod tests {
         let mut create_acl_handler = CreateAclRequestHandler::new(inner.clone(), auth_admin_service.clone());
         let mut update_acl_handler = UpdateAclRequestHandler::new(inner.clone(), auth_admin_service);
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut create_user_request = RemotingCommand::create_request_command(
             RequestCode::AuthCreateUser,
@@ -419,7 +418,7 @@ mod tests {
         let mut list_users_handler = ListUsersRequestHandler::new(inner.clone(), auth_admin_service.clone());
         let mut list_acl_handler = ListAclRequestHandler::new(inner.clone(), auth_admin_service);
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut list_users_request = RemotingCommand::create_request_command(
             RequestCode::AuthListUsers,
@@ -485,7 +484,7 @@ mod tests {
 
         let mut handler = UpdateUserRequestHandler::new(inner.clone(), auth_admin_service.clone());
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::AuthUpdateUser,
             UpdateUserRequestHeader {
@@ -540,7 +539,7 @@ mod tests {
         auth_admin_service.create_user(alice).await.expect("create alice user");
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut create_handler = CreateUserRequestHandler::new(inner.clone(), auth_admin_service.clone());
         let mut create_request = RemotingCommand::create_request_command(
@@ -652,7 +651,7 @@ mod tests {
         let mut delete_handler = DeleteAclRequestHandler::new(inner.clone(), auth_admin_service.clone());
         let mut get_handler = GetAclRequestHandler::new(inner.clone(), auth_admin_service);
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut delete_request = RemotingCommand::create_request_command(
             RequestCode::AuthDeleteAcl,
             DeleteAclRequestHeader::with_policy_type(

@@ -261,6 +261,11 @@ NameServer runtime/processor owner 随 Issue #8303 改为安全 `Arc` 根、`Wea
 内部同步 batch/KV/V1 wrapper 后，实际快照降至 669 production/1,918 occurrence，NameServer 降至 28 条/58
 occurrence。剩余 NameServer 债务精确为 V1 tables 16/44、remoting client 4/5 和 `ConnectionHandlerContext` 8/9；
 总进度仍为 75/82，M11-12 父工作包未完成。
+Remoting Channel/Context owner 随 Issue #8307 改为安全 `Arc`、cloneable connection lifecycle handle 与显式串行
+writer 后，实际快照降至 514 production/1,612 occurrence；Channel/Context 定向债务清零，并同步移除
+Broker/Client/Controller/NameServer/Auth/Proxy 中由旧 Context 别名传播的条目。剩余 production 债务为 Broker
+192/574、Client 147/604、Store 127/324、Remoting 21/41、NameServer 20/49、Controller 4/6、Tools 3/14；
+总进度仍为 75/82，后续 owner、compatibility、stable/SLO/HUMAN Gate 保持开放。
 
 ### 9.3 证据目录
 
