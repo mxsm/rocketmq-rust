@@ -14,6 +14,22 @@
 
 //! Runtime-neutral security contracts.
 
+pub mod secret_provider;
+
+pub use secret_provider::SecretAccess;
+pub use secret_provider::SecretIdentifierError;
+pub use secret_provider::SecretMaterial;
+pub use secret_provider::SecretMaterialError;
+pub use secret_provider::SecretName;
+pub use secret_provider::SecretPersistence;
+pub use secret_provider::SecretProvider;
+pub use secret_provider::SecretProviderCapabilities;
+pub use secret_provider::SecretProviderError;
+pub use secret_provider::SecretProviderId;
+pub use secret_provider::SecretVersion;
+pub use secret_provider::SecretVersioning;
+pub use secret_provider::VersionedSecret;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;

@@ -56,6 +56,7 @@ hex    = "0.4"
 base64 = "0.22.1"
 
 # Cryptographic operations
+aes-gcm = { version = "0.11.0", features = ["zeroize"] }
 hmac  = "0.13.0"
 md-5  = "0.11"
 sha1  = "0.11"

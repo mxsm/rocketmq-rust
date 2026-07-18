@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M11-01 已完成；下一工作包 PR-M11-02；部分依赖 M10 SLI） |
+| 状态 | 实施中（PR-M11-01～02 已完成；下一工作包 PR-M11-03；部分依赖 M10 SLI） |
 | 预计周期 | 4–6 周 |
 | 工作包 | 延续 WP01、WP03、WP05、WP07、WP14–WP16 |
 | 前置条件 | 32-package Gate；secure dry-run、ServiceContext、semantic owner、durability SLI 可用 |
@@ -61,11 +61,16 @@
 
 ### PR-M11-02：SecretProvider 基础合同与本地 Adapter
 
-- [ ] 入口：`[ARCH]` SecretProvider capability、secret wrapper、permission和redaction合同已冻结，不切换安全profile默认值。
-- [ ] `[DEV]` 实现provider contract、显式registry及开发用环境/受限文件adapter；生产provider只通过注入接入。
-- [ ] `[TEST]` focused test：owner-only permission、encrypted envelope、atomic read/write、redacted Debug、zeroize和provider缺失。
-- [ ] `[REV]` 检查secret不进入CLI/env dump/log/config snapshot，security-api不依赖provider实现。
-- [ ] 回滚点：停止注册新provider，保留dry-run与redaction；不得回滚为pretty JSON或宽松权限。
+- [x] 入口：`[ARCH]` SecretProvider capability、secret wrapper、permission和redaction合同已冻结，不切换安全profile默认值。
+- [x] `[DEV]` 实现provider contract、显式registry及开发用环境/受限文件adapter；生产provider只通过注入接入。
+- [x] `[TEST]` focused test：owner-only permission、encrypted envelope、atomic read/write、redacted Debug、zeroize和provider缺失。
+- [x] `[REV]` 检查secret不进入CLI/env dump/log/config snapshot，security-api不依赖provider实现。
+- [x] 回滚点：停止注册新provider，保留dry-run与redaction；不得回滚为pretty JSON或宽松权限。
+
+完成证据：[`11-secret-provider-evidence.md`](11-secret-provider-evidence.md)。合同保持同步且 runtime-neutral；环境
+adapter 只接受显式映射，本地文件 adapter 在 Unix 使用 owner-only AES-256-GCM immutable version，并在
+Windows ACL 未验证时 fail closed。66/82 工作包完成，剩余 M11 10 个、M12 6 个，下一工作包为
+PR-M11-03；本工作包没有切换安全 profile 默认值，也不提前宣称 M10、M11 或 Phase 3 Gate 完成。
 
 ### PR-M11-03：Secure Profile 与一次性 Bootstrap
 

@@ -526,7 +526,15 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] observability 精确 7 组 feature matrix 的 workspace check、strict Clippy 和 package test 全部通过
   - [x] [`M11-01 证据`](phase-3-production-readiness/11-telemetry-semantic-registry-evidence.md) 记录 API、验证、失败修复与回滚边界
   - [x] 65/82 已完成、17 未完成，下一工作包 PR-M11-02；M10/M11/Phase 3 Gate 均未提前宣称完成
-- [ ] PR-M11-02：实现 SecretProvider 基础合同与本地 adapter
+- [x] PR-M11-02：实现 SecretProvider 基础合同与本地 adapter
+  - [x] `rocketmq-security-api` 冻结同步、运行时中立的 provider/name/version/capability/error 合同
+  - [x] `SecretMaterial` 禁止空值、Debug 恒定 redaction，并在显式 zeroize 与 Drop 时清零底层字节
+  - [x] `rocketmq-auth` 提供无全局单例的显式 registry；缺失与重复 provider 均 fail closed
+  - [x] 环境 adapter 只读取显式 logical-name→env allowlist，保持只读且不输出变量名/值
+  - [x] 本地文件 adapter 使用 AES-256-GCM、name+version AAD、owner-only 权限、不可覆盖版本和原子发布
+  - [x] Windows 在没有 owner-only ACL verifier 前拒绝启用；WSL/Linux 真实权限、加密、tamper、版本冲突测试通过
+  - [x] [`M11-02 证据`](phase-3-production-readiness/11-secret-provider-evidence.md) 记录合同、平台测试、API 增量和回滚边界
+  - [x] 66/82 已完成、16 未完成，下一工作包 PR-M11-03；安全默认值、M10/M11/Phase 3 Gate 均未提前宣称完成
 - [ ] PR-M11-03：实现 Secure Profile 与一次性 bootstrap
 - [ ] PR-M11-04：实现 credential/certificate rotation 与原子 reload
 - [ ] PR-M11-05：完成 MCP HTTPS、JWKS 与 Principal 传播

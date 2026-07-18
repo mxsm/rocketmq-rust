@@ -21,6 +21,7 @@ pub mod config;
 pub mod migration;
 pub mod permission;
 pub mod runtime;
+pub mod secret_provider;
 /// Runtime-neutral contracts implemented by authentication and authorization providers.
 pub mod security_api {
     pub use rocketmq_security_api::*;
@@ -52,6 +53,9 @@ pub use runtime::AuthRuntimeBuilder;
 pub use runtime::AuthenticationService;
 pub use runtime::AuthorizationService;
 pub use runtime::ProviderRegistry;
+pub use secret_provider::EncryptedFileSecretProvider;
+pub use secret_provider::EnvironmentSecretProvider;
+pub use secret_provider::SecretProviderRegistry;
 
 #[doc(hidden)]
 pub mod bench_support {
