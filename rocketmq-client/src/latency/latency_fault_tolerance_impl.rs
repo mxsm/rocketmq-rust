@@ -13,10 +13,15 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering as AtomicOrdering;
+use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use parking_lot::RwLock;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use serde::Serialize;
 
@@ -32,12 +37,28 @@ const DETECTOR_SCAN_INTERVAL: Duration = Duration::from_secs(3);
 
 pub struct LatencyFaultToleranceImpl<R, S> {
     fault_item_table: DashMap<CheetahString, FaultItem>,
-    detect_timeout: u32,
-    detect_interval: u32,
+    detect_timeout: AtomicU32,
+    detect_interval: AtomicU32,
     start_detector_enable: AtomicBool,
-    resolver: Option<R>,
-    service_detector: Option<S>,
-    detector_task: Mutex<Option<FaultDetectorTaskHandle>>,
+    resolver: RwLock<Option<Arc<R>>>,
+    service_detector: RwLock<Option<Arc<S>>>,
+    detector_lifecycle: Mutex<DetectorLifecycle>,
+}
+
+#[derive(Default)]
+struct DetectorLifecycle {
+    task: Option<FaultDetectorTaskHandle>,
+    stopping: bool,
+}
+
+struct DetectorStoppingReset<'a> {
+    lifecycle: &'a Mutex<DetectorLifecycle>,
+}
+
+impl Drop for DetectorStoppingReset<'_> {
+    fn drop(&mut self) {
+        self.lifecycle.lock().stopping = false;
+    }
 }
 
 struct FaultDetectorTaskHandle {
@@ -88,35 +109,66 @@ pub struct LatencyFaultDetectorLifecycleProbe {
 impl<R, S> LatencyFaultToleranceImpl<R, S> {
     pub fn new() -> Self {
         Self {
-            resolver: None,
-            service_detector: None,
+            resolver: RwLock::new(None),
+            service_detector: RwLock::new(None),
             fault_item_table: Default::default(),
-            detect_timeout: 200,
-            detect_interval: 2000,
+            detect_timeout: AtomicU32::new(200),
+            detect_interval: AtomicU32::new(2000),
             start_detector_enable: AtomicBool::new(false),
-            detector_task: Mutex::new(None),
+            detector_lifecycle: Mutex::new(DetectorLifecycle::default()),
         }
     }
 
-    pub fn set_resolver(&mut self, resolver: R) {
-        self.resolver = Some(resolver);
+    pub fn set_resolver(&self, resolver: R) {
+        *self.resolver.write() = Some(Arc::new(resolver));
     }
 
-    pub fn set_service_detector(&mut self, service_detector: S) {
-        self.service_detector = Some(service_detector);
+    pub fn set_service_detector(&self, service_detector: S) {
+        *self.service_detector.write() = Some(Arc::new(service_detector));
     }
 
     #[cfg(test)]
     pub(crate) fn detector_config_for_test(&self) -> (u32, u32) {
-        (self.detect_interval, self.detect_timeout)
+        (
+            self.detect_interval.load(AtomicOrdering::Acquire),
+            self.detect_timeout.load(AtomicOrdering::Acquire),
+        )
     }
 
     pub async fn shutdown_detector(&self) -> bool {
-        let handle = { self.detector_task.lock().take() };
+        let handle = {
+            let mut lifecycle = self.detector_lifecycle.lock();
+            if lifecycle.stopping {
+                return true;
+            }
+            lifecycle.stopping = true;
+            lifecycle.task.take()
+        };
+        let _stopping_reset = DetectorStoppingReset {
+            lifecycle: &self.detector_lifecycle,
+        };
         match handle {
             Some(handle) => handle.shutdown(DETECTOR_TASK_SHUTDOWN_TIMEOUT).await,
             None => true,
         }
+    }
+
+    fn detector_task_count(&self) -> usize {
+        self.detector_lifecycle
+            .lock()
+            .task
+            .as_ref()
+            .map(FaultDetectorTaskHandle::task_count)
+            .unwrap_or_default()
+    }
+
+    fn detector_schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.detector_lifecycle
+            .lock()
+            .task
+            .as_ref()
+            .map(FaultDetectorTaskHandle::schedule_snapshot)
+            .unwrap_or_default()
     }
 }
 
@@ -179,26 +231,42 @@ where
         None
     }
 
-    fn start_detector(this: ArcMut<Self>) {
-        {
-            let guard = this.detector_task.lock();
-            if guard.as_ref().is_some_and(|handle| !handle.is_finished()) {
-                return;
-            }
+    fn start_detector(this: Arc<Self>) {
+        let mut lifecycle = this.detector_lifecycle.lock();
+        if lifecycle.stopping || lifecycle.task.as_ref().is_some_and(|handle| !handle.is_finished()) {
+            return;
         }
 
         if let Some(handle) = spawn_detector_loop(this.clone(), DETECTOR_SCAN_INITIAL_DELAY, DETECTOR_SCAN_INTERVAL) {
-            *this.detector_task.lock() = Some(handle);
+            lifecycle.task = Some(handle);
         }
     }
 
     fn shutdown(&self) {
-        if let Some(handle) = self.detector_task.lock().take() {
+        let handle = {
+            let mut lifecycle = self.detector_lifecycle.lock();
+            if lifecycle.stopping {
+                return;
+            }
+            lifecycle.stopping = true;
+            lifecycle.task.take()
+        };
+        let _stopping_reset = DetectorStoppingReset {
+            lifecycle: &self.detector_lifecycle,
+        };
+        if let Some(handle) = handle {
             handle.abort();
         }
     }
 
     async fn detect_by_one_round(&self) {
+        let resolver = self.resolver.read().clone();
+        let service_detector = self.service_detector.read().clone();
+        let detect_interval = self.detect_interval.load(AtomicOrdering::Acquire);
+        let detect_timeout = self.detect_timeout.load(AtomicOrdering::Acquire);
+        let (Some(resolver), Some(service_detector)) = (resolver, service_detector) else {
+            return;
+        };
         let mut remove_set = HashSet::new();
 
         for entry in self.fault_item_table.iter() {
@@ -208,28 +276,20 @@ where
                 continue;
             }
             fault_item.check_stamp.store(
-                current_millis() + self.detect_interval as u64,
+                current_millis() + detect_interval as u64,
                 std::sync::atomic::Ordering::Release,
             );
 
-            let broker_addr = match self.resolver.as_ref() {
-                Some(resolver) => match resolver.resolve(fault_item.name.as_ref()).await {
-                    Some(addr) => addr,
-                    None => {
-                        remove_set.insert(name.clone());
-                        continue;
-                    }
-                },
-                None => continue,
-            };
-
-            let service_detector = match self.service_detector.as_ref() {
-                Some(d) => d,
-                None => continue,
+            let broker_addr = match resolver.resolve(fault_item.name.as_ref()).await {
+                Some(addr) => addr,
+                None => {
+                    remove_set.insert(name.clone());
+                    continue;
+                }
             };
 
             let service_ok = service_detector
-                .detect(broker_addr.as_str(), self.detect_timeout as u64)
+                .detect(broker_addr.as_str(), detect_timeout as u64)
                 .await;
 
             if service_ok && !fault_item.is_reachable() {
@@ -243,36 +303,33 @@ where
         }
     }
 
-    fn set_detect_timeout(&mut self, detect_timeout: u32) {
-        self.detect_timeout = detect_timeout;
+    fn set_detect_timeout(&self, detect_timeout: u32) {
+        self.detect_timeout.store(detect_timeout, AtomicOrdering::Release);
     }
 
-    fn set_detect_interval(&mut self, detect_interval: u32) {
-        self.detect_interval = detect_interval;
+    fn set_detect_interval(&self, detect_interval: u32) {
+        self.detect_interval.store(detect_interval, AtomicOrdering::Release);
     }
 
-    fn set_start_detector_enable(&mut self, start_detector_enable: bool) {
+    fn set_start_detector_enable(&self, start_detector_enable: bool) {
         self.start_detector_enable
-            .store(start_detector_enable, std::sync::atomic::Ordering::Relaxed);
+            .store(start_detector_enable, AtomicOrdering::Release);
     }
 
     fn is_start_detector_enable(&self) -> bool {
-        self.start_detector_enable.load(std::sync::atomic::Ordering::Acquire)
+        self.start_detector_enable.load(AtomicOrdering::Acquire)
     }
 }
 
-use std::cmp::Ordering;
-use std::hash::Hash;
-use std::sync::atomic::AtomicBool;
-
 use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_rust::ArcMut;
+use std::cmp::Ordering;
+use std::hash::Hash;
 use tracing::error;
 use tracing::info;
 
 fn spawn_detector_loop<R, S>(
-    this: ArcMut<LatencyFaultToleranceImpl<R, S>>,
+    this: Arc<LatencyFaultToleranceImpl<R, S>>,
     initial_delay: Duration,
     scan_interval: Duration,
 ) -> Option<FaultDetectorTaskHandle>
@@ -307,18 +364,13 @@ where
 
 #[doc(hidden)]
 pub async fn run_latency_fault_detector_lifecycle_probe() -> LatencyFaultDetectorLifecycleProbe {
-    let detector = ArcMut::new(LatencyFaultToleranceImpl::<ProbeResolver, ProbeServiceDetector>::new());
-    detector.mut_from_ref().set_start_detector_enable(true);
+    let detector = Arc::new(LatencyFaultToleranceImpl::<ProbeResolver, ProbeServiceDetector>::new());
+    detector.set_start_detector_enable(true);
     let handle = spawn_detector_loop(detector.clone(), Duration::ZERO, Duration::from_millis(1))
         .expect("latency fault detector probe task should start");
-    *detector.detector_task.lock() = Some(handle);
+    detector.detector_lifecycle.lock().task = Some(handle);
 
-    let mut snapshots = detector
-        .detector_task
-        .lock()
-        .as_ref()
-        .map(FaultDetectorTaskHandle::schedule_snapshot)
-        .unwrap_or_default();
+    let mut snapshots = detector.detector_schedule_snapshot();
     for _ in 0..100 {
         if snapshots
             .iter()
@@ -327,33 +379,18 @@ pub async fn run_latency_fault_detector_lifecycle_probe() -> LatencyFaultDetecto
             break;
         }
         tokio::time::sleep(Duration::from_millis(1)).await;
-        snapshots = detector
-            .detector_task
-            .lock()
-            .as_ref()
-            .map(FaultDetectorTaskHandle::schedule_snapshot)
-            .unwrap_or_default();
+        snapshots = detector.detector_schedule_snapshot();
     }
 
     let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
     let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
     let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
     let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
-    let task_count_before_shutdown = detector
-        .detector_task
-        .lock()
-        .as_ref()
-        .map(FaultDetectorTaskHandle::task_count)
-        .unwrap_or_default();
+    let task_count_before_shutdown = detector.detector_task_count();
     let shutdown_started_at = std::time::Instant::now();
     let shutdown_healthy = detector.shutdown_detector().await;
     let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
-    let task_count_after_shutdown = detector
-        .detector_task
-        .lock()
-        .as_ref()
-        .map(FaultDetectorTaskHandle::task_count)
-        .unwrap_or_default();
+    let task_count_after_shutdown = detector.detector_task_count();
     let healthy = shutdown_healthy
         && scheduled_runs > 0
         && scheduled_overlaps == 0
@@ -545,6 +582,7 @@ impl std::fmt::Display for FaultItem {
 mod tests {
     use std::future::pending;
     use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
 
     use super::*;
@@ -573,6 +611,26 @@ mod tests {
         }
     }
 
+    struct StaticResolver;
+
+    impl Resolver for StaticResolver {
+        async fn resolve(&self, _name: &CheetahString) -> Option<CheetahString> {
+            Some(CheetahString::from_static_str("127.0.0.1:10911"))
+        }
+    }
+
+    struct RecordingServiceDetector {
+        timeout_millis: Arc<AtomicU64>,
+    }
+
+    impl ServiceDetector for RecordingServiceDetector {
+        async fn detect(&self, _endpoint: &str, timeout_millis: u64) -> bool {
+            self.timeout_millis
+                .store(timeout_millis, std::sync::atomic::Ordering::Release);
+            true
+        }
+    }
+
     #[test]
     fn fault_item_compare_to_matches_java_comparable_shape() {
         let fast = FaultItem::new(CheetahString::from("fast"));
@@ -585,9 +643,29 @@ mod tests {
         assert_eq!(fast.compare_to(&fast), 0);
     }
 
+    #[tokio::test]
+    async fn shared_detector_dependency_and_config_snapshots_drive_one_round() {
+        let detector = Arc::new(LatencyFaultToleranceImpl::<StaticResolver, RecordingServiceDetector>::new());
+        let timeout_millis = Arc::new(AtomicU64::new(0));
+        detector.set_resolver(StaticResolver);
+        detector.set_service_detector(RecordingServiceDetector {
+            timeout_millis: timeout_millis.clone(),
+        });
+        detector.set_detect_timeout(321);
+        detector.set_detect_interval(12_345);
+        let broker = CheetahString::from_static_str("broker-a");
+        detector.update_fault_item(broker.clone(), 10, 0, false).await;
+
+        detector.detect_by_one_round().await;
+
+        assert!(detector.is_reachable(&broker));
+        assert_eq!(timeout_millis.load(std::sync::atomic::Ordering::Acquire), 321);
+        assert_eq!(detector.detector_config_for_test(), (12_345, 321));
+    }
+
     #[test]
     fn start_detector_without_tokio_runtime_does_not_spawn_panic() {
-        let detector = ArcMut::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new());
+        let detector = Arc::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new());
 
         LatencyFaultTolerance::start_detector(detector.clone());
         detector.shutdown();
@@ -618,7 +696,7 @@ mod tests {
             },
         )
         .expect("scheduled detector test task should start");
-        *detector.detector_task.lock() = Some(FaultDetectorTaskHandle { handle });
+        detector.detector_lifecycle.lock().task = Some(FaultDetectorTaskHandle { handle });
 
         tokio::time::timeout(Duration::from_secs(1), async {
             while !started.load(std::sync::atomic::Ordering::Acquire) {
@@ -630,7 +708,7 @@ mod tests {
 
         detector.shutdown();
 
-        assert!(detector.detector_task.lock().is_none());
+        assert!(detector.detector_lifecycle.lock().task.is_none());
         tokio::time::timeout(Duration::from_secs(1), async {
             while !dropped.load(std::sync::atomic::Ordering::Acquire) {
                 tokio::task::yield_now().await;
@@ -709,13 +787,34 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_detector_waits_for_started_detector_task() {
-        let detector = ArcMut::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new());
+        let detector = Arc::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new());
 
         LatencyFaultTolerance::start_detector(detector.clone());
 
-        assert!(detector.detector_task.lock().is_some());
+        assert!(detector.detector_lifecycle.lock().task.is_some());
         assert!(detector.shutdown_detector().await);
-        assert!(detector.detector_task.lock().is_none());
+        assert!(detector.detector_lifecycle.lock().task.is_none());
+    }
+
+    #[tokio::test]
+    async fn concurrent_detector_start_publishes_one_owned_task() {
+        let detector = Arc::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new());
+        let starts = (0..8)
+            .map(|_| {
+                let detector = detector.clone();
+                tokio::spawn(async move {
+                    LatencyFaultTolerance::start_detector(detector);
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for start in starts {
+            start.await.expect("detector start task should finish");
+        }
+
+        assert_eq!(detector.detector_task_count(), 1);
+        assert!(detector.shutdown_detector().await);
+        assert_eq!(detector.detector_task_count(), 0);
     }
 
     #[tokio::test]

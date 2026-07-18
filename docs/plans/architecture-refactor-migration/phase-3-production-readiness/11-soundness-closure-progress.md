@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～k 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～l 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -39,6 +39,9 @@ M11-12j 的 Remoting protocol compatibility 由 Issue #8313 跟踪，分支为
 
 M11-12k 的 Client ProduceAccumulator owner 由 Issue #8315 跟踪，分支为
 `mxsm/architecture-refactor-client-produce-accumulator`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12l 的 Client latency fault detector owner 由 Issue #8317 跟踪，分支为
+`mxsm/architecture-refactor-client-latency-fault`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -305,6 +308,32 @@ M11-12k 后实际快照为 744 个条目：production 463、test 267、compatibi
 reviewed baseline 只删除源码真实消失的 3 个 identity/10 个 occurrence，不需要 relocation approval；baseline
 747→744、occurrences 2,301→2,291，分类精确为 production 463/1,495、test 267/756、compatibility 14/40。
 
+## M11-12l Client latency fault detector owner
+
+| 目标 | 实现与证据 |
+|---|---|
+| 安全共享 owner | `LatencyFaultTolerance::start_detector`、实现、`MQFaultStrategy`、available/reachable filters、probe 与 tests 全部使用标准 `Arc`，latency production 不再传播共享可变 facade |
+| 原子 detector 配置 | detect timeout、interval 与 enabled flag 使用 acquire/release 原子 load/store；Java-compatible 默认值和 constructor/runtime setter 语义保持 |
+| 依赖快照 | resolver 与 service detector 以 `RwLock<Option<Arc<_>>>` 发布；每轮检测只在短临界区克隆快照，网络 resolve/detect await 不持配置锁 |
+| 单一 task lifecycle | start 的既有 task 检查与新 scheduled task 发布合并到同一 lifecycle mutex；stopping 状态排除 shutdown 期间 restart，取消安全 reset 恢复后续可启动状态 |
+| 行为合同 | 8 路并发 start 只发布一个 owned scheduled task；同步 abort、异步 deadline shutdown、probe schedule metrics、broker availability/reachability 与 config copy 合同保持通过 |
+
+M11-12l 后实际快照为 732 个条目：production 454、test 264、compatibility 14；production occurrence 为
+1,481。相对 M11-12k 删除 9 个 production 条目/14 个 production occurrence，以及 3 个 test 条目/4 个
+test occurrence；相对初始快照累计删除 306 个 production 条目和 644 个 production occurrence。
+`rocketmq-client` production 债务从 143/589 降至 134/575；latency production 债务清零。剩余 production 债务为：
+
+| crate | 条目 | occurrence |
+|---|---:|---:|
+| `rocketmq-broker` | 190 | 568 |
+| `rocketmq-client` | 134 | 575 |
+| `rocketmq-store` | 127 | 324 |
+| `rocketmq-tools` | 3 | 14 |
+
+reviewed baseline 只删除三个 latency 文件中真实消失的 12 个 identity/18 个 occurrence，不需要 relocation
+approval；baseline 744→732、occurrences 2,291→2,273，分类精确为 production 454/1,481、test 264/752、
+compatibility 14/40。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -545,9 +574,28 @@ M11-12k 追加验证：
 | `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
 | `git diff --check` | 通过 |
 
+M11-12l 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过 |
+| `cargo test -p rocketmq-client-rust latency --lib` | 11/11 通过；包含依赖/config 快照、8 路并发 start 单 task、同步/异步 shutdown 与 lifecycle probe |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 全部通过；library 958/958，其余 integration targets 全部通过（35 项既有外部环境测试忽略） |
+| `python scripts/arc_mut_guard.py --bootstrap target/m11-12l-final-after.json` | 实际 732 条；production 454/1,481、test 264/752、compatibility 14/40 occurrences |
+| reviewed baseline reduction | 无 relocation approval；只删除三个 latency 文件中的真实消失债务，baseline 744→732、occurrences 2,291→2,273 |
+| `python scripts/arc_mut_guard.py` | 通过 |
+| `python -m unittest scripts.tests.test_arc_mut_guard -v` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；detector scheduled task 继续由 Client runtime owner 跟踪，lifecycle 锁不跨网络或 shutdown await |
+| `rocketmq-example`: `cargo fmt --all -- --check` / `cargo clippy --all-targets -- -D warnings` | standalone 消费者通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
-1. Client MQClientInstance、Producer/Admin、Push/Lite Consumer owner（143/589）。
+1. Client MQClientInstance、Producer/Admin、Push/Lite Consumer owner（134/575）。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 4. Tools 3/14、compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。

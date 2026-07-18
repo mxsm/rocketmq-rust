@@ -275,6 +275,11 @@ M11-12k 已把 Client ProduceAccumulator 的 Manager/Producer 共享 owner 从 `
 await 前取出 owned handle。实际快照累计降至 463 production/1,495 occurrences，Client 降至 143/589；其余
 Client owner、Broker/Store、Tools/compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12l 已把 Client latency fault detector 的 trait/strategy/filter/task capture 改为安全 `Arc`；detector 配置原子
+发布，resolver/service detector 通过短 `RwLock` 克隆 `Arc` 快照后再执行网络 await，task 发布与关闭由单一
+lifecycle mutex 串行。实际快照累计降至 454 production/1,481 occurrences，Client 降至 134/575；其余 Client
+owner、Broker/Store、Tools/compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
