@@ -141,8 +141,8 @@ receiver 收窄和 1 个相邻 import token context 的一对一 relocation，ap
 M11-12f 后实际快照为 1,008 个条目：production 669、test 325、compatibility 14；production occurrence 为
 1,918。相对 M11-12e 删除 19 个 production 条目和 41 个 production occurrence；相对初始快照累计删除
 91 个 production 条目和 207 个 production occurrence。`rocketmq-namesrv` production 债务由 47 条/99 occurrence
-降至 28 条/58 occurrence；剩余项精确为 V1 tables 16/44、remoting client 4/7 和
-`ConnectionHandlerContext` boundary 8/7。
+降至 28 条/58 occurrence；剩余项精确为 V1 tables 16/44、remoting client 4/5 和
+`ConnectionHandlerContext` boundary 8/9。Issue #8305 只校正该子类别分配，不改变总量或 reviewed baseline。
 
 reviewed baseline 为 1,008 条、production 669/1,921 occurrences。临时 ADR-013 approval 只批准 9 条同 item
 一对一 relocation，approval 不提交；baseline 1,029→1,008、occurrence 2,942→2,899。默认 guard 仍精确失败切片前
