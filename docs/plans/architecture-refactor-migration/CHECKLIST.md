@@ -29,15 +29,15 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 72 | 0 | 10 未开始；合计 10 尚未完成 | 82 |
+| PR 级工作包 | 73 | 0 | 9 未开始；合计 9 尚未完成 | 82 |
 | 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 1（M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 10 个未开始工作包分布：M10 为 0 个、M11 为 4 个、M12 为 6 个。
+剩余 9 个未开始工作包分布：M10 为 0 个、M11 为 3 个、M12 为 6 个。
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
-`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-09。
+`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-10。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -588,7 +588,16 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [ ] Docker/Syft/Trivy/Cosign 本机不可用；M11-07 远端 build 已暴露 slim runtime 缺 CA bundle，M11-08 增加“签名 snapshot HTTP 引导 CA→HTTPS”修复，但未观察修复后五镜像动态套件成功，容器 `[TEST]` Gate 保持开放
   - [x] [`M11-08 证据`](phase-3-production-readiness/11-service-image-entrypoints-evidence.md) 记录 owner 合同、signal 接线、验证边界和逐服务 digest 回滚
   - [x] 72/82 已完成、10 未完成，下一工作包 PR-M11-09；M10/M11/Phase 3/HUMAN/ARCH 及容器动态 `[TEST]` Gate 均未提前宣称完成
-- [ ] PR-M11-09：交付 Helm 与 Kustomize 资产
+- [x] PR-M11-09：交付 Helm 与 Kustomize 资产
+  - [ ] 入口 `[ARCH]`：五服务 schema/资源/state/secret 边界已版本化；production 签名 digest 与目标集群三个 Controller Service IP 尚未冻结，测试 fixture 不签署入口 Gate
+  - [x] canonical Helm chart 与确定性 Kustomize base/secure overlay 交付 37 个资源；默认 digest/IP sentinel fail closed，base 镜像归零
+  - [x] Broker/NameServer/Controller 使用 StatefulSet 与 Retain PVC；Proxy 保持 stateless；MCP 单副本 Recreate 且独占 retained audit PVC
+  - [x] requests/limits、PDB、hostname/zone topology、default-deny NetworkPolicy、restricted Pod Security、UID/GID 10001 与外部 Secret/SecretProviderClass 引用合同闭合
+  - [x] Controller remoting/Raft 修正为 60109/60110；三份 ordinal config 使用稳定 ClusterIP，显式多成员 bootstrap 仅由最小 node ID 执行；真实 formed quorum 留给 M11-11
+  - [x] Helm v4.2.3、Kustomize v5.8.1、Kubeconform v0.8.0 archive hash 固定；lint/template/build、37/37 双 render schema、deterministic parity 与 8 组正负测试通过
+  - [x] M11-09 禁止 probe/preStop/lifecycle/grace，避免提前伪造 M11-10 readiness/drain 语义；五份 rendered 配置经真实二进制解析
+  - [x] [`M11-09 证据`](phase-3-production-readiness/11-helm-kustomize-assets-evidence.md) 记录部署边界、Controller/MCP 修正、工具链、未签署 Gate 与不降级 PVC 的回滚策略
+  - [x] 73/82 已完成、9 未完成，下一工作包 PR-M11-10；M10/M11/Phase 3/HUMAN/ARCH、容器动态 `[TEST]` 与集群 fault Gate 均未提前宣称完成
 - [ ] PR-M11-10：统一 Probe、PreStop 与 Drain
 - [ ] PR-M11-11：完成 Kind/K3d fault matrix Gate
 - [ ] PR-M11-12：完成 ArcMut、stable 与 SLO Phase 3 收口

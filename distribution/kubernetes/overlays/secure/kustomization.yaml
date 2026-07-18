@@ -1,0 +1,21 @@
+# non-publishable rendering fixture only. Replace every digest with a verified signed production digest before deployment.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/mxsm/rocketmq-rust/broker
+    newName: ghcr.io/mxsm/rocketmq-rust/broker
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  - name: ghcr.io/mxsm/rocketmq-rust/namesrv
+    newName: ghcr.io/mxsm/rocketmq-rust/namesrv
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+  - name: ghcr.io/mxsm/rocketmq-rust/controller
+    newName: ghcr.io/mxsm/rocketmq-rust/controller
+    digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
+  - name: ghcr.io/mxsm/rocketmq-rust/proxy
+    newName: ghcr.io/mxsm/rocketmq-rust/proxy
+    digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
+  - name: ghcr.io/mxsm/rocketmq-rust/mcp
+    newName: ghcr.io/mxsm/rocketmq-rust/mcp
+    digest: sha256:5555555555555555555555555555555555555555555555555555555555555555

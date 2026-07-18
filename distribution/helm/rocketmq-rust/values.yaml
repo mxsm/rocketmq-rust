@@ -1,0 +1,77 @@
+global:
+  imageRegistry: ghcr.io/mxsm/rocketmq-rust
+  imagePullSecrets: []
+  otelEndpoint: http://otel-collector.observability.svc.cluster.local:4317
+  secretRefs:
+    existingSecret: rocketmq-runtime-secrets
+    secretProviderClassName: ""
+  podSecurity:
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+
+namespace:
+  create: true
+
+networkPolicy:
+  enabled: true
+  clientNamespaceLabel: rocketmq.apache.org/client-access
+  observabilityNamespaceLabel: rocketmq.apache.org/observability
+
+services:
+  broker:
+    replicas: 1
+    image:
+      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    persistence:
+      storageClassName: rocketmq-retain
+      size: 100Gi
+    resources:
+      requests: {cpu: 1000m, memory: 2Gi}
+      limits: {cpu: 4000m, memory: 8Gi}
+  namesrv:
+    replicas: 3
+    image:
+      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    persistence:
+      storageClassName: rocketmq-retain
+      size: 2Gi
+    resources:
+      requests: {cpu: 250m, memory: 256Mi}
+      limits: {cpu: 1000m, memory: 1Gi}
+  controller:
+    replicas: 3
+    peerServiceClusterIPs:
+      - 192.0.2.1
+      - 192.0.2.2
+      - 192.0.2.3
+    image:
+      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    persistence:
+      storageClassName: rocketmq-retain
+      size: 10Gi
+    resources:
+      requests: {cpu: 500m, memory: 512Mi}
+      limits: {cpu: 2000m, memory: 2Gi}
+  proxy:
+    replicas: 2
+    image:
+      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    resources:
+      requests: {cpu: 500m, memory: 512Mi}
+      limits: {cpu: 2000m, memory: 2Gi}
+  mcp:
+    replicas: 1
+    image:
+      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    publicBaseUrl: https://mcp.example.invalid
+    oauth:
+      issuer: https://issuer.example.invalid
+      audience: rocketmq-mcp
+      jwksUrl: https://issuer.example.invalid/.well-known/jwks.json
+    persistence:
+      storageClassName: rocketmq-retain
+      size: 10Gi
+    resources:
+      requests: {cpu: 250m, memory: 256Mi}
+      limits: {cpu: 1000m, memory: 1Gi}

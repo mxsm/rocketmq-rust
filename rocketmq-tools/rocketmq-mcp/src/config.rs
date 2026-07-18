@@ -430,6 +430,7 @@ const fn default_jwks_max_stale_seconds() -> u64 {
 #[serde(rename_all = "kebab-case")]
 pub enum HttpAuthMode {
     DevelopmentToken,
+    #[serde(rename = "oauth-jwt", alias = "o-auth-jwt")]
     OAuthJwt,
 }
 
@@ -560,6 +561,19 @@ mod tests {
         assert_eq!(config.diagnosis.consumer_lag_threshold, 1_000);
         assert_eq!(config.audit.max_record_bytes, 16 * 1024);
         assert_eq!(config.audit.queue_max_bytes, 1024 * 1024);
+    }
+
+    #[test]
+    fn oauth_auth_mode_accepts_the_documented_kebab_case_value() {
+        assert_eq!(
+            serde_json::from_str::<HttpAuthMode>(r#""oauth-jwt""#).unwrap(),
+            HttpAuthMode::OAuthJwt
+        );
+        assert_eq!(
+            serde_json::from_str::<HttpAuthMode>(r#""o-auth-jwt""#).unwrap(),
+            HttpAuthMode::OAuthJwt,
+            "retain the previously derived acronym spelling as a compatibility alias"
+        );
     }
 
     #[test]

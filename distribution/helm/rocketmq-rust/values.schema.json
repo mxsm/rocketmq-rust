@@ -1,0 +1,384 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/mxsm/rocketmq-rust/distribution/helm/rocketmq-rust/values.schema.json",
+  "title": "RocketMQ Rust secure deployment values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "global",
+    "namespace",
+    "networkPolicy",
+    "services"
+  ],
+  "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "imageRegistry",
+        "imagePullSecrets",
+        "otelEndpoint",
+        "secretRefs",
+        "podSecurity"
+      ],
+      "properties": {
+        "imageRegistry": {
+          "const": "ghcr.io/mxsm/rocketmq-rust"
+        },
+        "imagePullSecrets": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "otelEndpoint": {
+          "type": "string",
+          "pattern": "^https?://[^\\s]+:4317$"
+        },
+        "secretRefs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "existingSecret",
+            "secretProviderClassName"
+          ],
+          "properties": {
+            "existingSecret": {
+              "type": "string"
+            },
+            "secretProviderClassName": {
+              "type": "string"
+            }
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "existingSecret": {
+                  "minLength": 1
+                },
+                "secretProviderClassName": {
+                  "maxLength": 0
+                }
+              }
+            },
+            {
+              "properties": {
+                "existingSecret": {
+                  "maxLength": 0
+                },
+                "secretProviderClassName": {
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        },
+        "podSecurity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "runAsUser",
+            "runAsGroup",
+            "fsGroup"
+          ],
+          "properties": {
+            "runAsUser": {
+              "const": 10001
+            },
+            "runAsGroup": {
+              "const": 10001
+            },
+            "fsGroup": {
+              "const": 10001
+            }
+          }
+        }
+      }
+    },
+    "namespace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "create"
+      ],
+      "properties": {
+        "create": {
+          "const": true
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "clientNamespaceLabel",
+        "observabilityNamespaceLabel"
+      ],
+      "properties": {
+        "enabled": {
+          "const": true
+        },
+        "clientNamespaceLabel": {
+          "const": "rocketmq.apache.org/client-access"
+        },
+        "observabilityNamespaceLabel": {
+          "const": "rocketmq.apache.org/observability"
+        }
+      }
+    },
+    "services": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "broker",
+        "namesrv",
+        "controller",
+        "proxy",
+        "mcp"
+      ],
+      "properties": {
+        "broker": {
+          "$ref": "#/definitions/broker"
+        },
+        "namesrv": {
+          "$ref": "#/definitions/namesrv"
+        },
+        "controller": {
+          "$ref": "#/definitions/controller"
+        },
+        "proxy": {
+          "$ref": "#/definitions/proxy"
+        },
+        "mcp": {
+          "$ref": "#/definitions/mcp"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "digest"
+      ],
+      "properties": {
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requests",
+        "limits"
+      ],
+      "properties": {
+        "requests": {
+          "$ref": "#/definitions/resourcePair"
+        },
+        "limits": {
+          "$ref": "#/definitions/resourcePair"
+        }
+      }
+    },
+    "resourcePair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu",
+        "memory"
+      ],
+      "properties": {
+        "cpu": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(m)?$"
+        },
+        "memory": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(Mi|Gi)$"
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "storageClassName",
+        "size"
+      ],
+      "properties": {
+        "storageClassName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*Gi$"
+        }
+      }
+    },
+    "broker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "persistence",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "const": 1
+        },
+        "image": {
+          "$ref": "#/definitions/digest"
+        },
+        "persistence": {
+          "$ref": "#/definitions/persistence"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "namesrv": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "persistence",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "const": 3
+        },
+        "image": {
+          "$ref": "#/definitions/digest"
+        },
+        "persistence": {
+          "$ref": "#/definitions/persistence"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "peerServiceClusterIPs",
+        "image",
+        "persistence",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "const": 3
+        },
+        "peerServiceClusterIPs": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$"
+          }
+        },
+        "image": {
+          "$ref": "#/definitions/digest"
+        },
+        "persistence": {
+          "$ref": "#/definitions/persistence"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "const": 2
+        },
+        "image": {
+          "$ref": "#/definitions/digest"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "publicBaseUrl",
+        "oauth",
+        "persistence",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "const": 1
+        },
+        "image": {
+          "$ref": "#/definitions/digest"
+        },
+        "publicBaseUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "oauth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "issuer",
+            "audience",
+            "jwksUrl"
+          ],
+          "properties": {
+            "issuer": {
+              "type": "string",
+              "pattern": "^https://"
+            },
+            "audience": {
+              "type": "string",
+              "minLength": 1
+            },
+            "jwksUrl": {
+              "type": "string",
+              "pattern": "^https://"
+            }
+          }
+        },
+        "persistence": {
+          "$ref": "#/definitions/persistence"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    }
+  }
+}

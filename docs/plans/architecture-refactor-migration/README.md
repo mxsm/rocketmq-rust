@@ -1,10 +1,10 @@
 # RocketMQ Rust 架构重构迁移执行手册
 
-> 状态：实施中（Phase 3；M10 真实性能/HUMAN Gate 待验收，M11 已完成安全 profile/bootstrap/rotation、MCP HTTPS/audit 与五服务镜像入口，下一工作包为 PR-M11-09）
+> 状态：实施中（Phase 3；M10 真实性能/HUMAN Gate 待验收，M11 已完成安全 profile/bootstrap/rotation、MCP HTTPS/audit、五服务镜像入口与 Helm/Kustomize 资产，下一工作包为 PR-M11-10）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
-> 当前复核状态：根 workspace 已达到目标 32 个 package；72/82 工作包完成，剩余 10 个
+> 当前复核状态：根 workspace 已达到目标 32 个 package；73/82 工作包完成，剩余 9 个
 
 ## 1. 使用方式
 
@@ -220,6 +220,8 @@ python scripts/architecture_performance_guard.py --validate-profiles
 python scripts/architecture_performance_guard.py --baseline <baseline.json> --candidate <candidate.json>
 python scripts/telemetry_semantic_guard.py
 python scripts/arc_mut_guard.py
+.\scripts\kubernetes-assets-contract.ps1
+python -m unittest scripts.tests.test_m11_kubernetes_assets -v
 .\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline
 .\scripts\check-error-hygiene.ps1
 python scripts/error_architecture_guard.py
@@ -238,7 +240,8 @@ git diff --check
 ```
 
 M10 性能 guard 已落地；`--validate-profiles` 只验证合同，baseline/candidate 命令只有消费真实目标硬件报告时
-才构成性能验收。M11 telemetry semantic guard 已随 PR-M11-01 落地并包含正向和故意违规 fixture；Kind/K3d
+才构成性能验收。M11 telemetry semantic guard 已随 PR-M11-01 落地并包含正向和故意违规 fixture；Helm/
+Kustomize contract 已随 PR-M11-09 落地并校验确定性 render、Kubernetes 1.32 schema 与部署策略。Kind/K3d
 脚本落地前，用现有测试和人工证据完成同等预检，脚本落地的 PR 也必须提供正负 fixture。
 
 ### 9.3 证据目录

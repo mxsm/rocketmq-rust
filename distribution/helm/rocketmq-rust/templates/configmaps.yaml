@@ -1,0 +1,219 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-broker-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "broker") | indent 4 }}
+data:
+  broker.toml: |-
+    listenPort = 10911
+    brokerIp1 = "rocketmq-broker-0.rocketmq-broker-headless.{{ .Release.Namespace }}.svc.cluster.local"
+    storePathRootDir = "/var/lib/rocketmq/broker"
+    namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876"
+    autoCreateTopicEnable = false
+    authConfigPath = "/var/lib/rocketmq/broker/auth"
+    aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
+    aclFileWatchEnabled = true
+    authenticationEnabled = true
+    authorizationEnabled = true
+    signatureAlgorithm = "HmacSHA256"
+
+    [brokerIdentity]
+    brokerName = "rocketmq-broker"
+    brokerClusterName = "RocketmqRust"
+    brokerId = 0
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-namesrv-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "namesrv") | indent 4 }}
+data:
+  namesrv.toml: |-
+    rocketmqHome = "/var/lib/rocketmq/namesrv"
+    kvConfigPath = "/var/lib/rocketmq/namesrv/kvConfig.json"
+    configStorePath = "/var/lib/rocketmq/namesrv/namesrv.properties"
+    needWaitForService = false
+    listenPort = 9876
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-controller-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "controller") | indent 4 }}
+data:
+{{- range $ordinal := until 3 }}
+  controller-{{ $ordinal }}.toml: |-
+    rocketmqHome = "/var/lib/rocketmq/controller"
+    configStorePath = "/var/lib/rocketmq/controller/controller.properties"
+    controllerType = "Raft"
+    scanNotActiveBrokerInterval = 5000
+    controllerThreadPoolNums = 16
+    controllerRequestThreadPoolQueueCapacity = 50000
+    mappedFileSize = 1048576
+    controllerStorePath = "/var/lib/rocketmq/controller"
+    electMasterMaxRetryCount = 3
+    enableElectUncleanMaster = false
+    isProcessReadEvent = false
+    notifyBrokerRoleChanged = true
+    scanInactiveMasterInterval = 5000
+    raftScanWaitTimeoutMs = 1000
+    metricsExporterType = "disable"
+    metricsGrpcExporterTarget = ""
+    metricsGrpcExporterHeader = ""
+    metricGrpcExporterTimeOutInMills = 3000
+    metricGrpcExporterIntervalInMills = 60000
+    metricLoggingExporterIntervalInMills = 10000
+    metricsPromExporterPort = 5557
+    metricsPromExporterHost = ""
+    metricsLabel = ""
+    metricsInDelta = false
+    configBlackList = "configBlackList;configStorePath"
+    nodeId = {{ add $ordinal 1 }}
+    listenAddr = "0.0.0.0:60109"
+    electionTimeoutMs = 1000
+    heartbeatIntervalMs = 300
+    storagePath = "/var/lib/rocketmq/controller/node-{{ add $ordinal 1 }}"
+    storageBackend = "File"
+    enableElectUncleanMasterLocal = false
+{{- range $peer := until 3 }}
+
+    [[raftPeers]]
+    id = {{ add $peer 1 }}
+    addr = "{{ include "rocketmq.controllerServiceIP" (dict "address" (index $.Values.services.controller.peerServiceClusterIPs $peer)) }}:60110"
+
+    [[controllerPeers]]
+    id = {{ add $peer 1 }}
+    addr = "{{ include "rocketmq.controllerServiceIP" (dict "address" (index $.Values.services.controller.peerServiceClusterIPs $peer)) }}:60109"
+{{- end }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-proxy-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "proxy") | indent 4 }}
+data:
+  proxy.toml: |-
+    mode = "cluster"
+    enableAclRpcHookForClusterMode = true
+
+    [grpc]
+    listenAddr = "0.0.0.0:8081"
+
+    [remoting]
+    enabled = true
+    listenAddr = "0.0.0.0:8080"
+
+    [cluster]
+    namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876"
+
+    [auth]
+    authenticationEnabled = true
+    authorizationEnabled = true
+    authConfigPath = "/var/lib/rocketmq/proxy/auth"
+    aclFile = "/var/run/secrets/rocketmq/proxy-acl.yml"
+    aclFileWatchEnabled = true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-mcp-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "mcp") | indent 4 }}
+data:
+  mcp.toml: |-
+    [server]
+    name = "rocketmq-mcp"
+    version = "1.0.0"
+    transport = "streamable-http"
+    log_level = "info"
+
+    [server.stdio]
+    log_to_stderr = true
+
+    [server.http]
+    bind = "0.0.0.0:8089"
+    endpoint = "/mcp"
+    public_base_url = {{ .Values.services.mcp.publicBaseUrl | quote }}
+    validate_origin = true
+    allowed_origins = [{{ .Values.services.mcp.publicBaseUrl | quote }}]
+
+    [server.http.tls]
+    cert_path = "/var/run/secrets/rocketmq/tls.crt"
+    key_path = "/var/run/secrets/rocketmq/tls.key"
+
+    [server.http.auth]
+    mode = "oauth-jwt"
+    development_token_env = "ROCKETMQ_MCP_HTTP_TOKEN_DISABLED"
+    issuer = {{ .Values.services.mcp.oauth.issuer | quote }}
+    audience = {{ .Values.services.mcp.oauth.audience | quote }}
+    required_scopes = ["rocketmq:read"]
+    jwt_algorithm = "rs256"
+    jwt_key_env = ""
+    jwks_url = {{ .Values.services.mcp.oauth.jwksUrl | quote }}
+    jwks_refresh_seconds = 300
+    jwks_max_stale_seconds = 900
+    protected_resource_metadata_path = "/.well-known/oauth-protected-resource"
+
+    [[clusters]]
+    name = "rocketmq-rust"
+    namesrv_addr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876"
+    default = true
+
+    [security]
+    profile = "diagnose"
+    allow_change_planning = false
+    sanitize_output = true
+    rate_limit_per_minute = 60
+    permissions_file = "/etc/rocketmq/permissions.toml"
+    max_concurrent_requests_per_cluster = 8
+
+    [audit]
+    enabled = true
+    sink = "file"
+    path = "/var/lib/rocketmq/mcp/audit/rocketmq-mcp-audit.log"
+    queue_capacity = 1024
+    max_record_bytes = 16384
+    queue_max_bytes = 1048576
+    history_limit = 100
+
+    [cache]
+    enabled = true
+    max_entries = 256
+    cluster_overview_ttl_ms = 3000
+    topic_list_ttl_ms = 5000
+    broker_metrics_ttl_ms = 2000
+    consumer_lag_ttl_ms = 1000
+
+    [diagnosis]
+    consumer_lag_policy_profile = "production-default"
+    consumer_lag_threshold = 1000
+  permissions.toml: |-
+    [roles.read_only]
+    allowed_clusters = ["*"]
+    allow_tools = [
+      "rocketmq_get_cluster_overview",
+      "rocketmq_list_topics",
+      "rocketmq_describe_topic",
+      "rocketmq_get_topic_route",
+      "rocketmq_list_consumer_groups",
+      "rocketmq_get_consumer_lag",
+      "rocketmq_describe_broker"
+    ]
+    deny_tools = ["*"]
+
+    [roles.diagnose]
+    include = ["read_only"]
+    allowed_clusters = ["*"]
+    allow_tools = [
+      "rocketmq_diagnose_consumer_lag"
+    ]

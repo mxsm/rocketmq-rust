@@ -113,7 +113,7 @@ metricsInDelta = false
 configBlackList = "configBlackList;configStorePath"
 
 nodeId = 1
-listenAddr = "127.0.0.1:9878"
+listenAddr = "127.0.0.1:60109"
 controllerPeers = []
 electionTimeoutMs = 1000
 heartbeatIntervalMs = 300
@@ -123,11 +123,21 @@ enableElectUncleanMasterLocal = false
 
 [[raftPeers]]
 id = 1
-addr = "127.0.0.1:9878"
+addr = "127.0.0.1:60110"
 ```
 
 多节点 Controller 集群中，每个节点应使用独立的 `nodeId`、`listenAddr` 和 `storagePath`，所有节点共享相同的
-`raftPeers` 列表。
+`raftPeers` 列表。`listenAddr` 是面向 Broker 的 remoting 端点；每个 `raftPeers.addr` 是对外通告的 OpenRaft
+gRPC 端点，因此必须使用独立端口。
+
+当通告的 Raft 地址无法直接绑定到 Pod 或主机时，设置
+`ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR=<本地 IP>:<Raft 端口>`（例如 `0.0.0.0:60110`）。对外通告地址仍取自
+当前节点对应的 `raftPeers.addr`，该覆盖只改变本地 listener；无效 socket address 会使启动失败。
+
+单成员配置保持自动 bootstrap。多成员 bootstrap 默认关闭，只有显式设置
+`ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER=true`（或 `1`）才启用；启用后仅最小配置 node ID 初始化完整
+membership，已有 committed state 永远不会被重新初始化。运维仍必须验证 leader 与 quorum 确实形成；配置和
+replica 数量本身不是 quorum 证据。
 
 ## 快速开始
 

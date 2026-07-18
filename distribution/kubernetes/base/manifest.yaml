@@ -1,0 +1,1669 @@
+---
+# Source: rocketmq-rust/templates/namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rocketmq
+  labels:
+    app.kubernetes.io/part-of: rocketmq-rust
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+
+---
+# Source: rocketmq-rust/templates/networkpolicies.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-default-deny
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/part-of: rocketmq-rust
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rocketmq-rust
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Source: rocketmq-rust/templates/networkpolicies.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-intra-cluster
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/part-of: rocketmq-rust
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rocketmq-rust
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: rocketmq-rust
+      ports:
+        - {protocol: TCP, port: 10911}
+        - {protocol: TCP, port: 10912}
+        - {protocol: TCP, port: 9876}
+        - {protocol: TCP, port: 60109}
+        - {protocol: TCP, port: 60110}
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 8081}
+        - {protocol: TCP, port: 8089}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: rocketmq-rust
+      ports:
+        - {protocol: TCP, port: 10911}
+        - {protocol: TCP, port: 10912}
+        - {protocol: TCP, port: 9876}
+        - {protocol: TCP, port: 60109}
+        - {protocol: TCP, port: 60110}
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 8081}
+        - {protocol: TCP, port: 8089}
+---
+# Source: rocketmq-rust/templates/networkpolicies.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-dns-egress
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/part-of: rocketmq-rust
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rocketmq-rust
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+# Source: rocketmq-rust/templates/networkpolicies.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-otel-egress
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/part-of: rocketmq-rust
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rocketmq-rust
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              rocketmq.apache.org/observability: "true"
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: otel-collector
+      ports:
+        - {protocol: TCP, port: 4317}
+---
+# Source: rocketmq-rust/templates/networkpolicies.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-broker-client-ingress
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-broker
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: broker
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-broker
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: broker
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              rocketmq.apache.org/client-access: "true"
+      ports:
+        - {protocol: TCP, port: 10911}
+---
+# Source: rocketmq-rust/templates/networkpolicies.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-proxy-client-ingress
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-proxy
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: proxy
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-proxy
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: proxy
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              rocketmq.apache.org/client-access: "true"
+      ports:
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 8081}
+---
+# Source: rocketmq-rust/templates/networkpolicies.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-mcp-client-ingress
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-mcp
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: mcp
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-mcp
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: mcp
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              rocketmq.apache.org/client-access: "true"
+      ports:
+        - {protocol: TCP, port: 8089}
+---
+# Source: rocketmq-rust/templates/networkpolicies.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-mcp-jwks-egress
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-mcp
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: mcp
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-mcp
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: mcp
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - {protocol: TCP, port: 443}
+
+---
+# Source: rocketmq-rust/templates/pdbs.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rocketmq-broker
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-broker
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: broker
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-broker
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: broker
+---
+# Source: rocketmq-rust/templates/pdbs.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rocketmq-controller
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: controller
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-controller
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: controller
+---
+# Source: rocketmq-rust/templates/pdbs.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rocketmq-mcp
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-mcp
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: mcp
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-mcp
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: mcp
+---
+# Source: rocketmq-rust/templates/pdbs.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rocketmq-namesrv
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-namesrv
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: namesrv
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-namesrv
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: namesrv
+---
+# Source: rocketmq-rust/templates/pdbs.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rocketmq-proxy
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-proxy
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: proxy
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-proxy
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: proxy
+---
+# Source: rocketmq-rust/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rocketmq-runtime
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/part-of: rocketmq-rust
+    rocketmq.apache.org/architecture-milestone: M11-09
+automountServiceAccountToken: false
+
+---
+# Source: rocketmq-rust/templates/configmaps.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-broker-config
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-broker
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: broker
+    rocketmq.apache.org/architecture-milestone: M11-09
+data:
+  broker.toml: |-
+    listenPort = 10911
+    brokerIp1 = "rocketmq-broker-0.rocketmq-broker-headless.rocketmq.svc.cluster.local"
+    storePathRootDir = "/var/lib/rocketmq/broker"
+    namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
+    autoCreateTopicEnable = false
+    authConfigPath = "/var/lib/rocketmq/broker/auth"
+    aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
+    aclFileWatchEnabled = true
+    authenticationEnabled = true
+    authorizationEnabled = true
+    signatureAlgorithm = "HmacSHA256"
+
+    [brokerIdentity]
+    brokerName = "rocketmq-broker"
+    brokerClusterName = "RocketmqRust"
+    brokerId = 0
+---
+# Source: rocketmq-rust/templates/configmaps.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-namesrv-config
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-namesrv
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: namesrv
+    rocketmq.apache.org/architecture-milestone: M11-09
+data:
+  namesrv.toml: |-
+    rocketmqHome = "/var/lib/rocketmq/namesrv"
+    kvConfigPath = "/var/lib/rocketmq/namesrv/kvConfig.json"
+    configStorePath = "/var/lib/rocketmq/namesrv/namesrv.properties"
+    needWaitForService = false
+    listenPort = 9876
+---
+# Source: rocketmq-rust/templates/configmaps.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-controller-config
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: controller
+    rocketmq.apache.org/architecture-milestone: M11-09
+data:
+  controller-0.toml: |-
+    rocketmqHome = "/var/lib/rocketmq/controller"
+    configStorePath = "/var/lib/rocketmq/controller/controller.properties"
+    controllerType = "Raft"
+    scanNotActiveBrokerInterval = 5000
+    controllerThreadPoolNums = 16
+    controllerRequestThreadPoolQueueCapacity = 50000
+    mappedFileSize = 1048576
+    controllerStorePath = "/var/lib/rocketmq/controller"
+    electMasterMaxRetryCount = 3
+    enableElectUncleanMaster = false
+    isProcessReadEvent = false
+    notifyBrokerRoleChanged = true
+    scanInactiveMasterInterval = 5000
+    raftScanWaitTimeoutMs = 1000
+    metricsExporterType = "disable"
+    metricsGrpcExporterTarget = ""
+    metricsGrpcExporterHeader = ""
+    metricGrpcExporterTimeOutInMills = 3000
+    metricGrpcExporterIntervalInMills = 60000
+    metricLoggingExporterIntervalInMills = 10000
+    metricsPromExporterPort = 5557
+    metricsPromExporterHost = ""
+    metricsLabel = ""
+    metricsInDelta = false
+    configBlackList = "configBlackList;configStorePath"
+    nodeId = 1
+    listenAddr = "0.0.0.0:60109"
+    electionTimeoutMs = 1000
+    heartbeatIntervalMs = 300
+    storagePath = "/var/lib/rocketmq/controller/node-1"
+    storageBackend = "File"
+    enableElectUncleanMasterLocal = false
+
+    [[raftPeers]]
+    id = 1
+    addr = "10.96.0.201:60110"
+
+    [[controllerPeers]]
+    id = 1
+    addr = "10.96.0.201:60109"
+
+    [[raftPeers]]
+    id = 2
+    addr = "10.96.0.202:60110"
+
+    [[controllerPeers]]
+    id = 2
+    addr = "10.96.0.202:60109"
+
+    [[raftPeers]]
+    id = 3
+    addr = "10.96.0.203:60110"
+
+    [[controllerPeers]]
+    id = 3
+    addr = "10.96.0.203:60109"
+  controller-1.toml: |-
+    rocketmqHome = "/var/lib/rocketmq/controller"
+    configStorePath = "/var/lib/rocketmq/controller/controller.properties"
+    controllerType = "Raft"
+    scanNotActiveBrokerInterval = 5000
+    controllerThreadPoolNums = 16
+    controllerRequestThreadPoolQueueCapacity = 50000
+    mappedFileSize = 1048576
+    controllerStorePath = "/var/lib/rocketmq/controller"
+    electMasterMaxRetryCount = 3
+    enableElectUncleanMaster = false
+    isProcessReadEvent = false
+    notifyBrokerRoleChanged = true
+    scanInactiveMasterInterval = 5000
+    raftScanWaitTimeoutMs = 1000
+    metricsExporterType = "disable"
+    metricsGrpcExporterTarget = ""
+    metricsGrpcExporterHeader = ""
+    metricGrpcExporterTimeOutInMills = 3000
+    metricGrpcExporterIntervalInMills = 60000
+    metricLoggingExporterIntervalInMills = 10000
+    metricsPromExporterPort = 5557
+    metricsPromExporterHost = ""
+    metricsLabel = ""
+    metricsInDelta = false
+    configBlackList = "configBlackList;configStorePath"
+    nodeId = 2
+    listenAddr = "0.0.0.0:60109"
+    electionTimeoutMs = 1000
+    heartbeatIntervalMs = 300
+    storagePath = "/var/lib/rocketmq/controller/node-2"
+    storageBackend = "File"
+    enableElectUncleanMasterLocal = false
+
+    [[raftPeers]]
+    id = 1
+    addr = "10.96.0.201:60110"
+
+    [[controllerPeers]]
+    id = 1
+    addr = "10.96.0.201:60109"
+
+    [[raftPeers]]
+    id = 2
+    addr = "10.96.0.202:60110"
+
+    [[controllerPeers]]
+    id = 2
+    addr = "10.96.0.202:60109"
+
+    [[raftPeers]]
+    id = 3
+    addr = "10.96.0.203:60110"
+
+    [[controllerPeers]]
+    id = 3
+    addr = "10.96.0.203:60109"
+  controller-2.toml: |-
+    rocketmqHome = "/var/lib/rocketmq/controller"
+    configStorePath = "/var/lib/rocketmq/controller/controller.properties"
+    controllerType = "Raft"
+    scanNotActiveBrokerInterval = 5000
+    controllerThreadPoolNums = 16
+    controllerRequestThreadPoolQueueCapacity = 50000
+    mappedFileSize = 1048576
+    controllerStorePath = "/var/lib/rocketmq/controller"
+    electMasterMaxRetryCount = 3
+    enableElectUncleanMaster = false
+    isProcessReadEvent = false
+    notifyBrokerRoleChanged = true
+    scanInactiveMasterInterval = 5000
+    raftScanWaitTimeoutMs = 1000
+    metricsExporterType = "disable"
+    metricsGrpcExporterTarget = ""
+    metricsGrpcExporterHeader = ""
+    metricGrpcExporterTimeOutInMills = 3000
+    metricGrpcExporterIntervalInMills = 60000
+    metricLoggingExporterIntervalInMills = 10000
+    metricsPromExporterPort = 5557
+    metricsPromExporterHost = ""
+    metricsLabel = ""
+    metricsInDelta = false
+    configBlackList = "configBlackList;configStorePath"
+    nodeId = 3
+    listenAddr = "0.0.0.0:60109"
+    electionTimeoutMs = 1000
+    heartbeatIntervalMs = 300
+    storagePath = "/var/lib/rocketmq/controller/node-3"
+    storageBackend = "File"
+    enableElectUncleanMasterLocal = false
+
+    [[raftPeers]]
+    id = 1
+    addr = "10.96.0.201:60110"
+
+    [[controllerPeers]]
+    id = 1
+    addr = "10.96.0.201:60109"
+
+    [[raftPeers]]
+    id = 2
+    addr = "10.96.0.202:60110"
+
+    [[controllerPeers]]
+    id = 2
+    addr = "10.96.0.202:60109"
+
+    [[raftPeers]]
+    id = 3
+    addr = "10.96.0.203:60110"
+
+    [[controllerPeers]]
+    id = 3
+    addr = "10.96.0.203:60109"
+---
+# Source: rocketmq-rust/templates/configmaps.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-proxy-config
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-proxy
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: proxy
+    rocketmq.apache.org/architecture-milestone: M11-09
+data:
+  proxy.toml: |-
+    mode = "cluster"
+    enableAclRpcHookForClusterMode = true
+
+    [grpc]
+    listenAddr = "0.0.0.0:8081"
+
+    [remoting]
+    enabled = true
+    listenAddr = "0.0.0.0:8080"
+
+    [cluster]
+    namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
+
+    [auth]
+    authenticationEnabled = true
+    authorizationEnabled = true
+    authConfigPath = "/var/lib/rocketmq/proxy/auth"
+    aclFile = "/var/run/secrets/rocketmq/proxy-acl.yml"
+    aclFileWatchEnabled = true
+---
+# Source: rocketmq-rust/templates/configmaps.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-mcp-config
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-mcp
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: mcp
+    rocketmq.apache.org/architecture-milestone: M11-09
+data:
+  mcp.toml: |-
+    [server]
+    name = "rocketmq-mcp"
+    version = "1.0.0"
+    transport = "streamable-http"
+    log_level = "info"
+
+    [server.stdio]
+    log_to_stderr = true
+
+    [server.http]
+    bind = "0.0.0.0:8089"
+    endpoint = "/mcp"
+    public_base_url = "https://mcp.example.invalid"
+    validate_origin = true
+    allowed_origins = ["https://mcp.example.invalid"]
+
+    [server.http.tls]
+    cert_path = "/var/run/secrets/rocketmq/tls.crt"
+    key_path = "/var/run/secrets/rocketmq/tls.key"
+
+    [server.http.auth]
+    mode = "oauth-jwt"
+    development_token_env = "ROCKETMQ_MCP_HTTP_TOKEN_DISABLED"
+    issuer = "https://issuer.example.invalid"
+    audience = "rocketmq-mcp"
+    required_scopes = ["rocketmq:read"]
+    jwt_algorithm = "rs256"
+    jwt_key_env = ""
+    jwks_url = "https://issuer.example.invalid/.well-known/jwks.json"
+    jwks_refresh_seconds = 300
+    jwks_max_stale_seconds = 900
+    protected_resource_metadata_path = "/.well-known/oauth-protected-resource"
+
+    [[clusters]]
+    name = "rocketmq-rust"
+    namesrv_addr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
+    default = true
+
+    [security]
+    profile = "diagnose"
+    allow_change_planning = false
+    sanitize_output = true
+    rate_limit_per_minute = 60
+    permissions_file = "/etc/rocketmq/permissions.toml"
+    max_concurrent_requests_per_cluster = 8
+
+    [audit]
+    enabled = true
+    sink = "file"
+    path = "/var/lib/rocketmq/mcp/audit/rocketmq-mcp-audit.log"
+    queue_capacity = 1024
+    max_record_bytes = 16384
+    queue_max_bytes = 1048576
+    history_limit = 100
+
+    [cache]
+    enabled = true
+    max_entries = 256
+    cluster_overview_ttl_ms = 3000
+    topic_list_ttl_ms = 5000
+    broker_metrics_ttl_ms = 2000
+    consumer_lag_ttl_ms = 1000
+
+    [diagnosis]
+    consumer_lag_policy_profile = "production-default"
+    consumer_lag_threshold = 1000
+  permissions.toml: |-
+    [roles.read_only]
+    allowed_clusters = ["*"]
+    allow_tools = [
+      "rocketmq_get_cluster_overview",
+      "rocketmq_list_topics",
+      "rocketmq_describe_topic",
+      "rocketmq_get_topic_route",
+      "rocketmq_list_consumer_groups",
+      "rocketmq_get_consumer_lag",
+      "rocketmq_describe_broker"
+    ]
+    deny_tools = ["*"]
+
+    [roles.diagnose]
+    include = ["read_only"]
+    allowed_clusters = ["*"]
+    allow_tools = [
+      "rocketmq_diagnose_consumer_lag"
+    ]
+
+---
+# Source: rocketmq-rust/templates/workloads.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rocketmq-mcp-audit
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-mcp
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: mcp
+    rocketmq.apache.org/architecture-milestone: M11-09
+  annotations:
+    helm.sh/resource-policy: keep
+    rocketmq.apache.org/persisted-format: mcp-audit-v1
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: "rocketmq-retain"
+  resources:
+    requests:
+      storage: 10Gi
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-broker-headless
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-broker
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: broker
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: rocketmq-broker
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: broker
+  ports:
+    - name: tcp-10911
+      port: 10911
+      targetPort: 10911
+      protocol: TCP
+    - name: tcp-10912
+      port: 10912
+      targetPort: 10912
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-broker
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-broker
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: broker
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rocketmq-broker
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: broker
+  ports:
+    - name: tcp-10911
+      port: 10911
+      targetPort: 10911
+      protocol: TCP
+    - name: tcp-10912
+      port: 10912
+      targetPort: 10912
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-controller-headless
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: controller
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: controller
+  ports:
+    - name: tcp-60109
+      port: 60109
+      targetPort: 60109
+      protocol: TCP
+    - name: tcp-60110
+      port: 60110
+      targetPort: 60110
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-controller
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: controller
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: controller
+  ports:
+    - name: tcp-60109
+      port: 60109
+      targetPort: 60109
+      protocol: TCP
+    - name: tcp-60110
+      port: 60110
+      targetPort: 60110
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-namesrv-headless
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-namesrv
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: namesrv
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: rocketmq-namesrv
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: namesrv
+  ports:
+    - name: tcp-9876
+      port: 9876
+      targetPort: 9876
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-namesrv
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-namesrv
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: namesrv
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rocketmq-namesrv
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: namesrv
+  ports:
+    - name: tcp-9876
+      port: 9876
+      targetPort: 9876
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-controller-0
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: controller
+    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/controller-ordinal: "0"
+spec:
+  type: ClusterIP
+  clusterIP: 10.96.0.201
+  selector:
+    statefulset.kubernetes.io/pod-name: rocketmq-controller-0
+  ports:
+    - {name: remoting, port: 60109, targetPort: 60109, protocol: TCP}
+    - {name: raft, port: 60110, targetPort: 60110, protocol: TCP}
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-controller-1
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: controller
+    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/controller-ordinal: "1"
+spec:
+  type: ClusterIP
+  clusterIP: 10.96.0.202
+  selector:
+    statefulset.kubernetes.io/pod-name: rocketmq-controller-1
+  ports:
+    - {name: remoting, port: 60109, targetPort: 60109, protocol: TCP}
+    - {name: raft, port: 60110, targetPort: 60110, protocol: TCP}
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-controller-2
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: controller
+    rocketmq.apache.org/architecture-milestone: M11-09
+    rocketmq.apache.org/controller-ordinal: "2"
+spec:
+  type: ClusterIP
+  clusterIP: 10.96.0.203
+  selector:
+    statefulset.kubernetes.io/pod-name: rocketmq-controller-2
+  ports:
+    - {name: remoting, port: 60109, targetPort: 60109, protocol: TCP}
+    - {name: raft, port: 60110, targetPort: 60110, protocol: TCP}
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-mcp
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-mcp
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: mcp
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rocketmq-mcp
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: mcp
+  ports:
+    - name: tcp-8089
+      port: 8089
+      targetPort: 8089
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-proxy
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-proxy
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: proxy
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rocketmq-proxy
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: proxy
+  ports:
+    - name: tcp-8080
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: tcp-8081
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/workloads.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rocketmq-proxy
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-proxy
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: proxy
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-proxy
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-proxy
+        app.kubernetes.io/instance: rocketmq
+        app.kubernetes.io/part-of: rocketmq-rust
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/version: "0.1.0"
+        rocketmq.apache.org/service: proxy
+        rocketmq.apache.org/architecture-milestone: M11-09
+    spec:
+      serviceAccountName: rocketmq-runtime
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-proxy
+              app.kubernetes.io/instance: rocketmq
+              rocketmq.apache.org/service: proxy
+      containers:
+        - name: proxy
+          image: "ghcr.io/mxsm/rocketmq-rust/proxy@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+          imagePullPolicy: IfNotPresent
+          args: ["--config", "/etc/rocketmq/proxy.toml"]
+          env:
+            - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
+            - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+          ports:
+            - {name: remoting, containerPort: 8080, protocol: TCP}
+            - {name: grpc, containerPort: 8081, protocol: TCP}
+          resources:
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+            requests:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - {name: config, mountPath: /etc/rocketmq/proxy.toml, subPath: proxy.toml, readOnly: true}
+            - {name: data, mountPath: /var/lib/rocketmq/proxy}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: tmp, mountPath: /tmp/rocketmq}
+      volumes:
+        - name: config
+          configMap:
+            name: rocketmq-proxy-config
+        - name: data
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: runtime-secrets
+          secret:
+            secretName: "rocketmq-runtime-secrets"
+            optional: false
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+---
+# Source: rocketmq-rust/templates/workloads.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rocketmq-mcp
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-mcp
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: mcp
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-mcp
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-mcp
+        app.kubernetes.io/instance: rocketmq
+        app.kubernetes.io/part-of: rocketmq-rust
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/version: "0.1.0"
+        rocketmq.apache.org/service: mcp
+        rocketmq.apache.org/architecture-milestone: M11-09
+    spec:
+      serviceAccountName: rocketmq-runtime
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-mcp
+              app.kubernetes.io/instance: rocketmq
+              rocketmq.apache.org/service: mcp
+      containers:
+        - name: mcp
+          image: "ghcr.io/mxsm/rocketmq-rust/mcp@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          imagePullPolicy: IfNotPresent
+          args: ["--config", "/etc/rocketmq/mcp.toml", "--transport", "streamable-http"]
+          env:
+            - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/mcp}
+            - {name: OTEL_SERVICE_NAME, value: rocketmq-mcp}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+          ports:
+            - {name: https-mcp, containerPort: 8089, protocol: TCP}
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - {name: config, mountPath: /etc/rocketmq/mcp.toml, subPath: mcp.toml, readOnly: true}
+            - {name: config, mountPath: /etc/rocketmq/permissions.toml, subPath: permissions.toml, readOnly: true}
+            - {name: audit, mountPath: /var/lib/rocketmq/mcp}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: tmp, mountPath: /tmp/rocketmq}
+      volumes:
+        - name: config
+          configMap:
+            name: rocketmq-mcp-config
+        - name: audit
+          persistentVolumeClaim:
+            claimName: rocketmq-mcp-audit
+        - name: runtime-secrets
+          secret:
+            secretName: "rocketmq-runtime-secrets"
+            optional: false
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+
+---
+# Source: rocketmq-rust/templates/workloads.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rocketmq-broker
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-broker
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: broker
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  serviceName: rocketmq-broker-headless
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-broker
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: broker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-broker
+        app.kubernetes.io/instance: rocketmq
+        app.kubernetes.io/part-of: rocketmq-rust
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/version: "0.1.0"
+        rocketmq.apache.org/service: broker
+        rocketmq.apache.org/architecture-milestone: M11-09
+    spec:
+      serviceAccountName: rocketmq-runtime
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-broker
+              app.kubernetes.io/instance: rocketmq
+              rocketmq.apache.org/service: broker
+      containers:
+        - name: broker
+          image: "ghcr.io/mxsm/rocketmq-rust/broker@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          imagePullPolicy: IfNotPresent
+          args: ["--configFile", "/etc/rocketmq/broker.toml"]
+          env:
+            - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/broker}
+            - {name: OTEL_SERVICE_NAME, value: rocketmq-broker}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+          ports:
+            - {name: remoting, containerPort: 10911, protocol: TCP}
+            - {name: ha, containerPort: 10912, protocol: TCP}
+          resources:
+            limits:
+              cpu: 4000m
+              memory: 8Gi
+            requests:
+              cpu: 1000m
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - {name: config, mountPath: /etc/rocketmq/broker.toml, subPath: broker.toml, readOnly: true}
+            - {name: data, mountPath: /var/lib/rocketmq/broker}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: tmp, mountPath: /tmp/rocketmq}
+      volumes:
+        - name: config
+          configMap:
+            name: rocketmq-broker-config
+        - name: runtime-secrets
+          secret:
+            secretName: "rocketmq-runtime-secrets"
+            optional: false
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: rocketmq-broker
+          app.kubernetes.io/instance: rocketmq
+          app.kubernetes.io/part-of: rocketmq-rust
+          app.kubernetes.io/managed-by: Helm
+          app.kubernetes.io/version: "0.1.0"
+          rocketmq.apache.org/service: broker
+          rocketmq.apache.org/architecture-milestone: M11-09
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: "rocketmq-retain"
+        resources:
+          requests:
+            storage: 100Gi
+---
+# Source: rocketmq-rust/templates/workloads.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rocketmq-namesrv
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-namesrv
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: namesrv
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  serviceName: rocketmq-namesrv-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-namesrv
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: namesrv
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-namesrv
+        app.kubernetes.io/instance: rocketmq
+        app.kubernetes.io/part-of: rocketmq-rust
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/version: "0.1.0"
+        rocketmq.apache.org/service: namesrv
+        rocketmq.apache.org/architecture-milestone: M11-09
+    spec:
+      serviceAccountName: rocketmq-runtime
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-namesrv
+              app.kubernetes.io/instance: rocketmq
+              rocketmq.apache.org/service: namesrv
+      containers:
+        - name: namesrv
+          image: "ghcr.io/mxsm/rocketmq-rust/namesrv@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          imagePullPolicy: IfNotPresent
+          args: ["--configFile", "/etc/rocketmq/namesrv.toml"]
+          env:
+            - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
+            - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+          ports:
+            - {name: remoting, containerPort: 9876, protocol: TCP}
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - {name: config, mountPath: /etc/rocketmq/namesrv.toml, subPath: namesrv.toml, readOnly: true}
+            - {name: data, mountPath: /var/lib/rocketmq/namesrv}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: tmp, mountPath: /tmp/rocketmq}
+      volumes:
+        - name: config
+          configMap:
+            name: rocketmq-namesrv-config
+        - name: runtime-secrets
+          secret:
+            secretName: "rocketmq-runtime-secrets"
+            optional: false
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: rocketmq-namesrv
+          app.kubernetes.io/instance: rocketmq
+          app.kubernetes.io/part-of: rocketmq-rust
+          app.kubernetes.io/managed-by: Helm
+          app.kubernetes.io/version: "0.1.0"
+          rocketmq.apache.org/service: namesrv
+          rocketmq.apache.org/architecture-milestone: M11-09
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: "rocketmq-retain"
+        resources:
+          requests:
+            storage: 2Gi
+---
+# Source: rocketmq-rust/templates/workloads.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rocketmq-controller
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: controller
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  serviceName: rocketmq-controller-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-controller
+      app.kubernetes.io/instance: rocketmq
+      rocketmq.apache.org/service: controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-controller
+        app.kubernetes.io/instance: rocketmq
+        app.kubernetes.io/part-of: rocketmq-rust
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/version: "0.1.0"
+        rocketmq.apache.org/service: controller
+        rocketmq.apache.org/architecture-milestone: M11-09
+    spec:
+      serviceAccountName: rocketmq-runtime
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-controller
+              app.kubernetes.io/instance: rocketmq
+              rocketmq.apache.org/service: controller
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-controller
+              app.kubernetes.io/instance: rocketmq
+              rocketmq.apache.org/service: controller
+      containers:
+        - name: controller
+          image: "ghcr.io/mxsm/rocketmq-rust/controller@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+          imagePullPolicy: IfNotPresent
+          args: ["--config-file", "/etc/rocketmq/controller.toml"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/controller}
+            - {name: ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR, value: "0.0.0.0:60110"}
+            - {name: ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER, value: "true"}
+            - {name: OTEL_SERVICE_NAME, value: rocketmq-controller}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+          ports:
+            - {name: remoting, containerPort: 60109, protocol: TCP}
+            - {name: raft, containerPort: 60110, protocol: TCP}
+          resources:
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+            requests:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: config
+              mountPath: /etc/rocketmq/controller.toml
+              subPathExpr: $(POD_NAME).toml
+              readOnly: true
+            - {name: data, mountPath: /var/lib/rocketmq/controller}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: tmp, mountPath: /tmp/rocketmq}
+      volumes:
+        - name: config
+          configMap:
+            name: rocketmq-controller-config
+        - name: runtime-secrets
+          secret:
+            secretName: "rocketmq-runtime-secrets"
+            optional: false
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: rocketmq-controller
+          app.kubernetes.io/instance: rocketmq
+          app.kubernetes.io/part-of: rocketmq-rust
+          app.kubernetes.io/managed-by: Helm
+          app.kubernetes.io/version: "0.1.0"
+          rocketmq.apache.org/service: controller
+          rocketmq.apache.org/architecture-milestone: M11-09
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: "rocketmq-retain"
+        resources:
+          requests:
+            storage: 10Gi

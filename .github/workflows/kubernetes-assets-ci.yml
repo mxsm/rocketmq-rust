@@ -1,0 +1,54 @@
+name: Kubernetes deployment assets
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/kubernetes-assets-ci.yml"
+      - "distribution/helm/**"
+      - "distribution/kubernetes/**"
+      - "docker/container-policy.json"
+      - "scripts/kubernetes-assets-contract.ps1"
+      - "scripts/kubernetes_assets_guard.py"
+      - "scripts/tests/test_m11_kubernetes_assets.py"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/kubernetes-assets-ci.yml"
+      - "distribution/helm/**"
+      - "distribution/kubernetes/**"
+      - "docker/container-policy.json"
+      - "scripts/kubernetes-assets-contract.ps1"
+      - "scripts/kubernetes_assets_guard.py"
+      - "scripts/tests/test_m11_kubernetes_assets.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Helm, Kustomize, and schema contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Run static and deliberate-violation tests
+        shell: bash
+        run: |
+          python scripts/kubernetes_assets_guard.py
+          python -m unittest scripts.tests.test_m11_kubernetes_assets -v
+
+      - name: Validate canonical and overlay renders
+        shell: pwsh
+        run: ./scripts/kubernetes-assets-contract.ps1
+
+      - name: Upload rendered validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: kubernetes-assets-${{ github.sha }}
+          path: target/kubernetes-assets
+          if-no-files-found: error
+          retention-days: 14

@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M11-01～08 已完成；下一工作包 PR-M11-09；部分依赖 M10 SLI） |
+| 状态 | 实施中（PR-M11-01～09 已完成；下一工作包 PR-M11-10；部分依赖 M10 SLI） |
 | 预计周期 | 4–6 周 |
 | 工作包 | 延续 WP01、WP03、WP05、WP07、WP14–WP16 |
 | 前置条件 | 32-package Gate；secure dry-run、ServiceContext、semantic owner、durability SLI 可用 |
@@ -165,10 +165,20 @@ M10 真实性能、M11 入口 `[ARCH]`/安全默认 `[HUMAN]`、M11 与 Phase 3 
 ### PR-M11-09：Helm 与 Kustomize 资产
 
 - [ ] 入口：`[ARCH]` 五服务镜像digest、配置schema、PVC/topology/secret引用和资源预算已冻结。
-- [ ] `[DEV]` 在`distribution/helm`、`distribution/kubernetes`提供requests/limits、PVC、PDB、topology、NetworkPolicy、PodSecurity、OTel和Secret引用。
-- [ ] `[TEST]` focused test：helm lint/template、Kustomize build、schema validation、secure values和禁止inline secret。
-- [ ] `[REV]` 检查standalone/Stateful服务边界、Controller quorum和storage class语义。
-- [ ] 回滚点：Helm revision/Kustomize overlay回到上一签名版本，PVC和持久格式不降级。
+- [x] `[DEV]` 在`distribution/helm`、`distribution/kubernetes`提供requests/limits、PVC、PDB、topology、NetworkPolicy、PodSecurity、OTel和Secret引用。
+- [x] `[TEST]` focused test：helm lint/template、Kustomize build、schema validation、secure values和禁止inline secret。
+- [x] `[REV]` 检查standalone/Stateful服务边界、Controller quorum配置和storage class语义；真实 formed quorum 仍由 M11-11 取证。
+- [x] 回滚点：Helm revision/Kustomize overlay回到上一签名版本，PVC和持久格式不降级。
+
+完成证据：[`11-helm-kustomize-assets-evidence.md`](11-helm-kustomize-assets-evidence.md)。canonical Helm chart 与
+确定性 Kustomize base/secure overlay 共渲染 37 个资源，固定五服务 requests/limits、stateful/stateless/PVC/PDB、
+topology、default-deny NetworkPolicy、restricted Pod Security、OTel 和外部 secret 引用；默认 digest/IP sentinel
+fail closed，测试 digest 与 Controller ClusterIP 明确不可发布。Controller remoting/Raft 修正为 60109/60110，
+三份 ordinal config 使用稳定 ClusterIP，显式多成员 bootstrap 仅由最小 node ID 执行；真实 quorum/fault 留给
+M11-11。Helm/Kustomize/Kubeconform 工具 archive hash 固定，双 render 37/37 schema、确定性 parity、真实配置解析
+及 8 组正负测试通过。production 签名 digest 和目标集群 Service IP 未冻结，因此入口 `[ARCH]` 保持开放。
+73/82 工作包完成，剩余 M11 3 个、M12 6 个，下一工作包为 PR-M11-10；M10 真实性能、容器动态 `[TEST]`、
+M11/Phase 3/HUMAN/ARCH 与集群 fault Gate 均未完成。
 
 ### PR-M11-10：Probe、PreStop 与统一 Drain
 
@@ -215,6 +225,8 @@ cargo test -p rocketmq-mcp
 cargo test -p rocketmq-mcp --all-features
 cargo clippy --all-targets -p rocketmq-mcp --features streamable-http -- -D warnings
 cargo doc -p rocketmq-mcp --no-deps
+.\scripts\kubernetes-assets-contract.ps1
+python -m unittest scripts.tests.test_m11_kubernetes_assets -v
 .\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline
 .\scripts\check-error-hygiene.ps1
 .\scripts\check-agents-routing.ps1
